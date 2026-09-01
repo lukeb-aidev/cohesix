@@ -28,7 +28,7 @@ use pi4_driver_abi::{
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43DpcChildTimingEntry, DriverRuntimeCyw43DpcChildTimingRecord,
     DriverRuntimeCyw43DpcClientRecord, DriverRuntimeDpcEventRing,
-    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor, DriverRuntimePcieTimerState,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
     DriverRuntimeSerialRxState, DriverRuntimeSerialSpscHeader, DriverRuntimeSteadyServiceProgress,
@@ -57,7 +57,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
     DRIVER_RUNTIME_INIT_VERSION, DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
     DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE,
+    DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES, DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED,
+    DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES,
     DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
     DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
@@ -4004,6 +4006,25 @@ fn driver_task_ring_read_serial_rx_state(
     (first == second && second.valid()).then_some(second)
 }
 
+/// Read one stable, identity-bound PCIe root-idle timer publication.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_pcie_timer_state(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimePcieTimerState> {
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let read = || {
+        driver_task_ring_invalidate_root_range(
+            ring_root_ptr + usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET),
+            usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES),
+        );
+        ring.read_pcie_timer_state_snapshot()
+    };
+    let first = read()?;
+    fence(Ordering::Acquire);
+    let second = read()?;
+    DriverRuntimePcieTimerState::stable_snapshot(first, second)
+}
+
 #[cfg(feature = "kernel")]
 fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRingProgressRecord {
     driver_task_ring_invalidate_root_range(
@@ -4154,6 +4175,37 @@ impl DriverTaskRingView {
             )?,
             committed_publication: self.read_u32(
                 base + core::mem::offset_of!(DriverRuntimeSerialRxState, committed_publication),
+            )?,
+        })
+    }
+
+    fn read_pcie_timer_state_snapshot(&self) -> Option<DriverRuntimePcieTimerState> {
+        let base = usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET);
+        Some(DriverRuntimePcieTimerState {
+            magic: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimePcieTimerState, magic))?,
+            version: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimePcieTimerState, version))?,
+            len: self.read_u16(base + core::mem::offset_of!(DriverRuntimePcieTimerState, len))?,
+            task_key: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimePcieTimerState, task_key))?,
+            identity_token: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimePcieTimerState, identity_token),
+            )?,
+            publication: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimePcieTimerState, publication))?,
+            state: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimePcieTimerState, state))?,
+            enable_sequence: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimePcieTimerState, enable_sequence),
+            )?,
+            deadline_clo: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimePcieTimerState, deadline_clo),
+            )?,
+            irq_count: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimePcieTimerState, irq_count))?,
+            committed_publication: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimePcieTimerState, committed_publication),
             )?,
         })
     }
@@ -16537,6 +16589,116 @@ fn driver_task_current_descriptor_exact(
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PiRootIdleTimerEnablePlan {
+    Reject,
+    AlreadyEnabled(u32),
+    Enable,
+}
+
+#[cfg(feature = "kernel")]
+const fn pi_root_idle_timer_enable_plan(
+    exact_direct_genet_topology: bool,
+    owner_active: bool,
+    descriptor_sealed: bool,
+    descriptor: DriverRuntimeInitDescriptor,
+    state: Option<DriverRuntimePcieTimerState>,
+) -> PiRootIdleTimerEnablePlan {
+    if !exact_direct_genet_topology || !owner_active || !descriptor_sealed {
+        return PiRootIdleTimerEnablePlan::Reject;
+    }
+    let Some(state) = state else {
+        return PiRootIdleTimerEnablePlan::Reject;
+    };
+    if state.task_key != descriptor.task_key || state.identity_token != descriptor.identity_token {
+        return PiRootIdleTimerEnablePlan::Reject;
+    }
+    if state.enabled_for(descriptor.task_key, descriptor.identity_token) {
+        return PiRootIdleTimerEnablePlan::AlreadyEnabled(state.enable_sequence);
+    }
+    if state.valid()
+        && state.state == DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED
+        && state.enable_sequence == 0
+    {
+        PiRootIdleTimerEnablePlan::Enable
+    } else {
+        PiRootIdleTimerEnablePlan::Reject
+    }
+}
+
+/// Enable the PCIe-owned root scheduling timer for one exact direct-GENET
+/// lifetime. WiFi and every inexact topology fail before any ring publication
+/// or IPC. A durable Enabled record makes all later calls read-only.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn ensure_pi_root_idle_timer_enabled(exact_direct_genet_topology: bool) -> bool {
+    if !exact_direct_genet_topology {
+        return false;
+    }
+    let hot_path = DriverTaskHotPath::PcieRoot;
+    let Some(descriptor) = retained_driver_runtime_restart_descriptor(hot_path) else {
+        return false;
+    };
+    if !driver_task_current_descriptor_exact(hot_path, descriptor) {
+        return false;
+    }
+    let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_PCIE_ROOT) else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return false;
+    }
+    let state = driver_task_ring_read_pcie_timer_state(ring_root_ptr);
+    let plan = pi_root_idle_timer_enable_plan(
+        true,
+        DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire) & hot_path.owner_state_bit()
+            != 0,
+        driver_runtime_descriptor_seal_registered(hot_path),
+        descriptor,
+        state,
+    );
+    match plan {
+        PiRootIdleTimerEnablePlan::Reject => return false,
+        PiRootIdleTimerEnablePlan::AlreadyEnabled(sequence) => return sequence != 0,
+        PiRootIdleTimerEnablePlan::Enable => {}
+    }
+
+    let mut command = DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        hot_path,
+        DriverTaskBudgetGrant::from_contract(PCIE_ROOT_DRIVER_TASK_CONTRACT),
+        DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    command.aux0 = u32::from(DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE) << 16;
+    let Some(completion) = run_driver_task_ring_service(PCIE_ROOT_DRIVER_TASK_CONTRACT, command)
+    else {
+        return false;
+    };
+    if completion.code != DriverTaskCompletionCode::Progress.as_u16() || completion.result == 0 {
+        return false;
+    }
+
+    let Some(current_descriptor) = retained_driver_runtime_restart_descriptor(hot_path) else {
+        return false;
+    };
+    if current_descriptor != descriptor
+        || !driver_task_current_descriptor_exact(hot_path, current_descriptor)
+        || !driver_runtime_descriptor_seal_registered(hot_path)
+    {
+        return false;
+    }
+    driver_task_ring_read_pcie_timer_state(ring_root_ptr).is_some_and(|state| {
+        state.enabled_for(descriptor.task_key, descriptor.identity_token)
+            && state.enable_sequence == completion.result
+    })
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_current_usb_descriptor_identity(
     descriptor: DriverRuntimeInitDescriptor,
 ) -> Option<(u32, u32, pi4_driver_abi::DriverRuntimeBusLinkDescriptor)> {
@@ -27372,6 +27534,66 @@ mod tests {
             0x26e2_1000,
             0x26ed_1000,
         )
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_root_idle_timer_enable_plan_is_direct_genet_exact_and_once_only() {
+        let mut descriptor = runtime_init_test_mcs_descriptor(DRIVER_TASK_KEY_PCIE_ROOT as u32);
+        descriptor.hot_path = DriverTaskHotPath::PcieRoot.as_u32();
+        descriptor.role_bit = DriverTaskHotPath::PcieRoot.role_bit() as u32;
+        descriptor = descriptor.with_sealed_identity(DRIVER_TASK_KEY_PCIE_ROOT as u32, 0x5043_4945);
+        let disarmed = DriverRuntimePcieTimerState::staged(
+            descriptor.task_key,
+            descriptor.identity_token,
+            1,
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED,
+            0,
+            0,
+            0,
+        )
+        .commit();
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(true, true, true, descriptor, Some(disarmed)),
+            PiRootIdleTimerEnablePlan::Enable
+        );
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(false, true, true, descriptor, Some(disarmed)),
+            PiRootIdleTimerEnablePlan::Reject,
+            "WiFi and every non-direct topology must perform zero enable Call",
+        );
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(true, false, true, descriptor, Some(disarmed)),
+            PiRootIdleTimerEnablePlan::Reject
+        );
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(true, true, false, descriptor, Some(disarmed)),
+            PiRootIdleTimerEnablePlan::Reject
+        );
+
+        let enabled = DriverRuntimePcieTimerState::staged(
+            descriptor.task_key,
+            descriptor.identity_token,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED,
+            23,
+            5_000,
+            0,
+        )
+        .commit();
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(true, true, true, descriptor, Some(enabled)),
+            PiRootIdleTimerEnablePlan::AlreadyEnabled(23),
+            "a durable Enabled lifetime forbids a repeated timer activation",
+        );
+        let wrong_identity = DriverRuntimePcieTimerState {
+            identity_token: descriptor.identity_token.wrapping_add(1),
+            ..enabled
+        };
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(true, true, true, descriptor, Some(wrong_identity)),
+            PiRootIdleTimerEnablePlan::Reject
+        );
     }
 
     #[cfg(feature = "kernel")]

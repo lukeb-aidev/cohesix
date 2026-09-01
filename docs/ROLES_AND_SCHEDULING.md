@@ -385,6 +385,13 @@ generation, immutable frontier, captured healthy publication environment,
 exact `Cyw43Client` route, issued-unknown, pair-restart, live-recovery, and
 stable `Waiting` fences. Selected MCS may then use one `seL4_NBSendWait` to
 prompt slot 8 and atomically park on slot 3 before later semantic bookkeeping.
+On return, CYW43 re-proves that same sequence-last child is still `Waiting` and
+that its first SDIO-owner action receipt is still absent. Only that exact case
+performs one ordinary slot-3 notification wait, with no second slot-8 send; an
+already observed first action, terminal, replacement, recovery, or identity
+drift continues through durable reclassification. This closes the case where
+an already-active CYW43 badge satisfied `NBSendWait` before the equal-priority
+SDIO owner ran, without creating a resend, retry, loop, or second operation.
 Classic and every inexact, stale, or recovery-fenced publication retain the
 existing one slot-8 signal and do not park at this cut. The badge is only a
 hint; the durable ring and completion remain authority, and SDIO alone
@@ -397,27 +404,39 @@ topology no longer forfeits a refill at the proved ordinary global-idle cut.
 Activation binds its existing compiler-
 owned fan-in notification to the init TCB, and the root endpoint uses its
 existing explicit Reply object for both nonblocking and blocking receive.
-After timer, endpoint, durable producer, serial/local-seat/display, network,
-fault, recovery, containment, quarantine, and reboot predicates all remain
-idle across the condition-before-block cut, root blocks on that endpoint. An
+Descriptor replay leaves the PCIe-owned timer disarmed in every network mode.
+After a completed empty quantum, root consumes exactly one nonblocking
+multiplexed receive. If that receive is empty and timer, endpoint, durable
+producer, serial/local-seat/display, network, fault, recovery, containment,
+quarantine, and reboot predicates remain idle across the complete pre-enable
+condition-before-block fence, root issues one synchronous Reply-bearing typed
+enable Call to the PCIe owner. Root accepts only the matching completion and
+durable `Enabled` publication, repeats the complete fence, and only then blocks
+on the endpoint. Later idle entries use
+that lifetime-bound `Enabled` record and never reprogram the timer. An
 endpoint Call and a bound-notification signal are multiplexed by the kernel;
 the latter is only a hint, while the former is copied to staged root storage
 before returning. Every wake restarts operator/recovery-first arbitration.
 Post-response, reserve, operator, recovery, and fault exits retain their
 explicit handoff, so the receive cannot speculate about a future request or
 weaken physical-console priority. WiFi never enters this global-idle receive;
-it may block only for a currently issued finite operation or an exact
-current-transaction causal child.
+it never enables the timer and may block only for a currently issued finite
+operation or an exact current-transaction causal child.
 
 Deadline completeness comes from the existing isolated `driver-pcie` task,
 without another task or SC. Its unchanged `400/10000 us`, `wcet_us=300`,
 priority/MCP, core, refill, and timeout contract owns one additional exact BCM
 system-timer C3 duty: discontiguous page `0xFE003000`, level IRQ 99, badge 2048,
-handler slot 4, local notification slot 3, and 5,000-us interval. Each bounded
-IRQ turn clears and rearms C3, signals the existing root fan-in, then
-acknowledges; it performs no PCIe operation, retry, catch-up, or root work. The
-ten-page PCIe aperture and one-page timer resource remain separately tagged and
-fail closed before MMIO on any identity drift. This secondary duty consumes
+handler slot 4, local notification slot 3, and 5,000-us interval. Descriptor
+adoption publishes `Disarmed` without programming C3. The first exact
+direct-GENET enable programs it once; each bounded IRQ turn clears and
+self-rearms C3, signals the existing root fan-in, then acknowledges. After that
+IRQ service, the owner immediately re-enters its existing combined command-
+endpoint/local-notification receive, so a Reply-bearing command or the next
+real timer edge reaches the owner without a generic post-IRQ scheduler
+traversal. It performs no PCIe operation, retry, catch-up, poll, or root work.
+The ten-page PCIe aperture and one-page timer resource remain separately tagged
+and fail closed before MMIO on any identity drift. This secondary duty consumes
 only the existing isolated task's declared execution budget and changes no
 root, console, driver, or Worker scheduling numeric.
 

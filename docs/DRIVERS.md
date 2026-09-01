@@ -1251,8 +1251,16 @@ transport:
   recovery, and a stable `Waiting` completion. This includes ordinary cold
   HOST_CONFIG as well as the previously admitted persistent exchange. Selected
   MCS then uses one `seL4_NBSendWait` to prompt slot 8 and park on slot 3 before
-  later semantic bookkeeping. A returned badge has no work authority; a
-  reserved-root bit is routed only through the existing immutable-arm,
+  later semantic bookkeeping. When that syscall returns, CYW43 re-proves the
+  same sequence-last `Waiting` child and checks its exact first SDIO-owner
+  action receipt. If the child still waits and that receipt is absent, CYW43
+  performs exactly one ordinary slot-3 notification wait without another
+  slot-8 prompt; otherwise it continues through the existing durable
+  reclassification. This covers an already-active CYW43 badge consuming the
+  atomic wait before the equal-priority SDIO owner runs, without adding a
+  resend, retry, poll, loop, or second physical operation. A returned badge
+  has no work authority; a reserved-root bit is routed only through the
+  existing immutable-arm,
   physical-lifetime, child-sequence, and expiry classifier before it may prompt
   the sole SDIO owner. The retained state machine then reclassifies the durable
   completion. Classic and every inexact, stale, replaced, recovery, or
@@ -1308,19 +1316,27 @@ transport:
 - When the selected physical Pi MCS root-control task is in the exact
   direct-GENET topology, the compiler-owned root-control
   fan-in is bound to the init root-control TCB when that TCB's temporal runtime
-  is activated. The direct-GENET ordinary global-idle exit rechecks timer, endpoint,
-  serial/local-seat/display, network, fault, recovery, containment, quarantine,
-  and reboot state, nonblockingly receives once, repeats the durable idle
-  predicate, then may block on the root-control endpoint with the existing
-  explicit Reply object. The bound notification and endpoint are therefore one
+  is activated. Descriptor replay leaves the PCIe-owned timer disarmed in every
+  mode. After a completed empty quantum, the direct-GENET ordinary global-idle
+  exit consumes exactly one nonblocking multiplexed receive. If that receive is
+  empty, root rechecks timer, endpoint, serial/local-seat/display, network,
+  fault, recovery, containment, quarantine, and reboot state. At the first
+  complete pre-enable idle fence only, root synchronously issues the
+  Reply-bearing typed timer-enable Call, requires its matching completion and
+  durable identity-bound `Enabled` publication, then repeats the complete idle
+  fence before it may block on the root-control endpoint with that Reply
+  object. Later idle entries observe `Enabled` and do not issue another
+  programming operation. The bound notification and endpoint
+  are therefore one
   kernel-atomic receive domain: a fan-in badge is only a coalescing hint, while
   an endpoint message is copied into root-owned staged storage before the IPC
   buffer can be reused. A wake always returns to operator/recovery-first
   arbitration and fresh durable producer reads. Reserve, post-response,
   operator, recovery, fault, and every non-global-idle exit retain their
   explicit handoff; no future network request, badge, or elapsed interval is
-  inferred. WiFi never enters this global-idle receive and may block only for a
-  currently issued finite operation or exact current-transaction causal child.
+  inferred. WiFi never enables this timer or enters this global-idle receive
+  and may block only for a currently issued finite operation or exact
+  current-transaction causal child.
   QEMU and classic profiles retain their selected paths.
 - The existing isolated `pcie-root` runtime owns one additional, separately
   tagged Pi BCM system-timer channel-3 duty solely to make that global idle
@@ -1332,11 +1348,16 @@ transport:
   capability before any higher Pi MMIO in every network mode. WiFi admits the
   timer before its likewise child-only DMA page; wired and disabled modes admit
   only the timer. `pcie-root` consumes that retained capability through the
-  exclusive child-VSpace path, leaving no root alias. The runtime arms C3 at
-  5,000 us, exactly half its unchanged generated
-  10,000-us period. One IRQ service clears the source, reads `CLO`, arms the
-  next compare, orders and reads back the device state, signals the existing
-  root fan-in, and acknowledges the IRQ. It never performs root timer work,
+  exclusive child-VSpace path, leaving no root alias. Descriptor adoption
+  publishes an identity-bound `Disarmed` state and does not program C3. Only
+  the first exact direct-GENET synchronous enable programs C3 at 5,000 us,
+  exactly half its unchanged generated 10,000-us period, and publishes
+  `Enabled`; WiFi remains `Disarmed`. One IRQ service clears the source, reads
+  `CLO`, arms the next compare, orders and reads back the device state, signals
+  the existing root fan-in, and acknowledges the IRQ. It then immediately
+  blocks on the existing combined command-endpoint/local-notification receive;
+  a Reply-bearing command returns to ordinary dispatch, while another genuine
+  C3 edge is serviced before blocking again. It never performs root timer work,
   PCIe work, catch-up, retry, polling, or a second physical action. Every tag,
   address, page-count, IRQ, badge, slot, trigger, period, and interval identity
   is checked before MMIO; malformed identity performs no device access, signal,

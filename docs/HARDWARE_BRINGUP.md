@@ -1003,15 +1003,25 @@ ascending pages (`0xFE003000`, then `0xFE007000`) in WiFi mode and the timer
 page alone in wired mode. The timer capability must be consumed exclusively
 into `pcie-root`; `driver-runtime-pcie-timer-mmio-not-covered`, an ordinary
 root-mapped substitute, or a retained root alias fails before registry seal.
-Boot evidence must then show the runtime armed channel 3 at 5,000 us from its
-generated 10,000-us period and
-bound the existing root fan-in to root-control; a missing, duplicate, deferred,
-or mismatched resource/IRQ/binding rejects the candidate before performance
-testing. The timer edge is scheduling evidence only. Packet timing and raw TCP
-remain the performance authority, while fresh serial, USB, HDMI, fault, reboot,
-and endpoint-Call checks prove that the multiplexed idle receive did not strand
-an operator or control path. This blocking global-idle proof applies only in
-the exact direct-GENET topology; WiFi retains its separately fenced
+Boot evidence must show descriptor replay publish an exact `Disarmed` timer
+state without programming channel 3 in every mode, and bind the existing root
+fan-in to root-control. WiFi must remain `Disarmed` for its whole lifetime. On
+direct GENET, a completed empty quantum and exactly one empty nonblocking
+multiplexed receive must precede the first complete global-idle fence. That
+fence must precede one synchronous Reply-bearing typed enable Call; the
+matching completion and durable `Enabled` record must precede a second complete
+fence and the blocking receive. Later idle entries must reuse that exact
+enabled lifetime rather than reprogram C3.
+Each genuine timer IRQ must clear and self-rearm channel 3 at 5,000 us from its
+generated 10,000-us owner period, signal root, acknowledge once, and immediately
+return the PCIe owner to its combined command-endpoint/local-notification
+receive. A missing, duplicate, prematurely enabled, WiFi-enabled, or mismatched
+resource/IRQ/binding/state rejects the candidate before performance testing.
+The timer edge is scheduling evidence only. Packet timing and raw TCP remain
+the performance authority, while fresh serial, USB, HDMI, fault, reboot, and
+endpoint-Call checks prove that enable and the multiplexed idle receive did not
+strand an operator or control path. This blocking global-idle proof applies
+only in the exact direct-GENET topology; WiFi retains its separately fenced
 current-transaction waits.
 
 ### Wired GENET
@@ -1380,8 +1390,15 @@ The owner publishes complete sequence-last records before signalling.
 Notifications are coalescing wakeups, not transaction history. Root may mask
 only the exact issued parent's self-demand while its stable HAL state is
 `Waiting`; independent committed DPC, RX, and terminal work must remain
-eligible. Pair recovery fences new work, preserves the exact terminal reason,
-scrubs the discarded generation, and advances identity before replay.
+eligible. For a selected-MCS foreground publication, the first exact
+`seL4_NBSendWait` can return on an already-active CYW43 badge before the
+equal-priority SDIO owner runs. CYW43 must then re-prove the same sequence-last
+`Waiting` child and its absent first-owner-action receipt before taking exactly
+one ordinary local-notification wait. It sends no second doorbell and performs
+no retry, poll, or second physical operation; a visible first action, terminal,
+replacement, recovery, or identity drift returns to durable reclassification.
+Pair recovery fences new work, preserves the exact terminal reason, scrubs the
+discarded generation, and advances identity before replay.
 
 The owner-lifetime record is:
 

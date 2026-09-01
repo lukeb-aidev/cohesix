@@ -855,20 +855,69 @@ fn pi_root_idle_receive_multiplexes_endpoint_and_fanin_after_the_final_fence() {
         .find("pub(crate) fn prepare_pi_root_control_idle_wait(")
         .expect("root idle fence implementation");
     let prepare_end = event[prepare_start..]
-        .find("/// Return whether attached WiFi")
+        .find("fn pi_root_control_idle_fence_evidence(")
         .map(|offset| prepare_start + offset)
         .expect("bounded root idle fence implementation");
     let prepare = &event[prepare_start..prepare_end];
-    let timer = prepare
+    let pre_timer = prepare
         .find("self.poll_runtime_timer_prelude_checked()")
         .expect("absolute KernelTimer must be the first durable deadline authority");
-    let child = prepare
+    let pre_evidence = prepare[pre_timer..]
+        .find("self.pi_root_control_idle_fence_evidence()")
+        .map(|offset| pre_timer + offset)
+        .expect("complete pre-enable fence");
+    let pre_decision = prepare[pre_evidence..]
+        .find("pi_root_control_idle_preparation(before_enable)")
+        .map(|offset| pre_evidence + offset)
+        .expect("pre-enable fence decision");
+    let enable = prepare[pre_decision..]
+        .find("ensure_pi_root_idle_timer_enabled(")
+        .map(|offset| pre_decision + offset)
+        .expect("direct-GENET timer enable Call");
+    let post_timer = prepare[enable..]
+        .find("self.poll_runtime_timer_prelude_checked()")
+        .map(|offset| enable + offset)
+        .expect("absolute deadline recheck after timer enable");
+    let post_evidence = prepare[post_timer..]
+        .find("self.pi_root_control_idle_fence_evidence()")
+        .map(|offset| post_timer + offset)
+        .expect("complete post-enable fence");
+    let post_decision = prepare[post_evidence..]
+        .find("pi_root_control_idle_preparation(after_enable)")
+        .map(|offset| post_evidence + offset)
+        .expect("post-enable fence decision");
+    assert!(
+        pre_timer < pre_evidence
+            && pre_evidence < pre_decision
+            && pre_decision < enable
+            && enable < post_timer
+            && post_timer < post_evidence
+            && post_evidence < post_decision
+    );
+    assert_eq!(
+        prepare
+            .matches("self.poll_runtime_timer_prelude_checked()")
+            .count(),
+        2,
+        "the exact enable Call must be fenced by complete deadline checks"
+    );
+    assert_eq!(
+        prepare
+            .matches("self.pi_root_control_idle_fence_evidence()")
+            .count(),
+        2,
+        "the exact enable Call must be fenced by complete durable predicates"
+    );
+    assert!(prepare.contains("before_enable.exact_direct_genet_topology"));
+
+    let evidence_end = event[prepare_end..]
+        .find("/// Return whether attached WiFi")
+        .map(|offset| prepare_end + offset)
+        .expect("bounded durable evidence helper");
+    let evidence = &event[prepare_end..evidence_end];
+    let _child = evidence
         .find("net.console_child_publication_pending()")
         .expect("isolated child level must participate in the idle cut");
-    let decision = prepare
-        .find("pi_root_control_idle_preparation(evidence)")
-        .expect("all durable evidence must precede the idle decision");
-    assert!(timer < child && child < decision);
     for required in [
         "ipc.has_staged_bootstrap()",
         "linked_physical_operator_work()",
@@ -882,7 +931,7 @@ fn pi_root_idle_receive_multiplexes_endpoint_and_fanin_after_the_final_fence() {
         "physical_console_response_pending()",
         "net.console_service_pending()",
     ] {
-        assert!(prepare.contains(required), "idle fence lost {required}");
+        assert!(evidence.contains(required), "idle fence lost {required}");
     }
 }
 

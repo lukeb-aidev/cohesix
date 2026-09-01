@@ -11431,7 +11431,13 @@ Changes:
     route, turn, parent, child, physical generation, immutable frontier,
     `Waiting` completion, issued-unknown, pair-restart, and live recovery
     fences. Selected MCS alone may execute the existing atomic slot-8 prompt
-    plus slot-3 wait; classic and every inexact publication remain signal-only.
+    plus slot-3 wait. When that syscall returns, re-prove the same sequence-last
+    `Waiting` child and its exact first SDIO-owner action receipt. Only an
+    unchanged child without that receipt takes one ordinary slot-3 wait, with
+    no second slot-8 prompt; a visible first action, terminal, replacement,
+    recovery, or identity drift continues through durable reclassification.
+    Classic and every inexact publication remain signal-only and gain no
+    additional wait.
     A release/acquire suppression latch may project private recovery into this
     scheduling decision, but it cannot initiate, complete, or clear recovery;
     only the existing pair-generation scrub clears it after canonical recovery
@@ -11441,16 +11447,25 @@ Changes:
     compiler-declared idle-receive topology. Bind the existing root-control fan-in notification
     to the init root-control TCB when its selected MCS temporal runtime is
     activated. Retain the already-allocated root-control Reply object and use
-    it for every MCS endpoint receive and reply. At the exact direct-GENET ordinary global-idle
-    cut, recheck timer, endpoint, durable producer, serial/local-seat/display,
-    network, fault, recovery, quarantine, containment, and reboot state before
-    blocking on the root-control endpoint. The bound notification may satisfy
-    that receive only as a hint; an endpoint message must be copied into
-    dispatcher-owned storage before returning, and all work is reclassified
-    from durable state. Reserve, post-response, operator, recovery, fault, and
+    it for every MCS endpoint receive and reply. Descriptor replay leaves the
+    PCIe timer disarmed in every mode. At the exact direct-GENET ordinary
+    global-idle cut, a completed empty quantum first permits exactly one
+    nonblocking multiplexed receive. If that receive is empty, recheck timer,
+    endpoint, durable producer, serial/local-seat/display, network, fault,
+    recovery, quarantine, containment, and reboot state. At the first complete
+    pre-enable fence only, issue one synchronous Reply-bearing typed enable
+    Call, require the matching completion and durable identity-bound `Enabled`
+    publication, then repeat the complete fence before blocking on the
+    root-control endpoint. Later idle entries reuse that exact enabled
+    lifetime without another programming operation. The bound notification may
+    satisfy that receive only as a hint; an endpoint message must be copied
+    into dispatcher-owned storage before returning, and all work is
+    reclassified from durable state. Reserve, post-response, operator,
+    recovery, fault, and
     every non-global-idle boundary retain their explicit handoff. WiFi never
-    enters this global-idle receive; it may wait only for a currently issued
-    finite operation or an exact current-transaction causal child. Do not add a
+    enables the timer or enters this global-idle receive; it may wait only for
+    a currently issued finite operation or an exact current-transaction causal
+    child. Do not add a
     future-request tail, spin, retry, poll loop, larger root window, fallback
     owner, or notification-only wait.
 
@@ -11460,14 +11475,20 @@ Changes:
     one separately tagged, discontiguous BCM2711 system-timer page at
     `0xFE003000` and level IRQ 99 (GIC SPI 67), badge `2048`, handler slot 4,
     local-notification slot 3. Its existing 10-page PCIe host aperture remains
-    separately tagged and contiguous. Channel 3 is armed at exactly half the
-    unchanged generated `10000 us` PCIe-owner period, hence `5000 us`. Each
-    interrupt service performs only the bounded source clear, `CLO` sample,
-    next-compare arm, ordering/readback, existing root-fan-in signal, and IRQ
-    acknowledgement. It performs no PCIe work, root timer processing, retry,
-    polling, or catch-up loop. Missing or malformed hot-path, MMIO resource,
-    physical address, page count, IRQ, badge, handler, notification, trigger,
-    period, or interval identity must fail before MMIO, signal, or ACK. The
+    separately tagged and contiguous. Descriptor adoption publishes
+    `Disarmed` without programming channel 3. The first exact direct-GENET
+    enable programs it at exactly half the unchanged generated `10000 us`
+    PCIe-owner period, hence `5000 us`, and publishes `Enabled`; every WiFi
+    lifetime remains disarmed. Each interrupt service performs only the bounded
+    source clear, `CLO` sample, next-compare self-arm, ordering/readback,
+    existing root-fan-in signal, and IRQ acknowledgement. It then immediately
+    enters the existing combined command-endpoint/local-notification receive,
+    returning a Reply-bearing command to ordinary dispatch or servicing one
+    next genuine timer edge before blocking again. It performs no PCIe work,
+    root timer processing, retry, polling, or catch-up loop. Missing or malformed
+    hot-path, MMIO resource, physical address, page count, IRQ, badge, handler,
+    notification, trigger, period, or interval identity must fail before MMIO,
+    signal, or ACK. The
     isolated runtime remains sole owner of both its PCIe aperture and this
     exact channel; root remains a timer consumer and never maps or programs the
     device.

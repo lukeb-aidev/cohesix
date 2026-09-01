@@ -13645,10 +13645,30 @@ where
     /// snapshot signals the notification bound to the endpoint receive.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn prepare_pi_root_control_idle_wait(&mut self) -> PiRootControlIdlePreparation {
-        // Polling consumes the exact absolute deadline duty. A due tick is not
-        // itself residual work: after publishing timebase/metrics here, root
-        // may sleep again when every other durable level is empty.
+        // Polling consumes the exact absolute deadline duty. The complete
+        // durable predicate is evaluated before timer enable, then again after
+        // its synchronous Reply-bearing owner Call. Thus work arriving during
+        // enable is visible before the final blocking receive.
         let _ = self.poll_runtime_timer_prelude_checked();
+        let before_enable = self.pi_root_control_idle_fence_evidence();
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        let before_preparation = pi_root_control_idle_preparation(before_enable);
+        if before_preparation != PiRootControlIdlePreparation::Wait {
+            return before_preparation;
+        }
+        if !crate::hal::driver_task::ensure_pi_root_idle_timer_enabled(
+            before_enable.exact_direct_genet_topology,
+        ) {
+            return PiRootControlIdlePreparation::Yield;
+        }
+        let _ = self.poll_runtime_timer_prelude_checked();
+        let after_enable = self.pi_root_control_idle_fence_evidence();
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        pi_root_control_idle_preparation(after_enable)
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn pi_root_control_idle_fence_evidence(&mut self) -> PiRootControlIdleFenceEvidence {
         let physical_pi_owner_state =
             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
         let direct_genet_mode_available = self.selected_direct_genet_continuation_mode().is_some();
@@ -13710,7 +13730,7 @@ where
             || !self.pending_cyw43_bootstrap_serial_milestones.is_empty()
             || self.console_network_quarantine_cleanup_pending
             || self.pending_console_network_quarantine_diagnostic.is_some();
-        let evidence = PiRootControlIdleFenceEvidence {
+        PiRootControlIdleFenceEvidence {
             exact_direct_genet_topology,
             ipc_staged: self.ipc.has_staged_bootstrap(),
             physical_operator_pending: self.linked_physical_operator_work()
@@ -13727,9 +13747,7 @@ where
             retained_output_pending,
             network_work_pending,
             child_publication_pending,
-        };
-        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
-        pi_root_control_idle_preparation(evidence)
+        }
     }
 
     /// Return whether attached WiFi has one exact child completion that may

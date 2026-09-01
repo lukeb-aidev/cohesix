@@ -85,7 +85,7 @@ use pi4_driver_abi::{
     DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
     DriverRuntimeCyw43RxQueueState, DriverRuntimeDpcEventEntry, DriverRuntimeDpcEventRing,
     DriverRuntimeGenetCompletionResultParts, DriverRuntimeInitDescriptor,
-    DriverRuntimeIrqDescriptor, DriverRuntimeResourceRangeDescriptor,
+    DriverRuntimeIrqDescriptor, DriverRuntimePcieTimerState, DriverRuntimeResourceRangeDescriptor,
     DriverRuntimeSdioCommandDescriptor, DriverRuntimeSdioPhysicalLifetimeRecord,
     DriverRuntimeSerialSpscHeader, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
@@ -153,8 +153,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
     DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PCIE_OP_PORT_READ,
     DRIVER_RUNTIME_PCIE_OP_PORT_WRITE, DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH,
-    DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US, DRIVER_RUNTIME_PCIE_TIMER_IRQ,
-    DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE, DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US,
+    DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE, DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US,
+    DRIVER_RUNTIME_PCIE_TIMER_IRQ, DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+    DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US, DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES,
+    DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED, DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED,
+    DRIVER_RUNTIME_PCIE_TIMER_STATE_FAULTED, DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET,
     DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR, DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING,
@@ -7955,6 +7958,10 @@ static TEST_SDIO_HOST_CLOCK_STABLE: AtomicBool = AtomicBool::new(true);
 static PCIE_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static PCIE_OP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PCIE_TIMER_ARMED: AtomicBool = AtomicBool::new(false);
+static PCIE_TIMER_ENABLE_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+static PCIE_TIMER_DEADLINE_CLO: AtomicU32 = AtomicU32::new(0);
+static PCIE_TIMER_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
+static PCIE_TIMER_STATE_PUBLICATION: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME_STATE: RuntimeStateSlot<GenetRuntimeState> =
     RuntimeStateSlot::new(GenetRuntimeState::new());
 static PCIE_RUNTIME_STATE: RuntimeStateSlot<PcieRuntimeState> =
@@ -13225,6 +13232,9 @@ fn validate_runtime_init_descriptor_with_wait_support(
         if !adopt_hal_prepared_pcie_runtime_descriptor(descriptor) {
             PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
             PCIE_TIMER_ARMED.store(false, Ordering::Release);
+            PCIE_TIMER_ENABLE_SEQUENCE.store(0, Ordering::Release);
+            PCIE_TIMER_DEADLINE_CLO.store(0, Ordering::Release);
+            PCIE_TIMER_IRQ_COUNT.store(0, Ordering::Release);
             return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
         }
     }
@@ -13334,7 +13344,7 @@ fn mark_descriptor_ready(hot_path: u32) {
 
 fn adopt_hal_prepared_pcie_runtime_descriptor(descriptor: DriverRuntimeInitDescriptor) -> bool {
     if !descriptor_resources_ready(&descriptor, HOT_PATH_PCIE_ROOT)
-        || !pcie_timer_initialize(&descriptor)
+        || !pcie_timer_begin_disarmed_lifetime(&descriptor)
     {
         PCIE_TIMER_ARMED.store(false, Ordering::Release);
         return false;
@@ -16066,45 +16076,54 @@ fn descriptor_pcie_timer_authority(
     })
 }
 
-fn pcie_timer_arm_with<Read32, Write32, CompleteStores, Ack>(
+fn pcie_timer_enable_with<Read32, Write32, CompleteStores, Publish, Ack>(
     descriptor: &DriverRuntimeInitDescriptor,
     mut read32: Read32,
     mut write32: Write32,
     mut complete_stores: CompleteStores,
+    mut publish: Publish,
     mut ack: Ack,
-) -> bool
+) -> Option<u32>
 where
     Read32: FnMut(usize) -> u32,
     Write32: FnMut(usize, u32) -> bool,
     CompleteStores: FnMut(),
+    Publish: FnMut(u32) -> bool,
     Ack: FnMut(u32) -> bool,
 {
     let Some(authority) = descriptor_pcie_timer_authority(descriptor) else {
-        return false;
+        return None;
     };
     if !write32(BCM_SYSTEM_TIMER_CS, BCM_SYSTEM_TIMER_MATCH_3) {
-        return false;
+        return None;
     }
     complete_stores();
+    if read32(BCM_SYSTEM_TIMER_CS) & BCM_SYSTEM_TIMER_MATCH_3 != 0 {
+        return None;
+    }
     let deadline = read32(BCM_SYSTEM_TIMER_CLO).wrapping_add(DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US);
     if !write32(BCM_SYSTEM_TIMER_C3, deadline) {
-        return false;
+        return None;
     }
     complete_stores();
     if read32(BCM_SYSTEM_TIMER_C3) != deadline {
-        return false;
+        return None;
     }
-    ack(authority.handler_slot)
+    if !publish(deadline) || !ack(authority.handler_slot) {
+        return None;
+    }
+    Some(deadline)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pcie_timer_service_with<Read32, Write32, CompleteStores, Release, Signal, Ack>(
+fn pcie_timer_service_with<Read32, Write32, CompleteStores, RecordDeadline, Release, Signal, Ack>(
     descriptor: &DriverRuntimeInitDescriptor,
     badge: u32,
     armed: bool,
     mut read32: Read32,
     mut write32: Write32,
     mut complete_stores: CompleteStores,
+    mut record_deadline: RecordDeadline,
     mut release: Release,
     mut signal: Signal,
     mut ack: Ack,
@@ -16113,6 +16132,7 @@ where
     Read32: FnMut(usize) -> u32,
     Write32: FnMut(usize, u32) -> bool,
     CompleteStores: FnMut(),
+    RecordDeadline: FnMut(u32),
     Release: FnMut(),
     Signal: FnMut() -> bool,
     Ack: FnMut(u32) -> bool,
@@ -16131,6 +16151,9 @@ where
         return false;
     }
     complete_stores();
+    if read32(BCM_SYSTEM_TIMER_CS) & BCM_SYSTEM_TIMER_MATCH_3 != 0 {
+        return false;
+    }
     let deadline = read32(BCM_SYSTEM_TIMER_CLO).wrapping_add(DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US);
     if !write32(BCM_SYSTEM_TIMER_C3, deadline) {
         return false;
@@ -16139,6 +16162,10 @@ where
     if read32(BCM_SYSTEM_TIMER_C3) != deadline {
         return false;
     }
+    // Retain only owner-local exceptional-state truth on the healthy IRQ
+    // path. A later signal/ACK fault can publish the actual most recently
+    // programmed compare without adding a shared-ring clean to every tick.
+    record_deadline(deadline);
     release();
     if !signal() {
         return false;
@@ -16164,26 +16191,210 @@ fn pcie_timer_write32(base: usize, offset: usize, value: u32) -> bool {
     true
 }
 
-fn pcie_timer_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
-    let Some(authority) = descriptor_pcie_timer_authority(descriptor) else {
+fn pcie_timer_next_publication() -> u32 {
+    let previous = match PCIE_TIMER_STATE_PUBLICATION.fetch_update(
+        Ordering::AcqRel,
+        Ordering::Acquire,
+        |current| Some(current.wrapping_add(1).max(1)),
+    ) {
+        Ok(previous) | Err(previous) => previous,
+    };
+    previous.wrapping_add(1).max(1)
+}
+
+fn publish_pcie_timer_state(
+    descriptor: &DriverRuntimeInitDescriptor,
+    state: u32,
+    enable_sequence: u32,
+    deadline_clo: u32,
+    irq_count: u32,
+) -> bool {
+    if descriptor_pcie_timer_authority(descriptor).is_none() {
+        return false;
+    }
+    let record = DriverRuntimePcieTimerState::staged(
+        descriptor.task_key,
+        descriptor.identity_token,
+        pcie_timer_next_publication(),
+        state,
+        enable_sequence,
+        deadline_clo,
+        irq_count,
+    );
+    let offset = usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET);
+    let commit = core::mem::offset_of!(DriverRuntimePcieTimerState, committed_publication);
+
+    write_ring_u32(offset + commit, 0);
+    driver_task_shared_store_barrier();
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, magic),
+        record.magic,
+    );
+    write_ring_u16(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, version),
+        record.version,
+    );
+    write_ring_u16(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, len),
+        record.len,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, task_key),
+        record.task_key,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, identity_token),
+        record.identity_token,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, publication),
+        record.publication,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, state),
+        record.state,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, enable_sequence),
+        record.enable_sequence,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, deadline_clo),
+        record.deadline_clo,
+    );
+    write_ring_u32(
+        offset + core::mem::offset_of!(DriverRuntimePcieTimerState, irq_count),
+        record.irq_count,
+    );
+    driver_task_shared_store_barrier();
+    write_ring_u32(offset + commit, record.publication);
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_RING_VADDR + offset,
+        usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES),
+    );
+    true
+}
+
+fn pcie_timer_begin_disarmed_lifetime(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    if descriptor_pcie_timer_authority(descriptor).is_none() {
         PCIE_TIMER_ARMED.store(false, Ordering::Release);
         return false;
-    };
-    #[cfg(target_os = "none")]
-    let armed = pcie_timer_arm_with(
+    }
+    PCIE_TIMER_ARMED.store(false, Ordering::Release);
+    PCIE_TIMER_ENABLE_SEQUENCE.store(0, Ordering::Release);
+    PCIE_TIMER_DEADLINE_CLO.store(0, Ordering::Release);
+    PCIE_TIMER_IRQ_COUNT.store(0, Ordering::Release);
+    PCIE_TIMER_STATE_PUBLICATION.store(0, Ordering::Release);
+    publish_pcie_timer_state(
         descriptor,
-        |offset| pcie_timer_read32(authority.timer_vaddr, offset),
-        |offset, value| pcie_timer_write32(authority.timer_vaddr, offset, value),
-        device_store_completion_barrier,
-        runtime_irq_handler_ack,
-    );
-    #[cfg(not(target_os = "none"))]
-    let armed = {
-        let _ = authority;
-        true
+        DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED,
+        0,
+        0,
+        0,
+    )
+}
+
+fn pcie_timer_publish_faulted(descriptor: &DriverRuntimeInitDescriptor) {
+    PCIE_TIMER_ARMED.store(false, Ordering::Release);
+    let enable_sequence = PCIE_TIMER_ENABLE_SEQUENCE.load(Ordering::Acquire);
+    if enable_sequence != 0 {
+        let _ = publish_pcie_timer_state(
+            descriptor,
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_FAULTED,
+            enable_sequence,
+            PCIE_TIMER_DEADLINE_CLO.load(Ordering::Acquire),
+            PCIE_TIMER_IRQ_COUNT.load(Ordering::Acquire),
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PcieTimerEnableAdmission {
+    First,
+    AlreadyEnabled(u32),
+    Reject,
+}
+
+const fn pcie_timer_enable_admission(
+    armed: bool,
+    enable_sequence: u32,
+) -> PcieTimerEnableAdmission {
+    match (armed, enable_sequence) {
+        (false, 0) => PcieTimerEnableAdmission::First,
+        (true, 0) | (false, _) => PcieTimerEnableAdmission::Reject,
+        (true, sequence) => PcieTimerEnableAdmission::AlreadyEnabled(sequence),
+    }
+}
+
+fn pcie_timer_enable_from_command(command: DriverTaskCommandRecord) -> Option<u32> {
+    if command.sequence == 0
+        || command.opcode != OPCODE_SERVICE
+        || command.flags != 0
+        || command.arg0 != HOT_PATH_PCIE_ROOT
+        || command.arg1 != ROLE_PCIE
+        || command.aux0 != u32::from(DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE) << 16
+        || command.aux1 != 0
+        || command.frame != DriverFrameDescriptor::empty()
+    {
+        return None;
+    }
+    let descriptor = RUNTIME_DESCRIPTOR.load();
+    descriptor_pcie_timer_authority(&descriptor)?;
+    match pcie_timer_enable_admission(
+        PCIE_TIMER_ARMED.load(Ordering::Acquire),
+        PCIE_TIMER_ENABLE_SEQUENCE.load(Ordering::Acquire),
+    ) {
+        PcieTimerEnableAdmission::First => {}
+        PcieTimerEnableAdmission::AlreadyEnabled(enable_sequence) => {
+            return Some(enable_sequence);
+        }
+        PcieTimerEnableAdmission::Reject => return None,
+    }
+
+    PCIE_TIMER_ENABLE_SEQUENCE.store(command.sequence, Ordering::Release);
+    PCIE_TIMER_IRQ_COUNT.store(0, Ordering::Release);
+    #[cfg(target_os = "none")]
+    let enabled = {
+        let authority = descriptor_pcie_timer_authority(&descriptor)?;
+        pcie_timer_enable_with(
+            &descriptor,
+            |offset| pcie_timer_read32(authority.timer_vaddr, offset),
+            |offset, value| pcie_timer_write32(authority.timer_vaddr, offset, value),
+            device_store_completion_barrier,
+            |deadline| {
+                PCIE_TIMER_DEADLINE_CLO.store(deadline, Ordering::Release);
+                PCIE_TIMER_ARMED.store(true, Ordering::Release);
+                publish_pcie_timer_state(
+                    &descriptor,
+                    DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED,
+                    command.sequence,
+                    deadline,
+                    0,
+                )
+            },
+            runtime_irq_handler_ack,
+        )
+        .map(|_| command.sequence)
     };
-    PCIE_TIMER_ARMED.store(armed, Ordering::Release);
-    armed
+    #[cfg(not(target_os = "none"))]
+    let enabled = {
+        let deadline = DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US;
+        PCIE_TIMER_DEADLINE_CLO.store(deadline, Ordering::Release);
+        PCIE_TIMER_ARMED.store(true, Ordering::Release);
+        publish_pcie_timer_state(
+            &descriptor,
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED,
+            command.sequence,
+            deadline,
+            0,
+        )
+        .then_some(command.sequence)
+    };
+    if enabled.is_none() {
+        pcie_timer_publish_faulted(&descriptor);
+    }
+    enabled
 }
 
 fn pcie_timer_runtime_service_notification(badge: u32) -> bool {
@@ -16200,6 +16411,7 @@ fn pcie_timer_runtime_service_notification(badge: u32) -> bool {
         |offset| pcie_timer_read32(authority.timer_vaddr, offset),
         |offset, value| pcie_timer_write32(authority.timer_vaddr, offset, value),
         device_store_completion_barrier,
+        |deadline| PCIE_TIMER_DEADLINE_CLO.store(deadline, Ordering::Release),
         || fence(Ordering::Release),
         runtime_signal_root_control_wake,
         runtime_irq_handler_ack,
@@ -16210,9 +16422,67 @@ fn pcie_timer_runtime_service_notification(badge: u32) -> bool {
         false
     };
     if !serviced {
-        PCIE_TIMER_ARMED.store(false, Ordering::Release);
+        pcie_timer_publish_faulted(&descriptor);
+        // A masked or malformed timer source cannot be relied on for another
+        // edge. Wake root once after the durable fault publication so its
+        // post-wake fence refuses another global idle block.
+        let _ = runtime_signal_root_control_wake();
+    } else {
+        PCIE_TIMER_IRQ_COUNT.fetch_add(1, Ordering::AcqRel);
     }
     serviced
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PcieTimerPostIrqWakeRoute {
+    Command(RuntimeCommandIntake),
+    ServiceThenBlock(u32),
+    FailClosed,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn pcie_timer_post_irq_wake_route(wake: RuntimeWake) -> PcieTimerPostIrqWakeRoute {
+    match wake {
+        RuntimeWake::Command(intake) => PcieTimerPostIrqWakeRoute::Command(intake),
+        RuntimeWake::Notification(badge) if badge == DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE => {
+            PcieTimerPostIrqWakeRoute::ServiceThenBlock(badge)
+        }
+        RuntimeWake::Notification(_) | RuntimeWake::None => PcieTimerPostIrqWakeRoute::FailClosed,
+    }
+}
+
+/// After one timer IRQ, block immediately on the PCIe command endpoint and its
+/// bound notification. Each notification iteration services exactly one real
+/// channel-3 event before another blocking receive; it is not a software poll,
+/// retry, or free-running owner quantum. A received Call returns to the ordinary
+/// dispatcher with its sole MCS Reply association retained.
+#[cfg(target_os = "none")]
+fn pcie_timer_block_after_irq(
+    last_sequence: u32,
+    task_key_marker: u32,
+) -> Option<RuntimeCommandIntake> {
+    loop {
+        let wake = runtime_command_wait_wake_or_quarantine(
+            wait_runtime_command_or_notification(last_sequence, task_key_marker, false),
+            RuntimeNotificationRoute::PcieTimer,
+            None,
+        );
+        match pcie_timer_post_irq_wake_route(wake) {
+            PcieTimerPostIrqWakeRoute::Command(intake) => return Some(intake),
+            PcieTimerPostIrqWakeRoute::ServiceThenBlock(badge) => {
+                if !pcie_timer_runtime_service_notification(badge) {
+                    return None;
+                }
+            }
+            PcieTimerPostIrqWakeRoute::FailClosed => {
+                let descriptor = RUNTIME_DESCRIPTOR.load();
+                pcie_timer_publish_faulted(&descriptor);
+                let _ = runtime_signal_root_control_wake();
+                return None;
+            }
+        }
+    }
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
@@ -20499,7 +20769,9 @@ fn runtime_fail_closed_steady_wait_unavailable(
         | RuntimeNotificationRoute::Genet
         | RuntimeNotificationRoute::Unavailable => {}
         RuntimeNotificationRoute::PcieTimer => {
-            PCIE_TIMER_ARMED.store(false, Ordering::Release);
+            let descriptor = RUNTIME_DESCRIPTOR.load();
+            pcie_timer_publish_faulted(&descriptor);
+            let _ = runtime_signal_root_control_wake();
         }
     }
 }
@@ -21289,6 +21561,22 @@ enum RuntimeSdioOwnerPublicationRoute {
     AtomicPromptAndWait(RuntimeSdioOwnerDoorbell),
 }
 
+/// Final scheduling decision after the first atomic publication wait returns.
+///
+/// `NBSendWait` makes the prompt and receive indivisible, but an already-active
+/// CYW43 notification can satisfy that receive without switching to the
+/// equal-priority SDIO owner. The sequence-last child is therefore re-proved
+/// after the syscall. Exactly one ordinary notification wait is required only
+/// while that same immutable child is still waiting and its sequence-last first
+/// owner-action receipt is absent. The first receive consumed the complete
+/// currently-active badge union, so this is not a resend or retry.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSdioOwnerPostPublicationRoute {
+    Complete,
+    WaitForExactOwner(RuntimeSdioOwnerDoorbell),
+}
+
 #[cfg(any(target_os = "none", test))]
 const fn runtime_sdio_owner_doorbell(sequence: u32) -> RuntimeSdioOwnerDoorbell {
     RuntimeSdioOwnerDoorbell {
@@ -21316,6 +21604,40 @@ const fn runtime_sdio_owner_publication_route(
         }
     }
     RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell)
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_sdio_owner_post_publication_route(
+    publication: RuntimeSdioOwnerPublicationRoute,
+    exact_after_wake: Option<RuntimeSdioOwnerDoorbell>,
+    first_owner_action_returned: bool,
+) -> RuntimeSdioOwnerPostPublicationRoute {
+    match (publication, exact_after_wake, first_owner_action_returned) {
+        (RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(expected), Some(current), false)
+            if expected.sequence != 0
+                && current.sequence == expected.sequence
+                && current.slot == expected.slot =>
+        {
+            RuntimeSdioOwnerPostPublicationRoute::WaitForExactOwner(current)
+        }
+        (
+            RuntimeSdioOwnerPublicationRoute::SignalOnly(_)
+            | RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(_),
+            _,
+            _,
+        ) => RuntimeSdioOwnerPostPublicationRoute::Complete,
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_sdio_owner_first_action_returned(command: DriverTaskCommandRecord) -> bool {
+    runtime_steady_service_progress_advance(
+        read_runtime_steady_service_progress_at(DRIVER_TASK_SDIO_BUS_RING_VADDR),
+        command,
+        command.aux1,
+        0,
+    )
+    .is_some()
 }
 
 #[cfg(test)]
@@ -34397,6 +34719,28 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
         cfg!(sel4_config_kernel_mcs),
     );
     runtime_deliver_sdio_owner_publication_with_progress(publication_route, progress_sequence);
+    #[cfg(target_os = "none")]
+    if let RuntimeSdioOwnerPostPublicationRoute::WaitForExactOwner(_) =
+        runtime_sdio_owner_post_publication_route(
+            publication_route,
+            cyw43_foreground_publication_sdio_handoff(
+                transaction,
+                runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
+            ),
+            runtime_sdio_owner_first_action_returned(entry.command),
+        )
+    {
+        // A returned first wait can have consumed one coalesced root or stale
+        // child badge while merely queuing the equal-priority SDIO owner. The
+        // same sequence-last Waiting child without its exact first-action
+        // receipt forbids CYW43 from continuing. Park once on the existing
+        // local notification so the runnable owner gets a real activation. A
+        // newly racing external badge is handled by the existing durable
+        // reclassification after this scheduling boundary.
+        if let Some(raw_badge) = wait_runtime_local_notification() {
+            let _ = runtime_observe_sdio_owner_publication_wake(raw_badge);
+        }
+    }
     true
 }
 
@@ -38227,6 +38571,15 @@ fn sdio_settle_transfer_data_path_until_with<I: SdioTransferIo>(
     false
 }
 
+const fn pcie_host_register_offset_valid(offset: usize) -> bool {
+    let mmio_limit = PCIE_HOST_REQUIRED_MMIO_PAGES as usize * DRIVER_TASK_RING_PAGE_BYTES;
+    offset & 0x3 == 0
+        && match offset.checked_add(PCIE_MMIO_ACCESS_BYTES) {
+            Some(end) => end <= mmio_limit,
+            None => false,
+        }
+}
+
 fn service_pcie_root(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
     if let Some(completion) = service_engine_init(command) {
         return completion;
@@ -38235,15 +38588,19 @@ fn service_pcie_root(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     let op = (command.aux0 >> 16) as u16;
+    if op == DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE {
+        return match pcie_timer_enable_from_command(command) {
+            Some(enable_sequence) => {
+                DriverTaskCompletionRecord::progress(command.sequence, enable_sequence)
+            }
+            None => DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        };
+    }
     let offset = command.aux1 as usize;
-    let descriptor = RUNTIME_DESCRIPTOR.load();
-    let mmio_limit =
-        usize::from(descriptor.mmio_page_count).saturating_mul(DRIVER_TASK_RING_PAGE_BYTES);
-    if offset & 0x3 != 0
-        || offset
-            .checked_add(PCIE_MMIO_ACCESS_BYTES)
-            .is_none_or(|end| end > mmio_limit)
-    {
+    // Ordinary host-register commands retain only the ten-page PCIe aperture.
+    // The separately declared eleventh page is the owner-private BCM timer and
+    // is reachable only through the exact typed enable operation above.
+    if !pcie_host_register_offset_valid(offset) {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     match op {
@@ -67256,10 +67613,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                     if let Some(service_badge) =
                         runtime_notification_service_badge(notification_route, badge)
                     {
-                        let _ = service_runtime_persistent_source_once(
+                        let serviced = service_runtime_persistent_source_once(
                             notification_route,
                             service_badge,
                         );
+                        if notification_route == RuntimeNotificationRoute::PcieTimer && serviced {
+                            pending_intake =
+                                pcie_timer_block_after_irq(last_sequence, task_key_marker);
+                            pending_command_gate.complete();
+                        }
                     }
                     continue;
                 }
@@ -68335,7 +68697,12 @@ pub fn runtime_main(task_key: usize) -> ! {
                     }
                     let service_badge = runtime_idle_service_badge(notification_route, badge);
                     if let Some(service_badge) = service_badge {
-                        let _ = service_runtime_notification(service_badge);
+                        let serviced = service_runtime_notification(service_badge);
+                        if notification_route == RuntimeNotificationRoute::PcieTimer && serviced {
+                            pending_intake =
+                                pcie_timer_block_after_irq(last_sequence, task_key_marker);
+                            pending_command_gate.complete();
+                        }
                     }
                     // The notification is only a prompt. Re-enter arbitration
                     // locally so any durable cursor or joined IRQ progress is
@@ -71091,6 +71458,10 @@ mod tests {
         PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
         PCIE_OP_COUNT.store(0, Ordering::Release);
         PCIE_TIMER_ARMED.store(false, Ordering::Release);
+        PCIE_TIMER_ENABLE_SEQUENCE.store(0, Ordering::Release);
+        PCIE_TIMER_DEADLINE_CLO.store(0, Ordering::Release);
+        PCIE_TIMER_IRQ_COUNT.store(0, Ordering::Release);
+        PCIE_TIMER_STATE_PUBLICATION.store(0, Ordering::Release);
         GENET_RUNTIME_STATE.with_mut(GenetRuntimeState::reset);
         PCIE_RUNTIME_STATE.with_mut(PcieRuntimeState::reset);
         USB_RUNTIME_STATE.with_mut(UsbRuntimeState::reset);
@@ -72700,6 +73071,24 @@ mod tests {
                 "MCS combines the exact prompt and publisher wait",
             );
             assert_eq!(
+                runtime_sdio_owner_post_publication_route(
+                    RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                    Some(doorbell),
+                    false,
+                ),
+                RuntimeSdioOwnerPostPublicationRoute::WaitForExactOwner(doorbell),
+                "an already-active source wake still parks before the first owner action",
+            );
+            assert_eq!(
+                runtime_sdio_owner_post_publication_route(
+                    RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                    Some(doorbell),
+                    true,
+                ),
+                RuntimeSdioOwnerPostPublicationRoute::Complete,
+                "an exact first-action receipt releases the multi-turn producer",
+            );
+            assert_eq!(
                 runtime_sdio_owner_publication_route(doorbell, Some(doorbell), false),
                 RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
                 "classic retains its existing single signal",
@@ -72709,11 +73098,29 @@ mod tests {
                 RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
                 "MCS cannot atomically park an inexact publication",
             );
+            assert_eq!(
+                runtime_sdio_owner_post_publication_route(
+                    RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                    None,
+                    false,
+                ),
+                RuntimeSdioOwnerPostPublicationRoute::Complete,
+                "a terminal, replaced, or recovery-fenced child forbids the extra wait",
+            );
             let stale = runtime_sdio_owner_doorbell(child.sequence.wrapping_sub(1));
             assert_eq!(
                 runtime_sdio_owner_publication_route(doorbell, Some(stale), true),
                 RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
                 "a stale durable token cannot redirect the publication prompt",
+            );
+            assert_eq!(
+                runtime_sdio_owner_post_publication_route(
+                    RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                    Some(stale),
+                    false,
+                ),
+                RuntimeSdioOwnerPostPublicationRoute::Complete,
+                "a replaced child cannot retain CYW43 at the old publication boundary",
             );
             assert_eq!(
                 cyw43_foreground_publication_sdio_handoff(
@@ -85935,6 +86342,7 @@ mod tests {
 
         let events = std::cell::RefCell::new(std::vec::Vec::new());
         let c3 = std::cell::Cell::new(0u32);
+        let cs_pending = std::cell::Cell::new(true);
         let clo = u32::MAX - 15;
         assert!(pcie_timer_service_with(
             &descriptor,
@@ -85948,7 +86356,13 @@ mod tests {
                     _ => "read-invalid",
                 });
                 match offset {
-                    BCM_SYSTEM_TIMER_CS => BCM_SYSTEM_TIMER_MATCH_3,
+                    BCM_SYSTEM_TIMER_CS => {
+                        if cs_pending.get() {
+                            BCM_SYSTEM_TIMER_MATCH_3
+                        } else {
+                            0
+                        }
+                    }
                     BCM_SYSTEM_TIMER_CLO => clo,
                     BCM_SYSTEM_TIMER_C3 => c3.get(),
                     _ => 0,
@@ -85960,12 +86374,22 @@ mod tests {
                     BCM_SYSTEM_TIMER_C3 => "write-c3",
                     _ => "write-invalid",
                 });
+                if offset == BCM_SYSTEM_TIMER_CS {
+                    cs_pending.set(false);
+                }
                 if offset == BCM_SYSTEM_TIMER_C3 {
                     c3.set(value);
                 }
                 true
             },
             || events.borrow_mut().push("complete-stores"),
+            |deadline| {
+                assert_eq!(
+                    deadline,
+                    clo.wrapping_add(DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US)
+                );
+                events.borrow_mut().push("record-deadline");
+            },
             || events.borrow_mut().push("release"),
             || {
                 events.borrow_mut().push("signal-root");
@@ -85988,16 +86412,153 @@ mod tests {
                 "read-cs",
                 "write-cs",
                 "complete-stores",
+                "read-cs",
                 "read-clo",
                 "write-c3",
                 "complete-stores",
                 "read-c3",
+                "record-deadline",
                 "release",
                 "signal-root",
                 "ack-irq",
             ],
             "device source clear and current-CLO rearm must precede the release/signal/ACK boundary",
         );
+    }
+
+    #[test]
+    fn pcie_timer_enable_clears_arms_publishes_then_acks_once() {
+        assert_eq!(
+            pcie_timer_enable_admission(false, 0),
+            PcieTimerEnableAdmission::First
+        );
+        assert_eq!(
+            pcie_timer_enable_admission(true, 17),
+            PcieTimerEnableAdmission::AlreadyEnabled(17)
+        );
+        assert_eq!(
+            pcie_timer_enable_admission(false, 17),
+            PcieTimerEnableAdmission::Reject,
+            "a failed first enable is terminal and cannot reprogram or re-ACK C3",
+        );
+        assert_eq!(
+            pcie_timer_enable_admission(true, 0),
+            PcieTimerEnableAdmission::Reject,
+            "armed state without its exact enable identity fails closed",
+        );
+        let descriptor = descriptor_for(HOT_PATH_PCIE_ROOT, ROLE_PCIE);
+        let events = std::cell::RefCell::new(std::vec::Vec::new());
+        let c3 = std::cell::Cell::new(0u32);
+        let clo = 41_000u32;
+        assert_eq!(
+            pcie_timer_enable_with(
+                &descriptor,
+                |offset| {
+                    events.borrow_mut().push(match offset {
+                        BCM_SYSTEM_TIMER_CS => "read-cs",
+                        BCM_SYSTEM_TIMER_CLO => "read-clo",
+                        BCM_SYSTEM_TIMER_C3 => "read-c3",
+                        _ => "read-invalid",
+                    });
+                    match offset {
+                        BCM_SYSTEM_TIMER_CS => 0,
+                        BCM_SYSTEM_TIMER_CLO => clo,
+                        BCM_SYSTEM_TIMER_C3 => c3.get(),
+                        _ => 0,
+                    }
+                },
+                |offset, value| {
+                    events.borrow_mut().push(match offset {
+                        BCM_SYSTEM_TIMER_CS => "write-cs",
+                        BCM_SYSTEM_TIMER_C3 => "write-c3",
+                        _ => "write-invalid",
+                    });
+                    if offset == BCM_SYSTEM_TIMER_C3 {
+                        c3.set(value);
+                    }
+                    true
+                },
+                || events.borrow_mut().push("complete-stores"),
+                |deadline| {
+                    assert_eq!(deadline, clo + DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US);
+                    events.borrow_mut().push("publish-enabled");
+                    true
+                },
+                |slot| {
+                    assert_eq!(slot, DRIVER_TASK_CHILD_PCIE_TIMER_IRQ_HANDLER_SLOT);
+                    events.borrow_mut().push("ack-irq");
+                    true
+                },
+            ),
+            Some(clo + DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US)
+        );
+        assert_eq!(
+            events.into_inner(),
+            std::vec![
+                "write-cs",
+                "complete-stores",
+                "read-cs",
+                "read-clo",
+                "write-c3",
+                "complete-stores",
+                "read-c3",
+                "publish-enabled",
+                "ack-irq",
+            ],
+        );
+    }
+
+    #[test]
+    fn pcie_timer_post_irq_route_blocks_only_after_exact_events() {
+        let intake = RuntimeCommandIntake {
+            command: DriverTaskCommandRecord {
+                sequence: 9,
+                opcode: OPCODE_SERVICE,
+                flags: 0,
+                arg0: HOT_PATH_PCIE_ROOT,
+                arg1: ROLE_PCIE,
+                aux0: u32::from(DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE) << 16,
+                aux1: 0,
+                budget: DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 0,
+                    max_bytes: 0,
+                },
+                frame: DriverFrameDescriptor::empty(),
+            },
+            reply_cap_available: true,
+        };
+        assert_eq!(
+            pcie_timer_post_irq_wake_route(RuntimeWake::Command(intake)),
+            PcieTimerPostIrqWakeRoute::Command(intake)
+        );
+        assert_eq!(
+            pcie_timer_post_irq_wake_route(RuntimeWake::Notification(
+                DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE
+            )),
+            PcieTimerPostIrqWakeRoute::ServiceThenBlock(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE)
+        );
+        assert_eq!(
+            pcie_timer_post_irq_wake_route(RuntimeWake::Notification(0)),
+            PcieTimerPostIrqWakeRoute::FailClosed
+        );
+        assert_eq!(
+            pcie_timer_post_irq_wake_route(RuntimeWake::None),
+            PcieTimerPostIrqWakeRoute::FailClosed
+        );
+    }
+
+    #[test]
+    fn ordinary_pcie_register_commands_cannot_reach_timer_page() {
+        let host_bytes = PCIE_HOST_REQUIRED_MMIO_PAGES as usize * DRIVER_TASK_RING_PAGE_BYTES;
+        assert!(pcie_host_register_offset_valid(
+            host_bytes - PCIE_MMIO_ACCESS_BYTES
+        ));
+        assert!(!pcie_host_register_offset_valid(host_bytes));
+        assert!(!pcie_host_register_offset_valid(
+            PCIE_TIMER_MMIO_PAGE_INDEX * DRIVER_TASK_RING_PAGE_BYTES
+        ));
+        assert!(!pcie_host_register_offset_valid(1));
     }
 
     #[test]
@@ -86018,6 +86579,7 @@ mod tests {
                 true
             },
             || side_effects.set(side_effects.get().saturating_add(1)),
+            |_| side_effects.set(side_effects.get().saturating_add(1)),
             || side_effects.set(side_effects.get().saturating_add(1)),
             || {
                 side_effects.set(side_effects.get().saturating_add(1));
@@ -113843,10 +114405,32 @@ mod tests {
             RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
             "selected MCS atomically prompts the SDIO owner and parks CYW43",
         );
+        assert!(
+            !runtime_sdio_owner_first_action_returned(child),
+            "no first-action receipt may predate SDIO owner intake",
+        );
+        assert_eq!(
+            runtime_sdio_owner_post_publication_route(
+                RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                exact_handoff,
+                runtime_sdio_owner_first_action_returned(child),
+            ),
+            RuntimeSdioOwnerPostPublicationRoute::WaitForExactOwner(doorbell),
+            "a coalesced first wake cannot let CYW43 outrun the still-waiting HOST_CONFIG owner",
+        );
         assert_eq!(
             runtime_sdio_owner_publication_route(doorbell, exact_handoff, false),
             RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
             "classic retains the existing signal-only route",
+        );
+        assert_eq!(
+            runtime_sdio_owner_post_publication_route(
+                RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
+                exact_handoff,
+                false,
+            ),
+            RuntimeSdioOwnerPostPublicationRoute::Complete,
+            "classic never gains an additional publication wait",
         );
         assert_eq!(
             test_sdio_owner_doorbell(0),
@@ -113892,12 +114476,25 @@ mod tests {
         );
         assert_eq!(io.command_issue_count(), 0);
         assert_eq!(io.dma_started, 0);
+        // The target aliases SDIO's local ring into CYW43's bus-ring window;
+        // host tests keep those buffers separate, so publish the production
+        // first-action record directly into the consumer-visible fixture.
         assert!(publish_runtime_steady_service_progress_at(
             DRIVER_TASK_SDIO_BUS_RING_VADDR,
             child,
             generation,
             1,
         ));
+        assert!(runtime_sdio_owner_first_action_returned(child));
+        assert_eq!(
+            runtime_sdio_owner_post_publication_route(
+                RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                exact_handoff,
+                runtime_sdio_owner_first_action_returned(child),
+            ),
+            RuntimeSdioOwnerPostPublicationRoute::Complete,
+            "the exact first-action receipt must release CYW43 to publish HOST_CONFIG's grant",
+        );
         TEST_RUNTIME_TIMER_COUNTER_TICKS
             .fetch_add(runtime_micros_to_cycles(6_720_249), Ordering::AcqRel);
         gate.retain_after_pending_generation(generation);

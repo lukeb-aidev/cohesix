@@ -8972,14 +8972,21 @@ be replied or retained through exactly that object; an unavailable/null or
 duplicate Reply installation fails before activation. Classic and QEMU
 selection must retain their qualified receive/binding behavior.
 
-At the physical-Pi exact direct-GENET ordinary global-idle exit, tests must prove timer, endpoint,
-durable producer, serial/local-seat/display, network, fault, recovery,
-containment, quarantine, and reboot predicates are empty, perform exactly one
-nonblocking multiplexed receive, repeat the complete durable predicate, and
-only then perform one blocking endpoint receive. A notification wake returns
-to outer operator/recovery-first arbitration and derives no work from its
-badge; an endpoint wake stages the exact message and returns through that same
-arbitration. A timer becoming due, durable publication winning either race,
+At the physical-Pi exact direct-GENET ordinary global-idle exit, tests must
+prove a completed empty quantum precedes exactly one nonblocking multiplexed
+receive. If that receive is empty, root must prove timer, endpoint, durable
+producer, serial/local-seat/display, network, fault, recovery, containment,
+quarantine, and reboot predicates are empty. On the first such pre-enable fence
+in one owner lifetime, an exact durable `Disarmed` state must select one
+synchronous Reply-bearing typed timer-enable Call. Root must accept only the
+matching completion and stable identity-bound `Enabled` publication, repeat
+the complete idle fence, and only then perform one blocking endpoint receive.
+Work arriving during the nonblocking receive, enable, or either complete fence
+must prevent the block. Later idle entries must prove the same
+`Enabled` lifetime and issue no command or MMIO reprogram. A notification wake
+returns to outer operator/recovery-first arbitration and derives no work from
+its badge; an endpoint wake stages the exact message and returns through that
+same arbitration. A timer becoming due, durable publication winning either race,
 physical input/response, display debt, passive admission, local fault,
 recovery, containment, quarantine, reboot, handoff, or identity drift must
 skip the block. Reserve, post-response, operator, recovery, and fault exits
@@ -8988,8 +8995,9 @@ Wait, future-request admission, post-response or peer-ACK tail, spin, retry,
 poll loop, synthetic deadline, larger budget/window, and fallback ownership.
 The transaction-scoped current-request condition-before-block fences remain
 independently exact and cannot broaden the global idle predicate. WiFi must
-never select the global-idle receive; it may block only for a currently issued
-finite operation or exact current-transaction causal child.
+never issue the timer-enable Call or select the global-idle receive; it may
+block only for a currently issued finite operation or exact
+current-transaction causal child.
 
 Generated-profile, HAL, ABI, and isolated-runtime tests must prove the existing
 `driver-pcie` row retains its task, SC, core, priority/MCP, refill, WCET,
@@ -9004,11 +9012,22 @@ admit the timer before its DMA page, while wired and disabled selections admit
 the timer alone. QEMU and host profiles must admit no Pi device page. PCIe
 construction must revalidate that exclusive admission and consume it through
 the child-only map path rather than ordinary cached/root mapping.
-One valid IRQ turn must clear the C3 source, sample `CLO`, arm the next compare,
-perform the required ordering/readback, signal the existing root fan-in, and
-acknowledge once, in that order, with no PCIe action, catch-up, second timer
-operation, retry, or loop. Each malformed tag, range, page index, physical
-address, descriptor page, IRQ, badge, slot, trigger, hot path, period, or
+Descriptor replay in every Pi network mode must publish one valid
+identity-bound `Disarmed` record while performing no C3 program, timer IRQ ACK,
+or root signal. Only the first valid typed direct-GENET enable command may
+clear the stale source, sample `CLO`, arm C3 at the exact interval, publish
+`Enabled`, and return the same nonzero enable sequence. Repeated exact enable
+is read-only and idempotent; WiFi, inexact topology, malformed command,
+identity drift, or missing owner state must perform no command publication,
+MMIO, signal, or ACK. One valid IRQ turn must clear the C3 source, sample
+`CLO`, arm the next compare, perform the required ordering/readback, signal the
+existing root fan-in, and acknowledge once, in that order, with no PCIe action,
+catch-up, second timer operation, retry, or poll. It must then immediately
+enter the existing combined command-endpoint/local-notification receive: one
+Reply-bearing command returns to ordinary dispatch, while one next genuine C3
+notification services exactly one IRQ before blocking again. Each malformed
+tag, range, page index, physical address, descriptor page, IRQ, badge, slot,
+trigger, hot path, period, or
 interval case must perform zero MMIO, signal, and ACK. Compiler resource totals
 and all generated selected outputs must account for the one added page without
 changing task population, schema 1.16, runtime ABI v12 layout, or any SC
@@ -9653,23 +9672,32 @@ notification as its wait. `Returned`, `Recovery`, `Invalid`, a wrong route,
 zero sequence, or post-wake identity drift must issue no combined wait and
 select the existing fail-closed path. Tests must also prove that the durable
 command/grant record, never either notification badge, remains authority, and
-that an unrelated wake can only re-prompt the same durable command rather than
-create a retry or second physical operation. The exact MCS target compile must
-exercise the real `NBSendWait` binding. A classic non-MCS compile/source test
+that an unrelated active badge can satisfy the first atomic wait without
+proving the equal-priority SDIO owner ran. Only when the same sequence-last
+child remains `Waiting` and its first owner-action receipt is absent may CYW43
+perform exactly one ordinary local-notification wait, with no second slot-8
+prompt. A visible first action, terminal, replacement, recovery, or identity
+drift must skip that wait and return to durable reclassification. The exact MCS
+target compile must exercise the real `NBSendWait` and post-wait local `Wait`
+bindings. A classic non-MCS compile/source test
 must retain the prior slot-3 local wait-only behavior and prove that this
 correction emits no slot-8 peer signal. This focused check proves syscall
 selection and publication ordering only; it is not evidence that the SDIO
 owner ran or that Gate 8, DHCP, or either performance gate passed on Pi.
-The exact persistent-publication regression must separately drive the
+The exact fresh-foreground-publication regression must separately drive the
 production sequence-last commit cut. A positive selected-MCS case must prove
-the persistent parent, child sequence, generation, immutable frontier,
-root-grant environment, exact `Cyw43Client` route, no issued-unknown or pair
-restart, and stable `Waiting` completion before selecting one immediate
-`seL4_NBSendWait` on slots 8 and 3. Zero, stale, replaced, nonpersistent,
+the admitted executing turn, parent, child sequence, generation, immutable
+frontier, root-grant environment, exact `Cyw43Client` route, no issued-unknown
+or pair restart, and stable `Waiting` completion before selecting one immediate
+`seL4_NBSendWait` on slots 8 and 3. Ordinary cold HOST_CONFIG is a positive
+case when those fences are exact. Zero, stale, replaced, inadmissible-turn,
 wrong-route, recovery, issued-unknown, pair-restart, and non-Waiting cases must
 not select that atomic park. Classic and inexact publication cases must retain
-exactly one signal-only slot-8 prompt. Tests must classify the returned badge
-without granting it work: an unarmed, unexpired, stale, wrong-lifetime, or
+exactly one signal-only slot-8 prompt. After the syscall, tests must separately
+prove that the unchanged exact `Waiting` child without a first owner-action
+receipt selects one slot-3 wait and no send, while an observed receipt or any
+inexact state selects no additional wait. Tests must classify the returned
+badge without granting it work: an unarmed, unexpired, stale, wrong-lifetime, or
 wrong-sequence reserved-root badge must not prompt SDIO, and only the existing
 exact expired-deadline predicate may do so. The durable command/completion
 classifier remains mandatory before any later work. The

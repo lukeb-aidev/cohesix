@@ -549,6 +549,13 @@ pub const DRIVER_RUNTIME_PCIE_OP_PORT_READ: u16 = 1;
 pub const DRIVER_RUNTIME_PCIE_OP_PORT_WRITE: u16 = 2;
 /// PCIe runtime command operation: flush posted writes.
 pub const DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH: u16 = 3;
+/// PCIe runtime command operation: enable the direct-GENET root-idle timer.
+///
+/// This operation is Reply-bearing and idempotent. The isolated owner programs
+/// channel 3 only for the first exact enable in one runtime lifetime; later
+/// calls return the already-published enable identity without touching MMIO or
+/// acknowledging the IRQ handler again.
+pub const DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE: u16 = 4;
 /// SDIO runtime command flag: command has an SDIO data phase.
 pub const DRIVER_RUNTIME_SDIO_FLAG_DATA: u16 = 1 << 0;
 /// SDIO runtime command flag: data phase writes root-staged bytes to the card.
@@ -2720,6 +2727,159 @@ pub const DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US: u32 = 10_000;
 /// C3 wake interval derived as half of the declared PCIe-owner period.
 pub const DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US: u32 =
     DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US / 2;
+/// PCIe-role-local offset of the durable root-idle timer state.
+///
+/// Other isolated roles use the same numeric range in distinct physical ring
+/// pages. The record is disjoint from the command, continuation grant,
+/// completion, progress, cadence, and frame apertures in the PCIe ring.
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET: u16 = 192;
+/// Exact bytes in one [`DriverRuntimePcieTimerState`] publication.
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES: u16 = 40;
+/// Magic value for a PCIe-owned root-idle timer state (`PTMR`).
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_MAGIC: u32 = 0x5054_4d52;
+/// Layout version for [`DriverRuntimePcieTimerState`].
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_VERSION: u16 = 1;
+/// Timer state before the exact direct-GENET idle path enables channel 3.
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED: u32 = 1;
+/// Timer state after one exact enable; IRQ service self-rearms at 5 ms.
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED: u32 = 2;
+/// Timer state after a source, publication, signal, or ACK invariant failed.
+pub const DRIVER_RUNTIME_PCIE_TIMER_STATE_FAULTED: u32 = 3;
+
+/// Durable sequence-last state for the PCIe-owned root-idle timer.
+///
+/// Root uses this record only to prove whether the exact owner lifetime is
+/// already enabled. The absolute root `KernelTimer` deadline remains the time
+/// authority; the IRQ notification remains only a scheduling hint.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimePcieTimerState {
+    /// [`DRIVER_RUNTIME_PCIE_TIMER_STATE_MAGIC`].
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_PCIE_TIMER_STATE_VERSION`].
+    pub version: u16,
+    /// Exact record bytes.
+    pub len: u16,
+    /// Generated PCIe driver-task key.
+    pub task_key: u32,
+    /// Sealed PCIe runtime descriptor identity token.
+    pub identity_token: u32,
+    /// Monotonic nonzero publication identity.
+    pub publication: u32,
+    /// One `DRIVER_RUNTIME_PCIE_TIMER_STATE_*` value.
+    pub state: u32,
+    /// Root command sequence that first enabled this lifetime, or zero.
+    pub enable_sequence: u32,
+    /// Channel-3 compare value at this exceptional state publication.
+    pub deadline_clo: u32,
+    /// Owner-local IRQ count sampled only for an exceptional state publication.
+    /// Healthy 5 ms IRQs deliberately do not republish or clean this record.
+    pub irq_count: u32,
+    /// Sequence-last commit; exactly repeats `publication`.
+    pub committed_publication: u32,
+}
+
+impl DriverRuntimePcieTimerState {
+    /// Build one uncommitted state publication for a sealed runtime lifetime.
+    #[must_use]
+    pub const fn staged(
+        task_key: u32,
+        identity_token: u32,
+        publication: u32,
+        state: u32,
+        enable_sequence: u32,
+        deadline_clo: u32,
+        irq_count: u32,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_PCIE_TIMER_STATE_MAGIC,
+            version: DRIVER_RUNTIME_PCIE_TIMER_STATE_VERSION,
+            len: DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES,
+            task_key,
+            identity_token,
+            publication,
+            state,
+            enable_sequence,
+            deadline_clo,
+            irq_count,
+            committed_publication: 0,
+        }
+    }
+
+    /// Commit this complete body by repeating its publication identity.
+    #[must_use]
+    pub const fn commit(mut self) -> Self {
+        if self.body_valid() {
+            self.committed_publication = self.publication;
+        }
+        self
+    }
+
+    const fn body_valid(self) -> bool {
+        let state_valid = match self.state {
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED => self.enable_sequence == 0,
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED | DRIVER_RUNTIME_PCIE_TIMER_STATE_FAULTED => {
+                self.enable_sequence != 0
+            }
+            _ => false,
+        };
+        self.magic == DRIVER_RUNTIME_PCIE_TIMER_STATE_MAGIC
+            && self.version == DRIVER_RUNTIME_PCIE_TIMER_STATE_VERSION
+            && self.len == DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES
+            && self.task_key != 0
+            && self.identity_token != 0
+            && self.publication != 0
+            && state_valid
+    }
+
+    /// Whether this is one complete identity-bound publication.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid() && self.committed_publication == self.publication
+    }
+
+    /// Whether this exact descriptor lifetime is already timer-enabled.
+    #[must_use]
+    pub const fn enabled_for(self, task_key: u32, identity_token: u32) -> bool {
+        self.valid()
+            && self.task_key == task_key
+            && self.identity_token == identity_token
+            && self.state == DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED
+    }
+
+    /// Accept only two identical complete samples.
+    #[must_use]
+    pub const fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first.magic == second.magic
+            && first.version == second.version
+            && first.len == second.len
+            && first.task_key == second.task_key
+            && first.identity_token == second.identity_token
+            && first.publication == second.publication
+            && first.state == second.state
+            && first.enable_sequence == second.enable_sequence
+            && first.deadline_clo == second.deadline_clo
+            && first.irq_count == second.irq_count
+            && first.committed_publication == second.committed_publication
+            && first.valid()
+        {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<DriverRuntimePcieTimerState>() == 40);
+    assert!(core::mem::align_of::<DriverRuntimePcieTimerState>() == 4);
+    assert!(DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET >= 160);
+    assert!(
+        DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET + DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES
+            <= DRIVER_RUNTIME_RING_FRAME_OFFSET
+    );
+    assert!(core::mem::offset_of!(DriverRuntimePcieTimerState, committed_publication) == 36);
+};
 /// Exact seL4 IRQ identity for the BCM2711 GENET general/descriptor-ring line.
 ///
 /// The selected Pi profile's repository-managed `kernel.dts` records this as
@@ -8689,6 +8849,7 @@ mod tests {
 
     #[test]
     fn pcie_timer_constants_are_exact_and_disjoint() {
+        assert_eq!(DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE, 4);
         assert_eq!(DRIVER_RUNTIME_RESOURCE_TAG_PI4_SYSTEM_TIMER, 15);
         assert_eq!(DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR, 0xFE00_3000);
         assert_eq!(DRIVER_RUNTIME_PI4_SYSTEM_TIMER_CLOCK_HZ, 1_000_000);
@@ -8696,6 +8857,13 @@ mod tests {
         assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE, 1 << 11);
         assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US, 10_000);
         assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US, 5_000);
+        assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET, 192);
+        assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES, 40);
+        assert_eq!(core::mem::size_of::<DriverRuntimePcieTimerState>(), 40);
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimePcieTimerState, committed_publication),
+            36
+        );
         assert_eq!(
             DRIVER_TASK_CHILD_PCIE_TIMER_IRQ_HANDLER_SLOT,
             DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
@@ -8703,6 +8871,42 @@ mod tests {
         assert_eq!(
             DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
             0
+        );
+
+        let disarmed = DriverRuntimePcieTimerState::staged(
+            7,
+            11,
+            1,
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED,
+            0,
+            0,
+            0,
+        )
+        .commit();
+        assert!(disarmed.valid());
+        assert!(!disarmed.enabled_for(7, 11));
+
+        let enabled = DriverRuntimePcieTimerState::staged(
+            7,
+            11,
+            2,
+            DRIVER_RUNTIME_PCIE_TIMER_STATE_ENABLED,
+            19,
+            5_000,
+            0,
+        )
+        .commit();
+        assert!(enabled.enabled_for(7, 11));
+        assert!(!enabled.enabled_for(7, 12));
+        assert_eq!(
+            DriverRuntimePcieTimerState::stable_snapshot(enabled, enabled),
+            Some(enabled)
+        );
+        let mut torn = enabled;
+        torn.committed_publication = 0;
+        assert_eq!(
+            DriverRuntimePcieTimerState::stable_snapshot(enabled, torn),
+            None
         );
     }
 
