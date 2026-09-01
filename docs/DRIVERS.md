@@ -1252,23 +1252,33 @@ transport:
   HOST_CONFIG as well as the previously admitted persistent exchange. Selected
   MCS then uses one `seL4_NBSendWait` to prompt slot 8 and park on slot 3 before
   later semantic bookkeeping. When that syscall returns, CYW43 re-proves the
-  same sequence-last `Waiting` child and checks its exact first SDIO-owner
-  action receipt. If the child still waits and that receipt is absent, CYW43
-  performs exactly one ordinary slot-3 notification wait without another
-  slot-8 prompt; otherwise it continues through the existing durable
-  reclassification. This covers an already-active CYW43 badge consuming the
-  atomic wait before the equal-priority SDIO owner runs, without adding a
-  resend, retry, poll, loop, or second physical operation. A returned badge
-  has no work authority; a reserved-root bit is routed only through the
-  existing immutable-arm,
-  physical-lifetime, child-sequence, and expiry classifier before it may prompt
-  the sole SDIO owner. The retained state machine then reclassifies the durable
-  completion. Classic and every inexact, stale, replaced, recovery, or
-  wrong-route publication perform the existing single slot-8 signal instead;
-  they do not inherit the atomic park. A suppression-only atomic latch closes
-  recovery that begins after the healthy turn snapshot; only canonical pair
-  recovery clears it. SDIO remains the sole issuer and must independently
-  validate the same immutable command and generation before touching hardware.
+  same sequence-last child and enters one condition-driven publication episode.
+  A stable `Waiting` child without its exact first-action receipt parks again
+  on the existing slot-3 notification; it never sends slot 8 again. Every
+  returned badge is only a reason to re-read the exact child, generation,
+  immutable command, matching terminal, aliased no-grant progress record,
+  recovery fences, and unchanged absolute child timeout. An ordinary delegated
+  child accepts only strict DRSP1 because slice two requires root's later grant;
+  an exact steady or persistent autonomous child accepts any committed
+  monotonic slice above zero because it has no grant phase and may advance
+  before CYW43 observes owner intake. That exact receipt or an exact terminal
+  closes the episode; issued-unknown, pair restart, or the suppression-only
+  recovery latch returns to canonical recovery; a mixed marker, aliased grant,
+  identity drift, or malformed progress fails closed. An expired unchanged
+  absolute timeout performs the existing
+  late-terminal fence and enters the existing issued-unknown recovery path. It
+  does not count wakes, extend a deadline, or add a retry. This event-driven
+  condition-before-block episode covers any number of coalesced root or stale
+  child badges that could otherwise return before the equal-priority SDIO owner
+  runs, without adding a resend, polling cadence, spin, budget, owner, or second
+  physical operation. A reserved-root bit is routed only through the existing
+  immutable-arm, physical-lifetime, child-sequence, and expiry classifier before
+  it may prompt the sole SDIO owner. Classic and every inexact, stale, replaced,
+  recovery, or wrong-route publication perform the existing single slot-8
+  signal instead; they do not inherit the atomic park. Only canonical pair
+  recovery clears the suppression latch. SDIO remains the sole issuer and must
+  independently validate the same immutable command and generation before
+  touching hardware.
 - Within one CYW43 root-granted foreground turn, observing and consuming one
   exact successful SDIO child terminal under a sealed finite cold parent does
   not consume that turn's sole new-submission slot. The admitted cold set is
@@ -1331,7 +1341,12 @@ transport:
   kernel-atomic receive domain: a fan-in badge is only a coalescing hint, while
   an endpoint message is copied into root-owned staged storage before the IPC
   buffer can be reused. A wake always returns to operator/recovery-first
-  arbitration and fresh durable producer reads. Reserve, post-response,
+  arbitration and fresh durable producer reads. Consuming the one-shot
+  nonblocking hint does not revoke a later blocking idle cut after another
+  complete empty quantum: the full predicate is rechecked, routine empty USB
+  service debt remains governed by C3, and only real operator input retains the
+  operator fence. A persistent `Retry` still reaches the existing Yield instead
+  of forming a poll loop. Reserve, post-response,
   operator, recovery, fault, and every non-global-idle exit retain their
   explicit handoff; no future network request, badge, or elapsed interval is
   inferred. WiFi never enables this timer or enters this global-idle receive
@@ -1433,10 +1448,12 @@ transport:
   64-complete-quantum cap only for the current authenticated request. Every
   stage-bearing continuation binds generation, connection, and the exact
   nonzero one-slot child-control sequence. Its condition-before-block fan-in
-  wait remains eligible only while that same control level still owes the
-  child's watermark and no durable child publication is visible; a publication
-  that wins the race returns through outer recovery/operator-first arbitration
-  without Yield. Every quantum rechecks operator, passive, fault, recovery,
+  wait remains eligible while that same control level owes the child's
+  watermark and, after consumption, while an exact root-local response batch
+  with the same identity records control-complete but not output-drained. No
+  durable child publication may already be visible; a publication that wins
+  either race returns through outer recovery/operator-first arbitration without
+  Yield. Every quantum rechecks operator, passive, fault, recovery,
   containment, quarantine, reboot, handoff, and continuation-mode fences, and
   the root's `5,500/10,000 us` SC remains the hard execution bound. Fused
   stage-and-drain or `OutputDrained` is the terminal of this causal episode:

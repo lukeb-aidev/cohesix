@@ -271,14 +271,16 @@ badge returns to outer operator/recovery-first arbitration and a fresh durable
 read; ordinary zero takes the existing bounded Yield. One exact causal cut is
 different: after durable revalidation proves either an exact signal-bound
 finite one-way CYW43 operation whose sequence-last terminal is still absent, or
-an exact staged console control whose child-consumption watermark is still
-owed, root polls once and waits only if that poll is empty. Persistent and
-steady CYW43 parents retain root-polled deadlines and cannot wait. A stable
-terminal, semantic event, packet egress, ingress watermark, or control
-watermark visible at the cut returns to the rotor instead of waiting. Once the
-control watermark is accepted, peer-ACK/`OutputDrained` debt remains ordinary
-network/timer work. Bare physical idle, deadline, recovery, containment,
-quarantine, reboot, and operator-owned cuts grant no wait authority.
+an exact staged console response whose child-consumption or `OutputDrained`
+publication is still owed, root polls once and waits only if that poll is
+empty. Persistent and steady CYW43 parents retain root-polled deadlines and
+cannot wait. A stable terminal or durable child publication visible at the cut
+returns to the rotor instead of waiting. After accepting the control watermark,
+root may wait again only while the root-local response batch retains the same
+generation, authenticated connection, and nonzero control sequence and records
+control-complete without output-drained. Bare physical idle, deadline,
+recovery, containment, quarantine, reboot, and operator-owned cuts grant no
+causal wait authority.
 The selected timeout policy for root control and the active console child is
 `NaturalPostpone`: exhausting the current refill postpones execution until a
 valid replenishment. Their standard fault endpoints remain installed and
@@ -385,13 +387,22 @@ generation, immutable frontier, captured healthy publication environment,
 exact `Cyw43Client` route, issued-unknown, pair-restart, live-recovery, and
 stable `Waiting` fences. Selected MCS may then use one `seL4_NBSendWait` to
 prompt slot 8 and atomically park on slot 3 before later semantic bookkeeping.
-On return, CYW43 re-proves that same sequence-last child is still `Waiting` and
-that its first SDIO-owner action receipt is still absent. Only that exact case
-performs one ordinary slot-3 notification wait, with no second slot-8 send; an
-already observed first action, terminal, replacement, recovery, or identity
-drift continues through durable reclassification. This closes the case where
-an already-active CYW43 badge satisfied `NBSendWait` before the equal-priority
-SDIO owner ran, without creating a resend, retry, loop, or second operation.
+On return, CYW43 retains that same activation as a condition-driven publication
+episode. While the exact sequence-last child remains `Waiting` and its exact
+no-grant first-action receipt is absent, CYW43 blocks again on slot 3 without
+another slot-8 send. Ordinary delegated children require strict DRSP1 because
+slice two depends on root's later grant. Exact steady or persistent autonomous
+children may accept any committed monotonic slice above zero because they have
+no grant phase and can advance before CYW43 observes owner intake. Each
+returned badge only triggers durable reclassification: that exact receipt or a
+terminal returns, exact recovery unwinds, and a mixed marker, aliased grant,
+identity, or malformed progress fails closed. The unchanged absolute child
+timeout is sampled after a naturally returned wake; expiry takes the existing
+late-terminal-first, issued-unknown recovery route and never derives time from
+badge count. This
+closes any number of already-active root or stale-child badges that satisfy a
+wait before the equal-priority SDIO owner runs, without creating a resend,
+retry, polling cadence, spin, second operation, or scheduling-number change.
 Classic and every inexact, stale, or recovery-fenced publication retain the
 existing one slot-8 signal and do not park at this cut. The badge is only a
 hint; the durable ring and completion remain authority, and SDIO alone
@@ -537,10 +548,11 @@ root-control under the generated NaturalPostpone profile and unchanged
 stage-bearing continuation binds the exact generation, connection, and
 nonzero one-slot child-control sequence; generation and connection alone
 cannot match a later sequential publication. The condition-before-block fan-in
-may wait only while that exact control still owes its child-consumption
-watermark and no durable child publication is visible. If the child wins the
-race, root returns to outer recovery/operator-first arbitration without
-Yield. Every quantum rechecks passive admission, physical operator input or
+may wait while that exact control owes its child-consumption watermark and,
+after the watermark is accepted, while the same exact response batch still
+owes `OutputDrained`; no durable child publication may already be visible. If
+the child wins either race, root returns to outer recovery/operator-first
+arbitration without Yield. Every quantum rechecks passive admission, physical operator input or
 response, display debt, recovery, fault, containment, quarantine, reboot,
 handoff, identity, final Serial phase, and the shared cap; the root SC remains
 the hard CPU bound. Fused stage-and-drain or `OutputDrained` ends the current

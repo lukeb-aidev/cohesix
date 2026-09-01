@@ -167,6 +167,24 @@ struct ResponseLane {
     completed_responses: u16,
 }
 
+const fn console_response_batch_debt(
+    lane: Option<ResponseLane>,
+) -> Option<super::ConsoleResponseBatchDebt> {
+    let Some(lane) = lane else {
+        return None;
+    };
+    let Some(batch) = lane.awaiting_batch else {
+        return None;
+    };
+    Some(super::ConsoleResponseBatchDebt {
+        generation: lane.generation,
+        connection_id: lane.connection_id,
+        sequence: batch.sequence,
+        control_completed: batch.control_completed,
+        output_drained: batch.output_drained,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IsolatedTurnTelemetry {
     last_progress_ms: u64,
@@ -2063,6 +2081,10 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         self.runtime.child_control_publication_owed()
     }
 
+    fn console_response_batch_debt(&self) -> Option<super::ConsoleResponseBatchDebt> {
+        console_response_batch_debt(self.response_lane)
+    }
+
     fn request_disconnect(&mut self) {
         if self.active_connection.is_some() && !self.faulted && !self.terminal {
             self.disconnect_requested = true;
@@ -2292,6 +2314,46 @@ mod tests {
                 "QEMU, WiFi, non-direct, and backpressured stages retain the ordinary observation boundary: {evidence:?}",
             );
         }
+    }
+
+    #[test]
+    fn response_batch_debt_preserves_exact_control_and_drain_state() {
+        let mut batch = PendingResponseBatch::new(19, 1, 0);
+        batch.control_completed = true;
+        let lane = ResponseLane {
+            generation: 7,
+            connection_id: 41,
+            awaiting_batch: Some(batch),
+            producer_open: false,
+            completed_responses: 1,
+        };
+        assert_eq!(
+            console_response_batch_debt(Some(lane)),
+            Some(super::super::ConsoleResponseBatchDebt {
+                generation: 7,
+                connection_id: 41,
+                sequence: 19,
+                control_completed: true,
+                output_drained: false,
+            }),
+        );
+        let drained = ResponseLane {
+            awaiting_batch: lane.awaiting_batch.map(|mut batch| {
+                batch.output_drained = true;
+                batch
+            }),
+            ..lane
+        };
+        assert!(
+            console_response_batch_debt(Some(drained)).is_some_and(|debt| debt.output_drained),
+            "the exact terminal stays observable until ordinary settlement consumes it",
+        );
+        assert!(console_response_batch_debt(None).is_none());
+        assert!(console_response_batch_debt(Some(ResponseLane {
+            awaiting_batch: None,
+            ..lane
+        }))
+        .is_none());
     }
 
     #[test]

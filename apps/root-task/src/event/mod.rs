@@ -4638,7 +4638,15 @@ fn direct_genet_causal_wait_matches_only_the_current_control_identity() {
         connection_id: 41,
         sequence: 9,
     };
+    let exact_batch = crate::net::ConsoleResponseBatchDebt {
+        generation: 7,
+        connection_id: 41,
+        sequence: 9,
+        control_completed: true,
+        output_drained: false,
+    };
     assert!(expected.matches_child_control_publication(exact));
+    assert!(expected.matches_response_batch_debt(exact_batch));
     for stale in [
         crate::console_network_service::ConsoleNetworkControlPublication {
             generation: 8,
@@ -4675,9 +4683,42 @@ fn direct_genet_causal_wait_matches_only_the_current_control_identity() {
     ));
     assert!(!rebound.matches_child_control_publication(exact));
     assert_eq!(
-        direct_genet_causal_fanin_state(expected, Some(exact), Some(false), true),
+        direct_genet_causal_fanin_state(expected, Some(exact), None, Some(false), true),
         DirectGenetCausalFaninState::Wait,
     );
+    assert_eq!(
+        direct_genet_causal_fanin_state(expected, None, Some(exact_batch), Some(false), true),
+        DirectGenetCausalFaninState::Wait,
+        "the exact consumed control must retain the episode through output drain",
+    );
+    for stale_batch in [
+        crate::net::ConsoleResponseBatchDebt {
+            generation: 8,
+            ..exact_batch
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            connection_id: 42,
+            ..exact_batch
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            sequence: 10,
+            ..exact_batch
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            control_completed: false,
+            ..exact_batch
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            output_drained: true,
+            ..exact_batch
+        },
+    ] {
+        assert_eq!(
+            direct_genet_causal_fanin_state(expected, None, Some(stale_batch), Some(false), true,),
+            DirectGenetCausalFaninState::Closed,
+            "stale, unconsumed, or already-drained batch state grants no wait",
+        );
+    }
     assert_eq!(
         direct_genet_causal_fanin_state(
             expected,
@@ -4687,6 +4728,7 @@ fn direct_genet_causal_wait_matches_only_the_current_control_identity() {
                     ..exact
                 }
             ),
+            None,
             Some(false),
             true,
         ),
@@ -4694,12 +4736,18 @@ fn direct_genet_causal_wait_matches_only_the_current_control_identity() {
         "a later control in the same session cannot replace the exact staged request",
     );
     assert_eq!(
-        direct_genet_causal_fanin_state(expected, Some(exact), Some(true), true),
+        direct_genet_causal_fanin_state(expected, Some(exact), Some(exact_batch), Some(true), true,),
         DirectGenetCausalFaninState::Arbitrate,
         "any already-published child level may avoid Yield but grants only ordinary arbitration",
     );
     assert_eq!(
-        direct_genet_causal_fanin_state(expected, Some(exact), Some(false), false),
+        direct_genet_causal_fanin_state(
+            expected,
+            Some(exact),
+            Some(exact_batch),
+            Some(false),
+            false,
+        ),
         DirectGenetCausalFaninState::Closed,
         "operator, recovery, passive, display, or fault drift closes the wait",
     );
@@ -5967,6 +6015,25 @@ impl PiRootControlProductiveContinuation {
             && publication.sequence == self.child_control_sequence
     }
 
+    /// Match the exact staged response after the child consumed root's control
+    /// but before it published the final output-drained event.
+    ///
+    /// The batch record is root-local causal evidence, not a scheduling grant.
+    /// Requiring the same nonzero control sequence prevents an older batch in
+    /// the authenticated session from extending this continuation.
+    pub(crate) const fn matches_response_batch_debt(
+        self,
+        debt: crate::net::ConsoleResponseBatchDebt,
+    ) -> bool {
+        self.awaits_child_publication()
+            && debt.generation == self.generation
+            && debt.connection_id == self.connection_id
+            && self.child_control_sequence != 0
+            && debt.sequence == self.child_control_sequence
+            && debt.control_completed
+            && !debt.output_drained
+    }
+
     /// Bind one stage-bearing continuation to the exact one-slot control
     /// publication that the isolated child must consume.
     ///
@@ -6049,6 +6116,7 @@ fn direct_genet_causal_fanin_state(
     control_publication_owed: Option<
         crate::console_network_service::ConsoleNetworkControlPublication,
     >,
+    response_batch_debt: Option<crate::net::ConsoleResponseBatchDebt>,
     child_publication_pending: Option<bool>,
     fence_clear: bool,
 ) -> DirectGenetCausalFaninState {
@@ -6060,7 +6128,8 @@ fn direct_genet_causal_fanin_state(
         Some(false)
             if control_publication_owed.is_some_and(|publication| {
                 expected.matches_child_control_publication(publication)
-            }) =>
+            }) || response_batch_debt
+                .is_some_and(|debt| expected.matches_response_batch_debt(debt)) =>
         {
             DirectGenetCausalFaninState::Wait
         }
@@ -13572,6 +13641,10 @@ where
             .net
             .as_deref()
             .and_then(crate::net::NetPoller::console_child_control_publication_owed);
+        let response_batch_debt = self
+            .net
+            .as_deref()
+            .and_then(crate::net::NetPoller::console_response_batch_debt);
         let child_publication_pending = self
             .net
             .as_deref()
@@ -13579,6 +13652,7 @@ where
         direct_genet_causal_fanin_state(
             expected,
             control_publication_owed,
+            response_batch_debt,
             child_publication_pending,
             fence_clear,
         ) == DirectGenetCausalFaninState::Wait
@@ -13602,6 +13676,10 @@ where
             .net
             .as_deref()
             .and_then(crate::net::NetPoller::console_child_control_publication_owed);
+        let response_batch_debt = self
+            .net
+            .as_deref()
+            .and_then(crate::net::NetPoller::console_response_batch_debt);
         let child_publication_pending = self
             .net
             .as_deref()
@@ -13609,6 +13687,7 @@ where
         direct_genet_causal_fanin_state(
             expected,
             control_publication_owed,
+            response_batch_debt,
             child_publication_pending,
             fence_clear,
         ) == DirectGenetCausalFaninState::Arbitrate
@@ -13733,8 +13812,9 @@ where
         PiRootControlIdleFenceEvidence {
             exact_direct_genet_topology,
             ipc_staged: self.ipc.has_staged_bootstrap(),
-            physical_operator_pending: self.linked_physical_operator_work()
-                != LinkedPhysicalOperatorWork::Idle,
+            physical_operator_pending: self
+                .linked_physical_operator_work()
+                .retains_network_fence_after_dispatch(),
             serial_output_pending: self.serial.tx_pending(),
             display_pending: self.linked_runtime_operator_display_pending()
                 || self.split_ordinary_virtio_display_attach_pending(),

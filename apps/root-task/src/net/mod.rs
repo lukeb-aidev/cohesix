@@ -1704,6 +1704,12 @@ pub trait NetPoller {
         None
     }
 
+    /// Return the exact staged response batch whose child output has not yet
+    /// drained. Non-isolated transports cannot prove this causal debt.
+    fn console_response_batch_debt(&self) -> Option<ConsoleResponseBatchDebt> {
+        None
+    }
+
     /// Poll one isolated response-network unit through the normal driver-task
     /// budget. Other transports retain their ordinary polling contract.
     fn poll_console_response_with_budget(
@@ -2038,6 +2044,21 @@ pub struct ConsoleResponseLane {
     pub producer_open: bool,
     /// Number of complete ordered responses retained or awaiting exact drain.
     pub completed_responses: usize,
+}
+
+/// Exact root-local child response batch that remains causally undrained.
+///
+/// This is not a shared ABI or scheduling grant. Root uses the immutable
+/// generation, connection, and control sequence only to prove that a second
+/// condition-before-block wait still belongs to the response already staged
+/// for the isolated child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleResponseBatchDebt {
+    pub(crate) generation: u64,
+    pub(crate) connection_id: u64,
+    pub(crate) sequence: u64,
+    pub(crate) control_completed: bool,
+    pub(crate) output_drained: bool,
 }
 
 /// Bounded progress and queue snapshot for the isolated console-network child.

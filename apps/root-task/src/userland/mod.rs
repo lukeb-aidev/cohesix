@@ -33,10 +33,15 @@ use crate::event::Cyw43BootstrapAtomicDecisionOutcome;
     feature = "serial-console",
     feature = "kernel",
     feature = "net-console",
-    feature = "release-pi4",
-    target_arch = "aarch64",
-    target_os = "none",
-    sel4_config_kernel_mcs
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
 ))]
 use crate::event::PiRootControlIdlePreparation;
 #[cfg(all(
@@ -748,9 +753,12 @@ where
                     productive_window.consume_nonblocking_fanin_hint();
                     continue;
                 }
-                if !handoff_turn && productive_window.nonblocking_fanin_hint_eligible() {
-                    match pump.prepare_pi_root_control_idle_wait() {
-                        PiRootControlIdlePreparation::Retry => {
+                if !handoff_turn {
+                    match pi_root_control_idle_route(
+                        pump.prepare_pi_root_control_idle_wait(),
+                        productive_window.nonblocking_fanin_hint_eligible(),
+                    ) {
+                        PiRootControlIdleRoute::RetryOuter => {
                             // A level raced the completed empty quantum. Admit
                             // exactly one outer recheck; if it remains unable
                             // to advance, the consumed race allowance forces
@@ -758,17 +766,14 @@ where
                             productive_window.consume_nonblocking_fanin_hint();
                             continue;
                         }
-                        PiRootControlIdlePreparation::Wait
-                            if wait_pi_root_control_idle_fanin(pump) =>
-                        {
+                        PiRootControlIdleRoute::Block if wait_pi_root_control_idle_fanin(pump) => {
                             // An endpoint message has already been preserved,
                             // or a bound fan-in producer woke the receive. The
                             // badge grants no work identity: return through the
                             // complete recovery/operator-first outer fence.
                             continue;
                         }
-                        PiRootControlIdlePreparation::Wait
-                        | PiRootControlIdlePreparation::Yield => {}
+                        PiRootControlIdleRoute::Block | PiRootControlIdleRoute::Yield => {}
                     }
                 }
                 pi_root_control_yield_and_restart(
@@ -1908,6 +1913,61 @@ where
         }
         if !active_hot_tail_before_record && window.active_hot_tail_identity().is_some() {
             pump.record_pi_root_control_active_hot_tail_opened(identity);
+        }
+    }
+}
+
+/// Scheduling route selected after the complete global-idle predicate.
+///
+/// The one-shot nonblocking hint bounds only a raced outer recheck. It cannot
+/// revoke the independently fenced blocking receive after a later complete
+/// empty quantum, and it cannot turn persistent runnable state into a loop.
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PiRootControlIdleRoute {
+    RetryOuter,
+    Block,
+    Yield,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
+))]
+const fn pi_root_control_idle_route(
+    preparation: PiRootControlIdlePreparation,
+    race_retry_available: bool,
+) -> PiRootControlIdleRoute {
+    match preparation {
+        PiRootControlIdlePreparation::Retry if race_retry_available => {
+            PiRootControlIdleRoute::RetryOuter
+        }
+        PiRootControlIdlePreparation::Wait => PiRootControlIdleRoute::Block,
+        PiRootControlIdlePreparation::Retry | PiRootControlIdlePreparation::Yield => {
+            PiRootControlIdleRoute::Yield
         }
     }
 }
@@ -8171,6 +8231,35 @@ mod tests {
         assert!(!activation_window.nonblocking_fanin_hint_available());
         activation_window.reset();
         assert!(activation_window.nonblocking_fanin_hint_available());
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn root_control_idle_block_survives_consumed_hint_without_retry_spin() {
+        use crate::event::PiRootControlIdlePreparation::{Retry, Wait, Yield};
+
+        assert_eq!(
+            super::pi_root_control_idle_route(Wait, false),
+            super::PiRootControlIdleRoute::Block,
+            "a consumed wake hint cannot revoke the full condition-before-block cut",
+        );
+        assert_eq!(
+            super::pi_root_control_idle_route(Retry, true),
+            super::PiRootControlIdleRoute::RetryOuter,
+        );
+        assert_eq!(
+            super::pi_root_control_idle_route(Retry, false),
+            super::PiRootControlIdleRoute::Yield,
+            "persistent runnable state cannot form an outer recheck loop",
+        );
+        assert_eq!(
+            super::pi_root_control_idle_route(Yield, true),
+            super::PiRootControlIdleRoute::Yield,
+        );
     }
 
     #[cfg(all(

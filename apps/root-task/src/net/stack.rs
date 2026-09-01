@@ -55,12 +55,13 @@ use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     dhcp::{DhcpClient, DhcpEvent, DhcpLease, DhcpPhase, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
-    parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, ConsoleResponseIdentity,
-    ConsoleResponseLane, DirectGenetDiagnostics, IsolatedConsoleDiagnostics, NetBackend,
-    NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
-    NetInterfacePolicy, NetMode, NetPoller, NetSelfTestReport, NetSelfTestResult,
-    NetSelfTestStartResult, NetStage, NetStatusReport, NetTelemetry, WifiCredentials,
-    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
+    parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, ConsoleResponseBatchDebt,
+    ConsoleResponseIdentity, ConsoleResponseLane, DirectGenetDiagnostics,
+    IsolatedConsoleDiagnostics, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
+    NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller,
+    NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage, NetStatusReport,
+    NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, MAX_FRAME_LEN,
+    NET_DIAG, NET_STAGE,
 };
 #[cfg(all(
     feature = "net-backend-virtio",
@@ -9544,6 +9545,11 @@ impl NetPoller for GenetNetStack {
             .and_then(NetPoller::console_child_control_publication_owed)
     }
 
+    fn console_response_batch_debt(&self) -> Option<ConsoleResponseBatchDebt> {
+        self.inner()
+            .and_then(NetPoller::console_response_batch_debt)
+    }
+
     #[cfg(feature = "release-pi4")]
     fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64) {
         if let Some(inner) = self.inner_mut() {
@@ -9924,6 +9930,11 @@ impl NetPoller for Cyw43NetStack {
     ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
         self.inner()
             .and_then(NetPoller::console_child_control_publication_owed)
+    }
+
+    fn console_response_batch_debt(&self) -> Option<ConsoleResponseBatchDebt> {
+        self.inner()
+            .and_then(NetPoller::console_response_batch_debt)
     }
 
     #[cfg(feature = "release-pi4")]
@@ -11375,6 +11386,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.console_child_control_publication_owed(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_child_control_publication_owed(),
+        }
+    }
+
+    fn console_response_batch_debt(&self) -> Option<ConsoleResponseBatchDebt> {
+        match self {
+            Self::Rtl8139(stack) => stack.console_response_batch_debt(),
+            Self::GenetDriverTask(stack) => stack.console_response_batch_debt(),
+            Self::Cyw43DriverTask(stack) => stack.console_response_batch_debt(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_response_batch_debt(),
         }
     }
 

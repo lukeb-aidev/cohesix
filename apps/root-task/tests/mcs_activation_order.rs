@@ -818,6 +818,16 @@ fn pi_root_idle_receive_multiplexes_endpoint_and_fanin_after_the_final_fence() {
         1,
         "global idle must perform one full durable predicate recheck"
     );
+    assert!(
+        global_idle.contains("pi_root_control_idle_route(")
+            && global_idle.contains("productive_window.nonblocking_fanin_hint_eligible(),"),
+        "the one-shot hint may bound Retry but must not gate the full idle route",
+    );
+    assert!(
+        !global_idle
+            .contains("if !handoff_turn && productive_window.nonblocking_fanin_hint_eligible()"),
+        "a consumed coalesced edge cannot revoke the next fenced blocking receive",
+    );
     assert_eq!(
         global_idle
             .matches("wait_pi_root_control_idle_fanin(pump)")
