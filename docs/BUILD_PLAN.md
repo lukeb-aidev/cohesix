@@ -12858,6 +12858,13 @@ Define and prove the production coexistence contract:
    `plan -> apply -> watch -> explain -> verify -> recover`, with evidence-pack
    reconstruction and compensation using the same provider/action graph rather
    than ecosystem-specific scripts or client-invented state.
+10. Make each evidence pack a cross-system evidence graph keyed by one Cohesix
+    ticket. Offline, that ticket must answer: who requested the action; why it
+    was allowed; what actually ran; which resources it reserved and consumed;
+    whether it worked; and how an authorized operator can reproduce or reverse
+    it. Every answer resolves to validator-accepted records and immutable refs,
+    or to an explicit `missing|unavailable|unverified` result—never inference
+    from file presence, native labels, or an apparently successful transcript.
 
 **Non-Goals (Explicit)**
 - No in-VM Kubernetes, Docker, systemd, CUDA/NVML, PEFT, NeMo, Prometheus, OpenTelemetry, DICOM, CCSDS, MODBUS, CAN, DNP3, IEC-104, or other ecosystem runtime.
@@ -13262,6 +13269,13 @@ Implementation requirements:
   identity mapping, approval/decision/grant, native execution objects,
   observations, verification, provider/Worker receipts, recovery, packaging
   profile, exporter schemas, and content-addressed external refs.
+- Given only an evidence pack and ticket id, the offline verifier answers who,
+  why, what ran, reserved/observed resource use, verified outcome, and
+  reproducibility/reversal for that action with exact source refs. A required
+  missing or ambiguous causal node fails acceptance; reproduce and reverse are
+  rendered as bounded authorized plans with exact artifacts, configuration,
+  preconditions, idempotency state, and compensation target, never executed by
+  opening or inspecting the pack.
 - One generated ticket-centred host-tool journey can plan, apply, watch,
   explain, verify, recover, and export the same workflow without parsing native
   CLI text or inventing ecosystem-specific authority state.
