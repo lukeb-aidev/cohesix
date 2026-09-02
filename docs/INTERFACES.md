@@ -39,6 +39,12 @@ documentation in the same authorized change.
 
 ### MCS operator-inspection records
 
+The Pi-only verbose `wifi: pair_handoff` v1 diagnostic is additive; its passive
+ring layout and field semantics are defined in [DRIVERS.md](DRIVERS.md).
+It changes no runtime-init ABI version, generated authority, console command,
+authentication/framing, namespace, or REST/SDK/report schema. Absence is
+unavailable evidence, never a readiness or performance result.
+
 The console provides bare `caps`, bare `smp`, and the first `bi` record plus
 strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and
 `[smp:mcs/v1]`. Every record labels kernel, generated, or runtime authority.

@@ -34,6 +34,8 @@ use core::{
     sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
+mod pair_handoff;
+
 #[cfg(test)]
 use console_network_abi::DIRECT_GENET_RX_SLOT_COUNT;
 use console_network_abi::{
@@ -10943,6 +10945,7 @@ const fn cyw43_foreground_admission_rejection_result(command: DriverTaskCommandR
 }
 
 fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
+    pair_handoff::owner_stage(command, pi4_driver_abi::PAIR_HANDOFF_DISPATCH);
     GENET_RUNTIME_STATE.with_mut(|state| {
         if state.direct_genet_active {
             // Endpoint work spends the same child scheduling context as the
@@ -11022,6 +11025,7 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
     } else {
         RuntimeCommandTurn::Complete(service_command_immediate(task_key, command))
     };
+    pair_handoff::owner_stage(command, pi4_driver_abi::PAIR_HANDOFF_ACTION_RETURNED);
 
     #[cfg(any(target_os = "none", test))]
     if cyw43_transaction {
@@ -11308,8 +11312,18 @@ fn runtime_command_intake_after_pre_admit(
     command: DriverTaskCommandRecord,
     reply_cap_available: bool,
 ) -> RuntimeCommandIntake {
+    pair_handoff::owner_ring_seen(command);
+    pair_handoff::owner_stage(command, pi4_driver_abi::PAIR_HANDOFF_INTAKE_BEGIN);
     let _ = cyw43_foreground_pre_admit(command);
-    let _ = sdio_external_dma_pre_admit(command);
+    let sdio_sealed = sdio_external_dma_pre_admit(command);
+    pair_handoff::owner_stage(
+        command,
+        if sdio_sealed {
+            pi4_driver_abi::PAIR_HANDOFF_SEALED
+        } else {
+            pi4_driver_abi::PAIR_HANDOFF_REJECTED
+        },
+    );
     RuntimeCommandIntake {
         command,
         reply_cap_available,
@@ -13230,8 +13244,10 @@ fn read_runtime_command_record() -> DriverTaskCommandRecord {
         DRIVER_TASK_RING_VADDR,
         core::mem::size_of::<DriverTaskCommandRecord>(),
     );
-    runtime_ring_read_command_stable(&RuntimeRingWindow::local())
-        .unwrap_or(DriverTaskCommandRecord::empty())
+    let command = runtime_ring_read_command_stable(&RuntimeRingWindow::local())
+        .unwrap_or(DriverTaskCommandRecord::empty());
+    pair_handoff::owner_ring_seen(command);
+    command
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -13407,6 +13423,7 @@ fn poll_runtime_command(
     // inconclusive. Reply-bearing commands use the selected-kernel receive
     // contract above, including the explicit MCS Reply object.
     let tag = runtime_nonblocking_command_receive(&mut badge, false);
+    pair_handoff::owner_raw_receive(badge, tag.words[0]);
     let expected_command_badge = pi4_driver_abi::driver_runtime_command_badge(task_key_marker);
     match runtime_receive_observation(
         cfg!(sel4_config_kernel_mcs),
@@ -13500,6 +13517,7 @@ fn runtime_wake_from_received_values(
     last_sequence: u32,
     task_key: u32,
 ) -> RuntimeWake {
+    pair_handoff::owner_raw_receive(badge, tag.words[0]);
     match runtime_received_boundary_from_values(tag, badge, ipc_sequence, last_sequence, task_key) {
         RuntimeReceivedBoundary::Wake(wake) => wake,
         RuntimeReceivedBoundary::RejectedEndpointIpc => {
@@ -13624,6 +13642,10 @@ fn runtime_blocking_wait(
     target: RuntimeBlockingWaitTarget,
     badge: &mut sel4_sys::seL4_Word,
 ) -> sel4_sys::seL4_MessageInfo {
+    pair_handoff::owner_prewait(match target {
+        RuntimeBlockingWaitTarget::CommandOrNotification => 1,
+        RuntimeBlockingWaitTarget::LocalNotification => 2,
+    });
     // SAFETY: Root installs the command endpoint in fixed child slot 2 and
     // HAL installs the generated local notification in fixed child slot 3,
     // binding that same notification to this TCB. The typed target admits
@@ -13700,6 +13722,10 @@ struct RuntimeAtomicTerminalReceiveResult {
 fn runtime_atomic_terminal_receive(
     operation: RuntimeAtomicTerminalReceive,
 ) -> RuntimeAtomicTerminalReceiveResult {
+    pair_handoff::owner_prewait(match operation {
+        RuntimeAtomicTerminalReceive::ReplyRecv { .. } => 3,
+        RuntimeAtomicTerminalReceive::Cyw43PromptAndWait => 4,
+    });
     let mut badge: sel4_sys::seL4_Word = 0;
     let mut mr0 = match operation {
         RuntimeAtomicTerminalReceive::ReplyRecv { completion_result } => {
@@ -14173,6 +14199,7 @@ fn reset_sdio_register_shadows() {
 }
 
 fn reset_cyw43_sdio_pair_runtime_entry_state() {
+    pair_handoff::reset();
     // Root enters this scrub only after suspending both linked peers, so the
     // SDIO owner is the sole writer of its durable lifetime record. Fence an
     // abandoned in-progress power cycle before erasing the role-local cursor;
@@ -21495,6 +21522,7 @@ fn wait_runtime_local_notification_after_sdio_handoff(
                 &mut badge,
             )
         };
+        pair_handoff::producer_returned(doorbell.sequence, Some(badge as u32));
         Some(badge as u32)
     }
     #[cfg(not(sel4_config_kernel_mcs))]
@@ -22535,6 +22563,7 @@ fn runtime_deliver_sdio_owner_publication(route: RuntimeSdioOwnerPublicationRout
     match route {
         RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell) => {
             runtime_signal_sdio_owner_doorbell(doorbell.sequence);
+            pair_handoff::producer_returned(doorbell.sequence, None);
         }
         RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell) => {
             if let Some(raw_badge) = wait_runtime_local_notification_after_sdio_handoff(doorbell) {
@@ -35371,10 +35400,12 @@ const fn cyw43_foreground_persistent_transaction_marker_present(
 fn cyw43_foreground_precommit_sdio_handoff(
     transaction: &Cyw43ForegroundTransaction,
     route: RuntimeNotificationRoute,
-) -> Option<RuntimeSdioOwnerDoorbell> {
+) -> Result<RuntimeSdioOwnerDoorbell, u32> {
     let entry = transaction.frontier;
-    if route != RuntimeNotificationRoute::Cyw43Client
-        || !transaction.executing
+    if route != RuntimeNotificationRoute::Cyw43Client {
+        return Err(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ROUTE_REJECTED);
+    }
+    if !transaction.executing
         || !transaction.turn.pending
         || transaction.issued_unknown
         || transaction.poisoned
@@ -35382,18 +35413,28 @@ fn cyw43_foreground_precommit_sdio_handoff(
         || transaction.frontier_continuation_grant_required
         || transaction.frontier_continuation_grant_publish
         || transaction.frontier_grant_id != 0
-        || entry.command.sequence == 0
+    {
+        return Err(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_STATE_REJECTED);
+    }
+    if entry.command.sequence == 0
         || !cyw43_foreground_exact_causal_identity(
             transaction,
             transaction.parent,
             entry.command,
             transaction.generation,
         )
-        || !cyw43_foreground_publication_environment_current(transaction)
+    {
+        return Err(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED,
+        );
+    }
+    if !cyw43_foreground_publication_environment_current(transaction)
         || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
         || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
     {
-        return None;
+        return Err(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ENVIRONMENT_REJECTED,
+        );
     }
 
     // Completion is another passive sequence-last fence. Sample it before the
@@ -35403,7 +35444,9 @@ fn cyw43_foreground_precommit_sdio_handoff(
         cyw43_sdio_child_poll_exact(Cyw43SdioChildState::new(entry.command.sequence)),
         Cyw43SdioChildCompletion::Waiting
     ) {
-        return None;
+        return Err(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMPLETION_REJECTED,
+        );
     }
 
     // The completion read may overlap recovery or replacement. Recheck the
@@ -35414,13 +35457,20 @@ fn cyw43_foreground_precommit_sdio_handoff(
         transaction.parent,
         entry.command,
         transaction.generation,
-    ) || !cyw43_foreground_publication_environment_current(transaction)
+    ) {
+        return Err(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED,
+        );
+    }
+    if !cyw43_foreground_publication_environment_current(transaction)
         || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
         || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
     {
-        return None;
+        return Err(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ENVIRONMENT_REJECTED,
+        );
     }
-    Some(runtime_sdio_owner_doorbell(entry.command.sequence))
+    Ok(runtime_sdio_owner_doorbell(entry.command.sequence))
 }
 
 /// Re-prove an exact root->CYW43->SDIO foreground child after its sequence-last
@@ -35435,7 +35485,7 @@ fn cyw43_foreground_publication_sdio_handoff(
     route: RuntimeNotificationRoute,
 ) -> Option<RuntimeSdioOwnerDoorbell> {
     let entry = transaction.frontier;
-    let handoff = cyw43_foreground_precommit_sdio_handoff(transaction, route)?;
+    let handoff = cyw43_foreground_precommit_sdio_handoff(transaction, route).ok()?;
     if !cyw43_foreground_published_frontier_is_immutable(transaction)
         || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
         || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
@@ -35784,14 +35834,27 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
     // Capture every passive identity and recovery predicate before the
     // sequence-last commit. On the selected MCS profile, successful commit is
     // followed directly by the atomic owner prompt-and-wait syscall.
-    let exact_foreground_handoff = cyw43_foreground_precommit_sdio_handoff(
+    let precommit_handoff = cyw43_foreground_precommit_sdio_handoff(
         transaction,
         runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
     );
+    let exact_foreground_handoff = precommit_handoff.ok();
     let publication_route = runtime_sdio_owner_publication_route(
         runtime_sdio_owner_doorbell(entry.command.sequence),
         exact_foreground_handoff,
         cfg!(sel4_config_kernel_mcs),
+    );
+    // This passive record is staged before the command commit. It explicitly
+    // says PRECOMMIT, never "sent": the next sequence-last command and actual
+    // syscall-return observations provide those distinct boundary proofs.
+    pair_handoff::producer_precommit(
+        entry.command,
+        transaction.parent.sequence,
+        precommit_handoff.err(),
+        matches!(
+            publication_route,
+            RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(_)
+        ),
     );
     if !runtime_ring_commit_command_sequence(&mut owner_ring, entry.command.sequence) {
         let _ = cyw43_sdio_child_mark_issued_unknown_or_restart(entry.command.sequence);
@@ -35824,13 +35887,32 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
             },
         );
         match observation {
-            RuntimeSdioOwnerPublicationObservation::FirstActionReturned
-            | RuntimeSdioOwnerPublicationObservation::ExactTerminal => {}
+            RuntimeSdioOwnerPublicationObservation::FirstActionReturned => {
+                pair_handoff::producer_stage(
+                    expected.sequence,
+                    pi4_driver_abi::PAIR_HANDOFF_CHILD_RETURNED,
+                );
+            }
+            RuntimeSdioOwnerPublicationObservation::ExactTerminal => {
+                pair_handoff::producer_stage(
+                    expected.sequence,
+                    pi4_driver_abi::PAIR_HANDOFF_CHILD_RETURNED
+                        | pi4_driver_abi::PAIR_HANDOFF_TERMINAL,
+                );
+            }
             RuntimeSdioOwnerPublicationObservation::Recovery => {
+                pair_handoff::producer_stage(
+                    expected.sequence,
+                    pi4_driver_abi::PAIR_HANDOFF_RECOVERY,
+                );
                 transaction.turn.pending = true;
             }
             RuntimeSdioOwnerPublicationObservation::Invalid
             | RuntimeSdioOwnerPublicationObservation::Waiting => {
+                pair_handoff::producer_stage(
+                    expected.sequence,
+                    pi4_driver_abi::PAIR_HANDOFF_REJECTED,
+                );
                 // Identity/receipt failures have already retained their exact
                 // predicate. Only an unavailable wait reaches here without one.
                 record_cyw43_publication_rejection(
@@ -35991,6 +36073,10 @@ fn cyw43_foreground_accept_exact_completion(
         return None;
     }
     cyw43_bus_episode_record_foreground_child_terminal(entry, completion);
+    pair_handoff::producer_stage(
+        entry.command.sequence,
+        pi4_driver_abi::PAIR_HANDOFF_CHILD_RETURNED | pi4_driver_abi::PAIR_HANDOFF_TERMINAL,
+    );
     // A successful exact terminal may flow directly into one following
     // immutable child submission. Fault terminals retain the prior replay
     // boundary, and `new_submission_consumed` independently forbids a second
@@ -56849,6 +56935,11 @@ fn write_ring_u16(offset: usize, value: u16) {
 }
 
 fn publish_runtime_progress(sequence: u32, phase: u32, aux0: u32) {
+    if pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(phase)
+        && aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+    {
+        pair_handoff::producer_recovery();
+    }
     let phase = if phase
         == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
         && aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
@@ -70857,6 +70948,13 @@ pub fn runtime_main(task_key: usize) -> ! {
             runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
         );
         let completion_committed = publish_runtime_completion_sequence_last(completion);
+        if completion_committed && command.arg0 == HOT_PATH_SDIO_HOST {
+            if command_is_engine_init_aux(command.aux0) && completion.code != COMPLETION_FAULT {
+                pair_handoff::owner_engine_retired(command.sequence, notification_route);
+            } else {
+                pair_handoff::owner_stage(command, pi4_driver_abi::PAIR_HANDOFF_TERMINAL);
+            }
+        }
         #[cfg(sel4_config_kernel_mcs)]
         let terminal_diagnostic_snapshot = runtime_terminal_diagnostic_snapshot(notification_route);
         #[cfg(sel4_config_kernel_mcs)]
@@ -73081,6 +73179,7 @@ mod tests {
     }
 
     fn reset_runtime_for_test() {
+        pair_handoff::reset();
         reset_test_ring();
         reset_test_sdio_owner_doorbells();
         RUNTIME_DESCRIPTOR.store(DriverRuntimeInitDescriptor::empty());
@@ -74874,6 +74973,20 @@ mod tests {
                     Some(doorbell),
                     "the sequence-last waiting child must remain the durable handoff authority",
                 );
+                assert_eq!(cyw43_foreground_precommit_sdio_handoff(transaction,
+                    RuntimeNotificationRoute::SdioOwner), Err(470));
+                transaction.executing = false;
+                assert_eq!(cyw43_foreground_precommit_sdio_handoff(transaction,
+                    RuntimeNotificationRoute::Cyw43Client), Err(471));
+                transaction.executing = true;
+                transaction.frontier.command.sequence = 0;
+                assert_eq!(cyw43_foreground_precommit_sdio_handoff(transaction,
+                    RuntimeNotificationRoute::Cyw43Client), Err(472));
+                transaction.frontier.command.sequence = child.sequence;
+                transaction.publication_environment_admitted = false;
+                assert_eq!(cyw43_foreground_precommit_sdio_handoff(transaction,
+                    RuntimeNotificationRoute::Cyw43Client), Err(473));
+                transaction.publication_environment_admitted = true;
                 assert_eq!(
                     runtime_sdio_owner_publication_route(doorbell, Some(doorbell), true),
                     RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),

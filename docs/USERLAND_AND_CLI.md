@@ -130,7 +130,12 @@ grant consumption, wake counters, and exact fault identity. Its snapshot is
 explicitly `best-effort-multi-record`; downstream gates are `not-reached`
 instead of being presented as current acceptance after an earlier failure.
 `wifi dump-state` is the verbose acceptance, DPC, association, maintenance,
-queue, TX, and Gate 7/8 inspection surface. Legacy `wifi probe-ht`, `wifi
+queue, TX, and Gate 7/8 inspection surface. Its additive `wifi: pair_handoff`
+rows show the separately owned CYW43 and SDIO first-child trace, retained
+before recovery when available. `observed=no` means missing/unstable evidence;
+stage, route, detail, witness, and wrapping tick semantics are defined in
+[DRIVERS.md](DRIVERS.md). They cannot establish a boot or performance gate.
+Legacy `wifi probe-ht`, `wifi
 load-fw`, and `wifi retry` spellings
 remain recognized only to return one typed linked-runtime ownership refusal;
 they do not invoke a debug callback, snapshot traversal, or physical operation.

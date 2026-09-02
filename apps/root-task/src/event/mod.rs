@@ -26703,6 +26703,44 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_pair_handoff_line(
+        scope: &str,
+        role: &str,
+        record: Option<pi4_driver_abi::DriverRuntimePairHandoff>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        match record {
+            Some(record) => format_message(format_args!(
+                "wifi: pair_handoff v=1 scope={} role={} observed=yes request={:08x} parent={:08x} gen={:08x} route={:02x} stages={:04x} detail={:08x} witness={:08x} ticks={:08x} revision={}",
+                scope, role, record.request, record.parent, record.generation,
+                record.route, record.stages, record.detail, record.witness,
+                record.cntvct_lo, record.publication,
+            )),
+            None => format_message(format_args!(
+                "wifi: pair_handoff v=1 scope={} role={} observed=no cause=unavailable-or-unstable",
+                scope, role,
+            )),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_pair_handoff_diagnostics(
+        &mut self,
+        recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
+    ) {
+        let (scope, records) = match recovery {
+            Some(recovery) => (recovery.scheduler.scope, recovery.scheduler.pair_handoff),
+            None => (
+                "live-first-child",
+                crate::hal::driver_task::driver_task_pair_handoff_snapshot(),
+            ),
+        };
+        for (role, record) in ["cyw43", "sdio"].into_iter().zip(records) {
+            let line = Self::wifi_pair_handoff_line(scope, role, record);
+            self.emit_console_line(line.as_str());
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_deferred_recovery_line(
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
         live_generation: u32,
@@ -28068,6 +28106,7 @@ where
         self.emit_console_line(tx_queue.as_str());
         let retained_gate8_line = Self::wifi_diag_retained_gate8_line(retained_gate8);
         self.emit_console_line(retained_gate8_line.as_str());
+        self.emit_wifi_pair_handoff_diagnostics(deferred_recovery);
         if let Some(recovery) = deferred_recovery {
             for detail in [
                 Self::wifi_diag_deferred_recovery_line(recovery, association.generation),
@@ -29418,6 +29457,7 @@ where
         let deferred_recovery =
             crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
         let live_generation = crate::drivers::driver_task_net::cyw43_connection_generation();
+        self.emit_wifi_pair_handoff_diagnostics(deferred_recovery);
         if let Some(recovery) = deferred_recovery {
             for detail in [
                 Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
@@ -41322,6 +41362,31 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_pair_handoff_lines_are_bounded_and_label_unavailable_evidence() {
+        let record = pi4_driver_abi::DriverRuntimePairHandoff::from_words([
+            0x5048_4f46,
+            0x3101_0001,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            0x3fff,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+        ]);
+        let line =
+            KernelConsoleTestPump::wifi_pair_handoff_line("first-pre-fence", "sdio", Some(record));
+        assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        assert!(line.ends_with("revision=4294967295"), "{line}");
+        let unavailable =
+            KernelConsoleTestPump::wifi_pair_handoff_line("first-pre-fence", "cyw43", None);
+        assert_eq!(unavailable, "wifi: pair_handoff v=1 scope=first-pre-fence role=cyw43 observed=no cause=unavailable-or-unstable");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_diag_authority_lines_fit_the_untruncated_console_budget() {
         let budget = DEFAULT_LINE_CAPACITY
             .saturating_sub(DIAGNOSTIC_TRUNCATION_MARKER.len())
@@ -41574,6 +41639,7 @@ mod tests {
                 sdio_fault_words: [u32::MAX;
                     pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
                 runtime_recovery_source_line: 39_579,
+                pair_handoff: [None; 2],
             },
         };
         let owner = crate::drivers::driver_task_net::Cyw43LogicalControlOwnerDiagnostic {

@@ -5036,6 +5036,7 @@ pub(crate) struct Cyw43FirstRecoverySchedulerSnapshot {
     pub(crate) sdio_fault_frame_observed: bool,
     pub(crate) sdio_fault_words: [u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
     pub(crate) runtime_recovery_source_line: u32,
+    pub(crate) pair_handoff: [Option<pi4_driver_abi::DriverRuntimePairHandoff>; 2],
 }
 
 #[cfg(feature = "kernel")]
@@ -5078,6 +5079,7 @@ struct Cyw43FirstRecoverySchedulerState {
     sdio_fault_frame_observed: AtomicU32,
     sdio_fault_words: [AtomicU32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
     runtime_recovery_source_line: AtomicU32,
+    pair_handoff_words: [[AtomicU32; pi4_driver_abi::DRIVER_RUNTIME_PAIR_HANDOFF_WORDS]; 2],
 }
 
 #[cfg(feature = "kernel")]
@@ -5121,6 +5123,9 @@ impl Cyw43FirstRecoverySchedulerState {
             sdio_fault_words: [const { AtomicU32::new(0) };
                 pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
             runtime_recovery_source_line: AtomicU32::new(0),
+            pair_handoff_words: [const {
+                [const { AtomicU32::new(0) }; pi4_driver_abi::DRIVER_RUNTIME_PAIR_HANDOFF_WORDS]
+            }; 2],
         }
     }
 }
@@ -12377,6 +12382,48 @@ pub(crate) fn driver_task_sdio_dpc_ring_snapshot() -> Option<DriverTaskSdioDpcRi
     stable_sdio_dpc_ring_snapshot(first, second)
 }
 
+/// Read the first-child passive records in CYW43/SDIO order. Unavailable,
+/// torn, or wrong-role records are not evidence; this never grants work.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_pair_handoff_snapshot(
+) -> [Option<pi4_driver_abi::DriverRuntimePairHandoff>; 2] {
+    use pi4_driver_abi::{
+        DriverRuntimePairHandoff, DRIVER_RUNTIME_PAIR_HANDOFF_OFFSET,
+        DRIVER_RUNTIME_PAIR_HANDOFF_WORDS, PAIR_HANDOFF_CYW43, PAIR_HANDOFF_SDIO,
+    };
+    const _: () = assert!(
+        DRIVER_TASK_RING_COMPLETION_OFFSET + core::mem::size_of::<DriverTaskCompletionRecord>()
+            == DRIVER_RUNTIME_PAIR_HANDOFF_OFFSET
+    );
+    let read = |slot: &DriverTaskCommandSlot, role| {
+        let ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+        if ptr == 0 {
+            return None;
+        }
+        let ring = DriverTaskRingView::new(ptr)?;
+        let read_record = || {
+            driver_task_ring_invalidate_root_range(
+                ptr.checked_add(DRIVER_RUNTIME_PAIR_HANDOFF_OFFSET)?,
+                44,
+            );
+            let mut words = [0; DRIVER_RUNTIME_PAIR_HANDOFF_WORDS];
+            for (index, word) in words.iter_mut().enumerate() {
+                *word = ring.read_u32(DRIVER_RUNTIME_PAIR_HANDOFF_OFFSET + index * 4)?;
+            }
+            driver_task_shared_load_barrier();
+            Some(DriverRuntimePairHandoff::from_words(words))
+        };
+        let first = read_record()?;
+        let second = read_record()?;
+        (first == second && second.valid() && second.role == role).then_some(second)
+    };
+    [
+        read(&DRIVER_TASK_SLOT_CYW43455, PAIR_HANDOFF_CYW43),
+        read(&DRIVER_TASK_SLOT_SDIO_HOST, PAIR_HANDOFF_SDIO),
+    ]
+}
+
 /// Snapshot the delegated SDIO command ring without changing protocol state.
 ///
 /// This discriminator answers whether a CYW43 child command reached the
@@ -14134,6 +14181,7 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     // The snapshot is passive and fail-closed: an unstable pair is retained
     // as unavailable instead of being interpreted as a missing publication.
     let sdio_ring = driver_task_sdio_command_ring_snapshot();
+    let pair_handoff = driver_task_pair_handoff_snapshot();
     CYW43_FIRST_RECOVERY_SCHEDULER
         .outer_phase
         .store(outer.phase.as_u32(), Ordering::Relaxed);
@@ -14269,6 +14317,19 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     CYW43_FIRST_RECOVERY_SCHEDULER
         .runtime_recovery_source_line
         .store(runtime_recovery_source_line, Ordering::Relaxed);
+    for (target, record) in CYW43_FIRST_RECOVERY_SCHEDULER
+        .pair_handoff_words
+        .iter()
+        .zip(pair_handoff)
+    {
+        let words = record.map_or(
+            [0; pi4_driver_abi::DRIVER_RUNTIME_PAIR_HANDOFF_WORDS],
+            |record| record.words(),
+        );
+        for (word, value) in target.iter().zip(words) {
+            word.store(value, Ordering::Relaxed);
+        }
+    }
     // Sequence-last publication: readers cannot observe a partial tuple.
     CYW43_FIRST_RECOVERY_SCHEDULER
         .state
@@ -14408,6 +14469,15 @@ pub(crate) fn first_cyw43_recovery_scheduler_snapshot(
         runtime_recovery_source_line: CYW43_FIRST_RECOVERY_SCHEDULER
             .runtime_recovery_source_line
             .load(Ordering::Relaxed),
+        pair_handoff: core::array::from_fn(|role| {
+            let record = pi4_driver_abi::DriverRuntimePairHandoff::from_words(
+                core::array::from_fn(|word| {
+                    CYW43_FIRST_RECOVERY_SCHEDULER.pair_handoff_words[role][word]
+                        .load(Ordering::Relaxed)
+                }),
+            );
+            record.valid().then_some(record)
+        }),
     };
     (CYW43_FIRST_RECOVERY_SCHEDULER.state.load(Ordering::Acquire) == committed_version)
         .then_some(snapshot)
@@ -34216,6 +34286,31 @@ mod tests {
             .send_attempts
             .load(Ordering::Acquire);
 
+        let trace_words = [
+            0x5048_4f46,
+            0x4202_0001,
+            1,
+            0xeff0_90d9,
+            request,
+            generation,
+            0x201,
+            0,
+            0,
+            54,
+            1,
+        ];
+        first_ring.0[21..32].copy_from_slice(&trace_words);
+        let expected_trace = pi4_driver_abi::DriverRuntimePairHandoff::from_words(trace_words);
+        assert_eq!(
+            driver_task_pair_handoff_snapshot(),
+            [Some(expected_trace), None]
+        );
+        first_ring.0[31] = 0;
+        assert_eq!(driver_task_pair_handoff_snapshot(), [None, None]);
+        first_ring.0[31] = 1;
+        first_ring.0[22] = 0x3101_0001;
+        assert_eq!(driver_task_pair_handoff_snapshot(), [None, None]);
+        first_ring.0[22] = trace_words[1];
         request_cyw43_sdio_pair_restart();
         assert_eq!(
             cyw43_sdio_network_priority_lease_snapshot().phase,
@@ -34248,6 +34343,8 @@ mod tests {
         assert!(!retained.child_bus_episode_observed);
         assert_eq!(retained.child_bus_parent_sequence, 0);
         assert_eq!(retained.child_bus_parent_op, 0);
+        assert_eq!(retained.pair_handoff, [Some(expected_trace), None]);
+        first_ring.0[21..32].fill(0);
 
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
@@ -34315,6 +34412,20 @@ mod tests {
         let sdio_ring_root_ptr = sdio_ring.0.as_mut_ptr() as usize;
         publish_driver_task_ring(SDIO_HOST_DRIVER_TASK_CONTRACT, sdio_ring_root_ptr);
         let owner_guard = test_delegate_cyw43_sdio_dpc_owner();
+        let trace_words = [
+            0x5048_4f46,
+            0x3101_0001,
+            3,
+            0xeff0_90d9,
+            2,
+            0x4359_0001,
+            0x1f,
+            256,
+            1,
+            54,
+            3,
+        ];
+        sdio_ring.0[21..32].copy_from_slice(&trace_words);
         let mut command = DriverTaskCommandRecord::service(
             0xeff0_90d9,
             DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
@@ -34360,6 +34471,12 @@ mod tests {
         let retained = first_cyw43_recovery_scheduler_snapshot()
             .expect("the first recovery cut must retain the delegated SDIO records");
         assert!(retained.sdio_ring_observed);
+        assert_eq!(
+            retained.pair_handoff[1],
+            Some(pi4_driver_abi::DriverRuntimePairHandoff::from_words(
+                trace_words
+            ))
+        );
         assert_eq!(retained.sdio_command_sequence, command.sequence);
         assert_eq!(retained.sdio_command_opcode, command.opcode);
         assert_eq!(retained.sdio_command_flags, command.flags);

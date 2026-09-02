@@ -1818,6 +1818,40 @@ pre-scrub SDHCI and DMA4 register cut; `captured=no` means unavailable evidence,
 not zero hardware state. These rows never acknowledge, consume, retry, reset,
 wake, or recover either owner and cannot satisfy a Wi-Fi gate by themselves.
 
+The first delegated boot child has a separate passive
+`PHOF` v1 record in each CYW43/SDIO local ring, at bytes 84..128 between the
+20-byte completion and progress record. Its eleven words are magic; packed
+version/role/route; publication revision; child sequence; parent sequence
+(SDIO: retired engine sequence); child `aux1`; stage bits; detail; witness;
+low CNTVCT at the latest stage; and commit-last revision. Runtime-init ABI v13,
+command/completion layouts, grants, and all scheduling authority are unchanged.
+Only the respective runtime writes its record. Each stage is recorded at most
+once for the first child, freezes on its terminal or recovery, and clears only
+at canonical runtime reset. No unbounded event log or steady-state publication
+is added. Root accepts two equal valid reads with the correct writer role and
+retains them before its first recovery mutation; the two roles are not an
+atomic cross-runtime snapshot and identities must be compared explicitly.
+
+`wifi dump-state` and startup blackbox output expose two `wifi: pair_handoff`
+rows, scoped `live-first-child`, `first-pre-fence`, or `unavailable`. The fixed
+12-line atomic recovery queue and eight-body-line compact `wifi diag` contract
+are unchanged. `observed=no` is unavailable/unstable evidence, not a failed
+syscall. Stage bits 0..13 mean armed, actual prewait, raw receive returned,
+stable child read, intake begun, descriptor pre-admission returned true,
+dispatch entered, bounded action returned, terminal committed/observed,
+producer precommit, producer syscall returned, recovery, child action/terminal
+observed, and rejected. A raw result is not classified notification proof;
+action return is not physical I/O proof. Route low nibble is 0 unavailable,
+1 SDIO, 2 CYW43, 3 other; high nibble is 0 signal-only/unrecorded, 1 Recv,
+2 Wait, 3 ReplyRecv, 4 NBSendWait. SDIO detail/witness retain the first raw
+badge/MessageInfo low words. CYW43 detail is its precommit rejection phase
+470..479 (zero if admitted), witness its first returned wait badge. PRECOMMIT
+does not prove command commit or signal delivery. The new writes occur before
+command commit or after syscall return, never between commit and the atomic
+prompt-and-wait. Low CNTVCT is a wrapping stage stamp, not whole-boot timing or
+a substitute for the existing per-child DPC timing and packet captures. These
+records grant no wake, retry, recovery, gate, or performance acceptance.
+
 Routine WiFi, GENET, and HDMI ring-call begin/return chatter is not a required
 steady-state record. The target may suppress it for steady, nonblocking,
 prompt-slice, and retained turns; initialization, descriptor non-acceptance,

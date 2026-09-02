@@ -2254,7 +2254,14 @@ prove all of the following:
   `WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE`. A queue-poison test must prove
   the value is nonzero, survives pair scrub in the first-pre-fence snapshot,
   and cannot create a wake, grant, scheduler phase, or recovery predicate;
-  non-queue causes retain zero. Coverage must also distinguish
+  non-queue causes retain zero. Additive `wifi: pair_handoff v=1` verbose
+  records retain each runtime's first-child route/intake stages without
+  changing the compact diagnostic or atomic recovery queue bounds. Test
+  torn/wrong-role rejection, canonical reset, first-child freezing, and
+  preservation through scrub. The normalizer retains these rows as passive
+  payload but excludes even malformed or unknown versions from all gate
+  classifiers: raw badge/detail words are not WiFi fault authority.
+  Coverage must also distinguish
   the root command sequence from the doorbell-issued fact. The retained summary
   must preserve the exact bounded grammar
   `wifi: deferred_recovery retained=yes refinement=<...>

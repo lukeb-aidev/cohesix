@@ -939,6 +939,32 @@ def test_direct_genet_rows_have_no_network_or_acceptance_authority() -> None:
     )
 
 
+def test_pair_handoff_rows_are_payload_not_boot_acceptance() -> None:
+    """A complete-looking first-child trace cannot manufacture boot gates."""
+    rows = [
+        "wifi: pair_handoff v=1 scope=first-pre-fence role=cyw43 "
+        "observed=no cause=unavailable-or-unstable",
+        "wifi: pair_handoff v=1 scope=first-pre-fence role=sdio "
+        "observed=yes request=eff090d9 parent=00000002 gen=43595301 "
+        "route=31 stages=01ff detail=00000100 witness=00000001 "
+        "ticks=00000036 revision=9",
+    ]
+    events = normalizer.parse_events(rows)
+    assert [event.raw for event in events] == rows
+    assert all(event.domain == "wifi" for event in events)
+    assert all(event.fields["diagnostic"] == "passive-first-child" for event in events)
+    assert normalizer.summarize_gates(events).to_record() == (
+        normalizer.summarize_gates([]).to_record()
+    )
+    malformed = normalizer.parse_events([
+        "wifi: pair_handoff v=99 observed=yes status=ready gate=10 detail=fault",
+        "wifi: pair_handoff",
+    ])
+    assert normalizer.summarize_gates(malformed).to_record() == (
+        normalizer.summarize_gates([]).to_record()
+    )
+
+
 def test_compact_cyw43_bus_episode_is_anchored_and_passive() -> None:
     line = (
         "CYW43_BUS_EPISODE p=ffffffff e=ffffffff lg=ffffffff pe=ffffffff "

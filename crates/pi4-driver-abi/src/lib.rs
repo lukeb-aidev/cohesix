@@ -5,6 +5,9 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+mod pair_handoff;
+pub use pair_handoff::*;
+
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout and shared-protocol version.

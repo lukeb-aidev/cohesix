@@ -1460,6 +1460,7 @@ pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
     pub sdio_fault_frame_observed: bool,
     pub sdio_fault_words: [u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
     pub runtime_recovery_source_line: u32,
+    pub pair_handoff: [Option<pi4_driver_abi::DriverRuntimePairHandoff>; 2],
 }
 
 #[cfg(feature = "kernel")]
@@ -1505,6 +1506,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
                 sdio_fault_frame_observed: snapshot.sdio_fault_frame_observed,
                 sdio_fault_words: snapshot.sdio_fault_words,
                 runtime_recovery_source_line: snapshot.runtime_recovery_source_line,
+                pair_handoff: snapshot.pair_handoff,
             };
         }
         Self {
@@ -1545,6 +1547,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             sdio_fault_frame_observed: false,
             sdio_fault_words: [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
             runtime_recovery_source_line: 0,
+            pair_handoff: [None; 2],
         }
     }
 
@@ -1588,6 +1591,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             sdio_fault_frame_observed: false,
             sdio_fault_words: [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
             runtime_recovery_source_line: 0,
+            pair_handoff: [None; 2],
         }
     }
 }

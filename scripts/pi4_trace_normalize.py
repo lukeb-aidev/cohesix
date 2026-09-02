@@ -2567,6 +2567,9 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
     elif child_timing_entry is not None:
         stage = "cyw43-dpc-child-timing-entry"
         message = "dpc-child-timing-entry diagnostic=passive"
+    elif has_reserved_record_prefix(line, "wifi: pair_handoff"):
+        stage = "pair-handoff"
+        fields = {**fields, "diagnostic": "passive-first-child"}
     elif line.startswith("wifi: priority_episode scope=current "):
         stage = "priority-episode"
     elif line.startswith(
@@ -17579,7 +17582,13 @@ def summarize_cyw43_bootstrap_supervisor(
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
-    source_event_list = list(events)
+    # Raw badge/detail words are not gate failures or progress. Keep even
+    # malformed/unknown-version handoff rows in normalized payload, but never
+    # feed their arbitrary fields into any acceptance classifier.
+    source_event_list = [
+        event for event in events
+        if not has_reserved_record_prefix(event.raw, "wifi: pair_handoff")
+    ]
     dpc_child_timing = summarize_cyw43_dpc_child_timing(source_event_list)
     event_list = [
         event
