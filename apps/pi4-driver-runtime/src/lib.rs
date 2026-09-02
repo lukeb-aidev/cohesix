@@ -7974,6 +7974,9 @@ static CYW43_SDIO_CHILD_REAP_START_TICKS: AtomicU64 = AtomicU64::new(0);
 static CYW43_SDIO_CHILD_REAP_TIMEOUT_CYCLES: AtomicU64 = AtomicU64::new(0);
 static CYW43_SDIO_CHILD_RESTART_SIGNALLED: AtomicBool = AtomicBool::new(false);
 static CYW43_SDIO_PAIR_RESTART_REQUIRED: AtomicBool = AtomicBool::new(false);
+// First failed publication predicate for this pair lifetime. Diagnostic only;
+// the existing restart latch, not this refinement, owns containment.
+static CYW43_PUBLICATION_REJECT_PHASE: AtomicU32 = AtomicU32::new(0);
 /// Fail-closed scheduling projection of live CYW43 recovery.
 ///
 /// This latch cannot initiate, complete, or clear recovery. It only prevents
@@ -14190,6 +14193,7 @@ fn reset_cyw43_sdio_pair_runtime_entry_state() {
     CYW43_SDIO_CHILD_REAP_TIMEOUT_CYCLES.store(0, Ordering::Release);
     CYW43_SDIO_CHILD_RESTART_SIGNALLED.store(false, Ordering::Release);
     CYW43_SDIO_PAIR_RESTART_REQUIRED.store(false, Ordering::Release);
+    CYW43_PUBLICATION_REJECT_PHASE.store(0, Ordering::Release);
     CYW43_DPC_DEFERRED.store(false, Ordering::Release);
     CYW43_DPC_WATERMARK_REFRESH_SEQUENCE.store(0, Ordering::Release);
     CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE.store(0, Ordering::Release);
@@ -35485,29 +35489,80 @@ fn cyw43_foreground_sdio_publication_identity_current(
     transaction: &Cyw43ForegroundTransaction,
     expected: RuntimeSdioOwnerDoorbell,
 ) -> bool {
+    let rejection = cyw43_foreground_sdio_publication_identity_rejection(transaction, expected);
+    if let Some(phase) = rejection {
+        record_cyw43_publication_rejection(phase);
+    }
+    rejection.is_none()
+}
+
+#[cfg(any(target_os = "none", test))]
+fn record_cyw43_publication_rejection(phase: u32) {
+    let _ = CYW43_PUBLICATION_REJECT_PHASE.compare_exchange(
+        0,
+        phase,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_sdio_publication_identity_rejection(
+    transaction: &Cyw43ForegroundTransaction,
+    expected: RuntimeSdioOwnerDoorbell,
+) -> Option<u32> {
     let entry = transaction.frontier;
-    expected.slot == DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT
-        && expected.sequence != 0
-        && expected.sequence == entry.command.sequence
-        && runtime_notification_route(&RUNTIME_DESCRIPTOR.load())
-            == RuntimeNotificationRoute::Cyw43Client
-        && transaction.executing
-        && transaction.turn.pending
-        && !transaction.issued_unknown
-        && !transaction.poisoned
-        && transaction.frontier_submitted
-        && !transaction.frontier_continuation_grant_required
-        && !transaction.frontier_continuation_grant_publish
-        && transaction.frontier_grant_id == 0
-        && transaction.frontier_service_progress_slice == 0
-        && cyw43_foreground_exact_causal_identity(
-            transaction,
-            transaction.parent,
-            entry.command,
-            entry.ticket.generation,
-        )
-        && cyw43_foreground_publication_environment_current(transaction)
-        && cyw43_foreground_published_frontier_is_immutable(transaction)
+    if expected.slot != DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT
+        || expected.sequence == 0
+        || expected.sequence != entry.command.sequence
+        || runtime_notification_route(&RUNTIME_DESCRIPTOR.load())
+            != RuntimeNotificationRoute::Cyw43Client
+    {
+        return Some(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ROUTE_REJECTED);
+    }
+    if !transaction.executing
+        || !transaction.turn.pending
+        || transaction.issued_unknown
+        || transaction.poisoned
+        || !transaction.frontier_submitted
+        || transaction.frontier_continuation_grant_required
+        || transaction.frontier_continuation_grant_publish
+        || transaction.frontier_grant_id != 0
+        || transaction.frontier_service_progress_slice != 0
+    {
+        return Some(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_STATE_REJECTED);
+    }
+    if !cyw43_foreground_exact_causal_identity(
+        transaction,
+        transaction.parent,
+        entry.command,
+        entry.ticket.generation,
+    ) {
+        return Some(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED,
+        );
+    }
+    if !cyw43_foreground_publication_environment_current(transaction) {
+        return Some(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ENVIRONMENT_REJECTED,
+        );
+    }
+    cyw43_foreground_published_frontier_rejection(transaction)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_publication_completion_observation(
+    entry: Cyw43ForegroundTraceEntry,
+    completion: DriverTaskCompletionRecord,
+) -> RuntimeSdioOwnerPublicationObservation {
+    if cyw43_foreground_completion_matches(entry, completion) {
+        RuntimeSdioOwnerPublicationObservation::ExactTerminal
+    } else {
+        record_cyw43_publication_rejection(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMPLETION_REJECTED,
+        );
+        RuntimeSdioOwnerPublicationObservation::Invalid
+    }
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -35538,6 +35593,9 @@ fn cyw43_foreground_mark_child_wait_timeout(transaction: &mut Cyw43ForegroundTra
         DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     );
     if !cyw43_sdio_child_mark_issued_unknown_or_restart(entry.command.sequence) {
+        record_cyw43_publication_rejection(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED,
+        );
         transaction.poisoned = true;
         transaction.turn.pending = false;
         return false;
@@ -35579,11 +35637,7 @@ fn cyw43_foreground_sdio_publication_observation(
         return RuntimeSdioOwnerPublicationObservation::Invalid;
     }
     if let Cyw43SdioChildCompletion::Exact(completion) = completion {
-        return if cyw43_foreground_completion_matches(entry, completion) {
-            RuntimeSdioOwnerPublicationObservation::ExactTerminal
-        } else {
-            RuntimeSdioOwnerPublicationObservation::Invalid
-        };
+        return cyw43_publication_completion_observation(entry, completion);
     }
 
     let first_action = cyw43_foreground_publication_first_action_observation(
@@ -35598,11 +35652,7 @@ fn cyw43_foreground_sdio_publication_observation(
         return RuntimeSdioOwnerPublicationObservation::Invalid;
     }
     if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child) {
-        return if cyw43_foreground_completion_matches(entry, completion) {
-            RuntimeSdioOwnerPublicationObservation::ExactTerminal
-        } else {
-            RuntimeSdioOwnerPublicationObservation::Invalid
-        };
+        return cyw43_publication_completion_observation(entry, completion);
     }
 
     match first_action {
@@ -35613,6 +35663,9 @@ fn cyw43_foreground_sdio_publication_observation(
             RuntimeSdioOwnerPublicationObservation::Recovery
         }
         RuntimeRootCausalWaitObservation::Invalid => {
+            record_cyw43_publication_rejection(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_RECEIPT_REJECTED,
+            );
             RuntimeSdioOwnerPublicationObservation::Invalid
         }
         RuntimeRootCausalWaitObservation::Waiting => {
@@ -35623,11 +35676,7 @@ fn cyw43_foreground_sdio_publication_observation(
             // inactivity fence, including one racing the counter sample.
             if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child)
             {
-                return if cyw43_foreground_completion_matches(entry, completion) {
-                    RuntimeSdioOwnerPublicationObservation::ExactTerminal
-                } else {
-                    RuntimeSdioOwnerPublicationObservation::Invalid
-                };
+                return cyw43_publication_completion_observation(entry, completion);
             }
             if cyw43_foreground_sdio_publication_recovery_owned(transaction) {
                 return RuntimeSdioOwnerPublicationObservation::Recovery;
@@ -35782,6 +35831,11 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
             }
             RuntimeSdioOwnerPublicationObservation::Invalid
             | RuntimeSdioOwnerPublicationObservation::Waiting => {
+                // Identity/receipt failures have already retained their exact
+                // predicate. Only an unavailable wait reaches here without one.
+                record_cyw43_publication_rejection(
+                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_WAIT_REJECTED,
+                );
                 cyw43_foreground_poison_active_frontier(transaction);
                 return false;
             }
@@ -37228,21 +37282,36 @@ fn cyw43_foreground_new_frontier_generation_valid(
 fn cyw43_foreground_published_frontier_is_immutable(
     transaction: &Cyw43ForegroundTransaction,
 ) -> bool {
+    cyw43_foreground_published_frontier_rejection(transaction).is_none()
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_published_frontier_rejection(
+    transaction: &Cyw43ForegroundTransaction,
+) -> Option<u32> {
     if !transaction.frontier_submitted || !transaction.frontier_ticket_valid() {
-        return false;
+        return Some(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED,
+        );
     }
     let entry = transaction.frontier;
     let Some(owner_ring) = RuntimeRingWindow::sdio_owner() else {
-        return false;
+        return Some(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ROUTE_REJECTED);
     };
-    if runtime_ring_read_command_stable(&owner_ring) != Some(entry.command)
-        || sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
-            != Some(entry.descriptor)
+    if runtime_ring_read_command_stable(&owner_ring) != Some(entry.command) {
+        return Some(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMMAND_REJECTED,
+        );
+    }
+    if sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+        != Some(entry.descriptor)
     {
-        return false;
+        return Some(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_DESCRIPTOR_REJECTED,
+        );
     }
     let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR);
-    if cyw43_foreground_persistent_transaction_child(entry) {
+    let grant_exact = if cyw43_foreground_persistent_transaction_child(entry) {
         // Persistent physical children have exactly one admission and no
         // continuation lane. Even an otherwise exact grant is an authority
         // mutation, so reject it instead of silently accepting a second edge.
@@ -37254,7 +37323,9 @@ fn cyw43_foreground_published_frontier_is_immutable(
                     == runtime_continuation_action_fingerprint(entry.command)
                 && grant.generation == entry.ticket.generation
         })
-    }
+    };
+    (!grant_exact)
+        .then_some(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_GRANT_REJECTED)
 }
 
 /// Select only the immutable Function-2 child retained by this exact parent.
@@ -56778,6 +56849,19 @@ fn write_ring_u16(offset: usize, value: u16) {
 }
 
 fn publish_runtime_progress(sequence: u32, phase: u32, aux0: u32) {
+    let phase = if phase
+        == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+        && aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+    {
+        let rejection = CYW43_PUBLICATION_REJECT_PHASE.load(Ordering::Acquire);
+        if pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(rejection) {
+            rejection
+        } else {
+            phase
+        }
+    } else {
+        phase
+    };
     let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
     write_ring_u32(offset, DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
     write_ring_u32(offset + 4, sequence);
@@ -73031,6 +73115,7 @@ mod tests {
         CYW43_SDIO_CHILD_REAP_TIMEOUT_CYCLES.store(0, Ordering::Release);
         CYW43_SDIO_CHILD_RESTART_SIGNALLED.store(false, Ordering::Release);
         CYW43_SDIO_PAIR_RESTART_REQUIRED.store(false, Ordering::Release);
+        CYW43_PUBLICATION_REJECT_PHASE.store(0, Ordering::Release);
         CYW43_DPC_DEFERRED.store(false, Ordering::Release);
         CYW43_DPC_WATERMARK_REFRESH_SEQUENCE.store(0, Ordering::Release);
         CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE.store(0, Ordering::Release);
@@ -93738,6 +93823,28 @@ mod tests {
             DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         );
         assert_eq!(test_sdio_owner_doorbell(1), Some(doorbell));
+    }
+
+    #[test]
+    fn publication_rejection_refines_restart_without_becoming_authority() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let offset = usize::from(DRIVER_RUNTIME_RING_PROGRESS_OFFSET);
+        record_cyw43_publication_rejection(475);
+        record_cyw43_publication_rejection(479);
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        assert_eq!(CYW43_PUBLICATION_REJECT_PHASE.load(Ordering::Acquire), 475);
+        publish_runtime_progress(37, 142, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+        assert_eq!(read_ring_u32(offset + 8), 142);
+        publish_runtime_progress(37, 446, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+        assert_eq!(read_ring_u32(offset + 4), 37);
+        assert_eq!(read_ring_u32(offset + 8), 475);
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+        publish_runtime_progress(38, 446, 0);
+        assert_eq!(read_ring_u32(offset + 8), 446);
+        reset_runtime_for_test();
+        publish_runtime_progress(39, 446, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+        assert_eq!(read_ring_u32(offset + 8), 446);
     }
 
     #[test]
@@ -117049,6 +117156,53 @@ mod tests {
             RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
             "selected MCS atomically prompts the SDIO owner and parks CYW43",
         );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.executing = true;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                None
+            );
+            let wrong_doorbell = runtime_sdio_owner_doorbell(child.sequence.wrapping_add(1));
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, wrong_doorbell),
+                Some(470)
+            );
+            transaction.turn.pending = false;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                Some(471)
+            );
+            transaction.turn.pending = true;
+            transaction.frontier.ticket.generation ^= 1;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                Some(472)
+            );
+            transaction.frontier.ticket.generation ^= 1;
+            transaction.publication_environment_admitted = false;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                Some(473)
+            );
+            transaction.publication_environment_admitted = true;
+            transaction.frontier.command.budget.max_ops ^= 1;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                Some(474)
+            );
+            transaction.frontier.command.budget.max_ops ^= 1;
+            transaction.frontier.descriptor.addr ^= 1;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                Some(475)
+            );
+            transaction.frontier.descriptor.addr ^= 1;
+            assert_eq!(
+                cyw43_foreground_sdio_publication_identity_rejection(transaction, doorbell),
+                None
+            );
+            transaction.executing = false;
+        });
         assert_eq!(
             CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
                 transaction.executing = true;

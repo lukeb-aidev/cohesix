@@ -3342,6 +3342,29 @@ impl core::fmt::Debug for PacketPage {
 }
 
 impl PacketPage {
+    /// Initialize an exclusively owned page before either endpoint is activated.
+    ///
+    /// This writes empty identity, not a packet publication, without placing a
+    /// complete shared page on the constructor's stack. Never call on a live page.
+    pub fn initialize_into(
+        output: &mut [u8],
+        direction: PacketDirection,
+        generation: u64,
+    ) -> Result<(), AbiError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        if generation == 0 {
+            return Err(AbiError::StaleGeneration);
+        }
+        output.fill(0);
+        output[0..4].copy_from_slice(&PACKET_PAGE_MAGIC.to_le_bytes());
+        output[4..6].copy_from_slice(&ABI_VERSION.to_le_bytes());
+        output[6..8].copy_from_slice(&(direction as u16).to_le_bytes());
+        output[8..16].copy_from_slice(&generation.to_le_bytes());
+        Ok(())
+    }
+
     /// Empty page for one exact direction and generation.
     #[must_use]
     pub const fn empty(direction: PacketDirection, generation: u64) -> Self {
@@ -3655,6 +3678,25 @@ fn classify_publication_commit(
 }
 
 impl ExchangePage {
+    /// Initialize an exclusively owned page before either endpoint is activated.
+    ///
+    /// Sequence and completion watermarks remain zero: identity makes an empty
+    /// level readable but does not manufacture READY, an event, or any credit.
+    pub fn initialize_into(output: &mut [u8], generation: u64) -> Result<(), AbiError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        if generation == 0 {
+            return Err(AbiError::StaleGeneration);
+        }
+        output.fill(0);
+        output[0..4].copy_from_slice(&EXCHANGE_PAGE_MAGIC.to_le_bytes());
+        output[4..6].copy_from_slice(&ABI_VERSION.to_le_bytes());
+        output[8..10].copy_from_slice(&(SHARED_PAGE_BYTES as u16).to_le_bytes());
+        output[16..24].copy_from_slice(&generation.to_le_bytes());
+        Ok(())
+    }
+
     /// Empty page for a nonzero generation.
     #[must_use]
     pub const fn empty(generation: u64) -> Self {
@@ -4293,6 +4335,53 @@ const _: () = assert!(core::mem::offset_of!(ExchangePage, payload) == EXCHANGE_P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn construction_initializers_match_empty_wire_records_and_reject_bad_inputs() {
+        let mut actual = [0xa5; SHARED_PAGE_BYTES];
+        let mut expected = [0; SHARED_PAGE_BYTES];
+        for direction in [PacketDirection::Ingress, PacketDirection::Egress] {
+            PacketPage::empty(direction, 7)
+                .encode(&mut expected)
+                .unwrap();
+            PacketPage::initialize_into(&mut actual, direction, 7).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                PacketPage::publication_pending(&actual, direction, 7, 0),
+                Ok(false),
+            );
+        }
+        ExchangePage::empty(7).encode(&mut expected).unwrap();
+        ExchangePage::initialize_into(&mut actual, 7).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(ExchangePage::publication_pending(&actual, 7, 0), Ok(false));
+        assert_eq!(
+            ExchangePage::completion_watermarks(&actual, 7),
+            Ok(CompletionWatermarks::default()),
+        );
+
+        let before = actual;
+        assert_eq!(
+            ExchangePage::initialize_into(&mut actual, 0),
+            Err(AbiError::StaleGeneration)
+        );
+        assert_eq!(
+            PacketPage::initialize_into(&mut actual, PacketDirection::Egress, 0),
+            Err(AbiError::StaleGeneration),
+        );
+        assert_eq!(
+            ExchangePage::initialize_into(&mut actual[..64], 7),
+            Err(AbiError::InvalidLayout)
+        );
+        assert_eq!(
+            PacketPage::initialize_into(&mut actual[..64], PacketDirection::Ingress, 7),
+            Err(AbiError::InvalidLayout),
+        );
+        assert_eq!(
+            actual, before,
+            "invalid construction must not mutate the page"
+        );
+    }
 
     fn descriptor() -> RuntimeInitDescriptor {
         RuntimeInitDescriptor {

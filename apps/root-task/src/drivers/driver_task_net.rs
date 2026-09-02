@@ -5331,8 +5331,7 @@ pub(crate) fn wifi_cyw43_sdio_pair_restart_blocks_gate_one(
         cyw43_progress,
         Some(cyw43)
             if cyw43.marker_valid
-                && cyw43.phase
-                    == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+                && pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(cyw43.phase)
                 && cyw43.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
     )
 }
@@ -40696,6 +40695,16 @@ mod tests {
             test_publish_runtime_ready(&mut self._page.0, task_key);
         }
 
+        fn publish_post_engine_ready(&mut self, retired_sequence: u32, task_key: u32) {
+            assert_ne!(retired_sequence, 0);
+            self.publish_runtime_ready(task_key);
+            let offset = usize::from(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_OFFSET);
+            self._page.0[offset + 4..offset + 8].copy_from_slice(&retired_sequence.to_ne_bytes());
+            self._page.0[offset + 8..offset + 12].copy_from_slice(
+                &pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY.to_ne_bytes(),
+            );
+        }
+
         fn publish_physical_lifetime(
             &mut self,
             record: pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord,
@@ -51959,6 +51968,17 @@ mod tests {
             Some(cyw43),
             false,
         ));
+        for phase in 470..=479 {
+            let refined = DriverTaskRingProgressSnapshot { phase, ..cyw43 };
+            assert!(wifi_cyw43_sdio_pair_restart_blocks_gate_one(
+                Some(refined),
+                false
+            ));
+            assert!(!wifi_cyw43_sdio_pair_restart_blocks_gate_one(
+                Some(refined),
+                true
+            ));
+        }
         assert!(
             !wifi_cyw43_sdio_pair_restart_blocks_gate_one(Some(cyw43), true),
             "direct power-sequence proof must remain authoritative",
@@ -56615,6 +56635,16 @@ mod tests {
                         ),
                         "reciprocal owner did not service issued request for {contract:?}",
                     );
+                    if contract == SDIO_HOST_DRIVER_TASK_CONTRACT {
+                        if let Some(command) = active.command().filter(|command| {
+                            command.aux0 == pi4_driver_abi::DRIVER_RUNTIME_ENGINE_INIT_AUX
+                        }) {
+                            // Completion is not receive readiness. Model the
+                            // distinct owner receipt proved by the Pi boot.
+                            sdio_ring
+                                .publish_post_engine_ready(command.sequence, sdio_task_key as u32);
+                        }
+                    }
                 }
             }
 
@@ -56649,6 +56679,7 @@ mod tests {
                 "wait-sdio-recv-ready",
                 "replay-sdio-descriptor",
                 "replay-sdio-engine",
+                "wait-sdio-post-engine-recv-ready",
                 "resume-cyw43",
                 "wait-cyw43-recv-ready",
                 "replay-cyw43-descriptor",

@@ -2215,6 +2215,36 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT: u32 = 143;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY: u32 = 144;
 /// CYW43 exhausted the issued-unknown reap deadline and requires a fenced pair restart.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED: u32 = 446;
+/// Exact publication rejection retained until the CYW43/SDIO pair is reset.
+/// These phases refine phase 446 only after the same fail-closed restart latch
+/// is set. They retain its route marker and never authorize another action.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ROUTE_REJECTED: u32 = 470;
+/// The retained publication's local transaction state changed.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_STATE_REJECTED: u32 = 471;
+/// The retained parent/child/generation/claim identity changed.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED: u32 = 472;
+/// The captured turn or live owner epoch/recovery environment changed.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ENVIRONMENT_REJECTED: u32 = 473;
+/// The sequence-last SDIO command no longer matches the retained child.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMMAND_REJECTED: u32 = 474;
+/// The SDIO descriptor no longer matches the retained child.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_DESCRIPTOR_REJECTED: u32 = 475;
+/// The publication acquired an inexact or forbidden continuation grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_GRANT_REJECTED: u32 = 476;
+/// An exact-sequence child terminal does not match the retained descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMPLETION_REJECTED: u32 = 477;
+/// The first-action receipt is not exact for this immutable child mode.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_RECEIPT_REJECTED: u32 = 478;
+/// The declared local-notification wait was unavailable.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_WAIT_REJECTED: u32 = 479;
+
+/// Recognize only the canonical restart marker or its bounded refinements.
+#[must_use]
+pub const fn driver_runtime_cyw43_pair_restart_phase(phase: u32) -> bool {
+    phase == DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+        || (phase >= DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ROUTE_REJECTED
+            && phase <= DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_WAIT_REJECTED)
+}
 /// SDIO retained a CYW43 owner-notification edge before the delegated command needed it.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED: u32 = 458;
 /// SDIO is blocking because no stable delegated continuation grant is currently published.
@@ -11319,6 +11349,13 @@ mod tests {
 
     #[test]
     fn pair_restart_marker_is_out_of_band_and_phase_is_distinct() {
+        assert!(driver_runtime_cyw43_pair_restart_phase(446));
+        for phase in 470..=479 {
+            assert!(driver_runtime_cyw43_pair_restart_phase(phase));
+        }
+        for phase in [0, 143, 144, 445, 447, 469, 480, u32::MAX] {
+            assert!(!driver_runtime_cyw43_pair_restart_phase(phase));
+        }
         assert_eq!(DRIVER_RUNTIME_CYW43_PARENT_MAX_SDIO_ACTIONS, 1_024);
         assert_eq!(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG, 1 << 31);
         assert_eq!(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG & 0xff, 0);

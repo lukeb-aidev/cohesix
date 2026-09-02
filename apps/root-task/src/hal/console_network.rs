@@ -19,14 +19,15 @@ use core::sync::atomic::{fence, AtomicU64, Ordering};
 use console_network_abi::WAKE_DIRECT_VIRTIO_IRQ;
 use console_network_abi::{
     DirectGenetControlPage, DirectGenetLayout, DirectGenetRuntimeDiagnostic, DirectGenetSlotPage,
-    DirectVirtioLayout, CHILD_WAKE_MASK, DIRECT_GENET_LAYOUT_BYTES, DIRECT_GENET_LAYOUT_OFFSET,
-    DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES, DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET,
-    DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET, DIRECT_GENET_RX_SLOT_COUNT,
-    DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_TX_SLOT_COUNT, DIRECT_VIRTIO_BUFFER_COUNT,
-    DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET, DIRECT_VIRTIO_QUEUE_COUNT,
-    ROOT_CONTROL_WAKE_NOTIFICATION_BADGE, ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
-    RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL, WAKE_EVENT_READY,
-    WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
+    DirectVirtioLayout, ExchangePage, PacketDirection, PacketPage, CHILD_WAKE_MASK,
+    DIRECT_GENET_LAYOUT_BYTES, DIRECT_GENET_LAYOUT_OFFSET, DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET, DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET,
+    DIRECT_GENET_RX_SLOT_COUNT, DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_TX_SLOT_COUNT,
+    DIRECT_VIRTIO_BUFFER_COUNT, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET,
+    DIRECT_VIRTIO_QUEUE_COUNT, ROOT_CONTROL_WAKE_NOTIFICATION_BADGE,
+    ROOT_CONTROL_WAKE_NOTIFICATION_SLOT, RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES,
+    WAKE_CONTROL, WAKE_EVENT_READY, WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK,
+    WAKE_REVOKE, WAKE_SHUTDOWN,
 };
 #[cfg(feature = "net-backend-genet-direct")]
 use console_network_abi::{
@@ -1742,7 +1743,8 @@ fn construct_generation(
         sel4_sys::seL4_CapRights_ReadWrite,
     )?;
     map_empty_init_frame(hal, anchor, vspace, tracker, &slots, contract)?;
-    let shared_frames = map_shared_frames(hal, anchor, vspace, tracker, &slots, contract)?;
+    let shared_frames =
+        map_shared_frames(hal, anchor, vspace, tracker, &slots, contract, generation)?;
     let (direct_virtio_layout, direct_device_cap) =
         map_direct_virtio(hal, anchor, vspace, tracker, &slots)?;
     let (direct_genet_layout, direct_genet_root_ptrs) = map_direct_genet(
@@ -2006,6 +2008,7 @@ fn map_shared_frames(
     tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
     slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
     contract: ConsoleNetworkContract,
+    generation: u64,
 ) -> Result<Vec<RamFrame, SHARED_FRAME_COUNT>, HalError> {
     let vaddrs = [
         contract.packet_rx_vaddr,
@@ -2027,7 +2030,23 @@ fn map_shared_frames(
             .env
             .map_revoke_anchor_frame_in_root(frame_cap, runtime_cacheable_xn_attributes())
             .map_err(HalError::Sel4)?;
-        frame.as_mut_slice().fill(0);
+        // A level read can precede the child's first publication. Give every
+        // page its exact empty identity while the child is still suspended;
+        // direct GENET never writes the legacy packet-egress page at all.
+        match index {
+            0 => PacketPage::initialize_into(
+                frame.as_mut_slice(),
+                PacketDirection::Ingress,
+                generation,
+            ),
+            1 => PacketPage::initialize_into(
+                frame.as_mut_slice(),
+                PacketDirection::Egress,
+                generation,
+            ),
+            _ => ExchangePage::initialize_into(frame.as_mut_slice(), generation),
+        }
+        .map_err(|_| HalError::Unsupported("console-network-shared-page-init"))?;
         super::cache::cache_clean(
             sel4_sys::seL4_CapInitThreadVSpace,
             frame.ptr().as_ptr() as usize,

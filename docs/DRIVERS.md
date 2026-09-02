@@ -1289,6 +1289,16 @@ transport:
   before one `seL4_NBSendWait` prompts slot 8 and parks on slot 3. When that
   syscall returns, CYW43 re-proves the same sequence-last child and enters one
   condition-driven publication episode.
+  A rejected publication retains its first failed predicate for the pair
+  lifetime. Restart progress phase 446 is refined to 470..479 for route, local
+  state, causal identity, environment, command, descriptor, grant, completion,
+  first-action receipt, or unavailable wait respectively. The existing
+  `CYW43_COMMAND_AUX` route marker, sequence, record layout, and restart latch
+  remain unchanged. Root recognizes these bounded refinements as the same
+  fail-closed restart and prints their names; later generic restart markers
+  cannot erase the first rejection. The diagnostic adds no success-path
+  publication, retry, scheduling permission, or device action, and resets only
+  with the canonical pair runtime reset.
   A stable `Waiting` child without its exact first-action receipt parks again
   on the existing slot-3 notification; it never sends slot 8 again. Every
   returned badge is only a reason to re-read the exact child, generation,
@@ -1606,6 +1616,11 @@ not current-candidate performance or acceptance proof.
   publication ACK, fault, or containment cannot release the quiesce or
   authorize NIC work.
   QEMU direct VirtIO and non-GENET backends remain on their existing paths.
+  Before any console-network child is activated, HAL initializes all four
+  shared protocol pages with their exact generation and empty ABI identity.
+  Zero commit words and watermarks grant no READY or publication credit. This
+  permits strict level reads before the first event and on the unused direct
+  packet-egress page without accepting anonymous zero-filled or corrupt pages.
 - Copied WiFi may retain the current guarded root activation across a period
   seam only through one opaque transient-publication credit. Minting requires
   one Network poll to advance exactly one material isolated-child unit while

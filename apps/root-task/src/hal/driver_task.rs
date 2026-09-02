@@ -6094,7 +6094,7 @@ const fn cyw43_sdio_pair_restart_progress(progress: DriverTaskRingProgressRecord
     // abandoned. Match the authenticated ABI marker/phase/route, not the old
     // sequence, so an active CYW43 ring cannot hide the restart request.
     progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
-        && progress.phase == DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+        && pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(progress.phase)
         && progress.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
 }
 
@@ -21430,6 +21430,36 @@ pub(crate) fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str 
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED => {
             "cyw43-sdio-pair-restart-required"
         }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ROUTE_REJECTED => {
+            "cyw43-publication-route-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_STATE_REJECTED => {
+            "cyw43-publication-state-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_IDENTITY_REJECTED => {
+            "cyw43-publication-identity-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_ENVIRONMENT_REJECTED => {
+            "cyw43-publication-environment-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMMAND_REJECTED => {
+            "cyw43-publication-command-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_DESCRIPTOR_REJECTED => {
+            "cyw43-publication-descriptor-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_GRANT_REJECTED => {
+            "cyw43-publication-grant-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_COMPLETION_REJECTED => {
+            "cyw43-publication-completion-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_RECEIPT_REJECTED => {
+            "cyw43-publication-receipt-rejected"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_PUBLICATION_WAIT_REJECTED => {
+            "cyw43-publication-wait-rejected"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED => "sdio-owner-wake-retained",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN => "sdio-owner-grant-wait-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY => "sdio-owner-grant-ready",
@@ -31137,6 +31167,22 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn pair_restart_marker_is_actionable_across_parent_sequence_change() {
+        for phase in 470..=479 {
+            let record = DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 3,
+                phase,
+                aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            };
+            assert!(cyw43_sdio_pair_restart_progress(record));
+            assert!(driver_task_ring_progress_phase_label(phase).starts_with("cyw43-publication-"));
+            assert!(!cyw43_sdio_pair_restart_progress(
+                DriverTaskRingProgressRecord { aux0: 0, ..record }
+            ));
+            assert!(!cyw43_sdio_pair_restart_progress(
+                DriverTaskRingProgressRecord { magic: 0, ..record }
+            ));
+        }
         assert_eq!(
             driver_task_ring_progress_phase_label(
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,

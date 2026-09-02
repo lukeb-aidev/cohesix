@@ -120,6 +120,39 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
 }
 
 #[test]
+fn initialized_child_pages_are_idle_before_ready_without_weakening_identity() {
+    let mut boundary = ConsoleNetworkBoundary::new(27).expect("generated contract");
+    let mut event = [0xa5; SHARED_PAGE_BYTES];
+    let mut egress = [0xa5; SHARED_PAGE_BYTES];
+    ExchangePage::initialize_into(&mut event, 27).expect("construction-only event init");
+    PacketPage::initialize_into(&mut egress, PacketDirection::Egress, 27)
+        .expect("construction-only egress init");
+    assert_eq!(
+        boundary.child_publication_pending(&event, &egress),
+        Ok(false)
+    );
+    assert_eq!(boundary.state(), ServiceState::Constructing);
+
+    let ready = event_page(27, 1, ExchangeKind::Ready, 0, 0, READY_IDENTITY.as_bytes());
+    assert_eq!(
+        boundary.child_publication_pending(&ready, &egress),
+        Ok(true)
+    );
+    boundary.accept_event(&ready).expect("real child READY");
+    assert_eq!(
+        boundary.child_publication_pending(&ready, &egress),
+        Ok(false)
+    );
+    assert_eq!(boundary.state(), ServiceState::Listening);
+
+    egress[0] ^= 1;
+    assert!(boundary.child_publication_pending(&ready, &egress).is_err());
+    PacketPage::initialize_into(&mut egress, PacketDirection::Egress, 28)
+        .expect("different generation fixture");
+    assert!(boundary.child_publication_pending(&ready, &egress).is_err());
+}
+
+#[test]
 fn child_publication_frontier_covers_event_egress_and_both_watermarks() {
     let mut boundary = ConsoleNetworkBoundary::new(27).expect("generated contract");
     let generation = boundary.generation();
