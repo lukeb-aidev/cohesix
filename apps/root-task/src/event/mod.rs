@@ -6156,6 +6156,20 @@ struct DirectGenetProductiveQuantumEvidence {
     local_fault_pending: bool,
 }
 
+/// Passive HDMI redraw/output debt does not revoke an already-authenticated
+/// direct-GENET causal continuation.
+///
+/// Actual physical input and pending physical-console responses retain their
+/// separate precedence fences below. Display debt remains runnable through the
+/// bounded LocalSeat rotor and still prevents the global root-idle wait.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn direct_genet_passive_display_debt_preserves_continuation(
+    operator_display_pending: bool,
+) -> bool {
+    let _ = operator_display_pending;
+    true
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn direct_genet_productive_quantum_continuation_entitled(
     evidence: DirectGenetProductiveQuantumEvidence,
@@ -6315,8 +6329,12 @@ fn direct_genet_productive_quantum_continuation_entitled(
             .retains_network_fence_after_dispatch()
         && !evidence.before.physical_console_response_pending
         && !evidence.after.physical_console_response_pending
-        && !evidence.before.operator_display_pending
-        && !evidence.after.operator_display_pending
+        && direct_genet_passive_display_debt_preserves_continuation(
+            evidence.before.operator_display_pending,
+        )
+        && direct_genet_passive_display_debt_preserves_continuation(
+            evidence.after.operator_display_pending,
+        )
         && !evidence.local_fault_pending)
         .then_some(PiRootControlProductiveContinuation {
             generation: evidence.before.generation,
@@ -6386,7 +6404,9 @@ fn direct_genet_productive_continuation_fence_clear(
             .physical_operator_work
             .is_some_and(|work| !work.retains_network_fence_after_dispatch())
         && !evidence.physical_console_response_pending
-        && !evidence.operator_display_pending
+        && direct_genet_passive_display_debt_preserves_continuation(
+            evidence.operator_display_pending,
+        )
         && !evidence.local_fault_pending
 }
 
@@ -62088,6 +62108,28 @@ mod tests {
 
         for evidence in [
             DirectGenetProductiveQuantumEvidence {
+                before: DirectGenetProductiveQuantumSnapshot {
+                    operator_display_pending: true,
+                    ..before
+                },
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    operator_display_pending: true,
+                    ..stage_after
+                },
+                ..stage
+            },
+        ] {
+            assert!(
+                direct_genet_productive_quantum_continuation_entitled(evidence).is_some(),
+                "passive display debt must not revoke authenticated causal progress",
+            );
+        }
+
+        for evidence in [
+            DirectGenetProductiveQuantumEvidence {
                 causal_stage_completed: false,
                 ..stage
             },
@@ -62187,20 +62229,6 @@ mod tests {
                 ..stage
             },
             DirectGenetProductiveQuantumEvidence {
-                before: DirectGenetProductiveQuantumSnapshot {
-                    operator_display_pending: true,
-                    ..before
-                },
-                ..stage
-            },
-            DirectGenetProductiveQuantumEvidence {
-                after: DirectGenetProductiveQuantumSnapshot {
-                    operator_display_pending: true,
-                    ..stage_after
-                },
-                ..stage
-            },
-            DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     generation: before.generation.saturating_add(1),
                     ..stage_after
@@ -62283,6 +62311,12 @@ mod tests {
                 ..baseline
             },
         ));
+        assert!(direct_genet_productive_continuation_fence_clear(
+            DirectGenetProductiveContinuationFenceEvidence {
+                operator_display_pending: true,
+                ..baseline
+            },
+        ));
         assert!(
             !direct_genet_active_hot_tail_fence_clear(baseline),
             "stage-only progress cannot mint transaction authority",
@@ -62295,6 +62329,12 @@ mod tests {
         assert!(direct_genet_active_hot_tail_fence_clear(
             DirectGenetProductiveContinuationFenceEvidence {
                 physical_operator_work: Some(LinkedPhysicalOperatorWork::UsbServiceDebt),
+                ..active_baseline
+            },
+        ));
+        assert!(direct_genet_active_hot_tail_fence_clear(
+            DirectGenetProductiveContinuationFenceEvidence {
+                operator_display_pending: true,
                 ..active_baseline
             },
         ));
@@ -62392,10 +62432,6 @@ mod tests {
             },
             DirectGenetProductiveContinuationFenceEvidence {
                 physical_console_response_pending: true,
-                ..baseline
-            },
-            DirectGenetProductiveContinuationFenceEvidence {
-                operator_display_pending: true,
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {

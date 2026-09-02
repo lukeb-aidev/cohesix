@@ -9695,6 +9695,26 @@ fn publish_runtime_one_way_wait_receipt_at(
     true
 }
 
+/// Publish one exact DROW receipt and only then signal root's declared fan-in.
+///
+/// The callback is deliberately after the sequence-last clean. Root therefore
+/// cannot consume the scheduling edge before the complete receipt is stable,
+/// and a failed publication can never manufacture an edge without authority.
+#[cfg(any(target_os = "none", test))]
+fn publish_runtime_one_way_wait_receipt_and_signal_root_with<F>(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    runtime_identity_token: u32,
+    wait_slice: u32,
+    signal_root: F,
+) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    publish_runtime_one_way_wait_receipt_at(base, command, runtime_identity_token, wait_slice)
+        && signal_root()
+}
+
 #[cfg(any(target_os = "none", test))]
 fn clear_runtime_one_way_wait_receipt_at(
     base: usize,
@@ -69371,11 +69391,12 @@ pub fn runtime_main(task_key: usize) -> ! {
             {
                 // Generic MCS one-way work has no endpoint continuation: root
                 // reserved that endpoint for reply-bearing Call traffic. The
-                // child publishes one exact final-prewait receipt, atomically
-                // fans it into root once, and then consumes only the matching
-                // reserved-root prompt. Physical IRQ work still wins one hard
-                // source boundary; a coalesced prompt is retained as local
-                // debt and never asks root to signal the same slice twice.
+                // child publishes one exact final-prewait receipt, signals it
+                // into root only after the sequence-last clean, and then
+                // consumes only the matching reserved-root prompt. Physical
+                // IRQ work still wins one hard source boundary; a coalesced
+                // prompt is retained as local debt and never asks root to
+                // signal the same slice twice.
                 if !pending_command_gate.one_way_prompt_debt() {
                     let raw_badge = if pending_command_gate.one_way_root_control_sent() {
                         wait_runtime_local_notification()
@@ -70683,14 +70704,16 @@ pub fn runtime_main(task_key: usize) -> ! {
                         else {
                             runtime_raise_standard_fault();
                         };
-                        if !publish_runtime_one_way_wait_receipt_at(
+                        if !publish_runtime_one_way_wait_receipt_and_signal_root_with(
                             DRIVER_TASK_RING_VADDR,
                             command,
                             runtime_identity_token,
                             wait_slice,
+                            runtime_signal_root_control_wake,
                         ) {
                             runtime_raise_standard_fault();
                         }
+                        pending_command_gate.mark_one_way_root_control_sent();
                     } else {
                         // MCS reserves this endpoint for Reply-bearing Call.
                         // A missing sealed notification identity cannot fall
@@ -91991,6 +92014,48 @@ mod tests {
         );
         gate.complete();
         assert_eq!(gate.retain_after_pending_one_way(identity), Some(1));
+    }
+
+    #[test]
+    fn one_way_wait_receipt_signals_root_only_after_sequence_last_commit() {
+        use core::cell::Cell;
+
+        let command = endpoint_retained_gate_test_intake(0x53).command;
+        let identity = 0x7345_0002;
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+        let signals = Cell::new(0usize);
+
+        let mut invalid = command;
+        invalid.sequence = 0;
+        assert!(!publish_runtime_one_way_wait_receipt_and_signal_root_with(
+            base,
+            invalid,
+            identity,
+            1,
+            || {
+                signals.set(signals.get().saturating_add(1));
+                true
+            },
+        ));
+        assert_eq!(signals.get(), 0, "an invalid DROW publishes no wake");
+
+        assert!(publish_runtime_one_way_wait_receipt_and_signal_root_with(
+            base,
+            command,
+            identity,
+            1,
+            || {
+                let receipt = read_runtime_one_way_wait_receipt_at(base)
+                    .expect("DROW must be sequence-last before its root edge");
+                assert_eq!(receipt.request_sequence, command.sequence);
+                assert_eq!(receipt.runtime_identity_token, identity);
+                assert_eq!(receipt.wait_slice, 1);
+                signals.set(signals.get().saturating_add(1));
+                true
+            },
+        ));
+        assert_eq!(signals.get(), 1);
     }
 
     #[test]

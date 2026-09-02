@@ -7310,20 +7310,104 @@ pub(crate) enum DriverTaskOneWayCompletionCondition {
     /// Immutable issued command is live, but its independent recovery deadline
     /// advances only while root performs the existing timer poll.
     RootDeadlinePollRequired,
-    /// A terminal or root-owned continuation is visible and ordinary arbitration must run.
+    /// A terminal, exact DROW, or root-owned continuation is visible and
+    /// ordinary arbitration must run.
     Ready,
     /// Identity, lifecycle, or deadline state cannot authorize a blocking wait.
     Revoked,
 }
 
-/// Classify whether one exact retained one-way command still owes its
-/// sequence-last child completion.
+/// Classify one ordinary ABI-v13 MCS one-way command after its initial wake.
 ///
-/// The isolated runtime guarantees that every such completion signals the
+/// Unlike a retained turn, this lane has no priority-lease identity. The
+/// sequence-last command, the once-only prompt generation, and the runtime's
+/// actual TCB-bound notification jointly prove that the child has a scheduling
+/// edge and must publish either DROW or its terminal to the root-control
+/// fan-in. An endpoint-only initial hint cannot provide that blocking-wait
+/// guarantee and therefore fails closed into ordinary arbitration.
+#[cfg(feature = "kernel")]
+fn ordinary_driver_task_one_way_completion_condition_for_slot(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+) -> DriverTaskOneWayCompletionCondition {
+    let request = slot.request_seq.load(Ordering::Acquire);
+    let Ok(request_u32) = u32::try_from(request) else {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    let wait_cap_generation = slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire);
+    let Some(command) = driver_task_ring_stable_command_snapshot(slot, ring_root_ptr) else {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    };
+    let notification_guard = acquire_driver_task_mcs_one_way_notification_guard(slot, endpoint);
+    if request == 0
+        || ring_root_ptr == 0
+        || command_fingerprint == 0
+        || slot.active.load(Ordering::Acquire) == 0
+        || command.sequence as usize != request
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        || command.flags
+            & (DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
+                | DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE)
+            != 0
+        || driver_task_retained_uses_root_grant(contract, command)
+        || DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire),
+        ) != Some(DriverTaskRetainedLeasePhase::Inactive)
+        || slot.retained_priority_lease_request.load(Ordering::Acquire) != 0
+        || slot
+            .retained_priority_lease_fingerprint
+            .load(Ordering::Acquire)
+            != 0
+        || slot
+            .retained_priority_lease_generation
+            .load(Ordering::Acquire)
+            != 0
+        || slot.retained_priority_lease_mask.load(Ordering::Acquire) != 0
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+        || wait_cap_generation == 0
+        || !notification_guard.is_some_and(|guard| {
+            guard.notification_tcb_bound && guard.cap_generation == wait_cap_generation
+        })
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+    {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    }
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request_u32) {
+        return DriverTaskOneWayCompletionCondition::Ready;
+    }
+    let Some(receipt) = driver_task_ring_read_one_way_wait_receipt(ring_root_ptr) else {
+        return DriverTaskOneWayCompletionCondition::SignalBoundWaiting;
+    };
+    let runtime_identity_token = slot.runtime_identity_token.load(Ordering::Acquire);
+    let last_prompted_slice = slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire);
+    if runtime_identity_token != 0
+        && receipt.request_sequence == request_u32
+        && receipt.action_fingerprint == driver_task_runtime_continuation_fingerprint(command)
+        && receipt.runtime_identity_token == runtime_identity_token
+        && last_prompted_slice.checked_add(1) == Some(receipt.wait_slice)
+    {
+        // The DROW publication supplied the fan-in edge that brought root here.
+        // Ordinary arbitration must now ACK it and signal the parked child;
+        // blocking on the already-consumed edge would deadlock both parties.
+        DriverTaskOneWayCompletionCondition::Ready
+    } else {
+        DriverTaskOneWayCompletionCondition::Revoked
+    }
+}
+
+/// Classify whether one exact live one-way command still owes its sequence-last
+/// child completion.
+///
+/// An ordinary command qualifies only after its actual bound-notification
+/// initial wake; retained commands keep their stronger lease conditions. The
+/// isolated runtime guarantees that every such completion signals the
 /// component notification and then the shared root-control fan-in after the
-/// terminal record is committed. Stable terminal state is checked before wait
-/// eligibility, so a coalesced or stale fan-in edge cannot cause a second wait
-/// after the sole signal has already been issued. Prepared, torn,
+/// terminal record is committed. Stable terminal and DROW state are checked
+/// before wait eligibility, so a consumed or stale fan-in edge cannot cause a
+/// second wait before root ACKs the parked child. Prepared, torn,
 /// Reply-bearing, and retired requests fail closed.
 #[cfg(feature = "kernel")]
 pub(crate) fn active_driver_task_one_way_completion_condition(
@@ -7332,11 +7416,15 @@ pub(crate) fn active_driver_task_one_way_completion_condition(
     if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
         return DriverTaskOneWayCompletionCondition::Revoked;
     }
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    };
     let (request, command) = match active_driver_task_retained_request(contract) {
         Some(DriverTaskRetainedRequestState::Issued { request, command }) => (request, command),
-        None if driver_task_slot_for_contract(contract)
-            .is_some_and(|slot| slot.active.load(Ordering::Acquire) == 0) =>
-        {
+        Some(DriverTaskRetainedRequestState::Invalid { .. }) => {
+            return ordinary_driver_task_one_way_completion_condition_for_slot(slot, contract);
+        }
+        None if slot.active.load(Ordering::Acquire) == 0 => {
             return DriverTaskOneWayCompletionCondition::Idle;
         }
         _ => return DriverTaskOneWayCompletionCondition::Revoked,
@@ -7391,7 +7479,6 @@ pub(crate) fn active_driver_task_one_way_completion_condition(
         };
     }
 
-    let slot = &DRIVER_TASK_SLOT_CYW43455;
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
     if ring_root_ptr == 0
@@ -8743,6 +8830,18 @@ const fn driver_task_runtime_progress_is_admission_ready(
             DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
                 | DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY
         )
+}
+
+#[cfg(feature = "kernel")]
+#[must_use]
+const fn driver_task_runtime_progress_is_post_command_recv_ready(
+    progress: DriverTaskRingProgressRecord,
+    expected_aux0: u32,
+) -> bool {
+    progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && progress.sequence == 0
+        && progress.phase == DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
+        && progress.aux0 == expected_aux0
 }
 
 #[cfg(feature = "kernel")]
@@ -17453,6 +17552,7 @@ enum Cyw43SdioPairRestartAction {
     WaitSdioRecvReady,
     ReplaySdioDescriptor,
     ReplaySdioEngine,
+    WaitSdioPostEngineRecvReady,
     ResumeCyw43,
     WaitCyw43RecvReady,
     ReplayCyw43Descriptor,
@@ -17481,6 +17581,7 @@ impl Cyw43SdioPairRestartAction {
             Self::WaitSdioRecvReady => "wait-sdio-recv-ready",
             Self::ReplaySdioDescriptor => "replay-sdio-descriptor",
             Self::ReplaySdioEngine => "replay-sdio-engine",
+            Self::WaitSdioPostEngineRecvReady => "wait-sdio-post-engine-recv-ready",
             Self::ResumeCyw43 => "resume-cyw43",
             Self::WaitCyw43RecvReady => "wait-cyw43-recv-ready",
             Self::ReplayCyw43Descriptor => "replay-cyw43-descriptor",
@@ -17492,7 +17593,7 @@ impl Cyw43SdioPairRestartAction {
 }
 
 #[cfg(feature = "kernel")]
-const CYW43_SDIO_PAIR_RESTART_ACTION_ORDER: [Cyw43SdioPairRestartAction; 22] = [
+const CYW43_SDIO_PAIR_RESTART_ACTION_ORDER: [Cyw43SdioPairRestartAction; 23] = [
     Cyw43SdioPairRestartAction::SuspendPair,
     Cyw43SdioPairRestartAction::MaskCardInterrupt,
     Cyw43SdioPairRestartAction::UnbindNotifications,
@@ -17509,6 +17610,7 @@ const CYW43_SDIO_PAIR_RESTART_ACTION_ORDER: [Cyw43SdioPairRestartAction; 22] = [
     Cyw43SdioPairRestartAction::WaitSdioRecvReady,
     Cyw43SdioPairRestartAction::ReplaySdioDescriptor,
     Cyw43SdioPairRestartAction::ReplaySdioEngine,
+    Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady,
     Cyw43SdioPairRestartAction::ResumeCyw43,
     Cyw43SdioPairRestartAction::WaitCyw43RecvReady,
     Cyw43SdioPairRestartAction::ReplayCyw43Descriptor,
@@ -18381,7 +18483,7 @@ impl Cyw43SdioPairRestartFailure {
 pub enum Cyw43SdioPairRestartTurn {
     /// Exactly one HAL/runtime operation or retained poll completed.
     Pending {
-        /// Canonical 22-action schedule entry.
+        /// Canonical 23-action schedule entry.
         action: &'static str,
         /// Exact retained sub-operation completed by this turn.
         operation: &'static str,
@@ -18536,6 +18638,7 @@ enum Cyw43SdioPairRestartOperation {
     ProgramRestartRegisters(Cyw43SdioPairMember),
     Resume(Cyw43SdioPairMember),
     PollRecvReady(Cyw43SdioPairMember),
+    PollPostEngineRecvReady(Cyw43SdioPairMember),
     ReplayDescriptor(Cyw43SdioPairMember),
     ReplayEngine(Cyw43SdioPairMember),
     HandoffRingToCyw43,
@@ -18595,6 +18698,12 @@ impl Cyw43SdioPairRestartOperation {
             Self::Resume(Cyw43SdioPairMember::Sdio) => "resume-sdio",
             Self::PollRecvReady(Cyw43SdioPairMember::Cyw43) => "poll-cyw43-recv-ready",
             Self::PollRecvReady(Cyw43SdioPairMember::Sdio) => "poll-sdio-recv-ready",
+            Self::PollPostEngineRecvReady(Cyw43SdioPairMember::Cyw43) => {
+                "poll-cyw43-post-engine-recv-ready"
+            }
+            Self::PollPostEngineRecvReady(Cyw43SdioPairMember::Sdio) => {
+                "poll-sdio-post-engine-recv-ready"
+            }
             Self::ReplayDescriptor(Cyw43SdioPairMember::Cyw43) => "replay-cyw43-descriptor-turn",
             Self::ReplayDescriptor(Cyw43SdioPairMember::Sdio) => "replay-sdio-descriptor-turn",
             Self::ReplayEngine(Cyw43SdioPairMember::Cyw43) => "replay-cyw43-engine-turn",
@@ -18795,6 +18904,9 @@ impl Cyw43SdioPairRestartExecutor for Cyw43SdioPairRestartProductionExecutor {
             Cyw43SdioPairRestartOperation::PollRecvReady(member) => {
                 poll_cyw43_sdio_restart_recv_ready_once(Self::context(cursor, member))
             }
+            Cyw43SdioPairRestartOperation::PollPostEngineRecvReady(member) => {
+                poll_cyw43_sdio_restart_post_engine_recv_ready_once(Self::context(cursor, member))
+            }
             Cyw43SdioPairRestartOperation::ReplayDescriptor(member) => {
                 replay_cyw43_sdio_restart_descriptor_once(Self::context(cursor, member))
             }
@@ -18865,6 +18977,34 @@ fn poll_cyw43_sdio_restart_recv_ready_once(
             context.task_key,
             context.tcb,
             "ready",
+            progress,
+        );
+        Cyw43SdioPairRestartOperationOutcome::Complete
+    } else {
+        Cyw43SdioPairRestartOperationOutcome::Pending
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn poll_cyw43_sdio_restart_post_engine_recv_ready_once(
+    context: Cyw43SdioRuntimeRestartContext,
+) -> Cyw43SdioPairRestartOperationOutcome {
+    let Some(slot) = slot_for_task_key(context.task_key) else {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    }
+    let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+    record_driver_task_ring_progress(slot, progress);
+    let expected_aux0 = (context.task_key & u32::MAX as usize) as u32;
+    if driver_task_runtime_progress_is_post_command_recv_ready(progress, expected_aux0) {
+        emit_driver_task_runtime_entry_status(
+            context.contract,
+            context.task_key,
+            context.tcb,
+            "post-engine-ready",
             progress,
         );
         Cyw43SdioPairRestartOperationOutcome::Complete
@@ -19185,7 +19325,8 @@ fn enter_cyw43_sdio_pair_restart_failure_with_operation(
             driver_task_retained_frontier_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
         }
         Cyw43SdioPairRestartAction::ReplaySdioDescriptor
-        | Cyw43SdioPairRestartAction::ReplaySdioEngine => {
+        | Cyw43SdioPairRestartAction::ReplaySdioEngine
+        | Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady => {
             driver_task_retained_frontier_snapshot(SDIO_HOST_DRIVER_TASK_CONTRACT)
         }
         _ => None,
@@ -19246,7 +19387,7 @@ fn complete_cyw43_sdio_pair_restart_action(
             revoke_cyw43_sdio_network_priority_lease_after_pair_reset();
             emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::RingsReset, "ready")
         }
-        Cyw43SdioPairRestartAction::ReplaySdioEngine => {
+        Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady => {
             emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::SdioReady, "ready")
         }
         Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
@@ -19348,6 +19489,7 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
     if matches!(
         action,
         Cyw43SdioPairRestartAction::WaitSdioRecvReady
+            | Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady
             | Cyw43SdioPairRestartAction::WaitCyw43RecvReady
     ) && cursor.poll_count >= CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP
         || matches!(
@@ -19462,6 +19604,9 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         Cyw43SdioPairRestartAction::ReplaySdioEngine => {
             Cyw43SdioPairRestartOperation::ReplayEngine(Cyw43SdioPairMember::Sdio)
         }
+        Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady => {
+            Cyw43SdioPairRestartOperation::PollPostEngineRecvReady(Cyw43SdioPairMember::Sdio)
+        }
         Cyw43SdioPairRestartAction::ResumeCyw43 => {
             Cyw43SdioPairRestartOperation::Resume(Cyw43SdioPairMember::Cyw43)
         }
@@ -19548,6 +19693,7 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             }
         }
         Cyw43SdioPairRestartAction::WaitSdioRecvReady
+        | Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady
         | Cyw43SdioPairRestartAction::WaitCyw43RecvReady
         | Cyw43SdioPairRestartAction::ReplaySdioDescriptor
         | Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => match outcome {
@@ -30193,6 +30339,7 @@ mod tests {
                 Cyw43SdioPairRestartAction::WaitSdioRecvReady,
                 Cyw43SdioPairRestartAction::ReplaySdioDescriptor,
                 Cyw43SdioPairRestartAction::ReplaySdioEngine,
+                Cyw43SdioPairRestartAction::WaitSdioPostEngineRecvReady,
                 Cyw43SdioPairRestartAction::ResumeCyw43,
                 Cyw43SdioPairRestartAction::WaitCyw43RecvReady,
                 Cyw43SdioPairRestartAction::ReplayCyw43Descriptor,
@@ -30799,6 +30946,34 @@ mod tests {
                 .filter(|(_, operation)| {
                     *operation
                         == Cyw43SdioPairRestartOperation::PollRecvReady(Cyw43SdioPairMember::Sdio)
+                })
+                .count(),
+            4
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_pair_restart_post_engine_ready_fence_consumes_separate_outer_turns() {
+        let mut cursor = retained_pair_restart_test_cursor();
+        let mut executor = RetainedPairRestartTestExecutor::success();
+        executor.pending_operation = Some(Cyw43SdioPairRestartOperation::PollPostEngineRecvReady(
+            Cyw43SdioPairMember::Sdio,
+        ));
+        executor.pending_remaining = 3;
+        assert!(matches!(
+            drive_retained_pair_restart_test(&mut cursor, &mut executor),
+            Cyw43SdioPairRestartTurn::Complete { .. }
+        ));
+        assert_eq!(
+            executor
+                .calls
+                .iter()
+                .filter(|(_, operation)| {
+                    *operation
+                        == Cyw43SdioPairRestartOperation::PollPostEngineRecvReady(
+                            Cyw43SdioPairMember::Sdio,
+                        )
                 })
                 .count(),
             4
@@ -35411,6 +35586,126 @@ mod tests {
         assert_eq!(
             phase.operation(),
             DriverTaskRetainedLeaseOperation::NotifyRing
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ordinary_mcs_one_way_bound_initial_wake_owns_causal_wait_until_terminal() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut command = runtime_engine_init_command(
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+        );
+        command.sequence = 73;
+        command.flags |= DRIVER_TASK_RING_FLAG_ONE_WAY;
+        let fingerprint = driver_task_ring_command_fingerprint(command, 0);
+        driver_task_ring_publish_command_record(
+            &slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+        slot.active.store(1, Ordering::Release);
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.request_seq
+            .store(command.sequence as usize, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.endpoint.store(0x77, Ordering::Release);
+        slot.root_notification.store(0x99, Ordering::Release);
+        slot.runtime_notification_tcb_bound
+            .store(1, Ordering::Release);
+        slot.mcs_cap_generation.store(9, Ordering::Release);
+        slot.mcs_command_admission_open.store(1, Ordering::Release);
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.mcs_one_way_wait_cap_generation
+            .store(9, Ordering::Release);
+
+        assert_eq!(
+            ordinary_driver_task_one_way_completion_condition_for_slot(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            DriverTaskOneWayCompletionCondition::SignalBoundWaiting,
+            "the initial bound wake guarantees one DROW-or-terminal fan-in edge",
+        );
+        slot.runtime_notification_tcb_bound
+            .store(0, Ordering::Release);
+        assert_eq!(
+            ordinary_driver_task_one_way_completion_condition_for_slot(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            DriverTaskOneWayCompletionCondition::Revoked,
+            "an endpoint-only hint cannot authorize a blocking causal wait",
+        );
+        slot.runtime_notification_tcb_bound
+            .store(1, Ordering::Release);
+        slot.mcs_cap_generation.store(10, Ordering::Release);
+        assert_eq!(
+            ordinary_driver_task_one_way_completion_condition_for_slot(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            DriverTaskOneWayCompletionCondition::Revoked,
+            "a replaced capability generation revokes the initial wait",
+        );
+        slot.mcs_cap_generation.store(9, Ordering::Release);
+        let runtime_identity_token = 0x7345_0004;
+        slot.runtime_identity_token
+            .store(runtime_identity_token, Ordering::Release);
+        let receipt = DriverRuntimeOneWayWaitReceipt::new(
+            command.sequence,
+            driver_task_runtime_continuation_fingerprint(command),
+            runtime_identity_token,
+            1,
+        );
+        let receipt_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET))
+            as *mut DriverRuntimeOneWayWaitReceipt;
+        // SAFETY: `receipt_ptr` addresses the fixed DROW record in the aligned
+        // test-owned ring page.
+        unsafe { core::ptr::write_volatile(receipt_ptr, receipt) };
+        assert_eq!(
+            ordinary_driver_task_one_way_completion_condition_for_slot(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            DriverTaskOneWayCompletionCondition::Ready,
+            "the DROW fan-in edge must return to ACK arbitration, not a second wait",
+        );
+        slot.mcs_one_way_last_prompted_slice
+            .store(1, Ordering::Release);
+        assert_eq!(
+            ordinary_driver_task_one_way_completion_condition_for_slot(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            DriverTaskOneWayCompletionCondition::Revoked,
+            "a DROW slice at or behind the ACK cursor is not fresh authority",
+        );
+        slot.mcs_one_way_last_prompted_slice
+            .store(0, Ordering::Release);
+        let completion = DriverTaskCompletionRecord::idle(command.sequence);
+        // SAFETY: `completion_ptr` addresses the fixed completion record in
+        // the aligned test-owned ring page.
+        unsafe { core::ptr::write_volatile(completion_ptr, completion) };
+        assert_eq!(
+            ordinary_driver_task_one_way_completion_condition_for_slot(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            DriverTaskOneWayCompletionCondition::Ready,
+            "a durable terminal returns to ordinary arbitration without waiting",
         );
     }
 
@@ -42966,6 +43261,42 @@ mod tests {
                 sequence: 1,
                 phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
                 aux0: 7,
+            },
+            7,
+        ));
+        assert!(driver_task_runtime_progress_is_post_command_recv_ready(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 0,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+                aux0: 7,
+            },
+            7,
+        ));
+        assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 0,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+                aux0: 7,
+            },
+            7,
+        ));
+        assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 1,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+                aux0: 7,
+            },
+            7,
+        ));
+        assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 0,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+                aux0: 8,
             },
             7,
         ));
