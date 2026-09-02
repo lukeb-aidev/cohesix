@@ -31164,11 +31164,14 @@ where
 
     #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_suppresses_sdio_fallback(phase: u32) -> bool {
-        phase == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+        pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(phase)
     }
 
     #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_blocker(phase: u32) -> &'static str {
+        if pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(phase) {
+            return "cyw43-sdio-pair-restart-required";
+        }
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => {
                 "cyw43-root-grant-wait-or-wake-pending"
@@ -31398,6 +31401,9 @@ where
 
     #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_next_action(phase: u32) -> &'static str {
+        if pi4_driver_abi::driver_runtime_cyw43_pair_restart_phase(phase) {
+            return "inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause";
+        }
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => {
                 "recheck-exact-root-grant-before-wait"
@@ -57050,6 +57056,23 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn wifi_pair_restart_progress_is_named_without_inventing_a_gate() {
+        for phase in 470..=479 {
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_gate(phase),
+                None
+            );
+            assert!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(phase)
+            );
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_blocker(phase),
+                "cyw43-sdio-pair-restart-required"
+            );
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_next_action(phase),
+                "inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause"
+            );
+        }
         let phase = pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED;
         assert_eq!(
             KernelConsoleTestPump::wifi_cyw43_runtime_progress_gate(phase),
