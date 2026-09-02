@@ -4978,8 +4978,16 @@ impl<'a> KernelHal<'a> {
         #[cfg(sel4_config_kernel_mcs)]
         install_driver_task_supervisor_authority(contract, tcb, command_endpoint_origin, mcs)?;
 
-        let _notification_bound =
+        let notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
+        if !driver_task::publish_driver_task_runtime_notification_binding(
+            contract,
+            notification_bound,
+        ) {
+            return Err(HalError::Unsupported(
+                "driver-runtime-notification-binding-publish",
+            ));
+        }
 
         // Mint privately before resume, but do not publish producer authority
         // until the child has started and every fallible construction step has
@@ -6341,8 +6349,16 @@ impl<'a> KernelHal<'a> {
         #[cfg(sel4_config_kernel_mcs)]
         install_driver_task_supervisor_authority(contract, tcb, command_endpoint_origin, mcs)?;
 
-        let _notification_bound =
+        let notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
+        if !driver_task::publish_driver_task_runtime_notification_binding(
+            contract,
+            notification_bound,
+        ) {
+            return Err(HalError::Unsupported(
+                "driver-runtime-notification-binding-publish",
+            ));
+        }
         // Keep the producer cap private through construction. It is exposed
         // only after the child advertises receive readiness, immediately
         // before the first possible sequence-last one-way runtime command.
@@ -8560,6 +8576,13 @@ mod tests {
                 super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             )
             .expect("generated non-IRQ runtime topology"),
+            None,
+        );
+        assert_eq!(
+            super::generated_driver_tcb_notification_binding_source(
+                super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            )
+            .expect("generated display runtime topology"),
             None,
         );
     }

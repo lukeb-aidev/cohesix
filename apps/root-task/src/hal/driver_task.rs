@@ -1605,18 +1605,20 @@ pub const DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE: u16 = 1 << 14;
 /// Command flag used for send-only bootstrap/nonblocking turns.
 ///
 /// The linked runtime must not issue `Reply` for these commands. Classic
-/// kernels use `NbSend`; MCS uses one reserved-badge notification prompt, and
-/// neither transport installs a reply cap. Completion still travels through
-/// the shared ring.
+/// kernels use `NbSend`. MCS uses one scheduling edge: a reserved-badge
+/// notification when that notification is TCB-bound, or `NBSend` on the
+/// existing command endpoint when boot intentionally left it unbound. Neither
+/// route installs a reply cap. Completion still travels through the shared ring.
 pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
 
 /// Kernel transport selected for one published driver-ring command.
 ///
-/// MCS reserves the command endpoint for reply-bearing `Call` traffic. A
-/// one-way command carries its complete authority in the sequence-last shared
-/// record and uses the runtime's reserved-badge notification only as one
-/// coalescing scheduling prompt. Classic kernels retain the established
-/// nonblocking endpoint transport.
+/// An MCS one-way command carries its complete authority in the sequence-last
+/// shared record. Its initial edge follows the runtime's actual notification
+/// binding: bound runtimes use the reserved-badge notification, while runtimes
+/// protected by the early-bind guard use one nonblocking endpoint rendezvous.
+/// Any later explicit DROW wait uses the notification. Classic kernels retain
+/// the established nonblocking endpoint transport.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DriverTaskRingTransport {
@@ -4813,6 +4815,7 @@ struct DriverTaskCommandSlot {
     endpoint_lifetime_probes: AtomicU32,
     endpoint_lifetime_failure: AtomicU32,
     root_notification: AtomicUsize,
+    runtime_notification_tcb_bound: AtomicU32,
     root_wake_notification: AtomicUsize,
     root_wake_badge: AtomicU32,
     root_wake_polls: AtomicUsize,
@@ -5545,6 +5548,7 @@ impl DriverTaskCommandSlot {
             endpoint_lifetime_probes: AtomicU32::new(0),
             endpoint_lifetime_failure: AtomicU32::new(0),
             root_notification: AtomicUsize::new(0),
+            runtime_notification_tcb_bound: AtomicU32::new(0),
             root_wake_notification: AtomicUsize::new(0),
             root_wake_badge: AtomicU32::new(0),
             root_wake_polls: AtomicUsize::new(0),
@@ -5808,6 +5812,7 @@ struct DriverTaskMcsOneWayNotificationGuard<'a> {
     slot: &'a DriverTaskCommandSlot,
     endpoint: usize,
     notification: usize,
+    notification_tcb_bound: bool,
     cap_generation: u32,
 }
 
@@ -5820,6 +5825,11 @@ impl DriverTaskMcsOneWayNotificationGuard<'_> {
             && self.slot.mcs_command_admission_open.load(Ordering::Acquire) != 0
             && self.slot.endpoint.load(Ordering::Acquire) == self.endpoint
             && self.slot.root_notification.load(Ordering::Acquire) == self.notification
+            && self
+                .slot
+                .runtime_notification_tcb_bound
+                .load(Ordering::Acquire)
+                == u32::from(self.notification_tcb_bound)
             && self.slot.mcs_cap_generation.load(Ordering::Acquire) == self.cap_generation
     }
 }
@@ -5830,11 +5840,13 @@ fn acquire_driver_task_mcs_one_way_notification_guard(
     endpoint: usize,
 ) -> Option<DriverTaskMcsOneWayNotificationGuard<'_>> {
     let notification = slot.root_notification.load(Ordering::Acquire);
+    let notification_tcb_bound = slot.runtime_notification_tcb_bound.load(Ordering::Acquire) != 0;
     let cap_generation = slot.mcs_cap_generation.load(Ordering::Acquire);
     let guard = DriverTaskMcsOneWayNotificationGuard {
         slot,
         endpoint,
         notification,
+        notification_tcb_bound,
         cap_generation,
     };
     guard.publication_still_live().then_some(guard)
@@ -9797,6 +9809,8 @@ pub fn publish_cyw43_sdio_restart_context(
     slot.restart_notification
         .store(notification, Ordering::Release);
     slot.restart_notification_bound.store(1, Ordering::Release);
+    slot.runtime_notification_tcb_bound
+        .store(1, Ordering::Release);
     slot.restart_irq_handler
         .store(irq_handlers[0], Ordering::Release);
     slot.restart_dma_irq_handler
@@ -10070,6 +10084,27 @@ pub fn publish_driver_task_root_notification(contract: DriverTaskContract, notif
     };
     slot.root_notification
         .store(notification, Ordering::Release);
+}
+
+/// Publish whether the runtime notification is currently bound to its TCB.
+///
+/// This is separate from the root send-cap publication: unbound runtimes keep
+/// that capability for explicit post-quantum DROW waits, but their initial MCS
+/// one-way scheduling edge must use the command endpoint.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_runtime_notification_binding(
+    contract: DriverTaskContract,
+    bound: bool,
+) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.runtime_notification_tcb_bound
+        .store(u32::from(bound), Ordering::Release);
+    true
 }
 
 /// Publish root's receive cap for the compiler-declared CYW43 RX wake route.
@@ -12497,6 +12532,8 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     };
     slot.endpoint.store(0, Ordering::Release);
     slot.root_notification.store(0, Ordering::Release);
+    slot.runtime_notification_tcb_bound
+        .store(0, Ordering::Release);
     slot.root_wake_notification.store(0, Ordering::Release);
     slot.root_wake_badge.store(0, Ordering::Release);
     slot.root_wake_polls.store(0, Ordering::Release);
@@ -15447,7 +15484,7 @@ where
     true
 }
 
-/// Immutable identity for the sole MCS notification prompt of one one-way
+/// Immutable identity for the sole initial MCS scheduling edge of one one-way
 /// driver command after its sequence-last commit.
 #[cfg(feature = "kernel")]
 struct DriverTaskMcsOneWayPrompt<'a> {
@@ -15469,22 +15506,49 @@ enum DriverTaskMcsOneWayPromptResult {
     Invalid,
 }
 
-/// Revalidate and signal one exact MCS one-way command once.
+/// Initial scheduling edge for one sequence-last MCS one-way command.
+///
+/// A TCB-bound notification may wake the runtime directly. A runtime whose
+/// notification was intentionally left unbound must first receive the command
+/// through its existing one-way endpoint lane. After either edge, later DROW
+/// slices use the runtime's explicit notification wait and the same guarded
+/// notification capability generation.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskMcsOneWayInitialWake {
+    BoundNotification,
+    EndpointNonBlocking,
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_mcs_one_way_initial_wake(
+    notification_tcb_bound: bool,
+) -> DriverTaskMcsOneWayInitialWake {
+    if notification_tcb_bound {
+        DriverTaskMcsOneWayInitialWake::BoundNotification
+    } else {
+        DriverTaskMcsOneWayInitialWake::EndpointNonBlocking
+    }
+}
+
+/// Revalidate and hand off one exact MCS one-way command once.
 ///
 /// The durable command record is the sole authority. The request is marked
-/// issued before the callback and notification, so a repeated producer turn
+/// issued before the callback and scheduling edge, so a repeated producer turn
 /// can only observe `AlreadySignalled`; it can never manufacture a second
 /// edge. The callback is a deterministic test seam for verifying that the
-/// sequence-last commit precedes the signal.
+/// sequence-last commit precedes either initial wake route.
 #[cfg(feature = "kernel")]
-fn signal_driver_task_mcs_one_way_prompt_with<B, F>(
+fn signal_driver_task_mcs_one_way_prompt_with<B, N, E>(
     context: DriverTaskMcsOneWayPrompt<'_>,
     before_signal: B,
-    signal: F,
+    signal_notification: N,
+    send_endpoint: E,
 ) -> DriverTaskMcsOneWayPromptResult
 where
     B: FnOnce(),
-    F: FnOnce(usize),
+    N: FnOnce(usize),
+    E: FnOnce(usize),
 {
     let DriverTaskMcsOneWayPrompt {
         slot,
@@ -15544,6 +15608,8 @@ where
         .store(notification_guard.cap_generation, Ordering::Release);
     slot.mcs_one_way_last_prompted_slice
         .store(0, Ordering::Release);
+    let initial_wake =
+        driver_task_mcs_one_way_initial_wake(notification_guard.notification_tcb_bound);
     before_signal();
     if !notification_guard.publication_still_live()
         || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
@@ -15551,9 +15617,16 @@ where
         return DriverTaskMcsOneWayPromptResult::Invalid;
     }
     driver_task_counter_add(&slot.counters.send_attempts, 1);
-    #[cfg(test)]
-    TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
-    signal(notification_guard.notification);
+    match initial_wake {
+        DriverTaskMcsOneWayInitialWake::BoundNotification => {
+            #[cfg(test)]
+            TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
+            signal_notification(notification_guard.notification);
+        }
+        DriverTaskMcsOneWayInitialWake::EndpointNonBlocking => {
+            send_endpoint(notification_guard.endpoint);
+        }
+    }
     DriverTaskMcsOneWayPromptResult::Signalled
 }
 
@@ -17754,12 +17827,16 @@ fn unbind_cyw43_sdio_restart_notification(context: Cyw43SdioRuntimeRestartContex
         return false;
     };
     if slot.restart_notification_bound.load(Ordering::Acquire) == 0 {
+        slot.runtime_notification_tcb_bound
+            .store(0, Ordering::Release);
         return true;
     }
     if crate::sel4::unbind_tcb_notification(context.tcb as sel4_sys::seL4_CPtr).is_err() {
         return false;
     }
     slot.restart_notification_bound.store(0, Ordering::Release);
+    slot.runtime_notification_tcb_bound
+        .store(0, Ordering::Release);
     true
 }
 
@@ -17769,6 +17846,8 @@ fn rebind_cyw43_sdio_restart_notification(context: Cyw43SdioRuntimeRestartContex
         return false;
     };
     if slot.restart_notification_bound.load(Ordering::Acquire) != 0 {
+        slot.runtime_notification_tcb_bound
+            .store(1, Ordering::Release);
         return true;
     }
     if crate::sel4::bind_tcb_notification(
@@ -17780,6 +17859,8 @@ fn rebind_cyw43_sdio_restart_notification(context: Cyw43SdioRuntimeRestartContex
         return false;
     }
     slot.restart_notification_bound.store(1, Ordering::Release);
+    slot.runtime_notification_tcb_bound
+        .store(1, Ordering::Release);
     true
 }
 
@@ -22830,9 +22911,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         == DriverTaskRingTransport::McsNotificationPrompt
     {
         let Some(guard) = acquire_driver_task_mcs_one_way_notification_guard(slot, endpoint) else {
-            // The command endpoint is Call-only under MCS. Reject before
-            // Stage publishes any request identity when the matching
-            // generation's reserved-badge prompt cap is unavailable.
+            // Every MCS one-way route needs the matching notification
+            // generation: bound runtimes use it for the initial edge, while
+            // unbound runtimes keep it for explicit post-quantum DROW waits.
+            // Reject before Stage publishes any request identity if absent.
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -23253,8 +23335,9 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             return None;
         };
         // The command body and sequence-last identity are already clean and
-        // visible. Signal exactly once in this producer activation; later
-        // prompt slices may only poll the same durable request.
+        // visible. Hand off exactly once in this producer activation using the
+        // runtime's actual binding; later slices may only poll the same durable
+        // request or answer an explicit DROW wait.
         cache_counter_batch.flush(slot);
         match signal_driver_task_mcs_one_way_prompt_with(
             DriverTaskMcsOneWayPrompt {
@@ -23274,6 +23357,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             },
             |notification| {
                 crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+            },
+            |endpoint| {
+                crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
+                crate::sel4::send_nb_unchecked(
+                    endpoint as sel4_sys::seL4_CPtr,
+                    sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                );
             },
         ) {
             DriverTaskMcsOneWayPromptResult::Signalled => {
@@ -23686,6 +23776,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 || {},
                 |notification| {
                     crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+                },
+                |endpoint| {
+                    crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
+                    crate::sel4::send_nb_unchecked(
+                        endpoint as sel4_sys::seL4_CPtr,
+                        sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                    );
                 },
             ) {
                 DriverTaskMcsOneWayPromptResult::Signalled
@@ -24113,7 +24210,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         == DriverTaskRingTransport::McsNotificationPrompt
         && completion.sequence != request as u32
     {
-        // The sole prompt transferred scheduling to a sequence-last command.
+        // The sole initial edge transferred scheduling to a sequence-last command.
         // A missing terminal is issued-unknown: retain the immutable slot for
         // a later terminal drain or supervisor containment, never clear it for
         // replay merely because the old endpoint retry budget elapsed.
@@ -25451,6 +25548,8 @@ pub(crate) fn test_publish_driver_task_root_notification(contract: DriverTaskCon
         return false;
     };
     slot.root_notification.store(1, Ordering::Release);
+    slot.runtime_notification_tcb_bound
+        .store(1, Ordering::Release);
     true
 }
 
@@ -35362,6 +35461,8 @@ mod tests {
         slot.active.store(1, Ordering::Release);
         slot.endpoint.store(0x77, Ordering::Release);
         slot.root_notification.store(0x99, Ordering::Release);
+        slot.runtime_notification_tcb_bound
+            .store(1, Ordering::Release);
         slot.mcs_cap_generation.store(1, Ordering::Release);
         slot.mcs_command_admission_open.store(1, Ordering::Release);
         slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
@@ -35569,6 +35670,7 @@ mod tests {
                     assert_eq!(notification, 0x99);
                     signals.set(signals.get().saturating_add(1));
                 },
+                |_| panic!("bound notification handoff must not use the endpoint"),
             ),
             DriverTaskMcsOneWayPromptResult::Signalled,
         );
@@ -35579,6 +35681,7 @@ mod tests {
                 context(),
                 || {},
                 |_| signals.set(signals.get().saturating_add(1)),
+                |_| signals.set(signals.get().saturating_add(1)),
             ),
             DriverTaskMcsOneWayPromptResult::AlreadySignalled,
         );
@@ -35587,7 +35690,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn mcs_one_way_wait_receipt_acknowledges_only_the_exact_next_slice() {
+    fn mcs_unbound_endpoint_handoff_preserves_exact_drow_continuation() {
         use core::cell::Cell;
 
         let slot = DriverTaskCommandSlot::new();
@@ -35598,29 +35701,48 @@ mod tests {
         let payload = b"wait\n";
         let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, 0x51);
         commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, command);
+        slot.runtime_notification_tcb_bound
+            .store(0, Ordering::Release);
         slot.runtime_identity_token
             .store(0x7345_0003, Ordering::Release);
         let guard = || {
             acquire_driver_task_mcs_one_way_notification_guard(&slot, 0x77)
                 .expect("live MCS notification generation")
         };
+        let endpoint_sends = Cell::new(0usize);
+        let initial_context = || DriverTaskMcsOneWayPrompt {
+            slot: &slot,
+            notification_guard: guard(),
+            contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            command,
+            request: command.sequence as usize,
+            fingerprint,
+            ring_root_ptr,
+            mode: DriverTaskRingCommandMode::RetainedTurn,
+        };
         assert_eq!(
             signal_driver_task_mcs_one_way_prompt_with(
-                DriverTaskMcsOneWayPrompt {
-                    slot: &slot,
-                    notification_guard: guard(),
-                    contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
-                    command,
-                    request: command.sequence as usize,
-                    fingerprint,
-                    ring_root_ptr,
-                    mode: DriverTaskRingCommandMode::RetainedTurn,
-                },
+                initial_context(),
                 || {},
-                |_| {},
+                |_| panic!("unbound initial handoff must not signal the notification"),
+                |endpoint| {
+                    assert_eq!(endpoint, 0x77);
+                    endpoint_sends.set(endpoint_sends.get().saturating_add(1));
+                },
             ),
             DriverTaskMcsOneWayPromptResult::Signalled,
         );
+        assert_eq!(endpoint_sends.get(), 1);
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                initial_context(),
+                || {},
+                |_| panic!("issued unbound handoff cannot signal a notification"),
+                |_| endpoint_sends.set(endpoint_sends.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayPromptResult::AlreadySignalled,
+        );
+        assert_eq!(endpoint_sends.get(), 1);
         let context = || DriverTaskMcsOneWayContinuation {
             slot: &slot,
             notification_guard: guard(),
@@ -35800,6 +35922,7 @@ mod tests {
                 },
                 || {},
                 |_| {},
+                |_| panic!("bound notification handoff must not use the endpoint"),
             ),
             DriverTaskMcsOneWayPromptResult::Signalled,
         );
@@ -35881,6 +36004,7 @@ mod tests {
                     mode: DriverTaskRingCommandMode::RetainedTurn,
                 },
                 || {},
+                |_| signals.set(signals.get().saturating_add(1)),
                 |_| signals.set(signals.get().saturating_add(1)),
             ),
             DriverTaskMcsOneWayPromptResult::Invalid,
@@ -37161,6 +37285,9 @@ mod tests {
         let task_key = driver_task_contract_key(contract).expect("task key");
         let slot = slot_for_task_key(task_key).expect("slot");
         publish_driver_task_command_endpoint(contract, 0x1234);
+        assert!(publish_driver_task_runtime_notification_binding(
+            contract, true,
+        ));
         publish_driver_task_ring(contract, 0x7000_0000);
         publish_driver_task_scheduler(contract, 0x4321, 240);
         publish_driver_task_steady_priority_active(contract);
@@ -37185,6 +37312,10 @@ mod tests {
         clear_driver_task_transport(contract);
 
         assert_eq!(slot.endpoint.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.runtime_notification_tcb_bound.load(Ordering::Acquire),
+            0,
+        );
         assert_eq!(slot.ring_root_ptr.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_context.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_handler.load(Ordering::Acquire), 0);
@@ -42177,6 +42308,14 @@ mod tests {
         assert_eq!(
             driver_task_ring_transport(false, DRIVER_TASK_RING_FLAG_ONE_WAY),
             DriverTaskRingTransport::EndpointNonBlocking,
+        );
+        assert_eq!(
+            driver_task_mcs_one_way_initial_wake(true),
+            DriverTaskMcsOneWayInitialWake::BoundNotification,
+        );
+        assert_eq!(
+            driver_task_mcs_one_way_initial_wake(false),
+            DriverTaskMcsOneWayInitialWake::EndpointNonBlocking,
         );
         assert!(driver_task_ring_active_request_resume_allowed(
             DriverTaskRingCommandMode::NonBlocking,
