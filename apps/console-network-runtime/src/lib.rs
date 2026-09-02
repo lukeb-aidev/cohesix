@@ -65,6 +65,40 @@ pub const fn direct_service_repoll_required(
         || (egress_pending && !tx_waiting_for_peer)
 }
 
+/// Decide whether a direct control wake requires one local service cycle.
+///
+/// Direct VirtIO retains its qualified behavior: every control wake requests
+/// service. For exact direct GENET, the notification is only a scheduling hint;
+/// an empty stable control page requests service only when private retained work
+/// already exists or an authoritative child-owned timer is due. A newly
+/// sequenced control is admitted separately after its stable page read.
+#[must_use]
+pub const fn direct_control_wake_service_due(
+    exact_direct_genet: bool,
+    retained_private_work: bool,
+    timer_service_due: bool,
+) -> bool {
+    !exact_direct_genet || retained_private_work || timer_service_due
+}
+
+const fn timer_service_due_from_levels(
+    tcp_timer_due: bool,
+    transport_deadline_due: bool,
+    close_transition_due: bool,
+) -> bool {
+    tcp_timer_due || transport_deadline_due || close_transition_due
+}
+
+fn close_transition_service_due(
+    state: TcpState,
+    last_state: TcpState,
+    session_close_ready: bool,
+) -> bool {
+    matches!(state, TcpState::CloseWait | TcpState::TimeWait)
+        || (state == TcpState::Closed && last_state != TcpState::Closed)
+        || (state == TcpState::Established && session_close_ready)
+}
+
 /// Return whether a just-published child event must quiesce direct-GENET until
 /// root supplies the command's bounded control successor.
 ///
@@ -892,18 +926,24 @@ impl TransportSession {
         if self.close_after_flush {
             return Ok(());
         }
-        let timed_out = match self.state {
+        if self.deadline_service_due(now_ms) {
+            self.reject(now_ms, b"reason=timeout")?;
+            self.close_after_flush = true;
+        }
+        Ok(())
+    }
+
+    fn deadline_service_due(&self, now_ms: u64) -> bool {
+        if self.close_after_flush {
+            return false;
+        }
+        match self.state {
             AuthState::Waiting => now_ms >= self.auth_deadline_ms,
             AuthState::Authenticated => {
                 now_ms.saturating_sub(self.last_activity_ms) >= self.idle_timeout_ms
             }
             AuthState::Inactive => false,
-        };
-        if timed_out {
-            self.reject(now_ms, b"reason=timeout")?;
-            self.close_after_flush = true;
         }
-        Ok(())
     }
 
     /// Whether the socket should begin its TCP close handshake.
@@ -1341,6 +1381,32 @@ impl<'a> ConsoleNetworkService<'a> {
         self.device.egress.is_some()
     }
 
+    /// Return whether an empty direct-control wake must service an exact timer.
+    ///
+    /// This reads only child-owned TCP/session state. Device ingress remains
+    /// driven by its real link notification, while newly sequenced root control
+    /// and retained private work are admitted independently by the kernel loop.
+    /// The smoltcp soft deadline covers retransmit and close timers; explicit
+    /// session checks preserve authentication, authenticated-idle, peer-close,
+    /// and relisten transitions.
+    #[must_use]
+    pub fn timer_service_due(&mut self, now_ms: u64) -> bool {
+        if self.terminal {
+            return false;
+        }
+        let timestamp = Instant::from_millis(now_ms.min(i64::MAX as u64) as i64);
+        let tcp_timer_due = self
+            .interface
+            .poll_at(timestamp, &self.sockets)
+            .is_some_and(|deadline| deadline <= timestamp);
+        let state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
+        timer_service_due_from_levels(
+            tcp_timer_due,
+            self.session.deadline_service_due(now_ms),
+            close_transition_service_due(state, self.last_tcp_state, self.session.close_ready()),
+        )
+    }
+
     /// Apply one root-authorized control to its exact child-owned connection.
     pub fn apply_control(
         &mut self,
@@ -1622,6 +1688,101 @@ mod tests {
         assert!(direct_service_repoll_required(
             false, true, false, true, true, false,
         ));
+    }
+
+    #[test]
+    fn exact_direct_genet_empty_control_requires_retained_work_or_due_timer() {
+        assert!(!direct_control_wake_service_due(true, false, false));
+        assert!(direct_control_wake_service_due(true, true, false));
+        assert!(direct_control_wake_service_due(true, false, true));
+        assert!(direct_control_wake_service_due(true, true, true));
+        assert!(
+            direct_control_wake_service_due(false, false, false),
+            "direct VirtIO must retain its qualified every-control-wake service",
+        );
+    }
+
+    #[test]
+    fn direct_timer_due_preserves_tcp_transport_and_close_obligations() {
+        assert!(!timer_service_due_from_levels(false, false, false));
+        assert!(timer_service_due_from_levels(true, false, false));
+        assert!(timer_service_due_from_levels(false, true, false));
+        assert!(timer_service_due_from_levels(false, false, true));
+
+        assert!(close_transition_service_due(
+            TcpState::Established,
+            TcpState::Established,
+            true,
+        ));
+        assert!(!close_transition_service_due(
+            TcpState::Established,
+            TcpState::Established,
+            false,
+        ));
+        assert!(close_transition_service_due(
+            TcpState::CloseWait,
+            TcpState::Established,
+            false,
+        ));
+        assert!(close_transition_service_due(
+            TcpState::TimeWait,
+            TcpState::LastAck,
+            false,
+        ));
+        assert!(close_transition_service_due(
+            TcpState::Closed,
+            TcpState::TimeWait,
+            false,
+        ));
+        assert!(!close_transition_service_due(
+            TcpState::Closed,
+            TcpState::Closed,
+            false,
+        ));
+        assert!(!close_transition_service_due(
+            TcpState::FinWait1,
+            TcpState::Established,
+            true,
+        ));
+    }
+
+    #[test]
+    fn transport_deadline_due_uses_exact_auth_and_idle_boundaries() {
+        let descriptor = descriptor();
+        let mut session = TransportSession::new(descriptor).unwrap();
+        let connected_at = 100u64;
+        session.begin(1, connected_at).unwrap();
+        let auth_deadline = connected_at.saturating_add(u64::from(descriptor.auth_timeout_ms));
+        assert!(!session.deadline_service_due(auth_deadline - 1));
+        assert!(session.deadline_service_due(auth_deadline));
+
+        let authenticated_at = 200u64;
+        session
+            .ingest(framed(b"AUTH secret").as_slice(), authenticated_at)
+            .unwrap();
+        assert!(session.authenticated());
+        let idle_deadline = authenticated_at.saturating_add(u64::from(descriptor.idle_timeout_ms));
+        assert!(!session.deadline_service_due(idle_deadline - 1));
+        assert!(session.deadline_service_due(idle_deadline));
+
+        session.request_disconnect();
+        assert!(session.close_after_flush);
+        assert!(
+            !session.deadline_service_due(idle_deadline),
+            "close is a distinct service obligation, not an auth/idle timeout",
+        );
+    }
+
+    #[test]
+    fn listener_has_no_synthetic_timer_service_debt() {
+        let mut rx = [0u8; 1024];
+        let mut tx = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+
+        assert!(service.listener_ready());
+        assert!(!service.timer_service_due(1));
     }
 
     #[test]

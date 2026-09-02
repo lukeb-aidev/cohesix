@@ -34,7 +34,7 @@ use super::ConsoleNetConfig;
 use super::NetDeviceCounters;
 use super::{
     direct_genet_causal_stage_drain_observed, select_isolated_direct_network_turn_for_contract,
-    select_isolated_direct_response_turn, select_isolated_network_turn,
+    select_isolated_direct_response_turn_for_contract, select_isolated_network_turn,
     select_isolated_response_turn, ConsoleLine, DirectGenetCausalStageDrainEvidence,
     DirectGenetCommandControlDeferReason, DirectGenetCommandControlOutcome,
     IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
@@ -1746,7 +1746,22 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 self.fail_closed("direct-egress-publication");
                 return false;
             }
-            select_isolated_direct_response_turn(
+            let exact_genet_contract =
+                D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+            let child_publication_pending = if exact_genet_contract {
+                match self.runtime.child_publication_pending() {
+                    Ok(pending) => pending,
+                    Err(_) => {
+                        self.fail_closed("child-publication-level");
+                        return false;
+                    }
+                }
+            } else {
+                false
+            };
+            select_isolated_direct_response_turn_for_contract(
+                exact_genet_contract,
+                child_publication_pending,
                 stage_output_ready,
                 response_progress_outstanding,
                 self.lower_cursor,
@@ -1822,10 +1837,24 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
                 && self
                     .response_lane
                     .is_none_or(|lane| lane.awaiting_batch.is_none());
+            let exact_genet_contract =
+                D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+            let child_publication_pending = if exact_genet_contract {
+                match self.runtime.child_publication_pending() {
+                    Ok(pending) => pending,
+                    Err(_) => {
+                        self.fail_closed("child-publication-level");
+                        return false;
+                    }
+                }
+            } else {
+                false
+            };
             select_isolated_direct_network_turn_for_contract(
-                D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                exact_genet_contract,
                 stage_output_ready,
                 self.disconnect_stage_ready(),
+                child_publication_pending,
                 self.lower_cursor,
             )
         } else {

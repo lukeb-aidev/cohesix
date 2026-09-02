@@ -209,6 +209,7 @@ pub(crate) fn select_isolated_direct_network_turn(
 pub(crate) fn select_isolated_direct_genet_network_turn(
     stage_output_ready: bool,
     disconnect_ready: bool,
+    child_publication_pending: bool,
     lower_cursor: IsolatedNetworkLowerCursor,
 ) -> IsolatedNetworkTurnSelection {
     if stage_output_ready {
@@ -220,6 +221,12 @@ pub(crate) fn select_isolated_direct_genet_network_turn(
     if disconnect_ready {
         return IsolatedNetworkTurnSelection {
             unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect),
+            successor: lower_cursor,
+        };
+    }
+    if child_publication_pending {
+        return IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
             successor: lower_cursor,
         };
     }
@@ -249,12 +256,14 @@ pub(crate) fn select_isolated_direct_network_turn_for_contract(
     exact_genet_contract: bool,
     stage_output_ready: bool,
     disconnect_ready: bool,
+    child_publication_pending: bool,
     lower_cursor: IsolatedNetworkLowerCursor,
 ) -> IsolatedNetworkTurnSelection {
     if exact_genet_contract {
         select_isolated_direct_genet_network_turn(
             stage_output_ready,
             disconnect_ready,
+            child_publication_pending,
             lower_cursor,
         )
     } else {
@@ -356,6 +365,34 @@ pub(crate) fn select_isolated_direct_response_turn(
         successor: IsolatedNetworkLowerCursor {
             unit: IsolatedNetworkLowerUnit::StageOutput,
         },
+    }
+}
+
+/// Prioritize an exact direct-GENET child publication without changing the
+/// qualified direct-VirtIO response selector.
+///
+/// A sequence-last child level is useful work, while the notification that
+/// exposed it is only a scheduling hint. Exact output staging retains priority;
+/// otherwise the durable publication preempts a blind timer wake and preserves
+/// the interrupted lower-unit debt.
+pub(crate) fn select_isolated_direct_response_turn_for_contract(
+    exact_genet_contract: bool,
+    child_publication_pending: bool,
+    stage_output_ready: bool,
+    response_progress_outstanding: bool,
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    if exact_genet_contract && child_publication_pending && !stage_output_ready {
+        IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+            successor: lower_cursor,
+        }
+    } else {
+        select_isolated_direct_response_turn(
+            stage_output_ready,
+            response_progress_outstanding,
+            lower_cursor,
+        )
     }
 }
 
@@ -587,38 +624,105 @@ mod tests {
     #[test]
     fn direct_genet_selector_prioritizes_exact_control_work() {
         let cursor = IsolatedNetworkLowerCursor::new();
-        let observe = select_isolated_direct_genet_network_turn(false, false, cursor);
+        let observe = select_isolated_direct_genet_network_turn(false, false, false, cursor);
         assert_eq!(
             observe.unit(),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild)
         );
-        let tick = select_isolated_direct_genet_network_turn(false, false, observe.successor());
+        let tick =
+            select_isolated_direct_genet_network_turn(false, false, false, observe.successor());
         assert_eq!(
             tick.unit(),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick)
         );
 
-        let stage = select_isolated_direct_genet_network_turn(true, true, cursor);
+        let stage = select_isolated_direct_genet_network_turn(true, true, true, cursor);
         assert_eq!(
             stage.unit(),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
-            "retained response output must preempt disconnect and blind work"
+            "retained response output must preempt publication, disconnect, and blind work"
         );
         assert_eq!(
             stage.successor(),
             cursor,
             "exact control work cannot consume the blind lower-unit debt",
         );
-        let disconnect = select_isolated_direct_genet_network_turn(false, true, cursor);
+        let disconnect = select_isolated_direct_genet_network_turn(false, true, true, cursor);
         assert_eq!(
             disconnect.unit(),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect),
-            "an exact drained disconnect must preempt blind work"
+            "an exact drained disconnect must preempt publication and blind work"
         );
         assert_eq!(
             disconnect.successor(),
             cursor,
             "exact disconnect work cannot consume the blind lower-unit debt",
+        );
+    }
+
+    #[test]
+    fn direct_genet_pending_publication_preempts_blind_service_tick() {
+        let service_tick =
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ServiceTick);
+
+        let no_publication =
+            select_isolated_direct_genet_network_turn(false, false, false, service_tick);
+        assert_eq!(
+            no_publication.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick),
+            "the existing blind timer responsibility remains when no child level is ready",
+        );
+
+        let publication =
+            select_isolated_direct_genet_network_turn(false, false, true, service_tick);
+        assert_eq!(
+            publication.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+            "a durable child level must preempt the blind timer wake",
+        );
+        assert_eq!(
+            publication.successor(),
+            service_tick,
+            "publication priority must preserve the interrupted timer debt",
+        );
+    }
+
+    #[test]
+    fn direct_genet_pending_publication_preempts_blind_response_tick() {
+        let service_tick =
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ServiceTick);
+
+        let no_publication = select_isolated_direct_response_turn_for_contract(
+            true,
+            false,
+            false,
+            true,
+            service_tick,
+        );
+        assert_eq!(
+            no_publication.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick),
+        );
+
+        let publication = select_isolated_direct_response_turn_for_contract(
+            true,
+            true,
+            false,
+            true,
+            service_tick,
+        );
+        assert_eq!(
+            publication.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+        );
+        assert_eq!(publication.successor(), service_tick);
+
+        let staged_output =
+            select_isolated_direct_response_turn_for_contract(true, true, true, true, service_tick);
+        assert_eq!(
+            staged_output.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            "exact staged output retains priority over a simultaneous child level",
         );
     }
 
@@ -632,19 +736,42 @@ mod tests {
             IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::Ingress),
             IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ServiceTick),
         ] {
-            for (stage_output_ready, disconnect_ready) in
-                [(false, false), (false, true), (true, false), (true, true)]
-            {
-                assert_eq!(
-                    select_isolated_direct_network_turn_for_contract(
-                        false,
-                        stage_output_ready,
-                        disconnect_ready,
-                        cursor,
-                    ),
-                    select_isolated_direct_network_turn(cursor),
-                    "a non-GENET contract must retain the direct-VirtIO selector for cursor={cursor:?} stage={stage_output_ready} disconnect={disconnect_ready}",
-                );
+            for child_publication_pending in [false, true] {
+                for (stage_output_ready, disconnect_ready) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_eq!(
+                        select_isolated_direct_network_turn_for_contract(
+                            false,
+                            stage_output_ready,
+                            disconnect_ready,
+                            child_publication_pending,
+                            cursor,
+                        ),
+                        select_isolated_direct_network_turn(cursor),
+                        "a non-GENET contract must retain the direct-VirtIO selector for cursor={cursor:?} stage={stage_output_ready} disconnect={disconnect_ready} publication={child_publication_pending}",
+                    );
+                }
+
+                for (stage_output_ready, response_progress_outstanding) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_eq!(
+                        select_isolated_direct_response_turn_for_contract(
+                            false,
+                            child_publication_pending,
+                            stage_output_ready,
+                            response_progress_outstanding,
+                            cursor,
+                        ),
+                        select_isolated_direct_response_turn(
+                            stage_output_ready,
+                            response_progress_outstanding,
+                            cursor,
+                        ),
+                        "a non-GENET contract must retain the direct-VirtIO response selector for cursor={cursor:?} stage={stage_output_ready} response={response_progress_outstanding} publication={child_publication_pending}",
+                    );
+                }
             }
         }
     }

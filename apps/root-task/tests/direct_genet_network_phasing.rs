@@ -79,7 +79,9 @@ fn direct_genet_final_sleep_check_adopts_only_durable_physical_work() {
     assert!(record < yield_call);
 
     let loop_body = RUNTIME_SOURCE
-        .find("if runtime_idle_prewait_route(\n                notification_route,")
+        .find(
+            "if runtime_idle_prewait_route(\n                cfg!(sel4_config_kernel_mcs),\n                notification_route,",
+        )
         .expect("final command-ring admission check exists");
     let loop_body = &RUNTIME_SOURCE[loop_body..];
     let command_check = loop_body

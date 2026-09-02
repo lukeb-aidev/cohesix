@@ -26,13 +26,14 @@ use console_network_runtime::abi::{
 };
 #[cfg(feature = "direct-virtio")]
 use console_network_runtime::abi::{DIRECT_VIRTIO_IRQ_HANDLER_SLOT, WAKE_DIRECT_VIRTIO_IRQ};
+use console_network_runtime::{
+    direct_control_wake_service_due, direct_service_repoll_required, ChildTurnReadiness,
+    ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService, ControlApplyOutcome, RuntimeError,
+    ServicePollOutcome,
+};
 #[cfg(feature = "direct-genet")]
 use console_network_runtime::{
     direct_genet_command_control_releases_quiesce, direct_genet_command_publication_quiesces,
-};
-use console_network_runtime::{
-    direct_service_repoll_required, ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit,
-    ConsoleNetworkService, ControlApplyOutcome, RuntimeError, ServicePollOutcome,
 };
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
@@ -262,6 +263,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
         let direct_transport = false;
         #[cfg(feature = "direct-genet")]
+        let exact_direct_genet = direct_genet_link.is_some();
+        #[cfg(all(not(feature = "direct-genet"), feature = "direct-virtio"))]
+        let exact_direct_genet = false;
+        #[cfg(feature = "direct-genet")]
         let direct_genet_command_quiesced = awaiting_root_command_control;
         #[cfg(not(feature = "direct-genet"))]
         let direct_genet_command_quiesced = false;
@@ -365,7 +370,12 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         let control_wake = badge & WAKE_CONTROL != 0;
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
         if direct_transport && control_wake {
-            direct_service_pending = true;
+            // Direct VirtIO retains its qualified signal-driven service. For
+            // exact GENET, do not let the coalesced control badge itself mint a
+            // service cycle: the stable page read below will admit a new
+            // sequence, retained private work, or an actually due timer.
+            direct_service_pending =
+                direct_control_wake_service_due(exact_direct_genet, direct_service_pending, false);
         }
         turn_scheduler.retain_notification(packet_wake, control_wake);
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
@@ -734,16 +744,26 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     Err(RuntimeError::Backpressure) => {
                         // WAKE_CONTROL also carries root's service tick. Once
                         // the stable page proves that no newer control exists,
-                        // consume this empty hint before retaining exactly one
-                        // local service cycle. Otherwise local Poll progress
-                        // would revisit the same empty control forever.
+                        // consume this empty hint. Exact direct GENET retains a
+                        // local cycle only for private work or an authoritative
+                        // child-owned timer; direct VirtIO keeps its qualified
+                        // every-control-wake behavior.
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
                         if !direct_transport {
                             turn_scheduler.request_service();
                         } else {
                             #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
                             {
-                                direct_service_pending = true;
+                                let timer_service_due = if exact_direct_genet {
+                                    service.timer_service_due(now_ms(descriptor.timer_clock_hz))
+                                } else {
+                                    false
+                                };
+                                direct_service_pending = direct_control_wake_service_due(
+                                    exact_direct_genet,
+                                    direct_service_pending,
+                                    timer_service_due,
+                                );
                             }
                         }
                     }

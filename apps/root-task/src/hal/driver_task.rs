@@ -8836,11 +8836,17 @@ const fn driver_task_runtime_progress_is_admission_ready(
 #[must_use]
 const fn driver_task_runtime_progress_is_post_command_recv_ready(
     progress: DriverTaskRingProgressRecord,
+    expected_sequence: u32,
     expected_aux0: u32,
 ) -> bool {
-    progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
-        && progress.sequence == 0
-        && progress.phase == DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
+    expected_sequence != 0
+        && progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && progress.sequence == expected_sequence
+        && matches!(
+            progress.phase,
+            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
+                | DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY
+        )
         && progress.aux0 == expected_aux0
 }
 
@@ -18596,6 +18602,7 @@ pub struct Cyw43SdioPairRestartCursor {
     verify_signal_u32: u32,
     delay_start: u64,
     first_member_succeeded: bool,
+    sdio_engine_completion: Option<DriverTaskCompletionRecord>,
     cyw43_engine_completion: Option<DriverTaskCompletionRecord>,
     physical_lifetime_before: DriverRuntimeSdioPhysicalLifetimeRecord,
     physical_lifetime_epoch: u32,
@@ -18905,7 +18912,13 @@ impl Cyw43SdioPairRestartExecutor for Cyw43SdioPairRestartProductionExecutor {
                 poll_cyw43_sdio_restart_recv_ready_once(Self::context(cursor, member))
             }
             Cyw43SdioPairRestartOperation::PollPostEngineRecvReady(member) => {
-                poll_cyw43_sdio_restart_post_engine_recv_ready_once(Self::context(cursor, member))
+                let Some(completion) = cursor.sdio_engine_completion else {
+                    return Cyw43SdioPairRestartOperationOutcome::Failed;
+                };
+                poll_cyw43_sdio_restart_post_engine_recv_ready_once(
+                    Self::context(cursor, member),
+                    completion,
+                )
             }
             Cyw43SdioPairRestartOperation::ReplayDescriptor(member) => {
                 replay_cyw43_sdio_restart_descriptor_once(Self::context(cursor, member))
@@ -18988,6 +19001,7 @@ fn poll_cyw43_sdio_restart_recv_ready_once(
 #[cfg(feature = "kernel")]
 fn poll_cyw43_sdio_restart_post_engine_recv_ready_once(
     context: Cyw43SdioRuntimeRestartContext,
+    expected_completion: DriverTaskCompletionRecord,
 ) -> Cyw43SdioPairRestartOperationOutcome {
     let Some(slot) = slot_for_task_key(context.task_key) else {
         return Cyw43SdioPairRestartOperationOutcome::Failed;
@@ -18996,10 +19010,21 @@ fn poll_cyw43_sdio_restart_post_engine_recv_ready_once(
     if ring_root_ptr == 0 {
         return Cyw43SdioPairRestartOperationOutcome::Failed;
     }
+    if !matches!(
+        driver_task_committed_engine_init_turn(slot, context.hot_path),
+        Some((sequence, _, completion))
+            if sequence == expected_completion.sequence && completion == expected_completion
+    ) {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    }
     let progress = driver_task_ring_read_progress_record(ring_root_ptr);
     record_driver_task_ring_progress(slot, progress);
     let expected_aux0 = (context.task_key & u32::MAX as usize) as u32;
-    if driver_task_runtime_progress_is_post_command_recv_ready(progress, expected_aux0) {
+    if driver_task_runtime_progress_is_post_command_recv_ready(
+        progress,
+        expected_completion.sequence,
+        expected_aux0,
+    ) {
         emit_driver_task_runtime_entry_status(
             context.contract,
             context.task_key,
@@ -19745,6 +19770,9 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
                     );
                     return pending_cyw43_sdio_pair_restart_turn(action_label, operation);
                 }
+                if action == Cyw43SdioPairRestartAction::ReplaySdioEngine {
+                    cursor.sdio_engine_completion = Some(completion);
+                }
                 if action == Cyw43SdioPairRestartAction::ReplayCyw43Engine {
                     cursor.cyw43_engine_completion = Some(completion);
                 }
@@ -20249,6 +20277,7 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         verify_signal_u32: 0,
         delay_start: 0,
         first_member_succeeded: false,
+        sdio_engine_completion: None,
         cyw43_engine_completion: None,
         physical_lifetime_before,
         physical_lifetime_epoch: 0,
@@ -30418,6 +30447,7 @@ mod tests {
             verify_signal_u32: 0,
             delay_start: 0,
             first_member_succeeded: false,
+            sdio_engine_completion: None,
             cyw43_engine_completion: None,
             physical_lifetime_before: DriverRuntimeSdioPhysicalLifetimeRecord::empty(),
             physical_lifetime_epoch: 0,
@@ -30978,6 +31008,27 @@ mod tests {
                 .count(),
             4
         );
+        assert!(cursor.sdio_engine_completion.is_some_and(|completion| {
+            completion.sequence == 1 && completion.detail == DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY
+        }));
+        let replay_index = executor
+            .calls
+            .iter()
+            .position(|(_, operation)| {
+                *operation == Cyw43SdioPairRestartOperation::ReplayEngine(Cyw43SdioPairMember::Sdio)
+            })
+            .expect("SDIO engine replay");
+        let fence_index = executor
+            .calls
+            .iter()
+            .position(|(_, operation)| {
+                *operation
+                    == Cyw43SdioPairRestartOperation::PollPostEngineRecvReady(
+                        Cyw43SdioPairMember::Sdio,
+                    )
+            })
+            .expect("SDIO post-engine readiness fence");
+        assert!(replay_index < fence_index);
     }
 
     #[cfg(feature = "kernel")]
@@ -37863,7 +37914,7 @@ mod tests {
         slot.request_seq.store(2, Ordering::Release);
         slot.last_progress_magic
             .store(DRIVER_RUNTIME_RING_PROGRESS_MAGIC, Ordering::Release);
-        slot.last_progress_sequence.store(0, Ordering::Release);
+        slot.last_progress_sequence.store(2, Ordering::Release);
         slot.last_progress_phase.store(
             DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
             Ordering::Release,
@@ -43267,19 +43318,31 @@ mod tests {
         assert!(driver_task_runtime_progress_is_post_command_recv_ready(
             DriverTaskRingProgressRecord {
                 magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
-                sequence: 0,
+                sequence: 2,
                 phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
                 aux0: 7,
             },
+            2,
+            7,
+        ));
+        assert!(driver_task_runtime_progress_is_post_command_recv_ready(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 2,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+                aux0: 7,
+            },
+            2,
             7,
         ));
         assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
             DriverTaskRingProgressRecord {
                 magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
                 sequence: 0,
-                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
                 aux0: 7,
             },
+            2,
             7,
         ));
         assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
@@ -43289,15 +43352,35 @@ mod tests {
                 phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
                 aux0: 7,
             },
+            2,
             7,
         ));
-        assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
+        for progress in [
             DriverTaskRingProgressRecord {
                 magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
-                sequence: 0,
+                sequence: 2,
                 phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
                 aux0: 8,
             },
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 2,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+                aux0: 7,
+            },
+        ] {
+            assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
+                progress, 2, 7,
+            ));
+        }
+        assert!(!driver_task_runtime_progress_is_post_command_recv_ready(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 2,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+                aux0: 7,
+            },
+            0,
             7,
         ));
     }

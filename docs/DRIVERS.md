@@ -624,8 +624,10 @@ signal-before-commit races without turning polling into a scheduling clock.
 
 On the selected MCS profile, local terminal retirement is part of this order.
 After the sequence-last completion is durable, the runtime must update its
-consumed command sequence and publish receive-ready before any syscall can wake
-the producer. A reply-bearing terminal then uses the runtime's sole Reply
+consumed command sequence and publish receive-ready with that exact retired
+sequence before any syscall can wake the producer. Later idle-poll progress
+preserves that sequence, while zero remains reserved for initial admission. A
+reply-bearing terminal then uses the runtime's sole Reply
 object in one atomic `seL4_ReplyRecv`; a committed one-way SDIO child uses one
 atomic slot-10 CYW43 prompt plus slot-3 local wait. The returned endpoint MR0 or
 bound-notification badge is classified and any immutable successor is sealed
@@ -1425,6 +1427,14 @@ transport:
   behind an unacknowledged response segment. This changes no frame, queue,
   listener, authentication, ownership, or MCS contract; QEMU retains its
   already-qualified TCP policy.
+- The root's unchanged direct-GENET `ServiceTick` is a timer hint, not work
+  authority. After an empty stable control-page read, the console child starts
+  a local service cycle only for already-retained private work or an exact due
+  smoltcp, authentication, authenticated-idle, close, or relisten obligation.
+  A real GENET link wake and a newly sequenced root control remain
+  unconditional. This prevents an empty periodic wake from consuming the
+  child's SC on link/stack/session work while preserving every protocol timer;
+  direct VirtIO/QEMU and mediated WiFi retain their selected behavior.
 - The Pi console-network child retains eight refill records in its existing
   8-bit SC, matching the Pi direct-GENET fragment-preserving selection, and
   runs independently on core 2 while root-control remains on core 0 at equal

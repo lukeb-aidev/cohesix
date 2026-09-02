@@ -2105,8 +2105,11 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED: u32 = 
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-published command endpoint/shared-ring intake loop.
+/// Sequence zero identifies initial admission; otherwise sequence identifies
+/// the last command retired before this receive-ready publication.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY: u32 = 201;
 /// Linked runtime completed an intake poll without consuming a new command.
+/// Its sequence preserves the same last-retired-command identity as receive-ready.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY: u32 = 202;
 /// Linked runtime saw a non-one-way command before receiving a reply cap.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING: u32 = 203;

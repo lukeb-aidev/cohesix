@@ -70001,7 +70001,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             idle_polls = idle_polls.wrapping_add(1);
             if runtime_idle_poll_progress_due(idle_polls) {
                 publish_runtime_progress(
-                    0,
+                    last_sequence,
                     pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
                     task_key_marker,
                 );
@@ -70827,7 +70827,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             }
             last_sequence = command.sequence;
             publish_runtime_progress(
-                0,
+                last_sequence,
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
                 task_key_marker,
             );
@@ -70844,7 +70844,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 || {
                     last_sequence = command.sequence;
                     publish_runtime_progress(
-                        0,
+                        last_sequence,
                         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
                         task_key_marker,
                     );
@@ -87975,7 +87975,52 @@ mod tests {
         assert!(grant_retire < peer_wait);
 
         let main_start = source.find("pub fn runtime_main(").expect("runtime main");
-        let main = &source[main_start..];
+        let main_end = source[main_start..]
+            .find("#[cfg(test)]\nmod tests {")
+            .map(|offset| main_start + offset)
+            .expect("runtime tests must follow runtime main");
+        let main = &source[main_start..main_end];
+        let compact_main: String = main.split_whitespace().collect();
+        let admission_ready = concat!(
+            "publish_runtime_progress(0,",
+            "pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,",
+            "task_key_marker,);"
+        );
+        let retired_ready = concat!(
+            "publish_runtime_progress(last_sequence,",
+            "pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,",
+            "task_key_marker,);"
+        );
+        let idle_ready = concat!(
+            "publish_runtime_progress(last_sequence,",
+            "pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,",
+            "task_key_marker,);"
+        );
+        let anonymous_idle_ready = concat!(
+            "publish_runtime_progress(0,",
+            "pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,",
+            "task_key_marker,);"
+        );
+        assert_eq!(
+            compact_main.matches(admission_ready).count(),
+            1,
+            "sequence zero is reserved for the sole initial receive-ready admission",
+        );
+        assert_eq!(
+            compact_main.matches(retired_ready).count(),
+            2,
+            "classic and MCS terminal retirement must publish their exact last sequence",
+        );
+        assert_eq!(
+            compact_main.matches(idle_ready).count(),
+            1,
+            "idle polling must preserve the exact last-retired sequence",
+        );
+        assert_eq!(
+            compact_main.matches(anonymous_idle_ready).count(),
+            0,
+            "idle polling cannot erase the retired command identity",
+        );
         let commit = main
             .find("let completion_committed = publish_runtime_completion_sequence_last")
             .expect("durable completion commit");
