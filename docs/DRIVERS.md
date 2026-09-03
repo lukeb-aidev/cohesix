@@ -1818,6 +1818,15 @@ pre-scrub SDHCI and DMA4 register cut; `captured=no` means unavailable evidence,
 not zero hardware state. These rows never acknowledge, consume, retry, reset,
 wake, or recover either owner and cannot satisfy a Wi-Fi gate by themselves.
 
+Root-command generations and CYW43/SDIO link epochs are independent identities.
+An ordinary root grant is matched to the complete sealed parent, including
+its `aux1` (zero is valid at cold root startup). The retained reciprocal
+transaction is separately matched to the nonzero live CYW43 and SDIO DPC
+epoch. The post-action causal wait and childless recovery cut must not require
+these two domains to have equal numeric values. Replacing either the exact
+parent or the live peer epoch still rejects continuation; no grant, Reply,
+physical-operation bound, or recovery authority is relaxed.
+
 The first delegated boot child has a separate passive
 `PHOF` v1 record in each CYW43/SDIO local ring, at bytes 84..128 between the
 20-byte completion and progress record. Its eleven words are magic; packed
@@ -1825,7 +1834,10 @@ version/role/route; publication revision; child sequence; parent sequence
 (SDIO: retired engine sequence); child `aux1`; stage bits; detail; witness;
 low CNTVCT at the latest stage; and commit-last revision. Runtime-init ABI v13,
 command/completion layouts, grants, and all scheduling authority are unchanged.
-Only the respective runtime writes its record. Each stage is recorded at most
+Only the respective runtime writes its record. SDIO's child-selection predicate
+requires the delegated sequence domain, SDIO role/hot path, nonzero link epoch,
+and one-way flag; a passive reread of its retired engine command cannot consume
+the first-child slot. Each stage is recorded at most
 once for the first child, freezes on its terminal or recovery, and clears only
 at canonical runtime reset. No unbounded event log or steady-state publication
 is added. Root accepts two equal valid reads with the correct writer role and

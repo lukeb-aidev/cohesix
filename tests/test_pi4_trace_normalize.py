@@ -2278,7 +2278,7 @@ def test_gate_summary_tracks_netstatus_tcp_ready_proof() -> None:
     assert record["NETTEST_PROOF"] == "no"
 
 
-def test_gate_summary_keeps_selected_network_after_priority_lease_state() -> None:
+def test_gate_summary_keeps_selected_network_after_passive_component_state() -> None:
     events = normalizer.parse_events(
         [
             "netstats: generation=1 mode=dhcp policy=wifi active=wifi "
@@ -2286,6 +2286,12 @@ def test_gate_summary_keeps_selected_network_after_priority_lease_state() -> Non
             "gateway=192.168.86.1 dhcp=bound",
             "netstats: cyw43_priority_lease state=inactive pair_epoch=0 "
             "mask=0x00 active=no close_pending=no",
+            "netstats: mcs_idle schema=v1 before=200 after=0 timer_reject=0 "
+            "clear=0/0 last_cut=0 mask=0x0001",
+            "netstats: mcs_idle_fences schema=v1 base=0 counts=200,0,0,0",
+            "netstats: mcs_idle_fences schema=v1 base=4 counts=0,0,0,0",
+            "netstats: mcs_idle_fences schema=v1 base=8 counts=0,0,0,0",
+            "netstats: mcs_idle_fences schema=v1 base=12 counts=0,0,0,0",
         ]
     )
 
@@ -2294,6 +2300,8 @@ def test_gate_summary_keeps_selected_network_after_priority_lease_state() -> Non
     assert record["NET_ACTIVE"] == "wifi"
     assert record["NET_ADDR_SRC"] == "dhcp-lease"
     assert record["NET_DHCP"] == "bound"
+    assert record["NET_TCP_READY"] == "no"
+    assert record["NETTEST_PROOF"] == "no"
 
 
 def test_gate_summary_late_tcp_not_ready_clears_current_tcp_state() -> None:

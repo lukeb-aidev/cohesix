@@ -692,6 +692,83 @@ static OBSERVE_DISPATCH: Mutex<PiMcsCommandDispatchSummary> =
 static YIELD: Mutex<PiMcsYieldSummary> = Mutex::new(PiMcsYieldSummary::new());
 static BUDGET_GUARD: Mutex<PiMcsBudgetGuardSummary> = Mutex::new(PiMcsBudgetGuardSummary::new());
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PiMcsIdleCut {
+    BeforeEnable,
+    AfterEnable,
+    TimerRejected,
+}
+
+/// Count existing predicate samples without adding a timer, wake or admission.
+struct PiMcsIdleSummary {
+    cuts: [u64; 3],
+    clear: [u64; 2],
+    fences: [u64; 16],
+    last_mask: u32,
+    last_cut: u8,
+}
+
+impl PiMcsIdleSummary {
+    const fn new() -> Self {
+        Self {
+            cuts: [0; 3],
+            clear: [0; 2],
+            fences: [0; 16],
+            last_mask: 0,
+            last_cut: 0,
+        }
+    }
+
+    fn record(&mut self, cut: PiMcsIdleCut, mask: u32) {
+        let index = match cut {
+            PiMcsIdleCut::BeforeEnable => 0,
+            PiMcsIdleCut::AfterEnable => 1,
+            PiMcsIdleCut::TimerRejected => 2,
+        };
+        self.cuts[index] = self.cuts[index].saturating_add(1);
+        if index < 2 && mask == 0 {
+            self.clear[index] = self.clear[index].saturating_add(1);
+        }
+        for (bit, count) in self.fences.iter_mut().enumerate() {
+            if mask & (1 << bit) != 0 {
+                *count = count.saturating_add(1);
+            }
+        }
+        self.last_mask = mask;
+        self.last_cut = index as u8;
+    }
+
+    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+        let mut lines = core::array::from_fn(|_| HeaplessString::new());
+        let _ = write!(lines[0],
+            "netstats: mcs_idle schema=v1 before={} after={} timer_reject={} clear={}/{} last_cut={} mask=0x{:04x}",
+            self.cuts[0], self.cuts[1], self.cuts[2], self.clear[0], self.clear[1], self.last_cut, self.last_mask);
+        for group in 0..4 {
+            let i = group * 4;
+            let _ = write!(
+                lines[group + 1],
+                "netstats: mcs_idle_fences schema=v1 base={} counts={},{},{},{}",
+                i,
+                self.fences[i],
+                self.fences[i + 1],
+                self.fences[i + 2],
+                self.fences[i + 3]
+            );
+        }
+        lines
+    }
+}
+
+static IDLE: Mutex<PiMcsIdleSummary> = Mutex::new(PiMcsIdleSummary::new());
+
+pub(crate) fn record_idle_fence(cut: PiMcsIdleCut, mask: u32) {
+    IDLE.lock().record(cut, mask);
+}
+
+pub(crate) fn idle_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+    IDLE.lock().lines()
+}
+
 pub(crate) fn record_quantum(record: PiMcsQuantumRecord) {
     TIMING.lock().record(record);
 }
@@ -764,6 +841,33 @@ pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 22] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_fence_summary_separates_clear_race_and_timer_rejection() {
+        let mut summary = PiMcsIdleSummary::new();
+        summary.record(PiMcsIdleCut::BeforeEnable, (1 << 3) | (1 << 5));
+        summary.record(PiMcsIdleCut::BeforeEnable, 0);
+        summary.record(PiMcsIdleCut::AfterEnable, 1 << 14);
+        summary.record(PiMcsIdleCut::TimerRejected, 1 << 15);
+        assert_eq!(summary.cuts, [2, 1, 1]);
+        assert_eq!(summary.clear, [1, 0]);
+        assert_eq!(
+            summary.fences,
+            [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]
+        );
+        assert_eq!(summary.last_cut, 2);
+        assert_eq!(summary.last_mask, 0x8000);
+        summary.cuts = [u64::MAX; 3];
+        summary.clear = [u64::MAX; 2];
+        summary.fences = [u64::MAX; 16];
+        summary.record(PiMcsIdleCut::BeforeEnable, 0xffff);
+        assert_eq!(summary.cuts, [u64::MAX; 3]);
+        assert_eq!(summary.fences, [u64::MAX; 16]);
+        for line in summary.lines() {
+            assert!(!line.is_empty());
+            assert!(line.len() < DEFAULT_LINE_CAPACITY);
+        }
+    }
 
     fn record(
         lane: PiMcsLane,

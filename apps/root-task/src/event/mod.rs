@@ -787,6 +787,31 @@ struct PiRootControlIdleFenceEvidence {
     child_publication_pending: Option<bool>,
 }
 
+/// Passive bit mapping of the existing idle fences; never scheduling authority.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+fn pi_root_control_idle_fence_mask(e: PiRootControlIdleFenceEvidence) -> u32 {
+    let bits = [
+        !e.exact_direct_genet_topology,
+        e.child_publication_pending.is_none(),
+        e.ipc_staged,
+        e.physical_operator_pending,
+        e.serial_output_pending,
+        e.display_pending,
+        e.reboot_pending,
+        e.recovery_or_containment_pending,
+        e.handoff_pending,
+        e.passive_admission_pending,
+        e.local_fault_pending,
+        e.physical_response_pending,
+        e.retained_output_pending,
+        e.network_work_pending,
+        e.child_publication_pending == Some(true),
+    ];
+    bits.iter()
+        .enumerate()
+        .fold(0, |mask, (index, set)| mask | (u32::from(*set) << index))
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn pi_root_control_idle_preparation(
     evidence: PiRootControlIdleFenceEvidence,
@@ -13752,17 +13777,32 @@ where
         let before_enable = self.pi_root_control_idle_fence_evidence();
         core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         let before_preparation = pi_root_control_idle_preparation(before_enable);
+        #[cfg(feature = "release-pi4")]
+        crate::pi4_mcs_recorder::record_idle_fence(
+            crate::pi4_mcs_recorder::PiMcsIdleCut::BeforeEnable,
+            pi_root_control_idle_fence_mask(before_enable),
+        );
         if before_preparation != PiRootControlIdlePreparation::Wait {
             return before_preparation;
         }
         if !crate::hal::driver_task::ensure_pi_root_idle_timer_enabled(
             before_enable.exact_direct_genet_topology,
         ) {
+            #[cfg(feature = "release-pi4")]
+            crate::pi4_mcs_recorder::record_idle_fence(
+                crate::pi4_mcs_recorder::PiMcsIdleCut::TimerRejected,
+                1 << 15,
+            );
             return PiRootControlIdlePreparation::Yield;
         }
         let _ = self.poll_runtime_timer_prelude_checked();
         let after_enable = self.pi_root_control_idle_fence_evidence();
         core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        #[cfg(feature = "release-pi4")]
+        crate::pi4_mcs_recorder::record_idle_fence(
+            crate::pi4_mcs_recorder::PiMcsIdleCut::AfterEnable,
+            pi_root_control_idle_fence_mask(after_enable),
+        );
         pi_root_control_idle_preparation(after_enable)
     }
 
@@ -20355,6 +20395,10 @@ where
         }
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         for line in crate::pi4_mcs_recorder::snapshot_lines() {
+            self.emit_console_line(line.as_str());
+        }
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        for line in crate::pi4_mcs_recorder::idle_snapshot_lines() {
             self.emit_console_line(line.as_str());
         }
         self.emit_console_line("[smp:mcs/v1] end");
@@ -56119,9 +56163,11 @@ mod tests {
         );
 
         macro_rules! assert_retry {
-            ($field:ident) => {{
+            ($field:ident, $bit:literal) => {{
                 let mut evidence = idle;
                 evidence.$field = true;
+                #[cfg(feature = "release-pi4")]
+                assert_eq!(pi_root_control_idle_fence_mask(evidence), 1 << $bit);
                 assert_eq!(
                     pi_root_control_idle_preparation(evidence),
                     PiRootControlIdlePreparation::Retry,
@@ -56130,18 +56176,18 @@ mod tests {
                 );
             }};
         }
-        assert_retry!(ipc_staged);
-        assert_retry!(physical_operator_pending);
-        assert_retry!(serial_output_pending);
-        assert_retry!(display_pending);
-        assert_retry!(reboot_pending);
-        assert_retry!(recovery_or_containment_pending);
-        assert_retry!(handoff_pending);
-        assert_retry!(passive_admission_pending);
-        assert_retry!(local_fault_pending);
-        assert_retry!(physical_response_pending);
-        assert_retry!(retained_output_pending);
-        assert_retry!(network_work_pending);
+        assert_retry!(ipc_staged, 2);
+        assert_retry!(physical_operator_pending, 3);
+        assert_retry!(serial_output_pending, 4);
+        assert_retry!(display_pending, 5);
+        assert_retry!(reboot_pending, 6);
+        assert_retry!(recovery_or_containment_pending, 7);
+        assert_retry!(handoff_pending, 8);
+        assert_retry!(passive_admission_pending, 9);
+        assert_retry!(local_fault_pending, 10);
+        assert_retry!(physical_response_pending, 11);
+        assert_retry!(retained_output_pending, 12);
+        assert_retry!(network_work_pending, 13);
 
         let mut child_ready = idle;
         child_ready.child_publication_pending = Some(true);
@@ -56159,6 +56205,13 @@ mod tests {
 
         let mut wrong_topology = idle;
         wrong_topology.exact_direct_genet_topology = false;
+        #[cfg(feature = "release-pi4")]
+        {
+            assert_eq!(pi_root_control_idle_fence_mask(idle), 0);
+            assert_eq!(pi_root_control_idle_fence_mask(child_ready), 1 << 14);
+            assert_eq!(pi_root_control_idle_fence_mask(unavailable_level), 1 << 1);
+            assert_eq!(pi_root_control_idle_fence_mask(wrong_topology), 1);
+        }
         assert_eq!(
             pi_root_control_idle_preparation(wrong_topology),
             PiRootControlIdlePreparation::Yield

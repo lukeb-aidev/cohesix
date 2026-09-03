@@ -418,6 +418,13 @@ suppression-only atomic latch closes recovery that begins after the turn
 snapshot; only the canonical
 pair-generation scrub may clear it after private recovery authority resets.
 
+The ordinary root-causal bridge preserves two generation domains: the sealed
+root command and its root grant use the root-owned `parent.aux1`, while the
+reciprocal child and its action receipt use the independently validated live
+CYW43/SDIO link epoch. Cold root generation zero must not be equated with that
+nonzero peer epoch. Full parent equality and live peer-epoch checks still fence
+replacement; only the invalid cross-domain equality is removed.
+
 The reciprocal terminal boundary is equally atomic. On selected MCS, every
 reply-bearing isolated-driver terminal retires its local sequence and advertises
 receive-ready before `seL4_ReplyRecv` both releases the current root caller and

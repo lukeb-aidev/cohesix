@@ -90,9 +90,9 @@ profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
 runbooks. `smp mcs` labels compiler truth `source=generated`, BootInfo
 `source=kernel`, and copied live state `source=runtime`; unavailable is not a
-missing registration. On Pi release profiles it also emits the 22-row
+missing registration. On Pi release profiles it also emits the 27-row
 aggregate-only `mcs_quantum*`, `mcs_yield*`, command-dispatch, pending-state,
-and budget-guard batch documented below. These rows are not emitted by
+budget-guard and idle-fence batch documented below. These rows are not emitted by
 `netstats`. The command never calls `seL4_SchedContext_Consumed`, which would
 reset the accounting interval. QEMU output proves only its exact boot, while Pi
 state requires a fresh exact-image Pi boot. The `serial_rx_drop` and `serial_rx_backpressure` values in this
@@ -316,6 +316,19 @@ netstats: mcs_budget_guard schema=v1 activation=<u64> attached=<u64> operator=<u
 netstats: mcs_budget_pending schema=v1 activation=<u64> attached=<u64> operator=<u64> driver=<u64>
 netstats: mcs_budget_reason schema=v1 cap=<u64> clock=<u64> reserve=<u64> policy=<u64> mask=0x<hex>
 ```
+
+Five additive rows follow the existing 22-row batch: `mcs_idle schema=v1`
+contains `before`, `after`, `timer_reject`, `clear=<before>/<after>`,
+`last_cut=<0|1|2>` (before enable, after enable, timer rejected), and `mask`.
+Four `mcs_idle_fences schema=v1 base=<0|4|8|12> counts=<u64>,<u64>,<u64>,<u64>`
+rows count every set fence bit, saturating independently; co-occurring fences
+are not mutually exclusive. Bits 0..15 are inexact topology, unavailable child
+level, staged IPC, physical input, serial output, display, reboot,
+recovery/containment, handoff, passive admission, local fault, physical response,
+retained output, network work, ready child publication, and timer-enable
+rejection. These sample the existing predicates without changing them. A clear
+after-enable sample permits the existing wait but does not prove the syscall
+blocked, and timer rejection alone does not identify an inner HAL failure.
 
 `mcs_quantum*` measures root-control composer quanta, not kernel activations,
 SC refills, or scheduling-context consumption. `run` brackets the composer

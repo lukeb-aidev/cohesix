@@ -133,8 +133,8 @@ pub(super) fn owner_raw_receive(badge: u64, message_info: u64) {
 }
 
 pub(super) fn owner_ring_seen(command: DriverTaskCommandRecord) {
-    if command.sequence == 0
-        || command.arg0 != super::HOT_PATH_SDIO_HOST
+    if !super::runtime_delegated_continuation_command(command)
+        || command.aux1 == 0
         || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
     {
         return;
@@ -253,10 +253,20 @@ mod tests {
         owner_engine_retired(2, RuntimeNotificationRoute::SdioOwner);
         owner_prewait(3);
         owner_raw_receive(256, 1);
+        owner_ring_seen(DriverTaskCommandRecord {
+            sequence: 2,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            arg0: super::super::HOT_PATH_SDIO_HOST,
+            arg1: super::super::ROLE_SDIO,
+            ..DriverTaskCommandRecord::empty()
+        });
+        assert_eq!(TRACE.with_ref(|record| record.request), 0);
+        assert_eq!(TRACE.with_ref(|record| record.stages), 0x7);
         let command = DriverTaskCommandRecord {
             sequence: 0x8000_0042,
             flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
             arg0: super::super::HOT_PATH_SDIO_HOST,
+            arg1: super::super::ROLE_SDIO,
             aux1: 9,
             ..DriverTaskCommandRecord::empty()
         };

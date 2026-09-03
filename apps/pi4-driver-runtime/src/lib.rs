@@ -36410,9 +36410,14 @@ fn runtime_root_grant_foreground_post_action_route(
             && transaction.parent_input_sealed
             && !transaction.executing
             && transaction.generation != 0;
+        // The root grant is bound to parent.aux1 (zero on a cold root
+        // generation), while the reciprocal transaction names SDIO's link
+        // epoch. Never compare these independent generation domains. The
+        // admitted root grant and exact parent protect root identity; the
+        // live owner epoch independently protects the retained transaction.
         let ordinary_parent = exact_parent
-            && runtime_root_continuation_expected_generation(parent)
-                == Some(transaction.generation);
+            && runtime_root_continuation_expected_generation(parent).is_some()
+            && cyw43_foreground_retained_generation_is_current(transaction);
         let exact_frontier = exact_parent
             && transaction.frontier_valid
             && transaction.frontier_ticket_valid()
@@ -36578,9 +36583,9 @@ fn runtime_root_grant_foreground_allows_dpc_recovery(parent: DriverTaskCommandRe
             && !transaction.poisoned
             && transaction.turn == Cyw43ForegroundTurnState::new()
             && empty_frontier
+            && runtime_root_continuation_expected_generation(parent).is_some()
             && (transaction.generation == 0
-                || runtime_root_continuation_expected_generation(parent)
-                    == Some(transaction.generation));
+                || cyw43_foreground_retained_generation_is_current(transaction));
         fully_empty || exact_childless_parent
     })
 }
@@ -36677,7 +36682,7 @@ fn runtime_root_causal_wait_for_foreground(
             || transaction.parent != parent
             || parent.sequence == 0
             || transaction.generation == 0
-            || runtime_root_continuation_expected_generation(parent) != Some(transaction.generation)
+            || runtime_root_continuation_expected_generation(parent).is_none()
             || !transaction.parent_input_sealed
             || transaction.executing
             || !transaction.turn.pending
@@ -105145,7 +105150,9 @@ mod tests {
         let generation = 0x4359_91a3;
         initialize_production_foreground_pair(generation);
         let mut parent = cyw43_descriptor_command(0x4359_91a4);
-        parent.aux1 = generation;
+        // Cold root commands use root generation zero; the SDIO link epoch
+        // belongs to a different authority and must not be substituted for it.
+        parent.aux1 = 0;
         let descriptor = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
             function: 0,
@@ -105196,6 +105203,20 @@ mod tests {
             runtime_root_causal_wait_observation(first_wait),
             RuntimeRootCausalWaitObservation::Waiting,
         );
+        let replaced_parent = DriverTaskCommandRecord { aux1: 1, ..parent };
+        assert_eq!(
+            runtime_root_grant_foreground_post_action_route(replaced_parent),
+            RuntimeRootGrantForegroundPostActionRoute::Contain,
+            "a different root generation must not inherit the retained parent",
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_shared_epoch = generation + 1);
+        assert_eq!(
+            runtime_root_grant_foreground_post_action_route(parent),
+            RuntimeRootGrantForegroundPostActionRoute::Contain,
+            "an independently replaced peer epoch still revokes the causal wait",
+        );
+        assert!(runtime_root_causal_wait_for_foreground(parent).is_none());
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_shared_epoch = generation);
         assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
 
         assert!(publish_runtime_steady_service_progress_at(
@@ -105243,7 +105264,7 @@ mod tests {
         let generation = 0x4359_91a6;
         initialize_production_foreground_pair(generation);
         let mut parent = cyw43_descriptor_command(0x4359_91a7);
-        parent.aux1 = generation;
+        parent.aux1 = 7;
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.parent = parent;
             transaction.parent_input_sealed = true;
@@ -105253,6 +105274,10 @@ mod tests {
             runtime_root_grant_foreground_post_action_route(parent),
             RuntimeRootGrantForegroundPostActionRoute::ReturnInactive,
         );
+        assert!(runtime_root_grant_foreground_allows_dpc_recovery(parent));
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_shared_epoch = generation + 1);
+        assert!(!runtime_root_grant_foreground_allows_dpc_recovery(parent));
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_shared_epoch = generation);
 
         CYW43_SDIO_CHILD_ACTIVE.store(true, Ordering::Release);
         CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.store(0x8000_91a8, Ordering::Release);

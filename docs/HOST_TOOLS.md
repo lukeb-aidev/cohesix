@@ -92,7 +92,7 @@ Pi `netstats` adds six fast-path rows (`cyw43_publication`,
 `cyw43_publication_cut`, `cyw43_productive_window`, `genet_compact`,
 `genet_compose`, and `genet_defer`)
 plus five isolated-seam rows only when that timing snapshot is available. The detailed
-22-row composer/Yield batch is intentionally restricted to explicit `smp mcs`;
+27-row composer/Yield/idle-fence batch is intentionally restricted to explicit `smp mcs`;
 it is not appended to ordinary `netstats`. Existing key/prefix-based consumers
 ignore these unknown additive rows unless they are later taught to consume
 them; no current parser derives readiness, quarantine, throughput, latency, or
@@ -106,6 +106,15 @@ The Pi-only accounting writes and runtime rows are absent from the QEMU
 release hot path and output. A future consumer must
 add bounded-row and missing/invalid-evidence fixtures rather than treating row
 absence as success.
+
+The root/SDIO independent-generation repair changes only private Pi runtime
+identity validation. Its five additive `mcs_idle*` rows sample existing root
+idle predicates; they do not change those predicates or grant acceptance.
+The normalizer's passive-component fixture verifies that these rows neither
+replace network selection nor manufacture TCP/nettest readiness. Review of
+the complete host-tool and Python-library catalogue, generated contracts,
+`.coh` workloads, pressure/benchmark scripts and report readers finds no
+other affected wire field, parser requirement, public API or report schema.
 
 The complete `coh`, `cohsh`, `coh-status`, Hive Gateway/REST, SwarmUI, GPU
 bridge, host-ticket agent, sidecar and sidecar bus, CAS tooling, Pi gate and
