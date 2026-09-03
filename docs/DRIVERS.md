@@ -1827,6 +1827,15 @@ these two domains to have equal numeric values. Replacing either the exact
 parent or the live peer epoch still rejects continuation; no grant, Reply,
 physical-operation bound, or recovery authority is relaxed.
 
+An ordinary retained CYW43 timer poll is a childless bounded action, including
+the mandatory post-CMD0 guard. Its private per-turn witness names the exact
+retained deadline slot and clears on the next turn. A valid timer observation
+returns the admitted root action through the existing fan-in without restarting
+the deadline, skipping terminal replay, issuing a child, or entering recovery.
+An empty frontier or a previously stored deadline without that current witness
+does not qualify. Parent, peer epoch, payload seal, recovery, and child-ownership
+checks remain mandatory; the witness adds no runtime ABI field.
+
 The first delegated boot child has a separate passive
 `PHOF` v1 record in each CYW43/SDIO local ring, at bytes 84..128 between the
 20-byte completion and progress record. Its eleven words are magic; packed

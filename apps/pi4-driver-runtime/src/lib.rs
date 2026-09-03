@@ -32174,6 +32174,8 @@ struct Cyw43ForegroundTurnState {
     action_consumed: bool,
     completion_observed: bool,
     new_submission_consumed: bool,
+    /// Exact retained timer slot sampled by this turn, never cached history.
+    deadline_observed: Option<u8>,
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -32187,6 +32189,7 @@ impl Cyw43ForegroundTurnState {
             action_consumed: false,
             completion_observed: false,
             new_submission_consumed: false,
+            deadline_observed: None,
         }
     }
 
@@ -32201,6 +32204,7 @@ impl Cyw43ForegroundTurnState {
         self.action_consumed = false;
         self.completion_observed = false;
         self.new_submission_consumed = false;
+        self.deadline_observed = None;
     }
 
     fn complete_child_poll(&mut self, fusion_authorized: bool) {
@@ -33427,6 +33431,7 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
         // later turn before any following child operation may be submitted.
         transaction.turn.action_consumed = true;
         transaction.turn.pending = true;
+        transaction.turn.deadline_observed = Some(retained_index as u8);
         Some(expired)
     })
 }
@@ -36525,7 +36530,23 @@ fn runtime_root_grant_foreground_post_action_route(
             && transaction.turn.pending
             && transaction.turn.completion_observed
             && transaction.turn.committed_child_replay_due();
-        if fully_empty || retained_private_phase || exact_terminal_replay {
+        // A childless deadline sample is also a complete bounded owner action.
+        // Its exact slot witness is set only by the real retained-timer poll
+        // and cleared on every new turn; stored deadlines alone are not proof.
+        // Return the outer grant without shortening/restarting the timer or
+        // admitting a physical successor before its terminal replay.
+        let exact_deadline_poll = transaction.active
+            && ordinary_parent
+            && transaction.sealed_parent_payload_identity_valid()
+            && transaction.turn.pending
+            && transaction.turn.action_consumed
+            && !transaction.turn.new_submission_consumed
+            && transaction.turn.deadline_observed.is_some_and(|index| {
+                usize::from(index) < transaction.deadlines.len()
+                    && index < transaction.deadline_count
+                    && index < transaction.deadline_replay_index
+            });
+        if fully_empty || retained_private_phase || exact_terminal_replay || exact_deadline_poll {
             RuntimeRootGrantForegroundPostActionProbe::ReturnInactive
         } else {
             RuntimeRootGrantForegroundPostActionProbe::Contain
@@ -105309,6 +105330,106 @@ mod tests {
             RuntimeRootGrantForegroundPostActionRoute::Contain,
             "an active empty frontier without terminal evidence is identity loss",
         );
+    }
+
+    #[test]
+    fn root_causal_post_action_preserves_exact_retained_timer_poll() {
+        let _guard = test_guard();
+        let generation = 0x4359_91b0;
+        let parent = stage_production_transport_parent(generation, 0x4359_91b1);
+        assert_eq!(parent.aux1, 0);
+        assert!(cyw43_foreground_pre_admit(parent));
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.generation = generation;
+            assert!(transaction.begin_turn(parent, 1));
+        });
+        let deadline = cyw43_foreground_retain_deadline(
+            CYW43_FOREGROUND_DEADLINE_MICROS,
+            1_000,
+            SDHCI_INIT_SPINS,
+            RuntimeDeadline::Counter {
+                start: 100,
+                cycles: 54_000,
+            },
+        );
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(100, Ordering::Release);
+        assert_eq!(
+            cyw43_foreground_poll_retained_deadline(deadline),
+            Some(false)
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.executing = false);
+        assert_eq!(
+            runtime_root_grant_foreground_post_action_route(parent),
+            RuntimeRootGrantForegroundPostActionRoute::ReturnInactive,
+            "a bounded timer observation must return its root action without inventing a child",
+        );
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        let replaced_parent = DriverTaskCommandRecord { aux1: 1, ..parent };
+        assert_eq!(
+            runtime_root_grant_foreground_post_action_route(replaced_parent),
+            RuntimeRootGrantForegroundPostActionRoute::Contain,
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_shared_epoch = generation + 1);
+        assert_eq!(
+            runtime_root_grant_foreground_post_action_route(parent),
+            RuntimeRootGrantForegroundPostActionRoute::Contain,
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_shared_epoch = generation);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.turn.deadline_observed = Some(1);
+        });
+        assert_eq!(
+            runtime_root_grant_foreground_post_action_route(parent),
+            RuntimeRootGrantForegroundPostActionRoute::Contain,
+            "a timer slot outside the retained prefix cannot close an action",
+        );
+
+        for (turn_id, now, expired) in [(2, 54_099, false), (3, 54_100, true)] {
+            CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+                assert!(transaction.begin_turn(parent, turn_id));
+                assert_eq!(transaction.turn.deadline_observed, None);
+            });
+            let replayed = cyw43_foreground_retain_deadline(
+                CYW43_FOREGROUND_DEADLINE_MICROS,
+                1_000,
+                SDHCI_INIT_SPINS,
+                RuntimeDeadline::Counter {
+                    start: now,
+                    cycles: 54_000,
+                },
+            );
+            assert_eq!(replayed, deadline, "a root grant cannot restart the guard");
+            TEST_RUNTIME_TIMER_COUNTER_TICKS.store(now, Ordering::Release);
+            assert_eq!(
+                cyw43_foreground_poll_retained_deadline(replayed),
+                Some(expired)
+            );
+            CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.executing = false);
+            assert_eq!(
+                runtime_root_grant_foreground_post_action_route(parent),
+                RuntimeRootGrantForegroundPostActionRoute::ReturnInactive,
+            );
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 4));
+            assert_eq!(transaction.turn.deadline_observed, None);
+        });
+        let replayed = cyw43_foreground_retain_deadline(
+            CYW43_FOREGROUND_DEADLINE_MICROS,
+            1_000,
+            SDHCI_INIT_SPINS,
+            RuntimeDeadline::Counter {
+                start: 90_000,
+                cycles: 54_000,
+            },
+        );
+        assert_eq!(cyw43_foreground_poll_retained_deadline(replayed), None);
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(transaction.turn.deadline_observed, None);
+            assert!(!transaction.turn.action_consumed);
+            assert!(!transaction.turn.pending);
+        });
     }
 
     #[test]

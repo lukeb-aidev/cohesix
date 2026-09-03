@@ -13876,8 +13876,13 @@ where
                 .linked_physical_operator_work()
                 .retains_network_fence_after_dispatch(),
             serial_output_pending: self.serial.tx_pending(),
-            display_pending: self.linked_runtime_operator_display_pending()
-                || self.split_ordinary_virtio_display_attach_pending(),
+            // The linked Pi rotor owns USB admission and HDMI attachment, not
+            // the ordinary VirtIO post-prompt attach schedule. That legacy
+            // schedule can remain set after the linked owners are ready and
+            // would permanently veto this receive. Actual HDMI work remains
+            // fenced here; USB input/recovery and retained diagnostic output
+            // retain their independent checks above and below.
+            display_pending: self.linked_runtime_operator_display_pending(),
             reboot_pending: self.reboot_pending,
             recovery_or_containment_pending,
             handoff_pending: self.deferred_console_network_handoff_pending(),
@@ -56147,6 +56152,46 @@ mod tests {
             input.retains_network_fence_after_dispatch(),
             "actual serial or queued USB input keeps operator precedence"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_idle_display_uses_linked_work_not_ordinary_attach_schedule() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_local_seat(&mut local_seat);
+        #[cfg(feature = "usb")]
+        {
+            pump.post_prompt_local_seat_attach_pending = true;
+            assert!(pump.split_ordinary_virtio_display_attach_pending());
+        }
+        assert!(!pump.linked_runtime_operator_display_pending());
+        assert!(
+            !pump.pi_root_control_idle_fence_evidence().display_pending,
+            "ordinary attachment bookkeeping cannot veto the linked Pi idle receive",
+        );
+        pump.local_seat
+            .as_mut()
+            .unwrap()
+            .inject_linked_hdmi_pending_bytes_for_test(32);
+        assert!(pump.pi_root_control_idle_fence_evidence().display_pending);
+        pump.local_seat
+            .as_mut()
+            .unwrap()
+            .inject_linked_hdmi_pending_bytes_for_test(0);
+        pump.cyw43_bootstrap_hdmi_pending = true;
+        assert!(pump.pi_root_control_idle_fence_evidence().display_pending);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

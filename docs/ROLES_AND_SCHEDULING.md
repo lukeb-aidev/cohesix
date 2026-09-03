@@ -425,6 +425,19 @@ CYW43/SDIO link epoch. Cold root generation zero must not be equated with that
 nonzero peer epoch. Full parent equality and live peer-epoch checks still fence
 replacement; only the invalid cross-domain equality is removed.
 
+A childless retained deadline observation also completes one ordinary root
+action. Only the current turn's exact timer-slot witness qualifies; cached
+deadlines and empty frontiers are not work receipts. The original deadline and
+its terminal-replay boundary remain unchanged. This permits the mandatory CMD0
+guard to return through the existing root fan-in without fabricating a child.
+
+The direct-GENET root idle fence reads the linked Pi rotor's actual HDMI work.
+It must not import the ordinary VirtIO rotor's post-prompt attach schedule,
+which the linked Pi path does not consume. USB input/recovery, HDMI queued or
+retained frames, boot milestones, retained diagnostic output, timer-enable
+validation, and the complete before/after-enable race check remain fenced.
+QEMU's ordinary attachment schedule and selectors are unchanged.
+
 The reciprocal terminal boundary is equally atomic. On selected MCS, every
 reply-bearing isolated-driver terminal retires its local sequence and advertises
 receive-ready before `seL4_ReplyRecv` both releases the current root caller and

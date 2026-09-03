@@ -9677,6 +9677,15 @@ followed by a late consumed-ID write. Delegated CYW43-to-SDIO grants must prove
 the same admission/action-completion ordering after the initial exact
 grant-free service receipt, including post-commit peer signalling and
 terminal-supersedes-grant behavior.
+The ordinary CYW43 post-action cut must also exercise the actual retained
+timer helpers: nonexpired and terminal observations of the same immutable
+deadline close one root action, while cached deadline history, stale slot
+witnesses, replaced root identity and replaced peer epoch do not. The witness
+resets on every turn and terminal replay cannot restart or shorten the guard.
+The direct-GENET idle evidence adapter must reject actual linked HDMI work
+without importing the ordinary VirtIO post-prompt attach schedule. Exercise
+the adapter, not only a fabricated idle-mask fixture; keep QEMU attachment
+behavior and every other before/after-enable fence unchanged.
 Generic MCS one-way commands must prove a different, mutually exclusive
 continuation contract. After one bounded pending quantum, the runtime must
 commit one 24-byte `DROW` record with the exact request, action fingerprint,
