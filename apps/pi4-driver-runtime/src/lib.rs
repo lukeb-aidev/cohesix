@@ -52173,7 +52173,7 @@ fn usb_keyboard_recover_endpoint_if_due(
     descriptor: &DriverRuntimeInitDescriptor,
     recovery_aux: bool,
 ) -> bool {
-    usb_keyboard_recover_endpoint_if_due_with_progress(state, descriptor, recovery_aux, None)
+    usb_keyboard_recover_endpoint_if_due_with_progress(state, descriptor, recovery_aux, false, None)
 }
 
 fn usb_keyboard_recovery_due_reason(
@@ -52206,6 +52206,7 @@ fn usb_keyboard_recover_endpoint_if_due_with_progress(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     recovery_aux: bool,
+    fresh_valid_report: bool,
     progress: Option<(u32, u32)>,
 ) -> bool {
     if usb_keyboard_pre_first_report_full_no_event_reenumeration_due(state, recovery_aux) {
@@ -52229,7 +52230,7 @@ fn usb_keyboard_recover_endpoint_if_due_with_progress(
         return xhci_recover_keyboard_interrupt_endpoint_with_progress(state, descriptor, progress);
     }
     let full_recovery_queue =
-        usb_keyboard_recovery_aux_full_queue_recovery_due(state, recovery_aux);
+        usb_keyboard_recovery_aux_full_queue_recovery_due(state, recovery_aux, fresh_valid_report);
     if usb_keyboard_steady_overqueue_recovery_due(state)
         || usb_keyboard_pre_first_report_underfilled_queue_recovery_due(state)
         || usb_keyboard_steady_unmatched_recovery_due(state)
@@ -52344,6 +52345,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
                         state,
                         descriptor,
                         true,
+                        false,
                         Some((sequence, aux0)),
                     )
                 } else {
@@ -52363,6 +52365,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
         };
         let mut recovery_attempted = false;
         let mut saw_keyboard_transfer_event = false;
+        let mut fresh_valid_report = false;
         for _ in 0..USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH {
             let Some((event, report_slot)) = xhci_next_keyboard_transfer_event(state, descriptor)
             else {
@@ -52405,7 +52408,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
                 sequence,
                 aux0,
             ));
-            let _ = usb_keyboard_note_valid_report_status(state);
+            fresh_valid_report |= usb_keyboard_note_valid_report_status(state);
             if !usb_keyboard_rearm_after_completed_interrupt_in(state, descriptor, recovery_aux) {
                 recovery_attempted = true;
                 break;
@@ -52451,6 +52454,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
                     state,
                     descriptor,
                     true,
+                    fresh_valid_report,
                     Some((sequence, aux0)),
                 );
             } else {
@@ -64334,8 +64338,15 @@ fn usb_keyboard_recovery_aux_unmatched_recovery_due(
 fn usb_keyboard_recovery_aux_full_queue_recovery_due(
     state: &UsbRuntimeState,
     recovery_aux: bool,
+    fresh_valid_report: bool,
 ) -> bool {
-    if !recovery_aux
+    // Root's recovery request was formed from an earlier completion. A fresh
+    // valid release or held-key report disproves its no-event premise even
+    // when it produces no command bytes and rearms a full interrupt queue.
+    // Explicit transfer faults, rearm failures and unmatched-event recovery
+    // remain independent of this no-event predicate.
+    if fresh_valid_report
+        || !recovery_aux
         || !usb_keyboard_poll_ready_state(state)
         || state.keyboard_endpoint_recoveries >= USB_KEYBOARD_HARD_RECOVERY_LIMIT
         || state.keyboard_preserved_event_count != 0
@@ -132972,16 +132983,16 @@ mod tests {
             &state, true
         ));
         assert!(usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, false
+            &state, false, false
         ));
 
         state.keyboard_reports_queued = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u8;
         assert!(usb_keyboard_steady_overqueue_recovery_due(&state));
         assert!(usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
 
         state.keyboard_reports_queued = 1;
@@ -132989,7 +133000,7 @@ mod tests {
 
         state.keyboard_preserved_event_count = 1;
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         state.keyboard_preserved_event_count = 0;
         state.keyboard_reports_queued = USB_KEYBOARD_ACTIVE_INTERRUPT_QUEUE_DEPTH as u8;
@@ -133000,7 +133011,7 @@ mod tests {
             &state, true
         ));
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         assert!(!usb_keyboard_recovery_aux_unmatched_recovery_due(
             &state, false
@@ -133012,7 +133023,7 @@ mod tests {
         ));
         state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
 
         state.keyboard_valid_report_events = 0;
@@ -133021,7 +133032,7 @@ mod tests {
             &state, true
         ));
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         state.keyboard_valid_report_events = 1;
 
@@ -133030,8 +133041,43 @@ mod tests {
             &state, true
         ));
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true, false
+        ));
+    }
+
+    #[test]
+    fn usb_keyboard_fresh_report_cancels_stale_no_event_recovery() {
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_reports_queued = 1;
+        state.keyboard_valid_report_events = 1;
+
+        for status in [
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY,
+        ] {
+            state.keyboard_last_report_status = status;
+            assert!(usb_keyboard_note_valid_report_status(&mut state));
+            assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+                &state, true, true,
+            ));
+            assert!(usb_keyboard_recovery_aux_full_queue_recovery_due(
+                &state, true, false,
+            ));
+        }
+
+        state.keyboard_last_report_status =
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER;
+        assert!(!usb_keyboard_note_valid_report_status(&mut state));
+        assert!(usb_keyboard_recovery_aux_unmatched_recovery_due(
             &state, true
         ));
+        state.keyboard_reports_queued = 2;
+        assert!(usb_keyboard_steady_overqueue_recovery_due(&state));
     }
 
     #[test]
@@ -133045,27 +133091,27 @@ mod tests {
         state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
 
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         assert!(usb_keyboard_pre_first_report_full_no_event_reenumeration_due(&state, true));
 
         state.keyboard_transfer_events = 1;
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         assert!(!usb_keyboard_pre_first_report_full_no_event_reenumeration_due(&state, true));
 
         state.keyboard_transfer_events = 0;
         state.keyboard_doorbell_pending = true;
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         assert!(!usb_keyboard_pre_first_report_full_no_event_reenumeration_due(&state, true));
 
         state.keyboard_doorbell_pending = false;
         state.keyboard_reports_queued = 1;
         assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
-            &state, true
+            &state, true, false
         ));
         assert!(usb_keyboard_pre_first_report_full_no_event_reenumeration_due(&state, true));
     }

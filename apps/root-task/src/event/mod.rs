@@ -734,10 +734,18 @@ enum LinkedPhysicalOperatorWork {
 }
 
 impl LinkedPhysicalOperatorWork {
-    const fn classify(input_pending: bool, usb_service_pending: bool) -> Self {
-        if input_pending {
+    const fn classify(
+        input_pending: bool,
+        usb_input_pending: bool,
+        usb_parser_ready: bool,
+        usb_service_pending: bool,
+    ) -> Self {
+        if input_pending || (usb_input_pending && usb_parser_ready) {
             Self::Input
-        } else if usb_service_pending {
+        } else if usb_service_pending || usb_input_pending {
+            // Retained bytes behind the USB readiness/recovery gate cannot
+            // make progress in Dispatch. Give their owner a bounded service
+            // turn without indefinitely fencing independent HDMI and Network.
             Self::UsbServiceDebt
         } else {
             Self::Idle
@@ -17841,8 +17849,22 @@ where
     }
 
     fn linked_physical_operator_work(&self) -> LinkedPhysicalOperatorWork {
+        let (usb_input_pending, usb_parser_ready) = self
+            .local_seat
+            .as_ref()
+            .map(|runtime| {
+                (
+                    runtime.keyboard_trace().queued_bytes != 0,
+                    runtime.keyboard_parser_ingress_ready(),
+                )
+            })
+            .unwrap_or((false, false));
         LinkedPhysicalOperatorWork::classify(
-            self.physical_console_input_pending_for_output(),
+            self.serial.interactive_input_active()
+                || !self.local_line.is_empty()
+                || self.local_seat_chunk_input_pending,
+            usb_input_pending,
+            usb_parser_ready,
             self.linked_local_seat_usb_service_pending(),
         )
     }
@@ -56210,12 +56232,12 @@ mod tests {
             (false, 1)
         ));
 
-        let idle = LinkedPhysicalOperatorWork::classify(false, false);
+        let idle = LinkedPhysicalOperatorWork::classify(false, false, true, false);
         assert_eq!(idle, LinkedPhysicalOperatorWork::Idle);
         assert!(!idle.needs_operator_rotation());
         assert!(!idle.retains_network_fence_after_dispatch());
 
-        let service_debt = LinkedPhysicalOperatorWork::classify(false, true);
+        let service_debt = LinkedPhysicalOperatorWork::classify(false, false, false, true);
         assert_eq!(service_debt, LinkedPhysicalOperatorWork::UsbServiceDebt);
         assert!(service_debt.needs_operator_rotation());
         assert!(
@@ -56223,12 +56245,38 @@ mod tests {
             "USB readiness/recovery gets one LocalSeat turn but cannot starve Network"
         );
 
-        let input = LinkedPhysicalOperatorWork::classify(true, true);
+        let input = LinkedPhysicalOperatorWork::classify(true, false, false, true);
         assert_eq!(input, LinkedPhysicalOperatorWork::Input);
         assert!(input.needs_operator_rotation());
         assert!(
             input.retains_network_fence_after_dispatch(),
             "actual serial or queued USB input keeps operator precedence"
+        );
+    }
+
+    #[test]
+    fn blocked_usb_bytes_release_network_fence_without_losing_operator_turn() {
+        for usb_service_pending in [false, true] {
+            let blocked =
+                LinkedPhysicalOperatorWork::classify(false, true, false, usb_service_pending);
+            assert_eq!(blocked, LinkedPhysicalOperatorWork::UsbServiceDebt);
+            assert!(blocked.needs_operator_rotation());
+            assert!(!blocked.retains_network_fence_after_dispatch());
+
+            let ready =
+                LinkedPhysicalOperatorWork::classify(false, true, true, usb_service_pending);
+            assert_eq!(ready, LinkedPhysicalOperatorWork::Input);
+            assert!(ready.retains_network_fence_after_dispatch());
+
+            let serial_or_dispatch_input =
+                LinkedPhysicalOperatorWork::classify(true, true, false, usb_service_pending);
+            assert_eq!(serial_or_dispatch_input, LinkedPhysicalOperatorWork::Input);
+            assert!(serial_or_dispatch_input.retains_network_fence_after_dispatch());
+        }
+        assert_eq!(
+            LinkedPhysicalOperatorWork::classify(false, false, false, false),
+            LinkedPhysicalOperatorWork::Idle,
+            "an absent keyboard alone creates neither input nor service debt",
         );
     }
 
@@ -58873,6 +58921,9 @@ mod tests {
             buffer_lines: 64,
         });
         local_seat.mark_root_console_ready();
+        // This test owes an actual linked display operation. Ordinary attach
+        // bookkeeping is not a Pi display entitlement.
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)

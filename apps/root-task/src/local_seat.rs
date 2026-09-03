@@ -5936,7 +5936,9 @@ impl LocalSeatRuntime {
                 };
                 if linked_usb_keyboard_input_frame_valid(completion) {
                     self.record_keyboard_poll_completion();
-                    self.record_keyboard_post_first_byte_clean_poll(completion.result);
+                    // FrameReady.result is the input byte count, not the
+                    // Progress queue/status bitmap. Only an actual status
+                    // completion may advance or reject the clean-poll proof.
                     if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.swap(true, Ordering::AcqRel)
                     {
                         crate::hal::driver_task::emit_driver_task_resource_init_status(

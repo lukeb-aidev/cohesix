@@ -554,7 +554,12 @@ after the caller rechecks the NaturalPostpone profile and 64-unit caps. Real
 physical
 operator state remains typed across this post-Dispatch cut: `UsbServiceDebt`
 requests that one bounded `LocalSeat` opportunity and then releases the Network
-fence, while decoded or buffered `Input` retains it. The transient-publication
+fence, while runnable decoded or buffered `Input` retains it. Queued USB bytes
+behind the unchanged parser-readiness/recovery gate are `UsbServiceDebt`, not
+runnable input: they remain retained, get the bounded LocalSeat opportunity,
+and cannot indefinitely exclude independent HDMI and Network after Dispatch.
+Serial input, an active parser chunk, and a partial command retain their existing
+precedence. The transient-publication
 probe preserves that type and may carry passive USB debt only because every
 minted credit installs the complete mandatory operator rotor before Network
 re-entry; real Input still fences. A terminal-return shortcut remains strict.

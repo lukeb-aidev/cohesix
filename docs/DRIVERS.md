@@ -826,6 +826,13 @@ reusable ownership pattern.
   ingress, parser drain, and echo counters advance without a dropped-byte
   increase. A latched startup gate or unchanged cumulative counter is not
   current physical-input proof.
+- A root USB recovery request reflects an earlier status completion. The sole
+  USB owner revalidates it after consuming current reports: a freshly decoded
+  valid idle, release, or held-key report cancels the no-event/full-queue reason
+  even when no command byte is produced. Explicit matched-transfer faults,
+  rearm failures, unmatched events, recovery bounds, and the post-recovery
+  idle-baseline guard remain unchanged. `FrameReady.result` is a byte count,
+  never a queue/status bitmap or clean-poll proof.
 - Before a current linked-runtime HID byte is accepted, report
   `usb-physical-input-unproven`. Gate 10, command readiness, or first-report
   readiness alone must never be relabelled as first-byte evidence and cannot
