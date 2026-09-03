@@ -222,7 +222,7 @@ rows. Their grammar is:
 ```text
 netstats: cyw43_publication schema=v1 candidates=<u64> minted=<u64> consumed=<u64> rejected=<u64> reasons=0x<hex>
 netstats: cyw43_publication_cut schema=v1 probe=<u64> entry=<u64> pre_network=<u64> revoked=<u64>
-netstats: cyw43_productive_window schema=v1 opened=<u64> idle_admitted=<u64> closed=<u64>
+netstats: cyw43_productive_window schema=v1 opened=<u64> idle_admitted=<u64> closed=<u64> ready_rechecks=<u64>
 netstats: genet_compact schema=v1 stage=<u64> deferred=<u64> fault=<u64> unsupported=<u64> dispatch=<u64> stage_turns=<u64> rotations=<u64>
 netstats: genet_compose schema=v1 composed=<u64> no_pending=<u64> not_sealed=<u64> backpressure=<u64> identity_drift=<u64>
 netstats: genet_defer schema=v1 passive=<u64> command=<u64> compose_open=<u64> compose_backpressure=<u64> fence=<u64> prior_batch=<u64> control_busy=<u64> output_missing=<u64> stage_backpressure=<u64>
@@ -240,7 +240,10 @@ do not create a retry or continuation. `cyw43_productive_window` counts exact
 same-lifetime, authenticated generation/connection and accepted-command window
 opens and closes inside the generated `NaturalPostpone` activation. Its
 schema-stable `idle_admitted` field records the retired transient-empty path
-and remains zero under event-backed continuation. Every full Operator, Driver,
+and remains zero under event-backed continuation. `ready_rechecks` counts
+durable publication wins at the final wait cut, each spending the existing
+one-shot outer-recheck allowance. It is not an extra poll or retry allowance.
+Every full Operator, Driver,
 and attached Network service turn spends one of the unchanged 64 logical
 material-work units; productive Driver or attached Network progress is
 independently capped at 64. All operator, passive, recovery, containment,

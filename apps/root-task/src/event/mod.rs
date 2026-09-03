@@ -2822,6 +2822,9 @@ pub struct PumpMetrics {
     /// drift.
     #[cfg(feature = "release-pi4")]
     pub net_cyw43_productive_windows_closed: u64,
+    /// One-shot outer rechecks selected by a durable publication, not a badge.
+    #[cfg(feature = "release-pi4")]
+    pub net_cyw43_causal_ready_rechecks: u64,
     /// Largest completed CYW43 Network quantum in outer turns.
     pub net_cyw43_service_max_turns: u64,
     /// Largest completed CYW43 Network quantum duration in microseconds.
@@ -4637,6 +4640,49 @@ const fn cyw43_causal_wait_debt_authorized(
         condition,
         crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle
     ) && response_publication_pending)
+}
+
+/// A visible publication requires arbitration, not waiting or refill
+/// forfeiture. Invalid identity and root-only deadline debt remain excluded.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_causal_publication_ready(
+    condition: crate::hal::driver_task::DriverTaskOneWayCompletionCondition,
+    child_publication_pending: Option<bool>,
+) -> bool {
+    use crate::hal::driver_task::DriverTaskOneWayCompletionCondition::*;
+    match (condition, child_publication_pending) {
+        // A HAL-proved physical publication is sufficient before the console
+        // child exists during attached WiFi bootstrap. Missing console state
+        // cannot authorize a wait, but cannot erase this runnable work either.
+        (Ready, _) | (Idle | SignalBoundWaiting, Some(true)) => true,
+        _ => false,
+    }
+}
+
+#[cfg(all(test, feature = "kernel", feature = "net-console"))]
+#[test]
+fn cyw43_causal_publication_race_requires_exact_durable_work() {
+    use crate::hal::driver_task::DriverTaskOneWayCompletionCondition::*;
+    for condition in [
+        Idle,
+        SignalBoundWaiting,
+        RootDeadlinePollRequired,
+        Ready,
+        Revoked,
+    ] {
+        assert_eq!(
+            cyw43_causal_publication_ready(condition, None),
+            condition == Ready
+        );
+        assert_eq!(
+            cyw43_causal_publication_ready(condition, Some(false)),
+            condition == Ready
+        );
+        assert_eq!(
+            cyw43_causal_publication_ready(condition, Some(true)),
+            matches!(condition, Idle | SignalBoundWaiting | Ready)
+        );
+    }
 }
 
 #[cfg(all(test, feature = "kernel", feature = "net-console"))]
@@ -14001,6 +14047,33 @@ where
         // recovery into an unbounded notification wait.
         cyw43_causal_wait_debt_authorized(physical_condition, response_publication_pending)
             && self.pi_root_control_cyw43_causal_wait_fence_clear()
+    }
+
+    /// Nonblocking side of the same exact condition-before-wait cut. The
+    /// caller must spend its existing one-shot outer recheck, so a stagnant
+    /// publication cannot become a poll loop or grow the activation work cap.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn pi_root_control_cyw43_causal_publication_ready(&mut self) -> bool {
+        if !self.pi_root_control_cyw43_causal_wait_fence_clear() {
+            return false;
+        }
+        let pending = self
+            .net
+            .as_deref()
+            .and_then(crate::net::NetPoller::console_child_publication_pending);
+        let condition = crate::hal::driver_task::active_driver_task_one_way_completion_condition(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        let ready = cyw43_causal_publication_ready(condition, pending)
+            && self.pi_root_control_cyw43_causal_wait_fence_clear();
+        #[cfg(feature = "release-pi4")]
+        if ready {
+            self.metrics.net_cyw43_causal_ready_rechecks = self
+                .metrics
+                .net_cyw43_causal_ready_rechecks
+                .saturating_add(1);
+        }
+        ready
     }
 
     /// Recheck the exact authenticated-transaction authority that may retain a
@@ -34485,10 +34558,11 @@ where
                         ));
                         #[cfg(feature = "release-pi4")]
                         let line_cyw43_productive_window = format_message(format_args!(
-                            "netstats: cyw43_productive_window schema=v1 opened={} idle_admitted={} closed={}",
+                            "netstats: cyw43_productive_window schema=v1 opened={} idle_admitted={} closed={} ready_rechecks={}",
                             self.metrics.net_cyw43_productive_windows_opened,
                             self.metrics.net_cyw43_productive_window_idle_admissions,
                             self.metrics.net_cyw43_productive_windows_closed,
+                            self.metrics.net_cyw43_causal_ready_rechecks,
                         ));
                         #[cfg(feature = "release-pi4")]
                         let line_genet_compact = format_message(format_args!(

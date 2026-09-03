@@ -275,7 +275,14 @@ an exact staged console response whose child-consumption or `OutputDrained`
 publication is still owed, root polls once and waits only if that poll is
 empty. Persistent and steady CYW43 parents retain root-polled deadlines and
 cannot wait. A stable terminal or durable child publication visible at the cut
-returns to the rotor instead of waiting. After accepting the control watermark,
+returns to the rotor instead of waiting. Attached WiFi spends its existing
+one-shot outer recheck on that durable level even when the corresponding
+notification has already coalesced or been consumed; a stagnant level cannot
+renew the allowance. A fully fenced direct-GENET global-idle receive closes
+the finished software transaction cursor and its work count before fresh
+outer arbitration. A causal child wait does not close that cursor. Neither
+operation resets or expands the kernel scheduling context.
+After accepting the control watermark,
 root may wait again only while the root-local response batch retains the same
 generation, authenticated connection, and nonzero control sequence and records
 control-complete without output-drained. Bare physical idle, deadline,
@@ -307,7 +314,11 @@ still limits a submitted payload to 1,536 bytes.
 Ordinary current-refill exhaustion postpones execution instead of converting a
 retained multi-turn device lifetime into a terminal driver fault. Standard
 faults and explicit device deadlines remain terminal, and PCIe retains its
-selected terminal timeout policy.
+selected terminal timeout policy. Its completed C3 IRQ duty clears/rearms,
+signals root and ACKs before explicitly retiring the unused head refill; the
+two-refill terminal owner does not inherit the natural-postpone drivers'
+indefinite short-wait continuation. The compare remains 5,000 us, while IRQ
+dispatch remains subject to the unchanged 400/10,000-us reservation.
 The temporal adjustment changes neither QEMU scheduling nor driver ownership;
 the shared HDMI grant values change without changing the pointer-free record
 layout.

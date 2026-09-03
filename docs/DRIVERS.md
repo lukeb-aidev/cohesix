@@ -1420,9 +1420,16 @@ transport:
   `Enabled`; WiFi remains `Disarmed`. One IRQ service clears the source, reads
   `CLO`, arms the next compare, orders and reads back the device state, signals
   the existing root fan-in, and acknowledges the IRQ. It then immediately
-  blocks on the existing combined command-endpoint/local-notification receive;
+  retires its unused head refill through MCS Yield, then blocks on the existing
+  combined command-endpoint/local-notification receive;
   a Reply-bearing command returns to ordinary dispatch, while another genuine
-  C3 edge is serviced before blocking again. It never performs root timer work,
+  C3 edge is serviced and retired before blocking again. The terminal
+  two-refill context must not carry a progressively depleted head across an
+  unbounded series of short IRQ waits. Retirement follows clear, rearm, root
+  signal and successful IRQ ACK; failure retains ordinary containment. C3
+  remains programmed at 5,000 us, but a pending edge may wait for the unchanged
+  400/10,000-us reservation. This is not a 5-ms dispatch guarantee. Classic
+  kernels retain direct blocking. It never performs root timer work,
   PCIe work, catch-up, retry, polling, or a second physical action. Every tag,
   address, page-count, IRQ, badge, slot, trigger, period, and interval identity
   is checked before MMIO; malformed identity performs no device access, signal,
@@ -1674,7 +1681,12 @@ not current-candidate performance or acceptance proof.
   opens and closes inside the generated NaturalPostpone activation with the
   unchanged 64 logical/productive caps. Its
   schema-stable `idle_admitted` field records the retired transient-empty path
-  and remains zero under event-backed continuation. The counters grant no
+  and remains zero under event-backed continuation. The additive
+  `ready_rechecks` counts durable-publication wins at the final attached WiFi
+  wait cut. Such work spends the existing single outer-recheck allowance
+  without requiring another notification or forfeiting a refill. Invalid
+  identity, root-polled deadline and operator/recovery fences remain closed.
+  The counters grant no
   refill, retry, or device authority. Direct GENET counts the typed response-compose
   outcomes `composed`, `no_pending`, `not_sealed`, `backpressure`, and
   `identity_drift`. `composed` proves a sealed `SyncCapture` moved into the

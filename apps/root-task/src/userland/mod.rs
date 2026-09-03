@@ -771,6 +771,10 @@ where
                             // or a bound fan-in producer woke the receive. The
                             // badge grants no work identity: return through the
                             // complete recovery/operator-first outer fence.
+                            // The full idle cut ended the old transaction, not
+                            // the kernel reservation. Do not carry its cursor
+                            // or spent work cap into the newly awakened episode.
+                            productive_window.close_quiescent_episode();
                             continue;
                         }
                         PiRootControlIdleRoute::Block | PiRootControlIdleRoute::Yield => {}
@@ -1392,6 +1396,13 @@ impl PiRootControlProductiveWindow {
 
     fn reset(&mut self) {
         *self = Self::new();
+    }
+
+    /// Close only a proven global-idle episode, never a causal child wait.
+    /// This grants no refill or future-request identity; the next outer rotor
+    /// obtains fresh durable work under the unchanged kernel SC and work cap.
+    fn close_quiescent_episode(&mut self) {
+        self.reset();
     }
 
     fn restart_after_yield(
@@ -5130,6 +5141,23 @@ where
                         target_os = "none",
                         sel4_config_kernel_mcs
                     ))]
+                    if activation_window.nonblocking_fanin_hint_available()
+                        && pump.pi_root_control_cyw43_causal_publication_ready()
+                    {
+                        // The child won the publication race after the last
+                        // Network unit. Spend the existing one-shot outer
+                        // recheck on this durable level even if its coalesced
+                        // notification was already consumed. This is neither
+                        // permission to block nor a new physical operation.
+                        activation_window.consume_nonblocking_fanin_hint();
+                        continue 'supervisor;
+                    }
+                    #[cfg(all(
+                        feature = "release-pi4",
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    ))]
                     if activation_window.causal_wait_available()
                         && pump.pi_root_control_cyw43_causal_wait_eligible()
                         && wait_pi_root_control_causal_fanin(pump)
@@ -8450,6 +8478,30 @@ mod tests {
         assert!(cross_core_drained.completed_current_response());
         assert!(!cross_core_drained.is_cross_core_signal_only_hot_tail());
         assert_eq!(window.active_hot_tail_identity(), None);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_global_idle_closes_old_identity_and_work_cap() {
+        let finished = crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(7, 17);
+        let next = crate::event::PiRootControlProductiveContinuation::for_test(8, 18);
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        for _ in 0..64 {
+            assert!(window.record_completed_quantum_at(finished, 200));
+        }
+        assert!(!window.resumable_quantum_admitted(true));
+        window.close_quiescent_episode();
+        assert!(!window.has_completed_quantum());
+        assert_eq!(window.continuation_identity(), None);
+        assert_eq!(window.active_hot_tail_identity(), None);
+        assert!(window.resumable_quantum_admitted(true));
+        assert!(window.record_completed_quantum_at(next, 300));
+        assert_eq!(window.continuation_identity(), Some(next));
     }
 
     #[cfg(all(

@@ -97,8 +97,9 @@ it is not appended to ordinary `netstats`. Existing key/prefix-based consumers
 ignore these unknown additive rows unless they are later taught to consume
 them; no current parser derives readiness, quarantine, throughput, latency, or
 acceptance from their presence. `cyw43_productive_window` is diagnostic-only:
-its exact-identity `opened`, `idle_admitted`, and `closed` counters grant no
-refill, retry, network readiness, or device authority. Every aggregate compact Deferred increments
+its exact-identity `opened`, `idle_admitted`, and `closed` counters and additive
+`ready_rechecks` count grant no refill, retry, network readiness, or device
+authority. Every aggregate compact Deferred increments
 exactly one `genet_defer` reason counter, so the reason-counter sum equals the
 aggregate `genet_compact deferred` count; `compose_open` represents typed
 `NotSealed`. The row is classification only, not a retry or admission signal.

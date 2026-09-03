@@ -16842,7 +16842,16 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pcie_timer_service_with<Read32, Write32, CompleteStores, RecordDeadline, Release, Signal, Ack>(
+fn pcie_timer_service_with<
+    Read32,
+    Write32,
+    CompleteStores,
+    RecordDeadline,
+    Release,
+    Signal,
+    Ack,
+    Retire,
+>(
     descriptor: &DriverRuntimeInitDescriptor,
     badge: u32,
     armed: bool,
@@ -16853,6 +16862,7 @@ fn pcie_timer_service_with<Read32, Write32, CompleteStores, RecordDeadline, Rele
     mut release: Release,
     mut signal: Signal,
     mut ack: Ack,
+    mut retire: Retire,
 ) -> bool
 where
     Read32: FnMut(usize) -> u32,
@@ -16862,6 +16872,7 @@ where
     Release: FnMut(),
     Signal: FnMut() -> bool,
     Ack: FnMut(u32) -> bool,
+    Retire: FnMut(),
 {
     let Some(authority) = descriptor_pcie_timer_authority(descriptor) else {
         return false;
@@ -16896,7 +16907,16 @@ where
     if !signal() {
         return false;
     }
-    ack(authority.handler_slot)
+    if !ack(authority.handler_slot) {
+        return false;
+    }
+    // This terminal two-refill owner has completed its entire causal duty.
+    // Repeated short blocking receives are not a fresh-budget boundary: the
+    // selected kernel can repeatedly delay a full refill tail while charging
+    // the same head. Retire only after root has its wake and the real source
+    // is rearmed/ACKed. No future IRQ or pending command is executed here.
+    retire();
+    true
 }
 
 #[cfg(target_os = "none")]
@@ -17141,6 +17161,10 @@ fn pcie_timer_runtime_service_notification(badge: u32) -> bool {
         || fence(Ordering::Release),
         runtime_signal_root_control_wake,
         runtime_irq_handler_ack,
+        || {
+            #[cfg(sel4_config_kernel_mcs)]
+            runtime_yield_current_tcb();
+        },
     );
     #[cfg(not(target_os = "none"))]
     let serviced = {
@@ -17195,9 +17219,10 @@ const fn pcie_timer_post_irq_wake_route(wake: RuntimeWake) -> PcieTimerPostIrqWa
     }
 }
 
-/// After one timer IRQ, block immediately on the PCIe command endpoint and its
-/// bound notification. Each notification iteration services exactly one real
-/// channel-3 event before another blocking receive; it is not a software poll,
+/// After one timer IRQ has retired its terminal refill, block on the PCIe
+/// command endpoint and its bound notification. Each notification iteration
+/// services and retires exactly one real channel-3 event before another
+/// blocking receive; it is not a software poll,
 /// retry, or free-running owner quantum. A received Call returns to the ordinary
 /// dispatcher with its sole MCS Reply association retained.
 #[cfg(target_os = "none")]
@@ -88919,6 +88944,7 @@ mod tests {
                 events.borrow_mut().push("ack-irq");
                 true
             },
+            || events.borrow_mut().push("retire-refill"),
         ));
         assert_eq!(
             c3.get(),
@@ -88940,9 +88966,51 @@ mod tests {
                 "release",
                 "signal-root",
                 "ack-irq",
+                "retire-refill",
             ],
-            "device source clear and current-CLO rearm must precede the release/signal/ACK boundary",
+            "source clear/rearm and root signal/IRQ ACK must precede terminal refill retirement",
         );
+    }
+
+    #[test]
+    fn pcie_timer_failed_signal_or_ack_cannot_retire_as_success() {
+        let descriptor = descriptor_for(HOT_PATH_PCIE_ROOT, ROLE_PCIE);
+        for (signal_ok, ack_ok) in [(false, true), (true, false)] {
+            let pending = std::cell::Cell::new(true);
+            let c3 = std::cell::Cell::new(0);
+            let acknowledgements = std::cell::Cell::new(0);
+            let retirements = std::cell::Cell::new(0);
+            assert!(!pcie_timer_service_with(
+                &descriptor,
+                DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+                true,
+                |offset| match offset {
+                    BCM_SYSTEM_TIMER_CS if pending.get() => BCM_SYSTEM_TIMER_MATCH_3,
+                    BCM_SYSTEM_TIMER_CLO => 10_000,
+                    BCM_SYSTEM_TIMER_C3 => c3.get(),
+                    _ => 0,
+                },
+                |offset, value| {
+                    match offset {
+                        BCM_SYSTEM_TIMER_CS => pending.set(false),
+                        BCM_SYSTEM_TIMER_C3 => c3.set(value),
+                        _ => {}
+                    }
+                    true
+                },
+                || {},
+                |_| {},
+                || {},
+                || signal_ok,
+                |_| {
+                    acknowledgements.set(acknowledgements.get() + 1);
+                    ack_ok
+                },
+                || retirements.set(retirements.get() + 1),
+            ));
+            assert_eq!(acknowledgements.get(), u32::from(signal_ok));
+            assert_eq!(retirements.get(), 0);
+        }
     }
 
     #[test]
@@ -89108,6 +89176,7 @@ mod tests {
                 side_effects.set(side_effects.get().saturating_add(1));
                 true
             },
+            || side_effects.set(side_effects.get().saturating_add(1)),
         ));
         assert_eq!(side_effects.get(), 0);
     }

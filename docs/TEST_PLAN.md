@@ -1839,8 +1839,10 @@ infer a specific kernel refill from either aggregate.
 Pi `netstats` must retain the six bounded fast-path rows
 `cyw43_publication`, `cyw43_publication_cut`, `cyw43_productive_window`,
 `genet_compact`, `genet_compose`, and `genet_defer`. The exact WiFi window row
-is `netstats: cyw43_productive_window schema=v1 opened=<u64> idle_admitted=<u64> closed=<u64>`;
-it must remain exact-identity, bounded, diagnostic-only, and absent from QEMU.
+is `netstats: cyw43_productive_window schema=v1 opened=<u64> idle_admitted=<u64> closed=<u64> ready_rechecks=<u64>`;
+`ready_rechecks` counts durable-publication wins using the existing one-shot
+outer-recheck allowance; it proves a scheduling decision, not completed work.
+It must remain exact-identity, bounded, diagnostic-only, and absent from QEMU.
 The exact sixth row is
 `netstats: genet_defer schema=v1 passive=<u64> command=<u64> compose_open=<u64> compose_backpressure=<u64> fence=<u64> prior_batch=<u64> control_busy=<u64> output_missing=<u64> stage_backpressure=<u64>`.
 The WiFi rejection total must be assigned to exactly one of the probe,
