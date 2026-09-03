@@ -213,7 +213,7 @@ def test_pi_genet_direct_handoff_accepts_one_current_terminal() -> None:
         (
             pi_genet_direct_handoff_serial(
                 "DRIVER_FAULT_CONTAINMENT v1 q=1 task=bcmgenet-v5 "
-                "c=standard"
+                "c=standard pc=a1001234"
             ),
             "later driver fault",
         ),

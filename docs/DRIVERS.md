@@ -832,7 +832,15 @@ reusable ownership pattern.
   even when no command byte is produced. Explicit matched-transfer faults,
   rearm failures, unmatched events, recovery bounds, and the post-recovery
   idle-baseline guard remain unchanged. `FrameReady.result` is a byte count,
-  never a queue/status bitmap or clean-poll proof.
+  never a queue/status bitmap or clean-poll proof. The root status cache retains
+  the completion discriminant: only keyboard `Progress` with first-report
+  ready/pending detail authorizes queue-based recovery, prompt blocking, or
+  clean-poll advancement. A later input frame invalidates that cached queue
+  interpretation without discarding input or its first-byte proof. Enumeration
+  snapshots and Idle/Fault results likewise cannot be decoded as report queues.
+  Missing-reply recovery and real pending/recovery status retain their existing
+  guards. `usb: recovery_request` includes `queue_valid`; when it is `no`, its
+  zero-valued decoded queue fields carry no queue-health evidence.
 - Before a current linked-runtime HID byte is accepted, report
   `usb-physical-input-unproven`. Gate 10, command readiness, or first-report
   readiness alone must never be relabelled as first-byte evidence and cannot
@@ -1446,6 +1454,13 @@ transport:
   admission before suspension. After the supervisor's validated containment
   release, root-fault signals its existing root fan-in cap. Thus an old
   timer record cannot authorize another global wait after its owner faults.
+  On Pi only, after the existing validated containment Suspend and before
+  revoking supervisor authority, one bounded `TCB.ReadRegisters(count=1)`
+  records the suspended AArch64 PC. `DRIVER_FAULT_CONTAINMENT v1` then adds
+  `pc=<hex>` or `pc=err:<kernel-error-hex>`; absence means not captured.
+  Read failure never blocks the remaining containment, and no driver resumes
+  or receives another budget. The PC is a fault-location discriminator tied to
+  that exact runtime ELF, not a per-IRQ duration or successful recovery proof.
   USB readiness/recovery debt likewise prevents global idle, although it does
   not veto an exact authenticated response continuation after an operator turn.
   Healthy command-ready empty keyboard polling is not that readiness debt.

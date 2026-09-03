@@ -577,6 +577,14 @@ static LINKED_LOCAL_SEAT_USB_LAST_RESULT: AtomicUsize = AtomicUsize::new(0);
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_USB_LAST_CODE: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_USB_LAST_FRAME_OFFSET: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(all(
@@ -1295,6 +1303,36 @@ fn linked_usb_keyboard_input_frame_valid(
         && completion.frame.len != 0
         && completion.result == u32::from(completion.frame.len)
         && completion.frame.flags == DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT
+}
+
+/// Only the two keyboard Progress variants carry queue/recovery status.
+/// A FrameReady byte count and an enumeration snapshot cannot authorize
+/// recovery or revoke parser readiness, even when their bits resemble a queue.
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn local_seat_usb_queue_status_result(code: u16, detail: u16, result: u32) -> Option<u32> {
+    (code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+        && matches!(
+            detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+                | DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        ))
+    .then_some(result)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn linked_local_seat_usb_queue_status_result() -> Option<u32> {
+    // Root-control is the sole writer and all policy readers run on that TCB.
+    // Preserve the discriminant alongside the raw diagnostic fields.
+    local_seat_usb_queue_status_result(
+        LINKED_LOCAL_SEAT_USB_LAST_CODE.load(Ordering::Acquire) as u16,
+        LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire) as u16,
+        LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32,
+    )
 }
 
 #[cfg(all(
@@ -2953,10 +2991,13 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn linked_usb_prompt_safe_ready(&self) -> bool {
-        let runtime_queue_blocked = local_seat_keyboard_result_blocks_prompt_ready(
-            LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32,
-            LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire),
-        );
+        let runtime_queue_blocked =
+            linked_local_seat_usb_queue_status_result().is_some_and(|result| {
+                local_seat_keyboard_result_blocks_prompt_ready(
+                    result,
+                    LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire),
+                )
+            });
         local_seat_usb_prompt_safe_ready_state(LocalSeatUsbPromptSafeReadyState {
             physical_pi_owner_state:
                 crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
@@ -2980,7 +3021,6 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn linked_usb_command_input_ready(&self) -> bool {
-        let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
         let first_report_ready =
             LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire);
         let first_byte_ready =
@@ -2988,11 +3028,14 @@ impl LocalSeatRuntime {
         local_seat_usb_command_ready_state(LocalSeatUsbCommandReadyState {
             prompt_safe_ready: self.linked_usb_prompt_safe_ready(),
             first_report_ready,
-            first_report_fresh: local_seat_keyboard_first_report_fresh(
-                result,
-                first_report_ready,
-                first_byte_ready,
-            ),
+            first_report_fresh: first_byte_ready
+                || linked_local_seat_usb_queue_status_result().is_some_and(|result| {
+                    local_seat_keyboard_first_report_fresh(
+                        result,
+                        first_report_ready,
+                        first_byte_ready,
+                    )
+                }),
             first_byte_ready,
             clean_polls: self.keyboard_post_first_byte_clean_polls,
             post_first_byte_pressure: self.linked_usb_post_first_byte_pressure_active(),
@@ -5394,7 +5437,17 @@ impl LocalSeatRuntime {
         target_arch = "aarch64",
         target_os = "none"
     ))]
-    fn record_keyboard_post_first_byte_clean_poll(&mut self, result: u32) {
+    fn record_keyboard_post_first_byte_clean_poll(
+        &mut self,
+        completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+    ) {
+        let Some(result) = local_seat_usb_queue_status_result(
+            completion.code,
+            completion.detail,
+            completion.result,
+        ) else {
+            return;
+        };
         if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             || !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
         {
@@ -5513,7 +5566,9 @@ impl LocalSeatRuntime {
             {
                 return false;
             }
-            let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
+            let Some(result) = linked_local_seat_usb_queue_status_result() else {
+                return false;
+            };
             let queued_reports = result & 0xff;
             let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
                 & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
@@ -5545,7 +5600,9 @@ impl LocalSeatRuntime {
                 LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire);
             let first_byte_ready =
                 LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire);
-            let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
+            let Some(result) = linked_local_seat_usb_queue_status_result() else {
+                return false;
+            };
             let queued_reports = result & 0xff;
             let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
                 & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
@@ -5586,23 +5643,29 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn keyboard_poll_recovery_aux_requested(&self) -> bool {
-        let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
-        let queued_reports = result & 0xff;
-        let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
-            & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
-        let cached_unmatched_transfer = report_status
-            == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER);
+        let status = linked_local_seat_usb_queue_status_result();
+        // Missing status creates no queue-based recovery debt. The independent
+        // missing-reply policy remains active with its existing bounds.
+        let cached_unmatched_transfer = status.is_some_and(|result| {
+            local_seat_usb_keyboard_report_status_from_result(result)
+                == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER)
+        });
         let cached_stale_runtime_queue = self.keyboard_poll_stale_runtime_queue();
-        let cached_active_idle_runtime_queue =
-            local_seat_keyboard_active_queue_idle(queued_reports, report_status);
+        let cached_active_idle_runtime_queue = status.is_some_and(|result| {
+            local_seat_keyboard_active_queue_idle(
+                result & 0xff,
+                local_seat_usb_keyboard_report_status_from_result(result),
+            )
+        });
         let first_report_ready =
             LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire);
         let first_byte_ready =
             LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire);
         let cached_pre_first_report_steady_full_queue = !first_byte_ready
-            && local_seat_keyboard_pre_first_report_steady_full_queue_stalled(result);
-        let cached_pre_first_report_no_event_queue =
-            local_seat_keyboard_pre_first_report_recovery_due(first_byte_ready, result);
+            && status.is_some_and(local_seat_keyboard_pre_first_report_steady_full_queue_stalled);
+        let cached_pre_first_report_no_event_queue = status.is_some_and(|result| {
+            local_seat_keyboard_pre_first_report_recovery_due(first_byte_ready, result)
+        });
         let cached_pre_first_report_no_event_recovery_due =
             cached_pre_first_report_steady_full_queue || cached_pre_first_report_no_event_queue;
         local_seat_keyboard_recovery_aux_allowed_for_status(
@@ -6030,7 +6093,7 @@ impl LocalSeatRuntime {
                                 Some(completion),
                             );
                         }
-                        self.record_keyboard_post_first_byte_clean_poll(completion.result);
+                        self.record_keyboard_post_first_byte_clean_poll(completion);
                         return LocalSeatServiceTurn::Complete;
                     }
                     if local_seat_usb_first_report_pending_endpoint_armed(completion) {
@@ -6052,11 +6115,11 @@ impl LocalSeatRuntime {
                     }
                     if local_seat_usb_keyboard_enumeration_progress(completion) {
                         publish_local_seat_usb_enumeration_progress(contract, completion);
-                        self.record_keyboard_post_first_byte_clean_poll(completion.result);
+                        self.record_keyboard_post_first_byte_clean_poll(completion);
                         return LocalSeatServiceTurn::Complete;
                     }
                     record_linked_local_seat_usb_detail(Some(completion));
-                    self.record_keyboard_post_first_byte_clean_poll(completion.result);
+                    self.record_keyboard_post_first_byte_clean_poll(completion);
                     if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED
                         .swap(true, Ordering::AcqRel)
                     {
@@ -6081,7 +6144,7 @@ impl LocalSeatRuntime {
                     == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
                 {
                     self.record_keyboard_poll_idle_completion();
-                    self.record_keyboard_post_first_byte_clean_poll(completion.result);
+                    self.record_keyboard_post_first_byte_clean_poll(completion);
                     if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED
                         .swap(true, Ordering::AcqRel)
                     {
@@ -6748,6 +6811,7 @@ const fn linked_local_seat_usb_detail_warrants_recovery(detail: u16) -> bool {
 fn store_linked_local_seat_usb_completion(
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
 ) {
+    LINKED_LOCAL_SEAT_USB_LAST_CODE.store(completion.code as usize, Ordering::Release);
     LINKED_LOCAL_SEAT_USB_LAST_DETAIL.store(completion.detail as usize, Ordering::Release);
     LINKED_LOCAL_SEAT_USB_LAST_RESULT.store(completion.result as usize, Ordering::Release);
     LINKED_LOCAL_SEAT_USB_LAST_FRAME_OFFSET
@@ -7211,19 +7275,21 @@ fn emit_usb_keyboard_recovery_request(action: &str, trace: LocalSeatKeyboardTrac
 
     let detail = LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire);
     let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
-    let queued_reports = result & 0xff;
-    let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
-        & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
+    let status = linked_local_seat_usb_queue_status_result();
+    // Zero-valued display fields are explicitly unproved when queue_valid=no;
+    // the raw result above remains available with its diagnostic detail.
+    let queued_reports = status.map_or(0, |value| value & 0xff);
+    let report_status = status.map_or(0, local_seat_usb_keyboard_report_status_from_result);
     let stale_runtime_queue = queued_reports > LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS
         || local_seat_keyboard_recovery_probe_stalled(queued_reports, report_status);
     let active_idle_queue = local_seat_keyboard_active_queue_idle(queued_reports, report_status);
     let pre_first_report_no_completion =
-        local_seat_keyboard_pre_first_report_no_event_queue_stalled(result);
+        status.is_some_and(local_seat_keyboard_pre_first_report_no_event_queue_stalled);
     let debt = stale_runtime_queue || pre_first_report_no_completion;
     let mut line = heapless::String::<576>::new();
     let _ = write!(
         line,
-        "usb: recovery_request action={action} aux0=0x{:08x} no_reply={} streak={} cooldown={} recovery_aux_requests={} recovery_aux_pending={} queue_empty={} accepted={} drained={} echoed={} detail=0x{:04x} result=0x{:08x} queued_reports={} report_status={} report_status_code={} stale_runtime_queue={} active_idle_queue={} pre_first_report_no_completion={} debt={}",
+        "usb: recovery_request action={action} aux0=0x{:08x} no_reply={} streak={} cooldown={} recovery_aux_requests={} recovery_aux_pending={} queue_empty={} accepted={} drained={} echoed={} detail=0x{:04x} result=0x{:08x} queue_valid={} queued_reports={} report_status={} report_status_code={} stale_runtime_queue={} active_idle_queue={} pre_first_report_no_completion={} debt={}",
         DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
         trace.driver_task_no_replies,
         trace.driver_task_no_reply_streak,
@@ -7236,6 +7302,7 @@ fn emit_usb_keyboard_recovery_request(action: &str, trace: LocalSeatKeyboardTrac
         trace.echoed_bytes,
         detail,
         result,
+        local_seat_yes_no(status.is_some()),
         queued_reports,
         local_seat_keyboard_report_status_name(report_status),
         report_status,
@@ -13166,6 +13233,68 @@ mod tests {
         let mismatched_len =
             crate::hal::driver_task::DriverTaskCompletionRecord { result: 4, ..valid };
         assert!(!linked_usb_keyboard_input_frame_valid(mismatched_len));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_queue_status_keeps_completion_discriminant_across_arrow_frames() {
+        use crate::hal::driver_task::DriverTaskCompletionCode;
+
+        // ABI keyboard Progress: one queued report, idle report, 99 events.
+        let idle_status = 0x6300_0401;
+        assert_eq!(
+            local_seat_usb_queue_status_result(
+                DriverTaskCompletionCode::Progress.as_u16(),
+                DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
+                idle_status,
+            ),
+            Some(idle_status),
+        );
+        // One arrow is ESC '[' A/B; coalesced arrows are still input bytes,
+        // never a three/six/twelve-entry hardware queue or a recovery request.
+        for bytes in [3, 6, 12, 128] {
+            for detail in [0, DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY] {
+                assert_eq!(
+                    local_seat_usb_queue_status_result(
+                        DriverTaskCompletionCode::FrameReady.as_u16(),
+                        detail,
+                        bytes,
+                    ),
+                    None,
+                );
+            }
+        }
+        for code in [
+            DriverTaskCompletionCode::Idle,
+            DriverTaskCompletionCode::Fault,
+        ] {
+            assert_eq!(
+                local_seat_usb_queue_status_result(
+                    code.as_u16(),
+                    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+                    3,
+                ),
+                None,
+            );
+        }
+        assert_eq!(
+            local_seat_usb_queue_status_result(
+                DriverTaskCompletionCode::Progress.as_u16(),
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+                idle_status,
+            ),
+            None,
+        );
+        // Do not weaken an actual three-report/no-event status or a pending
+        // post-recovery guard: those remain authoritative typed Progress.
+        assert_eq!(
+            local_seat_usb_queue_status_result(
+                DriverTaskCompletionCode::Progress.as_u16(),
+                DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+                3,
+            ),
+            Some(3),
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

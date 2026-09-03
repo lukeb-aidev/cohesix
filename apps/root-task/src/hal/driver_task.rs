@@ -9420,6 +9420,7 @@ struct DriverSupervisorFaultDiagnostic {
     local_sc: usize,
     ipc_buffer_vaddr: usize,
     prior_call_phase: u32,
+    suspended_pc: Option<Result<usize, usize>>,
     stage: u8,
     kernel_error: isize,
     state: u8,
@@ -9451,6 +9452,7 @@ impl DriverSupervisorFaultDiagnostic {
             local_sc: 0,
             ipc_buffer_vaddr: 0,
             prior_call_phase: 0,
+            suspended_pc: None,
             stage: 0,
             kernel_error: 0,
             state: DRIVER_SUPERVISOR_DIAG_EMPTY,
@@ -9483,6 +9485,7 @@ fn begin_driver_supervisor_fault_diagnostic(
         local_sc,
         ipc_buffer_vaddr,
         prior_call_phase,
+        suspended_pc: None,
         stage: DRIVER_SUPERVISOR_DIAG_STAGE_IDENTITY,
         kernel_error: 0,
         state: DRIVER_SUPERVISOR_DIAG_CONTAINING,
@@ -9502,6 +9505,57 @@ fn complete_driver_supervisor_fault_diagnostic() {
     let mut diagnostic = DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock();
     diagnostic.stage = DRIVER_SUPERVISOR_DIAG_STAGE_DONE;
     diagnostic.state = DRIVER_SUPERVISOR_DIAG_COMPLETE;
+}
+
+#[cfg(any(
+    all(
+        feature = "kernel",
+        feature = "release-pi4",
+        sel4_config_kernel_mcs,
+        target_arch = "aarch64",
+        target_os = "none"
+    ),
+    test
+))]
+fn suspended_driver_pc_result(
+    reply: sel4_sys::seL4_MessageInfo,
+    registers: [sel4_sys::seL4_Word; 4],
+) -> Result<usize, usize> {
+    if reply.label() != sel4_sys::seL4_NoError as sel4_sys::seL4_Word {
+        return Err(reply.label() as usize);
+    }
+    if reply.length() != 1 {
+        return Err(sel4_sys::seL4_TruncatedMessage as usize);
+    }
+    Ok(registers[0] as usize)
+}
+
+/// Observe one terminal Pi driver only after its existing containment Suspend.
+/// The validated supervisor TCB capability grants this read; no driver is
+/// resumed, its Reply/SC state is untouched, and failure cannot stop containment.
+#[cfg(all(
+    feature = "kernel",
+    feature = "release-pi4",
+    sel4_config_kernel_mcs,
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn capture_suspended_driver_pc(tcb: sel4_sys::seL4_CPtr) {
+    // Selected libsel4 TCB.ReadRegisters: MR0 suspend=false/arch_flags=0,
+    // MR1 count=1; AArch64 UserContext's first returned word is PC. Only
+    // fast MRs are used, with no IPC-buffer pointer or additional capability.
+    let (reply, registers) = crate::sel4::call_with_message_registers_unchecked(
+        tcb,
+        sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::invocation_label_TCBReadRegisters as sel4_sys::seL4_Word,
+            0,
+            0,
+            2,
+        ),
+        [0, 1, 0, 0],
+    );
+    DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock().suspended_pc =
+        Some(suspended_driver_pc_result(reply, registers));
 }
 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
@@ -9589,6 +9643,17 @@ pub fn driver_supervisor_fault_diagnostic_line(
         ),
     )
     .ok()?;
+    if let Some(pc) = diagnostic.suspended_pc {
+        let mut context = heapless::String::<32>::new();
+        match pc {
+            Ok(pc) => core::fmt::write(&mut context, format_args!(" pc={pc:x}")),
+            Err(error) => core::fmt::write(&mut context, format_args!(" pc=err:{error:x}")),
+        }
+        .ok()?;
+        // Optional context cannot suppress the original containment record
+        // when its existing fixed line capacity has no room for the suffix.
+        let _ = line.push_str(context.as_str());
+    }
     Some((diagnostic.record.sequence, line))
 }
 
@@ -9766,6 +9831,8 @@ pub fn root_driver_supervisor_contain_fault(
     })?;
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_SUSPENDED, Ordering::Release);
+    #[cfg(all(feature = "release-pi4", target_arch = "aarch64", target_os = "none"))]
+    capture_suspended_driver_pc(supervisor_tcb as sel4_sys::seL4_CPtr);
     if supervisor_sc == 0 {
         return Err(fail_driver_supervisor_fault_diagnostic(
             DRIVER_SUPERVISOR_DIAG_STAGE_UNBIND,
@@ -28519,6 +28586,38 @@ fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suspended_driver_pc_requires_successful_exact_read_reply() {
+        assert_eq!(
+            suspended_driver_pc_result(
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                [0x401020, 0, 0, 0]
+            ),
+            Ok(0x401020),
+        );
+        for length in [0, 2] {
+            assert_eq!(
+                suspended_driver_pc_result(
+                    sel4_sys::seL4_MessageInfo::new(0, 0, 0, length),
+                    [0x401020, 0, 0, 0]
+                ),
+                Err(sel4_sys::seL4_TruncatedMessage as usize),
+            );
+        }
+        assert_eq!(
+            suspended_driver_pc_result(
+                sel4_sys::seL4_MessageInfo::new(
+                    sel4_sys::seL4_InvalidCapability as sel4_sys::seL4_Word,
+                    0,
+                    0,
+                    1
+                ),
+                [0x401020, 0, 0, 0]
+            ),
+            Err(sel4_sys::seL4_InvalidCapability as usize),
+        );
+    }
 
     #[cfg(feature = "kernel")]
     static PERSISTENT_OP11_DEADLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
