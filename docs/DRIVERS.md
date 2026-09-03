@@ -1426,7 +1426,13 @@ transport:
   PCIe work, catch-up, retry, polling, or a second physical action. Every tag,
   address, page-count, IRQ, badge, slot, trigger, period, and interval identity
   is checked before MMIO; malformed identity performs no device access, signal,
-  or ACK. Root never maps or programs this timer. The runtime descriptor layout
+  or ACK. A retained `Enabled` record alone is not a live producer: root also
+  requires the PCIe owner's current nonzero endpoint/capability generation,
+  open MCS command admission and idle Call phase. Containment closes that
+  admission before suspension. After the supervisor's validated containment
+  release, root-fault signals its existing root fan-in cap. Thus an old
+  timer record cannot authorize another global wait after its owner faults.
+  Root never maps or programs this timer. The runtime descriptor layout
   and runtime-descriptor layout remain unchanged; additive internal resource
   tag 15 names only this exact page. The current shared protocol version is
   ABI v13 because of the later generic one-way wait handshake above.

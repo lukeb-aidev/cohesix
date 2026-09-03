@@ -473,7 +473,12 @@ condition-before-block fence, root issues one synchronous Reply-bearing typed
 enable Call to the PCIe owner. Root accepts only the matching completion and
 durable `Enabled` publication, repeats the complete fence, and only then blocks
 on the endpoint. Later idle entries use
-that lifetime-bound `Enabled` record and never reprogram the timer. An
+that lifetime-bound `Enabled` record and never reprogram the timer. The record
+must also have a currently published endpoint/capability generation, open MCS
+command admission and idle Call phase; the boot owner-state mask is not live
+execution proof. Root-fault forwards the driver's validated containment-release
+notification through its existing root fan-in cap, so an earlier fault hint
+racing the final idle snapshot cannot strand root behind a dead timer. An
 endpoint Call and a bound-notification signal are multiplexed by the kernel;
 the latter is only a hint, while the former is copied to staged root storage
 before returning. Every wake restarts operator/recovery-first arbitration.

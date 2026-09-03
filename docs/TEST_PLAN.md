@@ -8995,7 +8995,18 @@ matching completion and stable identity-bound `Enabled` publication, repeat
 the complete idle fence, and only then perform one blocking endpoint receive.
 Work arriving during the nonblocking receive, enable, or either complete fence
 must prevent the block. Later idle entries must prove the same
-`Enabled` lifetime and issue no command or MMIO reprogram. A notification wake
+`Enabled` lifetime and issue no command or MMIO reprogram. An old `Enabled`
+record with historical owner registration must reject a missing endpoint,
+zero capability generation, closed command admission, associated Call or any
+fault/containment phase. The current slot must remain live after reading the
+timer record and after enable completes. Root-fault must forward the validated
+driver containment-release notification through its existing fan-in cap after
+admission closes: an earlier fault hint cannot cover a later durable state
+change. Driver-supervisor has no root fan-in cap and must not issue that
+syscall itself or acquire a new capability for this repair. Physical
+fault diagnostics must demonstrate that serial/local-seat arbitration remains
+reachable after a timer-owner fault; passing this liveness check cannot count
+as a clean boot or repair the initiating timer fault. A notification wake
 returns to outer operator/recovery-first arbitration and derives no work from
 its badge; an endpoint wake stages the exact message and returns through that
 same arbitration. A timer becoming due, durable publication winning either race,

@@ -2344,6 +2344,13 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                                 );
                             }
                             commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                            // The initial fault hint precedes the supervisor's
+                            // admission-closure/containment cut. Its validated
+                            // release proves that cut is durable. Root-fault,
+                            // unlike driver-supervisor, already owns the
+                            // send-only root fan-in cap, so forward this exact
+                            // release before returning to fault receive.
+                            signal_root_control_fanin_hint();
                             sel4::yield_now();
                         }
                         FaultReplyDisposition::CriticalTerminal { task_index } => {

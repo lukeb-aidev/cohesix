@@ -17240,6 +17240,37 @@ enum PiRootIdleTimerEnablePlan {
     Enable,
 }
 
+/// A boot owner-state receipt is historical admission, not a live timer
+/// producer. Containment closes command admission before suspending the TCB;
+/// an old Enabled ring record must lose wait authority at that same cut.
+#[cfg(feature = "kernel")]
+const fn pi_root_idle_timer_owner_live(
+    owner_registered: bool,
+    endpoint: usize,
+    cap_generation: u32,
+    command_admission_open: bool,
+    call_phase: u32,
+) -> bool {
+    owner_registered
+        && endpoint != 0
+        && cap_generation != 0
+        && command_admission_open
+        && call_phase == DRIVER_TASK_MCS_CALL_IDLE
+}
+
+#[cfg(feature = "kernel")]
+fn pi_root_idle_timer_slot_live(slot: &DriverTaskCommandSlot) -> bool {
+    pi_root_idle_timer_owner_live(
+        DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire)
+            & DriverTaskHotPath::PcieRoot.owner_state_bit()
+            != 0,
+        slot.endpoint.load(Ordering::Acquire),
+        slot.mcs_cap_generation.load(Ordering::Acquire),
+        slot.mcs_command_admission_open.load(Ordering::Acquire) != 0,
+        slot.mcs_call_phase.load(Ordering::Acquire),
+    )
+}
+
 #[cfg(feature = "kernel")]
 const fn pi_root_idle_timer_enable_plan(
     exact_direct_genet_topology: bool,
@@ -17296,15 +17327,16 @@ pub(crate) fn ensure_pi_root_idle_timer_enabled(exact_direct_genet_topology: boo
     let state = driver_task_ring_read_pcie_timer_state(ring_root_ptr);
     let plan = pi_root_idle_timer_enable_plan(
         true,
-        DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire) & hot_path.owner_state_bit()
-            != 0,
+        pi_root_idle_timer_slot_live(slot),
         driver_runtime_descriptor_seal_registered(hot_path),
         descriptor,
         state,
     );
     match plan {
         PiRootIdleTimerEnablePlan::Reject => return false,
-        PiRootIdleTimerEnablePlan::AlreadyEnabled(sequence) => return sequence != 0,
+        PiRootIdleTimerEnablePlan::AlreadyEnabled(sequence) => {
+            return sequence != 0 && pi_root_idle_timer_slot_live(slot);
+        }
         PiRootIdleTimerEnablePlan::Enable => {}
     }
 
@@ -17339,7 +17371,7 @@ pub(crate) fn ensure_pi_root_idle_timer_enabled(exact_direct_genet_topology: boo
     driver_task_ring_read_pcie_timer_state(ring_root_ptr).is_some_and(|state| {
         state.enabled_for(descriptor.task_key, descriptor.identity_token)
             && state.enable_sequence == completion.result
-    })
+    }) && pi_root_idle_timer_slot_live(slot)
 }
 
 #[cfg(feature = "kernel")]
@@ -28617,6 +28649,11 @@ mod tests {
             PiRootIdleTimerEnablePlan::AlreadyEnabled(23),
             "a durable Enabled lifetime forbids a repeated timer activation",
         );
+        assert_eq!(
+            pi_root_idle_timer_enable_plan(true, false, true, descriptor, Some(enabled)),
+            PiRootIdleTimerEnablePlan::Reject,
+            "a historical Enabled record cannot outlive its contained producer",
+        );
         let wrong_identity = DriverRuntimePcieTimerState {
             identity_token: descriptor.identity_token.wrapping_add(1),
             ..enabled
@@ -28625,6 +28662,57 @@ mod tests {
             pi_root_idle_timer_enable_plan(true, true, true, descriptor, Some(wrong_identity)),
             PiRootIdleTimerEnablePlan::Reject
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_root_idle_timer_live_owner_rejects_every_containment_cut() {
+        assert!(pi_root_idle_timer_owner_live(
+            true,
+            19,
+            7,
+            true,
+            DRIVER_TASK_MCS_CALL_IDLE
+        ));
+        assert!(!pi_root_idle_timer_owner_live(
+            false,
+            19,
+            7,
+            true,
+            DRIVER_TASK_MCS_CALL_IDLE
+        ));
+        assert!(!pi_root_idle_timer_owner_live(
+            true,
+            0,
+            7,
+            true,
+            DRIVER_TASK_MCS_CALL_IDLE
+        ));
+        assert!(!pi_root_idle_timer_owner_live(
+            true,
+            19,
+            0,
+            true,
+            DRIVER_TASK_MCS_CALL_IDLE
+        ));
+        assert!(!pi_root_idle_timer_owner_live(
+            true,
+            19,
+            7,
+            false,
+            DRIVER_TASK_MCS_CALL_IDLE
+        ));
+        for phase in [
+            DRIVER_TASK_MCS_CALL_ASSOCIATED,
+            DRIVER_TASK_MCS_CALL_FAULT_PUBLISHED,
+            DRIVER_TASK_MCS_CALL_FAILURE_REPLIED,
+            DRIVER_TASK_MCS_CALL_SUSPENDED,
+            DRIVER_TASK_MCS_CALL_ASSOCIATIONS_CLEAR,
+            DRIVER_TASK_MCS_CALL_REVOKED,
+            u32::MAX,
+        ] {
+            assert!(!pi_root_idle_timer_owner_live(true, 19, 7, true, phase));
+        }
     }
 
     #[cfg(feature = "kernel")]
