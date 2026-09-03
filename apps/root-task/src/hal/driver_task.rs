@@ -17322,7 +17322,11 @@ const fn pi_root_idle_timer_owner_live(
         && endpoint != 0
         && cap_generation != 0
         && command_admission_open
-        && call_phase == DRIVER_TASK_MCS_CALL_IDLE
+    // ASSOCIATED is still a live reply-capture phase during containment-safe
+    // continuation; allow it so the root timer can engage without spurious
+    // continuation loss between idle cuts.
+    && (call_phase == DRIVER_TASK_MCS_CALL_IDLE
+        || call_phase == DRIVER_TASK_MCS_CALL_ASSOCIATED)
 }
 
 #[cfg(feature = "kernel")]
@@ -28765,13 +28769,20 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi_root_idle_timer_live_owner_rejects_every_containment_cut() {
+    fn pi_root_idle_timer_live_owner_allows_associated_but_rejects_terminal_cut() {
         assert!(pi_root_idle_timer_owner_live(
             true,
             19,
             7,
             true,
             DRIVER_TASK_MCS_CALL_IDLE
+        ));
+        assert!(pi_root_idle_timer_owner_live(
+            true,
+            19,
+            7,
+            true,
+            DRIVER_TASK_MCS_CALL_ASSOCIATED
         ));
         assert!(!pi_root_idle_timer_owner_live(
             false,
@@ -28802,7 +28813,6 @@ mod tests {
             DRIVER_TASK_MCS_CALL_IDLE
         ));
         for phase in [
-            DRIVER_TASK_MCS_CALL_ASSOCIATED,
             DRIVER_TASK_MCS_CALL_FAULT_PUBLISHED,
             DRIVER_TASK_MCS_CALL_FAILURE_REPLIED,
             DRIVER_TASK_MCS_CALL_SUSPENDED,
