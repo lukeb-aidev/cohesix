@@ -13874,7 +13874,11 @@ where
             ipc_staged: self.ipc.has_staged_bootstrap(),
             physical_operator_pending: self
                 .linked_physical_operator_work()
-                .retains_network_fence_after_dispatch(),
+                // A response continuation may cross passive USB service debt
+                // after its bounded operator turn. Global idle cannot: this
+                // debt is unfinished readiness/recovery, not healthy empty
+                // keyboard polling, and still requires root rotor progress.
+                .needs_operator_rotation(),
             serial_output_pending: self.serial.tx_pending(),
             // The linked Pi rotor owns USB admission and HDMI attachment, not
             // the ordinary VirtIO post-prompt attach schedule. That legacy
@@ -56192,6 +56196,37 @@ mod tests {
             .inject_linked_hdmi_pending_bytes_for_test(0);
         pump.cyw43_bootstrap_hdmi_pending = true;
         assert!(pump.pi_root_control_idle_fence_evidence().display_pending);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_idle_fence_keeps_usb_readiness_debt_runnable() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+        pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+        assert!(
+            !pump
+                .pi_root_control_idle_fence_evidence()
+                .physical_operator_pending
+        );
+        pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+        assert!(
+            pump.pi_root_control_idle_fence_evidence()
+                .physical_operator_pending
+        );
+        assert!(direct_genet_compact_operator_fence_clear(Some(
+            pump.linked_physical_operator_work()
+        )));
+        pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+        assert!(
+            !pump
+                .pi_root_control_idle_fence_evidence()
+                .physical_operator_pending
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

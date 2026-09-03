@@ -9006,7 +9006,12 @@ change. Driver-supervisor has no root fan-in cap and must not issue that
 syscall itself or acquire a new capability for this repair. Physical
 fault diagnostics must demonstrate that serial/local-seat arbitration remains
 reachable after a timer-owner fault; passing this liveness check cannot count
-as a clean boot or repair the initiating timer fault. A notification wake
+as a clean boot or repair the initiating timer fault. The actual EventPump
+projection must fence USB readiness/recovery debt at global idle while the
+same typed debt remains admissible for an exact compact response continuation.
+Clearing that debt restores idle eligibility; do not substitute the old
+ordinary-VirtIO display-attachment flag or require an operator's first key.
+A notification wake
 returns to outer operator/recovery-first arbitration and derives no work from
 its badge; an endpoint wake stages the exact message and returns through that
 same arbitration. A timer becoming due, durable publication winning either race,

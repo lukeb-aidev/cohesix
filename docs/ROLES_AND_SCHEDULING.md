@@ -488,6 +488,12 @@ weaken physical-console priority. WiFi never enters this global-idle receive;
 it never enables the timer and may block only for a currently issued finite
 operation or an exact current-transaction causal child.
 
+The global-idle operator predicate requires no remaining USB readiness or
+recovery service debt. It is intentionally stricter than the compact network
+response fence, which may cross that debt after giving the operator rotor its
+bounded turn. Healthy command-ready empty polling contributes no readiness
+debt, so this correction does not permanently suppress the timer-backed wait.
+
 Deadline completeness comes from the existing isolated `driver-pcie` task,
 without another task or SC. Its unchanged `400/10000 us`, `wcet_us=300`,
 priority/MCP, core, refill, and timeout contract owns one additional exact BCM

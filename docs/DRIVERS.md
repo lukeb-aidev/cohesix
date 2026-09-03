@@ -1432,6 +1432,9 @@ transport:
   admission before suspension. After the supervisor's validated containment
   release, root-fault signals its existing root fan-in cap. Thus an old
   timer record cannot authorize another global wait after its owner faults.
+  USB readiness/recovery debt likewise prevents global idle, although it does
+  not veto an exact authenticated response continuation after an operator turn.
+  Healthy command-ready empty keyboard polling is not that readiness debt.
   Root never maps or programs this timer. The runtime descriptor layout
   and runtime-descriptor layout remain unchanged; additive internal resource
   tag 15 names only this exact page. The current shared protocol version is

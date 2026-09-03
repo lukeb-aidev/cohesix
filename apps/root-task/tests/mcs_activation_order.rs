@@ -4,6 +4,45 @@
 // Author: Lukas Bower
 
 #[test]
+fn driver_containment_release_reaches_root_through_existing_fault_cap() {
+    let source = include_str!("../src/hal/critical_tcb.rs");
+    let start = source
+        .find("FaultReplyDisposition::RetainedByDriver =>")
+        .unwrap();
+    let end = source[start..]
+        .find("FaultReplyDisposition::CriticalTerminal")
+        .unwrap()
+        + start;
+    let release = &source[start..end];
+    let receive = release
+        .find("sel4::wait(CHILD_DRIVER_RELEASE_SLOT")
+        .unwrap();
+    let validate = release.find("observed_badge != release_badge").unwrap();
+    let quiescent = release
+        .find("DRIVER_FAULT_REPLY_BUSY.load(Ordering::Acquire)")
+        .unwrap();
+    let commit = release
+        .find("commit_root_fault_turn(RootFaultCriticalTurn::Receive)")
+        .unwrap();
+    let wake = release.find("signal_root_control_fanin_hint();").unwrap();
+    let yield_call = release.find("sel4::yield_now();").unwrap();
+    assert!(receive < validate && validate < quiescent && quiescent < commit);
+    assert!(commit < wake && wake < yield_call);
+
+    let start = source
+        .find("extern \"C\" fn root_driver_supervisor_entry")
+        .unwrap();
+    let end = source[start..]
+        .find("/// Stable external-QEMU observation point")
+        .unwrap()
+        + start;
+    let supervisor = &source[start..end];
+    assert!(supervisor.contains("sel4::signal_unchecked(CHILD_DRIVER_RELEASE_SIGNAL_SLOT)"));
+    assert!(!supervisor.contains("signal_root_control_fanin_hint()"));
+    assert!(!supervisor.contains("CHILD_ROOT_CONTROL_WAKE_SLOT"));
+}
+
+#[test]
 fn qemu_children_seal_before_any_service_activation() {
     let source = include_str!("../src/kernel.rs");
     let markers = [
