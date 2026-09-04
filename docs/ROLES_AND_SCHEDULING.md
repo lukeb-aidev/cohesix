@@ -486,7 +486,8 @@ durable `Enabled` publication, repeats the complete fence, and only then blocks
 on the endpoint. Later idle entries use
 that lifetime-bound `Enabled` record and never reprogram the timer. The record
 must also have a currently published endpoint/capability generation, open MCS
-command admission and idle Call phase; the boot owner-state mask is not live
+command admission and idle or associated Call phase; terminal containment
+phases are rejected. The boot owner-state mask is not live
 execution proof. Root-fault forwards the driver's validated containment-release
 notification through its existing root fan-in cap, so an earlier fault hint
 racing the final idle snapshot cannot strand root behind a dead timer. An
@@ -507,7 +508,7 @@ debt, so this correction does not permanently suppress the timer-backed wait.
 
 Deadline completeness comes from the existing isolated `driver-pcie` task,
 without another task or SC. Its unchanged `400/10000 us`, `wcet_us=300`,
-priority/MCP, core, refill, and timeout contract owns one additional exact BCM
+priority/MCP, core, and terminal timeout contract owns one additional exact BCM
 system-timer C3 duty: discontiguous page `0xFE003000`, level IRQ 99, badge 2048,
 handler slot 4, local notification slot 3, and 5,000-us interval. Descriptor
 adoption publishes `Disarmed` without programming C3. The first exact
@@ -519,8 +520,15 @@ real timer edge reaches the owner without a generic post-IRQ scheduler
 traversal. It performs no PCIe operation, retry, catch-up, poll, or root work.
 The ten-page PCIe aperture and one-page timer resource remain separately tagged
 and fail closed before MMIO on any identity drift. This secondary duty consumes
-only the existing isolated task's declared execution budget and changes no
-root, console, driver, or Worker scheduling numeric.
+only the existing isolated task's declared execution budget. The Pi profile
+declares four refills: one active head, the two unexpired service fragments
+from 5-ms duties in a 10-ms period, and enable/call carry-in. The selected seL4
+kernel delays the existing tail when a refill queue is full, so two refills
+cannot preserve this repeated blocking pattern. The completed IRQ duty blocks
+without a full-head `Yield`; that syscall's entry budget check can raise the
+terminal timeout before its nonfaulting retirement body executes. Additional
+PCIe command/recovery pressure still requires exact-image hardware evidence;
+refill capacity does not increase CPU authority or waive timeout containment.
 
 The deferred physical WiFi supervisor may retain root-control across productive
 logical turns only when generated root truth is active, admitted,
@@ -617,6 +625,17 @@ activation after an exact stage only by binding and revalidating the sealed
 child control's exact nonzero sequence while it still owes its consumption
 watermark, then performing the condition-before-block Poll/Wait cut described
 above.
+
+Copied CYW43 console-network visits retain deferred diagnostic and already
+retained egress priority, then select exact ready output, a drained disconnect,
+child publication or owed publication ACK, and current-generation root-copied
+RX with available ingress and response capacity. Each visit still executes and
+charges one existing unit. When no exact work is ready, observation, ingress,
+and timer probes remain bounded; an empty output or disconnect slot does not
+consume a visit. The receive leaf revalidates all driver admission gates; this
+ordering cannot issue CYW43/SDIO source work, retain a paired RX/TX permit across
+actors, or mint a new continuation. The existing child-signal successor,
+operator rotation, NaturalPostpone profile, and 64-unit cap remain in force.
 
 Exact durable cross-core direct-GENET transaction identity may retain
 root-control under the generated NaturalPostpone profile and unchanged

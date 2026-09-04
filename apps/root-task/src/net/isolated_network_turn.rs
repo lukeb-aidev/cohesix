@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Bound one isolated QEMU console-network unit per outer Network visit.
+// Purpose: Bound isolated console-network work to one unit per outer Network visit.
 // Author: Lukas Bower
 
 /// One ordinary isolated console-network unit below ACK/diagnostic/TX preemption.
@@ -169,6 +169,90 @@ pub(crate) fn select_isolated_network_turn(
         }
     };
     IsolatedNetworkTurnSelection { unit, successor }
+}
+
+/// Passive readiness for the existing copied-device units, not device authority.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct IsolatedCopiedNetworkReadyWork {
+    pub(crate) deferred_diagnostic: bool,
+    pub(crate) pending_egress: bool,
+    pub(crate) stage_output: bool,
+    pub(crate) disconnect: bool,
+    pub(crate) child_publication_or_ack: bool,
+    pub(crate) ingress: bool,
+}
+
+impl IsolatedCopiedNetworkReadyWork {
+    fn select(
+        self,
+        lower_cursor: IsolatedNetworkLowerCursor,
+    ) -> Option<IsolatedNetworkTurnSelection> {
+        let unit = if self.deferred_diagnostic {
+            IsolatedNetworkTurnUnit::DeferredDiagnostic
+        } else if self.pending_egress {
+            // The single retained frame must leave before another child
+            // publication can expose egress and overwrite it.
+            IsolatedNetworkTurnUnit::TransmitEgress
+        } else if self.stage_output {
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput)
+        } else if self.disconnect {
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect)
+        } else if self.child_publication_or_ack {
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild)
+        } else if self.ingress {
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress)
+        } else {
+            return None;
+        };
+        Some(IsolatedNetworkTurnSelection {
+            unit,
+            successor: lower_cursor,
+        })
+    }
+}
+
+/// Prefer already available copied CYW43 work within the same one-unit budget.
+///
+/// One-slot control/ingress admission and retained egress still impose their
+/// existing backpressure. Idle service keeps observation, ingress, and timer
+/// probes; only locally disproven output/disconnect probes are skipped. A
+/// successful child signal retains the existing ObserveChild successor rule.
+pub(crate) fn select_isolated_copied_network_turn_for_contract(
+    exact_cyw43_contract: bool,
+    ready: IsolatedCopiedNetworkReadyWork,
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    if exact_cyw43_contract {
+        ready
+            .select(lower_cursor)
+            .unwrap_or_else(|| select_isolated_response_turn(false, false, true, lower_cursor))
+    } else {
+        select_isolated_network_turn(
+            ready.deferred_diagnostic,
+            ready.pending_egress,
+            lower_cursor,
+        )
+    }
+}
+
+/// Apply the same copied CYW43 readiness order during a bounded response turn.
+pub(crate) fn select_isolated_copied_response_turn_for_contract(
+    exact_cyw43_contract: bool,
+    ready: IsolatedCopiedNetworkReadyWork,
+    response_progress_outstanding: bool,
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    if exact_cyw43_contract {
+        if let Some(selection) = ready.select(lower_cursor) {
+            return selection;
+        }
+    }
+    select_isolated_response_turn(
+        ready.pending_egress,
+        ready.stage_output,
+        response_progress_outstanding,
+        lower_cursor,
+    )
 }
 
 /// Select one root control-plane unit when the child owns QEMU RX/TX directly.
@@ -399,6 +483,193 @@ pub(crate) fn select_isolated_direct_response_turn_for_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copied_cyw43_ready_order_preserves_retained_egress_and_control_backpressure() {
+        let all_ready = IsolatedCopiedNetworkReadyWork {
+            deferred_diagnostic: true,
+            pending_egress: true,
+            stage_output: true,
+            disconnect: true,
+            child_publication_or_ack: true,
+            ingress: true,
+        };
+        let after_diagnostic = IsolatedCopiedNetworkReadyWork {
+            deferred_diagnostic: false,
+            ..all_ready
+        };
+        let after_egress = IsolatedCopiedNetworkReadyWork {
+            pending_egress: false,
+            ..after_diagnostic
+        };
+        let control_occupied = IsolatedCopiedNetworkReadyWork {
+            stage_output: false,
+            ..after_egress
+        };
+        let no_disconnect = IsolatedCopiedNetworkReadyWork {
+            disconnect: false,
+            ..control_occupied
+        };
+        let no_publication = IsolatedCopiedNetworkReadyWork {
+            child_publication_or_ack: false,
+            ..no_disconnect
+        };
+        let cases = [
+            (all_ready, IsolatedNetworkTurnUnit::DeferredDiagnostic),
+            (after_diagnostic, IsolatedNetworkTurnUnit::TransmitEgress),
+            (
+                after_egress,
+                IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            ),
+            (
+                control_occupied,
+                IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect),
+            ),
+            (
+                no_disconnect,
+                IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+            ),
+            (
+                no_publication,
+                IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress),
+            ),
+        ];
+        for lower_unit in [
+            IsolatedNetworkLowerUnit::ObserveChild,
+            IsolatedNetworkLowerUnit::StageOutput,
+            IsolatedNetworkLowerUnit::Disconnect,
+            IsolatedNetworkLowerUnit::Ingress,
+            IsolatedNetworkLowerUnit::ServiceTick,
+        ] {
+            let cursor = IsolatedNetworkLowerCursor::for_unit(lower_unit);
+            for (ready, expected) in cases {
+                let ordinary =
+                    select_isolated_copied_network_turn_for_contract(true, ready, cursor);
+                assert_eq!(ordinary.unit(), expected);
+                assert_eq!(ordinary.successor(), cursor);
+                let (next, activity) = ordinary.finish(IsolatedNetworkTurnOutcome::complete(false));
+                assert_eq!(
+                    next, cursor,
+                    "backpressure must preserve the interrupted lower position"
+                );
+                assert!(!activity);
+                for response_outstanding in [false, true] {
+                    let response = select_isolated_copied_response_turn_for_contract(
+                        true,
+                        ready,
+                        response_outstanding,
+                        cursor,
+                    );
+                    assert_eq!(
+                        response, ordinary,
+                        "exact copied work has the same authority in either lane"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copied_cyw43_empty_turns_retain_ingress_and_timer_service() {
+        let mut cursor = IsolatedNetworkLowerCursor::new();
+        for expected in [
+            IsolatedNetworkLowerUnit::ObserveChild,
+            IsolatedNetworkLowerUnit::Ingress,
+            IsolatedNetworkLowerUnit::ServiceTick,
+            IsolatedNetworkLowerUnit::ObserveChild,
+        ] {
+            let selection = select_isolated_copied_network_turn_for_contract(
+                true,
+                IsolatedCopiedNetworkReadyWork::default(),
+                cursor,
+            );
+            assert_eq!(selection.unit(), IsolatedNetworkTurnUnit::Lower(expected));
+            assert_eq!(
+                selection,
+                select_isolated_copied_response_turn_for_contract(
+                    true,
+                    IsolatedCopiedNetworkReadyWork::default(),
+                    true,
+                    cursor
+                ),
+            );
+            (cursor, _) = selection.finish(IsolatedNetworkTurnOutcome::complete(false));
+        }
+    }
+
+    #[test]
+    fn copied_cyw43_ready_ingress_keeps_signal_observation_and_one_slot_admission() {
+        let cursor = IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ServiceTick);
+        let ready = IsolatedCopiedNetworkReadyWork {
+            ingress: true,
+            ..IsolatedCopiedNetworkReadyWork::default()
+        };
+        let selection = select_isolated_copied_network_turn_for_contract(true, ready, cursor);
+        assert_eq!(
+            selection.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress)
+        );
+        let (next, activity) =
+            selection.finish(IsolatedNetworkTurnOutcome::child_signal_attempt(true));
+        assert!(activity);
+        assert_eq!(next.unit(), IsolatedNetworkLowerUnit::ObserveChild);
+        let awaiting_child = select_isolated_copied_network_turn_for_contract(
+            true,
+            IsolatedCopiedNetworkReadyWork::default(),
+            next,
+        );
+        assert_eq!(
+            awaiting_child.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild)
+        );
+    }
+
+    #[test]
+    fn non_cyw43_copied_contract_retains_every_original_selection() {
+        for lower_unit in [
+            IsolatedNetworkLowerUnit::ObserveChild,
+            IsolatedNetworkLowerUnit::StageOutput,
+            IsolatedNetworkLowerUnit::Disconnect,
+            IsolatedNetworkLowerUnit::Ingress,
+            IsolatedNetworkLowerUnit::ServiceTick,
+        ] {
+            let cursor = IsolatedNetworkLowerCursor::for_unit(lower_unit);
+            for mask in 0u8..64 {
+                let ready = IsolatedCopiedNetworkReadyWork {
+                    deferred_diagnostic: mask & 1 != 0,
+                    pending_egress: mask & 2 != 0,
+                    stage_output: mask & 4 != 0,
+                    disconnect: mask & 8 != 0,
+                    child_publication_or_ack: mask & 16 != 0,
+                    ingress: mask & 32 != 0,
+                };
+                assert_eq!(
+                    select_isolated_copied_network_turn_for_contract(false, ready, cursor),
+                    select_isolated_network_turn(
+                        ready.deferred_diagnostic,
+                        ready.pending_egress,
+                        cursor
+                    )
+                );
+                for response_outstanding in [false, true] {
+                    assert_eq!(
+                        select_isolated_copied_response_turn_for_contract(
+                            false,
+                            ready,
+                            response_outstanding,
+                            cursor
+                        ),
+                        select_isolated_response_turn(
+                            ready.pending_egress,
+                            ready.stage_output,
+                            response_outstanding,
+                            cursor
+                        )
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn noop_attempts_advance_in_strict_lower_order() {

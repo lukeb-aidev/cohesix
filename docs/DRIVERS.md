@@ -1434,14 +1434,16 @@ transport:
   exactly half its unchanged generated 10,000-us period, and publishes
   `Enabled`; WiFi remains `Disarmed`. One IRQ service clears the source, reads
   `CLO`, arms the next compare, orders and reads back the device state, signals
-  the existing root fan-in, and acknowledges the IRQ. It then immediately
-  retires its unused head refill through MCS Yield, then blocks on the existing
-  combined command-endpoint/local-notification receive;
+  the existing root fan-in, and acknowledges the IRQ. It then blocks on the
+  existing combined command-endpoint/local-notification receive;
   a Reply-bearing command returns to ordinary dispatch, while another genuine
-  C3 edge is serviced and retired before blocking again. The terminal
-  two-refill context must not carry a progressively depleted head across an
-  unbounded series of short IRQ waits. Retirement follows clear, rearm, root
-  signal and successful IRQ ACK; failure retains ordinary containment. C3
+  C3 edge is serviced and acknowledged before blocking again. The selected
+  terminal context declares four refills: an active head, two unexpired usage
+  fragments for the 5-ms timer duties, and enable/call carry-in. This avoids
+  the two-slot full-tail merge that repeatedly defers replenishment. There is
+  no post-IRQ MCS Yield: the kernel's entry budget check can fault before its
+  nonfaulting full-head retirement body. No command Reply is held across this
+  completed IRQ block; failure retains ordinary containment. C3
   remains programmed at 5,000 us, but a pending edge may wait for the unchanged
   400/10,000-us reservation. This is not a 5-ms dispatch guarantee. Classic
   kernels retain direct blocking. It never performs root timer work,
@@ -1450,7 +1452,7 @@ transport:
   is checked before MMIO; malformed identity performs no device access, signal,
   or ACK. A retained `Enabled` record alone is not a live producer: root also
   requires the PCIe owner's current nonzero endpoint/capability generation,
-  open MCS command admission and idle Call phase. Containment closes that
+  open MCS command admission and idle or associated Call phase. Containment closes that
   admission before suspension. After the supervisor's validated containment
   release, root-fault signals its existing root fan-in cap. Thus an old
   timer record cannot authorize another global wait after its owner faults.

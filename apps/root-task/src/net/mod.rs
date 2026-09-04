@@ -1320,6 +1320,15 @@ pub trait NetDevice: Device {
     /// immediate egress paired with the current ingress packet.
     fn end_smoltcp_rx_transaction(&mut self) {}
 
+    /// Whether exact copied RX work can use the next isolated ingress unit.
+    ///
+    /// This passive hint must not issue hardware work, consume a frame, or
+    /// reserve capacity. The selected receive still revalidates every driver
+    /// gate. Devices without an exact readiness oracle retain bounded probes.
+    fn isolated_copied_rx_ready(&self) -> bool {
+        false
+    }
+
     /// Consume at most one raw Ethernet frame for the isolated child adapter.
     ///
     /// The default preserves a driver's ordinary smoltcp receive contract and
@@ -2163,10 +2172,12 @@ mod isolated_self_test;
     sel4_config_kernel_mcs
 ))]
 pub(crate) use isolated_network_turn::{
+    select_isolated_copied_network_turn_for_contract,
+    select_isolated_copied_response_turn_for_contract,
     select_isolated_direct_network_turn_for_contract,
-    select_isolated_direct_response_turn_for_contract, select_isolated_network_turn,
-    select_isolated_response_turn, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
-    IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
+    select_isolated_direct_response_turn_for_contract, IsolatedCopiedNetworkReadyWork,
+    IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome,
+    IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
 };
 
 /// Connection lifecycle notifications surfaced by TCP console transports.

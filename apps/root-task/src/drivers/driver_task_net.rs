@@ -29588,6 +29588,49 @@ fn defer_cyw43_precommit_data_frame(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_isolated_copied_rx_ready() -> bool {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    if !cyw43_data_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        || cyw43_host_eapol_runtime_work_pending()
+        || cyw43_logical_control_owner_active()
+    {
+        return false;
+    }
+    let maintenance_pending = {
+        let maintenance = CYW43_MAINTENANCE_CURSOR.lock();
+        maintenance.generation == generation
+            && (maintenance.requested != 0 || maintenance.action.is_some())
+    };
+    if maintenance_pending {
+        return false;
+    }
+    // Only retained root copies qualify. A DPC hint, metric, or unavailable
+    // runtime queue sample cannot turn this selector into source polling.
+    // EAPOL keeps its existing policy turn before ordinary copied ingress.
+    let copied_data_ready = {
+        let queue = CYW43_PENDING_RX_QUEUE.lock();
+        let mut data = false;
+        for pending in queue.iter() {
+            if pending.sampled_generation != generation
+                || cyw43_frame_channel(pending.flags)
+                    != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+            {
+                continue;
+            }
+            match cyw43_ethertype(&pending.token.buffer[..pending.token.len]) {
+                Some(ETH_P_EAPOL) => return false,
+                Some(_) => data = true,
+                None => {}
+            }
+        }
+        data
+    };
+    // The leaf still reserves response capacity and revalidates admission;
+    // observing this level neither dequeues RX nor retains a paired TX permit.
+    copied_data_ready && cyw43_data_consumer_open_for_generation(generation)
+}
+
+#[cfg(feature = "kernel")]
 fn receive_one_cyw43_pending_rx_token(
     contract: DriverTaskContract,
 ) -> Option<DriverTaskNetRxToken> {
@@ -31012,6 +31055,14 @@ macro_rules! driver_task_nic {
                 if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
                     self.cyw43_rx_transaction.end();
                 }
+            }
+
+            fn isolated_copied_rx_ready(&self) -> bool {
+                #[cfg(feature = "kernel")]
+                if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                    return cyw43_isolated_copied_rx_ready();
+                }
+                false
             }
 
             fn tx_drop_count(&self) -> u32 {
@@ -59599,6 +59650,87 @@ mod tests {
         token.consume(|bytes| assert_eq!(bytes, b"dhcP"));
         assert!(take_cyw43_pending_rx_token().is_none());
 
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_isolated_copied_rx_readiness_is_passive_and_admission_bound() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 9;
+        mark_cyw43_gate8_ready_for_test(generation);
+        assert!(!cyw43_isolated_copied_rx_ready());
+        let frame = test_cyw43_tcp_frame();
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&frame),
+        ));
+        let ready_tx = cyw43_data_tx_queue_diagnostic();
+        for _ in 0..2 {
+            assert!(cyw43_isolated_copied_rx_ready());
+            assert_eq!(cyw43_data_tx_queue_diagnostic(), ready_tx);
+            let queue = CYW43_PENDING_RX_QUEUE.lock();
+            assert_eq!(queue.len(), 1);
+            let pending = queue.front().expect("readiness retains copied RX");
+            assert_eq!(pending.sampled_generation, generation);
+            assert_eq!(&pending.token.buffer[..pending.token.len], &frame);
+        }
+
+        {
+            let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+            queue.front_mut().expect("copied RX").sampled_generation = generation - 1;
+        }
+        assert!(!cyw43_isolated_copied_rx_ready());
+        {
+            let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+            let pending = queue
+                .front_mut()
+                .expect("stale copy is not purged by readiness");
+            pending.sampled_generation = generation;
+            pending.flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL;
+        }
+        assert!(!cyw43_isolated_copied_rx_ready());
+        {
+            let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+            let pending = queue.front_mut().expect("control remains retained");
+            pending.flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+            pending.token.buffer[12..14].copy_from_slice(&ETH_P_EAPOL.to_be_bytes());
+        }
+        assert!(!cyw43_isolated_copied_rx_ready());
+        {
+            let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+            queue
+                .front_mut()
+                .expect("EAPOL remains retained")
+                .token
+                .buffer[..frame.len()]
+                .copy_from_slice(&frame);
+        }
+        assert!(cyw43_isolated_copied_rx_ready());
+
+        let maintenance = *CYW43_MAINTENANCE_CURSOR.lock();
+        *CYW43_MAINTENANCE_CURSOR.lock() = Cyw43MaintenanceCursor {
+            generation,
+            requested: 1,
+            ..Cyw43MaintenanceCursor::new()
+        };
+        assert!(!cyw43_isolated_copied_rx_ready());
+        *CYW43_MAINTENANCE_CURSOR.lock() = maintenance;
+        {
+            let mut queue = CYW43_DATA_TX_QUEUE.lock();
+            queue.generation = generation;
+            queue.reservations = CYW43_DATA_TX_QUEUE_CAP;
+        }
+        assert!(!cyw43_isolated_copied_rx_ready());
+        CYW43_DATA_TX_QUEUE.lock().reservations = 0;
+        assert!(cyw43_isolated_copied_rx_ready());
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        assert!(!cyw43_isolated_copied_rx_ready());
+        assert_eq!(CYW43_PENDING_RX_QUEUE.lock().len(), 1);
+        assert_eq!(CYW43_DATA_TX_QUEUE.lock().reservations, 0);
         reset_cyw43_status_flags();
     }
 

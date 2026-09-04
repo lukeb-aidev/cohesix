@@ -268,6 +268,18 @@ fn pi4_uboot_profile_emits_network_policy() {
         "terminal",
         "terminal Pi driver driver-pcie must retain its existing timeout policy"
     );
+    let pcie = temporal_tasks
+        .iter()
+        .find(|task| task["id"] == "driver-pcie")
+        .expect("selected Pi profile declares the sole PCIe/timer owner");
+    // Two 5-ms timer duties in a 10-ms period need a head plus two
+    // unexpired usage fragments. The fourth slot covers enable/call carry-in;
+    // this changes refill storage, not admitted CPU time or fault policy.
+    assert_eq!(pcie["max_refills"], 4);
+    assert_eq!(pcie["scheduling_context_bits"], 8);
+    assert_eq!(pcie["budget_us"], 400);
+    assert_eq!(pcie["period_us"], 10_000);
+    assert_eq!(pcie["priority"], 112);
     for task_id in ["driver-cyw43", "driver-sdio"] {
         let task = temporal_tasks
             .iter()

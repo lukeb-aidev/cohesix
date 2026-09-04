@@ -920,7 +920,8 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 3300
 admitted = true
-max_refills = 2
+# Two timer fragments per period, one active head and enable/call carry-in.
+max_refills = 4
 priority = 112
 mcp = 220
 timeout_badge = 653131792

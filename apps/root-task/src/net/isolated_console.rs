@@ -33,14 +33,16 @@ use super::ConsoleNetConfig;
 #[cfg(feature = "net-backend-virtio")]
 use super::NetDeviceCounters;
 use super::{
-    direct_genet_causal_stage_drain_observed, select_isolated_direct_network_turn_for_contract,
-    select_isolated_direct_response_turn_for_contract, select_isolated_network_turn,
-    select_isolated_response_turn, ConsoleLine, DirectGenetCausalStageDrainEvidence,
-    DirectGenetCommandControlDeferReason, DirectGenetCommandControlOutcome,
-    IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
-    IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
-    NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetPoller,
-    NetSelfTestReport, NetSelfTestStartResult, NetStatusReport, NetTelemetry,
+    direct_genet_causal_stage_drain_observed, select_isolated_copied_network_turn_for_contract,
+    select_isolated_copied_response_turn_for_contract,
+    select_isolated_direct_network_turn_for_contract,
+    select_isolated_direct_response_turn_for_contract, ConsoleLine,
+    DirectGenetCausalStageDrainEvidence, DirectGenetCommandControlDeferReason,
+    DirectGenetCommandControlOutcome, IsolatedConsoleDiagnostics, IsolatedCopiedNetworkReadyWork,
+    IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome,
+    IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit, NetConsoleDisconnectReason,
+    NetConsoleEvent, NetCounters, NetDevice, NetPoller, NetSelfTestReport, NetSelfTestStartResult,
+    NetStatusReport, NetTelemetry,
 };
 use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
 use crate::drivers::driver_task_net::Cyw43DriverTaskDevice;
@@ -1528,6 +1530,38 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             && (!self.output_issued || self.runtime.console_output_drained(connection_id))
     }
 
+    fn copied_ready_work(
+        &mut self,
+        stage_output_ready: bool,
+    ) -> Option<IsolatedCopiedNetworkReadyWork> {
+        let mut ready = IsolatedCopiedNetworkReadyWork {
+            deferred_diagnostic: self.device.isolated_deferred_tx_diagnostic_pending(),
+            pending_egress: self.pending_egress.is_some(),
+            stage_output: stage_output_ready,
+            ..IsolatedCopiedNetworkReadyWork::default()
+        };
+        if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            || ready.deferred_diagnostic
+            || ready.pending_egress
+            || ready.stage_output
+        {
+            return Some(ready);
+        }
+        ready.disconnect = self.disconnect_stage_ready();
+        ready.child_publication_or_ack = match self.runtime.child_publication_pending() {
+            Ok(pending) => pending || self.runtime.publication_ack_pending(),
+            Err(_) => {
+                self.fail_closed("child-publication-level");
+                return None;
+            }
+        };
+        ready.ingress = !ready.disconnect
+            && !ready.child_publication_or_ack
+            && self.runtime.ingress_available()
+            && self.device.isolated_copied_rx_ready();
+        Some(ready)
+    }
+
     fn refresh_device_counters(&mut self) {
         self.telemetry.tx_drops = self.device.tx_drop_count();
         refresh_isolated_device_counters(&mut self.counters, &self.device);
@@ -1767,9 +1801,13 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 self.lower_cursor,
             )
         } else {
-            select_isolated_response_turn(
-                self.pending_egress.is_some(),
-                stage_output_ready,
+            let Some(ready) = self.copied_ready_work(stage_output_ready) else {
+                return false;
+            };
+            select_isolated_copied_response_turn_for_contract(
+                D::driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ready,
                 response_progress_outstanding,
                 self.lower_cursor,
             )
@@ -1788,6 +1826,18 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             }
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick) => {
                 self.poll_service_tick_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect)
+                if D::driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT =>
+            {
+                self.poll_disconnect_unit()
+            }
+            IsolatedNetworkTurnUnit::DeferredDiagnostic
+                if D::driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT =>
+            {
+                self.poll_deferred_diagnostic_unit()
             }
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect)
             | IsolatedNetworkTurnUnit::DeferredDiagnostic => {
@@ -1858,9 +1908,18 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
                 self.lower_cursor,
             )
         } else {
-            select_isolated_network_turn(
-                self.device.isolated_deferred_tx_diagnostic_pending(),
-                self.pending_egress.is_some(),
+            let stage_output_ready = !self.output.is_empty()
+                && self.runtime.control_available()
+                && self
+                    .response_lane
+                    .is_none_or(|lane| lane.awaiting_batch.is_none());
+            let Some(ready) = self.copied_ready_work(stage_output_ready) else {
+                return false;
+            };
+            select_isolated_copied_network_turn_for_contract(
+                D::driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ready,
                 self.lower_cursor,
             )
         };
