@@ -187,10 +187,17 @@ For physical Pi read-concurrency diagnostics, the gateway must use
 `--worker-runtime-profile pi4-production` so its generated namespace bounds
 match the target. Keep `perf --population-mode executable-log` and the actual
 Pi transport; structured discovery must validate the requested real READY
-Workers before load. With `--suite telemetry --runs 8`, increasing
+Workers before load. With `--suite telemetry --runs 3`, increasing
 `--max-workers 16` to `32` increases parallel submissions while keeping the
-repeat count fixed. Preserve the generated pool limits and report queue or
-timeout failures. These are medium/high read-concurrency diagnostics, not the
+repeat count fixed. Use a fresh attached session for each level and let the
+harness perform its sole READY census: TAIL advances a session cursor even
+when its response is empty. With 32 discovered Workers, the census consumes
+32 of the generated 256 cursor advances; three sequential plus three parallel
+batches consume another 96 or 192, for totals of 128 or 224. Eight repetitions
+would instead require 288 or 544 and hit the ticket quota. Preserve that
+refusal as quota evidence; do not enlarge the ticket, rewind cursors or hide
+session rotation inside a run. Preserve the generated pool limits and report
+queue or timeout failures. These are medium/high read-concurrency diagnostics, not the
 mixed offered-load profiles below or 256-Worker acceptance.
 
 ## Running a Mixed REST Benchmark
