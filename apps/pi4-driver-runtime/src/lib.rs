@@ -68,9 +68,12 @@ use console_network_abi::{
 };
 use console_network_abi::{
     DirectGenetRuntimeSliceReceipt as GenetSliceReceipt, DIRECT_GENET_SLICE_FLAG_RX,
-    DIRECT_GENET_SLICE_FLAG_TCP, DIRECT_GENET_SLICE_FLAG_TX, DIRECT_GENET_SLICE_STAGE_BEGIN,
-    DIRECT_GENET_SLICE_STAGE_FINISH, DIRECT_GENET_SLICE_STAGE_IRQ, DIRECT_GENET_SLICE_STAGE_PACKET,
-    DIRECT_GENET_SLICE_STAGE_RX_PUBLICATION, DIRECT_GENET_SLICE_STAGE_SOURCE,
+    DIRECT_GENET_SLICE_FLAG_RX_NOTIFICATION_DUE, DIRECT_GENET_SLICE_FLAG_TCP,
+    DIRECT_GENET_SLICE_FLAG_TX, DIRECT_GENET_SLICE_STAGE_BEGIN, DIRECT_GENET_SLICE_STAGE_FINISH,
+    DIRECT_GENET_SLICE_STAGE_IRQ, DIRECT_GENET_SLICE_STAGE_PACKET,
+    DIRECT_GENET_SLICE_STAGE_RX_PUBLICATION, DIRECT_GENET_SLICE_STAGE_RX_RETIRED,
+    DIRECT_GENET_SLICE_STAGE_RX_SIGNAL_ENTER, DIRECT_GENET_SLICE_STAGE_RX_SIGNAL_RETURN,
+    DIRECT_GENET_SLICE_STAGE_SOURCE,
 };
 use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
@@ -18581,6 +18584,16 @@ fn genet_slice_keep_longest(longest: &mut GenetSliceReceipt, candidate: GenetSli
     if duration > previous {
         *longest = candidate;
     }
+}
+
+/// Keep each observational counter read at its source boundary. These compiler
+/// fences order the sample against surrounding stores and the unchanged syscall;
+/// they add no device fence, scheduling authority or physical waiting operation.
+fn genet_slice_boundary_ticks() -> u64 {
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    let ticks = runtime_timer_counter_ticks();
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    ticks
 }
 
 fn genet_runtime_prepare_dpc_quantum(state: &mut GenetRuntimeState) -> GenetDirectMcsPreRoute {
@@ -50905,7 +50918,16 @@ fn genet_direct_finish_rx_commit(
     }
     if receipt.data_notification_due {
         state.direct_genet_peer_signals = state.direct_genet_peer_signals.saturating_add(1);
+        if state.direct_genet_slice.began_ticks != 0 {
+            state.direct_genet_slice.flags |= DIRECT_GENET_SLICE_FLAG_RX_NOTIFICATION_DUE;
+            state.direct_genet_slice.rx_signal_enter_ticks = genet_slice_boundary_ticks();
+            state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_RX_SIGNAL_ENTER;
+        }
         runtime_signal_notification(DRIVER_RUNTIME_CHILD_DIRECT_GENET_PEER_NOTIFICATION_SLOT);
+        if state.direct_genet_slice.began_ticks != 0 {
+            state.direct_genet_slice.rx_signal_return_ticks = genet_slice_boundary_ticks();
+            state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_RX_SIGNAL_RETURN;
+        }
     }
     let slot = ring_slot(state.rx_cons_index, GENET_ACTIVE_RING_DESCS);
     genet_rearm_rx_slot(&descriptor, dma_range, slot);
@@ -50916,6 +50938,10 @@ fn genet_direct_finish_rx_commit(
     state.rx_packets = state.rx_packets.saturating_add(1);
     GENET_RX_COUNT.fetch_add(1, Ordering::AcqRel);
     GENET_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
+    if state.direct_genet_slice.began_ticks != 0 {
+        state.direct_genet_slice.rx_retired_ticks = genet_slice_boundary_ticks();
+        state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_RX_RETIRED;
+    }
     Ok(())
 }
 
@@ -85205,7 +85231,14 @@ mod tests {
             (0x0102_0304, 0x1112_1314)
         );
         assert_eq!(receipt.tcp_flags, 0x18);
-        assert_eq!(receipt.reserved, [0; 3]);
+        assert_eq!(
+            (
+                receipt.rx_signal_enter_ticks,
+                receipt.rx_signal_return_ticks,
+                receipt.rx_retired_ticks
+            ),
+            (0, 0, 0)
+        );
         assert_eq!(
             receipt.stages, 0,
             "header observation cannot invent a timing stage"
@@ -85238,6 +85271,112 @@ mod tests {
             let mut receipt = GenetSliceReceipt::empty();
             genet_slice_record_frame(&mut receipt, &fixture[..length], length as u16);
             assert_eq!(receipt.flags & DIRECT_GENET_SLICE_FLAG_TCP, 0);
+        }
+    }
+
+    #[test]
+    fn genet_slice_receipt_rx_commit_keeps_exact_signal_and_retirement_evidence() {
+        let _guard = test_guard();
+        // Reuse the existing byte-level ring/DMA fixtures. This checks recorder
+        // binding at ordinary and reconciled commits, not scheduler timing.
+        for (queued_predecessor, reconcile) in [(false, false), (true, false), (false, true)] {
+            reset_runtime_for_test();
+            let generation = 0x26e0_0031;
+            let descriptor = direct_genet_descriptor_for_test();
+            let mut state = direct_genet_test_state(generation);
+            if queued_predecessor {
+                direct_genet_peer_publish(DirectGenetDirection::Rx, generation, b"predecessor");
+            }
+            let frame = genet_slice_receipt_tcp_fixture();
+            stage_direct_genet_rx_hardware(&descriptor, &state, &frame);
+            state.direct_genet_slice = GenetSliceReceipt {
+                dpc_turn: 1,
+                began_ticks: 10,
+                source_ready_ticks: 20,
+                stages: 0x3,
+                ..GenetSliceReceipt::empty()
+            };
+            TEST_RUNTIME_TIMER_COUNTER_TICKS.store(25, Ordering::Release);
+            if reconcile {
+                let (mut page, initial) =
+                    genet_direct_control_sample(DirectGenetDirection::Rx, generation)
+                        .expect("the test's initial RX cursor is exact");
+                let dma = runtime_resource_range(
+                    &descriptor,
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                )
+                .expect("fixture declares RX DMA");
+                genet_direct_publish_rx_slot(generation, initial, dma.vaddr as usize, frame.len())
+                    .expect("fixture packet commits before cursor reconciliation");
+                state.direct_genet_pending_rx = Some(DirectGenetPendingRxCommit {
+                    initial,
+                    hardware_consumer: 0,
+                    frame_len: frame.len() as u16,
+                });
+                genet_direct_commit_producer(&mut page, initial)
+                    .expect("fixture cursor commits before reconciliation");
+            }
+            let (frames, units, progressed) =
+                genet_direct_drain_rx_hardware(&mut state, GENET_NAPI_BYTE_BUDGET, 1);
+            assert_eq!((frames, units, progressed), (1, 1, true));
+            assert!(state.direct_genet_pending_rx.is_none());
+            assert_eq!((state.rx_cons_index, state.direct_genet_rx_packets), (1, 1));
+            assert!(TEST_GENET_DIRECT_RX_REARM_AFTER_COMMIT.load(Ordering::Acquire));
+            let mut observed = state.direct_genet_slice;
+            observed.packet_done_ticks = 30;
+            observed.irq_done_ticks = 35;
+            observed.finished_ticks = 40;
+            observed.stages |= 0x1c;
+            assert!(observed.valid());
+            assert_eq!(observed.rx_cursor, if queued_predecessor { 2 } else { 1 });
+            assert_eq!(observed.frame_len, 54);
+            let page = direct_genet_read_page(
+                DIRECT_GENET_RX_FIRST_PAGE_INDEX + usize::from(queued_predecessor),
+            );
+            assert_eq!(
+                DirectGenetSlotPage::decode_next(
+                    &page,
+                    DirectGenetDirection::Rx,
+                    generation,
+                    u64::from(queued_predecessor),
+                )
+                .expect("the observed cursor binds the original published frame")
+                .frame(),
+                &frame,
+            );
+            assert_eq!(
+                (observed.tcp_sequence, observed.tcp_ack),
+                (0x0102_0304, 0x1112_1314)
+            );
+            assert_eq!(observed.tcp_flags, 0x18);
+            assert_eq!(
+                (observed.rx_publication_ticks, observed.rx_retired_ticks),
+                (25, 25)
+            );
+            if queued_predecessor {
+                assert_eq!(observed.flags, 0x5);
+                assert_eq!(observed.stages, 0x13f);
+                assert_eq!(
+                    (
+                        observed.rx_signal_enter_ticks,
+                        observed.rx_signal_return_ticks
+                    ),
+                    (0, 0)
+                );
+                assert_eq!(state.direct_genet_peer_signals, 0);
+            } else {
+                assert_eq!(observed.flags, 0xd);
+                assert_eq!(observed.stages, 0x1ff);
+                assert_eq!(
+                    (
+                        observed.rx_signal_enter_ticks,
+                        observed.rx_signal_return_ticks
+                    ),
+                    (25, 25)
+                );
+                assert_eq!(state.direct_genet_peer_signals, 1);
+            }
         }
     }
 

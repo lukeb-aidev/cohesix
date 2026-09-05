@@ -307,8 +307,14 @@ Attached WiFi may also retain its existing activation after one exact NetData
 op8 admission frontier advances. The same immutable request, descriptor,
 generation and physical lifetime must survive preparation, command commit,
 grant publication, notification and terminal retirement. Repeated readiness or
-a changed identity earns no continuation. This take-once receipt charges the
-existing logical 64-turn bound and passes the full operator/recovery fence;
+a changed identity earns no continuation. The frontier relation follows actual
+observable call boundaries, including initialization that performs its first
+boost or commit in the same call, and an already-visible terminal consumed
+directly from grant-required into restoration. A new terminal cannot excuse an
+unrelated phase jump. Consumer rank never decreases within a grant; replacement
+is exactly the next grant after initial admission or confirmed consumption.
+This take-once receipt charges the existing logical 64-turn bound and passes
+the full operator/recovery fence;
 it is not material ingress credit and creates no new service episode. Waiting
 still requires the existing owed-signal proof. The ordinary ingress selector
 may observe a stable current nonempty runtime DATA queue or an exact runnable

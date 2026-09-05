@@ -855,9 +855,9 @@ def test_parse_events_filters_unrelated_lines() -> None:
     assert events[2].fields["tag"] == "reset-write"
 
 
-@pytest.mark.parametrize("include_slice", [False, True])
+@pytest.mark.parametrize("diagnostic_version", [4, 5, 6])
 def test_direct_genet_netstats_rows_are_preserved_as_driver_diagnostics(
-    include_slice: bool,
+    diagnostic_version: int,
 ) -> None:
     rows = [
         "netstats: genet_direct refresh=fresh snapshot=present "
@@ -884,7 +884,7 @@ def test_direct_genet_netstats_rows_are_preserved_as_driver_diagnostics(
         "poison_tx=0/0",
     ]
 
-    if include_slice:
+    if diagnostic_version >= 5:
         rows.extend([
             'netstats: genet_direct_slice sample=present turn=9 direction=rx stages=0x0000003f flags=0x00000005 clock=cntvct timer_hz=54000000',
             'netstats: genet_direct_slice_begin began_ticks=10 source_ready_ticks=20 packet_done_ticks=30',
@@ -892,9 +892,17 @@ def test_direct_genet_netstats_rows_are_preserved_as_driver_diagnostics(
             'netstats: genet_direct_slice_packet rx_cursor=12 tx_cursor=0 frame_len=60',
             'netstats: genet_direct_slice_tcp present=yes src=192.0.2.1:0 dst=198.51.100.2:31337 seq=0x12345678 ack=0x9abcdef0 flags=0x118',
         ])
+    if diagnostic_version == 6:
+        rows[11] = rows[11].replace("0x0000003f", "0x000001ff").replace(
+            "0x00000005", "0x0000000d"
+        )
+        rows.append(
+            "netstats: genet_direct_slice_rx notify_due=yes "
+            "signal_enter_ticks=26 signal_return_ticks=27 retired_ticks=28"
+        )
     events = normalizer.parse_events(rows)
 
-    assert len(events) == (16 if include_slice else 11)
+    assert len(events) == {4: 11, 5: 16, 6: 17}[diagnostic_version]
     assert [event.raw for event in events] == rows
     assert all(event.domain == "driver" for event in events)
     assert all(event.source == "cohesix" for event in events)
@@ -907,11 +915,19 @@ def test_direct_genet_netstats_rows_are_preserved_as_driver_diagnostics(
     }
     assert events[1].fields["active"] == "yes"
     assert events[10].fields["poison_tx"] == "0/0"
-    if include_slice:
+    if diagnostic_version >= 5:
         assert events[11].fields["clock"] == "cntvct"
         assert events[11].fields["timer_hz"] == "54000000"
         assert events[13].fields["rx_publication_ticks"] == "25"
         assert events[15].fields["src"] == "192.0.2.1:0"
+
+    if diagnostic_version == 6:
+        assert events[16].fields == {
+            "notify_due": "yes",
+            "signal_enter_ticks": "26",
+            "signal_return_ticks": "27",
+            "retired_ticks": "28",
+        }
 
 
 @pytest.mark.parametrize("include_truncated_slice", [False, True])
@@ -936,6 +952,8 @@ def test_direct_genet_rows_have_no_network_or_acceptance_authority(
             "netstats: genet_direct_slice_begin began_ticks=10 [truncated]",
             "netstats: genet_direct_slice_tcp present=yes src=192.0.2.1:0 "
             "dst=198.51.100.2:31337 status=ready gate=10 [truncated]",
+            "netstats: genet_direct_slice_rx notify_due=yes "
+            "signal_enter_ticks=26 retired_ticks=28 [truncated]",
         ])
     legacy = normalizer.summarize_gates(
         normalizer.parse_events(legacy_rows)

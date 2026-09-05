@@ -39,12 +39,13 @@ temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
 refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
 
 The Pi-only GENET-to-console direct data plane is a private target transport
-change. Its optional causal diagnostic adds sixteen ordered
+change. Its optional causal diagnostic adds seventeen ordered
 `netstats: genet_direct*` rows without changing a command, listener, authentication,
 namespace, REST request/response, library API, workload, or report schema. The
-captured Pi-wired `cohsh` fixture includes the sixteen rows, including the raw
-receive-boundary notification discriminator and the v5 maximum-slice counter
-timestamps, direction/cursor and optional TCP header tuple. The Pi trace
+captured Pi-wired `cohsh` fixture includes the seventeen rows, including the raw
+receive-boundary notification discriminator and the v6 maximum-slice counter
+timestamps, including Signal entry/return and RX retirement, direction/cursor
+and optional TCP header tuple. The Pi trace
 normalizer classifies them as wired-driver evidence before generic network
 records and keeps legacy captures without them parseable. Network-state and
 TCP-authentication summaries explicitly exclude these observational rows: the
@@ -56,14 +57,16 @@ one-shot DGHO refresh may
 wake the owner and enable its normal idle RX service, so neither the normalized
 rows nor their before/after delta is passive performance or acceptance proof.
 
-The exact-0feb follow-up under
+The exact-d7fab follow-up under
 `m26e-driver-runtime-mcs-port-and-cyw43-coexistence` and
 `m26e-console-network-service-isolation` also advances existing copied WiFi
-NetData RX admission and batches private firmware marshalling. These changes
+NetData RX admission through every legal observable HAL transition. These changes
 preserve the console grammar and framing, AUTH/ATTACH and terminal semantics,
 Secure9P namespaces, role/ticket/cursor bounds, REST endpoints and deadlines,
 generated profiles, and physical-driver authority. The separately versioned
-GENET diagnostic grows from v4/192 bytes to v5/320 bytes; it is decoded only by
+GENET diagnostic advances from v5 to v6 while retaining its 320-byte extent,
+128-byte maximum-slice receipt and commit offset. Three formerly reserved words
+now distinguish peer Signal entry/return and RX retirement. It is decoded only by
 the paired target runtime and root reader, not by a host binary or Python API.
 Its timestamps measure elapsed counter intervals, not CPU use or packet arrival.
 
@@ -71,9 +74,13 @@ The affected host surfaces are
 [`pi4_trace_normalize.py`](../scripts/pi4_trace_normalize.py), its
 [legacy/current/partial diagnostic fixtures](../tests/test_pi4_trace_normalize.py),
 and the [Pi-wired cohsh fixture](../apps/cohsh/tests/tcp_cli_script.rs). The
-normalizer retains legacy eleven-row and current sixteen-row captures without
-assigning acceptance authority to either; the `cohsh` fixture verifies all
-sixteen diagnostic rows within the unchanged terminal-delimited response.
+normalizer retains legacy eleven-row and sixteen-row captures and current
+seventeen-row captures without assigning acceptance authority to any version.
+The new final `genet_direct_slice_rx` row reports `notify_due`,
+`signal_enter_ticks`, `signal_return_ticks` and `retired_ticks`; absent samples
+are zero and the existing presence mask distinguishes absent or empty evidence.
+The `cohsh` fixture verifies all seventeen diagnostic rows within the unchanged
+terminal-delimited response.
 No production `cohsh` transport change is required.
 
 The complete implementations of `coh`, `cohsh`, `coh-status`, Hive Gateway/REST,

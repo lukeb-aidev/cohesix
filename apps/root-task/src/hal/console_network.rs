@@ -2760,13 +2760,13 @@ mod tests {
             sample_direct_genet_runtime_diagnostic(root_ptr, generation + 1),
             None,
         );
-        let reserved_byte = DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET + 311;
-        page.0[reserved_byte] = 1;
+        let absent_retirement_byte = DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET + 311;
+        page.0[absent_retirement_byte] = 1;
         assert_eq!(
             sample_direct_genet_runtime_diagnostic(root_ptr, generation),
             None
         );
-        page.0[reserved_byte] = 0;
+        page.0[absent_retirement_byte] = 0;
         assert_eq!(
             sample_direct_genet_runtime_diagnostic(root_ptr, generation),
             Some(diagnostic)

@@ -1185,9 +1185,9 @@ reusable ownership pattern.
   operation count without widening a DMA mapping or moving device authority.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
-  direct-GENET diagnostic-v5 record occupies the formerly reserved bytes
+  direct-GENET diagnostic-v6 record occupies the formerly reserved bytes
   `[320,640)`, is exactly 320 bytes and cache-line aligned, and commits its
-  publication sequence last at record offset 312. Version 5 assigns offset 12
+  publication sequence last at record offset 312. Version 6 retains offset 12
   to the maximum observed bounded packet-slice duration and retains offset 108
   for cumulative `dpc_level_adoptions`, the number of badge-zero or
   peer-turn joins of durable physical work to a direct IRQ episode. Offsets
@@ -1208,10 +1208,14 @@ reusable ownership pattern.
   packet, IRQ, retry, recovery, or containment behavior. Ordinary packet turns
   do not scan the record, and page bytes `[640,4096)` remain reserved, zeroed at
   construction, and scrubbed at containment.
-- Diagnostic v5 includes one 128-byte maximum-slice receipt at record offset
+- Diagnostic v6 includes one 128-byte maximum-slice receipt at record offset
   184. Its ordered counter samples separate source/reclaim, packet work,
   IRQ work and final durable checking; a confirmed RX publication precedes
-  peer signalling and DMA rearm. The owner samples only a bounded header while
+  peer signalling and DMA rearm. Three formerly reserved words retain Signal
+  entry, Signal return and completion of RX descriptor/index retirement, with
+  an exact notification-due flag. When no notification is due, Signal samples
+  are absent. All intervals remain inside packet elapsed time; no syscall, DMA
+  retirement or guard moves to obtain a smaller maximum. The owner samples only a bounded header while
   that exact DMA slot still awaits rearm. A TX receipt uses the existing stable
   private frame. Direction, cursor and a validated IPv4/TCP tuple permit exact
   packet correlation without retaining payload. Invalid samples are discarded

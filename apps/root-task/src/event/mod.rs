@@ -273,14 +273,14 @@ struct DirectGenetNetstatsLines {
     dma: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     peer: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
-    slice: Option<[HeaplessString<DEFAULT_LINE_CAPACITY>; 5]>,
+    slice: Option<[HeaplessString<DEFAULT_LINE_CAPACITY>; 6]>,
 }
 
 #[cfg(feature = "net-console")]
 fn format_direct_genet_slice_netstats(
     slice: console_network_abi::DirectGenetRuntimeSliceReceipt,
     timer_hz: u64,
-) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 6] {
     let direction = if slice.flags & console_network_abi::DIRECT_GENET_SLICE_FLAG_RX != 0 {
         "rx"
     } else if slice.flags & console_network_abi::DIRECT_GENET_SLICE_FLAG_TX != 0 {
@@ -326,6 +326,13 @@ fn format_direct_genet_slice_netstats(
             slice.tcp_sequence,
             slice.tcp_ack,
             slice.tcp_flags,
+        )),
+        format_message(format_args!(
+            "netstats: genet_direct_slice_rx notify_due={} signal_enter_ticks={} signal_return_ticks={} retired_ticks={}",
+            yes_no(slice.flags & console_network_abi::DIRECT_GENET_SLICE_FLAG_RX_NOTIFICATION_DUE != 0),
+            slice.rx_signal_enter_ticks,
+            slice.rx_signal_return_ticks,
+            slice.rx_retired_ticks,
         )),
     ]
 }
@@ -37764,18 +37771,21 @@ mod tests {
             dst_port: u16::MAX,
             tcp_flags: 0x1ff,
             frame_len: 1536,
-            stages: 0x3f,
-            flags: 0x5,
-            reserved: [0; 3],
+            stages: 0x1ff,
+            flags: 0xd,
+            rx_signal_enter_ticks: u64::MAX - 2,
+            rx_signal_return_ticks: u64::MAX - 2,
+            rx_retired_ticks: u64::MAX - 1,
         };
         assert!(receipt.valid());
         let lines = format_direct_genet_slice_netstats(receipt, u64::MAX);
         let expected = [
-            "netstats: genet_direct_slice sample=present turn=18446744073709551615 direction=rx stages=0x0000003f flags=0x00000005 clock=cntvct timer_hz=18446744073709551615",
+            "netstats: genet_direct_slice sample=present turn=18446744073709551615 direction=rx stages=0x000001ff flags=0x0000000d clock=cntvct timer_hz=18446744073709551615",
             "netstats: genet_direct_slice_begin began_ticks=18446744073709551611 source_ready_ticks=18446744073709551612 packet_done_ticks=18446744073709551614",
             "netstats: genet_direct_slice_end irq_done_ticks=18446744073709551615 finished_ticks=18446744073709551615 rx_publication_ticks=18446744073709551613",
             "netstats: genet_direct_slice_packet rx_cursor=18446744073709551615 tx_cursor=0 frame_len=1536",
             "netstats: genet_direct_slice_tcp present=yes src=255.255.255.255:65535 dst=255.255.255.255:65535 seq=0xffffffff ack=0xffffffff flags=0x1ff",
+            "netstats: genet_direct_slice_rx notify_due=yes signal_enter_ticks=18446744073709551613 signal_return_ticks=18446744073709551613 retired_ticks=18446744073709551614",
         ];
         for (line, expected) in lines.iter().zip(expected) {
             assert_eq!(line.as_str(), expected);
@@ -37784,6 +37794,9 @@ mod tests {
         }
         let tx = console_network_abi::DirectGenetRuntimeSliceReceipt {
             rx_publication_ticks: 0,
+            rx_signal_enter_ticks: 0,
+            rx_signal_return_ticks: 0,
+            rx_retired_ticks: 0,
             rx_cursor: 0,
             tx_cursor: u64::MAX,
             stages: 0x1f,
@@ -37793,6 +37806,8 @@ mod tests {
         assert!(tx.valid());
         let tx_lines = format_direct_genet_slice_netstats(tx, 54_000_000);
         assert!(tx_lines[0].contains("direction=tx"));
+        assert_eq!(tx_lines[5].as_str(),
+            "netstats: genet_direct_slice_rx notify_due=no signal_enter_ticks=0 signal_return_ticks=0 retired_ticks=0");
         assert_eq!(tx_lines[3].as_str(),
             "netstats: genet_direct_slice_packet rx_cursor=0 tx_cursor=18446744073709551615 frame_len=1536");
         let empty = format_direct_genet_slice_netstats(
@@ -37803,6 +37818,7 @@ mod tests {
             "netstats: genet_direct_slice sample=empty turn=0 direction=none stages=0x00000000 flags=0x00000000 clock=cntvct timer_hz=54000000");
         assert_eq!(empty[4].as_str(),
             "netstats: genet_direct_slice_tcp present=no src=0.0.0.0:0 dst=0.0.0.0:0 seq=0x00000000 ack=0x00000000 flags=0x000");
+        assert_eq!(empty[5], tx_lines[5]);
     }
 
     #[cfg(feature = "net-console")]
@@ -37932,7 +37948,7 @@ mod tests {
         assert!(!missing.summary.contains(DIAGNOSTIC_TRUNCATION_MARKER));
         assert!(missing.slice.is_none());
         let slice_lines = lines.slice.as_ref().expect("slice rows");
-        assert_eq!(rendered.len() + slice_lines.len(), 16);
+        assert_eq!(rendered.len() + slice_lines.len(), 17);
         for line in slice_lines {
             assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER));
             assert!(line.len() <= payload_limit);

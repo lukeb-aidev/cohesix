@@ -16,7 +16,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 const TEST_AUTH_TOKEN: &str = "tcp-cli-script-test-token";
-const NETSTATS_BODY: [&str; 29] = [
+const NETSTATS_BODY: [&str; 30] = [
     "netstats: rx_pkts=12 tx_pkts=9 rx_used=4 tx_used=2 polls=37",
     "netstats: generation=7 udp_rx=3 udp_tx=5 tcp_accepts=2 tcp_auth=2 tcp_rx_bytes=384 tcp_recv_ready=8 tcp_recv_budget_hits=1 tcp_tx_bytes=512",
     "netstats: tcp_smoke_out=4 tcp_smoke_out_failures=0",
@@ -40,11 +40,12 @@ const NETSTATS_BODY: [&str; 29] = [
     "netstats: genet_direct_dma rdma_prod=5 rdma_cons=5 tdma_prod=3 tdma_cons=3 rx_packets=12 tx_packets=9",
     "netstats: genet_direct_ring rx_prod=12 rx_cons=12 tx_prod=9 tx_cons=9 rx_valid=yes tx_valid=yes state_changes=0",
     "netstats: genet_direct_peer wakes=4 signals=6 poison_rx=0/0 poison_tx=0/0",
-    "netstats: genet_direct_slice sample=present turn=9 direction=rx stages=0x0000003f flags=0x00000005 clock=cntvct timer_hz=54000000",
+    "netstats: genet_direct_slice sample=present turn=9 direction=rx stages=0x000001ff flags=0x0000000d clock=cntvct timer_hz=54000000",
     "netstats: genet_direct_slice_begin began_ticks=10 source_ready_ticks=20 packet_done_ticks=30",
     "netstats: genet_direct_slice_end irq_done_ticks=35 finished_ticks=40 rx_publication_ticks=25",
     "netstats: genet_direct_slice_packet rx_cursor=12 tx_cursor=0 frame_len=60",
     "netstats: genet_direct_slice_tcp present=yes src=192.0.2.1:0 dst=198.51.100.2:31337 seq=0x12345678 ack=0x9abcdef0 flags=0x118",
+    "netstats: genet_direct_slice_rx notify_due=yes signal_enter_ticks=26 signal_return_ticks=27 retired_ticks=28",
     "netstatus: generation=7 ip=192.168.86.154 gateway=192.168.86.1 src=dhcp-lease dhcp=bound tcp_ready=yes",
 ];
 

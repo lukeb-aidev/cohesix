@@ -3631,39 +3631,70 @@ impl Cyw43RxAdmissionFrontier {
 
     /// Accept only a strict frontier advance of the same immutable request.
     /// Repeated Ready, notification history and diagnostic counters cannot
-    /// perpetuate a root activation.
+    /// perpetuate a root activation. Edges describe complete retained calls:
+    /// initialization includes its first operation, and a late terminal may
+    /// enter restoration in the same call that planned grant publication.
     pub(crate) fn advanced_from(self, before: Self) -> bool {
+        use DriverTaskRetainedLeasePhase as Phase;
         if self.request != before.request
             || self.fingerprint != before.fingerprint
             || self.generation != before.generation
             || self.grant_id < before.grant_id
+            || self.consumed_rank > 2
+            || before.consumed_rank > 2
             || (self.grant_id == before.grant_id && self.consumed_rank < before.consumed_rank)
             || (before.terminal && !self.terminal)
+            || matches!(before.phase, Phase::Committed | Phase::Poisoned)
+            || matches!(self.phase, Phase::Committed | Phase::Poisoned)
         {
             return false;
         }
-        if self.terminal && !before.terminal {
-            return true;
-        }
-        use DriverTaskRetainedLeasePhase as Phase;
         if self.grant_id != before.grant_id {
             return before.grant_id.checked_add(1) == Some(self.grant_id)
                 && before.phase == Phase::GrantRequired
-                && (before.grant_id == 0 || before.consumed_rank == 2)
+                && ((before.grant_id == 0 && before.consumed_rank == 0)
+                    || (before.grant_id != 0 && before.consumed_rank == 2))
+                && (!before.terminal || before.grant_id == 0)
                 && self.phase == Phase::Granted;
         }
         if self.phase == before.phase {
-            return self.consumed_rank > before.consumed_rank;
+            return matches!(
+                self.phase,
+                Phase::GrantRequired
+                    | Phase::Granted
+                    | Phase::Issued
+                    | Phase::RestorePrimary
+                    | Phase::RestoreBus
+                    | Phase::ReadyToComplete
+            ) && ((self.grant_id != 0 && self.consumed_rank > before.consumed_rank)
+                || (self.terminal && !before.terminal));
         }
         match (before.phase, self.phase) {
-            (Phase::BoostBus, Phase::BoostPrimary | Phase::ReadyToIssue)
+            // Stage left an ABI-invisible request in Inactive. The next call
+            // initializes its exact lease, then performs the first boost or
+            // zero-mask CommitRing before returning to the outer rotor.
+            (Phase::Inactive, Phase::BoostPrimary | Phase::ReadyToIssue | Phase::GrantRequired)
+            | (Phase::BoostBus, Phase::BoostPrimary | Phase::ReadyToIssue)
             | (Phase::BoostPrimary, Phase::ReadyToIssue)
-            | (Phase::ReadyToIssue, Phase::GrantRequired)
-            | (Phase::Granted, Phase::Issued) => true,
-            (Phase::Issued, Phase::GrantRequired) => self.consumed_rank == 2,
+            | (Phase::ReadyToIssue, Phase::GrantRequired) => {
+                self.grant_id == 0
+                    && self.consumed_rank == 0
+                    && !before.terminal
+                    && (!self.terminal || self.phase == Phase::GrantRequired)
+            }
+            (Phase::Granted, Phase::Issued) => self.grant_id != 0,
+            (Phase::Issued, Phase::GrantRequired) => {
+                self.grant_id != 0 && self.consumed_rank == 2 && !before.terminal
+            }
+            // A recurrent publication can instead discover the exact late
+            // terminal, latch Issued, and begin restoration in this one call.
+            // With no boosts it returns the real completion immediately.
+            (Phase::GrantRequired, Phase::RestorePrimary | Phase::RestoreBus) => {
+                self.grant_id != 0 && self.terminal
+            }
             (Phase::Issued, Phase::RestorePrimary | Phase::RestoreBus | Phase::ReadyToComplete)
             | (Phase::RestorePrimary, Phase::RestoreBus | Phase::ReadyToComplete)
-            | (Phase::RestoreBus, Phase::ReadyToComplete) => self.terminal,
+            | (Phase::RestoreBus, Phase::ReadyToComplete) => self.grant_id != 0 && self.terminal,
             _ => false,
         }
     }
@@ -28711,6 +28742,269 @@ fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_admission_frontier_covers_complete_mask_and_grant_traces() {
+        use DriverTaskRetainedLeasePhase as Phase;
+        let staged = Cyw43RxAdmissionFrontier {
+            request: 41,
+            fingerprint: 0x1234,
+            generation: 7,
+            phase: Phase::Inactive,
+            grant_id: 0,
+            consumed_rank: 0,
+            terminal: false,
+            runnable: true,
+        };
+        // Independently specified call boundaries: no boosts commits on the
+        // initialization call; one boost finishes on that call; two boosts
+        // leave the primary boost for the following call. No expected phase
+        // is computed using the production transition or after_success table.
+        let traces: [(u8, &[Phase]); 4] = [
+            (0, &[Phase::Inactive, Phase::GrantRequired]),
+            (
+                1,
+                &[Phase::Inactive, Phase::ReadyToIssue, Phase::GrantRequired],
+            ),
+            (
+                2,
+                &[Phase::Inactive, Phase::ReadyToIssue, Phase::GrantRequired],
+            ),
+            (
+                3,
+                &[
+                    Phase::Inactive,
+                    Phase::BoostPrimary,
+                    Phase::ReadyToIssue,
+                    Phase::GrantRequired,
+                ],
+            ),
+        ];
+        for (mask, trace) in traces {
+            for phases in trace.windows(2) {
+                let before = Cyw43RxAdmissionFrontier {
+                    phase: phases[0],
+                    ..staged
+                };
+                let after = Cyw43RxAdmissionFrontier {
+                    phase: phases[1],
+                    ..staged
+                };
+                assert!(after.advanced_from(before), "mask {mask}: {phases:?}");
+                assert!(!before.advanced_from(after));
+                assert!(!after.advanced_from(after));
+            }
+        }
+
+        let committed = Cyw43RxAdmissionFrontier {
+            phase: Phase::GrantRequired,
+            ..staged
+        };
+        for observed_rank in [0, 1, 2] {
+            // The autonomous child can reach either consumer frontier before
+            // root observes a just-published grant. Notification then either
+            // signals once or recognizes consumption without another signal.
+            let granted = Cyw43RxAdmissionFrontier {
+                phase: Phase::Granted,
+                grant_id: 1,
+                consumed_rank: observed_rank,
+                ..committed
+            };
+            let issued = Cyw43RxAdmissionFrontier {
+                phase: Phase::Issued,
+                runnable: observed_rank == 2,
+                ..granted
+            };
+            assert!(granted.advanced_from(committed));
+            assert!(issued.advanced_from(granted));
+            assert_eq!(issued.runnable(), observed_rank == 2);
+            let consumed = Cyw43RxAdmissionFrontier {
+                consumed_rank: 2,
+                runnable: true,
+                ..issued
+            };
+            assert_eq!(consumed.advanced_from(issued), observed_rank != 2);
+            let recurrent = Cyw43RxAdmissionFrontier {
+                phase: Phase::GrantRequired,
+                ..consumed
+            };
+            assert!(recurrent.advanced_from(consumed));
+            for next_rank in [0, 1, 2] {
+                let next = Cyw43RxAdmissionFrontier {
+                    phase: Phase::Granted,
+                    grant_id: 2,
+                    consumed_rank: next_rank,
+                    ..recurrent
+                };
+                assert!(next.advanced_from(recurrent));
+                assert!(!recurrent.advanced_from(next));
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_admission_frontier_terminal_races_preserve_transition_fences() {
+        use DriverTaskRetainedLeasePhase as Phase;
+        let terminal = Cyw43RxAdmissionFrontier {
+            request: 41,
+            fingerprint: 0x1234,
+            generation: 7,
+            phase: Phase::Issued,
+            grant_id: 4,
+            consumed_rank: 2,
+            terminal: true,
+            runnable: true,
+        };
+        // Terminal-first publication planning coalesces Issued and the first
+        // restoration phase. Each actual restore remains a separate call.
+        // The zero-mask path instead returns the real terminal immediately;
+        // it cannot retain a receipt for a replacement ticket.
+        for (before_phase, after_phase) in [
+            (Phase::GrantRequired, Phase::RestorePrimary),
+            (Phase::GrantRequired, Phase::RestoreBus),
+            (Phase::Granted, Phase::Issued),
+            (Phase::Issued, Phase::RestorePrimary),
+            (Phase::Issued, Phase::RestoreBus),
+            (Phase::Issued, Phase::ReadyToComplete),
+            (Phase::RestorePrimary, Phase::RestoreBus),
+            (Phase::RestorePrimary, Phase::ReadyToComplete),
+            (Phase::RestoreBus, Phase::ReadyToComplete),
+        ] {
+            let before = Cyw43RxAdmissionFrontier {
+                phase: before_phase,
+                ..terminal
+            };
+            let after = Cyw43RxAdmissionFrontier {
+                phase: after_phase,
+                ..terminal
+            };
+            assert!(
+                after.advanced_from(before),
+                "{before_phase:?} -> {after_phase:?}"
+            );
+            if matches!(
+                before_phase,
+                Phase::GrantRequired | Phase::Granted | Phase::Issued
+            ) {
+                assert!(after.advanced_from(Cyw43RxAdmissionFrontier {
+                    terminal: false,
+                    ..before
+                }));
+            }
+            assert!(!after.advanced_from(after));
+            assert!(!Cyw43RxAdmissionFrontier {
+                terminal: false,
+                ..after
+            }
+            .advanced_from(before));
+        }
+        for phase in [Phase::GrantRequired, Phase::Granted, Phase::Issued] {
+            let before = Cyw43RxAdmissionFrontier {
+                phase,
+                terminal: false,
+                ..terminal
+            };
+            let after = Cyw43RxAdmissionFrontier { phase, ..terminal };
+            assert!(after.advanced_from(before), "terminal arrival at {phase:?}");
+            assert!(!before.advanced_from(after));
+        }
+        let before = Cyw43RxAdmissionFrontier {
+            phase: Phase::GrantRequired,
+            terminal: false,
+            ..terminal
+        };
+        let published = Cyw43RxAdmissionFrontier {
+            phase: Phase::Granted,
+            grant_id: 5,
+            ..terminal
+        };
+        assert!(
+            published.advanced_from(before),
+            "terminal may arrive after publication"
+        );
+        assert!(
+            !published.advanced_from(Cyw43RxAdmissionFrontier {
+                terminal: true,
+                ..before
+            }),
+            "an already visible terminal wins over recurrent grant publication"
+        );
+        for invalid in [
+            Cyw43RxAdmissionFrontier {
+                request: 42,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                fingerprint: 0x1235,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                generation: 8,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::Granted,
+                grant_id: 6,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::Granted,
+                grant_id: 3,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::RestorePrimary,
+                consumed_rank: 1,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::Poisoned,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::Committed,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::ReadyToIssue,
+                ..terminal
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::Issued,
+                ..terminal
+            },
+        ] {
+            assert!(
+                !invalid.advanced_from(before),
+                "terminal cannot excuse {invalid:?}"
+            );
+        }
+        let staged = Cyw43RxAdmissionFrontier {
+            phase: Phase::Inactive,
+            grant_id: 0,
+            consumed_rank: 0,
+            terminal: false,
+            ..terminal
+        };
+        for phase in [
+            Phase::BoostBus,
+            Phase::Granted,
+            Phase::Issued,
+            Phase::RestorePrimary,
+        ] {
+            assert!(!Cyw43RxAdmissionFrontier { phase, ..staged }.advanced_from(staged));
+        }
+        assert!(!Cyw43RxAdmissionFrontier {
+            phase: Phase::Granted,
+            ..terminal
+        }
+        .advanced_from(Cyw43RxAdmissionFrontier {
+            terminal: false,
+            ..terminal
+        }));
+    }
 
     #[cfg(feature = "kernel")]
     #[test]

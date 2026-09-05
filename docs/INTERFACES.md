@@ -312,7 +312,7 @@ Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
 and TX-consumer records. Console-network ABI v6 additionally assigns the
 formerly reserved bytes `[320,640)` to an optional, separately versioned
-direct-GENET diagnostic-v5 record. The record is exactly 320 bytes, aligned to
+direct-GENET diagnostic-v6 record. The record is exactly 320 bytes, aligned to
 64 bytes, assigns record-relative offset 12 to the maximum measured direct MCS
 packet-slice duration in microseconds, retains offset 108 for cumulative
 `dpc_level_adoptions`, and publishes its nonzero sequence last at
@@ -335,13 +335,20 @@ validate. Older or missing publications remain compatible unavailable
 evidence rather than authorizing an alternate path.
 Bytes `[640,4096)` remain reserved and non-authoritative.
 
-Diagnostic v5 adds a 128-byte maximum-slice receipt at record offset 184.
+Diagnostic v6 retains the 128-byte maximum-slice receipt at record offset 184.
 It retains the first longest valid slice, its counter timestamps after source
 adoption/reclaim, packet work, IRQ work and the final durable check, plus an
 optional confirmed RX publication timestamp. Direction and exact RX/TX cursor
 identify the packet operation; a validated nonfragmented IPv4/TCP header adds
 addresses, ports, sequence, acknowledgement and flags without payload bytes.
-Absent stages and reserved fields are zero. Present timestamps must be ordered;
+Three formerly reserved words now sample peer Signal entry, Signal return,
+and completion of RX descriptor/index retirement. An exact notification-due
+flag distinguishes an omitted Signal from a measured call. Receipt-relative
+offsets 104, 112 and 120 contain `rx_signal_enter_ticks`,
+`rx_signal_return_ticks` and `rx_retired_ticks`. The bounded final
+`genet_direct_slice_rx` diagnostic row exposes their values with `notify_due`.
+These samples remain inside packet elapsed time; Signal placement and physical
+ordering do not change. Absent stages are zero. Present timestamps must be ordered;
 RX and TX are mutually exclusive. An invalid observational sample cannot alter
 driver service or replace a valid maximum. Counter ticks use the generated
 timer frequency and include descheduling and kernel time. They do not measure
