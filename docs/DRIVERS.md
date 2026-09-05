@@ -923,12 +923,14 @@ reusable ownership pattern.
 - Map framebuffer pages into the display child without a steady root VSpace
   alias.
 - After the immutable framebuffer range, format, alignment, pitch, and geometry
-  are admitted, the child may write one fixed `Cohesix starting...` glyph tile
-  in the safe area and issue one device-store barrier. This is bounded early
-  physical progress only: it grants no root alias, prompt, USB readiness,
-  mailbox/HVS authority, or full-surface clear. Invalid geometry performs zero
-  stores, and the first ordinary generation-bound frame clears and replaces the
-  tile through the existing takeover cursor.
+  are admitted, the child may write one fixed two-line startup tile in the safe
+  area: `Cohesix starting...` followed by `Initializing services...`. It
+  validates both complete glyph rows before the first store and issues one
+  device-store barrier after the bounded raster. This is early physical
+  progress only: it grants no root alias, prompt, USB readiness, mailbox/HVS
+  authority, or full-surface clear. Invalid geometry performs zero stores, and
+  the first ordinary generation-bound frame clears and replaces the tile
+  through the existing takeover cursor.
 - Keep terminal state in a fixed child-private cell plane. The current Pi
   renderer admits at most 256 columns by 128 rows, uses a logical row ring for
   scrolling, and records visible damage in a fixed bitmap. Retain a

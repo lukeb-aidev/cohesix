@@ -6765,11 +6765,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       outstanding/deferral debt, and serial plus USB liveness under display
       pressure before polished or world-class performance is claimed.
       Independently, early-progress tests must render the fixed child-owned
-      `Cohesix starting...` tile only after full resource/geometry admission,
-      keep its stores below the fixed glyph bound, perform zero stores for each
-      rejected geometry, and prove the first ordinary frame's retained takeover
-      clear replaces it. The tile is not prompt, USB, network, or Pi acceptance
-      evidence.
+      two-line `Cohesix starting...` / `Initializing services...` tile only
+      after full resource/geometry admission, validate both rows before the
+      first store, keep its stores below the fixed glyph bound, perform zero
+      stores for each rejected geometry, and prove the first ordinary frame's
+      retained takeover clear replaces it. The tile is not prompt, USB,
+      network, or Pi acceptance evidence.
       The serial transport regression must prove that exactly four existing
       pages form two independent two-page/8,128-byte generation-bound SPSC
       rings. Prove only those CPU rings use identically cacheable,

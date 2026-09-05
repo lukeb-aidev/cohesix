@@ -898,13 +898,16 @@ const HDMI_CELL_CAPACITY: usize = 32_768;
 const HDMI_DIRTY_WORDS_PER_ROW: usize = HDMI_MAX_COLS.div_ceil(u64::BITS as usize);
 #[cfg(test)]
 const HDMI_DIRTY_WORDS: usize = HDMI_MAX_ROWS * HDMI_DIRTY_WORDS_PER_ROW;
-const HDMI_EARLY_PROGRESS_TEXT: &[u8] = b"Cohesix starting...";
-const HDMI_EARLY_PROGRESS_MAX_CELLS: usize = HDMI_EARLY_PROGRESS_TEXT.len();
+const HDMI_EARLY_PROGRESS_LINES: [&[u8]; 2] = [b"Cohesix starting...", b"Initializing services..."];
+const HDMI_EARLY_PROGRESS_ROWS: usize = HDMI_EARLY_PROGRESS_LINES.len();
+const HDMI_EARLY_PROGRESS_MAX_COLS: usize = HDMI_EARLY_PROGRESS_LINES[1].len();
+const HDMI_EARLY_PROGRESS_CELLS: usize =
+    HDMI_EARLY_PROGRESS_LINES[0].len() + HDMI_EARLY_PROGRESS_LINES[1].len();
 #[cfg(test)]
 const HDMI_EARLY_PROGRESS_MAX_STORES_PER_CELL: usize = CHAR_WIDTH * CHAR_HEIGHT * 3;
 #[cfg(test)]
 const HDMI_EARLY_PROGRESS_MAX_STORES: usize =
-    HDMI_EARLY_PROGRESS_MAX_CELLS * HDMI_EARLY_PROGRESS_MAX_STORES_PER_CELL;
+    HDMI_EARLY_PROGRESS_CELLS * HDMI_EARLY_PROGRESS_MAX_STORES_PER_CELL;
 const HDMI_BASE_BUDGET_US: usize = 400;
 const HDMI_MAX_RASTER_BUDGET_US: usize = 2_000;
 // One 400-us unit admits the previously validated scanline-store count. The
@@ -56059,22 +56062,26 @@ fn hdmi_render_early_progress_tile(descriptor: &DriverRuntimeInitDescriptor) -> 
         return None;
     }
     let state = HdmiRenderState::framebuffer_only_from_descriptor(descriptor);
-    let cells = HDMI_EARLY_PROGRESS_MAX_CELLS;
-    if state.cols < cells || !state.raster_row_span_admitted(0, cells) {
+    if state.cols < HDMI_EARLY_PROGRESS_MAX_COLS || state.rows < HDMI_EARLY_PROGRESS_ROWS {
         return None;
     }
-    for (col, byte) in HDMI_EARLY_PROGRESS_TEXT
-        .iter()
-        .copied()
-        .take(cells)
-        .enumerate()
-    {
-        if !state.raster_cell(0, col, byte) {
+
+    // Validate every line before the first store so a later-row geometry
+    // defect cannot leave a partial startup tile on scanout.
+    for (row, line) in HDMI_EARLY_PROGRESS_LINES.iter().copied().enumerate() {
+        if !state.raster_row_span_admitted(row, line.len()) {
             return None;
         }
     }
+    for (row, line) in HDMI_EARLY_PROGRESS_LINES.iter().copied().enumerate() {
+        for (col, byte) in line.iter().copied().enumerate() {
+            if !state.raster_cell(row, col, byte) {
+                return None;
+            }
+        }
+    }
     device_store_completion_barrier();
-    Some(cells)
+    Some(HDMI_EARLY_PROGRESS_CELLS)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137133,9 +137140,9 @@ mod tests {
         assert!(hdmi_cell_plane_geometry_admitted(&admitted));
 
         let insufficient_tile = descriptor_with_framebuffer(
-            (HDMI_EARLY_PROGRESS_MAX_CELLS * CHAR_WIDTH) as u32,
-            CHAR_HEIGHT as u32,
-            (HDMI_EARLY_PROGRESS_MAX_CELLS * CHAR_WIDTH * FB_BYTES_PER_PIXEL_32) as u32,
+            (HDMI_EARLY_PROGRESS_MAX_COLS * CHAR_WIDTH) as u32,
+            (HDMI_EARLY_PROGRESS_ROWS * CHAR_HEIGHT) as u32,
+            (HDMI_EARLY_PROGRESS_MAX_COLS * CHAR_WIDTH * FB_BYTES_PER_PIXEL_32) as u32,
             DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
         );
         assert!(hdmi_cell_plane_geometry_admitted(&insufficient_tile));
@@ -137144,7 +137151,7 @@ mod tests {
         assert_eq!(
             TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
             0,
-            "an admitted plane too narrow for the exact banner must not mutate scanout",
+            "an admitted plane too small for the exact progress tile must not mutate scanout",
         );
 
         let partial_width = descriptor_with_framebuffer(
@@ -137401,12 +137408,12 @@ mod tests {
         reset_runtime_for_test();
         let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
         descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
-        let width = HDMI_EARLY_PROGRESS_MAX_CELLS * CHAR_WIDTH + 32;
+        let width = HDMI_EARLY_PROGRESS_MAX_COLS * CHAR_WIDTH + 32;
         descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
             vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
             paddr: 0x3000_0000,
             width: width as u32,
-            height: 48,
+            height: 64,
             pitch: (width * 3) as u32,
             format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888,
         };
@@ -137437,17 +137444,26 @@ mod tests {
         let first_tile_byte = descriptor.framebuffer.vaddr as usize
             + safe.y * descriptor.framebuffer.pitch as usize
             + safe.x * 3;
-        let after_tile_byte = first_tile_byte + HDMI_EARLY_PROGRESS_MAX_CELLS * CHAR_WIDTH * 3;
+        let after_first_line_byte =
+            first_tile_byte + HDMI_EARLY_PROGRESS_LINES[0].len() * CHAR_WIDTH * 3;
+        let second_line_byte =
+            first_tile_byte + CHAR_HEIGHT * descriptor.framebuffer.pitch as usize;
+        let after_second_line_byte =
+            second_line_byte + HDMI_EARLY_PROGRESS_LINES[1].len() * CHAR_WIDTH * 3;
         write_framebuffer_byte(first_tile_byte - 1, 0xa5);
-        write_framebuffer_byte(after_tile_byte, 0x5a);
+        write_framebuffer_byte(after_first_line_byte, 0x5a);
+        write_framebuffer_byte(second_line_byte - 1, 0x3c);
+        write_framebuffer_byte(after_second_line_byte, 0xc3);
         TEST_FRAMEBUFFER_WRITE_STORES.store(0, Ordering::Release);
 
         assert_eq!(
             hdmi_render_early_progress_tile(&descriptor),
-            Some(HDMI_EARLY_PROGRESS_MAX_CELLS),
+            Some(HDMI_EARLY_PROGRESS_CELLS),
         );
         assert_eq!(read_framebuffer_byte(first_tile_byte - 1), 0xa5);
-        assert_eq!(read_framebuffer_byte(after_tile_byte), 0x5a);
+        assert_eq!(read_framebuffer_byte(after_first_line_byte), 0x5a);
+        assert_eq!(read_framebuffer_byte(second_line_byte - 1), 0x3c);
+        assert_eq!(read_framebuffer_byte(after_second_line_byte), 0xc3);
         assert_eq!(
             TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
             HDMI_EARLY_PROGRESS_MAX_STORES,
@@ -137886,15 +137902,23 @@ mod tests {
         let early_tile_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
             + safe.y * descriptor.framebuffer.pitch as usize
             + safe.x * FB_BYTES_PER_PIXEL_32;
-        let after_early_tile_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
+        let after_first_line_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
             + safe.y * descriptor.framebuffer.pitch as usize
-            + (safe.x + HDMI_EARLY_PROGRESS_MAX_CELLS * CHAR_WIDTH) * FB_BYTES_PER_PIXEL_32;
+            + (safe.x + HDMI_EARLY_PROGRESS_LINES[0].len() * CHAR_WIDTH) * FB_BYTES_PER_PIXEL_32;
+        let second_line_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
+            + (safe.y + CHAR_HEIGHT) * descriptor.framebuffer.pitch as usize
+            + safe.x * FB_BYTES_PER_PIXEL_32;
+        let after_second_line_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
+            + (safe.y + CHAR_HEIGHT) * descriptor.framebuffer.pitch as usize
+            + (safe.x + HDMI_EARLY_PROGRESS_LINES[1].len() * CHAR_WIDTH) * FB_BYTES_PER_PIXEL_32;
         write_framebuffer_u32(
             DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize,
             admission_sentinel,
         );
         write_framebuffer_u32(early_tile_addr, admission_sentinel);
-        write_framebuffer_u32(after_early_tile_addr, admission_sentinel);
+        write_framebuffer_u32(after_first_line_addr, admission_sentinel);
+        write_framebuffer_u32(second_line_addr, admission_sentinel);
+        write_framebuffer_u32(after_second_line_addr, admission_sentinel);
         TEST_FRAMEBUFFER_WRITE_STORES.store(0, Ordering::Release);
         assert_eq!(
             service_runtime_init_for_test(
@@ -137912,17 +137936,27 @@ mod tests {
         assert_ne!(
             read_framebuffer_u32(early_tile_addr),
             admission_sentinel,
-            "valid descriptor admission must publish the bounded child-owned startup tile",
+            "valid descriptor admission must publish the first startup line",
+        );
+        assert_ne!(
+            read_framebuffer_u32(second_line_addr),
+            admission_sentinel,
+            "valid descriptor admission must publish the second startup line",
         );
         assert_eq!(
-            read_framebuffer_u32(after_early_tile_addr),
+            read_framebuffer_u32(after_first_line_addr),
             admission_sentinel,
-            "the startup tile must not write beyond its exact cell bound",
+            "the first startup line must not write beyond its exact cell bound",
+        );
+        assert_eq!(
+            read_framebuffer_u32(after_second_line_addr),
+            admission_sentinel,
+            "the second startup line must not write beyond its exact cell bound",
         );
         let early_tile_stores = TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire);
         assert_eq!(
             early_tile_stores,
-            HDMI_EARLY_PROGRESS_MAX_CELLS * CHAR_HEIGHT * (CHAR_WIDTH / 2),
+            HDMI_EARLY_PROGRESS_CELLS * CHAR_HEIGHT * (CHAR_WIDTH / 2),
             "aligned XRGB8888 startup rendering must use one paired store per two pixels",
         );
         assert!(early_tile_stores <= HDMI_EARLY_PROGRESS_MAX_STORES);
@@ -138220,7 +138254,7 @@ mod tests {
         let final_pixel_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
             + descriptor.framebuffer.pitch as usize * (descriptor.framebuffer.height as usize - 1);
         assert_eq!(read_framebuffer_u32(final_pixel_addr), HDMI_BG_COLOR);
-        let early_glyph = BASIC_LEGACY[usize::from(HDMI_EARLY_PROGRESS_TEXT[0])];
+        let early_glyph = BASIC_LEGACY[usize::from(HDMI_EARLY_PROGRESS_LINES[0][0])];
         let takeover_glyph = BASIC_LEGACY[usize::from(b'h')];
         let (different_row, different_col) = early_glyph
             .iter()
@@ -138795,9 +138829,9 @@ mod tests {
         descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
             vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
             paddr: 0x3000_0000,
-            width: 192,
+            width: 200,
             height: (CHAR_HEIGHT * 3) as u32,
-            pitch: 192 * 4,
+            pitch: 200 * 4,
             format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
         };
         let range_index = descriptor.resource_range_count as usize;
@@ -138812,7 +138846,7 @@ mod tests {
             0x3000_0000,
             u64::from(descriptor.framebuffer.pitch)
                 .saturating_mul(u64::from(descriptor.framebuffer.height)),
-            9,
+            10,
             0,
         );
         descriptor.resource_range_count += 1;

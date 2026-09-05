@@ -192,6 +192,16 @@ and report readers keep their existing APIs, framing, workloads and schemas.
 Existing RX timing receipts and unchanged raw/pressure workloads measure the
 candidate; no host pacing, retries or acceptance thresholds are adjusted.
 
+The Pi HDMI early startup tile now adds one fixed child-rendered progress line
+within the existing admitted safe-area raster. It changes no console frame,
+command, namespace, authentication rule, generated contract, host API,
+diagnostic row, or report schema. The complete host-tool suite,
+`tools/cohesix-py`, `.coh` workloads, serial/Pi helpers, performance harnesses,
+and report readers therefore require no behavior or fixture change. Focused
+runtime tests and exact target compilation can reject the tile implementation;
+only the physical display can prove that both lines are visible before serial
+cutover and are replaced cleanly by the first ordinary frame.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or
