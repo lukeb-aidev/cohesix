@@ -15237,12 +15237,12 @@ fn initialize_driver_task_retained_priority_lease(
 
 /// Advance one request-bound retained scheduling lease turn.
 ///
-/// Each `Pending` result performed at most one scheduler syscall. Generic and
-/// resumed callers must return to the outer EventPump before asking for the
-/// next step. The sole exception is fresh exact persistent op11, whose caller
-/// may use `complete_fresh_persistent_op11_preissue` to bounded-drain only the
-/// two preissue boosts through `CommitRing`; polling and restoration remain
-/// separate outer turns.
+/// Each `Pending` result performs at most one scheduler syscall. Ordinary
+/// callers return to the outer EventPump before the next step. Fresh exact
+/// persistent op11 may bounded-drain its two preissue boosts through CommitRing.
+/// Physical MCS Pi queue-only NetData op8 may compose first admission or stable
+/// terminal retirement; its boost/restore steps preserve reservations and make
+/// no scheduling syscall. Neither exception loops while waiting for a child.
 #[cfg(feature = "kernel")]
 fn step_driver_task_retained_priority_lease(
     slot: &DriverTaskCommandSlot,
@@ -22995,6 +22995,95 @@ fn driver_task_staged_cyw43_descriptor(
     descriptor.valid().then_some(descriptor)
 }
 
+/// Only the existing queue-only NetData descriptor may compose root bookkeeping.
+/// The child still owns the queue, batch acknowledgement and every physical
+/// operation. In particular, source-probing and control polls keep their
+/// ordinary separately admitted turns.
+#[cfg(feature = "kernel")]
+fn cyw43_rx_root_episode_selected(
+    mcs_physical_pi: bool,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> bool {
+    if !mcs_physical_pi
+        || contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || mode != DriverTaskRingCommandMode::RetainedTurn
+        || command.flags != DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH
+        || command.sequence != 0
+        || command.aux1 == 0
+        || command.budget != DriverTaskBudgetGrant::from_contract(contract)
+        || command.opcode != DriverTaskOpcode::Service.as_u16()
+        || command.frame.flags != 0
+        || !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+        || staging_segments.len() != 1
+    {
+        return false;
+    }
+    driver_task_staged_cyw43_descriptor(command, staging_segments).is_some_and(|descriptor| {
+        descriptor.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            && descriptor.flags == pi4_driver_abi::DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN
+            && descriptor.target_addr == 0
+            && descriptor.payload_offset == 0
+            && descriptor.payload_len == 0
+            && descriptor.total_len == 0
+            && descriptor.arg0 == 0
+            && descriptor.arg1 == 0
+            && descriptor.reserved == 0
+    })
+}
+
+/// Compose first-grant admission or retirement of a stable terminal only.
+/// A notification ends admission even if the child has already completed. A
+/// later call may close strictly advancing terminal housekeeping. No repeated
+/// completion poll or recurrent child grant is authorized by this predicate.
+#[cfg(feature = "kernel")]
+fn cyw43_rx_root_episode_successor(
+    before: Option<Cyw43RxAdmissionFrontier>,
+    after: Cyw43RxAdmissionFrontier,
+) -> bool {
+    use DriverTaskRetainedLeasePhase as Phase;
+    if after.request == 0 || after.fingerprint == 0 || after.generation == 0 || !after.runnable {
+        return false;
+    }
+    let Some(before) = before else {
+        return after.phase == Phase::Inactive
+            && after.grant_id == 0
+            && after.consumed_rank == 0
+            && !after.terminal;
+    };
+    if after.terminal {
+        return before.terminal
+            && before.grant_id != 0
+            && after.grant_id == before.grant_id
+            && matches!(
+                before.phase,
+                Phase::Issued | Phase::GrantRequired | Phase::RestorePrimary | Phase::RestoreBus
+            )
+            && matches!(
+                after.phase,
+                Phase::RestorePrimary | Phase::RestoreBus | Phase::ReadyToComplete
+            )
+            && after.phase != before.phase
+            && after.advanced_from(before);
+    }
+    after.grant_id <= 1
+        && matches!(
+            before.phase,
+            Phase::Inactive
+                | Phase::BoostBus
+                | Phase::BoostPrimary
+                | Phase::ReadyToIssue
+                | Phase::GrantRequired
+        )
+        && matches!(
+            after.phase,
+            Phase::BoostPrimary | Phase::ReadyToIssue | Phase::GrantRequired | Phase::Granted
+        )
+        && after.advanced_from(before)
+}
+
 /// Derive the command half of one persistent CYW43 transaction from its exact
 /// staged op11 descriptor and payload. No caller-supplied flag is trusted.
 #[cfg(feature = "kernel")]
@@ -23295,14 +23384,65 @@ fn run_driver_task_ring_command_with_mode_and_staging(
     mode: DriverTaskRingCommandMode,
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_command_with_mode_and_staging_deadline(
+    let compose_bookkeeping = cyw43_rx_root_episode_selected(
+        cfg!(all(feature = "release-pi4", sel4_config_kernel_mcs))
+            && contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+            && mode == DriverTaskRingCommandMode::RetainedTurn
+            && physical_pi_driver_task_only_owner_state_active(),
         contract,
         command,
         mode,
         staging_segments,
-        None,
-        None,
-    )
+    );
+    if !compose_bookkeeping {
+        return run_driver_task_ring_command_with_mode_and_staging_deadline(
+            contract,
+            command,
+            mode,
+            staging_segments,
+            None,
+            None,
+        );
+    }
+    let mut fingerprint_command = command;
+    fingerprint_command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
+    let expected_fingerprint = driver_task_ring_command_fingerprint(
+        fingerprint_command,
+        driver_task_staging_segments_fingerprint(staging_segments),
+    );
+    let frontier = || {
+        let request = active_driver_task_retained_request_snapshot(contract)?
+            .state
+            .request();
+        let frontier = cyw43_rx_admission_frontier(request)?;
+        (frontier.fingerprint == expected_fingerprint && frontier.generation == command.aux1)
+            .then_some(frontier)
+    };
+    // Stage, two classic boost bookkeeping steps, CommitRing, PublishGrant,
+    // NotifyRing: six calls cover the maximum first-admission chain. Every
+    // call reacquires the ordinary producer/lifetime/recovery guards. MCS
+    // boost steps retain reservations but perform no scheduling syscall.
+    // Stop immediately after the sole notification. A later call with an
+    // already-stable terminal may instead close at most four retirement steps.
+    // No episode spans child waiting or replaces the existing grant protocol;
+    // the bounded outer EventPump resumes operator rotation after this call.
+    for _ in 0..6 {
+        let before = frontier();
+        let completion = run_driver_task_ring_command_with_mode_and_staging_deadline(
+            contract,
+            command,
+            mode,
+            staging_segments,
+            None,
+            None,
+        );
+        if completion.is_some()
+            || !frontier().is_some_and(|after| cyw43_rx_root_episode_successor(before, after))
+        {
+            return completion;
+        }
+    }
+    None
 }
 
 #[cfg(feature = "kernel")]
@@ -28742,6 +28882,253 @@ fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_root_episode_selects_only_the_sealed_queue_descriptor() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: u32::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                len: 28,
+                flags: 0,
+            },
+        );
+        command.flags = DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH;
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = 7;
+        let mut descriptor = [0u8; 28];
+        // Existing wire ABI: RX_POLL=8, RX_STEADY_TAIL_DRAIN=0x0010.
+        descriptor[0..2].copy_from_slice(&8u16.to_le_bytes());
+        descriptor[2..4].copy_from_slice(&0x0010u16.to_le_bytes());
+        let selected = |mcs, contract, command, mode, bytes: &[u8]| {
+            cyw43_rx_root_episode_selected(
+                mcs,
+                contract,
+                command,
+                mode,
+                &[DriverTaskStagingSegment::ring_payload_at(
+                    usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                    bytes,
+                    0,
+                )],
+            )
+        };
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mode = DriverTaskRingCommandMode::RetainedTurn;
+        assert!(selected(true, contract, command, mode, &descriptor));
+        assert!(!selected(false, contract, command, mode, &descriptor));
+        assert!(!selected(
+            true,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            command,
+            mode,
+            &descriptor
+        ));
+        assert!(!selected(
+            true,
+            contract,
+            command,
+            DriverTaskRingCommandMode::PromptSlice,
+            &descriptor
+        ));
+        for offset in [0, 2, 4, 8, 10, 12, 16, 20, 24] {
+            let mut changed = descriptor;
+            changed[offset] ^= 1;
+            assert!(
+                !selected(true, contract, command, mode, &changed),
+                "offset {offset}"
+            );
+        }
+        for changed in [
+            DriverTaskCommandRecord {
+                flags: command.flags | DRIVER_TASK_RING_FLAG_ONE_WAY,
+                ..command
+            },
+            DriverTaskCommandRecord {
+                sequence: 1,
+                ..command
+            },
+            DriverTaskCommandRecord { aux1: 0, ..command },
+            DriverTaskCommandRecord {
+                opcode: DriverTaskOpcode::SubmitFrame.as_u16(),
+                ..command
+            },
+        ] {
+            assert!(!selected(true, contract, changed, mode, &descriptor));
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_root_episode_stops_at_first_notify_or_any_stagnation() {
+        use DriverTaskRetainedLeasePhase as Phase;
+        let staged = Cyw43RxAdmissionFrontier {
+            request: 41,
+            fingerprint: 0x1234,
+            generation: 7,
+            phase: Phase::Inactive,
+            grant_id: 0,
+            consumed_rank: 0,
+            terminal: false,
+            runnable: true,
+        };
+        assert!(cyw43_rx_root_episode_successor(None, staged));
+        // These are the independent zero-, one- and two-boost call boundaries.
+        // They must reach one notify within six calls including initial Stage.
+        for phases in [
+            &[Phase::Inactive, Phase::GrantRequired][..],
+            &[Phase::Inactive, Phase::ReadyToIssue, Phase::GrantRequired][..],
+            &[
+                Phase::Inactive,
+                Phase::BoostPrimary,
+                Phase::ReadyToIssue,
+                Phase::GrantRequired,
+            ][..],
+        ] {
+            let mut before = staged;
+            for phase in &phases[1..] {
+                let after = Cyw43RxAdmissionFrontier {
+                    phase: *phase,
+                    ..staged
+                };
+                assert!(cyw43_rx_root_episode_successor(Some(before), after));
+                assert!(!cyw43_rx_root_episode_successor(Some(after), after));
+                before = after;
+            }
+            let granted = Cyw43RxAdmissionFrontier {
+                phase: Phase::Granted,
+                grant_id: 1,
+                ..staged
+            };
+            assert!(cyw43_rx_root_episode_successor(Some(before), granted));
+            for rank in [0, 1, 2] {
+                let issued = Cyw43RxAdmissionFrontier {
+                    phase: Phase::Issued,
+                    consumed_rank: rank,
+                    ..granted
+                };
+                assert!(!cyw43_rx_root_episode_successor(Some(granted), issued));
+            }
+            for changed in [
+                Cyw43RxAdmissionFrontier {
+                    terminal: true,
+                    ..granted
+                },
+                Cyw43RxAdmissionFrontier {
+                    request: 42,
+                    ..granted
+                },
+                Cyw43RxAdmissionFrontier {
+                    fingerprint: 0x1235,
+                    ..granted
+                },
+                Cyw43RxAdmissionFrontier {
+                    generation: 8,
+                    ..granted
+                },
+                Cyw43RxAdmissionFrontier {
+                    grant_id: 2,
+                    ..granted
+                },
+                Cyw43RxAdmissionFrontier {
+                    runnable: false,
+                    ..granted
+                },
+                Cyw43RxAdmissionFrontier {
+                    phase: Phase::RestorePrimary,
+                    ..granted
+                },
+            ] {
+                assert!(!cyw43_rx_root_episode_successor(Some(before), changed));
+            }
+            assert!(phases.len() + 2 <= 6);
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_root_episode_retires_only_an_already_stable_terminal() {
+        use DriverTaskRetainedLeasePhase as Phase;
+        let terminal = Cyw43RxAdmissionFrontier {
+            request: 41,
+            fingerprint: 0x1234,
+            generation: 7,
+            phase: Phase::Issued,
+            grant_id: 3,
+            consumed_rank: 2,
+            terminal: true,
+            runnable: true,
+        };
+        // Existing terminal cuts may omit either or both reservation restores.
+        for phases in [
+            &[Phase::Issued, Phase::ReadyToComplete][..],
+            &[Phase::Issued, Phase::RestorePrimary, Phase::ReadyToComplete][..],
+            &[
+                Phase::Issued,
+                Phase::RestorePrimary,
+                Phase::RestoreBus,
+                Phase::ReadyToComplete,
+            ][..],
+            &[
+                Phase::GrantRequired,
+                Phase::RestoreBus,
+                Phase::ReadyToComplete,
+            ][..],
+        ] {
+            for pair in phases.windows(2) {
+                let before = Cyw43RxAdmissionFrontier {
+                    phase: pair[0],
+                    ..terminal
+                };
+                let after = Cyw43RxAdmissionFrontier {
+                    phase: pair[1],
+                    ..terminal
+                };
+                assert!(cyw43_rx_root_episode_successor(Some(before), after));
+                assert!(!cyw43_rx_root_episode_successor(Some(after), after));
+                for changed in [
+                    Cyw43RxAdmissionFrontier {
+                        terminal: false,
+                        ..before
+                    },
+                    Cyw43RxAdmissionFrontier {
+                        request: 42,
+                        ..before
+                    },
+                    Cyw43RxAdmissionFrontier {
+                        fingerprint: 0x1235,
+                        ..before
+                    },
+                    Cyw43RxAdmissionFrontier {
+                        generation: 8,
+                        ..before
+                    },
+                    Cyw43RxAdmissionFrontier {
+                        grant_id: 2,
+                        ..before
+                    },
+                    Cyw43RxAdmissionFrontier {
+                        phase: Phase::Granted,
+                        ..before
+                    },
+                ] {
+                    assert!(!cyw43_rx_root_episode_successor(Some(changed), after));
+                }
+                assert!(!cyw43_rx_root_episode_successor(None, after));
+                assert!(!cyw43_rx_root_episode_successor(
+                    Some(before),
+                    Cyw43RxAdmissionFrontier {
+                        terminal: false,
+                        ..after
+                    }
+                ));
+            }
+            assert!(phases.len() <= 4);
+        }
+    }
 
     #[cfg(feature = "kernel")]
     #[test]

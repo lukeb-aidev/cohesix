@@ -1932,6 +1932,24 @@ these two domains to have equal numeric values. Replacing either the exact
 parent or the live peer epoch still rejects continuation; no grant, Reply,
 physical-operation bound, or recovery authority is relaxed.
 
+On physical Pi MCS, the exact queue-only NetData `RX_POLL` descriptor may
+compose root housekeeping within one bounded outer turn. HAL requires the
+unchanged canonical command budget, quiet retained flags, nonzero logical
+generation, sole 28-byte descriptor, and `RX_STEADY_TAIL_DRAIN` with every other
+descriptor field zero. Admission uses at most six existing calls: Stage,
+reservation/boost bookkeeping, sequence-last CommitRing, first PublishGrant,
+and NotifyRing. The MCS boost steps verify existing reservations without
+changing priority or the SC. Notification ends this episode, even if a child
+terminal races it. On a later turn, an already-stable exact terminal may close
+at most four existing retirement calls, including reservation release and
+completion consumption. Every composed call revalidates identity, lifetime,
+producer and recovery guards; only strict same-request phase progress permits
+another call. Stagnation, an unavailable frontier, a recurrent grant, notification,
+and completion return to outer arbitration. No child waiting, recurrent grant,
+physical work, deadline, batch acknowledgement, ring authority or QEMU path is
+changed. Existing queue-to-publication and publication-to-root receipts measure
+the effect; source and host checks do not establish physical performance.
+
 An ordinary retained CYW43 timer poll is a childless bounded action, including
 the mandatory post-CMD0 guard. Its private per-turn witness names the exact
 retained deadline slot and clears on the next turn. A valid timer observation

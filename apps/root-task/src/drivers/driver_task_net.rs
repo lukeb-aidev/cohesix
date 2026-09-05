@@ -29509,11 +29509,12 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
     let payload_staged = material.payload_staged;
     let active_before = crate::hal::driver_task::active_driver_task_ring_request(contract)
         .and_then(|request| u32::try_from(request).ok());
-    // A retained service call is one root event-pump turn, not a private
-    // send/yield or resume loop.
-    // The HAL retains the accepted ring request and its staged descriptor while
-    // this returns `None`; the next outer turn resumes that exact request, so a
-    // control payload is neither retransmitted nor assigned a new BCDC ID.
+    // One retained call consumes one outer event-pump turn. On physical MCS
+    // Pi, the exact queue-only NetData op8 may compose bounded root admission
+    // through its first notification, or retire an already-stable terminal.
+    // Child waiting, recurrent grants and all other operations return to the
+    // outer scheduler. The HAL retains the same request and staged descriptor
+    // on `None`; control payloads and BCDC IDs are never recreated by resume.
     #[cfg(test)]
     CYW43_TEST_PROGRESS_OPERATION_COUNT.fetch_add(1, Ordering::AcqRel);
     let service = {

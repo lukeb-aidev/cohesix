@@ -182,6 +182,16 @@ benchmark scripts therefore require no change. Host tests can validate those
 bounds and parsing invariants, but only a fresh exact-image Pi run can establish
 GENET IRQ progress, Wi-Fi/USB/HDMI latency, TCP/script success, or performance.
 
+The physical-Pi MCS queue-only NetData op8 root episode changes only private
+HAL admission and stable-terminal retirement. Review of `coh`, `cohsh`,
+`coh-status`, Hive Gateway/REST, SwarmUI, GPU/sidecar bridges, host-ticket agent,
+CAS tools, Pi gate/serial helpers and trace normalization finds no exposed
+field or behavior contract requiring a host change. `tools/cohesix-py`,
+generated-contract consumers, `.coh` scripts, the REST/performance harnesses
+and report readers keep their existing APIs, framing, workloads and schemas.
+Existing RX timing receipts and unchanged raw/pressure workloads measure the
+candidate; no host pacing, retries or acceptance thresholds are adjusted.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or
