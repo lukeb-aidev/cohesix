@@ -641,6 +641,7 @@ struct TargetWorkerProjection {
     control_sequence: u64,
     max_supervisor_generation: u64,
     slot_count: usize,
+    claimed_slots: WorkerPendingSet,
     pending_control_bits: WorkerPendingSet,
     pending_controls: [Option<WorkerControlRecord>; MAX_EXECUTABLE_WORKER_SLOTS],
     slots: [Option<TargetWorkerProjectionSlot>; MAX_EXECUTABLE_WORKER_SLOTS],
@@ -653,6 +654,7 @@ impl TargetWorkerProjection {
             control_sequence: 0,
             max_supervisor_generation: 0,
             slot_count: 0,
+            claimed_slots: WorkerPendingSet::empty(),
             pending_control_bits: WorkerPendingSet::empty(),
             pending_controls: [None; MAX_EXECUTABLE_WORKER_SLOTS],
             slots: [None; MAX_EXECUTABLE_WORKER_SLOTS],
@@ -665,6 +667,7 @@ impl TargetWorkerProjection {
         }
         self.control_sequence = 0;
         self.max_supervisor_generation = 0;
+        self.claimed_slots = WorkerPendingSet::empty();
         self.pending_control_bits = WorkerPendingSet::empty();
         for pending in &mut self.pending_controls {
             *pending = None;
@@ -802,6 +805,7 @@ impl TargetWorkerProjection {
         slot.prepared_identity = Some(identity);
         slot.runtime_init = None;
         slot.claimed = true;
+        self.claimed_slots.insert(index)?;
         Ok(CriticalWorkerControlRecord {
             sequence: self.next_control_sequence()?,
             task_index: worker_task_index(role, identity.slot)?,
@@ -916,6 +920,7 @@ impl TargetWorkerProjection {
 struct TargetWorkerProjectionCheckpoint {
     index: usize,
     slot: Option<TargetWorkerProjectionSlot>,
+    claimed_slots: WorkerPendingSet,
     pending_control: Option<WorkerControlRecord>,
     pending_control_bits: WorkerPendingSet,
     control_sequence: u64,
@@ -933,6 +938,7 @@ impl TargetWorkerProjection {
         Ok(TargetWorkerProjectionCheckpoint {
             index,
             slot: self.slots[index],
+            claimed_slots: self.claimed_slots,
             pending_control: self.pending_controls[index],
             pending_control_bits: self.pending_control_bits,
             control_sequence: self.control_sequence,
@@ -942,6 +948,7 @@ impl TargetWorkerProjection {
 
     fn restore(&mut self, checkpoint: TargetWorkerProjectionCheckpoint) {
         self.slots[checkpoint.index] = checkpoint.slot;
+        self.claimed_slots = checkpoint.claimed_slots;
         self.pending_controls[checkpoint.index] = checkpoint.pending_control;
         self.pending_control_bits = checkpoint.pending_control_bits;
         self.control_sequence = checkpoint.control_sequence;
@@ -1154,6 +1161,10 @@ fn target_worker_claimed(role: WorkerRole, role_slot: u32) -> bool {
         .lock()
         .slot(index)
         .is_ok_and(|slot| slot.claimed)
+}
+
+fn target_worker_claimed_slots() -> WorkerPendingSet {
+    TARGET_WORKER_PROJECTION.lock().claimed_slots
 }
 
 fn target_worker_projection_snapshot(
@@ -1615,15 +1626,21 @@ impl TargetWorkerRuntime {
         while processed < TARGET_WORKER_SERVICE_BOUND && self.handle_one_immediate_work(now_ms)? {
             processed += 1;
         }
-        for index in 0..self.supervisor.slot_count() {
+        // Immediate fault/policy work above can change claims and deadlines.
+        // Snapshot the exact claimed population only after that work, without
+        // holding the projection lock across deadline enforcement or seL4.
+        // Terminal claims remain present so re-admission keeps its existing
+        // deadline coverage. Every claimed slot is still checked on every
+        // service call with this call's unchanged time sample.
+        let mut claimed = target_worker_claimed_slots();
+        while let Some(index) = claimed.pop_first(self.supervisor.slot_count())? {
             let (role, role_slot) = role_slot_from_flat_index(index)?;
             self.last_service_context.stage = TargetWorkerServiceStage::Deadline;
             self.last_service_context.role = Some(role);
             self.last_service_context.role_slot = role_slot;
-            if target_worker_claimed(role, role_slot)
-                && self
-                    .supervisor
-                    .enforce_slot_deadline(role, role_slot, now_ms)?
+            if self
+                .supervisor
+                .enforce_slot_deadline(role, role_slot, now_ms)?
             {
                 update_target_worker_projection(self.supervisor.snapshot(role, role_slot)?)?;
                 processed = processed

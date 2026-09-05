@@ -37090,8 +37090,9 @@ fn runtime_root_causal_wait_observation(
 }
 
 /// Keep a source-service successor outside Reply and in-flight grant ownership.
-/// This boundary grants no work by itself: the exact cold-parent terminal and
-/// its unchanged local-successor cap must still be proved before retirement.
+/// This boundary grants no work by itself. Retiring the gate still requires an
+/// exact cold-parent terminal and its unchanged local-successor cap; an exact
+/// DPC peer wait instead preserves the complete gate for fresh grant admission.
 #[cfg(any(target_os = "none", test))]
 const fn runtime_cold_source_successor_boundary_admitted(
     route: RuntimeNotificationRoute,
@@ -37108,6 +37109,86 @@ const fn runtime_cold_source_successor_boundary_admitted(
         && watermark_fault.is_none()
         && in_flight_root_grant.is_none()
         && in_flight_delegated_grant.is_none()
+}
+
+/// A source quantum may park for its exact leased DPC child without forfeiting
+/// the remaining refill. It still ends before any foreground grant admission.
+/// Childless, RXBOUND, capacity and recovery work retain their existing cuts.
+#[cfg(any(target_os = "none", test))]
+fn runtime_dpc_source_peer_wait_admitted(
+    source_boundary_admitted: bool,
+    owner_phase: RuntimeRetainedOwnerPhase,
+    foreground_transaction_active: bool,
+    snapshot: Option<RuntimeSteadySemanticSnapshot>,
+) -> bool {
+    if !source_boundary_admitted
+        || owner_phase != RuntimeRetainedOwnerPhase::CheckGrant
+        || foreground_transaction_active
+    {
+        return false;
+    }
+    let Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(dpc)) = snapshot else {
+        return false;
+    };
+    if !matches!(
+        dpc.action,
+        Cyw43DpcAction::CaptureStatus
+            | Cyw43DpcAction::AckStatus
+            | Cyw43DpcAction::FlowAck
+            | Cyw43DpcAction::FlowRead
+            | Cyw43DpcAction::HostmailRead
+            | Cyw43DpcAction::HostmailAck
+            | Cyw43DpcAction::FifoWindow
+            | Cyw43DpcAction::Firstread
+            | Cyw43DpcAction::Remainder
+            | Cyw43DpcAction::PostStatus
+            | Cyw43DpcAction::PostAck
+    ) || dpc.generation == 0
+        || dpc.event_sequence == 0
+        || dpc.dpc_active_sequence != dpc.event_sequence
+        || dpc.child_generation != dpc.generation
+        || dpc.child_mode != Cyw43DpcChildMode::SteadyLease
+        || dpc.local_continuation_due
+    {
+        return false;
+    }
+    runtime_root_grant_dpc_post_service_route(snapshot, true, false, false)
+        == RuntimeRootGrantDpcPostServiceRoute::AwaitExactPeer
+}
+
+#[cfg(target_os = "none")]
+fn runtime_retained_dpc_source_peer_wait_snapshot(
+    route: RuntimeNotificationRoute,
+    gate: &RuntimePendingCommandGate,
+    intake: RuntimeCommandIntake,
+    watermark_fault: Option<u32>,
+    in_flight_root_grant: Option<u32>,
+    in_flight_delegated_grant: Option<u32>,
+) -> Option<RuntimeSteadySemanticSnapshot> {
+    // The cold-successor boundary predicate checks only common scheduling
+    // ownership; cold-parent fusion remains separately and narrowly gated.
+    let boundary_admitted = runtime_cold_source_successor_boundary_admitted(
+        route,
+        gate.root_grant_active(),
+        intake,
+        watermark_fault,
+        in_flight_root_grant,
+        in_flight_delegated_grant,
+    );
+    if !boundary_admitted || cyw43_foreground_transaction_active() {
+        return None;
+    }
+    let snapshot = runtime_steady_cyw43_dpc_semantic_snapshot()?;
+    if !runtime_dpc_source_peer_wait_admitted(
+        boundary_admitted,
+        gate.delegated_owner_phase(),
+        false,
+        Some(snapshot),
+    ) || runtime_root_causal_wait_for_dpc_child(None, snapshot).is_none()
+    {
+        return None;
+    }
+    Some(snapshot)
 }
 
 /// Admit one owner-local immutable cold-parent successor only from the exact
@@ -69430,12 +69511,10 @@ pub fn runtime_main(task_key: usize) -> ! {
                             continue 'runtime_commands;
                         }
                         let _ = service_runtime_notification(badge);
-                        // Service is a hard stop. Exactly one persistent-source
-                        // physical quantum ran. The sole exception is an exact
-                        // immutable cold-parent child terminal: that terminal
-                        // may causally admit its one successor without adding an
-                        // artificial root-period handoff. Every unrelated source,
-                        // miss, fault, or identity mismatch keeps this hard stop.
+                        // Exactly one persistent-source quantum ran. Only an
+                        // immutable cold-parent terminal may admit its causal
+                        // successor here; a leased DPC child may instead keep
+                        // its existing exact peer wait before fresh admission.
                         let root_grant_local_successor = pending_intake.is_some_and(|intake| {
                             runtime_cold_source_successor_boundary_admitted(
                                 notification_route,
@@ -69452,10 +69531,31 @@ pub fn runtime_main(task_key: usize) -> ! {
                             // the ordinary command body directly, before the
                             // inactive-gate guard can impose another Yield.
                             break 'retained_admission;
-                        } else {
-                            runtime_yield_current_tcb();
+                        }
+                        if let Some(snapshot) = pending_intake.and_then(|intake| {
+                            runtime_retained_dpc_source_peer_wait_snapshot(
+                                notification_route,
+                                &pending_command_gate,
+                                intake,
+                                foreground_watermark_refresh_fault,
+                                in_flight_root_grant_action,
+                                in_flight_delegated_grant_action,
+                            )
+                        }) {
+                            // Keep intake and CheckGrant intact. A coalesced root
+                            // hint can be consumed by this exact peer wait: the
+                            // next pass still reads the durable grant and closes
+                            // its Empty race before blocking again.
+                            runtime_handoff_steady_pending(
+                                RuntimeSteadyPendingDisposition::WaitForWake,
+                                notification_route,
+                                None,
+                                snapshot,
+                            );
                             continue 'runtime_commands;
                         }
+                        runtime_yield_current_tcb();
+                        continue 'runtime_commands;
                     }
 
                     if matches!(
@@ -69576,8 +69676,26 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 pending_command_gate.complete();
                                 break 'retained_admission;
                             }
-                            // Every unrelated source, waiting child, fault, or
-                            // owned Reply/grant retains the scheduling boundary.
+                            if let Some(snapshot) = runtime_retained_dpc_source_peer_wait_snapshot(
+                                notification_route,
+                                &pending_command_gate,
+                                *retained,
+                                foreground_watermark_refresh_fault,
+                                in_flight_root_grant_action,
+                                in_flight_delegated_grant_action,
+                            ) {
+                                // The same exact peer-wait cut as preselected
+                                // Service preserves all root grant bookkeeping.
+                                runtime_handoff_steady_pending(
+                                    RuntimeSteadyPendingDisposition::WaitForWake,
+                                    notification_route,
+                                    None,
+                                    snapshot,
+                                );
+                                continue 'runtime_commands;
+                            }
+                            // Unrelated, childless, recovery and owned-Reply or
+                            // in-flight-grant states retain the existing Yield.
                             runtime_yield_current_tcb();
                             continue 'runtime_commands;
                         }
@@ -94766,6 +94884,139 @@ mod tests {
                 route, true, intake, None, None, None,
             ));
         }
+    }
+
+    fn dpc_source_peer_wait_test_snapshot() -> RuntimeSteadyCyw43DpcSnapshot {
+        let mut snapshot = RuntimeSteadyCyw43DpcSnapshot::empty();
+        snapshot.generation = 7;
+        snapshot.event_sequence = 41;
+        snapshot.dpc_active_sequence = 41;
+        snapshot.action = Cyw43DpcAction::CaptureStatus;
+        snapshot.child_sequence = 0x8000_91b1;
+        snapshot.child_generation = 7;
+        snapshot.child_active = true;
+        snapshot.child_mode = Cyw43DpcChildMode::SteadyLease;
+        snapshot.child_steady_service_lease_admitted = true;
+        snapshot.global_child_active = true;
+        snapshot.global_child_expected_sequence = 0x8000_91b1;
+        snapshot
+    }
+
+    #[test]
+    fn dpc_source_peer_wait_requires_unowned_check_grant_boundary() {
+        let snapshot = Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(
+            dpc_source_peer_wait_test_snapshot(),
+        ));
+        for (phase, expected) in [
+            (RuntimeRetainedOwnerPhase::CheckGrant, true),
+            (RuntimeRetainedOwnerPhase::Inactive, false),
+            (RuntimeRetainedOwnerPhase::CheckWake, false),
+            (RuntimeRetainedOwnerPhase::Wait, false),
+            (RuntimeRetainedOwnerPhase::Service(1), false),
+        ] {
+            assert_eq!(
+                runtime_dpc_source_peer_wait_admitted(true, phase, false, snapshot),
+                expected,
+            );
+        }
+        assert!(!runtime_dpc_source_peer_wait_admitted(
+            false,
+            RuntimeRetainedOwnerPhase::CheckGrant,
+            false,
+            snapshot,
+        ));
+        assert!(!runtime_dpc_source_peer_wait_admitted(
+            true,
+            RuntimeRetainedOwnerPhase::CheckGrant,
+            true,
+            snapshot,
+        ));
+        assert!(!runtime_dpc_source_peer_wait_admitted(
+            true,
+            RuntimeRetainedOwnerPhase::CheckGrant,
+            false,
+            None,
+        ));
+    }
+
+    #[test]
+    fn dpc_source_peer_wait_requires_exact_active_steady_child() {
+        let valid = dpc_source_peer_wait_test_snapshot();
+        for invalid in 0..12 {
+            let mut snapshot = valid;
+            match invalid {
+                0 => snapshot.generation = 0,
+                1 => snapshot.event_sequence = 0,
+                2 => snapshot.dpc_active_sequence = 42,
+                3 => snapshot.child_generation = 8,
+                4 => snapshot.child_mode = Cyw43DpcChildMode::OrdinaryContinuation,
+                5 => snapshot.child_sequence = 0,
+                6 => snapshot.global_child_expected_sequence = 0x8000_91b2,
+                7 => snapshot.child_issued_unknown = true,
+                8 => snapshot.global_child_issued_unknown = true,
+                9 => snapshot.child_continuation_grant_required = true,
+                10 => snapshot.child_steady_service_lease_admitted = false,
+                _ => snapshot.local_continuation_due = true,
+            }
+            assert!(!runtime_dpc_source_peer_wait_admitted(
+                true,
+                RuntimeRetainedOwnerPhase::CheckGrant,
+                false,
+                Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(snapshot)),
+            ));
+        }
+        for (child_active, global_child_active) in [(false, false), (false, true), (true, false)] {
+            let snapshot = RuntimeSteadyCyw43DpcSnapshot {
+                child_active,
+                global_child_active,
+                ..valid
+            };
+            assert!(!runtime_dpc_source_peer_wait_admitted(
+                true,
+                RuntimeRetainedOwnerPhase::CheckGrant,
+                false,
+                Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(snapshot)),
+            ));
+        }
+    }
+
+    #[test]
+    fn dpc_source_peer_wait_preserves_rxbound_capacity_and_recovery_cuts() {
+        for action in [
+            Cyw43DpcAction::None,
+            Cyw43DpcAction::RxQuantumBoundary,
+            Cyw43DpcAction::RxQueueWait,
+            Cyw43DpcAction::AbortFunction2,
+            Cyw43DpcAction::TerminateReadFrame,
+            Cyw43DpcAction::RecoveryRframeLow,
+            Cyw43DpcAction::RecoveryRframeHigh,
+            Cyw43DpcAction::RecoverySettle,
+            Cyw43DpcAction::RetransmitNak,
+        ] {
+            let snapshot = RuntimeSteadyCyw43DpcSnapshot {
+                action,
+                ..dpc_source_peer_wait_test_snapshot()
+            };
+            assert!(!runtime_dpc_source_peer_wait_admitted(
+                true,
+                RuntimeRetainedOwnerPhase::CheckGrant,
+                false,
+                Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(snapshot)),
+            ));
+        }
+        let private = RuntimeSteadyCyw43DpcSnapshot {
+            action: Cyw43DpcAction::FifoWindow,
+            child_active: false,
+            global_child_active: false,
+            local_continuation_due: true,
+            ..dpc_source_peer_wait_test_snapshot()
+        };
+        assert!(!runtime_dpc_source_peer_wait_admitted(
+            true,
+            RuntimeRetainedOwnerPhase::CheckGrant,
+            false,
+            Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(private)),
+        ));
     }
 
     #[test]

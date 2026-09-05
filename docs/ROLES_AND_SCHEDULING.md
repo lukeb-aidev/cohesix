@@ -38,6 +38,26 @@ leaves 46,023 slots of deterministic headroom. This static admission does not
 prove construction, READY, driver coexistence, scheduling behavior, or
 performance on Pi hardware.
 
+The root CSpace allocator excludes every enabled compiler-declared service,
+Worker and critical-retention anchor from ordinary allocation before any child
+constructor claims it. A constructor claims its exact reserved slot once, even
+after ordinary allocation has passed that address. Duplicate claims, occupied
+slots, initial kernel capabilities and addresses outside the BootInfo empty
+window fail closed. Image-size changes must not let an earlier constructor
+consume a later service's anchor; constructor order does not confer ownership
+of another service's reserved slot.
+
+Ordinary Worker service drains its existing bounded immediate fault/policy
+work, then snapshots the claimed-slot bitmap under the existing projection
+lock. It checks every claimed slot in manifest order using that call's time
+sample, without holding the lock across enforcement or seL4 operations.
+Claims and their bitmap change in the same admission/checkpoint transaction;
+terminal claims remain covered. An empty population needs no per-slot
+projection lookup. Empty pending-operation selection also skips the slot scan
+only after validating the generated population. Fault-mailbox inspection,
+deadline cadence, nonempty pending fairness and QEMU's service quantum retain
+their existing bounds.
+
 ## Role support matrix
 
 The checked-in default and Pi 4 profiles currently declare the following:
@@ -373,6 +393,18 @@ quantum without a fresh completed grant, or alter an SC budget, period, deadline
 priority, core, owner, retry, or Reply/fault contract. Ordinary synchronous
 work and every genuine external-condition wait retain their prior scheduler
 handoff; rejected, ambiguous, and Reply-bearing generation inputs fail closed.
+
+After one persistent-source `Service` quantum, a healthy CYW43 DPC with an
+exact outstanding steady-lease SDIO child may use the existing semantic peer
+wait instead of Yield. The retained command and `CheckGrant` state remain
+intact: the next admission still validates and acknowledges a fresh grant.
+This exception requires no owned Reply, in-flight root/delegated grant,
+foreground transaction or watermark fault, and excludes childless, RXBOUND,
+capacity and recovery work. The existing final durable-condition check closes
+completion/coalesced-wake races before blocking. It admits no further physical
+action, resets no local continuation allowance and changes no hardware wait,
+deadline, IRQ, ring, recovery or SC contract. Cold-terminal successor admission
+remains a separate existing bounded rule.
 
 The exact-743e discriminator proved one remaining retained root-causal cut:
 the sequence-last CYW43-to-SDIO command was durable and its outer grant was

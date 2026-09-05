@@ -37,7 +37,7 @@ pub const MAX_EXECUTABLE_WORKER_SLOTS: usize = 256;
 const WORKER_PENDING_WORDS: usize = MAX_EXECUTABLE_WORKER_SLOTS / u64::BITS as usize;
 const _: () = assert!(MAX_EXECUTABLE_WORKER_SLOTS.is_multiple_of(u64::BITS as usize));
 
-/// Fixed, allocation-free pending set for the complete executable Worker pool.
+/// Fixed, allocation-free slot set for the complete executable Worker pool.
 ///
 /// A scalar mask made manifest capacity an accidental 64-instance ABI. This
 /// word array keeps selection and mutation bounded while allowing the compiler
@@ -72,6 +72,28 @@ impl WorkerPendingSet {
     pub(crate) fn contains(&self, index: usize) -> Result<bool, WorkerSupervisorError> {
         let (word, bit) = pending_position(index)?;
         Ok(self.words[word] & bit != 0)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.words.iter().all(|word| *word == 0)
+    }
+
+    /// Consume one exact member in manifest order from a bounded snapshot.
+    /// Validate the selected population before changing any membership so a
+    /// malformed set cannot hide an out-of-profile slot behind an empty result.
+    pub(crate) fn pop_first(
+        &mut self,
+        total: usize,
+    ) -> Result<Option<usize>, WorkerSupervisorError> {
+        self.validate_population(total)?;
+        for (index, word) in self.words.iter_mut().enumerate() {
+            if *word != 0 {
+                let bit = word.trailing_zeros() as usize;
+                *word &= *word - 1;
+                return Ok(Some(index * u64::BITS as usize + bit));
+            }
+        }
+        Ok(None)
     }
 
     fn validate_population(&self, total: usize) -> Result<(), WorkerSupervisorError> {
@@ -120,6 +142,9 @@ pub(crate) fn next_pending_worker_index(
     total: usize,
 ) -> Result<Option<(usize, usize)>, WorkerSupervisorError> {
     pending.validate_population(total)?;
+    if pending.is_empty() {
+        return Ok(None);
+    }
     let start = start % total;
     for offset in 0..total {
         let selected = (start + offset) % total;
@@ -1713,6 +1738,64 @@ mod tests {
             next_pending_worker_index(&WorkerPendingSet::empty(), 0, 37),
             Ok(None),
         );
+    }
+
+    #[test]
+    fn worker_slot_snapshot_consumes_sparse_members_in_manifest_order() {
+        let mut claimed = WorkerPendingSet::empty();
+        for index in [255, 64, 0, 128, 63, 127, 191, 192, 64] {
+            claimed.insert(index).unwrap();
+        }
+        let mut snapshot = claimed;
+        for expected in [0, 63, 64, 127, 128, 191, 192, 255] {
+            assert_eq!(snapshot.pop_first(256), Ok(Some(expected)));
+        }
+        assert_eq!(snapshot.pop_first(256), Ok(None));
+        assert_eq!(snapshot.pop_first(256), Ok(None));
+        // Consuming a service snapshot never retires a durable claim.
+        assert_eq!(claimed.pop_first(256), Ok(Some(0)));
+        assert_eq!(claimed.contains(255), Ok(true));
+    }
+
+    #[test]
+    fn worker_slot_snapshot_rejects_invalid_population_before_consumption() {
+        let mut claimed = WorkerPendingSet::empty();
+        claimed.insert(0).unwrap();
+        claimed.insert(37).unwrap();
+        let checkpoint = claimed;
+        for (population, error) in [
+            (0, super::WorkerSupervisorError::NotEnabled),
+            (37, super::WorkerSupervisorError::InvalidRecord),
+            (257, super::WorkerSupervisorError::NotEnabled),
+        ] {
+            assert_eq!(claimed.pop_first(population), Err(error));
+            assert_eq!(claimed, checkpoint);
+        }
+        assert_eq!(claimed.pop_first(38), Ok(Some(0)));
+        assert_eq!(claimed.pop_first(38), Ok(Some(37)));
+        assert_eq!(claimed.pop_first(38), Ok(None));
+    }
+
+    #[test]
+    fn pending_worker_empty_selection_still_validates_population() {
+        let mut empty = WorkerPendingSet::empty();
+        for population in [0, 257] {
+            assert_eq!(
+                next_pending_worker_index(&empty, usize::MAX, population),
+                Err(super::WorkerSupervisorError::NotEnabled),
+            );
+            assert_eq!(
+                empty.pop_first(population),
+                Err(super::WorkerSupervisorError::NotEnabled),
+            );
+        }
+        for population in [1, 37, 64, 256] {
+            assert_eq!(
+                next_pending_worker_index(&empty, usize::MAX, population),
+                Ok(None),
+            );
+            assert_eq!(empty.pop_first(population), Ok(None));
+        }
     }
 
     #[test]

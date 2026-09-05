@@ -3702,7 +3702,8 @@ impl ReservedVaddrRanges {
     }
 }
 
-/// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
+/// Bump allocation excludes every enabled compiler-owned anchor before its
+/// constructor claims the slot. The bitmap records claims, not declarations.
 pub struct SlotAllocator {
     cnode: seL4_CNode,
     start: seL4_CPtr,
@@ -3715,6 +3716,39 @@ pub struct SlotAllocator {
 const ROOT_CSPACE_SLOT_CAPACITY: usize = 1 << 14;
 const RESERVED_SLOT_WORD_BITS: usize = u64::BITS as usize;
 const RESERVED_SLOT_WORDS: usize = ROOT_CSPACE_SLOT_CAPACITY / RESERVED_SLOT_WORD_BITS;
+
+/// Fixed generated destinations cannot depend on constructor order or the
+/// number of BootInfo image caps preceding the ordinary allocation frontier.
+fn is_generated_cspace_anchor_slot(slot: seL4_CPtr) -> bool {
+    generated_cspace_anchor_slot_in(
+        slot,
+        &crate::generated::ninedoor_service_config(),
+        &crate::generated::console_network_service_config(),
+        &crate::generated::worker_resource_admission_config(),
+    )
+}
+
+fn generated_cspace_anchor_slot_in(
+    slot: seL4_CPtr,
+    ninedoor: &crate::generated::NineDoorServiceConfig,
+    console: &crate::generated::ConsoleNetworkServiceConfig,
+    admission: &crate::generated::WorkerResourceAdmissionConfig,
+) -> bool {
+    let Ok(slot) = u32::try_from(slot) else {
+        return false;
+    };
+    (ninedoor.enabled && slot == ninedoor.revoke_anchor_slot)
+        || (console.enabled && slot == console.revoke_anchor_slot)
+        || (admission.enabled
+            && (admission
+                .critical_tcbs
+                .iter()
+                .any(|resource| slot == resource.revoke_anchor_slot)
+                || admission.executable_roles.iter().any(|role| {
+                    slot.checked_sub(role.revoke_anchor_slot)
+                        .is_some_and(|offset| offset < u32::from(role.executable_slots))
+                })))
+}
 
 /// Fixed, allocation-free exact reservation set for the complete root CNode.
 struct ReservedSlotBitmap {
@@ -3815,6 +3849,13 @@ impl SlotAllocator {
     }
 
     fn alloc(&mut self) -> Option<seL4_CPtr> {
+        self.alloc_with_anchor_predicate(is_generated_cspace_anchor_slot)
+    }
+
+    fn alloc_with_anchor_predicate(
+        &mut self,
+        generated_anchor: impl Fn(seL4_CPtr) -> bool,
+    ) -> Option<seL4_CPtr> {
         if self.next < self.start {
             ::log::warn!(
                 "[cspace] next slot 0x{next:04x} before window start 0x{start:04x}; correcting",
@@ -3825,7 +3866,9 @@ impl SlotAllocator {
         }
         while self.next < self.end {
             while self.next < self.end
-                && (is_boot_reserved_slot(self.next) || self.reserved_slots.contains(self.next))
+                && (is_boot_reserved_slot(self.next)
+                    || generated_anchor(self.next)
+                    || self.reserved_slots.contains(self.next))
             {
                 self.next += 1;
             }
@@ -3860,14 +3903,24 @@ impl SlotAllocator {
         self.alloc()
     }
 
-    /// Excludes one exact empty slot from bump allocation for a retained anchor.
+    /// Claims one exact empty anchor once. A declared anchor may be below the
+    /// bump cursor because ordinary allocation has always excluded that slot.
     pub fn reserve_exact(&mut self, slot: seL4_CPtr) -> Result<(), seL4_Error> {
-        if slot < self.next
-            || slot < self.start
+        self.reserve_exact_with_checks(slot, is_generated_cspace_anchor_slot, debug_cap_identify)
+    }
+
+    fn reserve_exact_with_checks(
+        &mut self,
+        slot: seL4_CPtr,
+        generated_anchor: impl FnOnce(seL4_CPtr) -> bool,
+        identify: impl FnOnce(seL4_CPtr) -> seL4_Word,
+    ) -> Result<(), seL4_Error> {
+        if slot < self.start
             || slot >= self.end
             || is_boot_reserved_slot(slot)
+            || (slot < self.next && !generated_anchor(slot))
             || self.reserved_slots.contains(slot)
-            || debug_cap_identify(slot) != 0
+            || identify(slot) != 0
         {
             return Err(sel4_sys::seL4_DeleteFirst);
         }
@@ -7869,6 +7922,188 @@ impl Default for VSpaceTableTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_allocator_preserves_future_service_anchors_across_frontier() {
+        let mut slots = SlotAllocator::new(
+            seL4_CapInitThreadCNode,
+            seL4_SlotRegion {
+                start: 0x3f07,
+                end: 0x3f0c,
+            },
+            16,
+        );
+        // Independent fixture for the physical console/NineDoor frontier.
+        let declared = |slot| matches!(slot, 0x3f08 | 0x3f09);
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), Some(0x3f07));
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), Some(0x3f0a));
+        assert_eq!(slots.window().next, 0x3f0b);
+        for anchor in [0x3f08, 0x3f09] {
+            assert_eq!(
+                slots.reserve_exact_with_checks(anchor, declared, |_| 0),
+                Ok(())
+            );
+            assert_eq!(
+                slots.reserve_exact_with_checks(anchor, declared, |_| 0),
+                Err(seL4_DeleteFirst)
+            );
+        }
+        for ordinary in [0x3f07, 0x3f0a] {
+            assert_eq!(
+                slots.reserve_exact_with_checks(ordinary, declared, |_| 0),
+                Err(seL4_DeleteFirst)
+            );
+        }
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), Some(0x3f0b));
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), None);
+    }
+
+    #[test]
+    fn slot_allocator_anchor_claim_preserves_empty_window_and_occupancy_checks() {
+        let mut slots = SlotAllocator::new(
+            seL4_CapInitThreadCNode,
+            seL4_SlotRegion {
+                start: 100,
+                end: 104,
+            },
+            16,
+        );
+        let declared = |slot| slot == 101;
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), Some(100));
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), Some(102));
+        for outside in [0, 99, 104] {
+            assert_eq!(
+                slots.reserve_exact_with_checks(outside, |_| true, |_| 0),
+                Err(seL4_DeleteFirst)
+            );
+        }
+        assert_eq!(
+            slots.reserve_exact_with_checks(101, declared, |_| 1),
+            Err(seL4_DeleteFirst)
+        );
+        assert_eq!(
+            slots.reserve_exact_with_checks(101, declared, |_| 0),
+            Ok(())
+        );
+        // An undeclared future anchor retains the existing one-time reservation.
+        assert_eq!(
+            slots.reserve_exact_with_checks(103, declared, |_| 0),
+            Ok(())
+        );
+        assert_eq!(slots.alloc_with_anchor_predicate(declared), None);
+
+        let mut initial = SlotAllocator::new(
+            seL4_CapInitThreadCNode,
+            seL4_SlotRegion { start: 0, end: 104 },
+            16,
+        );
+        assert_eq!(
+            initial.reserve_exact_with_checks(seL4_CapInitThreadTCB, |_| true, |_| 0),
+            Err(seL4_DeleteFirst)
+        );
+    }
+
+    #[test]
+    fn slot_allocator_generated_anchor_declarations_respect_enabled_ranges() {
+        const CRITICAL: [crate::generated::CriticalTcbResource; 1] =
+            [crate::generated::CriticalTcbResource {
+                id: "test-critical",
+                cnode_radix_bits: 7,
+                cspace_cap_count: 32,
+                revoke_anchor_slot: 0x3f00,
+                ipc_buffer_pages: 1,
+                stack_pages: 4,
+                fault_reply_lanes: 1,
+            }];
+        const ROLES: [crate::generated::ExecutableRoleAdmission; 1] =
+            [crate::generated::ExecutableRoleAdmission {
+                role: "test-worker",
+                task_prefix: "test-worker-",
+                namespace_capacity: 2,
+                executable_slots: 2,
+                core: 3,
+                revoke_anchor_slot: 0x3a98,
+                per_slot: crate::generated::KernelObjectBudget {
+                    tcbs: 1,
+                    cnodes: 1,
+                    vspaces: 1,
+                    page_tables: 8,
+                    asids: 1,
+                    frames: 12,
+                    endpoints: 1,
+                    notifications: 0,
+                    fault_caps: 1,
+                    timeout_fault_caps: 1,
+                    reply_objects: 1,
+                    scheduling_contexts: 1,
+                    cspace_slots: 32,
+                    untyped_bytes: 131072,
+                },
+            }];
+        // A fixed local declaration is sufficient for this pure classifier;
+        // the production manifest's other fields do not participate.
+        let mut admission = crate::generated::worker_resource_admission_config();
+        admission.critical_tcbs = &CRITICAL;
+        admission.executable_roles = &ROLES;
+        let mut ninedoor = crate::generated::ninedoor_service_config();
+        let mut console = crate::generated::console_network_service_config();
+        ninedoor.revoke_anchor_slot = 0x3f09;
+        console.revoke_anchor_slot = 0x3f08;
+        for enabled in 0..8 {
+            ninedoor.enabled = enabled & 1 != 0;
+            console.enabled = enabled & 2 != 0;
+            admission.enabled = enabled & 4 != 0;
+            for slot in [
+                0x3a97, 0x3a98, 0x3a99, 0x3a9a, 0x3f00, 0x3f01, 0x3f07, 0x3f08, 0x3f09, 0x3f0a,
+            ] {
+                let expected = (enabled & 1 != 0 && slot == 0x3f09)
+                    || (enabled & 2 != 0 && slot == 0x3f08)
+                    || (enabled & 4 != 0 && matches!(slot, 0x3a98 | 0x3a99 | 0x3f00));
+                assert_eq!(
+                    generated_cspace_anchor_slot_in(slot, &ninedoor, &console, &admission),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slot_allocator_selected_generated_anchors_fit_unique_claim_bitmap_slots() {
+        let mut expected = crate::rust_alloc::collections::BTreeSet::new();
+        let ninedoor = crate::generated::ninedoor_service_config();
+        let console = crate::generated::console_network_service_config();
+        let admission = crate::generated::worker_resource_admission_config();
+        for (enabled, anchor) in [
+            (ninedoor.enabled, ninedoor.revoke_anchor_slot),
+            (console.enabled, console.revoke_anchor_slot),
+        ] {
+            if enabled {
+                assert!(expected.insert(anchor));
+            }
+        }
+        if admission.enabled {
+            for resource in admission.critical_tcbs {
+                assert!(expected.insert(resource.revoke_anchor_slot));
+            }
+            for role in admission.executable_roles {
+                for offset in 0..u32::from(role.executable_slots) {
+                    assert!(role
+                        .revoke_anchor_slot
+                        .checked_add(offset)
+                        .is_some_and(|anchor| expected.insert(anchor)));
+                }
+            }
+        }
+        for anchor in &expected {
+            assert!(u64::from(*anchor) < ROOT_CSPACE_SLOT_CAPACITY as u64);
+        }
+        for slot in 0..ROOT_CSPACE_SLOT_CAPACITY {
+            assert_eq!(
+                is_generated_cspace_anchor_slot(slot as seL4_CPtr),
+                expected.contains(&(slot as u32))
+            );
+        }
+    }
 
     #[test]
     fn reserved_slot_bitmap_tracks_hundreds_of_exact_anchors() {
