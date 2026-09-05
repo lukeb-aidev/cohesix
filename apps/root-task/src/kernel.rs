@@ -4802,6 +4802,7 @@ fn bootstrap<P: Platform>(
         },
     );
     boot_log::force_uart_line(driver_task_line.as_str());
+    let _ = crate::hal::poll_early_hdmi_boot_progress();
 
     let mut uart_slot: Option<sel4_sys::seL4_CPtr> = None;
     let mut uart_mmio: Option<KernelUartMmio> = None;

@@ -192,15 +192,19 @@ and report readers keep their existing APIs, framing, workloads and schemas.
 Existing RX timing receipts and unchanged raw/pressure workloads measure the
 candidate; no host pacing, retries or acceptance thresholds are adjusted.
 
-The Pi HDMI early startup tile now adds one fixed child-rendered progress line
-within the existing admitted safe-area raster. It changes no console frame,
-command, namespace, authentication rule, generated contract, host API,
-diagnostic row, or report schema. The complete host-tool suite,
-`tools/cohesix-py`, `.coh` workloads, serial/Pi helpers, performance harnesses,
-and report readers therefore require no behavior or fixture change. Focused
-runtime tests and exact target compilation can reject the tile implementation;
-only the physical display can prove that both lines are visible before serial
-cutover and are replaced cleanly by the first ordinary frame.
+The Pi HDMI startup tile now supports a bounded five-second elapsed-status
+refresh before ordinary terminal takeover. This changes only the internal
+empty HDMI frame completion: a due pre-terminal raster returns `Progress`
+with its cell count; an inactive or early poll remains `Idle`. Its existing
+opcode, layout, generated budget, capability authority and ordinary frame
+contract remain unchanged. The complete `coh`/`cohsh`, Hive Gateway/REST,
+SwarmUI, host bridge/tool catalog, `tools/cohesix-py`, `.coh` scripts,
+serial/build/Pi evidence helpers, generated-profile consumers, performance
+harness workloads/arithmetic and report readers were reviewed. None consumes
+this display-private completion, so none requires behavior, fixture or schema
+changes. Root and display tests cover its bounded clock/raster semantics;
+only exact-image Pi evidence can prove visible five-second updates, clean
+terminal takeover, liveness and performance.
 
 ## Choose one live topology
 

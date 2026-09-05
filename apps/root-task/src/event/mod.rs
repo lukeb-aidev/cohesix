@@ -17780,6 +17780,7 @@ where
         if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             || crate::serial::serial_linked_runtime_transport_active()
         {
+            crate::hal::finish_early_hdmi_boot_progress();
             return SerialLinkedRuntimeCutoverTurn::Complete;
         }
 
@@ -17792,6 +17793,19 @@ where
         self.queue_stream_prompt_tail_if_ready();
         if self.reboot_pending && self.reboot_ack_drain_observed {
             self.service_pending_reboot();
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return SerialLinkedRuntimeCutoverTurn::DrainPending;
+        }
+
+        // Before UART ownership release, one due display refresh may consume
+        // this entire outer turn. Physical input and response tails retain
+        // priority; no refresh is composed with a linked serial init action.
+        if !self.serial_root_uart_released_for_linked_runtime
+            && !self.reboot_pending
+            && !self.physical_console_input_pending_for_output()
+            && !self.physical_console_response_pending()
+            && crate::hal::poll_early_hdmi_boot_progress()
+        {
             self.cyw43_bootstrap_operator_turn_active = false;
             return SerialLinkedRuntimeCutoverTurn::DrainPending;
         }
@@ -17865,6 +17879,7 @@ where
                         .serial
                         .use_driver_task_client_after_attach_without_root_flush();
                 if cutover_ready {
+                    crate::hal::finish_early_hdmi_boot_progress();
                     let _ = self.try_emit_serial_line_with_kind(
                         "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
                         PendingConsoleOutputKind::Line,

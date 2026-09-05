@@ -931,6 +931,22 @@ reusable ownership pattern.
   authority, or full-surface clear. Invalid geometry performs zero stores, and
   the first ordinary generation-bound frame clears and replaces the tile
   through the existing takeover cursor.
+- Before terminal takeover, a canonical empty HDMI `SubmitFrame` (fixed ring
+  offset, HDMI role, zero auxiliaries/frame flags and exact generated budget)
+  may refresh only the second tile row after five seconds in exported CNTVCT
+  time. The fixed-width status is `Initializing... 00005s`, padded to erase
+  the preceding row; elapsed seconds saturate at 99999. Missed periods
+  coalesce into one raster, with full span admission before any store and one
+  completion barrier. The command returns `Progress` with the rendered cell
+  count only when it draws, otherwise the existing `Idle`. First ordinary
+  frame admission disables these refreshes permanently, before any retained
+  clear. Root offers the empty command at quiescent bootstrap checkpoints,
+  at most every five elapsed seconds, through the existing synchronous
+  command/Reply transport; it adds no timer or device authority. Pre-release
+  UART cutover gives input and response tails priority and consumes a separate
+  outer turn for a due display poll. Cutover stops the root polling source.
+  Physical cadence is bounded by the next safe checkpoint and scheduling;
+  hardware must verify the requested visible five-second cadence.
 - Keep terminal state in a fixed child-private cell plane. The current Pi
   renderer admits at most 256 columns by 128 rows, uses a logical row ring for
   scrolling, and records visible damage in a fixed bitmap. Retain a

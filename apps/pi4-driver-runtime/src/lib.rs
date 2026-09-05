@@ -7976,6 +7976,10 @@ static HDMI_CSI_DIGITS_SEEN: AtomicU32 = AtomicU32::new(0);
 static HDMI_SAVED_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
 static HDMI_SAVED_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
 static HDMI_FIRST_FRAME_CLEARED: AtomicBool = AtomicBool::new(false);
+// Only the display owner reads or advances these boot-only timestamps. Zero
+// disables the tile permanently when the first ordinary frame is admitted.
+static HDMI_EARLY_PROGRESS_START: AtomicU64 = AtomicU64::new(0);
+static HDMI_EARLY_PROGRESS_LAST: AtomicU64 = AtomicU64::new(0);
 static HDMI_FRAME_CURSOR: RuntimeStateSlot<HdmiFrameCursor> =
     RuntimeStateSlot::new(HdmiFrameCursor::idle());
 static HDMI_CELL_PLANE: RuntimeStateSlot<HdmiCellPlane> =
@@ -13958,6 +13962,9 @@ fn validate_runtime_init_descriptor_with_wait_support(
         if hdmi_render_early_progress_tile(&descriptor).is_none() {
             return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
         }
+        let now = runtime_timer_counter_ticks();
+        HDMI_EARLY_PROGRESS_START.store(now, Ordering::Release);
+        HDMI_EARLY_PROGRESS_LAST.store(now, Ordering::Release);
         HDMI_RUNTIME_FLAGS.fetch_or(
             ENGINE_STATE_INITIALIZED
                 | ENGINE_STATE_DESCRIPTOR_READY
@@ -22358,6 +22365,21 @@ fn service_hdmi_text(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     if command.frame.len == 0 {
+        // A canonical empty frame is a bounded boot-progress poll, never a
+        // terminal input or a retained clear. After ordinary-frame takeover
+        // it retains its existing Idle result and performs no framebuffer I/O.
+        if command.sequence != 0
+            && command.opcode == OPCODE_SUBMIT_FRAME
+            && command.arg0 == HOT_PATH_HDMI_TEXT
+            && command.arg1 == ROLE_DISPLAY
+            && command.aux0 == 0
+            && command.frame.offset as usize == DRIVER_TASK_RING_FRAME_OFFSET
+            && hdmi_frame_command_envelope_valid(command)
+        {
+            if let Some(cells) = hdmi_refresh_early_progress(runtime_timer_counter_ticks()) {
+                return DriverTaskCompletionRecord::progress(command.sequence, cells as u32);
+            }
+        }
         publish_runtime_progress(
             command.sequence,
             DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED,
@@ -55045,6 +55067,7 @@ fn service_hdmi_frame_command_turn(command: DriverTaskCommandRecord) -> Option<R
     let phase = HDMI_FRAME_CURSOR.with_mut(|cursor| {
         let began = matches!(cursor.phase, HdmiFramePhase::Idle);
         if began {
+            HDMI_EARLY_PROGRESS_START.store(0, Ordering::Release);
             cursor.begin(command, !HDMI_FIRST_FRAME_CLEARED.load(Ordering::Acquire));
         }
         if !cursor.active_for(command) {
@@ -56082,6 +56105,55 @@ fn hdmi_render_early_progress_tile(descriptor: &DriverRuntimeInitDescriptor) -> 
     }
     device_store_completion_barrier();
     Some(HDMI_EARLY_PROGRESS_CELLS)
+}
+
+fn hdmi_early_progress_due(start: u64, last: u64, now: u64, hz: u64) -> bool {
+    start != 0
+        && last >= start
+        && hz != 0
+        && now.checked_sub(last).is_some_and(|ticks| ticks / hz >= 5)
+}
+
+fn hdmi_early_progress_line(seconds: u64) -> [u8; HDMI_EARLY_PROGRESS_MAX_COLS] {
+    let mut line = [b' '; HDMI_EARLY_PROGRESS_MAX_COLS];
+    let prefix = b"Initializing... ";
+    line[..prefix.len()].copy_from_slice(prefix);
+    let mut remaining = seconds.min(99_999);
+    for index in (prefix.len()..prefix.len() + 5).rev() {
+        line[index] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+    }
+    line[prefix.len() + 5] = b's';
+    line
+}
+
+fn hdmi_refresh_early_progress(now: u64) -> Option<usize> {
+    let start = HDMI_EARLY_PROGRESS_START.load(Ordering::Acquire);
+    let last = HDMI_EARLY_PROGRESS_LAST.load(Ordering::Acquire);
+    let hz = runtime_timer_freq_hz();
+    if !hdmi_early_progress_due(start, last, now, hz) {
+        return None;
+    }
+    // Coalesce missed intervals into one update, including a rejected raster.
+    // There is no catch-up queue and this poll cannot restart a stopped tile.
+    HDMI_EARLY_PROGRESS_LAST.store(now, Ordering::Release);
+    let line = hdmi_early_progress_line((now - start) / hz);
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        if !hdmi_cell_plane_geometry_admitted(descriptor) {
+            return None;
+        }
+        let state = HdmiRenderState::framebuffer_only_from_descriptor(descriptor);
+        if !state.raster_row_span_admitted(1, line.len()) {
+            return None;
+        }
+        for (col, byte) in line.iter().copied().enumerate() {
+            if !state.raster_cell(1, col, byte) {
+                return None;
+            }
+        }
+        device_store_completion_barrier();
+        Some(line.len())
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73679,6 +73751,8 @@ mod tests {
         HDMI_SAVED_CURSOR_ROW.store(0, Ordering::Release);
         HDMI_SAVED_CURSOR_COL.store(0, Ordering::Release);
         HDMI_FIRST_FRAME_CLEARED.store(false, Ordering::Release);
+        HDMI_EARLY_PROGRESS_START.store(0, Ordering::Release);
+        HDMI_EARLY_PROGRESS_LAST.store(0, Ordering::Release);
         HDMI_FRAME_CURSOR.with_mut(HdmiFrameCursor::reset);
         HDMI_CELL_PLANE.with_mut(HdmiCellPlane::reset);
         GENET_RUNTIME_FLAGS.store(0, Ordering::Release);
@@ -137049,6 +137123,22 @@ mod tests {
     }
 
     #[test]
+    fn hdmi_early_progress_clock_and_text_are_bounded() {
+        assert!(!hdmi_early_progress_due(0, 1, 500_000_001, 100_000_000));
+        assert!(!hdmi_early_progress_due(1, 0, 500_000_001, 100_000_000));
+        assert!(!hdmi_early_progress_due(1, 1, 500_000_001, 0));
+        assert!(!hdmi_early_progress_due(1, 2, 1, 100_000_000));
+        assert!(!hdmi_early_progress_due(1, 1, 500_000_000, 100_000_000));
+        assert!(hdmi_early_progress_due(1, 1, 500_000_001, 100_000_000));
+        assert!(hdmi_early_progress_due(1, 1, u64::MAX, 100_000_000));
+        assert_eq!(&hdmi_early_progress_line(5), b"Initializing... 00005s  ");
+        assert_eq!(
+            &hdmi_early_progress_line(u64::MAX),
+            b"Initializing... 99999s  "
+        );
+    }
+
+    #[test]
     fn hdmi_safe_area_insets_and_aligns_text_surface() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -137469,6 +137559,27 @@ mod tests {
             HDMI_EARLY_PROGRESS_MAX_STORES,
             "RGB888 uses three volatile stores for every bounded tile pixel",
         );
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        HDMI_EARLY_PROGRESS_START.store(1, Ordering::Release);
+        HDMI_EARLY_PROGRESS_LAST.store(1, Ordering::Release);
+        let later = 1 + runtime_timer_freq_hz() * 30;
+        TEST_FRAMEBUFFER_WRITE_STORES.store(0, Ordering::Release);
+        assert_eq!(hdmi_refresh_early_progress(later), Some(24));
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
+            24 * 8 * 16 * 3
+        );
+        assert_eq!(hdmi_refresh_early_progress(later), None);
+        assert_eq!(read_framebuffer_byte(second_line_byte - 1), 0x3c);
+        assert_eq!(read_framebuffer_byte(after_second_line_byte), 0xc3);
+        descriptor.framebuffer.pitch = 1;
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        TEST_FRAMEBUFFER_WRITE_STORES.store(0, Ordering::Release);
+        assert_eq!(
+            hdmi_refresh_early_progress(later + runtime_timer_freq_hz() * 5),
+            None
+        );
+        assert_eq!(TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -137853,6 +137964,7 @@ mod tests {
     fn hdmi_linked_runtime_renders_after_framebuffer_descriptor() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
         let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
         descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
         descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
@@ -137991,6 +138103,56 @@ mod tests {
             TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
             early_tile_stores,
             "steady engine admission performs no second scanout mutation",
+        );
+        let pulse = DriverTaskCommandRecord {
+            sequence: 99,
+            opcode: OPCODE_SUBMIT_FRAME,
+            arg0: HOT_PATH_HDMI_TEXT,
+            arg1: ROLE_DISPLAY,
+            budget: hdmi_budget(),
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 0,
+                flags: 0,
+            },
+            ..DriverTaskCommandRecord::empty()
+        };
+        let hz = runtime_timer_freq_hz();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + hz * 5 - 1, Ordering::Release);
+        assert_eq!(
+            service_command(0, pulse),
+            DriverTaskCompletionRecord::idle(99)
+        );
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
+            early_tile_stores
+        );
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + hz * 5, Ordering::Release);
+        assert_eq!(
+            service_command(0, pulse),
+            DriverTaskCompletionRecord::progress(99, 24),
+        );
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire) - early_tile_stores,
+            24 * 16 * 4,
+        );
+        assert_eq!(
+            read_framebuffer_u32(after_second_line_addr),
+            admission_sentinel
+        );
+        assert_eq!(
+            read_framebuffer_u32(early_tile_addr),
+            early_tile_first_pixel
+        );
+        assert!(HDMI_CELL_PLANE.with_ref(HdmiCellPlane::cold_engine_init_ready));
+        let refreshed_stores = TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire);
+        assert_eq!(
+            service_command(0, pulse),
+            DriverTaskCompletionRecord::idle(99)
+        );
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
+            refreshed_stores
         );
         let frame = DriverTaskCommandRecord {
             sequence: 32,
@@ -138167,6 +138329,13 @@ mod tests {
             RuntimeCommandTurn::Pending,
             "the first display mutation must retain the command while clearing one bounded row batch",
         );
+        let stores_at_takeover = TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire);
+        assert_eq!(hdmi_refresh_early_progress(1 + hz * 60), None);
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
+            stores_at_takeover
+        );
+        assert_eq!(HDMI_EARLY_PROGRESS_START.load(Ordering::Acquire), 0);
         assert_eq!(
             TEST_FRAMEBUFFER_READS.load(Ordering::Acquire),
             0,

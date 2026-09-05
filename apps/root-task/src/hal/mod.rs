@@ -19,9 +19,88 @@ use core::{
     ptr::{self, NonNull},
 };
 
-// Early Pi HDMI bootstrap admits the engine and owner descriptor only. The
-// steady local-seat retained-frame path owns the first framebuffer mutation,
-// its completion receipt, and every later redraw.
+// The display child owns the bounded startup tile and its boot-only refresh;
+// the steady local-seat retained frame owns terminal takeover and later redraws.
+#[cfg(feature = "kernel")]
+static EARLY_HDMI_PROGRESS_LAST_US: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "kernel")]
+fn early_hdmi_progress_due(last_us: u64, now_us: u64) -> bool {
+    last_us != 0
+        && now_us
+            .checked_sub(last_us)
+            .is_some_and(|elapsed| elapsed >= 5_000_000)
+}
+
+/// Offer one empty display command at a quiescent bootstrap checkpoint.
+/// Callers hold no driver call/Reply or display ticket. The existing transport
+/// owns admission, fault containment and retirement; root never maps scanout.
+/// Missed periods coalesce, and failure disables further optional boot polls.
+#[cfg(feature = "kernel")]
+pub(crate) fn poll_early_hdmi_boot_progress() -> bool {
+    let last = EARLY_HDMI_PROGRESS_LAST_US.load(Ordering::Acquire);
+    if last == 0 || !driver_task::physical_pi_driver_task_only_owner_state_active() {
+        return false;
+    }
+    let Some(now) = crate::kernel::pi4_root_boot_elapsed_us() else {
+        return false;
+    };
+    if !early_hdmi_progress_due(last, now) {
+        return false;
+    }
+    if driver_task::driver_task_ring_command_active(HDMI_TEXT_DRIVER_TASK_CONTRACT)
+        || driver_task::driver_task_ring_command_active(SERIAL_DRIVER_TASK_CONTRACT)
+    {
+        // An existing immutable ticket owns its slot and completion. Optional
+        // display status must never displace it or compose a second Call.
+        return false;
+    }
+    EARLY_HDMI_PROGRESS_LAST_US.store(now, Ordering::Release);
+    let command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        driver_task::DriverTaskHotPath::HdmiText,
+        driver_task::DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        driver_task::DriverFrameDescriptor {
+            offset: driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: 0,
+            flags: 0,
+        },
+    );
+    let completion = driver_task::run_driver_task_ring_service_bootstrap(
+        HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        command,
+    );
+    if completion
+        .is_none_or(|record| record.code == driver_task::DriverTaskCompletionCode::Fault.as_u16())
+    {
+        EARLY_HDMI_PROGRESS_LAST_US.store(0, Ordering::Release);
+    } else {
+        // Start the next interval after the child's completed poll, so the
+        // independent child guard cannot skip alternate updates when command
+        // admission latency varies between calls.
+        EARLY_HDMI_PROGRESS_LAST_US.store(
+            crate::kernel::pi4_root_boot_elapsed_us().unwrap_or(0),
+            Ordering::Release,
+        );
+    }
+    let mut line = heapless::String::<160>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "HDMI_BOOT_PROGRESS elapsed_us={} code={} cells={} source=cntvct-el0",
+            now,
+            completion.map_or(0, |record| record.code),
+            completion.map_or(0, |record| record.result),
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+    true
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn finish_early_hdmi_boot_progress() {
+    EARLY_HDMI_PROGRESS_LAST_US.store(0, Ordering::Release);
+}
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
@@ -2750,6 +2829,12 @@ fn bootstrap_linked_runtime_engine_for_early_console(
     let owner_state = driver_task::register_driver_task_runtime_owner_state(
         driver_task::DriverTaskHotPath::HdmiText,
     );
+    if owner_state {
+        EARLY_HDMI_PROGRESS_LAST_US.store(
+            crate::kernel::pi4_root_boot_elapsed_us().unwrap_or(0),
+            Ordering::Release,
+        );
+    }
     driver_task::emit_driver_task_endpoint_lifetime_checkpoint(contract, "early-draw");
     let mut line = heapless::String::<192>::new();
     let _ = fmt::Write::write_fmt(
@@ -4256,6 +4341,7 @@ impl<'a> KernelHal<'a> {
         }
 
         for contract in bootstrap_contracts {
+            let _ = poll_early_hdmi_boot_progress();
             let created = if use_isolated_vspace {
                 self.create_isolated_driver_task(*contract, fault_endpoint)
             } else {
@@ -5178,6 +5264,9 @@ impl<'a> KernelHal<'a> {
                 crate::hal::cache::cache_unify_instruction(vspace, vaddr, page_bytes)
                     .map_err(|err| HalError::Sel4(err.code()))?;
             }
+            // The previous page has no pending mapping or IPC operation. Check
+            // the clock here so large image copies cannot hide boot progress.
+            let _ = poll_early_hdmi_boot_progress();
         }
         Ok(RuntimeElfLoad {
             entry: plan.entry,
@@ -7070,6 +7159,17 @@ impl<'a> Cyw43Hal for KernelHal<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn early_hdmi_progress_requires_five_elapsed_seconds() {
+        assert!(!super::early_hdmi_progress_due(0, 9_000_000));
+        assert!(!super::early_hdmi_progress_due(2, 1));
+        assert!(!super::early_hdmi_progress_due(1, 5_000_000));
+        assert!(super::early_hdmi_progress_due(1, 5_000_001));
+        assert!(!super::early_hdmi_progress_due(5_000_001, 5_000_002));
+        assert!(super::early_hdmi_progress_due(5_000_001, 50_000_001));
+    }
+
     use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};
 
     #[cfg(feature = "kernel")]

@@ -6769,8 +6769,14 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       after full resource/geometry admission, validate both rows before the
       first store, keep its stores below the fixed glyph bound, perform zero
       stores for each rejected geometry, and prove the first ordinary frame's
-      retained takeover clear replaces it. The tile is not prompt, USB,
-      network, or Pi acceptance evidence.
+      retained takeover clear replaces it. Empty-frame refresh tests use an
+      injected counter to prove the five-second threshold, no early/repeated
+      update, backwards/zero-clock rejection, coalesced missed periods,
+      bounded decimal saturation, exact second-row RGB888/XRGB8888 stores,
+      rejected-geometry zero stores, and permanent stop at first normal-frame
+      admission. Fresh hardware must timestamp visible updates between the
+      initial tile and serial cutover, including any scheduling/checkpoint
+      overrun. The tile is not prompt, USB, network, or Pi acceptance evidence.
       The serial transport regression must prove that exactly four existing
       pages form two independent two-page/8,128-byte generation-bound SPSC
       rings. Prove only those CPU rings use identically cacheable,
