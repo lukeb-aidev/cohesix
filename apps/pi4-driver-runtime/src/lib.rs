@@ -69116,7 +69116,7 @@ pub fn runtime_main(task_key: usize) -> ! {
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
         task_key_marker,
     );
-    loop {
+    'runtime_commands: loop {
         let notification_route = runtime_notification_route(&RUNTIME_DESCRIPTOR.load());
         if let Some(wait) = root_causal_wait {
             let parent = wait.parent();
@@ -69427,7 +69427,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                             // its immutable source-probe contract.
                             CYW43_DPC_DEFERRED.store(true, Ordering::Release);
                             runtime_yield_current_tcb();
-                            continue;
+                            continue 'runtime_commands;
                         }
                         let _ = service_runtime_notification(badge);
                         // Service is a hard stop. Exactly one persistent-source
@@ -69454,7 +69454,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                             break 'retained_admission;
                         } else {
                             runtime_yield_current_tcb();
-                            continue;
+                            continue 'runtime_commands;
                         }
                     }
 
@@ -69468,7 +69468,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                         pending_command_gate
                             .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckWake);
                         runtime_yield_current_tcb();
-                        continue;
+                        continue 'runtime_commands;
                     }
 
                     let wake = if pending_command_gate.delegated_owner_phase()
@@ -69494,7 +69494,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                     let Some(retained) = pending_intake.as_mut() else {
                         pending_command_gate.complete();
                         runtime_yield_current_tcb();
-                        continue;
+                        continue 'runtime_commands;
                     };
                     let admission = runtime_retained_owner_bounded_admission(
                         &mut pending_command_gate,
@@ -69534,7 +69534,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                         pending_command_gate
                             .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
                         runtime_yield_current_tcb();
-                        continue;
+                        continue 'runtime_commands;
                     }
                     if let Some(probe) = admission.initial_probe {
                         publish_runtime_retained_grant_probe(
@@ -69579,7 +69579,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                             // Every unrelated source, waiting child, fault, or
                             // owned Reply/grant retains the scheduling boundary.
                             runtime_yield_current_tcb();
-                            continue;
+                            continue 'runtime_commands;
                         }
                         RuntimeRetainedOwnerAdmissionOutcome::Execute(grant) => {
                             if root_grant {
@@ -69618,7 +69618,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 grant.grant_id,
                             );
                             runtime_yield_current_tcb();
-                            continue;
+                            continue 'runtime_commands;
                         }
                         RuntimeRetainedOwnerAdmissionOutcome::Wait
                         | RuntimeRetainedOwnerAdmissionOutcome::Rejected(_) => {
@@ -69645,13 +69645,13 @@ pub fn runtime_main(task_key: usize) -> ! {
                             // The blocking receive is the scheduling boundary. Resume
                             // pure grant bookkeeping directly instead of adding an
                             // artificial MCS-period yield.
-                            continue;
+                            continue 'runtime_commands;
                         }
                         RuntimeRetainedOwnerAdmissionOutcome::Unsupported => {
                             // Exact-grant fusion is deliberately unavailable to
                             // serial, GENET, and malformed/non-grant lanes.
                             runtime_yield_current_tcb();
-                            continue;
+                            continue 'runtime_commands;
                         }
                     }
                 }
