@@ -3204,6 +3204,14 @@ fn driver_task_ring_read_persistent_wait_receipt(
 fn driver_task_ring_read_one_way_wait_receipt(
     ring_root_ptr: usize,
 ) -> Option<DriverRuntimeOneWayWaitReceipt> {
+    driver_task_ring_read_one_way_wait_record(ring_root_ptr, false)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_one_way_wait_record(
+    ring_root_ptr: usize,
+    acknowledged: bool,
+) -> Option<DriverRuntimeOneWayWaitReceipt> {
     let base_offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET);
     let base = ring_root_ptr + base_offset;
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
@@ -3240,7 +3248,13 @@ fn driver_task_ring_read_one_way_wait_receipt(
     };
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
-    (word(commit_offset)? == first_commit && receipt.valid()).then_some(receipt)
+    (word(commit_offset)? == first_commit
+        && if acknowledged {
+            receipt.acknowledged()
+        } else {
+            receipt.valid()
+        })
+    .then_some(receipt)
 }
 
 /// Consume only a strictly newer service heartbeat for this exact tagged parent.
@@ -6181,6 +6195,19 @@ pub(crate) struct DriverTaskRetainedFrontierSnapshot {
     pub(crate) aborts: u64,
 }
 
+/// Explicit diagnostic only: fresh child progress and exact one-way wait state.
+/// Individual records are stable reads; the whole snapshot is not an atomic
+/// cross-runtime transaction and grants no scheduling or recovery authority.
+#[cfg(feature = "kernel")]
+pub(crate) struct DriverTaskOneWayDiagnostic {
+    pub(crate) frontier: DriverTaskRetainedFrontierSnapshot,
+    pub(crate) notification_tcb_bound: bool,
+    pub(crate) wait_cap_generation: u32,
+    pub(crate) last_prompted_slice: u32,
+    pub(crate) wait: Option<DriverRuntimeOneWayWaitReceipt>,
+    pub(crate) wait_exact: bool,
+}
+
 /// Passive root view of the CYW43 child-to-root RX wake route.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8768,6 +8795,44 @@ pub(crate) fn driver_task_retained_frontier_snapshot(
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
     driver_task_retained_frontier_snapshot_for_slot(task_key, slot)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_one_way_diagnostic(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskOneWayDiagnostic> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let base = slot.ring_root_ptr.load(Ordering::Acquire);
+    if base == 0 {
+        return None;
+    }
+    driver_task_ring_invalidate_completion_record(base);
+    let mut frontier = driver_task_retained_frontier_snapshot_for_slot(task_key, slot)?;
+    let progress = driver_task_ring_read_progress_record(base);
+    frontier.progress_valid = progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC;
+    frontier.progress_sequence = progress.sequence;
+    frontier.progress_phase = progress.phase;
+    frontier.progress_phase_name = driver_task_ring_progress_phase_label(progress.phase);
+    frontier.progress_aux0 = progress.aux0;
+    let wait = driver_task_ring_read_one_way_wait_record(base, false)
+        .or_else(|| driver_task_ring_read_one_way_wait_record(base, true));
+    let wait_exact = active_driver_task_ring_command(contract)
+        .zip(wait)
+        .is_some_and(|(command, wait)| {
+            wait.request_sequence == command.sequence
+                && wait.action_fingerprint == driver_task_runtime_continuation_fingerprint(command)
+                && wait.runtime_identity_token
+                    == slot.runtime_identity_token.load(Ordering::Acquire)
+        });
+    Some(DriverTaskOneWayDiagnostic {
+        frontier,
+        notification_tcb_bound: slot.runtime_notification_tcb_bound.load(Ordering::Acquire) != 0,
+        wait_cap_generation: slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire),
+        last_prompted_slice: slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire),
+        wait,
+        wait_exact,
+    })
 }
 
 /// Snapshot passive runtime cadence without advancing command or lease state.
@@ -37503,6 +37568,10 @@ mod tests {
         // the exact test-owned record.
         let acknowledged = unsafe { core::ptr::read_volatile(receipt_ptr) };
         assert!(acknowledged.acknowledged());
+        assert_eq!(
+            driver_task_ring_read_one_way_wait_record(ring_root_ptr, true),
+            Some(acknowledged)
+        );
         assert_eq!(acknowledged.request_sequence, exact.request_sequence);
         assert_eq!(acknowledged.wait_slice, exact.wait_slice);
         assert_eq!(

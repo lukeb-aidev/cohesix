@@ -947,6 +947,11 @@ reusable ownership pattern.
   outer turn for a due display poll. Cutover stops the root polling source.
   Physical cadence is bounded by the next safe checkpoint and scheduling;
   hardware must verify the requested visible two-second cadence.
+  Early HAL PCIe settle waits offer a checkpoint after each bounded chunk of
+  50,000 original spin iterations. Every original iteration and flushed MMIO
+  ordering remains; the chunk is not an elapsed-time clock or a shortened
+  hardware deadline. Only the existing CNTVCT guard decides when to draw.
+  These calls hold no driver Reply or display ticket and add no HAL reentry.
 - Keep terminal state in a fixed child-private cell plane. The current Pi
   renderer admits at most 256 columns by 128 rows, uses a logical row ring for
   scrolling, and records visible damage in a fixed bitmap. Retain a
@@ -1862,6 +1867,27 @@ An at-boundary, late, missing, replayed, or drifted publication fails closed. A
 handoff failure stays failed, with no root TCP fallback,
 deadline renewal, or extra retry. Gate 8 and DHCP alone therefore do not prove
 listener readiness.
+
+
+### Pi display continuation diagnostics
+
+Generic MCS one-way runtimes without a physical notification source recheck
+the exact durable DROA acknowledgement before a local notification wait.
+Only matching request, fingerprint, sealed runtime identity and slice permit
+clearing that acknowledgement and resuming the existing bounded action.
+Unacknowledged, stale or retired records do not authorize work. Serial, GENET,
+PCIe and CYW43/SDIO retain their physical-source arbitration boundaries. The
+early unbound USB/HDMI initial endpoint edge and bootstrap binding guard remain
+unchanged; this prewait repair alone does not prove an initial edge was received.
+
+Explicit USB diagnostics add `command_frontier`, `command_wait` and
+`command_progress` for each mapped USB/HDMI runtime. These stable per-record
+reads do not advance the command or grant a wake. Cross-record values can race
+a real child transition and must be correlated by request/slice. `state=absent`
+means no stable DROW/DROA was observed; it is not proof that the child is idle.
+The progress row reads the current shared record rather than a cached timeout
+sample. A persistent outstanding frame is a liveness failure even when timeout
+and no-reply counters remain zero.
 
 ## 8. Build diagnostics for developers, not incidents
 

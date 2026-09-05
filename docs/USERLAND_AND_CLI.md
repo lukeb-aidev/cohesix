@@ -152,6 +152,16 @@ retained service turn completes; a cached ready latch with a pending request is
 reports HDMI queue state separately from the isolated display driver's
 completion receipt.
 
+Mapped USB and HDMI runtimes additionally report three bounded rows:
+`usb: command_frontier` has `seq=request/command/completion`, lease `phase`,
+`issued`, `admission`, capability generation `cap`, `producers` and `sends`.
+`usb: command_wait` has actual `notification_bound`, `cap_gen`, last
+`prompted` slice, `state=absent|wait|ack`, receipt `request`, `slice` and
+`exact` identity match. `usb: command_progress` has fresh shared-record
+`valid`, `seq`, `phase` and `aux`. Each row names `domain=usb-runtime` or
+`hdmi-display`; absent/unmapped runtimes retain their existing counter row.
+These are passive diagnostic snapshots, not readiness or timeout verdicts.
+
 Every passive `usb status`, `usb dump-state`, and `usb diag` response begins
 with one atomic adjacent old-good pair:
 

@@ -9618,6 +9618,22 @@ const fn runtime_one_way_wait_ack_matches(
         && ack.committed_wait_slice == wait.committed_wait_slice
 }
 
+/// A runtime without a physical notification source may consume an already
+/// durable exact acknowledgement before parking. Other routes retain source
+/// arbitration at their existing notification boundary.
+#[cfg(any(target_os = "none", test))]
+fn runtime_one_way_prewait_ack(
+    route: RuntimeNotificationRoute,
+    base: usize,
+    wait: DriverRuntimeOneWayWaitReceipt,
+) -> Option<DriverRuntimeOneWayWaitReceipt> {
+    if route != RuntimeNotificationRoute::Unavailable {
+        return None;
+    }
+    read_runtime_one_way_wait_ack_at(base)
+        .filter(|ack| runtime_one_way_wait_ack_matches(wait, *ack))
+}
+
 #[cfg(any(target_os = "none", test))]
 const fn runtime_one_way_wait_receipt_command_valid(command: DriverTaskCommandRecord) -> bool {
     command.sequence != 0
@@ -70127,6 +70143,18 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // prompt is retained as local debt and never asks root to
                 // signal the same slice twice.
                 if !pending_command_gate.one_way_prompt_debt() {
+                    if let Some(ack) = runtime_one_way_prewait_ack(
+                        notification_route,
+                        DRIVER_TASK_RING_VADDR,
+                        receipt,
+                    ) {
+                        if !clear_runtime_one_way_wait_receipt_at(DRIVER_TASK_RING_VADDR, ack) {
+                            runtime_raise_standard_fault();
+                        }
+                        pending_command_gate.retain_one_way_prompt_debt();
+                    }
+                }
+                if !pending_command_gate.one_way_prompt_debt() {
                     let raw_badge = if pending_command_gate.one_way_root_control_sent() {
                         wait_runtime_local_notification()
                     } else {
@@ -93037,6 +93065,12 @@ mod tests {
         assert!(!wait.acknowledged());
         assert_eq!(read_runtime_one_way_wait_ack_at(base), None);
 
+        assert_eq!(
+            runtime_one_way_prewait_ack(RuntimeNotificationRoute::Unavailable, base, wait),
+            None,
+            "an unacknowledged DROW must still block",
+        );
+
         assert!(runtime_continuation_grant_write_u32(
             base,
             core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic),
@@ -93044,6 +93078,35 @@ mod tests {
         ));
         let ack = read_runtime_one_way_wait_ack_at(base).expect("committed DROA");
         assert!(runtime_one_way_wait_ack_matches(wait, ack));
+        assert_eq!(
+            runtime_one_way_prewait_ack(RuntimeNotificationRoute::Unavailable, base, wait),
+            Some(ack),
+            "exact durable work needs no second scheduling edge",
+        );
+        for route in [
+            RuntimeNotificationRoute::Serial,
+            RuntimeNotificationRoute::Genet,
+            RuntimeNotificationRoute::SdioOwner,
+            RuntimeNotificationRoute::Cyw43Client,
+            RuntimeNotificationRoute::PcieTimer,
+        ] {
+            assert_eq!(
+                runtime_one_way_prewait_ack(route, base, wait),
+                None,
+                "physical source arbitration remains at its existing boundary"
+            );
+        }
+        assert_eq!(
+            runtime_one_way_prewait_ack(
+                RuntimeNotificationRoute::Unavailable,
+                base,
+                DriverRuntimeOneWayWaitReceipt {
+                    request_sequence: wait.request_sequence + 1,
+                    ..wait
+                }
+            ),
+            None
+        );
         assert!(!runtime_one_way_wait_ack_matches(
             wait,
             DriverRuntimeOneWayWaitReceipt {
@@ -93068,6 +93131,10 @@ mod tests {
         ));
         assert!(clear_runtime_one_way_wait_receipt_at(base, ack));
         assert_eq!(read_runtime_one_way_wait_ack_at(base), None);
+        assert_eq!(
+            runtime_one_way_prewait_ack(RuntimeNotificationRoute::Unavailable, base, wait),
+            None
+        );
 
         let mut gate = RuntimePendingCommandGate::new();
         assert_eq!(gate.retain_after_pending_one_way(identity), Some(1));

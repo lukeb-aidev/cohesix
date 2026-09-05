@@ -38,6 +38,15 @@ contracts. Use [Roles and Scheduling](ROLES_AND_SCHEDULING.md) for target
 temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
 refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
 
+Pi ec3b display-continuation compatibility review: `cas-tool`, `coh`, `cohsh`,
+`gpu-bridge-host`, `hive-gateway`, `host-sidecar-bridge`, `host-ticket-agent`,
+`swarmui`, `tools/cohesix-py`, `.coh` workloads and
+`scripts/rest_perf_harness.py` retain their interfaces and operation counts.
+The additive explicit USB command/wait/progress rows are ordinary diagnostic
+payload; no consumer treats them as readiness or benchmark authority. No host
+implementation, REST schema, authentication, quota, retry, generated manifest
+or benchmark-report change is required.
+
 The Pi-only GENET-to-console direct data plane is a private target transport
 change. Its optional causal diagnostic adds seventeen ordered
 `netstats: genet_direct*` rows without changing a command, listener, authentication,

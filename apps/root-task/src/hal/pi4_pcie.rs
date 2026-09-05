@@ -1771,8 +1771,34 @@ fn configure_pcie_outbound_window_regs(
 }
 
 fn pcie_spin_delay(spins: usize) {
-    for _ in 0..spins {
-        core::hint::spin_loop();
+    pcie_spin_delay_with(
+        spins,
+        |count| {
+            for _ in 0..count {
+                core::hint::spin_loop();
+            }
+        },
+        || {
+            // HAL's flushed MMIO waits hold no driver Reply or frame ticket.
+            // This only offers the existing child-owned startup tile a turn;
+            // its CNTVCT guard disables the path after serial cutover.
+            let _ = super::poll_early_hdmi_boot_progress();
+        },
+    );
+}
+
+fn pcie_spin_delay_with(
+    mut remaining: usize,
+    mut delay: impl FnMut(usize),
+    mut checkpoint: impl FnMut(),
+) {
+    // Preserve every original hardware-settle iteration. Chunking provides
+    // service opportunities; it is neither a clock nor a shorter PCIe wait.
+    while remaining != 0 {
+        let count = remaining.min(50_000);
+        delay(count);
+        remaining -= count;
+        checkpoint();
     }
 }
 
@@ -2530,6 +2556,24 @@ mod tests {
             BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP
         ));
         assert!(!pcie_status_link_up_and_rc(0xf2c0_000a));
+    }
+
+    #[test]
+    fn pcie_progress_checkpoints_preserve_the_complete_settle_wait() {
+        for (spins, expected_calls) in [(0, 0), (1, 1), (50_000, 1), (50_001, 2)] {
+            let mut delayed = 0;
+            let mut calls = 0;
+            pcie_spin_delay_with(
+                spins,
+                |count| {
+                    assert!((1..=50_000).contains(&count));
+                    delayed += count;
+                },
+                || calls += 1,
+            );
+            assert_eq!(delayed, spins);
+            assert_eq!(calls, expected_calls);
+        }
     }
 
     #[test]

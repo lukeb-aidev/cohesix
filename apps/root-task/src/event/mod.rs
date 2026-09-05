@@ -23341,6 +23341,51 @@ where
             counters.tx_bytes,
         ));
         self.emit_console_line(line.as_str());
+        if let Some(state) = crate::hal::driver_task::driver_task_one_way_diagnostic(contract) {
+            for line in Self::format_usb_driver_frontier(domain, &state) {
+                self.emit_console_line(line.as_str());
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_usb_driver_frontier(
+        domain: &'static str,
+        state: &crate::hal::driver_task::DriverTaskOneWayDiagnostic,
+    ) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 3] {
+        let f = state.frontier;
+        let frontier = format_message(format_args!(
+                "usb: command_frontier domain={domain} seq={}/{}/{} phase={} issued={} admission={} cap={} producers={} sends={}",
+                f.request, f.command_sequence, f.completion_sequence, f.phase_name,
+                Self::yes_no(f.doorbell_issued), Self::yes_no(f.mcs_admission_open),
+                f.mcs_cap_generation, f.mcs_producers, f.send_attempts,
+            ));
+        let wait_state =
+            state.wait.map_or(
+                "absent",
+                |wait| {
+                    if wait.acknowledged() {
+                        "ack"
+                    } else {
+                        "wait"
+                    }
+                },
+            );
+        let wait = format_message(format_args!(
+                "usb: command_wait domain={domain} notification_bound={} cap_gen={} prompted={} state={} request={} slice={} exact={}",
+                Self::yes_no(state.notification_tcb_bound), state.wait_cap_generation,
+                state.last_prompted_slice, wait_state,
+                state.wait.map_or(0, |wait| wait.request_sequence),
+                state.wait.map_or(0, |wait| wait.wait_slice), Self::yes_no(state.wait_exact),
+            ));
+        let progress = format_message(format_args!(
+            "usb: command_progress domain={domain} valid={} seq={} phase={} aux={}",
+            Self::yes_no(f.progress_valid),
+            f.progress_sequence,
+            f.progress_phase_name,
+            f.progress_aux0,
+        ));
+        [frontier, wait, progress]
     }
 
     #[cfg(feature = "kernel")]
@@ -56708,6 +56753,27 @@ mod tests {
             assert!(line.contains(contract.name));
             assert!(line.contains("engine-init-resource-check-failed"));
         }
+        let state = crate::hal::driver_task::DriverTaskOneWayDiagnostic {
+            frontier,
+            notification_tcb_bound: true,
+            wait_cap_generation: u32::MAX,
+            last_prompted_slice: u32::MAX,
+            wait: Some(pi4_driver_abi::DriverRuntimeOneWayWaitReceipt::new(
+                u32::MAX,
+                u32::MAX,
+                u32::MAX,
+                u32::MAX,
+            )),
+            wait_exact: true,
+        };
+        let lines = KernelConsoleTestPump::format_usb_driver_frontier("hdmi-display", &state);
+        for line in &lines {
+            assert!(line.len() < DEFAULT_LINE_CAPACITY);
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        }
+        assert!(lines[0].ends_with("sends=18446744073709551615"));
+        assert!(lines[1].ends_with("slice=4294967295 exact=yes"));
+        assert!(lines[2].ends_with("aux=4294967295"));
     }
 
     #[cfg(feature = "kernel")]

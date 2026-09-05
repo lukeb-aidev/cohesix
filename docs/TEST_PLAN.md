@@ -245,6 +245,23 @@ source, image, target/profile/topology, pressure, repeatability, and hardware
 identities still match. A stale convergence result, even a PASS, cannot become
 accepted Milestone 26e evidence.
 
+
+Pi ec3b display-stall convergence follow-up (non-claiming): preserve the
+unchanged two-WiFi/two-GENET matrix and W01's first failed `boot_v0` terminal;
+dependent pressure remains unexecuted for that boot. The candidate checks
+exact prewait ACK identity and retirement, physical-source exclusions,
+unchanged PCIe settle iterations and complete maximum-width USB diagnostic
+rows, then compiles the exact Pi profile and runs the narrow root-MCS QEMU
+canary. Fresh Pi serial must show the added pre-cutover display opportunities;
+physical observation must confirm visible approximately two-second progress.
+After the first raw session and each passing pressure level, record USB
+command/wait/progress rows before another TCP connection. Correlate persistent
+request/completion, fresh child phase, actual notification binding and exact
+DROW/DROA slice with the retained session idle fences. Keep initial-wake loss
+and continuation stalls separate until a matching child receipt proves the
+first missing boundary. No snapshot, build or media result replaces actual
+USB/HDMI input, raw latency or transport repeatability proof.
+
 ## Mandatory Acceptance Execution Contract
 
 This contract is normative whenever a milestone, release, or claim-tier result
