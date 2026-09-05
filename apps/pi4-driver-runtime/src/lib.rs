@@ -66,6 +66,12 @@ use console_network_abi::{
     DIRECT_GENET_TX_PRODUCER_STATE_OFFSET, ETHERNET_FRAME_BYTES as DIRECT_GENET_MAX_FRAME_BYTES,
     SHARED_PAGE_BYTES,
 };
+use console_network_abi::{
+    DirectGenetRuntimeSliceReceipt as GenetSliceReceipt, DIRECT_GENET_SLICE_FLAG_RX,
+    DIRECT_GENET_SLICE_FLAG_TCP, DIRECT_GENET_SLICE_FLAG_TX, DIRECT_GENET_SLICE_STAGE_BEGIN,
+    DIRECT_GENET_SLICE_STAGE_FINISH, DIRECT_GENET_SLICE_STAGE_IRQ, DIRECT_GENET_SLICE_STAGE_PACKET,
+    DIRECT_GENET_SLICE_STAGE_RX_PUBLICATION, DIRECT_GENET_SLICE_STAGE_SOURCE,
+};
 use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
 use pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO;
@@ -2401,6 +2407,7 @@ impl<T> RuntimeStateSlot<T> {
 struct DirectGenetPendingRxCommit {
     initial: DirectGenetRingSnapshot,
     hardware_consumer: u16,
+    frame_len: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2680,6 +2687,8 @@ struct GenetRuntimeState {
     raw_notification_badge_or: u64,
     direct_genet_diagnostic_sequence: u64,
     direct_genet_mcs_window: GenetDirectMcsWindow,
+    direct_genet_slice: GenetSliceReceipt,
+    direct_genet_max_slice: GenetSliceReceipt,
     direct_genet_pending_rx: Option<DirectGenetPendingRxCommit>,
     direct_genet_pending_tx: Option<DirectGenetRingSnapshot>,
     direct_genet_cutover_phase: GenetDirectCutoverPhase,
@@ -2744,6 +2753,8 @@ impl GenetRuntimeState {
             raw_notification_badge_or: 0,
             direct_genet_diagnostic_sequence: 0,
             direct_genet_mcs_window: GenetDirectMcsWindow::empty(),
+            direct_genet_slice: GenetSliceReceipt::empty(),
+            direct_genet_max_slice: GenetSliceReceipt::empty(),
             direct_genet_pending_rx: None,
             direct_genet_pending_tx: None,
             direct_genet_cutover_phase: GenetDirectCutoverPhase::Legacy,
@@ -2807,6 +2818,8 @@ impl GenetRuntimeState {
         self.raw_notification_badge_or = 0;
         self.direct_genet_diagnostic_sequence = 0;
         self.direct_genet_mcs_window = GenetDirectMcsWindow::empty();
+        self.direct_genet_slice = GenetSliceReceipt::empty();
+        self.direct_genet_max_slice = GenetSliceReceipt::empty();
         self.direct_genet_pending_rx = None;
         self.direct_genet_pending_tx = None;
         self.direct_genet_cutover_phase = GenetDirectCutoverPhase::Legacy;
@@ -18511,6 +18524,65 @@ fn genet_direct_mcs_counter_ticks() -> u64 {
     }
 }
 
+/// Record only a bounded header from a frame already owned by this slice.
+/// The receipt never selects work or changes packet acceptance. Fragmented,
+/// truncated, non-IPv4 and non-TCP frames retain only their length/direction.
+fn genet_slice_record_frame(receipt: &mut GenetSliceReceipt, header: &[u8], frame_len: u16) {
+    receipt.frame_len = frame_len;
+    if header.len() < 54 || header[12..14] != [0x08, 0x00] || header[14] >> 4 != 4 {
+        return;
+    }
+    let ip_len = usize::from(header[14] & 0x0f) * 4;
+    let total_len = usize::from(u16::from_be_bytes([header[16], header[17]]));
+    let fragments = u16::from_be_bytes([header[20], header[21]]);
+    let tcp = 14 + ip_len;
+    if ip_len < 20
+        || header[23] != 6
+        || fragments & 0x3fff != 0
+        || total_len < ip_len + 20
+        || total_len + 14 > usize::from(frame_len)
+        || tcp + 20 > header.len()
+    {
+        return;
+    }
+    let tcp_len = usize::from(header[tcp + 12] >> 4) * 4;
+    if tcp_len < 20 || ip_len + tcp_len > total_len {
+        return;
+    }
+    receipt.src_ipv4 = u32::from_be_bytes([header[26], header[27], header[28], header[29]]);
+    receipt.dst_ipv4 = u32::from_be_bytes([header[30], header[31], header[32], header[33]]);
+    receipt.src_port = u16::from_be_bytes([header[tcp], header[tcp + 1]]);
+    receipt.dst_port = u16::from_be_bytes([header[tcp + 2], header[tcp + 3]]);
+    receipt.tcp_sequence = u32::from_be_bytes([
+        header[tcp + 4],
+        header[tcp + 5],
+        header[tcp + 6],
+        header[tcp + 7],
+    ]);
+    receipt.tcp_ack = u32::from_be_bytes([
+        header[tcp + 8],
+        header[tcp + 9],
+        header[tcp + 10],
+        header[tcp + 11],
+    ]);
+    receipt.tcp_flags = u16::from(header[tcp + 13]) | (u16::from(header[tcp + 12] & 1) << 8);
+    receipt.flags |= DIRECT_GENET_SLICE_FLAG_TCP;
+}
+
+/// Keep one longest valid slice. Invalid observational clocks cannot poison
+/// the driver or replace the last valid receipt; the MCS window independently
+/// applies its unchanged scheduling and clock contract.
+fn genet_slice_keep_longest(longest: &mut GenetSliceReceipt, candidate: GenetSliceReceipt) {
+    if !candidate.valid() || candidate.dpc_turn == 0 {
+        return;
+    }
+    let duration = candidate.finished_ticks - candidate.began_ticks;
+    let previous = longest.finished_ticks.saturating_sub(longest.began_ticks);
+    if duration > previous {
+        *longest = candidate;
+    }
+}
+
 fn genet_runtime_prepare_dpc_quantum(state: &mut GenetRuntimeState) -> GenetDirectMcsPreRoute {
     if !state.direct_genet_active {
         return GenetDirectMcsPreRoute::Begin;
@@ -18523,7 +18595,15 @@ fn genet_runtime_prepare_dpc_quantum(state: &mut GenetRuntimeState) -> GenetDire
     let now = genet_direct_mcs_counter_ticks();
     let admission_cycles = runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US));
     match state.direct_genet_mcs_window.begin(now, admission_cycles) {
-        Ok(()) => GenetDirectMcsPreRoute::Begin,
+        Ok(()) => {
+            state.direct_genet_slice = GenetSliceReceipt {
+                dpc_turn: u64::from(state.dpc_turns).saturating_add(1),
+                began_ticks: now,
+                stages: DIRECT_GENET_SLICE_STAGE_BEGIN,
+                ..GenetSliceReceipt::empty()
+            };
+            GenetDirectMcsPreRoute::Begin
+        }
         Err(reason) if reason == DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT => {
             GenetDirectMcsPreRoute::Fault(reason)
         }
@@ -18535,6 +18615,10 @@ fn genet_runtime_finish_dpc_quantum(
     state: &mut GenetRuntimeState,
     productive_quantum: bool,
 ) -> GenetDirectMcsQuantumRoute {
+    if state.direct_genet_active {
+        state.direct_genet_slice.irq_done_ticks = runtime_timer_counter_ticks();
+        state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_IRQ;
+    }
     let durable_work_ready = genet_runtime_dpc_local_continuation_ready(state);
     if !state.direct_genet_active {
         return if durable_work_ready {
@@ -18543,13 +18627,18 @@ fn genet_runtime_finish_dpc_quantum(
             GenetDirectMcsQuantumRoute::Block
         };
     }
-    state.direct_genet_mcs_window.finish(
-        genet_direct_mcs_counter_ticks(),
+    let now = genet_direct_mcs_counter_ticks();
+    let route = state.direct_genet_mcs_window.finish(
+        now,
         runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US)),
         runtime_timer_freq_hz(),
         productive_quantum,
         durable_work_ready,
-    )
+    );
+    state.direct_genet_slice.finished_ticks = now;
+    state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_FINISH;
+    genet_slice_keep_longest(&mut state.direct_genet_max_slice, state.direct_genet_slice);
+    route
 }
 
 fn genet_runtime_record_mcs_yield(reason: u32) {
@@ -18729,6 +18818,10 @@ fn genet_runtime_service_dpc_quantum_state(
 
     state.dpc_turns = state.dpc_turns.saturating_add(1);
     genet_runtime_poll_tx_completions(state);
+    if state.direct_genet_active {
+        state.direct_genet_slice.source_ready_ticks = runtime_timer_counter_ticks();
+        state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_SOURCE;
+    }
     let (
         direct_tx_serviced,
         tx_service_units,
@@ -18796,6 +18889,10 @@ fn genet_runtime_service_dpc_quantum_state(
     };
     let slice_units = tx_service_units.saturating_add(rx_service_units);
     let progressed = tx_progressed || rx_progressed;
+    if state.direct_genet_active {
+        state.direct_genet_slice.packet_done_ticks = runtime_timer_counter_ticks();
+        state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_PACKET;
+    }
     if state.direct_genet_faulted {
         return GenetRuntimeDpcOutcome::new(false, slice_units, progressed);
     }
@@ -32621,9 +32718,11 @@ impl Cyw43ForegroundTransaction {
             write_cyw43_command_descriptor_physical(self.parent.frame, self.parent_descriptor);
         }
         let base = usize::from(self.parent_payload_offset);
-        for index in 0..usize::from(self.parent_payload_len) {
-            write_runtime_payload_byte_physical(base + index, self.parent_payload[index]);
-        }
+        cyw43_write_firmware_payload_slice_with(
+            base,
+            &self.parent_payload[..usize::from(self.parent_payload_len)],
+            |_, _| {},
+        );
     }
 
     fn parent_payload_index(&self, offset: usize) -> Option<usize> {
@@ -44306,9 +44405,116 @@ fn cyw43_save_firmware_payload_scratch(
     payload_offset: usize,
     payload_len: usize,
 ) {
-    for index in 0..payload_len {
-        state.firmware_stage_scratch[index] = read_runtime_payload_byte(payload_offset + index);
+    cyw43_read_firmware_payload_slice(
+        payload_offset,
+        &mut state.firmware_stage_scratch[..payload_len],
+    );
+}
+
+/// Borrow the replay seal once for a private firmware copy. The CYW43 state
+/// writer precedes this transaction reader, as in the byte accessors; neither
+/// the immutable parent nor its overlay is replaced during the copy. Bytes
+/// outside the seal retain the existing physical-aperture fallback.
+fn cyw43_read_firmware_payload_slice(offset: usize, destination: &mut [u8]) {
+    #[cfg(any(target_os = "none", test))]
+    {
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                let source = offset + index;
+                *byte = if transaction.executing {
+                    transaction
+                        .read_parent_payload(source)
+                        .unwrap_or_else(|| read_runtime_payload_byte_physical(source))
+                } else {
+                    read_runtime_payload_byte_physical(source)
+                };
+            }
+        });
     }
+    #[cfg(not(any(target_os = "none", test)))]
+    for (index, byte) in destination.iter_mut().enumerate() {
+        *byte = read_runtime_payload_byte_physical(offset + index);
+    }
+}
+
+/// Marshal already-admitted private bytes into the uncached payload aperture.
+/// A complete naturally aligned word must remain in one mapped arena and the
+/// caller's validated slice; unaligned edges and ring/shared crossings retain
+/// byte stores. The callback records each affected overlay byte before its
+/// store. It never changes the intake seal or a sequence-last publication.
+fn cyw43_write_firmware_payload_slice_with<F>(offset: usize, source: &[u8], mut before_write: F)
+where
+    F: FnMut(usize, u8),
+{
+    // The runtime descriptor is immutable after image admission. Reading its
+    // bounds while the caller holds the transaction slot cannot acquire or
+    // re-enter the CYW43 state/transaction locks.
+    let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
+    let bulk_range_admitted = u32::try_from(offset)
+        .ok()
+        .zip(u16::try_from(source.len()).ok())
+        .is_some_and(|(offset, len)| {
+            DriverFrameDescriptor {
+                offset,
+                len,
+                flags: 0,
+            }
+            .in_runtime_payload(shared_payload_bytes)
+        });
+    let shape = if bulk_range_admitted
+        && sdio_external_dma_payload_range_contiguous(offset, source.len())
+    {
+        sdio_external_dma_payload_vaddr(offset).map(|address| {
+            // Private source bytes are assembled into a value, not read through
+            // an aligned pointer. Only the physical destination needs alignment.
+            sdio_external_dma_copy_shape(address, address, source.len())
+        })
+    } else {
+        None
+    }
+    .unwrap_or(SdioExternalDmaCopyShape {
+        prefix_bytes: source.len(),
+        word_count: 0,
+        tail_bytes: 0,
+    });
+    let mut copied = 0;
+    while copied < shape.prefix_bytes {
+        before_write(offset + copied, source[copied]);
+        write_runtime_payload_byte_physical(offset + copied, source[copied]);
+        copied += 1;
+    }
+    for _ in 0..shape.word_count {
+        let bytes = core::array::from_fn(|index| source[copied + index]);
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            before_write(offset + copied + index, byte);
+        }
+        write_runtime_payload_u64_physical(offset + copied, u64::from_le_bytes(bytes));
+        copied += SDIO_DMA_COPY_WORD_BYTES;
+    }
+    let end = copied + shape.tail_bytes;
+    while copied < end {
+        before_write(offset + copied, source[copied]);
+        write_runtime_payload_byte_physical(offset + copied, source[copied]);
+        copied += 1;
+    }
+}
+
+fn cyw43_write_firmware_payload_slice(offset: usize, source: &[u8]) {
+    #[cfg(any(target_os = "none", test))]
+    {
+        // Keep the existing state-writer -> transaction-writer order. No
+        // callback re-enters either slot, and no physical publication or IPC
+        // occurs while this private overlay/uncached payload copy is borrowed.
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            cyw43_write_firmware_payload_slice_with(offset, source, |destination, byte| {
+                if transaction.executing {
+                    transaction.record_parent_overlay(destination, byte);
+                }
+            });
+        });
+    }
+    #[cfg(not(any(target_os = "none", test)))]
+    cyw43_write_firmware_payload_slice_with(offset, source, |_, _| {});
 }
 
 fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
@@ -44325,12 +44531,10 @@ fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
         cyw43_reset_firmware_stage(state);
         return true;
     }
-    for index in flush_offset..len {
-        write_runtime_payload_byte(
-            CYW43_FIRMWARE_STAGE_OFFSET + index,
-            state.firmware_stage[index],
-        );
-    }
+    cyw43_write_firmware_payload_slice(
+        CYW43_FIRMWARE_STAGE_OFFSET + flush_offset,
+        &state.firmware_stage[flush_offset..len],
+    );
     let Some(flush_addr) = state.firmware_stage_addr.checked_add(flush_offset as u32) else {
         cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_ADDR);
         return false;
@@ -44422,12 +44626,14 @@ fn cyw43_stage_firmware_chunk(
         cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_APPEND);
         return false;
     }
-    for index in 0..payload_len {
-        state.firmware_stage[stage_len + index] = if payload_saved {
-            state.firmware_stage_scratch[index]
-        } else {
-            read_runtime_payload_byte(payload_offset + index)
-        };
+    if payload_saved {
+        state.firmware_stage[stage_len..next_stage_len]
+            .copy_from_slice(&state.firmware_stage_scratch[..payload_len]);
+    } else {
+        cyw43_read_firmware_payload_slice(
+            payload_offset,
+            &mut state.firmware_stage[stage_len..next_stage_len],
+        );
     }
     state.firmware_stage_len = next_stage_len as u16;
     if next_stage_len == CYW43_FIRMWARE_STAGE_BYTES || stream_complete {
@@ -50174,6 +50380,7 @@ fn genet_direct_publish_runtime_diagnostic(
         raw_notification_receipts: state.raw_notification_receipts,
         raw_notification_rejected: state.raw_notification_rejected,
         raw_notification_badge_or: state.raw_notification_badge_or,
+        max_slice: state.direct_genet_max_slice,
         committed_sequence: sequence,
     };
     let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
@@ -50605,6 +50812,13 @@ fn genet_direct_service_tx(
             GenetTxSubmitResult::Submitted(_) => {
                 service_units = service_units.saturating_add(1);
                 progressed = true;
+                state.direct_genet_slice.tx_cursor = record.sequence();
+                state.direct_genet_slice.flags |= DIRECT_GENET_SLICE_FLAG_TX;
+                genet_slice_record_frame(
+                    &mut state.direct_genet_slice,
+                    record.frame(),
+                    record.frame().len() as u16,
+                );
             }
         }
         state.direct_genet_pending_tx = Some(initial);
@@ -50666,6 +50880,28 @@ fn genet_direct_finish_rx_commit(
         .is_ok_and(|(_, snapshot)| snapshot.producer_cursor == receipt.sequence)
     {
         TEST_GENET_DIRECT_RX_REARM_AFTER_COMMIT.store(true, Ordering::Release);
+    }
+    if state.direct_genet_slice.began_ticks != 0 {
+        // The exact committed cursor still owes DMA rearm. This single owner
+        // can sample the bounded header before the slot is returned to GENET;
+        // no packet payload or new shared-ring authority is retained.
+        let slot = ring_slot(state.rx_cons_index, GENET_ACTIVE_RING_DESCS);
+        let payload =
+            dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES + GENET_RX_BUF_OFFSET;
+        let mut header = [0u8; 94];
+        let header_len = usize::from(pending.frame_len).min(header.len());
+        for (index, byte) in header[..header_len].iter_mut().enumerate() {
+            *byte = read_dma_byte(payload + index);
+        }
+        state.direct_genet_slice.rx_cursor = receipt.sequence;
+        state.direct_genet_slice.flags |= DIRECT_GENET_SLICE_FLAG_RX;
+        genet_slice_record_frame(
+            &mut state.direct_genet_slice,
+            &header[..header_len],
+            pending.frame_len,
+        );
+        state.direct_genet_slice.rx_publication_ticks = runtime_timer_counter_ticks();
+        state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_RX_PUBLICATION;
     }
     if receipt.data_notification_due {
         state.direct_genet_peer_signals = state.direct_genet_peer_signals.saturating_add(1);
@@ -50829,6 +51065,7 @@ fn genet_direct_drain_rx_hardware(
         state.direct_genet_pending_rx = Some(DirectGenetPendingRxCommit {
             initial,
             hardware_consumer: state.rx_cons_index,
+            frame_len: frame_len as u16,
         });
         service_units = service_units.saturating_add(1);
         progressed = true;
@@ -84874,7 +85111,16 @@ mod tests {
                 DRIVER_RUNTIME_GENET_IRQ_BADGE | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
             ),
         );
-        let rejected = DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_GENET_IRQ_BADGE;
+        // The admitted root doorbell may coalesce with GENET IRQ bit 10.
+        // Bit 30 has no authority in this runtime's root/IRQ/direct-peer ABI.
+        let coalesced_root = DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_GENET_IRQ_BADGE;
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::Notification(coalesced_root),
+        );
+        assert_eq!(state.raw_notification_rejected, 0);
+        let rejected = (1 << 30) | DRIVER_RUNTIME_GENET_IRQ_BADGE;
         genet_runtime_observe_received_wake(
             &mut state,
             RuntimeNotificationRoute::Genet,
@@ -84891,12 +85137,13 @@ mod tests {
             RuntimeWake::None,
         );
 
-        assert_eq!(state.raw_notification_receipts, 4);
+        assert_eq!(state.raw_notification_receipts, 5);
         assert_eq!(state.raw_notification_rejected, 1);
         assert_eq!(
             state.raw_notification_badge_or,
             u64::from(
-                DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                (1 << 30)
+                    | DRIVER_RUNTIME_RESERVED_ROOT_BADGE
                     | DRIVER_RUNTIME_GENET_IRQ_BADGE
                     | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE
             ),
@@ -84916,6 +85163,114 @@ mod tests {
         );
         assert_eq!(state.raw_notification_receipts, u64::MAX);
         assert_eq!(state.raw_notification_rejected, u64::MAX);
+    }
+
+    fn genet_slice_receipt_tcp_fixture() -> [u8; 54] {
+        let mut frame = [0u8; 54];
+        frame[12..14].copy_from_slice(&[0x08, 0x00]);
+        frame[14] = 0x45;
+        frame[16..18].copy_from_slice(&40u16.to_be_bytes());
+        frame[23] = 6;
+        frame[26..30].copy_from_slice(&[192, 0, 2, 1]);
+        frame[30..34].copy_from_slice(&[198, 51, 100, 2]);
+        frame[34..36].copy_from_slice(&40000u16.to_be_bytes());
+        frame[36..38].copy_from_slice(&31337u16.to_be_bytes());
+        frame[38..42].copy_from_slice(&0x0102_0304u32.to_be_bytes());
+        frame[42..46].copy_from_slice(&0x1112_1314u32.to_be_bytes());
+        frame[46] = 0x50;
+        frame[47] = 0x18;
+        frame
+    }
+
+    #[test]
+    fn genet_slice_receipt_keeps_only_validated_tcp_header_identity() {
+        let frame = genet_slice_receipt_tcp_fixture();
+        let mut receipt = GenetSliceReceipt {
+            flags: DIRECT_GENET_SLICE_FLAG_RX,
+            ..GenetSliceReceipt::empty()
+        };
+        genet_slice_record_frame(&mut receipt, &frame, 54);
+        assert_eq!(
+            receipt.flags,
+            DIRECT_GENET_SLICE_FLAG_RX | DIRECT_GENET_SLICE_FLAG_TCP
+        );
+        assert_eq!(receipt.frame_len, 54);
+        assert_eq!(
+            (receipt.src_ipv4, receipt.dst_ipv4),
+            (0xc000_0201, 0xc633_6402)
+        );
+        assert_eq!((receipt.src_port, receipt.dst_port), (40000, 31337));
+        assert_eq!(
+            (receipt.tcp_sequence, receipt.tcp_ack),
+            (0x0102_0304, 0x1112_1314)
+        );
+        assert_eq!(receipt.tcp_flags, 0x18);
+        assert_eq!(receipt.reserved, [0; 3]);
+        assert_eq!(
+            receipt.stages, 0,
+            "header observation cannot invent a timing stage"
+        );
+    }
+
+    #[test]
+    fn genet_slice_receipt_rejects_fragmented_and_truncated_tuple_samples() {
+        let fixture = genet_slice_receipt_tcp_fixture();
+        for (offset, value) in [
+            (12, 0x86),
+            (14, 0x44),
+            (14, 0x65),
+            (20, 0x20),
+            (23, 17),
+            (16, 0xff),
+            (46, 0x40),
+        ] {
+            let mut frame = fixture;
+            frame[offset] = value;
+            let mut receipt = GenetSliceReceipt {
+                flags: DIRECT_GENET_SLICE_FLAG_RX,
+                ..GenetSliceReceipt::empty()
+            };
+            genet_slice_record_frame(&mut receipt, &frame, 54);
+            assert_eq!(receipt.flags, DIRECT_GENET_SLICE_FLAG_RX);
+            assert_eq!((receipt.src_ipv4, receipt.tcp_sequence), (0, 0));
+        }
+        for length in 0..54 {
+            let mut receipt = GenetSliceReceipt::empty();
+            genet_slice_record_frame(&mut receipt, &fixture[..length], length as u16);
+            assert_eq!(receipt.flags & DIRECT_GENET_SLICE_FLAG_TCP, 0);
+        }
+    }
+
+    #[test]
+    fn genet_slice_receipt_maximum_preserves_first_tie_and_rejects_invalid_clock() {
+        let first = GenetSliceReceipt {
+            dpc_turn: 1,
+            began_ticks: 100,
+            finished_ticks: 200,
+            stages: DIRECT_GENET_SLICE_STAGE_BEGIN | DIRECT_GENET_SLICE_STAGE_FINISH,
+            ..GenetSliceReceipt::empty()
+        };
+        let mut longest = GenetSliceReceipt::empty();
+        genet_slice_keep_longest(&mut longest, first);
+        assert_eq!(longest, first);
+        for finish in [0, 99, 100, 199, 200] {
+            genet_slice_keep_longest(
+                &mut longest,
+                GenetSliceReceipt {
+                    dpc_turn: 2,
+                    finished_ticks: finish,
+                    ..first
+                },
+            );
+            assert_eq!(longest, first);
+        }
+        let later = GenetSliceReceipt {
+            dpc_turn: 3,
+            finished_ticks: 301,
+            ..first
+        };
+        genet_slice_keep_longest(&mut longest, later);
+        assert_eq!(longest, later);
     }
 
     #[test]
@@ -85441,6 +85796,7 @@ mod tests {
         state.direct_genet_pending_rx = Some(DirectGenetPendingRxCommit {
             initial,
             hardware_consumer: 0,
+            frame_len: 1,
         });
         genet_direct_commit_producer(&mut page, initial)
             .expect("shared RX cursor advances before retained reconciliation");
@@ -115016,6 +115372,137 @@ mod tests {
                 "control block {index} successor"
             );
         }
+    }
+
+    #[test]
+    fn cyw43_firmware_marshalling_preserves_all_alignments_and_arena_crossing() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        let source = [
+            0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8a, 0x9b, 0xac, 0xbd, 0xce, 0xdf, 0xe0,
+            0xf1, 0x02, 0x14, 0x25, 0x36, 0x47, 0x58, 0x69, 0x7a,
+        ];
+        for base in [
+            DRIVER_TASK_RING_FRAME_OFFSET + 64,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 64,
+            DRIVER_TASK_RING_PAGE_BYTES - 8,
+        ] {
+            for alignment in 0..8 {
+                let offset = base + alignment;
+                for index in 0..source.len() + 2 {
+                    write_runtime_payload_byte_physical(offset - 1 + index, 0xa5);
+                }
+                let mut observed = Vec::new();
+                cyw43_write_firmware_payload_slice_with(offset, &source, |address, byte| {
+                    observed.push((address, byte));
+                });
+                assert_eq!(observed.len(), source.len());
+                for (index, byte) in source.iter().copied().enumerate() {
+                    assert_eq!(observed[index], (offset + index, byte));
+                    assert_eq!(read_runtime_payload_byte_physical(offset + index), byte);
+                }
+                assert_eq!(read_runtime_payload_byte_physical(offset - 1), 0xa5);
+                assert_eq!(
+                    read_runtime_payload_byte_physical(offset + source.len()),
+                    0xa5
+                );
+                cyw43_write_firmware_payload_slice_with(offset, &[], |_, _| {
+                    panic!("an empty slice must not record an overlay byte");
+                });
+                assert_eq!(read_runtime_payload_byte_physical(offset), source[0]);
+            }
+        }
+    }
+
+    #[test]
+    fn cyw43_firmware_marshalling_preserves_partial_seal_and_overlay_precedence() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        let offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 65;
+        let sealed = [
+            0x20, 0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x97, 0xa8, 0xb9, 0xca,
+        ];
+        for index in 0..17 {
+            write_runtime_payload_byte_physical(offset + index, 0xee);
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.clear();
+            transaction.executing = true;
+            transaction.parent_input_sealed = true;
+            transaction.parent_payload_offset = (offset + 3) as u16;
+            transaction.parent_payload_len = sealed.len() as u16;
+            transaction.parent_payload[..sealed.len()].copy_from_slice(&sealed);
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            transaction.record_parent_overlay(offset + 4, 0x5c);
+            transaction.record_parent_overlay(offset + 12, 0x6d);
+        });
+        let mut readback = [0; 17];
+        cyw43_read_firmware_payload_slice(offset, &mut readback);
+        let mut expected = [0xee; 17];
+        expected[3..14].copy_from_slice(&sealed);
+        expected[4] = 0x5c;
+        expected[12] = 0x6d;
+        assert_eq!(readback, expected);
+
+        let replacement = [0x19; 17];
+        cyw43_write_firmware_payload_slice(offset, &replacement);
+        cyw43_read_firmware_payload_slice(offset, &mut readback);
+        assert_eq!(readback, replacement);
+        for index in 0..17 {
+            assert_eq!(read_runtime_payload_byte_physical(offset + index), 0x19);
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(&transaction.parent_payload[..sealed.len()], &sealed);
+            assert!(transaction.parent_payload_seal_valid());
+            // Rollback must restore the original seal, never the replay overlay.
+            transaction.restore_parent_input();
+            assert_eq!(transaction.read_parent_payload(offset + 4), Some(0x19));
+        });
+        for (index, byte) in sealed.iter().copied().enumerate() {
+            assert_eq!(read_runtime_payload_byte_physical(offset + 3 + index), byte);
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.executing = false);
+        cyw43_read_firmware_payload_slice(offset, &mut readback);
+        expected.fill(0x19);
+        expected[3..14].copy_from_slice(&sealed);
+        assert_eq!(readback, expected);
+    }
+
+    #[test]
+    fn cyw43_firmware_marshalling_restores_full_aperture_without_changing_seal() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        const BYTES: usize = 32 * 1024;
+        let offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
+        write_runtime_payload_byte_physical(offset - 1, 0x71);
+        write_runtime_payload_byte_physical(offset + BYTES, 0x82);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.clear();
+            transaction.executing = true;
+            transaction.parent_input_sealed = true;
+            transaction.parent_payload_offset = offset as u16;
+            transaction.parent_payload_len = BYTES as u16;
+            for index in 0..BYTES {
+                transaction.parent_payload[index] = (index % 251) as u8;
+                write_runtime_payload_byte_physical(offset + index, 0xff);
+            }
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            transaction.record_parent_overlay(offset + 7, 0xde);
+            transaction.restore_parent_input();
+            assert!(transaction.parent_payload_seal_valid());
+            assert_eq!(transaction.read_parent_payload(offset + 7), Some(0xde));
+        });
+        for index in 0..BYTES {
+            assert_eq!(
+                read_runtime_payload_byte_physical(offset + index),
+                (index % 251) as u8
+            );
+        }
+        assert_eq!(read_runtime_payload_byte_physical(offset - 1), 0x71);
+        assert_eq!(read_runtime_payload_byte_physical(offset + BYTES), 0x82);
     }
 
     #[test]

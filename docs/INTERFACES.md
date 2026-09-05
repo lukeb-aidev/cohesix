@@ -311,12 +311,12 @@ terminal.
 Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
 and TX-consumer records. Console-network ABI v6 additionally assigns the
-formerly reserved bytes `[320,512)` to an optional, separately versioned
-direct-GENET diagnostic-v4 record. The record is exactly 192 bytes, aligned to
+formerly reserved bytes `[320,640)` to an optional, separately versioned
+direct-GENET diagnostic-v5 record. The record is exactly 320 bytes, aligned to
 64 bytes, assigns record-relative offset 12 to the maximum measured direct MCS
 packet-slice duration in microseconds, retains offset 108 for cumulative
 `dpc_level_adoptions`, and publishes its nonzero sequence last at
-record-relative offset 184 (control-page offset 504). Offsets 160, 168, and 176
+record-relative offset 312 (control-page offset 632). Offsets 160, 168, and 176
 hold cumulative nonzero receive-boundary notification receipts, receipts
 rejected by the exact GENET badge filter, and the bitwise OR of every received
 badge. Flag bits 9 through 13 retain whether a command-freshness, elapsed
@@ -333,7 +333,20 @@ magic, version, length, flags, counter relations, 32-bit badge width,
 IRQ-mask relation, cursor-validity rules, and sequence/commit must all
 validate. Older or missing publications remain compatible unavailable
 evidence rather than authorizing an alternate path.
-Bytes `[512,4096)` remain reserved and non-authoritative.
+Bytes `[640,4096)` remain reserved and non-authoritative.
+
+Diagnostic v5 adds a 128-byte maximum-slice receipt at record offset 184.
+It retains the first longest valid slice, its counter timestamps after source
+adoption/reclaim, packet work, IRQ work and the final durable check, plus an
+optional confirmed RX publication timestamp. Direction and exact RX/TX cursor
+identify the packet operation; a validated nonfragmented IPv4/TCP header adds
+addresses, ports, sequence, acknowledgement and flags without payload bytes.
+Absent stages and reserved fields are zero. Present timestamps must be ordered;
+RX and TX are mutually exclusive. An invalid observational sample cannot alter
+driver service or replace a valid maximum. Counter ticks use the generated
+timer frequency and include descheduling and kernel time. They do not measure
+wire arrival, consumed SC budget or console admission, and an unrelated TX or
+empty slice maximum cannot be assigned to a delayed incoming TCP request.
 
 The record is not inspected during ordinary direct packet service. One
 operator `netstats` request may ask the already active GENET owner for one

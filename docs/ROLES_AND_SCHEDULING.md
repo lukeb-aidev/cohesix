@@ -302,6 +302,21 @@ renew the allowance. A fully fenced direct-GENET global-idle receive closes
 the finished software transaction cursor and its work count before fresh
 outer arbitration. A causal child wait does not close that cursor. Neither
 operation resets or expands the kernel scheduling context.
+
+Attached WiFi may also retain its existing activation after one exact NetData
+op8 admission frontier advances. The same immutable request, descriptor,
+generation and physical lifetime must survive preparation, command commit,
+grant publication, notification and terminal retirement. Repeated readiness or
+a changed identity earns no continuation. This take-once receipt charges the
+existing logical 64-turn bound and passes the full operator/recovery fence;
+it is not material ingress credit and creates no new service episode. Waiting
+still requires the existing owed-signal proof. The ordinary ingress selector
+may observe a stable current nonempty runtime DATA queue or an exact runnable
+op8 continuation, with EAPOL, capacity, maintenance and ownership fences intact.
+Only the authorized leaf imports/dequeues data, and only successful child
+staging counts as material ingress. A resumed valid batch can deliver its first
+eligible copied frame in that same receive operation without duplicating it.
+
 After accepting the control watermark,
 root may wait again only while the root-local response batch retains the same
 generation, authenticated connection, and nonzero control sequence and records

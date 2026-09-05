@@ -5233,6 +5233,16 @@ where
                         // guard before another exact resumable unit.
                         continue 'supervisor;
                     }
+                    let rx_admission_advanced =
+                        pump.take_pi_root_control_cyw43_rx_admission_continuation();
+                    if natural_postpone_profile && rx_admission_advanced {
+                        // The same op8 made a strict prepare/commit/grant/
+                        // notify frontier advance. This turn already spent a
+                        // logical unit and earned no material credit. Keep
+                        // that unchanged cap while the required operator rotor
+                        // precedes its next one-operation Network leaf.
+                        continue 'supervisor;
+                    }
                     #[cfg(all(
                         feature = "release-pi4",
                         target_arch = "aarch64",
@@ -8317,6 +8327,31 @@ mod tests {
             window.last_reject_reason(),
             super::DeferredCyw43ActivationWindow::REJECT_POLICY_AFTER_FIRST,
         );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_rx_admission_progress_spends_logical_cap_without_material_credit() {
+        let mut window = super::DeferredCyw43ActivationWindow::new();
+        for _ in 0..64 {
+            assert!(window.resumable_turn_admitted(true));
+            window.record_attached_network_turn(false);
+        }
+        assert_eq!(window.logical_turns, 64);
+        assert_eq!(window.productive_units, 0);
+        assert!(!window.resumable_turn_admitted(true));
+        assert!(
+            window.nonblocking_fanin_hint_available(),
+            "frontier progress does not borrow or reset the independent fan-in hint"
+        );
+        window.reset();
+        assert!(window.resumable_turn_admitted(false));
+        window.record_attached_network_turn(false);
+        assert!(!window.resumable_turn_admitted(false));
     }
 
     #[cfg(all(

@@ -1418,13 +1418,39 @@ pub const DIRECT_GENET_TX_CONSUMER_STATE_OFFSET: usize = 256;
 /// the isolated GENET owner then publishes the complete record sequence-last.
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET: usize = 320;
 /// Exact bytes in one direct-GENET runtime diagnostic record.
-pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES: usize = 192;
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES: usize = 320;
 /// Sequence-last commit offset within the runtime diagnostic record.
-pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET: usize = 184;
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET: usize = 312;
 /// Direct-GENET runtime diagnostic magic (`CNGD`).
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC: u32 = 0x434e_4744;
 /// Direct-GENET runtime diagnostic layout version.
-pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 4;
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 5;
+/// Offset of the retained maximum-duration slice within the diagnostic record.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAX_SLICE_OFFSET: usize = 184;
+/// Exact bytes in one observational direct-GENET service-slice receipt.
+pub const DIRECT_GENET_RUNTIME_SLICE_RECEIPT_BYTES: usize = 128;
+/// Slice stage: the existing MCS window supplied the begin sample.
+pub const DIRECT_GENET_SLICE_STAGE_BEGIN: u32 = 1 << 0;
+/// Slice stage: physical source adoption and TX reclaim completed.
+pub const DIRECT_GENET_SLICE_STAGE_SOURCE: u32 = 1 << 1;
+/// Slice stage: the bounded packet operation completed.
+pub const DIRECT_GENET_SLICE_STAGE_PACKET: u32 = 1 << 2;
+/// Slice stage: the DPC body, including its IRQ handling, returned.
+pub const DIRECT_GENET_SLICE_STAGE_IRQ: u32 = 1 << 3;
+/// Slice stage: the existing MCS finish sample followed the durable-work check.
+pub const DIRECT_GENET_SLICE_STAGE_FINISH: u32 = 1 << 4;
+/// Slice stage: the RX producer commit was confirmed before peer notification.
+pub const DIRECT_GENET_SLICE_STAGE_RX_PUBLICATION: u32 = 1 << 5;
+/// Complete presence mask for observational slice timestamps.
+pub const DIRECT_GENET_SLICE_STAGES: u32 = (1 << 6) - 1;
+/// Slice direction: one RX packet was committed to the direct ring.
+pub const DIRECT_GENET_SLICE_FLAG_RX: u32 = 1 << 0;
+/// Slice direction: one copied TX record was submitted to hardware.
+pub const DIRECT_GENET_SLICE_FLAG_TX: u32 = 1 << 1;
+/// Slice tuple: bounded, non-fragmented IPv4/TCP headers supplied the identity.
+pub const DIRECT_GENET_SLICE_FLAG_TCP: u32 = 1 << 2;
+/// Complete flag set admitted by a slice receipt.
+pub const DIRECT_GENET_SLICE_FLAGS: u32 = (1 << 3) - 1;
 /// Diagnostic flag: the isolated GENET runtime completed initialization.
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED: u32 = 1 << 0;
 /// Diagnostic flag: the exact direct-link generation is active.
@@ -1604,6 +1630,255 @@ pub enum DirectGenetError {
     Poisoned(DirectGenetPoison),
 }
 
+/// Observational elapsed interval for one bounded physical GENET service attempt.
+///
+/// Timestamps use exported CNTVCT ticks at the selected generated timer frequency.
+/// They include descheduling and syscalls, and do not measure CPU use or packet
+/// arrival. The retained maximum can describe RX, TX, or an empty attempt. Packet
+/// identity requires the enclosing generation, the direction cursor and tuple;
+/// `dpc_turn` alone is neither unique nor a console command identifier.
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetRuntimeSliceReceipt {
+    /// Proposed next owner-local DPC turn at begin; empty attempts may share it.
+    pub dpc_turn: u64,
+    /// Existing MCS begin sample.
+    pub began_ticks: u64,
+    /// Sample after physical source adoption and TX reclaim.
+    pub source_ready_ticks: u64,
+    /// Sample after the bounded RX/TX operation.
+    pub packet_done_ticks: u64,
+    /// Sample after the DPC body returns, including early returns.
+    pub irq_done_ticks: u64,
+    /// Existing MCS finish sample after the durable-work check.
+    pub finished_ticks: u64,
+    /// Sample after RX producer commit, before peer notification and rearm.
+    pub rx_publication_ticks: u64,
+    /// Committed RX sequence, otherwise zero.
+    pub rx_cursor: u64,
+    /// Submitted TX sequence, otherwise zero.
+    pub tx_cursor: u64,
+    /// IPv4 source address represented in network byte order as an integer.
+    pub src_ipv4: u32,
+    /// IPv4 destination address represented in network byte order as an integer.
+    pub dst_ipv4: u32,
+    /// TCP sequence number; no payload is retained.
+    pub tcp_sequence: u32,
+    /// TCP acknowledgement number.
+    pub tcp_ack: u32,
+    /// TCP source port, including the valid numeric value zero.
+    pub src_port: u16,
+    /// TCP destination port, including the valid numeric value zero.
+    pub dst_port: u16,
+    /// TCP header flags, including the NS bit.
+    pub tcp_flags: u16,
+    /// Complete Ethernet frame length for the admitted direction.
+    pub frame_len: u16,
+    /// Exact timestamp-presence mask.
+    pub stages: u32,
+    /// Exact direction and tuple-presence mask.
+    pub flags: u32,
+    /// Reserved words remain zero in this version.
+    pub reserved: [u64; 3],
+}
+
+impl DirectGenetRuntimeSliceReceipt {
+    /// No retained sample; every byte is zero.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            dpc_turn: 0,
+            began_ticks: 0,
+            source_ready_ticks: 0,
+            packet_done_ticks: 0,
+            irq_done_ticks: 0,
+            finished_ticks: 0,
+            rx_publication_ticks: 0,
+            rx_cursor: 0,
+            tx_cursor: 0,
+            src_ipv4: 0,
+            dst_ipv4: 0,
+            tcp_sequence: 0,
+            tcp_ack: 0,
+            src_port: 0,
+            dst_port: 0,
+            tcp_flags: 0,
+            frame_len: 0,
+            stages: 0,
+            flags: 0,
+            reserved: [0; 3],
+        }
+    }
+
+    /// Whether the empty or populated observational record is internally exact.
+    ///
+    /// Invalid recorder candidates are discarded observationally; validation
+    /// does not grant or revoke physical service, IRQ or recovery authority.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        let tuple_empty = self.src_ipv4 == 0
+            && self.dst_ipv4 == 0
+            && self.tcp_sequence == 0
+            && self.tcp_ack == 0
+            && self.src_port == 0
+            && self.dst_port == 0
+            && self.tcp_flags == 0;
+        if self.reserved[0] != 0 || self.reserved[1] != 0 || self.reserved[2] != 0 {
+            return false;
+        }
+        if self.stages == 0 {
+            return self.dpc_turn == 0
+                && self.began_ticks == 0
+                && self.source_ready_ticks == 0
+                && self.packet_done_ticks == 0
+                && self.irq_done_ticks == 0
+                && self.finished_ticks == 0
+                && self.rx_publication_ticks == 0
+                && self.rx_cursor == 0
+                && self.tx_cursor == 0
+                && tuple_empty
+                && self.frame_len == 0
+                && self.flags == 0;
+        }
+        let required = DIRECT_GENET_SLICE_STAGE_BEGIN | DIRECT_GENET_SLICE_STAGE_FINISH;
+        if self.stages & !DIRECT_GENET_SLICE_STAGES != 0
+            || self.flags & !DIRECT_GENET_SLICE_FLAGS != 0
+            || self.stages & required != required
+            || self.began_ticks == 0
+            || self.finished_ticks <= self.began_ticks
+        {
+            return false;
+        }
+        let ordered = [
+            (DIRECT_GENET_SLICE_STAGE_SOURCE, self.source_ready_ticks),
+            (DIRECT_GENET_SLICE_STAGE_PACKET, self.packet_done_ticks),
+            (DIRECT_GENET_SLICE_STAGE_IRQ, self.irq_done_ticks),
+        ];
+        let mut previous = self.began_ticks;
+        let mut index = 0;
+        while index < ordered.len() {
+            let (stage, ticks) = ordered[index];
+            if self.stages & stage != 0 {
+                if ticks == 0 || ticks < previous || ticks > self.finished_ticks {
+                    return false;
+                }
+                previous = ticks;
+            } else if ticks != 0 {
+                return false;
+            }
+            index += 1;
+        }
+        let publication = self.stages & DIRECT_GENET_SLICE_STAGE_RX_PUBLICATION != 0;
+        if publication {
+            if self.rx_publication_ticks == 0
+                || self.rx_publication_ticks < self.began_ticks
+                || self.rx_publication_ticks > self.finished_ticks
+                || (self.stages & DIRECT_GENET_SLICE_STAGE_SOURCE != 0
+                    && self.rx_publication_ticks < self.source_ready_ticks)
+                || (self.stages & DIRECT_GENET_SLICE_STAGE_PACKET != 0
+                    && self.rx_publication_ticks > self.packet_done_ticks)
+            {
+                return false;
+            }
+        } else if self.rx_publication_ticks != 0 {
+            return false;
+        }
+        let rx = self.flags & DIRECT_GENET_SLICE_FLAG_RX != 0;
+        let tx = self.flags & DIRECT_GENET_SLICE_FLAG_TX != 0;
+        let tcp = self.flags & DIRECT_GENET_SLICE_FLAG_TCP != 0;
+        if rx && tx {
+            return false;
+        }
+        if rx {
+            if self.rx_cursor == 0 || self.tx_cursor != 0 || !publication {
+                return false;
+            }
+        } else if tx {
+            if self.tx_cursor == 0 || self.rx_cursor != 0 || publication {
+                return false;
+            }
+        } else if self.rx_cursor != 0 || self.tx_cursor != 0 || self.frame_len != 0 || publication {
+            return false;
+        }
+        if (rx || tx) && (self.frame_len == 0 || self.frame_len as usize > ETHERNET_FRAME_BYTES) {
+            return false;
+        }
+        if tcp {
+            (rx || tx) && self.frame_len >= 54 && self.tcp_flags & !0x01ff == 0
+        } else {
+            tuple_empty
+        }
+    }
+
+    fn encode(&self, output: &mut [u8]) {
+        let words = [
+            self.dpc_turn,
+            self.began_ticks,
+            self.source_ready_ticks,
+            self.packet_done_ticks,
+            self.irq_done_ticks,
+            self.finished_ticks,
+            self.rx_publication_ticks,
+            self.rx_cursor,
+            self.tx_cursor,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            output[index * 8..index * 8 + 8].copy_from_slice(&word.to_le_bytes());
+        }
+        for (index, word) in [
+            self.src_ipv4,
+            self.dst_ipv4,
+            self.tcp_sequence,
+            self.tcp_ack,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            output[72 + index * 4..76 + index * 4].copy_from_slice(&word.to_le_bytes());
+        }
+        for (index, word) in [self.src_port, self.dst_port, self.tcp_flags, self.frame_len]
+            .into_iter()
+            .enumerate()
+        {
+            output[88 + index * 2..90 + index * 2].copy_from_slice(&word.to_le_bytes());
+        }
+        output[96..100].copy_from_slice(&self.stages.to_le_bytes());
+        output[100..104].copy_from_slice(&self.flags.to_le_bytes());
+        for (index, word) in self.reserved.into_iter().enumerate() {
+            output[104 + index * 8..112 + index * 8].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+
+    fn decode(input: &[u8]) -> Self {
+        Self {
+            dpc_turn: read_u64(input, 0),
+            began_ticks: read_u64(input, 8),
+            source_ready_ticks: read_u64(input, 16),
+            packet_done_ticks: read_u64(input, 24),
+            irq_done_ticks: read_u64(input, 32),
+            finished_ticks: read_u64(input, 40),
+            rx_publication_ticks: read_u64(input, 48),
+            rx_cursor: read_u64(input, 56),
+            tx_cursor: read_u64(input, 64),
+            src_ipv4: read_u32(input, 72),
+            dst_ipv4: read_u32(input, 76),
+            tcp_sequence: read_u32(input, 80),
+            tcp_ack: read_u32(input, 84),
+            src_port: read_u16(input, 88),
+            dst_port: read_u16(input, 90),
+            tcp_flags: read_u16(input, 92),
+            frame_len: read_u16(input, 94),
+            stages: read_u32(input, 96),
+            flags: read_u32(input, 100),
+            reserved: [
+                read_u64(input, 104),
+                read_u64(input, 112),
+                read_u64(input, 120),
+            ],
+        }
+    }
+}
+
 /// Sequence-last, child-owned direct-GENET diagnostic snapshot.
 ///
 /// This record lives in a cache-line-isolated region of the CPU-only control
@@ -1694,6 +1969,8 @@ pub struct DirectGenetRuntimeDiagnostic {
     pub raw_notification_rejected: u64,
     /// Bitwise OR of every raw notification badge returned to the runtime.
     pub raw_notification_badge_or: u64,
+    /// Longest valid owner-local elapsed slice; zero until a sample is retained.
+    pub max_slice: DirectGenetRuntimeSliceReceipt,
     /// Sequence-last commit, equal to [`Self::publication_sequence`].
     pub committed_sequence: u64,
 }
@@ -1743,6 +2020,7 @@ impl DirectGenetRuntimeDiagnostic {
             raw_notification_receipts: 0,
             raw_notification_rejected: 0,
             raw_notification_badge_or: 0,
+            max_slice: DirectGenetRuntimeSliceReceipt::empty(),
             committed_sequence: 0,
         }
     }
@@ -1758,6 +2036,7 @@ impl DirectGenetRuntimeDiagnostic {
             && self.version == DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION
             && self.len as usize == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES
             && self.flags & !DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS == 0
+            && self.max_slice.valid()
             && self.raw_notification_rejected <= self.raw_notification_receipts
             && self.raw_notification_badge_or <= u32::MAX as u64
             && ((self.raw_notification_receipts == 0) == (self.raw_notification_badge_or == 0))
@@ -1824,6 +2103,10 @@ impl DirectGenetRuntimeDiagnostic {
         output[160..168].copy_from_slice(&self.raw_notification_receipts.to_le_bytes());
         output[168..176].copy_from_slice(&self.raw_notification_rejected.to_le_bytes());
         output[176..184].copy_from_slice(&self.raw_notification_badge_or.to_le_bytes());
+        self.max_slice.encode(
+            &mut output[DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAX_SLICE_OFFSET
+                ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET],
+        );
         output[DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
             ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET + 8]
             .copy_from_slice(&self.committed_sequence.to_le_bytes());
@@ -1876,6 +2159,10 @@ impl DirectGenetRuntimeDiagnostic {
             raw_notification_receipts: read_u64(input, 160),
             raw_notification_rejected: read_u64(input, 168),
             raw_notification_badge_or: read_u64(input, 176),
+            max_slice: DirectGenetRuntimeSliceReceipt::decode(
+                &input[DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAX_SLICE_OFFSET
+                    ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET],
+            ),
             committed_sequence: read_u64(input, DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET),
         };
         if record.valid_for(generation) {
@@ -4259,6 +4546,16 @@ const _: () = assert!(size_of::<DirectGenetSlotHeader>() == DIRECT_GENET_SLOT_HE
 const _: () =
     assert!(size_of::<DirectGenetRuntimeDiagnostic>() == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES);
 const _: () = assert!(align_of::<DirectGenetRuntimeDiagnostic>() == 64);
+const _: () = assert!(size_of::<DirectGenetRuntimeSliceReceipt>() == 128);
+const _: () = assert!(align_of::<DirectGenetRuntimeSliceReceipt>() == 8);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetRuntimeDiagnostic, max_slice)
+        == DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAX_SLICE_OFFSET
+);
+const _: () = assert!(
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAX_SLICE_OFFSET + DIRECT_GENET_RUNTIME_SLICE_RECEIPT_BYTES
+        == DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
+);
 const _: () = assert!(
     DIRECT_GENET_LAYOUT_OFFSET + DIRECT_GENET_LAYOUT_BYTES <= SHARED_PAGE_BYTES
         && DIRECT_VIRTIO_LAYOUT_OFFSET + DIRECT_VIRTIO_LAYOUT_BYTES <= DIRECT_GENET_LAYOUT_OFFSET
@@ -5066,6 +5363,272 @@ mod tests {
         assert_eq!(layout.validate_for(8), Err(AbiError::StaleGeneration));
     }
 
+    fn direct_genet_slice_fixture() -> DirectGenetRuntimeSliceReceipt {
+        DirectGenetRuntimeSliceReceipt {
+            dpc_turn: 9,
+            began_ticks: 10,
+            source_ready_ticks: 20,
+            packet_done_ticks: 30,
+            irq_done_ticks: 35,
+            finished_ticks: 40,
+            rx_publication_ticks: 25,
+            rx_cursor: 17,
+            src_ipv4: 0xc000_0201,
+            dst_ipv4: 0xc633_6402,
+            tcp_sequence: 0x1234_5678,
+            tcp_ack: 0x9abc_def0,
+            src_port: 0,
+            dst_port: 31337,
+            tcp_flags: 0x118,
+            frame_len: 60,
+            stages: 0x3f,
+            flags: 0x5,
+            ..DirectGenetRuntimeSliceReceipt::empty()
+        }
+    }
+
+    #[test]
+    fn direct_genet_slice_presence_order_and_direction_are_exact() {
+        let empty = DirectGenetRuntimeSliceReceipt::empty();
+        assert!(empty.valid());
+        let rx = direct_genet_slice_fixture();
+        assert!(rx.valid(), "a zero TCP port remains representable");
+        let no_packet = DirectGenetRuntimeSliceReceipt {
+            dpc_turn: 1,
+            began_ticks: 10,
+            finished_ticks: 11,
+            stages: 0x11,
+            ..empty
+        };
+        assert!(
+            no_packet.valid(),
+            "an empty attempt can be the longest slice"
+        );
+        let tx = DirectGenetRuntimeSliceReceipt {
+            rx_publication_ticks: 0,
+            rx_cursor: 0,
+            tx_cursor: 18,
+            stages: 0x1f,
+            flags: 0x6,
+            ..rx
+        };
+        assert!(tx.valid());
+        let non_tcp = DirectGenetRuntimeSliceReceipt {
+            rx_publication_ticks: 10,
+            rx_cursor: 1,
+            frame_len: 1,
+            stages: 0x31,
+            flags: 0x1,
+            ..no_packet
+        };
+        assert!(non_tcp.valid());
+        assert!(
+            DirectGenetRuntimeSliceReceipt {
+                src_ipv4: 0,
+                dst_ipv4: 0,
+                src_port: 0,
+                dst_port: 0,
+                ..rx
+            }
+            .valid(),
+            "tuple validation imposes no address or port policy"
+        );
+        for bad in [
+            DirectGenetRuntimeSliceReceipt {
+                dpc_turn: 1,
+                ..empty
+            },
+            DirectGenetRuntimeSliceReceipt {
+                reserved: [0, 1, 0],
+                ..empty
+            },
+            DirectGenetRuntimeSliceReceipt {
+                reserved: [0, 0, 1],
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt { stages: 0x7f, ..rx },
+            DirectGenetRuntimeSliceReceipt { stages: 0x3e, ..rx },
+            DirectGenetRuntimeSliceReceipt { stages: 0x2f, ..rx },
+            DirectGenetRuntimeSliceReceipt { flags: 0xd, ..rx },
+            DirectGenetRuntimeSliceReceipt {
+                began_ticks: 0,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                finished_ticks: 10,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                source_ready_ticks: 0,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                source_ready_ticks: 9,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                source_ready_ticks: 31,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                packet_done_ticks: 41,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                irq_done_ticks: 29,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                source_ready_ticks: 10,
+                ..no_packet
+            },
+            DirectGenetRuntimeSliceReceipt {
+                packet_done_ticks: 10,
+                ..no_packet
+            },
+            DirectGenetRuntimeSliceReceipt {
+                irq_done_ticks: 10,
+                ..no_packet
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_publication_ticks: 0,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_publication_ticks: 9,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_publication_ticks: 19,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_publication_ticks: 31,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_publication_ticks: 41,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_publication_ticks: 10,
+                ..tx
+            },
+            DirectGenetRuntimeSliceReceipt { flags: 0x7, ..rx },
+            DirectGenetRuntimeSliceReceipt { rx_cursor: 0, ..rx },
+            DirectGenetRuntimeSliceReceipt { tx_cursor: 1, ..rx },
+            DirectGenetRuntimeSliceReceipt { tx_cursor: 0, ..tx },
+            DirectGenetRuntimeSliceReceipt { rx_cursor: 1, ..tx },
+            DirectGenetRuntimeSliceReceipt {
+                stages: 0x1f,
+                rx_publication_ticks: 0,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                rx_cursor: 1,
+                ..no_packet
+            },
+            DirectGenetRuntimeSliceReceipt {
+                frame_len: 1,
+                ..no_packet
+            },
+            DirectGenetRuntimeSliceReceipt {
+                flags: 0x4,
+                ..no_packet
+            },
+            DirectGenetRuntimeSliceReceipt {
+                frame_len: 0,
+                ..non_tcp
+            },
+            DirectGenetRuntimeSliceReceipt {
+                frame_len: 1537,
+                ..non_tcp
+            },
+            DirectGenetRuntimeSliceReceipt {
+                frame_len: 53,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                tcp_flags: 0x200,
+                ..rx
+            },
+            DirectGenetRuntimeSliceReceipt {
+                src_port: 1,
+                ..non_tcp
+            },
+        ] {
+            assert!(!bad.valid(), "malformed slice accepted: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn direct_genet_slice_v5_offsets_and_corrupt_encoding_are_exact() {
+        assert_eq!(core::mem::size_of::<DirectGenetRuntimeSliceReceipt>(), 128);
+        assert_eq!(core::mem::align_of::<DirectGenetRuntimeSliceReceipt>(), 8);
+        assert_eq!(core::mem::size_of::<DirectGenetRuntimeDiagnostic>(), 320);
+        assert_eq!(
+            core::mem::offset_of!(DirectGenetRuntimeDiagnostic, max_slice),
+            184
+        );
+        assert_eq!(
+            core::mem::offset_of!(DirectGenetRuntimeDiagnostic, committed_sequence),
+            312
+        );
+        let mut diagnostic = DirectGenetRuntimeDiagnostic::empty();
+        diagnostic.generation = 7;
+        diagnostic.publication_sequence = 3;
+        diagnostic.committed_sequence = 3;
+        diagnostic.max_slice = direct_genet_slice_fixture();
+        let mut encoded = [0u8; 320];
+        diagnostic.encode(&mut encoded).unwrap();
+        assert_eq!(&encoded[4..8], &[5, 0, 64, 1]);
+        for (offset, value) in [
+            (184, 9u64),
+            (192, 10),
+            (200, 20),
+            (208, 30),
+            (216, 35),
+            (224, 40),
+            (232, 25),
+            (240, 17),
+            (248, 0),
+            (312, 3),
+        ] {
+            assert_eq!(&encoded[offset..offset + 8], &value.to_le_bytes());
+        }
+        assert_eq!(
+            &encoded[256..272],
+            &[1, 2, 0, 192, 2, 100, 51, 198, 0x78, 0x56, 0x34, 0x12, 0xf0, 0xde, 0xbc, 0x9a,]
+        );
+        assert_eq!(
+            &encoded[272..288],
+            &[0, 0, 0x69, 0x7a, 0x18, 1, 60, 0, 0x3f, 0, 0, 0, 5, 0, 0, 0,]
+        );
+        assert_eq!(&encoded[288..312], &[0; 24]);
+        assert_eq!(
+            DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
+            Ok(diagnostic)
+        );
+        for (offset, value) in [(4, 4), (280, 0x7f), (284, 0x7), (288, 1), (311, 1)] {
+            let mut corrupt = encoded;
+            corrupt[offset] = value;
+            assert_eq!(
+                DirectGenetRuntimeDiagnostic::decode(&corrupt, 7),
+                Err(DirectGenetError::InvalidLayout)
+            );
+        }
+        let mut corrupt = diagnostic;
+        corrupt.max_slice.finished_ticks = 10;
+        assert_eq!(
+            corrupt.encode(&mut encoded),
+            Err(DirectGenetError::InvalidLayout)
+        );
+        assert_eq!(
+            DirectGenetRuntimeDiagnostic::decode(&encoded[..192], 7),
+            Err(DirectGenetError::InvalidLayout)
+        );
+    }
+
     #[test]
     fn direct_genet_runtime_diagnostic_is_sequence_last_and_generation_exact() {
         let mut diagnostic = DirectGenetRuntimeDiagnostic::empty();
@@ -5107,27 +5670,27 @@ mod tests {
         assert_eq!(
             &encoded[12..16],
             &731u32.to_le_bytes(),
-            "diagnostic v4 assigns offset 12 to the MCS quantum high-water",
+            "diagnostic v5 assigns offset 12 to the MCS quantum high-water",
         );
         assert_eq!(
             &encoded[108..112],
             &1u32.to_le_bytes(),
-            "diagnostic v4 retains raw record offset 108 for level adoptions",
+            "diagnostic v5 retains raw record offset 108 for level adoptions",
         );
         assert_eq!(
             &encoded[160..168],
             &9u64.to_le_bytes(),
-            "diagnostic v4 assigns offset 160 to raw notification receipts",
+            "diagnostic v5 assigns offset 160 to raw notification receipts",
         );
         assert_eq!(
             &encoded[168..176],
             &1u64.to_le_bytes(),
-            "diagnostic v4 assigns offset 168 to rejected raw notifications",
+            "diagnostic v5 assigns offset 168 to rejected raw notifications",
         );
         assert_eq!(
             &encoded[176..184],
             &0x500u64.to_le_bytes(),
-            "diagnostic v4 assigns offset 176 to the raw badge union",
+            "diagnostic v5 assigns offset 176 to the raw badge union",
         );
         assert_eq!(
             DirectGenetRuntimeDiagnostic::decode(&encoded, 7),

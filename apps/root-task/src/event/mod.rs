@@ -273,6 +273,61 @@ struct DirectGenetNetstatsLines {
     dma: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     peer: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    slice: Option<[HeaplessString<DEFAULT_LINE_CAPACITY>; 5]>,
+}
+
+#[cfg(feature = "net-console")]
+fn format_direct_genet_slice_netstats(
+    slice: console_network_abi::DirectGenetRuntimeSliceReceipt,
+    timer_hz: u64,
+) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+    let direction = if slice.flags & console_network_abi::DIRECT_GENET_SLICE_FLAG_RX != 0 {
+        "rx"
+    } else if slice.flags & console_network_abi::DIRECT_GENET_SLICE_FLAG_TX != 0 {
+        "tx"
+    } else {
+        "none"
+    };
+    [
+        format_message(format_args!(
+            "netstats: genet_direct_slice sample={} turn={} direction={} stages=0x{:08x} flags=0x{:08x} clock=cntvct timer_hz={}",
+            if slice.stages == 0 { "empty" } else { "present" },
+            slice.dpc_turn,
+            direction,
+            slice.stages,
+            slice.flags,
+            timer_hz,
+        )),
+        format_message(format_args!(
+            "netstats: genet_direct_slice_begin began_ticks={} source_ready_ticks={} packet_done_ticks={}",
+            slice.began_ticks,
+            slice.source_ready_ticks,
+            slice.packet_done_ticks,
+        )),
+        format_message(format_args!(
+            "netstats: genet_direct_slice_end irq_done_ticks={} finished_ticks={} rx_publication_ticks={}",
+            slice.irq_done_ticks,
+            slice.finished_ticks,
+            slice.rx_publication_ticks,
+        )),
+        format_message(format_args!(
+            "netstats: genet_direct_slice_packet rx_cursor={} tx_cursor={} frame_len={}",
+            slice.rx_cursor,
+            slice.tx_cursor,
+            slice.frame_len,
+        )),
+        format_message(format_args!(
+            "netstats: genet_direct_slice_tcp present={} src={}:{} dst={}:{} seq=0x{:08x} ack=0x{:08x} flags=0x{:03x}",
+            yes_no(slice.flags & console_network_abi::DIRECT_GENET_SLICE_FLAG_TCP != 0),
+            core::net::Ipv4Addr::from(slice.src_ipv4),
+            slice.src_port,
+            core::net::Ipv4Addr::from(slice.dst_ipv4),
+            slice.dst_port,
+            slice.tcp_sequence,
+            slice.tcp_ack,
+            slice.tcp_flags,
+        )),
+    ]
 }
 
 #[cfg(feature = "net-console")]
@@ -358,6 +413,7 @@ fn format_direct_genet_netstats(
             dma: None,
             ring: None,
             peer: None,
+            slice: None,
         };
     };
     DirectGenetNetstatsLines {
@@ -423,6 +479,10 @@ fn format_direct_genet_netstats(
             snapshot.tx_producer_poison,
             snapshot.tx_consumer_poison,
         ))),
+        slice: Some(format_direct_genet_slice_netstats(
+            snapshot.max_slice,
+            crate::generated::console_network_service_config().timer_clock_hz,
+        )),
     }
 }
 
@@ -3767,6 +3827,25 @@ fn deferred_cyw43_attached_network_continuation(
         && !recovery_required
         && !containment_work_pending
         && (schedulable_network_work || retained_authenticated_response_flush)
+}
+
+/// A strict same-ticket admission receipt may cross only its one Network cut.
+/// The successor is the full operator rotor; Dispatch and recovery keep their
+/// separately selected owners and material progress keeps its existing route.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_rx_admission_rotation_admitted(
+    network_units: usize,
+    network_activity: bool,
+    outer_operations: u32,
+    next_phase: LinkedRuntimeServicePhase,
+) -> bool {
+    network_units == 1
+        && !network_activity
+        && outer_operations == 1
+        && matches!(
+            next_phase,
+            LinkedRuntimeServicePhase::Network | LinkedRuntimeServicePhase::Serial
+        )
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -8339,6 +8418,9 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     deferred_cyw43_attached_network_activity: bool,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    deferred_cyw43_rx_admission_continuation:
+        Option<crate::drivers::driver_task_net::Cyw43RxAdmissionContinuation>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     deferred_cyw43_transient_publication_credit: Option<Cyw43TransientPublicationCredit>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     deferred_cyw43_authenticated_response_episode: Option<Cyw43AuthenticatedResponseEpisode>,
@@ -9061,6 +9143,8 @@ where
             linked_runtime_cyw43_operator_rotation_pending: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             deferred_cyw43_attached_network_activity: false,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            deferred_cyw43_rx_admission_continuation: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             deferred_cyw43_transient_publication_credit: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -9885,8 +9969,9 @@ where
     /// without changing that cursor's existing 8/16-turn hard bound.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[inline(never)]
-    #[must_use = "a false continuation token requires an explicit root-control yield"]
+    #[must_use = "consume an exact admission receipt or apply the existing idle boundary"]
     pub fn poll_deferred_cyw43_attached_network_control_turn(&mut self) -> bool {
+        self.deferred_cyw43_rx_admission_continuation = None;
         #[cfg(all(
             feature = "release-pi4",
             target_arch = "aarch64",
@@ -10059,6 +10144,11 @@ where
 
                 let root_wake_before_poll = crate::hal::driver_task::cyw43_root_wake_snapshot();
                 self.poll();
+                let rx_admission_continuation = if cyw43_lane_selected {
+                    crate::drivers::driver_task_net::take_cyw43_rx_admission_continuation()
+                } else {
+                    None
+                };
                 let root_wake_consumed = cyw43_root_wake_consumed_between(
                     root_wake_before_poll,
                     crate::hal::driver_task::cyw43_root_wake_snapshot(),
@@ -10261,6 +10351,26 @@ where
                     if exact_productive_progress {
                         let _ = self.note_cyw43_productive_activation_progress();
                         return true;
+                    }
+                    if cyw43_rx_admission_rotation_admitted(
+                        network_units,
+                        self.deferred_cyw43_attached_network_activity,
+                        crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count(),
+                        self.linked_runtime_service_phase,
+                    ) && self.pi_root_control_cyw43_causal_wait_fence_clear()
+                    {
+                        if let Some(receipt) =
+                            rx_admission_continuation.filter(|receipt| receipt.current())
+                        {
+                            // The exact op8 advanced root housekeeping but has
+                            // not delivered a packet. Preserve only that
+                            // take-once frontier through the full operator
+                            // rotor; material progress remains false.
+                            self.require_linked_runtime_cyw43_operator_rotation();
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                            self.deferred_cyw43_rx_admission_continuation = Some(receipt);
+                            return false;
+                        }
                     }
                 }
 
@@ -14066,6 +14176,17 @@ where
             && !local_fault_pending
             && !physical_operator_work.retains_network_fence_after_dispatch()
             && !self.physical_console_response_pending()
+    }
+
+    /// Consume one strict op8 admission advance without manufacturing material
+    /// progress. The caller retains its existing activation cap and the next
+    /// turn begins at the required physical-operator rotation.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn take_pi_root_control_cyw43_rx_admission_continuation(&mut self) -> bool {
+        let receipt = self.deferred_cyw43_rx_admission_continuation.take();
+        receipt.is_some_and(|receipt| {
+            self.pi_root_control_cyw43_causal_wait_fence_clear() && receipt.current()
+        })
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -35038,6 +35159,11 @@ where
                                 if let Some(line) = lines.peer {
                                     self.emit_console_line(line.as_str());
                                 }
+                                if let Some(slice) = lines.slice {
+                                    for line in slice {
+                                        self.emit_console_line(line.as_str());
+                                    }
+                                }
                             }
                         }
                         self.emit_console_line(line_six.as_str());
@@ -36947,6 +37073,35 @@ extern "C" fn vtable_sentinel() {}
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_rx_admission_rotation_requires_one_nonmaterial_network_step() {
+        use super::{
+            cyw43_rx_admission_rotation_admitted as admitted, LinkedRuntimeServicePhase as Phase,
+        };
+        for phase in [Phase::Network, Phase::Serial] {
+            assert!(admitted(1, false, 1, phase));
+            for units in [0, 2, 5] {
+                assert!(!admitted(units, false, 1, phase));
+            }
+            for operations in [0, 2, u32::MAX] {
+                assert!(!admitted(1, false, operations, phase));
+            }
+            assert!(!admitted(1, true, 1, phase));
+        }
+        for phase in [
+            Phase::LocalSeat,
+            Phase::Dispatch,
+            Phase::Display,
+            Phase::ContainmentDiagnostic,
+        ] {
+            assert!(
+                !admitted(1, false, 1, phase),
+                "preserve the already-selected owner"
+            );
+        }
+    }
+
     use super::*;
     #[cfg(feature = "kernel")]
     use crate::hal::{
@@ -37590,6 +37745,68 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn direct_genet_slice_netstats_are_exact_at_legal_maxima() {
+        let receipt = console_network_abi::DirectGenetRuntimeSliceReceipt {
+            dpc_turn: u64::MAX,
+            began_ticks: u64::MAX - 4,
+            source_ready_ticks: u64::MAX - 3,
+            rx_publication_ticks: u64::MAX - 2,
+            packet_done_ticks: u64::MAX - 1,
+            irq_done_ticks: u64::MAX,
+            finished_ticks: u64::MAX,
+            rx_cursor: u64::MAX,
+            tx_cursor: 0,
+            src_ipv4: u32::MAX,
+            dst_ipv4: u32::MAX,
+            tcp_sequence: u32::MAX,
+            tcp_ack: u32::MAX,
+            src_port: u16::MAX,
+            dst_port: u16::MAX,
+            tcp_flags: 0x1ff,
+            frame_len: 1536,
+            stages: 0x3f,
+            flags: 0x5,
+            reserved: [0; 3],
+        };
+        assert!(receipt.valid());
+        let lines = format_direct_genet_slice_netstats(receipt, u64::MAX);
+        let expected = [
+            "netstats: genet_direct_slice sample=present turn=18446744073709551615 direction=rx stages=0x0000003f flags=0x00000005 clock=cntvct timer_hz=18446744073709551615",
+            "netstats: genet_direct_slice_begin began_ticks=18446744073709551611 source_ready_ticks=18446744073709551612 packet_done_ticks=18446744073709551614",
+            "netstats: genet_direct_slice_end irq_done_ticks=18446744073709551615 finished_ticks=18446744073709551615 rx_publication_ticks=18446744073709551613",
+            "netstats: genet_direct_slice_packet rx_cursor=18446744073709551615 tx_cursor=0 frame_len=1536",
+            "netstats: genet_direct_slice_tcp present=yes src=255.255.255.255:65535 dst=255.255.255.255:65535 seq=0xffffffff ack=0xffffffff flags=0x1ff",
+        ];
+        for (line, expected) in lines.iter().zip(expected) {
+            assert_eq!(line.as_str(), expected);
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+            assert!(line.len() < DEFAULT_LINE_CAPACITY);
+        }
+        let tx = console_network_abi::DirectGenetRuntimeSliceReceipt {
+            rx_publication_ticks: 0,
+            rx_cursor: 0,
+            tx_cursor: u64::MAX,
+            stages: 0x1f,
+            flags: 0x6,
+            ..receipt
+        };
+        assert!(tx.valid());
+        let tx_lines = format_direct_genet_slice_netstats(tx, 54_000_000);
+        assert!(tx_lines[0].contains("direction=tx"));
+        assert_eq!(tx_lines[3].as_str(),
+            "netstats: genet_direct_slice_packet rx_cursor=0 tx_cursor=18446744073709551615 frame_len=1536");
+        let empty = format_direct_genet_slice_netstats(
+            console_network_abi::DirectGenetRuntimeSliceReceipt::empty(),
+            54_000_000,
+        );
+        assert_eq!(empty[0].as_str(),
+            "netstats: genet_direct_slice sample=empty turn=0 direction=none stages=0x00000000 flags=0x00000000 clock=cntvct timer_hz=54000000");
+        assert_eq!(empty[4].as_str(),
+            "netstats: genet_direct_slice_tcp present=no src=0.0.0.0:0 dst=0.0.0.0:0 seq=0x00000000 ack=0x00000000 flags=0x000");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn direct_genet_netstats_rows_are_exact_and_untruncated_at_legal_maxima() {
         let mut snapshot = console_network_abi::DirectGenetRuntimeDiagnostic::empty();
         snapshot.flags = console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS
@@ -37713,6 +37930,13 @@ mod tests {
             "netstats: genet_direct refresh=ready-missing snapshot=missing",
         );
         assert!(!missing.summary.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(missing.slice.is_none());
+        let slice_lines = lines.slice.as_ref().expect("slice rows");
+        assert_eq!(rendered.len() + slice_lines.len(), 16);
+        for line in slice_lines {
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+            assert!(line.len() <= payload_limit);
+        }
     }
 
     #[cfg(feature = "kernel")]

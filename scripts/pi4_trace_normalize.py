@@ -12727,6 +12727,10 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
     nettest_proof = False
     for event in events:
         raw = event.raw.lower()
+        if raw.startswith("netstats: genet_direct"):
+            # Owner diagnostics carry packet tuple and timing fields, never
+            # selected-interface, address-source or authenticated TCP proof.
+            continue
         if "[cohsh-net][auth] auth ok" in raw or "[net-console] auth ok" in raw:
             host_tcp_proof = True
             tcp_ready = True
@@ -12782,6 +12786,10 @@ def summarize_cohsh_tcp_auth(events: Iterable[TraceEvent]) -> tuple[bool, int, i
     rx_bytes = 0
     for event in events:
         raw = event.raw.lower()
+        if raw.startswith("netstats: genet_direct"):
+            # Owner diagnostics carry packet tuple and timing fields, never
+            # selected-interface, address-source or authenticated TCP proof.
+            continue
         if "[cohsh-net][auth] auth ok" in raw or "[net-console] auth ok" in raw:
             auth_line_seen = True
         if not (

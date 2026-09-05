@@ -1185,9 +1185,9 @@ reusable ownership pattern.
   operation count without widening a DMA mapping or moving device authority.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
-  direct-GENET diagnostic-v4 record occupies the formerly reserved bytes
-  `[320,512)`, is exactly 192 bytes and cache-line aligned, and commits its
-  publication sequence last at record offset 184. Version 4 assigns offset 12
+  direct-GENET diagnostic-v5 record occupies the formerly reserved bytes
+  `[320,640)`, is exactly 320 bytes and cache-line aligned, and commits its
+  publication sequence last at record offset 312. Version 5 assigns offset 12
   to the maximum observed bounded packet-slice duration and retains offset 108
   for cumulative `dpc_level_adoptions`, the number of badge-zero or
   peer-turn joins of durable physical work to a direct IRQ episode. Offsets
@@ -1206,8 +1206,18 @@ reusable ownership pattern.
   stale, wrong-generation, or
   malformed data is unavailable diagnostic evidence, not a reason to change
   packet, IRQ, retry, recovery, or containment behavior. Ordinary packet turns
-  do not scan the record, and page bytes `[512,4096)` remain reserved, zeroed at
+  do not scan the record, and page bytes `[640,4096)` remain reserved, zeroed at
   construction, and scrubbed at containment.
+- Diagnostic v5 includes one 128-byte maximum-slice receipt at record offset
+  184. Its ordered counter samples separate source/reclaim, packet work,
+  IRQ work and final durable checking; a confirmed RX publication precedes
+  peer signalling and DMA rearm. The owner samples only a bounded header while
+  that exact DMA slot still awaits rearm. A TX receipt uses the existing stable
+  private frame. Direction, cursor and a validated IPv4/TCP tuple permit exact
+  packet correlation without retaining payload. Invalid samples are discarded
+  without affecting scheduling or service. Elapsed time includes descheduling
+  and kernel time; neither a maximum nor its tuple proves wire arrival or SC
+  consumption. Record publication remains restricted to diagnostic replay.
 - One operator diagnostic may request one idempotent, exact-generation `DGHO`
   replay so the sole GENET owner publishes that record. Retain both the stable
   pre-replay snapshot and the replacement sampled before normal post-command
@@ -1236,6 +1246,14 @@ transport:
   SDIO work through the generated link.
 - One parent identity remains bound through every child action and the final
   consumer receipt.
+- Firmware staging borrows the existing replay transaction once per bounded
+  payload copy, preserving sealed-parent and overlay precedence for every byte.
+  Full baseline snapshots, replay order, saved overlapping input and partial
+  flush offsets remain authoritative. Restoring the immutable parent aperture
+  and flushing staged firmware may use the existing aligned volatile word
+  stores only within one validated contiguous mapping; prefixes, suffixes and
+  mapping seams retain byte stores. This changes copy work, not SDIO command
+  shape, firmware bytes, physical waits, replay identity or recovery.
 - A nonforeground bus-link payload copy validates both complete ranges before
   mutation, computes batching from the actual mapped virtual addresses, and
   uses naturally aligned parent words plus paired aligned owner words when the

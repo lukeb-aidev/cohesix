@@ -6963,8 +6963,8 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       anchor revoke.
       Direct-GENET diagnostic coverage must prove the exact page-0 layout:
       control header `[0,64)`, four cursor records `[64,320)`, optional aligned
-      192-byte diagnostic-v4 record `[320,512)`, record-relative sequence-last
-      commit at offset 184, and still-reserved tail `[512,4096)`. ABI tests must
+      320-byte diagnostic-v5 record `[320,640)`, record-relative sequence-last
+      commit at offset 312, and still-reserved tail `[640,4096)`. ABI tests must
       prove record offset 12 round-trips the direct MCS packet-slice high-water,
       record offset 108 round-trips cumulative `dpc_level_adoptions`, and
       offsets 160, 168, and 176 round-trip nonzero raw notification receipts,
@@ -6976,6 +6976,15 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       than accepted. Root must stable-read the complete record around its commit
       and require the exact live nonzero direct generation. Ordinary packet turns
       must neither scan nor mutate the diagnostic or reserved tail.
+      The 128-byte v5 extension at record offset 184 must preserve the first
+      longest valid slice, reject invalid or backwards stage clocks and
+      inconsistent direction/cursor/tuple fields, and keep reserved fields zero.
+      Runtime header sampling must retain the validated RX frame length across
+      commit reconciliation and occur before that same DMA slot is rearmed.
+      Non-IPv4, fragmented or truncated headers must not fabricate a TCP tuple.
+      Invalid observations must not change the scheduling decision or fault the
+      device. The receipt measures its own slice, including descheduling and
+      kernel time; it cannot identify wire arrival or consumed SC time.
       One active wired `netstats` request may issue exactly one idempotent,
       generation-bound DGHO replay. Tests must retain the stable pre-replay
       sample, label the replacement `phase=pre-idle-service`, and emit a complete
@@ -6983,7 +6992,9 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `genet_direct_before`, `genet_direct_before_ring`, `genet_direct_irq`,
       `genet_direct_irq_source`, `genet_direct_notification`,
       `genet_direct_dpc`, `genet_direct_dma`, `genet_direct_ring`, then
-      `genet_direct_peer`. The DPC row must retain the cumulative dense-window
+      `genet_direct_peer`, `genet_direct_slice`, `genet_direct_slice_begin`,
+      `genet_direct_slice_end`, `genet_direct_slice_packet`, then
+      `genet_direct_slice_tcp`. The DPC row must retain the cumulative dense-window
       yield/fault reason mask and maximum measured packet-slice duration without
       granting scheduling authority. Runtime coverage must prove one direct
       notification can consume successive exact packet units through caller-local
@@ -7012,11 +7023,13 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       available and the accepted sequence changed. READY with no stable
       pre-replay record is `ready-unverified`, even if a record is visible
       afterward; it cannot be promoted to fresh causal evidence.
-      The `cohsh` TCP fixture must preserve all eleven ordered rows. The Pi trace
+      The `cohsh` TCP fixture must preserve all sixteen ordered rows. Legacy v4
+      eleven-row captures remain parseable; partial v5 batches remain individual
+      observational rows, without an asserted completeness verdict. The Pi trace
       normalizer must classify `genet_direct*` as wired-driver evidence before
       generic network parsing, prevent a component `active=yes` flag from
       overwriting canonical `NET_ACTIVE`, keep legacy traces with no optional
-      rows parseable, and refuse to label a truncated or incomplete batch as
+      rows parseable, and never label a truncated or incomplete batch as
       complete causal evidence. No row or batch supplies TCP, performance, or
       Pi-acceptance authority.
       Fresh same-boot wired evidence must prove DHCP/static policy, ARP, ICMP,
@@ -8949,15 +8962,15 @@ perform a release fence, write the header and active bytes, perform a second
 release fence, publish the final sequence commit, and signal only afterward.
 Readers must reject an oversized length or a commit that changes across the
 bounded copy without advancing the accepted sequence. Scalar reserved header
-fields must validate as zero. On direct-GENET control page 0, bytes `[320,512)`
+fields must validate as zero. On direct-GENET control page 0, bytes `[320,640)`
 are no longer generic reserved tail: they hold the optional, separately
-versioned diagnostic-v4 record governed by the stable exact-generation rules
+versioned diagnostic-v5 record governed by the stable exact-generation rules
 above. Record offset 12 carries the direct-MCS packet-slice high-water; cumulative
 reason flags distinguish fresh-boundary, half-budget guard, timer-sample,
 attempt-cap, and stalled-retry yields. Cumulative `dpc_level_adoptions` remains
 at record offset 108, with raw notification receipt, rejection, and badge-union
 evidence at offsets 160, 168, and 176. Bytes
-`[512,4096)` and inactive payload suffixes remain non-authoritative and must not
+`[640,4096)` and inactive payload suffixes remain non-authoritative and must not
 be scanned or copied during a normal turn; construction zeroing and containment
 scrub remain required. Capability
 inspection must show that the child's packet-ingress and control mappings are

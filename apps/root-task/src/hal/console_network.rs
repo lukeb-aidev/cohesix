@@ -156,6 +156,11 @@ fn sample_direct_genet_runtime_diagnostic(
         encoded[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
         offset += 8;
     }
+    // Complete the relaxed body reads before rechecking the commit. The
+    // writer orders commit invalidation before its body stores; this acquire
+    // fence prevents accepting a mixed body under two old commit samples.
+    // An acquire load alone would order only the reads that follow it.
+    fence(Ordering::Acquire);
     let second_commit = diagnostic_words[COMMIT_WORD_INDEX].load(Ordering::Acquire);
     if second_commit != first_commit {
         return None;
@@ -2730,6 +2735,13 @@ mod tests {
         diagnostic.raw_notification_receipts = 7;
         diagnostic.raw_notification_rejected = 1;
         diagnostic.raw_notification_badge_or = 0x500;
+        diagnostic.max_slice = console_network_abi::DirectGenetRuntimeSliceReceipt {
+            dpc_turn: 4,
+            began_ticks: 10,
+            finished_ticks: 11,
+            stages: 0x11,
+            ..console_network_abi::DirectGenetRuntimeSliceReceipt::empty()
+        };
         diagnostic.committed_sequence = 3;
         let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
         diagnostic
@@ -2747,6 +2759,17 @@ mod tests {
         assert_eq!(
             sample_direct_genet_runtime_diagnostic(root_ptr, generation + 1),
             None,
+        );
+        let reserved_byte = DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET + 311;
+        page.0[reserved_byte] = 1;
+        assert_eq!(
+            sample_direct_genet_runtime_diagnostic(root_ptr, generation),
+            None
+        );
+        page.0[reserved_byte] = 0;
+        assert_eq!(
+            sample_direct_genet_runtime_diagnostic(root_ptr, generation),
+            Some(diagnostic)
         );
         let commit_ptr = root_ptr
             + DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET

@@ -29,9 +29,9 @@ use crate::drivers::cyw43_host_eapol::{
 #[cfg(feature = "kernel")]
 use crate::hal::driver_task::{
     Cyw43PersistentTransactionParentCondition, Cyw43RetainedParentCondition,
-    Cyw43SdioNetworkPriorityLeasePhase, Cyw43SteadyDataPlaneOp, DriverServiceBudget,
-    DriverServiceBudgetError, DriverTaskRetainedServiceTurn, DriverTaskRingProgressSnapshot,
-    CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
+    Cyw43RxAdmissionFrontier, Cyw43SdioNetworkPriorityLeasePhase, Cyw43SteadyDataPlaneOp,
+    DriverServiceBudget, DriverServiceBudgetError, DriverTaskRetainedServiceTurn,
+    DriverTaskRingProgressSnapshot, CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
 };
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
@@ -737,6 +737,7 @@ pub(crate) fn begin_cyw43_outer_event_turn() {
         finish_cyw43_outer_event_turn();
     }
     CYW43_OUTER_EVENT_TURN_ACTIVE.store(0, Ordering::Release);
+    *CYW43_RX_ADMISSION_CONTINUATION.lock() = None;
     *CYW43_CANONICAL_POLICY_SNAPSHOT.lock() = None;
     *CYW43_SERVICE_WORK_POLICY_SNAPSHOT.lock() = None;
     if CYW43_COMMITTED_SEMANTIC_RETIREMENT.lock().is_some() {
@@ -1127,6 +1128,55 @@ struct Cyw43PendingPromptPoll {
     deadline: Cyw43PollDeadline,
     child_reply_latched: bool,
     child_reply_renewals: u16,
+}
+
+/// One completed root admission step of the existing NetData op8 ticket.
+/// Taking this receipt grants no packet, device operation or publication credit.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RxAdmissionContinuation {
+    ticket_id: u64,
+    request: u32,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    lifetime: Cyw43DataRxLifetimeCursor,
+    frontier: Cyw43RxAdmissionFrontier,
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_RX_ADMISSION_CONTINUATION: Mutex<Option<Cyw43RxAdmissionContinuation>> =
+    Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+impl Cyw43RxAdmissionContinuation {
+    pub(crate) fn current(self) -> bool {
+        let pending = *CYW43_PENDING_PROMPT_POLL.lock();
+        if !cyw43_data_rx_lifetime_identity_current(self.lifetime)
+            || !pending.is_some_and(|pending| {
+                pending.owner == Cyw43PromptPollOwner::NetData
+                    && pending.ticket_id == self.ticket_id
+                    && pending.generation == self.lifetime.generation
+                    && pending.request == Some(self.request)
+                    && pending.descriptor == self.descriptor
+            })
+            || cyw43_retained_descriptor_active_state(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                self.lifetime.generation,
+                self.descriptor,
+                Some(self.request),
+            )
+            .is_none()
+        {
+            return false;
+        }
+        crate::hal::driver_task::cyw43_rx_admission_frontier(self.request).is_some_and(|now| {
+            now.runnable() && (now == self.frontier || now.advanced_from(self.frontier))
+        })
+    }
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn take_cyw43_rx_admission_continuation() -> Option<Cyw43RxAdmissionContinuation> {
+    CYW43_RX_ADMISSION_CONTINUATION.lock().take()
 }
 
 /// Immutable identity for one runtime command across prompt-slice resumes.
@@ -23634,6 +23684,19 @@ fn run_cyw43_owned_prompt_poll(
             return None;
         }
     }
+    let rx_lifetime = (owner == Cyw43PromptPollOwner::NetData
+        && descriptor.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        && descriptor.flags == DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN)
+        .then(|| *CYW43_DATA_RX_LIFETIME_CURSOR.lock())
+        .flatten()
+        .filter(|cursor| cyw43_data_rx_lifetime_identity_current(*cursor));
+    let rx_request_before = pending.request;
+    let rx_frontier_before = rx_lifetime
+        .and_then(|_| pending.request)
+        .and_then(crate::hal::driver_task::cyw43_rx_admission_frontier);
+    let rx_queue_before = rx_request_before.is_none()
+        && rx_lifetime.is_some()
+        && cyw43_exact_runtime_rx_queue_ready();
     let turn = match run_cyw43_runtime_descriptor_turn_raw(
         contract,
         pending.generation,
@@ -23679,6 +23742,27 @@ fn run_cyw43_owned_prompt_poll(
         let _ =
             retain_cyw43_terminal_drain_cursor(request, Cyw43TerminalDrainOwner::Prompt(pending));
         *CYW43_PENDING_PROMPT_POLL.lock() = Some(pending);
+        if let Some((lifetime, frontier)) = rx_lifetime.zip(
+            crate::hal::driver_task::cyw43_rx_admission_frontier(request),
+        ) {
+            let advanced = match (rx_request_before, rx_frontier_before) {
+                (None, None) => rx_queue_before,
+                (Some(before_request), Some(before)) => {
+                    before_request == request && frontier.advanced_from(before)
+                }
+                _ => false,
+            };
+            if advanced && frontier.runnable() && cyw43_data_rx_lifetime_identity_current(lifetime)
+            {
+                *CYW43_RX_ADMISSION_CONTINUATION.lock() = Some(Cyw43RxAdmissionContinuation {
+                    ticket_id: pending.ticket_id,
+                    request,
+                    descriptor,
+                    lifetime,
+                    frontier,
+                });
+            }
+        }
         return None;
     };
     if completion.sequence == 0
@@ -29783,6 +29867,19 @@ fn defer_cyw43_precommit_data_frame(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_exact_runtime_rx_queue_ready() -> bool {
+    let lifetime = *CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+    let Some(lifetime) = lifetime.filter(|cursor| cyw43_data_rx_lifetime_identity_current(*cursor))
+    else {
+        return false;
+    };
+    let expected_generation = cyw43_sdio_dpc_expected_generation();
+    let ready = crate::hal::driver_task::driver_task_cyw43_rx_queue_state_snapshot()
+        .is_some_and(|queue| Some(queue.generation) == expected_generation && queue.work_visible());
+    ready && cyw43_data_rx_lifetime_identity_current(lifetime)
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_isolated_copied_rx_ready() -> bool {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     if !cyw43_data_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT)
@@ -29799,10 +29896,10 @@ fn cyw43_isolated_copied_rx_ready() -> bool {
     if maintenance_pending {
         return false;
     }
-    // Only retained root copies qualify. A DPC hint, metric, or unavailable
+    // Root copies precede another queue import. A DPC hint, metric, or unavailable
     // runtime queue sample cannot turn this selector into source polling.
     // EAPOL keeps its existing policy turn before ordinary copied ingress.
-    let copied_data_ready = {
+    let (copied_data_ready, batch_capacity_ready) = {
         let queue = CYW43_PENDING_RX_QUEUE.lock();
         let mut data = false;
         for pending in queue.iter() {
@@ -29818,11 +29915,51 @@ fn cyw43_isolated_copied_rx_ready() -> bool {
                 None => {}
             }
         }
-        data
+        (
+            data,
+            cyw43_pending_rx_batch_fits(queue.len(), DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP),
+        )
     };
     // The leaf still reserves response capacity and revalidates admission;
     // observing this level neither dequeues RX nor retains a paired TX permit.
-    copied_data_ready && cyw43_data_consumer_open_for_generation(generation)
+    if !cyw43_data_consumer_open_for_generation(generation) {
+        return false;
+    }
+    if copied_data_ready {
+        return true;
+    }
+    let pending = *CYW43_PENDING_PROMPT_POLL.lock();
+    if let Some(pending) = pending {
+        if pending.owner != Cyw43PromptPollOwner::NetData
+            || pending.generation != generation
+            || pending.ticket_id == 0
+            || pending.descriptor.op != DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            || pending.descriptor.flags != DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN
+        {
+            return false;
+        }
+        let Some(request) = pending.request else {
+            return false;
+        };
+        return cyw43_retained_descriptor_active_state(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            generation,
+            pending.descriptor,
+            Some(request),
+        )
+        .is_some()
+            && CYW43_DATA_RX_LIFETIME_CURSOR
+                .lock()
+                .is_some_and(|cursor| cyw43_data_rx_lifetime_identity_current(cursor))
+            && crate::hal::driver_task::cyw43_rx_admission_frontier(request)
+                .is_some_and(Cyw43RxAdmissionFrontier::runnable);
+    }
+    // Only the existing queue-only op8 leaf may import these copied frames;
+    // it reserves its complete batch and revalidates every owner before issue.
+    crate::hal::driver_task::active_driver_task_retained_request(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        .is_none()
+        && batch_capacity_ready
+        && cyw43_exact_runtime_rx_queue_ready()
 }
 
 #[cfg(feature = "kernel")]
@@ -29883,7 +30020,11 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         if !cyw43_net_data_pre_poll_continuation_pending(contract) {
             return None;
         }
-        let (flags, token) = resume_cyw43_active_prompt_poll_for_data_path(contract)?;
+        let Cyw43DataPathResume::Frame(flags, token) =
+            resume_cyw43_active_prompt_poll_for_data_path(contract)?
+        else {
+            return None;
+        };
         if cyw43_pre_secure_host_eapol_frame(flags, &token) {
             defer_cyw43_pre_secure_eapol_to_service_slice(contract, flags, token, "handoff-resume");
             return None;
@@ -29903,7 +30044,14 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         return Some(token);
     }
     if cyw43_prompt_poll_owned_by(Cyw43PromptPollOwner::NetData) {
-        let (flags, token) = resume_cyw43_active_prompt_poll_for_data_path(contract)?;
+        let resumed = resume_cyw43_active_prompt_poll_for_data_path(contract)?;
+        let Cyw43DataPathResume::Frame(flags, token) = resumed else {
+            // A resumed batch has already retired its exact op8 and copied
+            // the bounded frames. Deliver its first eligible frame in this
+            // same receive, as the fresh batch path does below. Waiting and
+            // malformed batches provide neither a frame nor extra authority.
+            return receive_cyw43_resumed_batch_frame(contract);
+        };
         if cyw43_pre_secure_host_eapol_frame(flags, &token) {
             defer_cyw43_pre_secure_eapol_to_service_slice(contract, flags, token, "resume");
             return None;
@@ -31008,9 +31156,22 @@ fn preserve_cyw43_control_event_frame(
 }
 
 #[cfg(feature = "kernel")]
+enum Cyw43DataPathResume {
+    Frame(u16, DriverTaskNetRxToken),
+    BatchPreserved,
+}
+
+#[cfg(feature = "kernel")]
+fn receive_cyw43_resumed_batch_frame(contract: DriverTaskContract) -> Option<DriverTaskNetRxToken> {
+    cyw43_current_generation_data_consumer_open()
+        .then(|| receive_one_cyw43_pending_rx_token(contract))
+        .flatten()
+}
+
+#[cfg(feature = "kernel")]
 fn resume_cyw43_active_prompt_poll_for_data_path(
     contract: DriverTaskContract,
-) -> Option<(u16, DriverTaskNetRxToken)> {
+) -> Option<Cyw43DataPathResume> {
     if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
         return None;
     }
@@ -31019,10 +31180,11 @@ fn resume_cyw43_active_prompt_poll_for_data_path(
         descriptor.flags,
         Cyw43PromptPollOwner::NetData,
     )?;
-    if preserve_cyw43_rx_batch_completion(contract, completion).is_some() {
-        return None;
+    if let Some(preserved) = preserve_cyw43_rx_batch_completion(contract, completion) {
+        return preserved.then_some(Cyw43DataPathResume::BatchPreserved);
     }
     cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
+        .map(|(flags, token)| Cyw43DataPathResume::Frame(flags, token))
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -58056,6 +58218,55 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_resumed_batch_delivers_first_frame_only_after_exact_handoff() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let connection_generation = 9;
+        mark_cyw43_gate8_ready_for_test(connection_generation);
+        let generation =
+            cyw43_sdio_dpc_expected_generation().expect("generated runtime generation");
+        let mut page = [0; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring = test_publish_cyw43_ring(&mut page);
+        let mut shared = TestCyw43RxBatchPages::new();
+        let first = test_cyw43_tcp_frame();
+        let mut second = first;
+        second[0] ^= 1;
+        let completion = shared.publish(
+            &mut ring,
+            41,
+            generation,
+            &[
+                (&first, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA),
+                (&second, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA),
+            ],
+        );
+        invalidate_cyw43_data_handoff();
+        assert_eq!(
+            preserve_cyw43_rx_batch_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion),
+            Some(true)
+        );
+        assert!(receive_cyw43_resumed_batch_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none());
+        assert_eq!(CYW43_PENDING_RX_QUEUE.lock().len(), 2);
+        assert!(commit_cyw43_data_handoff_if_ready(connection_generation));
+        assert!(publish_cyw43_gate8_data_consumer_for_test(
+            connection_generation
+        ));
+        let token = receive_cyw43_resumed_batch_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("a completed batch supplies the first frame in this receive");
+        assert_eq!(&token.buffer[..token.len], &first);
+        assert_eq!(CYW43_PENDING_RX_QUEUE.lock().len(), 1);
+        let tail = take_cyw43_pending_rx_token()
+            .expect("the second frame stays bounded and ordered")
+            .1;
+        assert_eq!(&tail.buffer[..tail.len], &second);
+        assert!(receive_cyw43_resumed_batch_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none());
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_rx_batch_holds_ordinary_data_while_pre_secure_owner_is_active() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
@@ -60108,6 +60319,92 @@ mod tests {
         assert!(!cyw43_isolated_copied_rx_ready());
         assert_eq!(CYW43_PENDING_RX_QUEUE.lock().len(), 1);
         assert_eq!(CYW43_DATA_TX_QUEUE.lock().reservations, 0);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_isolated_runtime_rx_readiness_requires_exact_live_queue() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 9;
+        mark_cyw43_gate8_ready_for_test(generation);
+        let lifetime = *CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+        let runtime_generation =
+            cyw43_sdio_dpc_expected_generation().expect("generated paired runtime");
+        let mut page = [0; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring = test_publish_cyw43_ring(&mut page);
+        let ready = pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+            generation: runtime_generation,
+            queue_depth: 1,
+            commit_sequence: 17,
+            ..pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty()
+        };
+        ring.publish_rx_queue_state(ready);
+        for _ in 0..2 {
+            assert!(
+                cyw43_isolated_copied_rx_ready(),
+                "an exact runtime DATA queue needs no new wake"
+            );
+            assert_eq!(
+                crate::hal::driver_task::driver_task_cyw43_rx_queue_state_snapshot(),
+                Some(ready)
+            );
+            assert_eq!(*CYW43_DATA_RX_LIFETIME_CURSOR.lock(), lifetime);
+            assert!(CYW43_PENDING_RX_QUEUE.lock().is_empty());
+            assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+        }
+        for unavailable in [
+            pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+                queue_depth: 0,
+                ..ready
+            },
+            pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+                generation: runtime_generation + 1,
+                ..ready
+            },
+            pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+                commit_sequence: 0,
+                ..ready
+            },
+            pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+                flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+                recovery_source_line: 123,
+                ..ready
+            },
+        ] {
+            ring.publish_rx_queue_state(unavailable);
+            assert!(!cyw43_isolated_copied_rx_ready());
+            assert_eq!(
+                *CYW43_DATA_RX_LIFETIME_CURSOR.lock(),
+                lifetime,
+                "readiness must not consume the lifetime"
+            );
+        }
+        ring.publish_rx_queue_state(ready);
+        let mut eapol = test_cyw43_tcp_frame();
+        eapol[12..14].copy_from_slice(&ETH_P_EAPOL.to_be_bytes());
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&eapol)
+        ));
+        assert!(
+            !cyw43_isolated_copied_rx_ready(),
+            "root-held EAPOL precedes runtime DATA import"
+        );
+        assert_eq!(CYW43_PENDING_RX_QUEUE.lock().len(), 1);
+        CYW43_PENDING_RX_QUEUE.lock().clear();
+        CYW43_DATA_TX_QUEUE.lock().reservations = CYW43_DATA_TX_QUEUE_CAP;
+        assert!(!cyw43_isolated_copied_rx_ready());
+        CYW43_DATA_TX_QUEUE.lock().reservations = 0;
+        CYW43_PAIR_SCRUB_EPOCH.fetch_add(1, Ordering::AcqRel);
+        assert!(
+            !cyw43_isolated_copied_rx_ready(),
+            "old pair identity cannot import a current-looking queue"
+        );
+        assert_eq!(*CYW43_DATA_RX_LIFETIME_CURSOR.lock(), lifetime);
         reset_cyw43_status_flags();
     }
 

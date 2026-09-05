@@ -3608,6 +3608,127 @@ pub(crate) enum Cyw43RetainedParentCondition {
     TerminalVisible,
 }
 
+/// Exact root-owned admission frontier; this is neither a grant nor CPU credit.
+/// The NetData owner separately binds its immutable op8 descriptor and lifetime.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RxAdmissionFrontier {
+    request: u32,
+    fingerprint: u32,
+    generation: u32,
+    phase: DriverTaskRetainedLeasePhase,
+    grant_id: u32,
+    consumed_rank: u8,
+    terminal: bool,
+    runnable: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43RxAdmissionFrontier {
+    pub(crate) const fn runnable(self) -> bool {
+        self.runnable
+    }
+
+    /// Accept only a strict frontier advance of the same immutable request.
+    /// Repeated Ready, notification history and diagnostic counters cannot
+    /// perpetuate a root activation.
+    pub(crate) fn advanced_from(self, before: Self) -> bool {
+        if self.request != before.request
+            || self.fingerprint != before.fingerprint
+            || self.generation != before.generation
+            || self.grant_id < before.grant_id
+            || (self.grant_id == before.grant_id && self.consumed_rank < before.consumed_rank)
+            || (before.terminal && !self.terminal)
+        {
+            return false;
+        }
+        if self.terminal && !before.terminal {
+            return true;
+        }
+        use DriverTaskRetainedLeasePhase as Phase;
+        if self.grant_id != before.grant_id {
+            return before.grant_id.checked_add(1) == Some(self.grant_id)
+                && before.phase == Phase::GrantRequired
+                && (before.grant_id == 0 || before.consumed_rank == 2)
+                && self.phase == Phase::Granted;
+        }
+        if self.phase == before.phase {
+            return self.consumed_rank > before.consumed_rank;
+        }
+        match (before.phase, self.phase) {
+            (Phase::BoostBus, Phase::BoostPrimary | Phase::ReadyToIssue)
+            | (Phase::BoostPrimary, Phase::ReadyToIssue)
+            | (Phase::ReadyToIssue, Phase::GrantRequired)
+            | (Phase::Granted, Phase::Issued) => true,
+            (Phase::Issued, Phase::GrantRequired) => self.consumed_rank == 2,
+            (Phase::Issued, Phase::RestorePrimary | Phase::RestoreBus | Phase::ReadyToComplete)
+            | (Phase::RestorePrimary, Phase::RestoreBus | Phase::ReadyToComplete)
+            | (Phase::RestoreBus, Phase::ReadyToComplete) => self.terminal,
+            _ => false,
+        }
+    }
+}
+
+/// Read one typed frontier without changing the command, grant, SC or Reply.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_rx_admission_frontier(
+    expected_request: u32,
+) -> Option<Cyw43RxAdmissionFrontier> {
+    let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let before = active_driver_task_retained_request_snapshot(contract)?;
+    let command = before.state.command()?;
+    if expected_request == 0
+        || before.state.request() != expected_request
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        || !driver_task_retained_uses_root_grant(contract, command)
+    {
+        return None;
+    }
+    let phase = DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    )?;
+    let grant_id = slot.retained_grant_id.load(Ordering::Acquire);
+    let condition = before
+        .state
+        .issued()
+        .then(|| cyw43_retained_parent_condition(expected_request));
+    if condition == Some(Cyw43RetainedParentCondition::NotExact) {
+        return None;
+    }
+    let consumed_rank = if grant_id == 0 {
+        0
+    } else {
+        let grant = read_driver_task_retained_root_grant_stable_with(command, grant_id, || {
+            driver_task_ring_read_continuation_grant(slot.ring_root_ptr.load(Ordering::Acquire))
+        })?;
+        driver_task_root_grant_consumer_rank(grant.consumed_grant_id, grant_id)?
+    };
+    if active_driver_task_retained_request_snapshot(contract) != Some(before)
+        || slot.retained_priority_lease_phase.load(Ordering::Acquire) != phase.as_usize()
+        || slot.retained_grant_id.load(Ordering::Acquire) != grant_id
+    {
+        return None;
+    }
+    Some(Cyw43RxAdmissionFrontier {
+        request: expected_request,
+        fingerprint: before.command_fingerprint,
+        generation: command.aux1,
+        phase,
+        grant_id,
+        consumed_rank,
+        terminal: condition == Some(Cyw43RetainedParentCondition::TerminalVisible),
+        runnable: !before.state.issued()
+            || matches!(
+                condition,
+                Some(
+                    Cyw43RetainedParentCondition::ContinuationReady
+                        | Cyw43RetainedParentCondition::TerminalVisible
+                )
+            ),
+    })
+}
+
 /// Passive root-side proof of one finite CYW43 parent pre-wait boundary.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28590,6 +28711,129 @@ fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_admission_frontier_requires_strict_same_request_progress() {
+        use DriverTaskRetainedLeasePhase as Phase;
+        let prepared = Cyw43RxAdmissionFrontier {
+            request: 41,
+            fingerprint: 0x1234,
+            generation: 7,
+            phase: Phase::ReadyToIssue,
+            grant_id: 0,
+            consumed_rank: 0,
+            terminal: false,
+            runnable: true,
+        };
+        let committed = Cyw43RxAdmissionFrontier {
+            phase: Phase::GrantRequired,
+            ..prepared
+        };
+        let granted = Cyw43RxAdmissionFrontier {
+            phase: Phase::Granted,
+            grant_id: 1,
+            ..committed
+        };
+        let issued = Cyw43RxAdmissionFrontier {
+            phase: Phase::Issued,
+            runnable: false,
+            ..granted
+        };
+        let consumed = Cyw43RxAdmissionFrontier {
+            consumed_rank: 2,
+            runnable: true,
+            ..issued
+        };
+        let recurrent = Cyw43RxAdmissionFrontier {
+            phase: Phase::GrantRequired,
+            ..consumed
+        };
+        let next_grant = Cyw43RxAdmissionFrontier {
+            grant_id: 2,
+            consumed_rank: 0,
+            phase: Phase::Granted,
+            ..recurrent
+        };
+        let terminal = Cyw43RxAdmissionFrontier {
+            terminal: true,
+            runnable: true,
+            ..issued
+        };
+        for (before, after) in [
+            (prepared, committed),
+            (committed, granted),
+            (granted, issued),
+            (issued, consumed),
+            (consumed, recurrent),
+            (recurrent, next_grant),
+            (issued, terminal),
+        ] {
+            assert!(
+                after.advanced_from(before),
+                "independent commit/grant/action frontier: {before:?} -> {after:?}"
+            );
+            assert!(
+                !before.advanced_from(after),
+                "a prior frontier cannot rearm a successor"
+            );
+            assert!(
+                !after.advanced_from(after),
+                "a repeated Ready cannot perpetuate activation"
+            );
+        }
+        assert!(
+            !issued.runnable(),
+            "issued hardware waiting earns no admission receipt"
+        );
+        for changed in [
+            Cyw43RxAdmissionFrontier {
+                request: 42,
+                ..committed
+            },
+            Cyw43RxAdmissionFrontier {
+                generation: 8,
+                ..committed
+            },
+            Cyw43RxAdmissionFrontier {
+                fingerprint: 0x1235,
+                ..committed
+            },
+            Cyw43RxAdmissionFrontier {
+                grant_id: 2,
+                ..granted
+            },
+            Cyw43RxAdmissionFrontier {
+                phase: Phase::Poisoned,
+                ..prepared
+            },
+        ] {
+            assert!(!changed.advanced_from(prepared));
+        }
+        assert!(
+            !next_grant.advanced_from(Cyw43RxAdmissionFrontier {
+                consumed_rank: 1,
+                ..recurrent
+            }),
+            "admitted physical work must finish before a recurrent grant"
+        );
+        assert!(
+            !issued.advanced_from(Cyw43RxAdmissionFrontier {
+                consumed_rank: 2,
+                ..granted
+            }),
+            "a phase advance cannot hide regression of the same grant consumer"
+        );
+        assert!(
+            !Cyw43RxAdmissionFrontier {
+                consumed_rank: 0,
+                phase: Phase::GrantRequired,
+                ..issued
+            }
+            .advanced_from(issued),
+            "a phase change cannot replace an owed child completion"
+        );
+    }
 
     #[test]
     fn suspended_driver_pc_requires_successful_exact_read_reply() {

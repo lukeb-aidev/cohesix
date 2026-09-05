@@ -39,24 +39,59 @@ temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
 refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
 
 The Pi-only GENET-to-console direct data plane is a private target transport
-change. Its optional causal diagnostic adds eleven ordered
+change. Its optional causal diagnostic adds sixteen ordered
 `netstats: genet_direct*` rows without changing a command, listener, authentication,
 namespace, REST request/response, library API, workload, or report schema. The
-captured Pi-wired `cohsh` fixture includes the eleven rows, including the raw
-receive-boundary notification receipt/rejection/badge-union discriminator. The
-Pi trace normalizer
-classifies them as wired-driver evidence before generic network records, keeps
-legacy captures without them parseable, prevents a component `active=yes` flag
-from replacing canonical `NET_ACTIVE`, and refuses to promote a truncated or
-incomplete row batch to complete causal evidence. The one-shot DGHO refresh may
+captured Pi-wired `cohsh` fixture includes the sixteen rows, including the raw
+receive-boundary notification discriminator and the v5 maximum-slice counter
+timestamps, direction/cursor and optional TCP header tuple. The Pi trace
+normalizer classifies them as wired-driver evidence before generic network
+records and keeps legacy captures without them parseable. Network-state and
+TCP-authentication summaries explicitly exclude these observational rows: the
+packet tuple's `src=` must not replace canonical `NET_ADDR_SRC`, and component
+flags must not replace `NET_ACTIVE` or manufacture authentication proof. Partial
+batches remain individual observational rows. Parsing does not assert batch
+completeness or promote a partial capture to complete causal evidence. The
+one-shot DGHO refresh may
 wake the owner and enable its normal idle RX service, so neither the normalized
 rows nor their before/after delta is passive performance or acceptance proof.
 
-The complete `coh` and `cohsh` implementations, `coh-status`, Hive Gateway/REST,
-SwarmUI, GPU bridge, host-ticket agent, sidecar, sidecar bus, CAS tool,
-`tools/cohesix-py`, generated-profile consumers, every `.coh` script, driver
-model comparator, M26e pressure runner, benchmark workloads, and report schemas
-were reviewed and require no hand-authored compatibility change. The Pi gate
+The exact-0feb follow-up under
+`m26e-driver-runtime-mcs-port-and-cyw43-coexistence` and
+`m26e-console-network-service-isolation` also advances existing copied WiFi
+NetData RX admission and batches private firmware marshalling. These changes
+preserve the console grammar and framing, AUTH/ATTACH and terminal semantics,
+Secure9P namespaces, role/ticket/cursor bounds, REST endpoints and deadlines,
+generated profiles, and physical-driver authority. The separately versioned
+GENET diagnostic grows from v4/192 bytes to v5/320 bytes; it is decoded only by
+the paired target runtime and root reader, not by a host binary or Python API.
+Its timestamps measure elapsed counter intervals, not CPU use or packet arrival.
+
+The affected host surfaces are
+[`pi4_trace_normalize.py`](../scripts/pi4_trace_normalize.py), its
+[legacy/current/partial diagnostic fixtures](../tests/test_pi4_trace_normalize.py),
+and the [Pi-wired cohsh fixture](../apps/cohsh/tests/tcp_cli_script.rs). The
+normalizer retains legacy eleven-row and current sixteen-row captures without
+assigning acceptance authority to either; the `cohsh` fixture verifies all
+sixteen diagnostic rows within the unchanged terminal-delimited response.
+No production `cohsh` transport change is required.
+
+The complete implementations of `coh`, `cohsh`, `coh-status`, Hive Gateway/REST,
+SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, sidecar
+bus, CAS tooling and `console-ack-wire` were reviewed and require no further
+compatibility change. The same review covers all `tools/cohesix-py` filesystem,
+TCP, REST and mock backends, typed helpers and playbooks; generated-profile and
+`coh-rtc` consumers; every `.coh` workload; Pi serial/gate helpers and driver
+model comparison; the M26e QEMU pressure runner; REST benchmark workloads,
+measurement arithmetic, evidence predicates and report readers. None requires
+an implementation, generated-output, workload or schema change for this batch.
+In particular, the existing explicit Pi gateway profile, canonical READY census,
+TAIL cursor accounting, pool/backpressure bounds, retries and timeouts remain
+unchanged. GENET diagnostic rows do not replace the harness's exact boot/handoff,
+authentication, Worker or pressure proofs. Host compatibility and a QEMU canary
+do not establish improvement on the next physical Pi image.
+
+The Pi gate
 wrapper now preflights the canonical authenticated peer, selects only its
 command-bound exact DHCP lease on the required WiFi or GENET lane, starts that
 peer after a nonzero `nettest` admission, and still requires an exact
