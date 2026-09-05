@@ -341,6 +341,13 @@ non-loopback binds require an explicit opt-in. See
 [API_GUIDELINES.md](API_GUIDELINES.md) for endpoint, status, and compatibility
 rules.
 
+For a physical Pi gateway, select `--worker-runtime-profile pi4-production`.
+The default `qemu-smp-production` preserves the QEMU contract. This option
+selects the existing compiler-generated Worker roles, limits and namespace
+bounds for `/v1/meta/bounds`; it does not discover or qualify the target.
+Pi uses eight shard bits, while the QEMU profile uses six, so the selection
+must match the target before structured Worker discovery or REST pressure.
+
 The gateway owns one authenticated target connection and one bounded broker.
 It schedules three fixed progress classes over that connection: host-ticket
 specification ingress first, receipt/control progress second, and bulk reads or

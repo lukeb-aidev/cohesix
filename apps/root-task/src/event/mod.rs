@@ -568,6 +568,55 @@ fn format_cyw43_tx_phase_diagnostics(
 }
 
 #[cfg(feature = "kernel")]
+fn format_cyw43_rx_dequeue_diagnostic(
+    diagnostic: crate::drivers::driver_task_net::Cyw43RxDequeueDiagnostic,
+) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+    let generation = diagnostic.generation;
+    let summary = format_message(format_args!(
+        "netstats: wifi_rx_dequeue schema=v1 gen={} n={} missing={} sat={} invalid={}",
+        generation,
+        diagnostic.samples,
+        diagnostic.missing,
+        diagnostic.saturated,
+        diagnostic.invalid,
+    ));
+    let runtime = format_message(format_args!(
+        "netstats: wifi_rx_dequeue_runtime gen={} us=sum/max s2q={}/{} q2p={}/{}",
+        generation,
+        diagnostic.total_us[0],
+        diagnostic.max_us[0],
+        diagnostic.total_us[1],
+        diagnostic.max_us[1],
+    ));
+    let root = format_message(format_args!(
+        "netstats: wifi_rx_dequeue_root gen={} us=sum/max p2r={}/{} r2d={}/{}",
+        generation,
+        diagnostic.total_us[2],
+        diagnostic.max_us[2],
+        diagnostic.total_us[3],
+        diagnostic.max_us[3],
+    ));
+    let (identity, timing) = match diagnostic.slow {
+        Some((tuple, intervals, total)) => (
+            format_message(format_args!(
+                "netstats: wifi_rx_dequeue_slow gen={} src={:08x}:{} dst={:08x}:{} seq={:08x} ack={:08x} flags={:03x}",
+                generation, tuple.source_ipv4, tuple.source_port, tuple.destination_ipv4, tuple.destination_port,
+                tuple.sequence, tuple.acknowledgment, tuple.flags,
+            )),
+            format_message(format_args!(
+                "netstats: wifi_rx_dequeue_slow_us gen={} total={} s2q={} q2p={} p2r={} r2d={}",
+                generation, total, intervals[0], intervals[1], intervals[2], intervals[3],
+            )),
+        ),
+        None => (
+            format_message(format_args!("netstats: wifi_rx_dequeue_slow gen={} absent=yes", generation)),
+            format_message(format_args!("netstats: wifi_rx_dequeue_slow_us gen={} absent=yes", generation)),
+        ),
+    };
+    [summary, runtime, root, identity, timing]
+}
+
+#[cfg(feature = "kernel")]
 fn format_cyw43_data_tx_queue_diagnostic(
     namespace: &str,
     metric_name: &str,
@@ -12718,8 +12767,15 @@ where
                     self.cancel_linked_runtime_network_quantum();
                     return;
                 }
+                // Keep timer service inside the existing CYW43 active-time
+                // bound. This earlier start conservatively includes the
+                // intervening lease admission as well as the NIC body.
                 #[cfg(feature = "net-console")]
-                let cyw43_priority_lease_actionable = self.linked_runtime_cyw43_priority_work_due();
+                let cyw43_network_active_interval_start = cyw43_lane_selected
+                    .then(|| (self.now_ms, Self::linked_runtime_counter_ticks()));
+                #[cfg(feature = "net-console")]
+                let cyw43_priority_lease_actionable =
+                    cyw43_lane_selected && self.prepare_linked_runtime_cyw43_network_turn();
                 #[cfg(feature = "net-console")]
                 let cyw43_owner_override_actionable = cyw43_lane_selected
                     && cyw43_terminal_retirement_override()
@@ -12910,13 +12966,25 @@ where
                 #[cfg(feature = "net-console")]
                 let pending_net_flush_active_before_poll = self.pending_net_flush.active();
                 #[cfg(feature = "net-console")]
-                let network_active_interval_started_ms = self.now_ms;
+                let network_active_interval_started_ms = cyw43_network_active_interval_start
+                    .map_or(self.now_ms, |(started_ms, _)| started_ms);
                 #[cfg(feature = "net-console")]
-                let network_active_interval_started_ticks = Self::linked_runtime_counter_ticks();
+                let network_active_interval_started_ticks = cyw43_network_active_interval_start
+                    .map_or_else(Self::linked_runtime_counter_ticks, |(_, ticks)| ticks);
                 // The Network leaf owns timer/NIC work only. Root IPC,
                 // bootstrap, stream, and reboot tails run in their dedicated
                 // Dispatch/operator phases instead of being multiplied by
                 // every retained child microstep.
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected {
+                    // Admission and the association supervisor must use the
+                    // same fresh timer sample. Advancing it again here could
+                    // make a retry due after its outer lease was declined.
+                    self.poll_runtime_after_timer_prelude(true, false, true, false);
+                } else {
+                    self.poll_runtime_without_control_tail(true, false, true);
+                }
+                #[cfg(not(feature = "net-console"))]
                 self.poll_runtime_without_control_tail(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
@@ -13790,6 +13858,24 @@ where
             child_publication_pending,
             fence_clear,
         ) == DirectGenetCausalFaninState::Arbitrate
+    }
+
+    /// Recheck a newer durable publication after the preceding response drained.
+    /// The completed token supplies only its authenticated lane and existing
+    /// operator/recovery fences. The shared publication frontier supplies fresh
+    /// work; neither a notification nor the old response authorizes another turn.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn pi_root_control_completed_response_publication_ready(
+        &self,
+        completed: PiRootControlProductiveContinuation,
+    ) -> bool {
+        completed.completed_current_response()
+            && self.pi_root_control_productive_continuation_fence_clear(completed)
+            && self
+                .net
+                .as_deref()
+                .and_then(crate::net::NetPoller::console_child_publication_pending)
+                == Some(true)
     }
 
     /// Consume at most one endpoint message or bound fan-in hint without
@@ -15359,6 +15445,15 @@ where
                 || self.linked_runtime_cyw43_durable_resume.is_some())
     }
 
+    /// Sample current policy time before deciding whether this Network turn
+    /// needs an outer lease. Its runtime body must consume this same sample;
+    /// the next turn samples again, and physical deadlines remain driver-owned.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn prepare_linked_runtime_cyw43_network_turn(&mut self) -> bool {
+        self.poll_runtime_timer_prelude();
+        self.linked_runtime_cyw43_priority_work_due()
+    }
+
     /// Dispatch at most one network-console line already retained by the NIC
     /// service phase.
     ///
@@ -16726,14 +16821,31 @@ where
                 false
             }
         };
+        self.poll_runtime_timer_prelude();
+        self.poll_runtime_after_timer_prelude(
+            suppress_console_input,
+            physical_input_active,
+            service_network,
+            service_control_tail,
+        );
+    }
+
+    /// Consume one already sampled Runtime turn. The caller has also resolved
+    /// console-input suppression before this body; CYW43 Network always
+    /// suppresses input so Dispatch retains its separate ownership turn.
+    fn poll_runtime_after_timer_prelude(
+        &mut self,
+        suppress_console_input: bool,
+        physical_input_active: bool,
+        service_network: bool,
+        service_control_tail: bool,
+    ) {
         #[cfg(not(feature = "net-console"))]
         let _ = suppress_console_input;
         #[cfg(not(feature = "net-console"))]
         let _ = physical_input_active;
         #[cfg(not(feature = "net-console"))]
         let _ = service_network;
-
-        self.poll_runtime_timer_prelude();
 
         #[cfg(feature = "net-console")]
         let response_owner_pending = self.network_response_owner_active()
@@ -34875,6 +34987,11 @@ where
                                 self.emit_console_line(line_cyw43_tx_phase_rxsplit_q11a.as_str());
                                 self.emit_console_line(line_cyw43_tx_phase_rxsplit_q11b.as_str());
                                 self.emit_console_line(line_cyw43_tx_queue.as_str());
+                                for line in format_cyw43_rx_dequeue_diagnostic(
+                                    crate::drivers::driver_task_net::cyw43_rx_dequeue_diagnostic(),
+                                ) {
+                                    self.emit_console_line(line.as_str());
+                                }
                             }
                             self.emit_console_line(line_wifi.as_str());
                             self.emit_console_line(line_wifi_rxq.as_str());
@@ -43283,6 +43400,7 @@ mod tests {
         counters: NetCounters,
         self_test_report: NetSelfTestReport,
         polls: usize,
+        last_poll_now_ms: Option<u64>,
         poll_activity: bool,
         response_polls: usize,
         tcp_flushes: usize,
@@ -43304,6 +43422,7 @@ mod tests {
         console_service_pending: bool,
         icmp_echo_due: bool,
         cyw43_association_turn_pending: bool,
+        cyw43_association_due_ms: Option<u64>,
         #[cfg(feature = "kernel")]
         expect_cyw43_priority_lease_open_on_poll: bool,
         #[cfg(feature = "kernel")]
@@ -43347,6 +43466,7 @@ mod tests {
                 counters: NetCounters::default(),
                 self_test_report: NetSelfTestReport::default(),
                 polls: 0,
+                last_poll_now_ms: None,
                 poll_activity: true,
                 response_polls: 0,
                 tcp_flushes: 0,
@@ -43368,6 +43488,7 @@ mod tests {
                 console_service_pending: false,
                 icmp_echo_due: false,
                 cyw43_association_turn_pending: false,
+                cyw43_association_due_ms: None,
                 #[cfg(feature = "kernel")]
                 expect_cyw43_priority_lease_open_on_poll: false,
                 #[cfg(feature = "kernel")]
@@ -43447,7 +43568,8 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     impl NetPoller for FakeNet {
-        fn poll(&mut self, _now_ms: u64) -> bool {
+        fn poll(&mut self, now_ms: u64) -> bool {
+            self.last_poll_now_ms = Some(now_ms);
             #[cfg(feature = "kernel")]
             if self.expect_cyw43_priority_lease_open_on_poll {
                 assert_eq!(
@@ -43733,8 +43855,11 @@ mod tests {
             self.icmp_echo_due
         }
 
-        fn cyw43_association_runtime_turn_pending(&self, _now_ms: u64) -> bool {
+        fn cyw43_association_runtime_turn_pending(&self, now_ms: u64) -> bool {
             self.cyw43_association_turn_pending
+                || self
+                    .cyw43_association_due_ms
+                    .is_some_and(|deadline_ms| now_ms >= deadline_ms)
         }
 
         fn console_listener_ready(&self) -> bool {
@@ -60030,6 +60155,61 @@ mod tests {
             crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
             false,
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_network_admission_and_service_share_fresh_deadline_sample() {
+        for (sample_ms, association_due) in [(1_999, false), (2_000, true)] {
+            let _progress_guard = wifi_driver_task_progress_test_guard();
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(71, 17, 1, 0),
+            ));
+            let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
+                LoopbackSerial::<32768>::new(),
+            );
+            let mut timer = TestTimer::single(TickEvent {
+                tick: 1,
+                now_ms: sample_ms,
+            });
+            timer
+                .ticks
+                .push(TickEvent {
+                    tick: 2,
+                    now_ms: 2_001,
+                })
+                .unwrap();
+            let mut audit = AuditLog::new();
+            let mut wifi = FakeNet::new();
+            wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+            wifi.status.active_driver = "cyw43";
+            wifi.status.active_interface = "wifi";
+            wifi.status.address_source = "driver-task-ring-client";
+            wifi.status.dhcp_phase = "deferred";
+            wifi.cyw43_association_due_ms = Some(2_000);
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, TicketTable::<4>::new(), &mut audit)
+                    .with_network(&mut wifi);
+            pump.now_ms = 1_998;
+            assert!(!pump.linked_runtime_cyw43_priority_work_due());
+            assert_eq!(
+                pump.prepare_linked_runtime_cyw43_network_turn(),
+                association_due,
+                "only the fresh deadline sample may make association actionable",
+            );
+            pump.poll_runtime_after_timer_prelude(true, false, true, false);
+            assert_eq!(pump.now_ms, sample_ms);
+            assert_eq!(pump.timer.index, 1, "one Network turn samples time once");
+            assert!(
+                pump.prepare_linked_runtime_cyw43_network_turn(),
+                "the next turn must refresh time rather than freeze the prior sample",
+            );
+            assert_eq!(pump.now_ms, 2_001);
+            assert_eq!(pump.timer.index, 2);
+            drop(pump);
+            assert_eq!(wifi.polls, 1);
+            assert_eq!(wifi.last_poll_now_ms, Some(sample_ms));
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

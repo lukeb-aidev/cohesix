@@ -24,7 +24,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use cohesix_net_constants::{
     COHESIX_TCP_CONSOLE_PORT, HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS,
     HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS,
@@ -175,6 +175,13 @@ const SWAGGER_UI_HTML: &str = r#"<!doctype html>
 </body>
 </html>"#;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum WorkerRuntimeProfile {
+    #[default]
+    QemuSmpProduction,
+    Pi4Production,
+}
+
 #[derive(Debug, Parser)]
 #[command(author = "Lukas Bower", version, about = "Cohesix host REST gateway")]
 struct Cli {
@@ -187,6 +194,9 @@ struct Cli {
     /// TCP console port.
     #[arg(long, default_value_t = COHESIX_TCP_CONSOLE_PORT)]
     tcp_port: u16,
+    /// Compiler-generated Worker bounds for the explicitly selected target profile.
+    #[arg(long, value_enum, default_value_t = WorkerRuntimeProfile::QemuSmpProduction)]
+    worker_runtime_profile: WorkerRuntimeProfile,
     /// TCP console auth token (or set COH_AUTH_TOKEN / COHSH_AUTH_TOKEN).
     #[arg(long)]
     auth_token: Option<String>,
@@ -1274,7 +1284,8 @@ async fn main() -> Result<()> {
         policy.pool.control_sessions, policy.pool.telemetry_sessions
     );
     let pool = build_session_pool(&config, policy)?;
-    let bounds = build_bounds().context("load generated Worker runtime bounds")?;
+    let bounds = build_bounds(config.worker_runtime_profile)
+        .context("load generated Worker runtime bounds")?;
     let worker_acceptance = worker_acceptance_state(
         config.worker_acceptance_root.as_deref(),
         config.worker_acceptance_evidence.as_deref(),
@@ -1364,6 +1375,7 @@ struct GatewayConfig {
     bind: String,
     tcp_host: String,
     tcp_port: u16,
+    worker_runtime_profile: WorkerRuntimeProfile,
     auth_token: String,
     request_auth_token: String,
     role: Role,
@@ -1518,6 +1530,7 @@ impl GatewayConfig {
             bind,
             tcp_host,
             tcp_port,
+            worker_runtime_profile: cli.worker_runtime_profile,
             auth_token,
             request_auth_token,
             role,
@@ -2090,11 +2103,17 @@ struct GeneratedGatewayWorker {
     task_abi_version: u16,
 }
 
-fn build_worker_runtime_bounds() -> Result<WorkerRuntimeBounds> {
-    const GENERATED_PROFILE: &str =
-        include_str!("../../../configs/generated/cohesix_python_qemu_smp_production.json");
-    let profile: GeneratedGatewayWorkerProfile = serde_json::from_str(GENERATED_PROFILE)
-        .context("parse compiler-generated qemu_smp_production Worker profile")?;
+fn build_worker_runtime_bounds(selected: WorkerRuntimeProfile) -> Result<WorkerRuntimeBounds> {
+    let generated_profile = match selected {
+        WorkerRuntimeProfile::QemuSmpProduction => {
+            include_str!("../../../configs/generated/cohesix_python_qemu_smp_production.json")
+        }
+        WorkerRuntimeProfile::Pi4Production => {
+            include_str!("../../../configs/generated/cohesix_python_pi4_production.json")
+        }
+    };
+    let profile: GeneratedGatewayWorkerProfile = serde_json::from_str(generated_profile)
+        .with_context(|| format!("parse compiler-generated {selected:?} Worker profile"))?;
     if profile.worker.roles.is_empty()
         || profile.worker.roles.len() > 16
         || profile.worker.maximum_live_tasks == 0
@@ -2144,7 +2163,7 @@ fn build_worker_runtime_bounds() -> Result<WorkerRuntimeBounds> {
     })
 }
 
-fn build_bounds() -> Result<BoundsResponse> {
+fn build_bounds(worker_runtime_profile: WorkerRuntimeProfile) -> Result<BoundsResponse> {
     Ok(BoundsResponse {
         manifest_sha256: CohshPolicy::manifest_hash(),
         secure9p: Secure9pBounds {
@@ -2207,7 +2226,7 @@ fn build_bounds() -> Result<BoundsResponse> {
                 preemptions_bytes: PROC_LEASE_PREEMPTIONS_BYTES,
             },
         },
-        worker_runtime: Some(build_worker_runtime_bounds()?),
+        worker_runtime: Some(build_worker_runtime_bounds(worker_runtime_profile)?),
     })
 }
 
@@ -4384,46 +4403,94 @@ mod tests {
     }
 
     #[test]
-    fn generated_worker_bounds_are_exact_and_bounded() {
-        let bounds = build_worker_runtime_bounds().expect("generated Worker profile parses");
-        assert_eq!(bounds.maximum_live_tasks, 256);
-        assert_eq!(bounds.task_abi_schema, "worker-task-abi/v2");
-        assert_eq!(bounds.task_abi_version, 2);
-        assert_eq!(
-            bounds.canonical_telemetry_template,
-            "/shard/<label>/worker/<id>/telemetry"
-        );
-        assert_eq!(
-            bounds
-                .roles
-                .iter()
-                .filter(|role| role.declaration == WorkerDeclaration::Executable)
-                .map(|role| role.executable_slots)
-                .sum::<u16>(),
-            bounds.maximum_live_tasks
-        );
-        for (role, executable_slots) in [
-            ("worker-heartbeat", 1),
-            ("worker-gpu", 127),
-            ("worker-lora", 128),
+    fn worker_runtime_profile_cli_default_and_explicit_shards_match_targets() {
+        for (arguments, expected_profile, shard_bits, worker_15_shard) in [
+            (
+                vec!["hive-gateway"],
+                WorkerRuntimeProfile::QemuSmpProduction,
+                6,
+                "03",
+            ),
+            (
+                vec!["hive-gateway", "--worker-runtime-profile", "pi4-production"],
+                WorkerRuntimeProfile::Pi4Production,
+                8,
+                "0f",
+            ),
         ] {
+            let cli = Cli::try_parse_from(arguments).expect("valid target profile selector");
+            assert_eq!(cli.worker_runtime_profile, expected_profile);
+            let bounds = build_bounds(cli.worker_runtime_profile)
+                .expect("selected generated bounds parse")
+                .worker_runtime
+                .expect("selected Worker bounds are present");
+            assert_eq!(bounds.shard_bits, shard_bits);
+            assert_eq!(
+                ShardLayout::enabled(bounds.shard_bits, bounds.legacy_worker_alias)
+                    .worker_shard_label("worker-15"),
+                worker_15_shard
+            );
+        }
+    }
+
+    #[test]
+    fn worker_runtime_profile_cli_rejects_unknown_profile() {
+        let error = Cli::try_parse_from([
+            "hive-gateway",
+            "--worker-runtime-profile",
+            "unknown-production",
+        ])
+        .expect_err("unknown profile must not select a fallback");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn generated_worker_bounds_are_exact_and_bounded() {
+        for selected in [
+            WorkerRuntimeProfile::QemuSmpProduction,
+            WorkerRuntimeProfile::Pi4Production,
+        ] {
+            let bounds =
+                build_worker_runtime_bounds(selected).expect("generated Worker profile parses");
+            assert_eq!(bounds.maximum_live_tasks, 256);
+            assert_eq!(bounds.task_abi_schema, "worker-task-abi/v2");
+            assert_eq!(bounds.task_abi_version, 2);
+            assert_eq!(
+                bounds.canonical_telemetry_template,
+                "/shard/<label>/worker/<id>/telemetry"
+            );
             assert_eq!(
                 bounds
                     .roles
                     .iter()
-                    .find(|contract| contract.role == role)
-                    .map(|contract| (&contract.declaration, contract.executable_slots)),
-                Some((&WorkerDeclaration::Executable, executable_slots))
+                    .filter(|role| role.declaration == WorkerDeclaration::Executable)
+                    .map(|role| role.executable_slots)
+                    .sum::<u16>(),
+                bounds.maximum_live_tasks
+            );
+            for (role, executable_slots) in [
+                ("worker-heartbeat", 1),
+                ("worker-gpu", 127),
+                ("worker-lora", 128),
+            ] {
+                assert_eq!(
+                    bounds
+                        .roles
+                        .iter()
+                        .find(|contract| contract.role == role)
+                        .map(|contract| (&contract.declaration, contract.executable_slots)),
+                    Some((&WorkerDeclaration::Executable, executable_slots))
+                );
+            }
+            assert_eq!(
+                bounds
+                    .roles
+                    .iter()
+                    .find(|role| role.role == "worker-bus")
+                    .map(|role| (&role.declaration, role.executable_slots)),
+                Some((&WorkerDeclaration::ModelOnly, 0))
             );
         }
-        assert_eq!(
-            bounds
-                .roles
-                .iter()
-                .find(|role| role.role == "worker-bus")
-                .map(|role| (&role.declaration, role.executable_slots)),
-            Some((&WorkerDeclaration::ModelOnly, 0))
-        );
     }
 
     #[test]
@@ -5680,6 +5747,7 @@ mod tests {
             bind: "127.0.0.1:8080".to_owned(),
             tcp_host: "127.0.0.1".to_owned(),
             tcp_port: 31337,
+            worker_runtime_profile: WorkerRuntimeProfile::QemuSmpProduction,
             auth_token: "token".to_owned(),
             request_auth_token: "request-token".to_owned(),
             role: Role::Queen,
@@ -5769,7 +5837,8 @@ mod tests {
                     telemetry_response_ms: DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
                 },
                 control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
-                bounds: build_bounds().expect("compiled generated Worker bounds must parse"),
+                bounds: build_bounds(WorkerRuntimeProfile::QemuSmpProduction)
+                    .expect("compiled generated Worker bounds must parse"),
                 backend_class: BackendClass::Unknown,
                 target_host: "127.0.0.1".to_owned(),
                 target_port: 31337,

@@ -19120,16 +19120,39 @@ fn record_cyw43_post_dhcp_rx_progress(
 fn record_cyw43_post_dhcp_rx_delivery(
     contract: DriverTaskContract,
     frame_flags: u16,
-    frame: &[u8],
+    token: &DriverTaskNetRxToken,
 ) {
+    let dequeue_ticks = cyw43_counter_ticks().map(|ticks| ticks as u32);
+    let frame = &token.buffer[..token.len];
+    let assigned_ipv4 = cyw43_assigned_ipv4();
     record_cyw43_post_dhcp_rx_progress(
         contract,
         cyw43_trace_frame_info(frame),
         frame.len(),
         frame_flags,
         runtime_mac(DriverTaskHotPath::Cyw43Wifi).unwrap_or(CYW43_DRIVER_TASK_MAC),
-        cyw43_assigned_ipv4(),
+        assigned_ipv4,
     );
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && cyw43_frame_channel(frame_flags) == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+    {
+        if let Some(tuple) = Cyw43RxDequeueTcpTuple::from_frame(frame)
+            .filter(|tuple| Some(tuple.destination_ipv4.to_be_bytes()) == assigned_ipv4)
+        {
+            let sample = cyw43_rx_dequeue_intervals(
+                token.source_cntvct_lo,
+                token.first_data_stage_deltas_q11,
+                token.root_copy_cntvct_lo,
+                dequeue_ticks,
+                cyw43_counter_freq_hz(),
+            );
+            CYW43_RX_DEQUEUE_DIAGNOSTIC.lock().record(
+                CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+                tuple,
+                sample,
+            );
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -25237,6 +25260,178 @@ pub struct DriverTaskNetRxToken {
     root_copy_cntvct_lo: Option<u32>,
 }
 
+/// Structurally validated incoming TCP header identity; never packet payload.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RxDequeueTcpTuple {
+    pub source_ipv4: u32,
+    pub destination_ipv4: u32,
+    pub source_port: u16,
+    pub destination_port: u16,
+    pub sequence: u32,
+    pub acknowledgment: u32,
+    pub flags: u16,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43RxDequeueTcpTuple {
+    fn from_frame(frame: &[u8]) -> Option<Self> {
+        // Reuse the bounded IPv4/nonfragmented TCP header validation. Its
+        // tuple describes the reverse response; diagnostics retain ingress.
+        let reverse = Cyw43RxCoupledTcpReply::from_received_frame(frame)?;
+        if reverse.destination_port == 0
+            || !cyw43_tcp_port_is_control_or_proof_port(reverse.source_port)
+        {
+            return None;
+        }
+        let tcp = ETH_HEADER_LEN + cyw43_ipv4_header_len(frame)?;
+        Some(Self {
+            source_ipv4: u32::from_be_bytes(reverse.destination_ipv4),
+            destination_ipv4: u32::from_be_bytes(reverse.source_ipv4),
+            source_port: reverse.destination_port,
+            destination_port: reverse.source_port,
+            sequence: cyw43_get_u32_be(frame, tcp + 4)?,
+            acknowledgment: cyw43_get_u32_be(frame, tcp + 8)?,
+            flags: (u16::from(*frame.get(tcp + 12)? & 1) << 8) | u16::from(*frame.get(tcp + 13)?),
+        })
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43RxDequeueSampleError {
+    Missing,
+    Saturated,
+    Invalid,
+}
+
+/// All four intervals belong to the batch's exact first DATA entry only.
+/// Q11 floors affect the first two; their remainders stay in precommit-to-copy.
+#[cfg(feature = "kernel")]
+fn cyw43_rx_dequeue_intervals(
+    source: Option<u32>,
+    stages_q11: Option<u32>,
+    root_copy: Option<u32>,
+    dequeue: Option<u32>,
+    frequency_hz: Option<u64>,
+) -> Result<([u64; 4], u64), Cyw43RxDequeueSampleError> {
+    use Cyw43RxDequeueSampleError::{Invalid, Missing, Saturated};
+    let (Some(source), Some(stages), Some(root), Some(end)) =
+        (source, stages_q11, root_copy, dequeue)
+    else {
+        return Err(Missing);
+    };
+    let frequency_hz = frequency_hz
+        .filter(|frequency| *frequency != 0)
+        .ok_or(Invalid)?;
+    let s2q = pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_source_to_queue(stages);
+    let q2p = pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_queue_to_precommit(stages);
+    if s2q == pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED
+        || q2p == pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED
+    {
+        return Err(Saturated);
+    }
+    let s2q = u32::from(s2q) << pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT;
+    let q2p = u32::from(q2p) << pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT;
+    let source_to_root = root.wrapping_sub(source);
+    let root_to_dequeue = end.wrapping_sub(root);
+    let total = end.wrapping_sub(source);
+    // A populated zero low word is valid. Half-wrap or larger is ambiguous
+    // ordering, not a latency sample; no diagnostic value admits work.
+    if total >= 1 << 31
+        || source_to_root >= 1 << 31
+        || root_to_dequeue >= 1 << 31
+        || source_to_root.checked_add(root_to_dequeue) != Some(total)
+    {
+        return Err(Invalid);
+    }
+    let p2r = source_to_root
+        .checked_sub(s2q.checked_add(q2p).ok_or(Invalid)?)
+        .ok_or(Invalid)?;
+    let micros = |ticks| u64::from(ticks) * 1_000_000 / frequency_hz;
+    Ok(([s2q, q2p, p2r, root_to_dequeue].map(micros), micros(total)))
+}
+
+/// Root-only first-DATA TCP dequeue evidence, distinct from paired-TX timing.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RxDequeueDiagnostic {
+    pub generation: u32,
+    pub samples: u32,
+    pub missing: u32,
+    pub saturated: u32,
+    pub invalid: u32,
+    /// Ordered source-to-queue, queue-to-precommit, precommit-to-copy, copy-to-dequeue.
+    pub total_us: [u64; 4],
+    pub max_us: [u64; 4],
+    pub slow: Option<(Cyw43RxDequeueTcpTuple, [u64; 4], u64)>,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43RxDequeueDiagnostic {
+    const fn empty(generation: u32) -> Self {
+        Self {
+            generation,
+            samples: 0,
+            missing: 0,
+            saturated: 0,
+            invalid: 0,
+            total_us: [0; 4],
+            max_us: [0; 4],
+            slow: None,
+        }
+    }
+
+    fn record(
+        &mut self,
+        generation: u32,
+        tuple: Cyw43RxDequeueTcpTuple,
+        sample: Result<([u64; 4], u64), Cyw43RxDequeueSampleError>,
+    ) {
+        if self.generation != generation {
+            *self = Self::empty(generation);
+        }
+        let (intervals, total) = match sample {
+            Ok(sample) if generation != 0 => sample,
+            Err(Cyw43RxDequeueSampleError::Missing) => {
+                self.missing = self.missing.saturating_add(1);
+                return;
+            }
+            Err(Cyw43RxDequeueSampleError::Saturated) => {
+                self.saturated = self.saturated.saturating_add(1);
+                return;
+            }
+            _ => {
+                self.invalid = self.invalid.saturating_add(1);
+                return;
+            }
+        };
+        self.samples = self.samples.saturating_add(1);
+        for (index, interval) in intervals.iter().copied().enumerate() {
+            self.total_us[index] = self.total_us[index].saturating_add(interval);
+            self.max_us[index] = self.max_us[index].max(interval);
+        }
+        if self.slow.is_none_or(|(_, _, previous)| total > previous) {
+            self.slow = Some((tuple, intervals, total));
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_RX_DEQUEUE_DIAGNOSTIC: Mutex<Cyw43RxDequeueDiagnostic> =
+    Mutex::new(Cyw43RxDequeueDiagnostic::empty(0));
+
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_rx_dequeue_diagnostic() -> Cyw43RxDequeueDiagnostic {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let diagnostic = CYW43_RX_DEQUEUE_DIAGNOSTIC.lock();
+    if diagnostic.generation == generation {
+        *diagnostic
+    } else {
+        Cyw43RxDequeueDiagnostic::empty(generation)
+    }
+}
+
 #[cfg(feature = "kernel")]
 struct DriverTaskNetPendingRxToken {
     sampled_generation: u32,
@@ -29657,7 +29852,7 @@ fn receive_one_cyw43_pending_rx_token(
             true,
             cyw43_pending_rx_token_occupied(),
         );
-        record_cyw43_post_dhcp_rx_delivery(contract, flags, &token.buffer[..token.len]);
+        record_cyw43_post_dhcp_rx_delivery(contract, flags, &token);
         queue_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
         return Some(token);
     }
@@ -29727,7 +29922,7 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
             false,
             false,
         );
-        record_cyw43_post_dhcp_rx_delivery(contract, flags, &token.buffer[..token.len]);
+        record_cyw43_post_dhcp_rx_delivery(contract, flags, &token);
         queue_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
         return Some(token);
     }
@@ -29773,7 +29968,7 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         false,
         false,
     );
-    record_cyw43_post_dhcp_rx_delivery(contract, flags, &token.buffer[..token.len]);
+    record_cyw43_post_dhcp_rx_delivery(contract, flags, &token);
     queue_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
     Some(token)
 }
@@ -32095,6 +32290,7 @@ mod tests {
         CYW43_TX_TERMINAL_RELEASED.store(0, Ordering::Release);
         CYW43_DATA_TX_NEXT_TICKET.store(1, Ordering::Release);
         *CYW43_TX_PHASE_TRACKER.lock() = Cyw43TxPhaseTracker::new();
+        *CYW43_RX_DEQUEUE_DIAGNOSTIC.lock() = Cyw43RxDequeueDiagnostic::empty(0);
         CYW43_BCDC_IOCTL_ID.store(0, Ordering::Release);
         *CYW43_PENDING_DATA_TX.lock() = None;
         CYW43_PENDING_ARP_TX.lock().clear();
@@ -57384,17 +57580,17 @@ mod tests {
         record_cyw43_post_dhcp_rx_delivery(
             contract,
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
-            &frame,
+            &test_rx_token(&frame),
         );
         record_cyw43_post_dhcp_rx_delivery(
             contract,
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
-            &smoke_frame,
+            &test_rx_token(&smoke_frame),
         );
         record_cyw43_post_dhcp_rx_delivery(
             contract,
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
-            &unrelated_frame,
+            &test_rx_token(&unrelated_frame),
         );
 
         let counters = Cyw43DriverTaskDevice::default().counters();
@@ -58624,6 +58820,187 @@ mod tests {
         assert_eq!(tracker.diagnostic.terminal_to_next_issue.last_us, 650);
         assert_eq!(tracker.diagnostic.terminal_to_next_issue.max_us, 650);
         assert_eq!(tracker.diagnostic.terminal_to_next_issue.average_us(), 650);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_dequeue_intervals_preserve_zero_wrap_and_q11_remainders() {
+        assert_eq!(
+            cyw43_rx_dequeue_intervals(
+                Some(0),
+                Some(0x0001_0002),
+                Some(7_000),
+                Some(10_000),
+                Some(1_000_000)
+            ),
+            Ok(([4_096, 2_048, 856, 3_000], 10_000)),
+        );
+        assert_eq!(
+            cyw43_rx_dequeue_intervals(
+                Some(0),
+                Some(0x0001_0002),
+                Some(7_000),
+                Some(10_000),
+                Some(54_000_000)
+            ),
+            Ok(([75, 37, 15, 55], 185)),
+            "each displayed interval floors independently; total retains its own conversion",
+        );
+        assert_eq!(
+            cyw43_rx_dequeue_intervals(
+                Some(0xffff_ff00),
+                Some(0),
+                Some(0x300),
+                Some(0x500),
+                Some(1_000_000)
+            ),
+            Ok(([0, 0, 1_024, 512], 1_536)),
+        );
+        assert_eq!(
+            cyw43_rx_dequeue_intervals(Some(0), Some(0), Some(0), Some(0), Some(1_000_000)),
+            Ok(([0; 4], 0)),
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_dequeue_intervals_distinguish_missing_saturation_and_invalid() {
+        use Cyw43RxDequeueSampleError::{Invalid, Missing, Saturated};
+        for missing in 0..4 {
+            let mut fields = [Some(0); 4];
+            fields[missing] = None;
+            assert_eq!(
+                cyw43_rx_dequeue_intervals(
+                    fields[0],
+                    fields[1],
+                    fields[2],
+                    fields[3],
+                    Some(1_000_000)
+                ),
+                Err(Missing)
+            );
+        }
+        for word in [0xffff_0000, 0x0000_ffff] {
+            assert_eq!(
+                cyw43_rx_dequeue_intervals(
+                    Some(0),
+                    Some(word),
+                    Some(100),
+                    Some(200),
+                    Some(1_000_000)
+                ),
+                Err(Saturated)
+            );
+        }
+        for clock in [None, Some(0)] {
+            assert_eq!(
+                cyw43_rx_dequeue_intervals(Some(0), Some(0), Some(0), Some(0), clock),
+                Err(Invalid)
+            );
+        }
+        for (root, end) in [(0, 0x8000_0000), (0x8000_0000, 0), (20, 10)] {
+            assert_eq!(
+                cyw43_rx_dequeue_intervals(
+                    Some(0),
+                    Some(0),
+                    Some(root),
+                    Some(end),
+                    Some(1_000_000)
+                ),
+                Err(Invalid)
+            );
+        }
+        assert_eq!(
+            cyw43_rx_dequeue_intervals(Some(0), Some(1), Some(100), Some(200), Some(1_000_000)),
+            Err(Invalid)
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_dequeue_tuple_validates_headers_and_retains_no_payload() {
+        let mut frame = test_cyw43_host_tcp_frame([192, 168, 86, 154]);
+        frame[38..42].copy_from_slice(&0x1122_3344u32.to_be_bytes());
+        frame[42..46].copy_from_slice(&0x5566_7788u32.to_be_bytes());
+        frame[46] = 0x51;
+        frame[47] = 0x12;
+        let expected = Cyw43RxDequeueTcpTuple {
+            source_ipv4: 0xc0a8_5666,
+            destination_ipv4: 0xc0a8_569a,
+            source_port: 49_152,
+            destination_port: 31_337,
+            sequence: 0x1122_3344,
+            acknowledgment: 0x5566_7788,
+            flags: 0x112,
+        };
+        assert_eq!(Cyw43RxDequeueTcpTuple::from_frame(&frame), Some(expected));
+        frame[54..].fill(0xa5);
+        assert_eq!(Cyw43RxDequeueTcpTuple::from_frame(&frame), Some(expected));
+        for length in 0..frame.len() {
+            assert_eq!(Cyw43RxDequeueTcpTuple::from_frame(&frame[..length]), None);
+        }
+        for (offset, value) in [
+            (14, 0x65),
+            (14, 0x44),
+            (23, 17),
+            (20, 0x20),
+            (21, 1),
+            (46, 0x40),
+        ] {
+            let mut malformed = frame;
+            malformed[offset] = value;
+            assert_eq!(Cyw43RxDequeueTcpTuple::from_frame(&malformed), None);
+        }
+        for ports in [(0u16, 31_337u16), (49_152, 80)] {
+            let mut unrelated = frame;
+            unrelated[34..36].copy_from_slice(&ports.0.to_be_bytes());
+            unrelated[36..38].copy_from_slice(&ports.1.to_be_bytes());
+            assert_eq!(Cyw43RxDequeueTcpTuple::from_frame(&unrelated), None);
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_dequeue_counters_saturate_and_keep_one_correlated_maximum() {
+        let tuple =
+            Cyw43RxDequeueTcpTuple::from_frame(&test_cyw43_host_tcp_frame([192, 168, 86, 154]))
+                .expect("valid TCP fixture");
+        let mut diagnostic = Cyw43RxDequeueDiagnostic::empty(7);
+        diagnostic.record(7, tuple, Ok(([1, 2, 3, 4], 10)));
+        let first = diagnostic.slow;
+        diagnostic.record(7, tuple, Ok(([1; 4], 4)));
+        assert_eq!(diagnostic.samples, 2);
+        assert_eq!(diagnostic.total_us, [2, 3, 4, 5]);
+        assert_eq!(diagnostic.max_us, [1, 2, 3, 4]);
+        assert_eq!(diagnostic.slow, first);
+        diagnostic.samples = u32::MAX;
+        diagnostic.total_us = [u64::MAX; 4];
+        diagnostic.record(7, tuple, Ok(([9; 4], 36)));
+        assert_eq!(diagnostic.samples, u32::MAX);
+        assert_eq!(diagnostic.total_us, [u64::MAX; 4]);
+        assert_eq!(diagnostic.slow, Some((tuple, [9; 4], 36)));
+        diagnostic.missing = u32::MAX;
+        diagnostic.saturated = u32::MAX;
+        diagnostic.invalid = u32::MAX;
+        for error in [
+            Cyw43RxDequeueSampleError::Missing,
+            Cyw43RxDequeueSampleError::Saturated,
+            Cyw43RxDequeueSampleError::Invalid,
+        ] {
+            diagnostic.record(7, tuple, Err(error));
+        }
+        assert_eq!(
+            (diagnostic.missing, diagnostic.saturated, diagnostic.invalid),
+            (u32::MAX, u32::MAX, u32::MAX)
+        );
+        diagnostic.record(8, tuple, Err(Cyw43RxDequeueSampleError::Missing));
+        assert_eq!(
+            diagnostic,
+            Cyw43RxDequeueDiagnostic {
+                missing: 1,
+                ..Cyw43RxDequeueDiagnostic::empty(8)
+            }
+        );
     }
 
     #[cfg(feature = "kernel")]

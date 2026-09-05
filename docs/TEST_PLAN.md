@@ -1643,6 +1643,23 @@ tickets/frontier, one submit per terminal and turn, cap exhaustion, replay
 idempotence, stable no-mutation denial, zero-payload identity, and retained
 DPC/CARD_INT fairness.
 
+Both retained source-service entry paths must apply that same exact-terminal
+exception only with a one-way parent, no command Reply, no in-flight root or
+delegated action, no watermark fault and remaining successor capacity. A
+successful retirement must reach the existing command body without falling
+into the cleared gate's Inactive/Yield branch. Rejected or waiting terminals
+retain their existing Yield; tests must preserve every adverse identity and
+cap case above. Fresh firmware-stream elapsed time is the physical speed
+discriminator; source control flow alone cannot establish branch frequency.
+
+Copied-RX dequeue diagnostics must keep first-DATA metadata distinct from
+ordinary missing metadata, reject saturation/invalid clocks/half-wrap ordering,
+preserve populated zero values and Q11 floor residuals, validate bounded TCP
+headers, and retain one correlated maximum under saturating arithmetic.
+Existing post-DHCP delivery counters retain their meaning. On-demand output
+must fit the console line bound and contain no frame payload; these timestamps
+cannot substitute for matched wire evidence or alter RX/TX authority.
+
 Exact source `4be7bad98b3187dbd6be4b0d5a12c0d48f0f5628`, build ID
 `a9fcd26d0e559a1a85fc69e306cd9c6e6baafb08f5f4523acbc6235fa92a95dc`,
 image ID
@@ -3691,6 +3708,9 @@ The focused acceptance tests
 `retained_priority_lease_identity_rejects_request_fingerprint_and_generation_aliases`,
 `eventpump_join_opens_one_network_episode_from_inactive_outer_lease`,
 `eventpump_join_issue_and_terminal_share_one_open_network_episode`,
+`linked_cyw43_network_admission_and_service_share_fresh_deadline_sample`,
+`linked_cyw43_association_claim_preopens_priority_lane`,
+`ordinary_association_join_fails_before_inactive_outer_can_create_root_actions`,
 `missing_clock_caps_untyped_gate_but_not_exact_retained_receipt`,
 `pair_restart_completion_mints_only_owned_cold_epoch_provenance`,
 `recovery_request_during_cold_cursor_survives_and_supersedes_completion`,
@@ -6856,8 +6876,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       rechecks response/queue identity, passive admission, physical operator
       input or response, display debt, recovery, fault, reboot, containment,
       quarantine, handoff, and local fault under the unchanged 64-quantum and
-      root-SC bounds. Fused stage-and-drain and `ResponseDrained` must close the
-      episode at ordinary explicit Yield. Tests must reject any post-response
+      root-SC bounds. Fused stage-and-drain and `ResponseDrained` retire the
+      current request. Fresh-publication tests must prove that one ordinary
+      recheck removes the old continuation, preserves clock/causal-wait count
+      and the 64-quantum cap, charges an executed empty turn, stops without
+      progress, and rejects lane drift or an absent frontier. Only fresh
+      productive progress may create the next continuation. Tests must reject any post-response
       Network baton, cross-core empty hot tail, broad wait, or continuation for
       a future request; that request must publish its own command and enter the
       Serial-first rotor. A failed or backpressured stage, zero or stale
@@ -9019,7 +9043,10 @@ its badge; an endpoint wake stages the exact message and returns through that
 same arbitration. A timer becoming due, durable publication winning either race,
 physical input/response, display debt, passive admission, local fault,
 recovery, containment, quarantine, reboot, handoff, or identity drift must
-skip the block. Reserve, post-response, operator, recovery, and fault exits
+skip the block. A completed response with a fresh unconsumed child frontier
+may take one separately charged Serial-first recheck, retaining the shared
+cap and all lane/operator/recovery fences; an empty executed recheck stops.
+Reserve, operator, recovery, and fault exits
 must retain explicit handoff. Negative coverage must reject notification-only
 Wait, future-request admission, post-response or peer-ACK tail, spin, retry,
 poll loop, synthetic deadline, larger budget/window, and fallback ownership.

@@ -183,6 +183,16 @@ proof class, authentication/session continuity, run count, latency,
 retries, and timeouts. It cannot be relabelled executable Worker pressure,
 mixed mutation, target capacity, Pi acceptance, or QEMU/Pi parity.
 
+For physical Pi read-concurrency diagnostics, the gateway must use
+`--worker-runtime-profile pi4-production` so its generated namespace bounds
+match the target. Keep `perf --population-mode executable-log` and the actual
+Pi transport; structured discovery must validate the requested real READY
+Workers before load. With `--suite telemetry --runs 8`, increasing
+`--max-workers 16` to `32` increases parallel submissions while keeping the
+repeat count fixed. Preserve the generated pool limits and report queue or
+timeout failures. These are medium/high read-concurrency diagnostics, not the
+mixed offered-load profiles below or 256-Worker acceptance.
+
 ## Running a Mixed REST Benchmark
 
 Use a repository-local virtual environment so the interpreter is isolated and

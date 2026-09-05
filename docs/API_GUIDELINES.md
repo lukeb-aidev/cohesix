@@ -214,6 +214,12 @@ for a live manifest. Use the returned limits for requests sent through that
 gateway, and compare the fingerprint with `/proc/boot` or equivalent image
 build evidence before claiming that both sides use the same manifest.
 
+Worker declarations and namespace bounds use the explicit
+`--worker-runtime-profile` selection: `qemu-smp-production` is the default;
+physical Pi gateways require `pi4-production`. These existing generated
+profiles declare six and eight shard bits respectively. This selection does
+not make the top-level host policy fingerprint a live target attestation.
+
 Do not treat a successful `GET /v1/meta/bounds` as target-manifest proof or as
 proof that every optional path exists. List the relevant parent and check the
 profile-specific path. The canonical worker namespace begins at `/shard`;

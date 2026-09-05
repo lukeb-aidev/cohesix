@@ -1352,6 +1352,13 @@ transport:
   identity.
   After continuing from that exact accepted result, the runtime may publish at
   most one following immutable child command in that same turn.
+  This exact-terminal exception applies after either retained source-service
+  entry. With no command Reply, no in-flight root/delegated action, no watermark
+  fault and remaining successor capacity, successful retirement skips the
+  old retained-admission block and reaches the existing command body. It must
+  not fall into the now-inactive gate's Yield guard. A missing or rejected
+  terminal retains the original source-service Yield; source arbitration and
+  the independent 64-successor cap remain unchanged.
   The new submission consumes the slot; a second new command is forbidden.
   Fault terminals, every control, RX, steady, persistent, or other non-cold
   parent, a still-pending child, issued-unknown state, identity or generation
@@ -1411,8 +1418,11 @@ transport:
   complete empty quantum: the full predicate is rechecked, routine empty USB
   service debt remains governed by C3, and only real operator input retains the
   operator fence. A persistent `Retry` still reaches the existing Yield instead
-  of forming a poll loop. Reserve, post-response,
-  operator, recovery, fault, and every non-global-idle exit retain their
+  of forming a poll loop. After a completed response, a fresh unconsumed child
+  publication may instead admit one separately charged Serial-first recheck
+  under the existing lane, operator, recovery and shared work-cap fences.
+  The old response token is retired; a failed recheck cannot rearm itself.
+  Reserve, operator, recovery, fault, and other fenced exits retain their
   explicit handoff; no future network request, badge, or elapsed interval is
   inferred. WiFi never enables this timer or enters this global-idle receive
   and may block only for a currently issued finite operation or exact
@@ -1555,14 +1565,42 @@ transport:
   Yield. Every quantum rechecks operator, passive, fault, recovery,
   containment, quarantine, reboot, handoff, and continuation-mode fences, and
   the root's `5,500/10,000 us` SC remains the hard execution bound. Fused
-  stage-and-drain or `OutputDrained` is the terminal of this causal episode:
-  root takes the ordinary explicit Yield and cannot mint a post-response
-  Network baton, cross-core empty hot tail, broad event wait, or authority for
-  a future sequential request. The next request must publish its own command
-  and enter the ordinary Serial-first rotor. Stale, backpressured, faulted, or
+  stage-and-drain or `OutputDrained` retires the current request. A fresh
+  unconsumed child frontier may then justify one ordinary Serial-first rotor
+  after the complete lane and operator/recovery fences revalidate. This
+  recheck preserves the clock, causal-wait count and 64-quantum cap; even an
+  executed turn without progress consumes one quantum and stops. Only fresh
+  productive progress can establish the next continuation. An absent frontier
+  retains the existing idle/Yield route, with no post-response Network baton,
+  empty hot tail, broad event wait or future-request authority. Stale,
+  backpressured, faulted, or
   operator-owned work fails closed without a retry, second packet operation,
   new refill, child authority, or owner transfer. Mediated WiFi cannot acquire
   direct-GENET continuation authority.
+- A selected CYW43 Network turn samples the existing timer prelude before
+  deciding whether association/policy work requires its outer priority lease.
+  Admission and the subsequent runtime body consume that same fresh sample;
+  the next turn samples again. The active Network interval includes the
+  prelude and intervening admission. The typed inactive-outer Join rejection,
+  physical deadlines, ownership and recovery remain unchanged. Generic,
+  GENET and QEMU runtime callers retain their original timer order.
+- WiFi `netstats` adds five passive `wifi_rx_dequeue*` rows for copied TCP
+  ingress. `wifi_rx_dequeue schema=v1` reports connection generation, valid
+  sample count, missing metadata, saturated Q11 metadata and invalid timing.
+  Missing includes ordinary non-first-DATA frames and is not a packet-loss
+  counter. Only the exact first DATA token carrying both stage metadata and
+  root-copy time contributes the four `us=sum/max` intervals: `s2q` is DPC
+  source to runtime queue, `q2p` queue to batch precommit, `p2r` precommit to
+  root copy, and `r2d` root copy to dequeue. Source is an existing DPC episode
+  timestamp, not wire arrival. The first two are Q11 floors; their residuals
+  remain in `p2r`, and independent microsecond flooring may differ from total
+  by up to three microseconds. Missing, saturated, invalid-clock, inconsistent
+  or half-wrap-ambiguous observations do not enter timing sums. Populated zero
+  low words remain valid. Counts/sums saturate and reset by generation.
+  `wifi_rx_dequeue_slow` and `_slow_us` retain one maximum total with its same
+  four intervals and bounded IPv4/TCP header identity, or `absent=yes`.
+  Header validation makes no checksum/authentication claim; no payload is
+  recorded. Existing paired-TX RX-split counters retain their separate meaning.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
   begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the

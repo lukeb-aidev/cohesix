@@ -3295,7 +3295,19 @@ def test_run_simulation_rejects_backend_before_marker_or_discovery(
         raise AssertionError("target-backed host-model run must fail closed")
 
 
-def test_managed_gateway_mock_skips_target_tcp_preflight(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("benchmark_target", "profile_arguments"),
+    [
+        (rest_perf.BENCHMARK_TARGET_QEMU, []),
+        (
+            rest_perf.BENCHMARK_TARGET_PI4,
+            ["--worker-runtime-profile", "pi4-production"],
+        ),
+    ],
+)
+def test_managed_gateway_mock_skips_target_tcp_preflight(
+    monkeypatch, benchmark_target: str, profile_arguments: list[str]
+) -> None:
     class StopAfterBackend(RuntimeError):
         pass
 
@@ -3344,6 +3356,7 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(monkeypatch) -> None:
         qemu_run=None,
         gateway_bin="hive-gateway",
         gateway_mock=True,
+        benchmark_target=benchmark_target,
         rest_url="http://127.0.0.1:8080",
         gateway_bind="127.0.0.1:8080",
         no_qemu=True,
@@ -3377,7 +3390,9 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(monkeypatch) -> None:
     else:
         raise AssertionError("test sentinel was not reached")
 
-    assert launched == [["hive-gateway", "--bind", "127.0.0.1:8080", "--mock"]]
+    assert launched == [
+        ["hive-gateway", "--bind", "127.0.0.1:8080", *profile_arguments, "--mock"]
+    ]
 
 
 def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:

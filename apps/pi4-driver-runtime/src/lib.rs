@@ -37089,6 +37089,27 @@ fn runtime_root_causal_wait_observation(
     }
 }
 
+/// Keep a source-service successor outside Reply and in-flight grant ownership.
+/// This boundary grants no work by itself: the exact cold-parent terminal and
+/// its unchanged local-successor cap must still be proved before retirement.
+#[cfg(any(target_os = "none", test))]
+const fn runtime_cold_source_successor_boundary_admitted(
+    route: RuntimeNotificationRoute,
+    root_grant_active: bool,
+    intake: RuntimeCommandIntake,
+    watermark_fault: Option<u32>,
+    in_flight_root_grant: Option<u32>,
+    in_flight_delegated_grant: Option<u32>,
+) -> bool {
+    matches!(route, RuntimeNotificationRoute::Cyw43Client)
+        && root_grant_active
+        && intake.command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+        && !intake.reply_cap_available
+        && watermark_fault.is_none()
+        && in_flight_root_grant.is_none()
+        && in_flight_delegated_grant.is_none()
+}
+
 /// Admit one owner-local immutable cold-parent successor only from the exact
 /// successful terminal of its immediately preceding SDIO child.
 ///
@@ -69383,228 +69404,255 @@ pub fn runtime_main(task_key: usize) -> ! {
             ) == RuntimeCommandLoopRoute::WaitForRetainedContinuation
         {
             if pending_command_gate.grant_generation().is_some() {
-                // Linux's host request and DPC work both use a durable condition
-                // plus a coalescing scheduler hint. Cohesix preserves source
-                // priority while collapsing only pure bookkeeping:
-                //
-                //   CheckWake -> Service
-                //             -> stable grant -> optional Empty recheck -> ACK.
-                //
-                // CARD_INT pending at CheckWake is the arbitration winner. An
-                // interrupt arriving after that linearization point remains
-                // latched and may be delayed by at most the one admitted owner
-                // quantum. No notification history is counted authority.
-                if let RuntimeRetainedOwnerPhase::Service(badge) =
-                    pending_command_gate.delegated_owner_phase()
-                {
-                    pending_command_gate
-                        .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
-                    if foreground_watermark_refresh_fault.is_some() {
-                        // Preserve the durable notification without inspecting
-                        // a ring whose formerly accepted front event violated
-                        // its immutable source-probe contract.
-                        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                    let _ = service_runtime_notification(badge);
-                    // Service is a hard stop. Exactly one persistent-source
-                    // physical quantum ran. The sole exception is an exact
-                    // immutable cold-parent child terminal: that terminal
-                    // may causally admit its one successor without adding an
-                    // artificial root-period handoff. Every unrelated source,
-                    // miss, fault, or identity mismatch keeps this hard stop.
-                    let root_grant_local_successor = pending_intake.is_some_and(|intake| {
-                        notification_route == RuntimeNotificationRoute::Cyw43Client
-                            && pending_command_gate.root_grant_active()
-                            && cyw43_foreground_prepare_root_grant_local_successor(intake.command)
-                    });
-                    if root_grant_local_successor {
-                        pending_command_gate.complete();
-                    } else {
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                }
-
-                if matches!(
-                    pending_command_gate.delegated_owner_phase(),
-                    RuntimeRetainedOwnerPhase::Inactive
-                ) {
-                    // An exact retained command is never admitted from an
-                    // inactive or previously frozen phase. Re-read durable
-                    // source/grant truth after a peer handoff.
-                    pending_command_gate
-                        .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckWake);
-                    runtime_yield_current_tcb();
-                    continue;
-                }
-
-                let wake = if pending_command_gate.delegated_owner_phase()
-                    == RuntimeRetainedOwnerPhase::CheckWake
-                {
-                    runtime_pending_wake_for_route(
-                        notification_route,
-                        runtime_command_wait_wake_or_quarantine(
-                            poll_runtime_command_or_notification(
-                                last_sequence,
-                                task_key_marker,
-                                pending_intake.is_some_and(|intake| intake.reply_cap_available),
-                            ),
-                            notification_route,
-                            pending_intake.map(|intake| intake.command),
-                        ),
-                    )
-                } else {
-                    RuntimeWake::None
-                };
-                let root_grant = pending_command_gate.root_grant_active();
-                let root_grant_admission_available = in_flight_root_grant_action.is_none();
-                let Some(retained) = pending_intake.as_mut() else {
-                    pending_command_gate.complete();
-                    runtime_yield_current_tcb();
-                    continue;
-                };
-                let admission = runtime_retained_owner_bounded_admission(
-                    &mut pending_command_gate,
-                    retained,
-                    notification_route,
-                    wake,
-                    |gate, intake| {
-                        probe_runtime_retained_continuation_grant(
-                            gate,
-                            Some(intake),
-                            DRIVER_TASK_RING_VADDR,
-                        )
-                    },
-                    |gate, intake| {
-                        recheck_runtime_retained_continuation_grant_before_wait(
-                            gate,
-                            Some(intake),
-                            DRIVER_TASK_RING_VADDR,
-                        )
-                    },
-                    |grant_id| {
-                        let admission_available = if root_grant {
-                            root_grant_admission_available
-                        } else {
-                            in_flight_delegated_grant_action.is_none()
-                        };
-                        admission_available
-                            && admit_runtime_root_continuation_grant_at(
-                                DRIVER_TASK_RING_VADDR,
-                                grant_id,
-                            )
-                    },
-                );
-                if !admission.within_bound() {
-                    // This is a structural fail-closed guard. The helper has no
-                    // loop and every constructor is at or below the constant.
-                    pending_command_gate
-                        .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
-                    runtime_yield_current_tcb();
-                    continue;
-                }
-                if let Some(probe) = admission.initial_probe {
-                    publish_runtime_retained_grant_probe(
-                        retained.command.sequence,
-                        root_grant,
-                        pending_command_gate.last_grant_id,
-                        probe,
-                    );
-                }
-                if let Some(recheck) = admission.wait_recheck {
-                    publish_runtime_retained_grant_recheck(
-                        retained.command.sequence,
-                        root_grant,
-                        recheck,
-                    );
-                }
-                match admission.outcome {
-                    RuntimeRetainedOwnerAdmissionOutcome::Service(badge) => {
+                'retained_admission: {
+                    // Linux's host request and DPC work both use a durable condition
+                    // plus a coalescing scheduler hint. Cohesix preserves source
+                    // priority while collapsing only pure bookkeeping:
+                    //
+                    //   CheckWake -> Service
+                    //             -> stable grant -> optional Empty recheck -> ACK.
+                    //
+                    // CARD_INT pending at CheckWake is the arbitration winner. An
+                    // interrupt arriving after that linearization point remains
+                    // latched and may be delayed by at most the one admitted owner
+                    // quantum. No notification history is counted authority.
+                    if let RuntimeRetainedOwnerPhase::Service(badge) =
+                        pending_command_gate.delegated_owner_phase()
+                    {
                         pending_command_gate
                             .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
                         if foreground_watermark_refresh_fault.is_some() {
+                            // Preserve the durable notification without inspecting
+                            // a ring whose formerly accepted front event violated
+                            // its immutable source-probe contract.
                             CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-                        } else {
-                            let _ = service_runtime_notification(badge);
+                            runtime_yield_current_tcb();
+                            continue;
                         }
-                        // A source winner never shares this activation with a
-                        // foreground physical action.
+                        let _ = service_runtime_notification(badge);
+                        // Service is a hard stop. Exactly one persistent-source
+                        // physical quantum ran. The sole exception is an exact
+                        // immutable cold-parent child terminal: that terminal
+                        // may causally admit its one successor without adding an
+                        // artificial root-period handoff. Every unrelated source,
+                        // miss, fault, or identity mismatch keeps this hard stop.
+                        let root_grant_local_successor = pending_intake.is_some_and(|intake| {
+                            runtime_cold_source_successor_boundary_admitted(
+                                notification_route,
+                                pending_command_gate.root_grant_active(),
+                                intake,
+                                foreground_watermark_refresh_fault,
+                                in_flight_root_grant_action,
+                                in_flight_delegated_grant_action,
+                            ) && cyw43_foreground_prepare_root_grant_local_successor(intake.command)
+                        });
+                        if root_grant_local_successor {
+                            pending_command_gate.complete();
+                            // The exact terminal replaced grant admission. Reach
+                            // the ordinary command body directly, before the
+                            // inactive-gate guard can impose another Yield.
+                            break 'retained_admission;
+                        } else {
+                            runtime_yield_current_tcb();
+                            continue;
+                        }
+                    }
+
+                    if matches!(
+                        pending_command_gate.delegated_owner_phase(),
+                        RuntimeRetainedOwnerPhase::Inactive
+                    ) {
+                        // An exact retained command is never admitted from an
+                        // inactive or previously frozen phase. Re-read durable
+                        // source/grant truth after a peer handoff.
+                        pending_command_gate
+                            .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckWake);
                         runtime_yield_current_tcb();
                         continue;
                     }
-                    RuntimeRetainedOwnerAdmissionOutcome::Execute(grant) => {
-                        if root_grant {
-                            in_flight_root_grant_action = Some(grant.grant_id);
-                            let _ = cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant(
+
+                    let wake = if pending_command_gate.delegated_owner_phase()
+                        == RuntimeRetainedOwnerPhase::CheckWake
+                    {
+                        runtime_pending_wake_for_route(
+                            notification_route,
+                            runtime_command_wait_wake_or_quarantine(
+                                poll_runtime_command_or_notification(
+                                    last_sequence,
+                                    task_key_marker,
+                                    pending_intake.is_some_and(|intake| intake.reply_cap_available),
+                                ),
+                                notification_route,
+                                pending_intake.map(|intake| intake.command),
+                            ),
+                        )
+                    } else {
+                        RuntimeWake::None
+                    };
+                    let root_grant = pending_command_gate.root_grant_active();
+                    let root_grant_admission_available = in_flight_root_grant_action.is_none();
+                    let Some(retained) = pending_intake.as_mut() else {
+                        pending_command_gate.complete();
+                        runtime_yield_current_tcb();
+                        continue;
+                    };
+                    let admission = runtime_retained_owner_bounded_admission(
+                        &mut pending_command_gate,
+                        retained,
+                        notification_route,
+                        wake,
+                        |gate, intake| {
+                            probe_runtime_retained_continuation_grant(
+                                gate,
+                                Some(intake),
+                                DRIVER_TASK_RING_VADDR,
+                            )
+                        },
+                        |gate, intake| {
+                            recheck_runtime_retained_continuation_grant_before_wait(
+                                gate,
+                                Some(intake),
+                                DRIVER_TASK_RING_VADDR,
+                            )
+                        },
+                        |grant_id| {
+                            let admission_available = if root_grant {
+                                root_grant_admission_available
+                            } else {
+                                in_flight_delegated_grant_action.is_none()
+                            };
+                            admission_available
+                                && admit_runtime_root_continuation_grant_at(
+                                    DRIVER_TASK_RING_VADDR,
+                                    grant_id,
+                                )
+                        },
+                    );
+                    if !admission.within_bound() {
+                        // This is a structural fail-closed guard. The helper has no
+                        // loop and every constructor is at or below the constant.
+                        pending_command_gate
+                            .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
+                        runtime_yield_current_tcb();
+                        continue;
+                    }
+                    if let Some(probe) = admission.initial_probe {
+                        publish_runtime_retained_grant_probe(
+                            retained.command.sequence,
+                            root_grant,
+                            pending_command_gate.last_grant_id,
+                            probe,
+                        );
+                    }
+                    if let Some(recheck) = admission.wait_recheck {
+                        publish_runtime_retained_grant_recheck(
+                            retained.command.sequence,
+                            root_grant,
+                            recheck,
+                        );
+                    }
+                    match admission.outcome {
+                        RuntimeRetainedOwnerAdmissionOutcome::Service(badge) => {
+                            pending_command_gate
+                                .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
+                            if foreground_watermark_refresh_fault.is_some() {
+                                CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+                            } else {
+                                let _ = service_runtime_notification(badge);
+                            }
+                            if runtime_cold_source_successor_boundary_admitted(
+                                notification_route,
+                                pending_command_gate.root_grant_active(),
+                                *retained,
+                                foreground_watermark_refresh_fault,
+                                in_flight_root_grant_action,
+                                in_flight_delegated_grant_action,
+                            ) && cyw43_foreground_prepare_root_grant_local_successor(
+                                retained.command,
+                            ) {
+                                // This source reached the same exact cold-child
+                                // terminal as the preselected Service path. Keep
+                                // its causal successor under the existing cap.
+                                pending_command_gate.complete();
+                                break 'retained_admission;
+                            }
+                            // Every unrelated source, waiting child, fault, or
+                            // owned Reply/grant retains the scheduling boundary.
+                            runtime_yield_current_tcb();
+                            continue;
+                        }
+                        RuntimeRetainedOwnerAdmissionOutcome::Execute(grant) => {
+                            if root_grant {
+                                in_flight_root_grant_action = Some(grant.grant_id);
+                                let _ = cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant(
                                 &pending_command_gate,
                                 *retained,
                                 grant,
                             );
-                        } else {
-                            in_flight_delegated_grant_action = Some(grant.grant_id);
+                            } else {
+                                in_flight_delegated_grant_action = Some(grant.grant_id);
+                            }
+                            publish_runtime_progress(
+                                retained.command.sequence,
+                                if root_grant {
+                                    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED
+                                } else {
+                                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED
+                                },
+                                grant.grant_id,
+                            );
+                            // ACK publication is the final shared-memory admission
+                            // point before exactly one foreground physical quantum.
+                            // Root grants remain visibly in-flight until that
+                            // quantum reaches its explicit action-end frontier.
+                            core::sync::atomic::compiler_fence(Ordering::Acquire);
                         }
-                        publish_runtime_progress(
-                            retained.command.sequence,
-                            if root_grant {
-                                DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED
-                            } else {
-                                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED
-                            },
-                            grant.grant_id,
-                        );
-                        // ACK publication is the final shared-memory admission
-                        // point before exactly one foreground physical quantum.
-                        // Root grants remain visibly in-flight until that
-                        // quantum reaches its explicit action-end frontier.
-                        core::sync::atomic::compiler_fence(Ordering::Acquire);
-                    }
-                    RuntimeRetainedOwnerAdmissionOutcome::AckFailed(grant) => {
-                        publish_runtime_progress(
-                            retained.command.sequence,
-                            if root_grant {
-                                DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED
-                            } else {
-                                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED
-                            },
-                            grant.grant_id,
-                        );
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                    RuntimeRetainedOwnerAdmissionOutcome::Wait
-                    | RuntimeRetainedOwnerAdmissionOutcome::Rejected(_) => {
-                        pending_command_gate
-                            .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Wait);
-                        let wake = runtime_pending_wake_for_route(
-                            notification_route,
-                            runtime_command_wait_wake_or_quarantine(
-                                wait_runtime_command_or_notification(
-                                    last_sequence,
-                                    task_key_marker,
-                                    retained.reply_cap_available,
-                                ),
+                        RuntimeRetainedOwnerAdmissionOutcome::AckFailed(grant) => {
+                            publish_runtime_progress(
+                                retained.command.sequence,
+                                if root_grant {
+                                    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED
+                                } else {
+                                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED
+                                },
+                                grant.grant_id,
+                            );
+                            runtime_yield_current_tcb();
+                            continue;
+                        }
+                        RuntimeRetainedOwnerAdmissionOutcome::Wait
+                        | RuntimeRetainedOwnerAdmissionOutcome::Rejected(_) => {
+                            pending_command_gate
+                                .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Wait);
+                            let wake = runtime_pending_wake_for_route(
                                 notification_route,
-                                Some(retained.command),
-                            ),
-                        );
-                        let next_phase = runtime_retained_owner_phase_after_wake(
-                            &mut pending_command_gate,
-                            Some(retained),
-                            wake,
-                        );
-                        pending_command_gate.set_delegated_owner_phase(next_phase);
-                        // The blocking receive is the scheduling boundary. Resume
-                        // pure grant bookkeeping directly instead of adding an
-                        // artificial MCS-period yield.
-                        continue;
-                    }
-                    RuntimeRetainedOwnerAdmissionOutcome::Unsupported => {
-                        // Exact-grant fusion is deliberately unavailable to
-                        // serial, GENET, and malformed/non-grant lanes.
-                        runtime_yield_current_tcb();
-                        continue;
+                                runtime_command_wait_wake_or_quarantine(
+                                    wait_runtime_command_or_notification(
+                                        last_sequence,
+                                        task_key_marker,
+                                        retained.reply_cap_available,
+                                    ),
+                                    notification_route,
+                                    Some(retained.command),
+                                ),
+                            );
+                            let next_phase = runtime_retained_owner_phase_after_wake(
+                                &mut pending_command_gate,
+                                Some(retained),
+                                wake,
+                            );
+                            pending_command_gate.set_delegated_owner_phase(next_phase);
+                            // The blocking receive is the scheduling boundary. Resume
+                            // pure grant bookkeeping directly instead of adding an
+                            // artificial MCS-period yield.
+                            continue;
+                        }
+                        RuntimeRetainedOwnerAdmissionOutcome::Unsupported => {
+                            // Exact-grant fusion is deliberately unavailable to
+                            // serial, GENET, and malformed/non-grant lanes.
+                            runtime_yield_current_tcb();
+                            continue;
+                        }
                     }
                 }
             } else if let Some(receipt) = pending_intake
@@ -94683,6 +94731,41 @@ mod tests {
         assert!(!turn.completion_observed);
         assert!(turn.committed_child_replay_due());
         assert_eq!(turn.replay_cached_child(), Some(0));
+    }
+
+    #[test]
+    fn cold_source_successor_boundary_preserves_reply_grant_and_source_fences() {
+        let intake = root_retained_gate_test_intake(17, 7);
+        for blocked in 0u8..64 {
+            let mut candidate = intake;
+            candidate.reply_cap_available = blocked & 2 != 0;
+            if blocked & 32 != 0 {
+                candidate.command.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+            }
+            assert_eq!(
+                runtime_cold_source_successor_boundary_admitted(
+                    RuntimeNotificationRoute::Cyw43Client,
+                    blocked & 1 == 0,
+                    candidate,
+                    (blocked & 4 != 0).then_some(0),
+                    (blocked & 8 != 0).then_some(19),
+                    (blocked & 16 != 0).then_some(23),
+                ),
+                blocked == 0,
+                "every Reply, grant, source-fault or admission fence is independent: {blocked:#x}",
+            );
+        }
+        for route in [
+            RuntimeNotificationRoute::Unavailable,
+            RuntimeNotificationRoute::Serial,
+            RuntimeNotificationRoute::Genet,
+            RuntimeNotificationRoute::SdioOwner,
+            RuntimeNotificationRoute::PcieTimer,
+        ] {
+            assert!(!runtime_cold_source_successor_boundary_admitted(
+                route, true, intake, None, None, None,
+            ));
+        }
     }
 
     #[test]

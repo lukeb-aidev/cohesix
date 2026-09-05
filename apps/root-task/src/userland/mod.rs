@@ -754,8 +754,25 @@ where
                     continue;
                 }
                 if !handoff_turn {
+                    let idle_preparation = pump.prepare_pi_root_control_idle_wait();
+                    if idle_preparation == PiRootControlIdlePreparation::Retry {
+                        let publication_ready = productive_window
+                            .continuation_identity()
+                            .is_some_and(|completed| {
+                                pump.pi_root_control_completed_response_publication_ready(completed)
+                            });
+                        if productive_window.prepare_ready_publication_rearbitration(
+                            publication_ready,
+                            natural_postpone_profile,
+                        ) {
+                            // The old response is retired. Re-enter the full
+                            // operator/recovery rotor for the newer durable
+                            // publication under the retained SC and work cap.
+                            continue;
+                        }
+                    }
                     match pi_root_control_idle_route(
-                        pump.prepare_pi_root_control_idle_wait(),
+                        idle_preparation,
                         productive_window.nonblocking_fanin_hint_eligible(),
                     ) {
                         PiRootControlIdleRoute::RetryOuter => {
@@ -1343,6 +1360,7 @@ struct PiRootControlProductiveWindow {
     completed_quanta: u8,
     causal_waits: u8,
     continuation: Option<crate::event::PiRootControlProductiveContinuation>,
+    ready_publication_lane: Option<crate::event::PiRootControlProductiveContinuation>,
     active_hot_tail: Option<crate::event::PiRootControlProductiveContinuation>,
     active_hot_tail_started_ticks: u64,
     credited_child_scaled: u128,
@@ -1383,6 +1401,7 @@ impl PiRootControlProductiveWindow {
             completed_quanta: 0,
             causal_waits: 0,
             continuation: None,
+            ready_publication_lane: None,
             active_hot_tail: None,
             active_hot_tail_started_ticks: 0,
             credited_child_scaled: 0,
@@ -1414,6 +1433,7 @@ impl PiRootControlProductiveWindow {
         self.completed_quanta = 0;
         self.causal_waits = 0;
         self.continuation = None;
+        self.ready_publication_lane = None;
         self.active_hot_tail = None;
         self.active_hot_tail_started_ticks = 0;
         self.credited_child_scaled = 0;
@@ -1445,6 +1465,69 @@ impl PiRootControlProductiveWindow {
             return false;
         }
         true
+    }
+
+    /// Retire a completed request before one freshly justified outer recheck.
+    /// Keep the SC accounting, causal-wait count and 64-quantum cap; only a
+    /// real idle receive or Yield may close that enclosing service episode.
+    fn prepare_ready_publication_rearbitration(
+        &mut self,
+        publication_ready: bool,
+        natural_postpone_profile: bool,
+    ) -> bool {
+        let Some(completed) = self
+            .continuation
+            .filter(|identity| identity.completed_current_response())
+        else {
+            return false;
+        };
+        if !publication_ready
+            || self.ready_publication_lane.is_some()
+            || !self.resumable_quantum_admitted(natural_postpone_profile)
+        {
+            return false;
+        }
+        self.continuation = None;
+        self.ready_publication_lane = Some(completed);
+        self.active_hot_tail = None;
+        self.active_hot_tail_started_ticks = 0;
+        true
+    }
+
+    /// Consume the one-shot lane fence before revalidating its live frontier.
+    /// It cannot survive a failed recheck as authority for repeated polling.
+    fn take_ready_publication_lane(
+        &mut self,
+    ) -> Option<crate::event::PiRootControlProductiveContinuation> {
+        self.ready_publication_lane.take()
+    }
+
+    /// Account the fresh-publication quantum even when it produced no command.
+    /// Only independently observed productive progress may create a successor;
+    /// its generation and connection must still match the rechecked lane.
+    fn record_ready_publication_quantum_at(
+        &mut self,
+        lane: crate::event::PiRootControlProductiveContinuation,
+        successor: Option<crate::event::PiRootControlProductiveContinuation>,
+        completed_at_ticks: u64,
+    ) -> bool {
+        if let Some(successor) = successor {
+            if lane.same_lane(successor) {
+                return self.record_completed_quantum_at(successor, completed_at_ticks);
+            }
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+        } else {
+            self.completed_quanta = self
+                .completed_quanta
+                .saturating_add(1)
+                .min(Self::MAX_COMPLETED_QUANTA);
+        }
+        self.continuation = None;
+        self.active_hot_tail = None;
+        self.active_hot_tail_started_ticks = 0;
+        self.last_reject_reason = Self::REJECT_TOKEN;
+        false
     }
 
     /// Sample legacy effective-root telemetry without making it an admission
@@ -1776,7 +1859,10 @@ where
         let counter_hz = counter_frequency();
         let active_hot_tail_preleaf_us = pi_root_control_active_hot_tail_preleaf_from_manifest_us();
         let retained_quantum = window.has_completed_quantum();
-        let ordinary_fence_clear = if retained_quantum {
+        let ready_publication_lane = window.take_ready_publication_lane();
+        let ordinary_fence_clear = if let Some(lane) = ready_publication_lane {
+            pump.pi_root_control_completed_response_publication_ready(lane)
+        } else if retained_quantum {
             let Some(identity) = window.continuation_identity() else {
                 pump.record_pi_root_control_productive_window_decision(
                     false,
@@ -1857,6 +1943,10 @@ where
             );
         }
         if explicit_yield_required {
+            if let Some(lane) = ready_publication_lane {
+                let _ = window.record_ready_publication_quantum_at(lane, None, monotonic_ticks());
+                return true;
+            }
             if active_hot_tail_admitted {
                 let hot_tail_still_clear = active_hot_tail_identity.is_some_and(|identity| {
                     pump.pi_root_control_active_hot_tail_fence_clear(identity)
@@ -1879,6 +1969,9 @@ where
             return true;
         }
         let Some(identity) = pump.take_pi_root_control_productive_continuation_identity() else {
+            if let Some(lane) = ready_publication_lane {
+                let _ = window.record_ready_publication_quantum_at(lane, None, monotonic_ticks());
+            }
             pump.record_pi_root_control_productive_window_decision(
                 false,
                 window.last_effective_root_us(counter_hz),
@@ -1896,7 +1989,12 @@ where
         let active_hot_tail_before_record = window.active_hot_tail_identity().is_some();
         let active_hot_tail_wall_before_record =
             window.active_hot_tail_elapsed_us(completed_at_ticks, counter_hz);
-        if !window.record_completed_quantum_at(identity, completed_at_ticks) {
+        let recorded = if let Some(lane) = ready_publication_lane {
+            window.record_ready_publication_quantum_at(lane, Some(identity), completed_at_ticks)
+        } else {
+            window.record_completed_quantum_at(identity, completed_at_ticks)
+        };
+        if !recorded {
             pump.record_pi_root_control_productive_window_decision(
                 false,
                 window.last_effective_root_us(counter_hz),
@@ -8478,6 +8576,112 @@ mod tests {
         assert!(cross_core_drained.completed_current_response());
         assert!(!cross_core_drained.is_cross_core_signal_only_hot_tail());
         assert_eq!(window.active_hot_tail_identity(), None);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_ready_publication_retires_response_without_resetting_episode() {
+        let completed =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
+                7, 17,
+            );
+        let next =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(7, 17);
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        assert!(window.record_completed_quantum_at(completed, 200));
+        window.causal_waits = 3;
+        window.nonblocking_fanin_hint_consumed = true;
+        let clock = window.clock;
+
+        assert!(!window.prepare_ready_publication_rearbitration(false, true));
+        assert_eq!(window.continuation_identity(), Some(completed));
+        assert!(!window.prepare_ready_publication_rearbitration(true, false));
+        assert_eq!(window.continuation_identity(), Some(completed));
+        assert!(window.prepare_ready_publication_rearbitration(true, true));
+        assert_eq!(window.continuation_identity(), None);
+        assert_eq!(window.active_hot_tail_identity(), None);
+        assert_eq!(window.completed_quanta, 1);
+        assert_eq!(window.causal_waits, 3);
+        assert_eq!(window.clock, clock);
+        assert!(window.nonblocking_fanin_hint_consumed);
+        assert!(!window.nonblocking_fanin_hint_eligible());
+        assert_eq!(window.take_ready_publication_lane(), Some(completed));
+        assert_eq!(window.take_ready_publication_lane(), None);
+        assert!(!window.prepare_ready_publication_rearbitration(true, true));
+        assert_eq!(window.completed_quanta, 1);
+
+        assert!(window.record_ready_publication_quantum_at(completed, Some(next), 300));
+        assert_eq!(window.completed_quanta, 2);
+        assert_eq!(window.continuation_identity(), Some(next));
+        assert!(!window.prepare_ready_publication_rearbitration(true, true));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_ready_publication_without_progress_spends_one_quantum_and_stops() {
+        let completed =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
+                7, 17,
+            );
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        assert!(window.record_completed_quantum_at(completed, 200));
+        assert!(window.prepare_ready_publication_rearbitration(true, true));
+        assert_eq!(window.take_ready_publication_lane(), Some(completed));
+        assert!(!window.record_ready_publication_quantum_at(completed, None, 300));
+        assert_eq!(window.completed_quanta, 2);
+        assert_eq!(window.continuation_identity(), None);
+        assert_eq!(window.active_hot_tail_identity(), None);
+        assert_eq!(window.take_ready_publication_lane(), None);
+        assert!(!window.prepare_ready_publication_rearbitration(true, true));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_ready_publication_preserves_cap_and_rejects_lane_drift() {
+        let completed =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
+                7, 17,
+            );
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        assert!(window.record_completed_quantum_at(completed, 200));
+        for _ in 1..64 {
+            assert!(window.prepare_ready_publication_rearbitration(true, true));
+            assert_eq!(window.take_ready_publication_lane(), Some(completed));
+            assert!(window.record_ready_publication_quantum_at(completed, Some(completed), 300));
+        }
+        assert_eq!(window.completed_quanta, 64);
+        assert!(!window.prepare_ready_publication_rearbitration(true, true));
+        assert_eq!(window.completed_quanta, 64);
+        assert_eq!(window.take_ready_publication_lane(), None);
+
+        for stale in [
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(8, 17),
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(7, 18),
+        ] {
+            assert!(window.restart_after_yield(400, 1_000_000, true));
+            assert!(window.record_completed_quantum_at(completed, 500));
+            assert!(window.prepare_ready_publication_rearbitration(true, true));
+            assert_eq!(window.take_ready_publication_lane(), Some(completed));
+            assert!(!window.record_ready_publication_quantum_at(completed, Some(stale), 600));
+            assert_eq!(window.completed_quanta, 64);
+            assert_eq!(window.continuation_identity(), None);
+            assert_eq!(window.clock, super::DeferredCyw43ActivationClock::Invalid);
+        }
     }
 
     #[cfg(all(

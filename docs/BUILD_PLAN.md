@@ -9816,6 +9816,8 @@ Goal: Replace the current MCS driver stubs with the real seL4 16 MCS command, Re
 Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, crates/pi4-driver-abi/**, apps/pi4-driver-runtime/**, apps/root-task/src/kernel.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task_pi4_uboot_aarch64.toml, scripts/cohesix-build-run.sh, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, the accepted classic driver archive/hash and exact CYW43 evidence, and selected QEMU/Pi MCS generated headers.
 Changes:
   - Pi exact-eed4 causal performance correction — baseline image `15695c455ad673c9a0d23ea1d4299d641f7e9a002b037ad21d9ac812132aebe0` measures WiFi 10.888 req/s with 108.686 ms terminal p95 and GENET 90.870 req/s with 10.214 ms p95. The suspended PCIe timer PC resolves to Yield entry, whose selected-kernel minimum-budget check runs before nonfaulting retirement. Keep the existing completed-IRQ blocking receive and sole command Reply; remove only that post-IRQ Yield and declare four PCIe refills for the two 5 ms fragments, active head and enable/call carry-in, preserving the 400/10000 us budget/period, priority and terminal timeout policy. For exact copied CYW43 service, choose already retained egress, admitted output, exact disconnect/publication or passive current-generation copied RX ahead of empty lower probes; retain one separately charged unit, child-signal observation, response bounds, operator rotation and every physical admission/recovery gate. Productive child input/control still executes the retained three-phase service cycle with current hardware time; idle probes retain observation, ingress and ServiceTick. Direct QEMU/GENET paths and physical driver authority remain unchanged. Focused pure invariants, generated profile checks, exact-profile builds and the root-MCS QEMU canary qualify the candidate only; fresh image-bound WiFi/GENET raw TCP, representative scripts, medium/high REST and physical operator stress remain necessary, followed by two qualifying reboots per transport. See DRIVERS and ROLES_AND_SCHEDULING for the current contract and `~/cohesix/26e.md` for exact per-boot evidence and falsified hypotheses.
+  - Pi exact-132a admission follow-up — GENET retains an 8.899 ms mean command-publication gap despite zero timer rejections; a completed response may retire its token and admit one fresh durable-publication recheck through the full ordinary rotor, preserving the clock, causal-wait count, 64-quantum cap, SC and every lane/operator/recovery fence. A failed recheck cannot rearm; an executed empty turn consumes one quantum. CYW43 association admission and its runtime body now use one fresh timer sample, with the prelude included in active Network accounting, so a due retry cannot appear only after the outer lease decision. Keep the typed inactive-outer Join rejection and all physical deadlines, protocols and recovery unchanged. Focused bounds/identity/time-order tests and the QEMU root-MCS canary qualify source; fresh Pi evidence must establish performance and reliability.
+  - Pi exact-132a retained cold-service and receive evidence follow-up — both retained source-Service exits may reach the existing cold command body only after the existing exact terminal helper proves an immutable cold parent with remaining 64-successor allowance, no Reply, no in-flight grant and no watermark fault. Retire the gate without falling through to its inactive Yield; all failed guards retain that boundary. Add only bounded root-dequeue timing from the existing first-DATA timestamp tuple and one slow TCP header tuple, with missing, saturated and invalid samples kept separate. Firmware timing improvement and the WiFi receive bottleneck remain unproven until the next exact Pi image; change no physical protocol, deadline, recovery, ABI, owner or MCS reservation.
   - crates/pi4-driver-abi/** + tools/coh-rtc/src/** — add/version the scheduler-specific runtime-init fields and generated cap/slot inventory required for active SCs, per-runtime command Reply objects, standard/timeout fault caps sharing root-fault's single receive endpoint and Reply, command endpoints, IRQ/DPC notifications, one-way completion wakes, containment anchors, the generated driver-supervisor-to-root-fault release signal, and at most one in-flight root command per runtime without changing device command/completion ring semantics. Root command caps are `Write + GrantReply` with no `Grant`; driver receive and IRQ-wait caps are Read-only; software signal/completion caps are Write-only; SCs bind only to driver TCBs; and command, IRQ, completion, fault, and release badge domains are disjoint.
   - apps/root-task/src/hal/driver_task.rs + apps/root-task/src/sel4/** — replace the MCS `wfe`/unsupported trampoline with generated construction and dispatch. Every linked runtime gets one admitted active SC on its generated core; synchronous root commands use the active server's MCS `Recv` with the exact supervisor-owned command Reply object and reply exactly once, while existing one-way bootstrap/background turns remain nonblocking ring/notification operations with no Reply or donated SC.
   - apps/pi4-driver-runtime/** — implement the MCS receive/Reply loop for serial, USB, HDMI, GENET, CYW43, SDIO, and PCIe images; keep the active SC bound to the TCB rather than a notification, make IRQ/DPC work notification-woken on that same admitted SC, validate runtime-init identity/cap rights, and remove `RuntimeWake::None`/unsupported MCS paths. No runtime receives SchedControl or ticket material.
@@ -11352,8 +11354,13 @@ Changes:
     watermark; if the child wins the race, its durable publication returns to
     outer recovery/operator-first arbitration without an intervening Yield.
     Once the current request reaches its exact response terminal—either fused
-    stage-and-drain or `OutputDrained`—end the retained activation and take the
-    ordinary explicit Yield. Do not mint a post-response Network baton, open a
+    stage-and-drain or `OutputDrained`—retire that request's continuation. A
+    fresh unconsumed child frontier may justify one separately charged
+    Serial-first recheck after the lane and operator/recovery fences pass;
+    preserve the enclosing clock, causal-wait count and 64-quantum cap. An
+    executed empty recheck spends one quantum and stops; only fresh productive
+    progress establishes another continuation. An absent frontier retains the
+    existing idle/Yield route. Do not mint a post-response Network baton, open a
     cross-core empty hot tail, wait broadly for a future event, or admit a
     speculative sequential request. A future request must publish its own
     command and re-enter the ordinary Serial-first rotor. Identity, sequence,
@@ -11361,16 +11368,12 @@ Changes:
     reboot, or handoff drift fails closed without child work, NIC authority,
     queue entry, refill, or owner transfer.
 
-    This correction does not claim to eliminate the earlier direct-GENET
-    command-publication-to-root-observation delay. The child already commits
-    and signals both its semantic edge and root fan-in, but an idle MCS root
-    may already have forfeited its refill through `Yield`. The current fan-in
-    is intentionally unbound, passive root endpoint traffic is separately
-    polled, and timer plus USB/operator cadence is root-polled; replacing Yield
-    with a broad notification wait could therefore strand Reply, timer,
-    recovery, reboot, and operator work. Closing that first seam requires one
-    compiler-declared event-driven root-idle topology with bound fan-in,
-    endpoint/Reply multiplexing, and a real bounded timer producer. Do not add
+    Exact 132a physical evidence retains an 8.899 ms mean publication-to-root
+    gap after the declared timer repair removes idle timer rejection. The
+    existing bound fan-in, endpoint/Reply multiplexing and periodic timer
+    remain authoritative. The fresh-frontier recheck addresses a completed
+    response's spent race allowance despite already durable child work; it
+    does not replace the complete global-idle predicate. Do not add
     a post-response wait, spin, retry, poll loop, fallback owner, or unbounded
     future-request promise as a local substitute. Until hardware measurement,
     the current source is a discriminator, not certainty that GENET meets its
@@ -11379,7 +11382,8 @@ Changes:
     Preserve every SC budget, WCET, period, priority, MCP, refill count, Reply
     rule, operator ordering, physical owner, queue, retry, deadline, recovery,
     containment, quarantine, manifest population, ABI layout/version, schema,
-    and QEMU selector. `docs/INTERFACES.md`, the complete host-tool suite,
+    and QEMU selector. For this GENET continuation correction,
+    `docs/INTERFACES.md`, the complete host-tool suite,
     `tools/cohesix-py`, compiler/generated contracts, all `.coh` workloads,
     `scripts/rest_perf_harness.py` workloads and arithmetic, benchmark evidence
     records, and report schemas were reviewed and require no change because the
@@ -11469,7 +11473,8 @@ Changes:
     lifetime without another programming operation. The bound notification may
     satisfy that receive only as a hint; an endpoint message must be copied
     into dispatcher-owned storage before returning, and all work is
-    reclassified from durable state. Reserve, post-response, operator,
+    reclassified from durable state. A completed response may use the bounded
+    fresh-publication recheck above. Reserve, operator,
     recovery, fault, and
     every non-global-idle boundary retain their explicit handoff. WiFi never
     enables the timer or enters this global-idle receive; it may wait only for
@@ -11794,6 +11799,7 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Make Cohesix host tools and every mandatory 26e host-integration lane discover, start, observe, correlate, execute, package, and evidence real Heartbeat/GPU/LoRA Workers through existing Secure9P/console projections with one generated state/dependency contract, no new authority plane, and no VM-local GPU/PEFT execution.
 Inputs: `m26e-production-surface-truth-and-stub-retirement`, `m26e-worker-abi-identity-notifications`, `m26e-worker-image-pipeline-loader`, `m26e-worker-supervisor-child-isolation`, `m26e-host-integration-dependency-contract`, Cargo.toml, configs/root_task*.toml, configs/host_integration_acceptance.toml, crates/worker-task-abi/**, crates/cohsh-core/**, crates/cohesix-rest/**, apps/cohesix-proto/**, apps/nine-door/**, apps/cohsh/**, apps/coh/**, apps/coh-status/**, apps/gpu-bridge-host/**, crates/host-cuda/**, apps/host-ticket-agent/**, apps/host-sidecar-bridge/**, apps/sidecar-bus/**, apps/cas-tool/**, apps/hive-gateway/**, apps/swarmui/**, tools/cohesix-py/**, tools/swarmui-ui-tests/**, tools/coh-rtc/src/**, resources/openapi/hive-gateway.yaml, scripts/cohsh/**, scripts/ci/host_integration_run.sh, scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, scripts/release_bundle.sh, docs/USE_CASES.md, docs/HOST_TOOLS.md, docs/HOST_API.md, docs/GPU_NODES.md, docs/PYTHON_SUPPORT.md, docs/BENCHMARKS.md, docs/TEST_PLAN.md, docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md, generated Worker image manifests, and the accepted 26e MCS driver/CYW43 coexistence identities by immutable hash/reference only.
 Changes:
+  - Pi exact-132a W02 host-profile correction — the target correctly publishes worker-15 under shard 0f, but the gateway unconditionally reports the QEMU six-bit profile and makes structured discovery expect 03. Add an explicit generated Worker runtime profile selection, retain the QEMU default and select the existing eight-bit Pi profile for managed Pi benchmark gateways. Preserve the shard algorithm, namespace, bounds response shape, authentication, broker/pool limits, workload, readiness predicates and evidence classes. Focused CLI/default/profile bounds and managed-launch tests must cover both targets; actual Pi discovery and pressure remain physical evidence.
   - Cargo.toml + crates/cohesix-worker-evidence/** — add a host-only bounded parser/validator shared by Rust host consumers. It represents transport/action outcome separately from declaration (`model-only` or `executable`), lifecycle (`absent`, `queued`, `starting`, `ready`, `closing`, `faulted`, or `terminal`), artifact (`missing`, `verified`, or `mismatch`), receipt (`none`, `pending`, `confirmed`, `rejected`, or `stale`), integration obligation/observed mode, and execution proof (`none`, `host-model`, `qemu`, or `fresh-pi`). It validates record kind and its required/forbidden field matrix, role, public instance id, slot, logical lease epoch, supervisor generation, cap generation, receipt sequence, ABI/schema version, target class, dependency-graph and Worker-integration record hashes, kernel/root/driver/CYW43/Worker archive/image-manifest/image hashes, record bounds, duplicate identity, and stale generation without exposing raw badges, CPtrs, capability values, or secrets. Worker-runtime release eligibility is derived separately from artifact state plus satisfied role/release compatibility rows and the matching QEMU/Pi component, root-TCB, and full-system acceptance graph; a missing or mismatched kind/hash/schema/target/evidence layer is a typed failure, never a downgraded proof class, and this release status never implies production use-case acceptance.
   - apps/cohesix-proto/src/lib.rs — provide stable canonical role labels, strict parse/round-trip behavior, and `ALL_ROLES`; preserve `Role::Worker` compatibility as canonical `worker-heartbeat`. WorkerBus recognition never implies executability, and profile-dependent declaration/lifecycle/receipt/proof state does not enter this protocol-label crate.
   - tools/coh-rtc/src/** + generated clients/docs — generate the executable-role matrix, host-integration dependency graph, Worker ABI/evidence schema versions, maximum live tasks, canonical sharded telemetry template, legacy-alias gate, lifecycle vocabulary, receipt bounds, archive identity, and proof vocabulary from the selected profile. Rust, Python, REST, and UI consumers use the same generated JSON schemas and conformance vectors; direct-TCP local manifests remain expectations, while remote declarations come from bounded remote metadata and proof comes only from hash-matched Worker plus per-row Worker-integration evidence.

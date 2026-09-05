@@ -8286,6 +8286,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             env["COH_ROLE"] = args.role
             env["HIVE_GATEWAY_BIND"] = args.gateway_bind
             gateway_cmd = [gateway_bin, "--bind", args.gateway_bind]
+            if args.benchmark_target == BENCHMARK_TARGET_PI4:
+                gateway_cmd.extend(["--worker-runtime-profile", "pi4-production"])
             if args.gateway_mock:
                 gateway_cmd.append("--mock")
             if args.worker_acceptance_root is not None:
