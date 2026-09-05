@@ -159,6 +159,16 @@ the complete host-tool and Python-library catalogue, generated contracts,
 `.coh` workloads, pressure/benchmark scripts and report readers finds no
 other affected wire field, parser requirement, public API or report schema.
 
+The a176 four-boot follow-up adds seven passive `mcs_session*` rows only to Pi
+`smp mcs`. They retain the latest nonzero TCP identity's idle fences, precise
+operator predicates and existing Yield intervals across disconnect, excluding
+later serial-only typing. The complete host suite listed below, Python library,
+`.coh` workloads, profile consumers, REST/raw workloads, benchmark arithmetic
+and report schemas were reviewed again. Only the trace normalizer's passive
+component fixture changes, to prove the new rows cannot manufacture readiness;
+no consumer requires a behavior or schema change. The new rows are optional
+evidence, not transport acceptance, SC-consumed time or scheduling authority.
+
 The complete `coh`, `cohsh`, `coh-status`, Hive Gateway/REST, SwarmUI, GPU
 bridge, host-ticket agent, sidecar and sidecar bus, CAS tooling, Pi gate and
 serial helpers, trace normalization, `tools/cohesix-py`, generated-contract

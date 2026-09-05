@@ -1892,10 +1892,14 @@ QEMU must preserve the caller-time fallback and unchanged row grammar.
 
 The detailed Pi MCS batch must be absent from ordinary `netstats` and appear
 only inside explicit `smp mcs`, before `[smp:mcs/v1] end`. It contains exactly
-27 bounded rows: nine `mcs_quantum*` rows, command-publication-to-dispatch and
+34 bounded rows: nine `mcs_quantum*` rows, command-publication-to-dispatch and
 root-observation-to-dispatch rows, fixed progress and ten-bit pending legends,
 six `mcs_yield*` rows, three schema-stable budget rows, and five passive
-`mcs_idle*` rows. The idle records separately count before/after timer-enable
+`mcs_idle*` rows plus seven `mcs_session*` rows. Session tests prove that
+zero/disconnected identities cannot overwrite the preceding TCP evidence, a
+new connection or generation resets the retained cohort, operator reasons
+remain independent, invalid Yield clocks are excluded, counters saturate and
+maximum-width rows remain complete. The idle records separately count before/after timer-enable
 cuts, clear cuts, timer rejection and all sixteen existing fence bits; test
 each field's independent bit, co-occurrence, saturation and maximum-width
 output. No idle counter may affect admission, perform a new probe, or claim

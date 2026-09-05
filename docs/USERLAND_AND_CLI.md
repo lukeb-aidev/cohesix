@@ -90,7 +90,7 @@ profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
 runbooks. `smp mcs` labels compiler truth `source=generated`, BootInfo
 `source=kernel`, and copied live state `source=runtime`; unavailable is not a
-missing registration. On Pi release profiles it also emits the 27-row
+missing registration. On Pi release profiles it also emits the 34-row
 aggregate-only `mcs_quantum*`, `mcs_yield*`, command-dispatch, pending-state,
 budget-guard and idle-fence batch documented below. These rows are not emitted by
 `netstats`. The command never calls `seL4_SchedContext_Consumed`, which would
@@ -332,6 +332,28 @@ retained output, network work, ready child publication, and timer-enable
 rejection. These sample the existing predicates without changing them. A clear
 after-enable sample permits the existing wait but does not prove the syscall
 blocked, and timer rejection alone does not identify an inner HAL failure.
+
+Seven `mcs_session*` v1 rows retain the latest observed nonzero TCP connection
+and runtime generation after disconnect, until a different nonzero identity
+is observed. Zero/absent identity never erases this evidence; it is not an
+authentication or acceptance claim. `mcs_session` reports `generation`, `conn`,
+`before`, `after`, `timer_reject` and `clear=<before>/<after>`. Four
+`mcs_session_fences base=<0|4|8|12> counts=...` rows use the same fence bits.
+`mcs_session_operator` separately counts the sampled root serial RX queue,
+partial serial line, partial local-seat line, current local input chunk,
+queued USB bytes and USB readiness/recovery service debt as `serial_rx`,
+`serial_line`, `local_line`, `local_chunk`, `usb_bytes`, `usb_service`.
+These are independently sampled predicates and can co-occur; none changes the
+operator decision. `mcs_session_yield` reports `samples`, `total_us`, `max_us`
+and `invalid` for the existing exact Yield wall-time samples carrying this
+identity. Backwards/zero clocks are invalid, and all counts/sums saturate.
+The seven rows are emitted only by `smp mcs`, with no hot-path serial output,
+new counter read or scheduling syscall. Idle observation points remain the
+existing idle-preparation cuts, so zero cuts does not imply an idle-free
+session. Gather these rows after the first raw connection closes and before
+opening another TCP session; later UART diagnostic typing with no active TCP
+identity cannot contaminate them. They still do not prove SC consumption,
+kernel activations, refill exhaustion or that a permitted wait actually slept.
 
 `mcs_quantum*` measures root-control composer quanta, not kernel activations,
 SC refills, or scheduling-context consumption. `run` brackets the composer

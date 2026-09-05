@@ -14035,7 +14035,7 @@ where
         core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         let before_preparation = pi_root_control_idle_preparation(before_enable);
         #[cfg(feature = "release-pi4")]
-        crate::pi4_mcs_recorder::record_idle_fence(
+        self.record_pi_root_control_idle_fence(
             crate::pi4_mcs_recorder::PiMcsIdleCut::BeforeEnable,
             pi_root_control_idle_fence_mask(before_enable),
         );
@@ -14046,7 +14046,7 @@ where
             before_enable.exact_direct_genet_topology,
         ) {
             #[cfg(feature = "release-pi4")]
-            crate::pi4_mcs_recorder::record_idle_fence(
+            self.record_pi_root_control_idle_fence(
                 crate::pi4_mcs_recorder::PiMcsIdleCut::TimerRejected,
                 1 << 15,
             );
@@ -14056,11 +14056,54 @@ where
         let after_enable = self.pi_root_control_idle_fence_evidence();
         core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         #[cfg(feature = "release-pi4")]
-        crate::pi4_mcs_recorder::record_idle_fence(
+        self.record_pi_root_control_idle_fence(
             crate::pi4_mcs_recorder::PiMcsIdleCut::AfterEnable,
             pi_root_control_idle_fence_mask(after_enable),
         );
         pi_root_control_idle_preparation(after_enable)
+    }
+
+    /// Observe the existing cut under the current TCP identity. These values
+    /// are diagnostic only and cannot change the idle predicate or wake path.
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+    fn record_pi_root_control_idle_fence(
+        &self,
+        cut: crate::pi4_mcs_recorder::PiMcsIdleCut,
+        mask: u32,
+    ) {
+        crate::pi4_mcs_recorder::record_idle_fence(cut, mask);
+        let Some(net) = self.net.as_deref() else {
+            return;
+        };
+        let Some(connection) = net.active_console_conn_id().filter(|id| *id != 0) else {
+            return;
+        };
+        let Some(diagnostic) = net.isolated_console_diagnostics() else {
+            return;
+        };
+        let serial = self.serial.owner_runtime_record();
+        let operator = [
+            serial.rx_depth != 0,
+            serial.line_len != 0,
+            !self.local_line.is_empty(),
+            self.local_seat_chunk_input_pending,
+            self.local_seat
+                .as_ref()
+                .is_some_and(|seat| seat.keyboard_trace().queued_bytes != 0),
+            self.linked_local_seat_usb_service_pending(),
+        ]
+        .iter()
+        .enumerate()
+        .fold(0u8, |bits, (index, pending)| {
+            bits | (u8::from(*pending) << index)
+        });
+        crate::pi4_mcs_recorder::record_session_idle(
+            diagnostic.generation,
+            connection,
+            cut,
+            mask,
+            operator,
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -20758,6 +20801,10 @@ where
         }
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         for line in crate::pi4_mcs_recorder::idle_snapshot_lines() {
+            self.emit_console_line(line.as_str());
+        }
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        for line in crate::pi4_mcs_recorder::session_snapshot_lines() {
             self.emit_console_line(line.as_str());
         }
         self.emit_console_line("[smp:mcs/v1] end");

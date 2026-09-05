@@ -45,8 +45,8 @@ It changes no runtime-init ABI version, generated authority, console command,
 authentication/framing, namespace, or REST/SDK/report schema. Absence is
 unavailable evidence, never a readiness or performance result.
 
-Pi `smp mcs` adds five passive `mcs_idle*` v1 rows after its existing 22-row
-batch, as specified in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md). They retain
+Pi `smp mcs` adds five passive `mcs_idle*` and seven latest-connection
+`mcs_session*` v1 rows after its existing 22-row batch, as specified in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md). They retain
 the existing idle fences and timer-enable rejection, with no new scheduling
 authority. Ordinary `netstats`, QEMU output, authentication, framing and
 host-tool/REST/SDK APIs are unchanged.

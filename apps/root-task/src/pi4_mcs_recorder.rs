@@ -761,6 +761,126 @@ impl PiMcsIdleSummary {
 
 static IDLE: Mutex<PiMcsIdleSummary> = Mutex::new(PiMcsIdleSummary::new());
 
+/// Retain the latest nonzero TCP identity across disconnect. Later UART
+/// diagnostic typing must not overwrite the session's idle/Yield evidence.
+struct PiMcsSessionSummary {
+    generation: u64,
+    connection: u64,
+    idle: PiMcsIdleSummary,
+    operator: [u64; 6],
+    yields: u64,
+    yield_us: u64,
+    yield_max_us: u64,
+    yield_invalid: u64,
+}
+
+impl PiMcsSessionSummary {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            connection: 0,
+            idle: PiMcsIdleSummary::new(),
+            operator: [0; 6],
+            yields: 0,
+            yield_us: 0,
+            yield_max_us: 0,
+            yield_invalid: 0,
+        }
+    }
+
+    fn select(&mut self, generation: u64, connection: u64) -> bool {
+        if generation == 0 || connection == 0 {
+            return false;
+        }
+        if (generation, connection) != (self.generation, self.connection) {
+            *self = Self::new();
+            self.generation = generation;
+            self.connection = connection;
+        }
+        true
+    }
+
+    fn record_idle(
+        &mut self,
+        generation: u64,
+        connection: u64,
+        cut: PiMcsIdleCut,
+        mask: u32,
+        operator: u8,
+    ) {
+        if !self.select(generation, connection) {
+            return;
+        }
+        self.idle.record(cut, mask);
+        for (bit, count) in self.operator.iter_mut().enumerate() {
+            if operator & (1 << bit) != 0 {
+                *count = count.saturating_add(1);
+            }
+        }
+    }
+
+    fn record_yield(&mut self, record: PiMcsYieldRecord) {
+        if !self.select(record.generation, record.connection_id) {
+            return;
+        }
+        let Some(us) = (record.entered_ticks != 0)
+            .then_some(record.resumed_ticks)
+            .and_then(|resumed| resumed.checked_sub(record.entered_ticks))
+            .and_then(|ticks| ticks_to_us(ticks, record.counter_hz))
+        else {
+            self.yield_invalid = self.yield_invalid.saturating_add(1);
+            return;
+        };
+        self.yields = self.yields.saturating_add(1);
+        self.yield_us = self.yield_us.saturating_add(us);
+        self.yield_max_us = self.yield_max_us.max(us);
+    }
+
+    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 7] {
+        let mut lines = core::array::from_fn(|_| HeaplessString::new());
+        let _ = write!(lines[0], "netstats: mcs_session schema=v1 generation={} conn={} before={} after={} timer_reject={} clear={}/{}",
+            self.generation, self.connection, self.idle.cuts[0], self.idle.cuts[1], self.idle.cuts[2], self.idle.clear[0], self.idle.clear[1]);
+        for group in 0..4 {
+            let i = group * 4;
+            let _ = write!(
+                lines[group + 1],
+                "netstats: mcs_session_fences schema=v1 base={} counts={},{},{},{}",
+                i,
+                self.idle.fences[i],
+                self.idle.fences[i + 1],
+                self.idle.fences[i + 2],
+                self.idle.fences[i + 3]
+            );
+        }
+        let _ = write!(lines[5], "netstats: mcs_session_operator schema=v1 serial_rx={} serial_line={} local_line={} local_chunk={} usb_bytes={} usb_service={}",
+            self.operator[0], self.operator[1], self.operator[2], self.operator[3], self.operator[4], self.operator[5]);
+        let _ = write!(
+            lines[6],
+            "netstats: mcs_session_yield schema=v1 samples={} total_us={} max_us={} invalid={}",
+            self.yields, self.yield_us, self.yield_max_us, self.yield_invalid
+        );
+        lines
+    }
+}
+
+static SESSION: Mutex<PiMcsSessionSummary> = Mutex::new(PiMcsSessionSummary::new());
+
+pub(crate) fn record_session_idle(
+    generation: u64,
+    connection: u64,
+    cut: PiMcsIdleCut,
+    mask: u32,
+    operator: u8,
+) {
+    SESSION
+        .lock()
+        .record_idle(generation, connection, cut, mask, operator);
+}
+
+pub(crate) fn session_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 7] {
+    SESSION.lock().lines()
+}
+
 pub(crate) fn record_idle_fence(cut: PiMcsIdleCut, mask: u32) {
     IDLE.lock().record(cut, mask);
 }
@@ -775,6 +895,9 @@ pub(crate) fn record_quantum(record: PiMcsQuantumRecord) {
 
 pub(crate) fn record_yield(record: PiMcsYieldRecord) {
     YIELD.lock().record(record);
+    if record.generation != 0 && record.connection_id != 0 {
+        SESSION.lock().record_yield(record);
+    }
 }
 
 pub(crate) fn record_budget_guard(
@@ -841,6 +964,83 @@ pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 22] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_summary_retains_disconnect_and_resets_on_new_identity() {
+        let mut summary = PiMcsSessionSummary::new();
+        summary.record_idle(7, 11, PiMcsIdleCut::BeforeEnable, 1 << 3, 0b000010);
+        summary.record_idle(7, 11, PiMcsIdleCut::AfterEnable, 0, 0);
+        let sample = PiMcsYieldRecord {
+            lane: PiMcsLane::Genet,
+            entered_ticks: 100,
+            resumed_ticks: 540_100,
+            counter_hz: 54_000_000,
+            generation: 7,
+            connection_id: 11,
+            pending_mask: 0,
+            trigger: PiMcsYieldTrigger::NoProductiveSuccessor,
+        };
+        summary.record_yield(sample);
+        summary.record_idle(7, 0, PiMcsIdleCut::BeforeEnable, 0xffff, 0x3f);
+        summary.record_yield(PiMcsYieldRecord {
+            connection_id: 0,
+            ..sample
+        });
+        assert_eq!(summary.idle.cuts, [1, 1, 0]);
+        assert_eq!(summary.idle.clear, [0, 1]);
+        assert_eq!(summary.operator, [0, 1, 0, 0, 0, 0]);
+        assert_eq!(
+            (summary.yields, summary.yield_us, summary.yield_max_us),
+            (1, 10_000, 10_000)
+        );
+        summary.record_yield(PiMcsYieldRecord {
+            resumed_ticks: 99,
+            ..sample
+        });
+        summary.record_yield(PiMcsYieldRecord {
+            counter_hz: 0,
+            ..sample
+        });
+        summary.record_yield(PiMcsYieldRecord {
+            entered_ticks: 0,
+            ..sample
+        });
+        assert_eq!(summary.yield_invalid, 3);
+        summary.record_idle(8, 11, PiMcsIdleCut::BeforeEnable, 0, 0);
+        assert_eq!((summary.generation, summary.connection), (8, 11));
+        assert_eq!(summary.idle.cuts, [1, 0, 0]);
+        assert_eq!(summary.operator, [0; 6]);
+        assert_eq!(
+            (summary.yields, summary.yield_us, summary.yield_invalid),
+            (0, 0, 0)
+        );
+        summary.record_idle(8, 12, PiMcsIdleCut::TimerRejected, 1 << 15, 0);
+        assert_eq!(summary.idle.cuts, [0, 0, 1]);
+    }
+
+    #[test]
+    fn session_summary_saturates_and_preserves_complete_diagnostic_rows() {
+        let mut summary = PiMcsSessionSummary::new();
+        summary.select(u64::MAX, u64::MAX);
+        summary.idle.cuts = [u64::MAX; 3];
+        summary.idle.clear = [u64::MAX; 2];
+        summary.idle.fences = [u64::MAX; 16];
+        summary.operator = [u64::MAX; 6];
+        summary.yields = u64::MAX;
+        summary.yield_us = u64::MAX;
+        summary.yield_max_us = u64::MAX;
+        summary.yield_invalid = u64::MAX;
+        summary.record_idle(u64::MAX, u64::MAX, PiMcsIdleCut::BeforeEnable, 0xffff, 0x3f);
+        assert_eq!(summary.idle.fences, [u64::MAX; 16]);
+        assert_eq!(summary.operator, [u64::MAX; 6]);
+        let lines = summary.lines();
+        assert!(lines[0].ends_with("clear=18446744073709551615/18446744073709551615"));
+        assert!(lines[5].ends_with("usb_service=18446744073709551615"));
+        assert!(lines[6].ends_with("invalid=18446744073709551615"));
+        for line in lines {
+            assert!(line.len() < DEFAULT_LINE_CAPACITY);
+        }
+    }
 
     #[test]
     fn idle_fence_summary_separates_clear_race_and_timer_rejection() {

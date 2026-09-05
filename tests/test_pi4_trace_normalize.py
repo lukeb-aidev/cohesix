@@ -2334,6 +2334,16 @@ def test_gate_summary_keeps_selected_network_after_passive_component_state() -> 
             "netstats: mcs_idle_fences schema=v1 base=4 counts=0,0,0,0",
             "netstats: mcs_idle_fences schema=v1 base=8 counts=0,0,0,0",
             "netstats: mcs_idle_fences schema=v1 base=12 counts=0,0,0,0",
+            "netstats: mcs_session schema=v1 generation=1 conn=11 before=20 "
+            "after=0 timer_reject=0 clear=0/0",
+            "netstats: mcs_session_fences schema=v1 base=0 counts=0,0,0,20",
+            "netstats: mcs_session_fences schema=v1 base=4 counts=0,0,0,0",
+            "netstats: mcs_session_fences schema=v1 base=8 counts=0,0,0,0",
+            "netstats: mcs_session_fences schema=v1 base=12 counts=0,0,0,0",
+            "netstats: mcs_session_operator schema=v1 serial_rx=0 "
+            "serial_line=20 local_line=0 local_chunk=0 usb_bytes=0 usb_service=0",
+            "netstats: mcs_session_yield schema=v1 samples=20 "
+            "total_us=190000 max_us=10000 invalid=0",
         ]
     )
 
