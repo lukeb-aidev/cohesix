@@ -12767,7 +12767,11 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
             # only the bounded lease. It must not replace the selected
             # network carried by the canonical netstats/activity record.
             active = selected_active
-        addr_src = event.fields.get("addr_src", event.fields.get("src", addr_src))
+        addr_src = event.fields.get("addr_src", addr_src)
+        if raw.startswith(("netstatus:", "[smp] activity net ")):
+            # Only these status records use src for address provenance.
+            # Packet diagnostics use the same key for an IPv4/port tuple.
+            addr_src = event.fields.get("src", addr_src)
         dhcp = event.fields.get("dhcp", dhcp)
         tcp_ready_field = field_lower(event, "tcp_ready")
         if tcp_ready_field == "yes":

@@ -29,7 +29,7 @@ fn early_hdmi_progress_due(last_us: u64, now_us: u64) -> bool {
     last_us != 0
         && now_us
             .checked_sub(last_us)
-            .is_some_and(|elapsed| elapsed >= 5_000_000)
+            .is_some_and(|elapsed| elapsed >= 2_000_000)
 }
 
 /// Offer one empty display command at a quiescent bootstrap checkpoint.
@@ -7161,13 +7161,13 @@ impl<'a> Cyw43Hal for KernelHal<'a> {
 mod tests {
     #[cfg(feature = "kernel")]
     #[test]
-    fn early_hdmi_progress_requires_five_elapsed_seconds() {
+    fn early_hdmi_progress_requires_two_elapsed_seconds() {
         assert!(!super::early_hdmi_progress_due(0, 9_000_000));
         assert!(!super::early_hdmi_progress_due(2, 1));
-        assert!(!super::early_hdmi_progress_due(1, 5_000_000));
-        assert!(super::early_hdmi_progress_due(1, 5_000_001));
-        assert!(!super::early_hdmi_progress_due(5_000_001, 5_000_002));
-        assert!(super::early_hdmi_progress_due(5_000_001, 50_000_001));
+        assert!(!super::early_hdmi_progress_due(1, 2_000_000));
+        assert!(super::early_hdmi_progress_due(1, 2_000_001));
+        assert!(!super::early_hdmi_progress_due(2_000_001, 2_000_002));
+        assert!(super::early_hdmi_progress_due(2_000_001, 4_000_001));
     }
 
     use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};

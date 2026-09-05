@@ -45,11 +45,15 @@ It changes no runtime-init ABI version, generated authority, console command,
 authentication/framing, namespace, or REST/SDK/report schema. Absence is
 unavailable evidence, never a readiness or performance result.
 
-Pi `smp mcs` adds five passive `mcs_idle*` and seven latest-connection
-`mcs_session*` v1 rows after its existing 22-row batch, as specified in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md). They retain
-the existing idle fences and timer-enable rejection, with no new scheduling
-authority. Ordinary `netstats`, QEMU output, authentication, framing and
-host-tool/REST/SDK APIs are unchanged.
+Pi `smp mcs` adds five passive `mcs_idle*` rows after its existing 22-row
+batch. Pi `netstats` emits the seven latest-connection `mcs_session*` v1 rows
+and, for Wi-Fi, two passive `wifi_ack_admission` / `wifi_ack_last` v1 rows,
+as specified in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md). Keeping the session
+rows outside `smp mcs` preserves its complete physical body and end marker
+within the existing 69-line body / 72-line total backlog. ACK receipts prove
+only root dequeue, copied-page publication and child ingress acceptance, never
+TCP retirement. These records add no scheduling authority. QEMU output,
+authentication, framing and host-tool/REST/SDK APIs are unchanged.
 
 The console provides bare `caps`, bare `smp`, and the first `bi` record plus
 strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and

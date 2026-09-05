@@ -25355,11 +25355,12 @@ pub(crate) struct Cyw43RxDequeueTcpTuple {
     pub sequence: u32,
     pub acknowledgment: u32,
     pub flags: u16,
+    pub payload_bytes: u16,
 }
 
 #[cfg(feature = "kernel")]
 impl Cyw43RxDequeueTcpTuple {
-    fn from_frame(frame: &[u8]) -> Option<Self> {
+    pub(crate) fn from_frame(frame: &[u8]) -> Option<Self> {
         // Reuse the bounded IPv4/nonfragmented TCP header validation. Its
         // tuple describes the reverse response; diagnostics retain ingress.
         let reverse = Cyw43RxCoupledTcpReply::from_received_frame(frame)?;
@@ -25369,6 +25370,9 @@ impl Cyw43RxDequeueTcpTuple {
             return None;
         }
         let tcp = ETH_HEADER_LEN + cyw43_ipv4_header_len(frame)?;
+        let payload_bytes = usize::from(cyw43_get_u16_be(frame, ETH_HEADER_LEN + 2)?)
+            .checked_sub(tcp - ETH_HEADER_LEN)?
+            .checked_sub(usize::from(*frame.get(tcp + 12)? >> 4) * 4)?;
         Some(Self {
             source_ipv4: u32::from_be_bytes(reverse.destination_ipv4),
             destination_ipv4: u32::from_be_bytes(reverse.source_ipv4),
@@ -25377,7 +25381,63 @@ impl Cyw43RxDequeueTcpTuple {
             sequence: cyw43_get_u32_be(frame, tcp + 4)?,
             acknowledgment: cyw43_get_u32_be(frame, tcp + 8)?,
             flags: (u16::from(*frame.get(tcp + 12)? & 1) << 8) | u16::from(*frame.get(tcp + 13)?),
+            payload_bytes: u16::try_from(payload_bytes).ok()?,
         })
+    }
+
+    const fn ack_only(self) -> bool {
+        self.flags == 0x10 && self.payload_bytes == 0
+    }
+}
+
+/// One exact latest ACK receipt, independent of optional DPC timing samples.
+/// Completion means child ingress acceptance, never TCP ACK retirement.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43AckAdmissionDiagnostic {
+    pub dequeued: u32,
+    pub staged: u32,
+    pub completed: u32,
+    pub last: Option<Cyw43RxDequeueTcpTuple>,
+    pub runtime_generation: u64,
+    pub ingress_sequence: u64,
+    pub last_completed: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43AckAdmissionDiagnostic {
+    fn dequeue(&mut self, tuple: Cyw43RxDequeueTcpTuple) {
+        if tuple.ack_only() {
+            self.dequeued = self.dequeued.saturating_add(1);
+            self.last = Some(tuple);
+            self.runtime_generation = 0;
+            self.ingress_sequence = 0;
+            self.last_completed = false;
+        }
+    }
+
+    fn stage(&mut self, tuple: Cyw43RxDequeueTcpTuple, generation: u64, sequence: u64) {
+        if generation != 0
+            && sequence != 0
+            && self.last == Some(tuple)
+            && self.ingress_sequence == 0
+        {
+            self.staged = self.staged.saturating_add(1);
+            self.runtime_generation = generation;
+            self.ingress_sequence = sequence;
+        }
+    }
+
+    fn complete(&mut self, generation: u64, sequence: u64) {
+        if generation != 0
+            && sequence != 0
+            && self.runtime_generation == generation
+            && self.ingress_sequence == sequence
+            && !self.last_completed
+        {
+            self.completed = self.completed.saturating_add(1);
+            self.last_completed = true;
+        }
     }
 }
 
@@ -25449,6 +25509,7 @@ pub(crate) struct Cyw43RxDequeueDiagnostic {
     pub total_us: [u64; 4],
     pub max_us: [u64; 4],
     pub slow: Option<(Cyw43RxDequeueTcpTuple, [u64; 4], u64)>,
+    pub ack: Cyw43AckAdmissionDiagnostic,
 }
 
 #[cfg(feature = "kernel")]
@@ -25463,6 +25524,15 @@ impl Cyw43RxDequeueDiagnostic {
             total_us: [0; 4],
             max_us: [0; 4],
             slow: None,
+            ack: Cyw43AckAdmissionDiagnostic {
+                dequeued: 0,
+                staged: 0,
+                completed: 0,
+                last: None,
+                runtime_generation: 0,
+                ingress_sequence: 0,
+                last_completed: false,
+            },
         }
     }
 
@@ -25474,6 +25544,9 @@ impl Cyw43RxDequeueDiagnostic {
     ) {
         if self.generation != generation {
             *self = Self::empty(generation);
+        }
+        if generation != 0 {
+            self.ack.dequeue(tuple);
         }
         let (intervals, total) = match sample {
             Ok(sample) if generation != 0 => sample,
@@ -25504,6 +25577,28 @@ impl Cyw43RxDequeueDiagnostic {
 #[cfg(feature = "kernel")]
 static CYW43_RX_DEQUEUE_DIAGNOSTIC: Mutex<Cyw43RxDequeueDiagnostic> =
     Mutex::new(Cyw43RxDequeueDiagnostic::empty(0));
+
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+pub(crate) fn record_cyw43_ack_staged(
+    tuple: Cyw43RxDequeueTcpTuple,
+    runtime_generation: u64,
+    sequence: u64,
+) {
+    if tuple.ack_only() {
+        CYW43_RX_DEQUEUE_DIAGNOSTIC
+            .lock()
+            .ack
+            .stage(tuple, runtime_generation, sequence);
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+pub(crate) fn record_cyw43_ack_completed(runtime_generation: u64, sequence: u64) {
+    CYW43_RX_DEQUEUE_DIAGNOSTIC
+        .lock()
+        .ack
+        .complete(runtime_generation, sequence);
+}
 
 #[cfg(feature = "kernel")]
 pub(crate) fn cyw43_rx_dequeue_diagnostic() -> Cyw43RxDequeueDiagnostic {
@@ -59144,6 +59239,7 @@ mod tests {
             sequence: 0x1122_3344,
             acknowledgment: 0x5566_7788,
             flags: 0x112,
+            payload_bytes: 40,
         };
         assert_eq!(Cyw43RxDequeueTcpTuple::from_frame(&frame), Some(expected));
         frame[54..].fill(0xa5);
@@ -59213,6 +59309,76 @@ mod tests {
                 ..Cyw43RxDequeueDiagnostic::empty(8)
             }
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_ack_admission_requires_exact_header_and_child_identity() {
+        let mut frame = test_cyw43_host_tcp_frame([192, 168, 86, 154]);
+        // Ethernet padding is not TCP payload. IP total length owns the cut.
+        frame[16..18].copy_from_slice(&40u16.to_be_bytes());
+        frame[47] = 0x10;
+        let ack = Cyw43RxDequeueTcpTuple::from_frame(&frame).unwrap();
+        assert!(ack.ack_only());
+        let mut diagnostic = Cyw43RxDequeueDiagnostic::empty(7);
+        diagnostic.record(7, ack, Err(Cyw43RxDequeueSampleError::Missing));
+        assert_eq!(
+            diagnostic.ack.dequeued, 1,
+            "missing DPC timing is not missing ingress"
+        );
+        let receipt = &mut diagnostic.ack;
+        receipt.stage(ack, 0, 9);
+        receipt.stage(ack, 2, 0);
+        receipt.stage(
+            Cyw43RxDequeueTcpTuple {
+                acknowledgment: ack.acknowledgment.wrapping_add(1),
+                ..ack
+            },
+            2,
+            9,
+        );
+        assert_eq!(receipt.staged, 0);
+        receipt.stage(ack, 2, 9);
+        receipt.stage(ack, 2, 9);
+        assert_eq!(receipt.staged, 1);
+        receipt.complete(3, 9);
+        receipt.complete(2, 10);
+        assert!(!receipt.last_completed);
+        receipt.complete(2, 9);
+        receipt.complete(2, 9);
+        assert_eq!(receipt.completed, 1);
+        assert!(receipt.last_completed);
+        for other in [
+            Cyw43RxDequeueTcpTuple { flags: 0x11, ..ack },
+            Cyw43RxDequeueTcpTuple { flags: 0x18, ..ack },
+            Cyw43RxDequeueTcpTuple {
+                payload_bytes: 1,
+                ..ack
+            },
+        ] {
+            receipt.dequeue(other);
+        }
+        assert_eq!(receipt.dequeued, 1);
+        assert!(receipt.last_completed);
+        receipt.dequeued = u32::MAX;
+        receipt.staged = u32::MAX;
+        receipt.completed = u32::MAX;
+        receipt.dequeue(ack);
+        assert!(!receipt.last_completed);
+        assert_eq!(
+            (receipt.runtime_generation, receipt.ingress_sequence),
+            (0, 0)
+        );
+        receipt.stage(ack, 2, 10);
+        receipt.complete(2, 10);
+        assert_eq!(
+            (receipt.dequeued, receipt.staged, receipt.completed),
+            (u32::MAX, u32::MAX, u32::MAX)
+        );
+        diagnostic.record(8, ack, Err(Cyw43RxDequeueSampleError::Missing));
+        assert_eq!(diagnostic.ack.dequeued, 1);
+        assert_eq!((diagnostic.ack.staged, diagnostic.ack.completed), (0, 0));
+        assert!(!diagnostic.ack.last_completed);
     }
 
     #[cfg(feature = "kernel")]

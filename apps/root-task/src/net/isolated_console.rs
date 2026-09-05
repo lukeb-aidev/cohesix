@@ -1300,6 +1300,15 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         };
         let publication_observed = turn.publication_observed();
         let mut activity = turn.input_progress_observed();
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        if D::driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            if let Some(sequence) = turn.input_completions.packet_sequence {
+                crate::drivers::driver_task_net::record_cyw43_ack_completed(
+                    self.runtime.generation(),
+                    sequence,
+                );
+            }
+        }
         if let Some(sequence) = turn.input_completions.control_sequence {
             self.handle_control_completed(sequence);
             if self.faulted {
@@ -1386,7 +1395,24 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     if packet.is_empty() {
                         Ok(None)
                     } else {
-                        runtime.stage_ingress(packet).map(Some)
+                        let sequence = runtime.stage_ingress(packet)?;
+                        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+                        if D::driver_task_contract()
+                            == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+                        {
+                            if let Some(tuple) =
+                                crate::drivers::driver_task_net::Cyw43RxDequeueTcpTuple::from_frame(
+                                    packet,
+                                )
+                            {
+                                crate::drivers::driver_task_net::record_cyw43_ack_staged(
+                                    tuple,
+                                    runtime.generation(),
+                                    sequence,
+                                );
+                            }
+                        }
+                        Ok(Some(sequence))
                     }
                 },
             )

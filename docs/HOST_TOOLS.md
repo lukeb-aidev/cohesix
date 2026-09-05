@@ -159,14 +159,18 @@ the complete host-tool and Python-library catalogue, generated contracts,
 `.coh` workloads, pressure/benchmark scripts and report readers finds no
 other affected wire field, parser requirement, public API or report schema.
 
-The a176 four-boot follow-up adds seven passive `mcs_session*` rows only to Pi
-`smp mcs`. They retain the latest nonzero TCP identity's idle fences, precise
+The a176 four-boot follow-up adds seven passive `mcs_session*` rows to Pi
+`netstats` (moved from `smp mcs` after exact 55fc physical backlog overflow).
+They retain the latest nonzero TCP identity's idle fences, precise
 operator predicates and existing Yield intervals across disconnect, excluding
 later serial-only typing. The complete host suite listed below, Python library,
 `.coh` workloads, profile consumers, REST/raw workloads, benchmark arithmetic
-and report schemas were reviewed again. Only the trace normalizer's passive
-component fixture changes, to prove the new rows cannot manufacture readiness;
-no consumer requires a behavior or schema change. The new rows are optional
+and report schemas were reviewed again. The trace normalizer and its
+passive-component fixture also change: packet
+`src` tuples cannot replace address provenance, whose `src` alias belongs only
+to `netstatus` and `[smp] activity net`. This fixes a reproduced diagnostic
+interpretation error, including earlier Wi-Fi dequeue rows; no API, workload
+or report schema changes. The new rows are optional
 evidence, not transport acceptance, SC-consumed time or scheduling authority.
 
 The complete `coh`, `cohsh`, `coh-status`, Hive Gateway/REST, SwarmUI, GPU
@@ -202,7 +206,7 @@ and report readers keep their existing APIs, framing, workloads and schemas.
 Existing RX timing receipts and unchanged raw/pressure workloads measure the
 candidate; no host pacing, retries or acceptance thresholds are adjusted.
 
-The Pi HDMI startup tile now supports a bounded five-second elapsed-status
+The Pi HDMI startup tile now supports a bounded two-second elapsed-status
 refresh before ordinary terminal takeover. This changes only the internal
 empty HDMI frame completion: a due pre-terminal raster returns `Progress`
 with its cell count; an inactive or early poll remains `Idle`. Its existing
@@ -213,7 +217,7 @@ serial/build/Pi evidence helpers, generated-profile consumers, performance
 harness workloads/arithmetic and report readers were reviewed. None consumes
 this display-private completion, so none requires behavior, fixture or schema
 changes. Root and display tests cover its bounded clock/raster semantics;
-only exact-image Pi evidence can prove visible five-second updates, clean
+only exact-image Pi evidence can prove visible two-second updates, clean
 terminal takeover, liveness and performance.
 
 ## Choose one live topology

@@ -56111,7 +56111,7 @@ fn hdmi_early_progress_due(start: u64, last: u64, now: u64, hz: u64) -> bool {
     start != 0
         && last >= start
         && hz != 0
-        && now.checked_sub(last).is_some_and(|ticks| ticks / hz >= 5)
+        && now.checked_sub(last).is_some_and(|ticks| ticks / hz >= 2)
 }
 
 fn hdmi_early_progress_line(seconds: u64) -> [u8; HDMI_EARLY_PROGRESS_MAX_COLS] {
@@ -137124,14 +137124,14 @@ mod tests {
 
     #[test]
     fn hdmi_early_progress_clock_and_text_are_bounded() {
-        assert!(!hdmi_early_progress_due(0, 1, 500_000_001, 100_000_000));
-        assert!(!hdmi_early_progress_due(1, 0, 500_000_001, 100_000_000));
-        assert!(!hdmi_early_progress_due(1, 1, 500_000_001, 0));
+        assert!(!hdmi_early_progress_due(0, 1, 200_000_001, 100_000_000));
+        assert!(!hdmi_early_progress_due(1, 0, 200_000_001, 100_000_000));
+        assert!(!hdmi_early_progress_due(1, 1, 200_000_001, 0));
         assert!(!hdmi_early_progress_due(1, 2, 1, 100_000_000));
-        assert!(!hdmi_early_progress_due(1, 1, 500_000_000, 100_000_000));
-        assert!(hdmi_early_progress_due(1, 1, 500_000_001, 100_000_000));
+        assert!(!hdmi_early_progress_due(1, 1, 200_000_000, 100_000_000));
+        assert!(hdmi_early_progress_due(1, 1, 200_000_001, 100_000_000));
         assert!(hdmi_early_progress_due(1, 1, u64::MAX, 100_000_000));
-        assert_eq!(&hdmi_early_progress_line(5), b"Initializing... 00005s  ");
+        assert_eq!(&hdmi_early_progress_line(2), b"Initializing... 00002s  ");
         assert_eq!(
             &hdmi_early_progress_line(u64::MAX),
             b"Initializing... 99999s  "
@@ -138118,7 +138118,7 @@ mod tests {
             ..DriverTaskCommandRecord::empty()
         };
         let hz = runtime_timer_freq_hz();
-        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + hz * 5 - 1, Ordering::Release);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + hz * 2 - 1, Ordering::Release);
         assert_eq!(
             service_command(0, pulse),
             DriverTaskCompletionRecord::idle(99)
@@ -138127,7 +138127,7 @@ mod tests {
             TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
             early_tile_stores
         );
-        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + hz * 5, Ordering::Release);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + hz * 2, Ordering::Release);
         assert_eq!(
             service_command(0, pulse),
             DriverTaskCompletionRecord::progress(99, 24),

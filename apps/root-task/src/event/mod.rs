@@ -637,7 +637,7 @@ fn format_cyw43_tx_phase_diagnostics(
 #[cfg(feature = "kernel")]
 fn format_cyw43_rx_dequeue_diagnostic(
     diagnostic: crate::drivers::driver_task_net::Cyw43RxDequeueDiagnostic,
-) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 7] {
     let generation = diagnostic.generation;
     let summary = format_message(format_args!(
         "netstats: wifi_rx_dequeue schema=v1 gen={} n={} missing={} sat={} invalid={}",
@@ -680,7 +680,31 @@ fn format_cyw43_rx_dequeue_diagnostic(
             format_message(format_args!("netstats: wifi_rx_dequeue_slow_us gen={} absent=yes", generation)),
         ),
     };
-    [summary, runtime, root, identity, timing]
+    let ack = diagnostic.ack;
+    let admission = format_message(format_args!(
+        "netstats: wifi_ack_admission schema=v1 gen={} dequeued={} staged={} completed={} runtime_gen={} ingress_seq={} consumed={}",
+        generation, ack.dequeued, ack.staged, ack.completed, ack.runtime_generation,
+        ack.ingress_sequence, yes_no(ack.last_completed),
+    ));
+    let ack_identity = match ack.last {
+        Some(tuple) => format_message(format_args!(
+            "netstats: wifi_ack_last schema=v1 gen={} src={:08x}:{} dst={:08x}:{} seq={:08x} ack={:08x}",
+            generation, tuple.source_ipv4, tuple.source_port, tuple.destination_ipv4,
+            tuple.destination_port, tuple.sequence, tuple.acknowledgment,
+        )),
+        None => format_message(format_args!(
+            "netstats: wifi_ack_last schema=v1 gen={} absent=yes", generation,
+        )),
+    };
+    [
+        summary,
+        runtime,
+        root,
+        identity,
+        timing,
+        admission,
+        ack_identity,
+    ]
 }
 
 #[cfg(feature = "kernel")]
@@ -20803,10 +20827,6 @@ where
         for line in crate::pi4_mcs_recorder::idle_snapshot_lines() {
             self.emit_console_line(line.as_str());
         }
-        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
-        for line in crate::pi4_mcs_recorder::session_snapshot_lines() {
-            self.emit_console_line(line.as_str());
-        }
         self.emit_console_line("[smp:mcs/v1] end");
     }
 
@@ -35238,6 +35258,13 @@ where
                         self.emit_console_line(line_six.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.emit_console_line(target_line.as_str());
+                        // Keep the complete latest-connection cut in netstats.
+                        // Adding it to smp mcs exceeds the physical backlog's
+                        // body capacity and silently loses the closing rows.
+                        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+                        for line in crate::pi4_mcs_recorder::session_snapshot_lines() {
+                            self.emit_console_line(line.as_str());
+                        }
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);
                     } else {
@@ -47337,6 +47364,125 @@ mod tests {
             .any(|line| line.contains("[smp] activity end")));
     }
 
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    #[test]
+    fn pi_diagnostic_commands_retain_closing_rows_with_linked_serial_backpressure() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = Reset;
+        let serial =
+            SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<128>::new());
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::repeated(1, 1),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        )
+        .with_network(&mut net);
+        // The host has no live target registry. Reserve each mandatory live
+        // registration row in the same physical queue; the real renderer
+        // supplies the selected manifest, counters and final marker below.
+        for _ in crate::generated::temporal_tasks()
+            .iter()
+            .filter(|task| task.kind != crate::generated::TemporalTaskKind::Worker)
+        {
+            pump.emit_console_line("[smp:mcs/v1] source=runtime registration=present");
+        }
+        pump.emit_smp_mcs();
+        assert_eq!(
+            pump.pending_console_output.last().unwrap().text.as_str(),
+            "[smp:mcs/v1] end"
+        );
+        assert!(
+            pump.pending_console_output.len()
+                <= CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE
+        );
+        assert_eq!(
+            pump.pending_console_output
+                .iter()
+                .filter(|row| row.text.starts_with("netstats: mcs_"))
+                .count(),
+            27
+        );
+        assert!(!pump
+            .pending_console_output
+            .iter()
+            .any(|row| row.text.starts_with("netstats: mcs_session")));
+        pump.pending_console_output.clear();
+        pump.session = Some(SessionRole::Queen);
+        pump.dispatch_command_now(Command::NetStats).unwrap();
+        assert_eq!(
+            pump.pending_console_output
+                .iter()
+                .filter(|row| row.text.starts_with("netstats: mcs_session"))
+                .count(),
+            7
+        );
+        assert!(pump
+            .pending_console_output
+            .iter()
+            .any(|row| row.text.starts_with("netstats: mcs_session_yield")));
+        assert!(pump
+            .pending_console_output
+            .iter()
+            .any(|row| row.text.starts_with("netstats: wifi_ack_last")));
+        assert!(pump
+            .pending_console_output
+            .iter()
+            .any(|row| row.text.starts_with("OK NETSTATS")));
+        assert!(pump.pending_console_output.len() <= CONSOLE_OUTPUT_BACKLOG_LINES);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_ack_diagnostic_rows_preserve_maximum_width_identities() {
+        use crate::drivers::driver_task_net::{
+            Cyw43AckAdmissionDiagnostic, Cyw43RxDequeueDiagnostic, Cyw43RxDequeueTcpTuple,
+        };
+        let diagnostic = Cyw43RxDequeueDiagnostic {
+            generation: u32::MAX,
+            samples: 0,
+            missing: 0,
+            saturated: 0,
+            invalid: 0,
+            total_us: [0; 4],
+            max_us: [0; 4],
+            slow: None,
+            ack: Cyw43AckAdmissionDiagnostic {
+                dequeued: u32::MAX,
+                staged: u32::MAX,
+                completed: u32::MAX,
+                last: Some(Cyw43RxDequeueTcpTuple {
+                    source_ipv4: u32::MAX,
+                    destination_ipv4: u32::MAX,
+                    source_port: u16::MAX,
+                    destination_port: u16::MAX,
+                    sequence: u32::MAX,
+                    acknowledgment: u32::MAX,
+                    flags: 0x10,
+                    payload_bytes: 0,
+                }),
+                runtime_generation: u64::MAX,
+                ingress_sequence: u64::MAX,
+                last_completed: true,
+            },
+        };
+        let rows = format_cyw43_rx_dequeue_diagnostic(diagnostic);
+        assert_eq!(rows[5].as_str(), "netstats: wifi_ack_admission schema=v1 gen=4294967295 dequeued=4294967295 staged=4294967295 completed=4294967295 runtime_gen=18446744073709551615 ingress_seq=18446744073709551615 consumed=yes");
+        assert_eq!(rows[6].as_str(), "netstats: wifi_ack_last schema=v1 gen=4294967295 src=ffffffff:65535 dst=ffffffff:65535 seq=ffffffff ack=ffffffff");
+    }
+
     #[test]
     fn mcs_operator_inspection_is_bounded_and_source_labelled() {
         let driver = LoopbackSerial::<16384>::new();
@@ -47435,7 +47581,7 @@ mod tests {
                 .find("[smp:mcs/v1] end")
                 .expect("smp mcs transcript must have an end marker");
             let runtime_lines: Vec<_> = rendered.match_indices("netstats: mcs_").collect();
-            assert_eq!(runtime_lines.len(), 22, "{rendered}");
+            assert_eq!(runtime_lines.len(), 27, "{rendered}");
             assert!(
                 runtime_lines
                     .iter()
@@ -49273,8 +49419,14 @@ mod tests {
         )
         .expect("serial output must be utf8");
         assert!(
-            !transcript.contains("netstats: mcs_"),
-            "detailed Pi MCS telemetry belongs to smp mcs, not netstats: {transcript}"
+            !transcript.contains("netstats: mcs_quantum"),
+            "{transcript}"
+        );
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        assert_eq!(
+            transcript.matches("netstats: mcs_session").count(),
+            7,
+            "{transcript}"
         );
         drop(pump);
 
@@ -49289,7 +49441,7 @@ mod tests {
             })
             .collect();
         #[cfg(feature = "release-pi4")]
-        assert_eq!(diagnostic_lines.len(), 20, "{mirrored:?}");
+        assert_eq!(diagnostic_lines.len(), 27, "{mirrored:?}");
         #[cfg(all(feature = "release-qemu", not(feature = "release-pi4")))]
         assert_eq!(diagnostic_lines.len(), 14, "{mirrored:?}");
         assert!(
@@ -49379,8 +49531,9 @@ mod tests {
         assert!(
             mirrored
                 .iter()
-                .all(|line| !line.starts_with("netstats: mcs_")),
-            "detailed Pi MCS telemetry belongs to smp mcs, not netstats: {mirrored:?}"
+                .all(|line| !line.starts_with("netstats: mcs_")
+                    || line.starts_with("netstats: mcs_session")),
+            "only latest-session MCS telemetry belongs to netstats: {mirrored:?}"
         );
         assert!(
             mirrored.iter().any(|line| {

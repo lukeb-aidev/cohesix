@@ -347,13 +347,28 @@ These are independently sampled predicates and can co-occur; none changes the
 operator decision. `mcs_session_yield` reports `samples`, `total_us`, `max_us`
 and `invalid` for the existing exact Yield wall-time samples carrying this
 identity. Backwards/zero clocks are invalid, and all counts/sums saturate.
-The seven rows are emitted only by `smp mcs`, with no hot-path serial output,
+The seven rows are emitted only by Pi `netstats`, with no hot-path serial output,
 new counter read or scheduling syscall. Idle observation points remain the
 existing idle-preparation cuts, so zero cuts does not imply an idle-free
 session. Gather these rows after the first raw connection closes and before
 opening another TCP session; later UART diagnostic typing with no active TCP
 identity cannot contaminate them. They still do not prove SC consumption,
 kernel activations, refill exhaustion or that a permitted wait actually slept.
+
+On Pi Wi-Fi, `netstats` also emits `wifi_ack_admission schema=v1` and
+`wifi_ack_last schema=v1`. They retain one latest structurally valid,
+nonfragmented IPv4/TCP ACK-only header (flags 0x10, zero TCP payload; Ethernet
+padding excluded), never payload bytes. `gen` is the Wi-Fi generation;
+`dequeued`, `staged` and `completed` are saturating counts. `runtime_gen` and
+`ingress_seq` identify that ACK's successful copied-page stage and returned
+signal; zero means absent. `consumed=yes` requires the exact child ingress
+completion watermark, and does not prove smoltcp processed or retired the ACK.
+The second row reports source/destination IPv4, sequence and ACK in hex,
+ports in decimal, or `absent=yes`. DPC timing missing/saturation does not discard these
+admission receipts. Each new ACK resets its receipt; other packets preserve
+it. A new Wi-Fi generation resets all counts. Collect via serial before another
+TCP connection, then match the exact header against the boot-paired pcap.
+There is no new device operation, timer read, ABI page, queue or capability.
 
 `mcs_quantum*` measures root-control composer quanta, not kernel activations,
 SC refills, or scheduling-context consumption. `run` brackets the composer

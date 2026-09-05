@@ -2344,6 +2344,12 @@ def test_gate_summary_keeps_selected_network_after_passive_component_state() -> 
             "serial_line=20 local_line=0 local_chunk=0 usb_bytes=0 usb_service=0",
             "netstats: mcs_session_yield schema=v1 samples=20 "
             "total_us=190000 max_us=10000 invalid=0",
+            "netstats: wifi_ack_admission schema=v1 gen=1 dequeued=60 "
+            "staged=60 completed=59 runtime_gen=1 ingress_seq=121 consumed=no",
+            "netstats: wifi_ack_last schema=v1 gen=1 src=c0a85666:49152 "
+            "dst=c0a8569a:31337 seq=11223344 ack=55667788",
+            "netstats: wifi_rx_dequeue_slow gen=1 src=c0a85666:49152 "
+            "dst=c0a8569a:31337 seq=11223344 ack=55667788 flags=010",
         ]
     )
 
