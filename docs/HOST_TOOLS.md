@@ -182,6 +182,18 @@ interpretation error, including earlier Wi-Fi dequeue rows; no API, workload
 or report schema changes. The new rows are optional
 evidence, not transport acceptance, SC-consumed time or scheduling authority.
 
+The exact-0783 two-WiFi/two-GENET follow-up adds one eighth session row for
+the longest valid Yield's pre-Yield work context and two WiFi FIN-cut rows
+for the preceding same-flow ACK admission receipt. Existing row fields remain
+unchanged. The passive-component normalizer fixture covers all three additions,
+including the new packet `src` tuple, without changing network provenance or
+manufacturing TCP/nettest proof. The complete host catalogue, `cohesix-py`
+backends and helpers, `coh-rtc` and generated-profile consumers, `.coh` scripts,
+REST/raw performance harnesses and report readers need no implementation,
+API, workload, timeout, generated-output or report-schema change. These optional
+Pi diagnostics retain evidence across teardown; they do not claim ACK retirement,
+SC consumption or measured performance improvement.
+
 The complete `coh`, `cohsh`, `coh-status`, Hive Gateway/REST, SwarmUI, GPU
 bridge, host-ticket agent, sidecar and sidecar bus, CAS tooling, Pi gate and
 serial helpers, trace normalization, `tools/cohesix-py`, generated-contract

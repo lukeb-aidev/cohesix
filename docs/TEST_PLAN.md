@@ -1925,13 +1925,17 @@ only inside explicit `smp mcs`, before `[smp:mcs/v1] end`. It contains exactly
 27 bounded rows: nine `mcs_quantum*` rows, command-publication-to-dispatch and
 root-observation-to-dispatch rows, fixed progress and ten-bit pending legends,
 six `mcs_yield*` rows, three schema-stable budget rows, and five passive
-`mcs_idle*` rows. The separate Pi `netstats` body contains seven
+`mcs_idle*` rows. The separate Pi `netstats` body contains eight
 `mcs_session*` rows. Exercise linked serial backpressure with the full
 selected non-Worker registration allowance and require the `smp mcs` end marker,
 all session rows in `netstats`, and the protocol ACK within unchanged capacity.
 Wi-Fi ACK receipt tests distinguish zero TCP payload from Ethernet padding,
 reject wrong tuple/runtime/sequence completion, preserve admission when DPC
-timing is missing, and prove saturation and generation reset. Fresh Pi evidence
+timing is missing, and prove saturation and generation reset. The two added
+FIN-cut rows preserve the preceding same-flow ACK across a closing ACK,
+duplicate FIN and later completion; unrelated flows must not borrow that ACK,
+and SYN tuple reuse and a new Wi-Fi generation must clear the retained cut.
+Render maximum-width headers and receipts without truncation. Fresh Pi evidence
 must correlate the retained header to the exact pcap before attributing a stall
 to root, child ingress or TCP retirement. The normalizer must preserve selected
 address provenance across packet `src` tuples, including the older Wi-Fi
@@ -1939,7 +1943,10 @@ dequeue record; canonical netstatus/activity `src` remains supported.
 Session tests prove that
 zero/disconnected identities cannot overwrite the preceding TCP evidence, a
 new connection or generation resets the retained cohort, operator reasons
-remain independent, invalid Yield clocks are excluded, counters saturate and
+remain independent, invalid Yield clocks are excluded, and the first maximum
+valid Yield retains its pre-Yield work counters, phase and child-publication
+state across shorter, invalid and disconnected samples. A new session clears
+that cut. Counters saturate and
 maximum-width rows remain complete. The idle records separately count before/after timer-enable
 cuts, clear cuts, timer rejection and all sixteen existing fence bits; test
 each field's independent bit, co-occurrence, saturation and maximum-width

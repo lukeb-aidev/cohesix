@@ -1786,6 +1786,17 @@ not current-candidate performance or acceptance proof.
   schema-stable; exact NaturalPostpone productive lanes now close on cap or
   policy rather than a userland clock/reserve cut. These observations can
   locate an off-CPU MCS seam but do not independently identify a kernel refill.
+- The latest TCP session also retains the first longest valid Yield's existing
+  pre-Yield root work counters, pending mask, phase and observed child
+  publication level. This passive cut grants no service work and cannot prove
+  the child remained unchanged until the syscall. WiFi ACK admission retains
+  the latest same-flow ACK immediately before a received FIN, so teardown ACKs
+  cannot erase the body receipt. Duplicate FINs preserve that cut; SYN tuple
+  reuse and WiFi generation replacement clear it. Missing matching headers
+  remain absent. Child ingress completion is recorded as observed at that cut,
+  never upgraded by later completion and never called TCP ACK retirement.
+  Both additions use existing bounded root records without new clocks,
+  scheduling syscalls, device operations, payload retention or shared ABI.
 - Pi `netstats` retains six additive fast-path rows. Copied WiFi counts
   transient-publication candidates, mint/consume/reject totals, the sticky
   reason mask, and rejects at the exact probe, next-composer entry, final

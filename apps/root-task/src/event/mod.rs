@@ -637,7 +637,7 @@ fn format_cyw43_tx_phase_diagnostics(
 #[cfg(feature = "kernel")]
 fn format_cyw43_rx_dequeue_diagnostic(
     diagnostic: crate::drivers::driver_task_net::Cyw43RxDequeueDiagnostic,
-) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 7] {
+) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 9] {
     let generation = diagnostic.generation;
     let summary = format_message(format_args!(
         "netstats: wifi_rx_dequeue schema=v1 gen={} n={} missing={} sat={} invalid={}",
@@ -696,6 +696,36 @@ fn format_cyw43_rx_dequeue_diagnostic(
             "netstats: wifi_ack_last schema=v1 gen={} absent=yes", generation,
         )),
     };
+    let (fin_identity, before_fin) = match ack.before_fin {
+        Some(receipt) => {
+            let fin = receipt.fin;
+            let identity = format_message(format_args!(
+                "netstats: wifi_ack_fin schema=v1 gen={} src={:08x}:{} dst={:08x}:{} seq={:08x} ack={:08x}",
+                generation, fin.source_ipv4, fin.source_port, fin.destination_ipv4,
+                fin.destination_port, fin.sequence, fin.acknowledgment,
+            ));
+            let before = match receipt.ack {
+                Some(previous) => format_message(format_args!(
+                    "netstats: wifi_ack_before_fin schema=v1 seq={:08x} ack={:08x} runtime_gen={} ingress_seq={} consumed={}",
+                    previous.sequence, previous.acknowledgment, receipt.runtime_generation,
+                    receipt.ingress_sequence, yes_no(receipt.completed),
+                )),
+                None => format_message(format_args!(
+                    "netstats: wifi_ack_before_fin schema=v1 absent=yes",
+                )),
+            };
+            (identity, before)
+        }
+        None => (
+            format_message(format_args!(
+                "netstats: wifi_ack_fin schema=v1 gen={} absent=yes",
+                generation
+            )),
+            format_message(format_args!(
+                "netstats: wifi_ack_before_fin schema=v1 absent=yes"
+            )),
+        ),
+    };
     [
         summary,
         runtime,
@@ -704,6 +734,8 @@ fn format_cyw43_rx_dequeue_diagnostic(
         timing,
         admission,
         ack_identity,
+        fin_identity,
+        before_fin,
     ]
 }
 
@@ -5837,6 +5869,7 @@ pub(crate) struct PiMcsYieldCut {
     connection_id: u64,
     pending_mask: u32,
     trigger: crate::pi4_mcs_recorder::PiMcsYieldTrigger,
+    context: Option<crate::pi4_mcs_recorder::PiMcsYieldContext>,
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
@@ -13748,7 +13781,39 @@ where
         lane: crate::pi4_mcs_recorder::PiMcsLane,
         trigger: crate::pi4_mcs_recorder::PiMcsYieldTrigger,
     ) -> PiMcsYieldCut {
-        let (generation, connection_id, pending_mask) = self.pi_mcs_identity_and_pending(lane);
+        let snapshot = self.pi_mcs_work_snapshot(lane);
+        let (generation, connection_id, pending_mask) = snapshot.map_or_else(
+            || self.pi_mcs_identity_and_pending(lane),
+            |snapshot| {
+                (
+                    snapshot.generation,
+                    snapshot.connection_id,
+                    snapshot.pending_mask,
+                )
+            },
+        );
+        let context = snapshot.map(|snapshot| crate::pi4_mcs_recorder::PiMcsYieldContext {
+            accepted_commands: snapshot.accepted_commands,
+            stages: snapshot.stage_output_successes,
+            drains: snapshot.response_drains,
+            phase: match self.linked_runtime_service_phase {
+                LinkedRuntimeServicePhase::Serial => 0,
+                LinkedRuntimeServicePhase::Dispatch => 1,
+                LinkedRuntimeServicePhase::ContainmentDiagnostic => 2,
+                LinkedRuntimeServicePhase::Network => 3,
+                LinkedRuntimeServicePhase::LocalSeat => 4,
+                LinkedRuntimeServicePhase::Display => 5,
+            },
+            child_publication: match self
+                .net
+                .as_deref()
+                .and_then(crate::net::NetPoller::console_child_publication_pending)
+            {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            },
+        });
         PiMcsYieldCut {
             lane,
             counter_hz: crate::arch::aarch64::timer::timer_freq_hz(),
@@ -13756,6 +13821,7 @@ where
             connection_id,
             pending_mask,
             trigger,
+            context,
         }
     }
 
@@ -13784,6 +13850,7 @@ where
             connection_id: cut.connection_id,
             pending_mask: cut.pending_mask,
             trigger: cut.trigger,
+            context: cut.context,
         });
     }
 
@@ -47480,16 +47547,16 @@ mod tests {
                 .iter()
                 .filter(|row| row.text.starts_with("netstats: mcs_session"))
                 .count(),
-            7
+            8
         );
         assert!(pump
             .pending_console_output
             .iter()
-            .any(|row| row.text.starts_with("netstats: mcs_session_yield")));
+            .any(|row| row.text.starts_with("netstats: mcs_session_yield_cut")));
         assert!(pump
             .pending_console_output
             .iter()
-            .any(|row| row.text.starts_with("netstats: wifi_ack_last")));
+            .any(|row| row.text.starts_with("netstats: wifi_ack_before_fin")));
         assert!(pump
             .pending_console_output
             .iter()
@@ -47529,11 +47596,27 @@ mod tests {
                 runtime_generation: u64::MAX,
                 ingress_sequence: u64::MAX,
                 last_completed: true,
+                before_fin: None,
             },
         };
         let rows = format_cyw43_rx_dequeue_diagnostic(diagnostic);
         assert_eq!(rows[5].as_str(), "netstats: wifi_ack_admission schema=v1 gen=4294967295 dequeued=4294967295 staged=4294967295 completed=4294967295 runtime_gen=18446744073709551615 ingress_seq=18446744073709551615 consumed=yes");
         assert_eq!(rows[6].as_str(), "netstats: wifi_ack_last schema=v1 gen=4294967295 src=ffffffff:65535 dst=ffffffff:65535 seq=ffffffff ack=ffffffff");
+        let mut closed = diagnostic;
+        let ack = closed.ack.last.unwrap();
+        closed.ack.before_fin = Some(
+            crate::drivers::driver_task_net::Cyw43AckBeforeFinDiagnostic {
+                fin: crate::drivers::driver_task_net::Cyw43RxDequeueTcpTuple { flags: 0x11, ..ack },
+                ack: Some(ack),
+                runtime_generation: u64::MAX,
+                ingress_sequence: u64::MAX,
+                completed: true,
+            },
+        );
+        let rows = format_cyw43_rx_dequeue_diagnostic(closed);
+        assert_eq!(rows[7].as_str(), "netstats: wifi_ack_fin schema=v1 gen=4294967295 src=ffffffff:65535 dst=ffffffff:65535 seq=ffffffff ack=ffffffff");
+        assert_eq!(rows[8].as_str(), "netstats: wifi_ack_before_fin schema=v1 seq=ffffffff ack=ffffffff runtime_gen=18446744073709551615 ingress_seq=18446744073709551615 consumed=yes");
+        assert!(rows.iter().all(|row| row.len() < DEFAULT_LINE_CAPACITY));
     }
 
     #[test]
@@ -49478,7 +49561,7 @@ mod tests {
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         assert_eq!(
             transcript.matches("netstats: mcs_session").count(),
-            7,
+            8,
             "{transcript}"
         );
         drop(pump);
@@ -49494,7 +49577,7 @@ mod tests {
             })
             .collect();
         #[cfg(feature = "release-pi4")]
-        assert_eq!(diagnostic_lines.len(), 27, "{mirrored:?}");
+        assert_eq!(diagnostic_lines.len(), 28, "{mirrored:?}");
         #[cfg(all(feature = "release-qemu", not(feature = "release-pi4")))]
         assert_eq!(diagnostic_lines.len(), 14, "{mirrored:?}");
         assert!(

@@ -343,7 +343,7 @@ rejection. These sample the existing predicates without changing them. A clear
 after-enable sample permits the existing wait but does not prove the syscall
 blocked, and timer rejection alone does not identify an inner HAL failure.
 
-Seven `mcs_session*` v1 rows retain the latest observed nonzero TCP connection
+Eight `mcs_session*` v1 rows retain the latest observed nonzero TCP connection
 and runtime generation after disconnect, until a different nonzero identity
 is observed. Zero/absent identity never erases this evidence; it is not an
 authentication or acceptance claim. `mcs_session` reports `generation`, `conn`,
@@ -357,7 +357,17 @@ These are independently sampled predicates and can co-occur; none changes the
 operator decision. `mcs_session_yield` reports `samples`, `total_us`, `max_us`
 and `invalid` for the existing exact Yield wall-time samples carrying this
 identity. Backwards/zero clocks are invalid, and all counts/sums saturate.
-The seven rows are emitted only by Pi `netstats`, with no hot-path serial output,
+`mcs_session_yield_cut` retains the pre-Yield work context for the first
+maximum-duration valid sample in that session, or `absent=yes`. `cause` is the
+existing exclusive Yield trigger; `pending`, `cmd`, `stage`, `drain` and the
+entry/resume `ticks` pair are hexadecimal. Command, successful output-stage and
+response-drain counts are cumulative runtime counters at the cut. Decimal
+`phase` maps Serial=0, Dispatch=1, ContainmentDiagnostic=2, Network=3,
+LocalSeat=4 and Display=5; `pub` maps unknown=0, observed empty=1 and durable
+child publication=2. This is a bounded root observation before Yield
+preparation, not a synchronized child snapshot or new continuation authority.
+Shorter or invalid samples and disconnect cannot overwrite the maximum.
+The eight rows are emitted only by Pi `netstats`, with no hot-path serial output,
 new counter read or scheduling syscall. Idle observation points remain the
 existing idle-preparation cuts, so zero cuts does not imply an idle-free
 session. Gather these rows after the first raw connection closes and before
@@ -375,8 +385,15 @@ signal; zero means absent. `consumed=yes` requires the exact child ingress
 completion watermark, and does not prove smoltcp processed or retired the ACK.
 The second row reports source/destination IPv4, sequence and ACK in hex,
 ports in decimal, or `absent=yes`. DPC timing missing/saturation does not discard these
-admission receipts. Each new ACK resets its receipt; other packets preserve
-it. A new Wi-Fi generation resets all counts. Collect via serial before another
+admission receipts. Each new ACK resets its receipt. A received SYN clears the
+latest header and close receipt to fence TCP tuple reuse without resetting the
+cumulative counts. `wifi_ack_fin schema=v1` adds the full received FIN header
+identity; `wifi_ack_before_fin schema=v1` freezes the latest same-flow ACK's
+sequence, acknowledgment and admission receipt immediately before that FIN.
+A missing same-flow ACK emits `absent=yes`. Repeated FINs with the same flow
+and sequence, closing ACKs and later ingress completions cannot rewrite this
+cut. It is header/admission evidence, not proof of TCP retirement or on-air
+delivery. A new Wi-Fi generation resets all counts and receipts. Collect via serial before another
 TCP connection, then match the exact header against the boot-paired pcap.
 There is no new device operation, timer read, ABI page, queue or capability.
 

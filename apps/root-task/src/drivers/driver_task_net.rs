@@ -25388,6 +25388,25 @@ impl Cyw43RxDequeueTcpTuple {
     const fn ack_only(self) -> bool {
         self.flags == 0x10 && self.payload_bytes == 0
     }
+
+    const fn same_flow(self, other: Self) -> bool {
+        self.source_ipv4 == other.source_ipv4
+            && self.destination_ipv4 == other.destination_ipv4
+            && self.source_port == other.source_port
+            && self.destination_port == other.destination_port
+    }
+}
+
+/// ACK admission at one exact received FIN header cut.
+/// Closing ACKs and repeats of that FIN cannot replace the body evidence.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43AckBeforeFinDiagnostic {
+    pub fin: Cyw43RxDequeueTcpTuple,
+    pub ack: Option<Cyw43RxDequeueTcpTuple>,
+    pub runtime_generation: u64,
+    pub ingress_sequence: u64,
+    pub completed: bool,
 }
 
 /// One exact latest ACK receipt, independent of optional DPC timing samples.
@@ -25402,11 +25421,43 @@ pub(crate) struct Cyw43AckAdmissionDiagnostic {
     pub runtime_generation: u64,
     pub ingress_sequence: u64,
     pub last_completed: bool,
+    pub before_fin: Option<Cyw43AckBeforeFinDiagnostic>,
 }
 
 #[cfg(feature = "kernel")]
 impl Cyw43AckAdmissionDiagnostic {
     fn dequeue(&mut self, tuple: Cyw43RxDequeueTcpTuple) {
+        if tuple.flags & 0x02 != 0 {
+            // A new SYN fences tuple reuse, including a peer deliberately
+            // reusing an earlier source port or initial sequence number.
+            self.last = None;
+            self.runtime_generation = 0;
+            self.ingress_sequence = 0;
+            self.last_completed = false;
+            self.before_fin = None;
+        }
+        if tuple.flags & 0x01 != 0
+            && !self.before_fin.is_some_and(|receipt| {
+                receipt.fin.same_flow(tuple) && receipt.fin.sequence == tuple.sequence
+            })
+        {
+            let ack = self.last.filter(|ack| ack.same_flow(tuple));
+            self.before_fin = Some(Cyw43AckBeforeFinDiagnostic {
+                fin: tuple,
+                ack,
+                runtime_generation: if ack.is_some() {
+                    self.runtime_generation
+                } else {
+                    0
+                },
+                ingress_sequence: if ack.is_some() {
+                    self.ingress_sequence
+                } else {
+                    0
+                },
+                completed: ack.is_some() && self.last_completed,
+            });
+        }
         if tuple.ack_only() {
             self.dequeued = self.dequeued.saturating_add(1);
             self.last = Some(tuple);
@@ -25532,6 +25583,7 @@ impl Cyw43RxDequeueDiagnostic {
                 runtime_generation: 0,
                 ingress_sequence: 0,
                 last_completed: false,
+                before_fin: None,
             },
         }
     }
@@ -59379,6 +59431,85 @@ mod tests {
         assert_eq!(diagnostic.ack.dequeued, 1);
         assert_eq!((diagnostic.ack.staged, diagnostic.ack.completed), (0, 0));
         assert!(!diagnostic.ack.last_completed);
+        assert!(diagnostic.ack.before_fin.is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_ack_before_fin_preserves_body_receipt_and_fences_tuple_reuse() {
+        let body_ack = Cyw43RxDequeueTcpTuple {
+            source_ipv4: 0xc0a85666,
+            destination_ipv4: 0xc0a8569a,
+            source_port: 52217,
+            destination_port: 31337,
+            sequence: 0x938897e5,
+            acknowledgment: 0x29312d45,
+            flags: 0x10,
+            payload_bytes: 0,
+        };
+        let fin = Cyw43RxDequeueTcpTuple {
+            flags: 0x11,
+            acknowledgment: 0x29312df4,
+            ..body_ack
+        };
+        let mut receipt = Cyw43AckAdmissionDiagnostic::default();
+        receipt.dequeue(body_ack);
+        receipt.stage(body_ack, 1, 17);
+        receipt.complete(1, 17);
+        receipt.dequeue(fin);
+        let frozen = Cyw43AckBeforeFinDiagnostic {
+            fin,
+            ack: Some(body_ack),
+            runtime_generation: 1,
+            ingress_sequence: 17,
+            completed: true,
+        };
+        assert_eq!(receipt.before_fin, Some(frozen));
+        let closing_ack = Cyw43RxDequeueTcpTuple {
+            sequence: 0x938897e6,
+            acknowledgment: 0x29312df5,
+            ..body_ack
+        };
+        receipt.dequeue(closing_ack);
+        receipt.stage(closing_ack, 1, 18);
+        receipt.complete(1, 18);
+        receipt.dequeue(fin);
+        assert_eq!(receipt.before_fin, Some(frozen));
+        receipt.dequeue(Cyw43RxDequeueTcpTuple {
+            source_port: 52218,
+            ..fin
+        });
+        let unrelated = receipt.before_fin.unwrap();
+        assert_eq!(unrelated.ack, None);
+        assert_eq!(
+            (
+                unrelated.runtime_generation,
+                unrelated.ingress_sequence,
+                unrelated.completed
+            ),
+            (0, 0, false)
+        );
+        receipt.dequeue(Cyw43RxDequeueTcpTuple {
+            flags: 0x02,
+            ..body_ack
+        });
+        assert_eq!(receipt.before_fin, None);
+        assert_eq!(receipt.last, None);
+        receipt.dequeue(fin);
+        assert_eq!(receipt.before_fin.unwrap().ack, None);
+        receipt.dequeue(body_ack);
+        receipt.stage(body_ack, 2, 19);
+        receipt.dequeue(Cyw43RxDequeueTcpTuple {
+            sequence: fin.sequence.wrapping_add(1),
+            ..fin
+        });
+        assert!(!receipt.before_fin.unwrap().completed);
+        receipt.complete(2, 19);
+        assert!(receipt.last_completed);
+        assert!(
+            !receipt.before_fin.unwrap().completed,
+            "later child completion cannot rewrite the earlier FIN cut"
+        );
     }
 
     #[cfg(feature = "kernel")]

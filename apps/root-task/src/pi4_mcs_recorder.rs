@@ -95,6 +95,18 @@ pub(crate) struct PiMcsYieldRecord {
     pub connection_id: u64,
     pub pending_mask: u32,
     pub trigger: PiMcsYieldTrigger,
+    pub context: Option<PiMcsYieldContext>,
+}
+
+/// Existing durable levels at the pre-Yield cut, without additional clocks or IPC.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PiMcsYieldContext {
+    pub accepted_commands: u64,
+    pub stages: u64,
+    pub drains: u64,
+    pub phase: u8,
+    /// 0 unknown, 1 observed empty, 2 observed durable child publication.
+    pub child_publication: u8,
 }
 
 /// Exclusive reason the root-control path crossed one explicit MCS Yield.
@@ -772,6 +784,7 @@ struct PiMcsSessionSummary {
     yield_us: u64,
     yield_max_us: u64,
     yield_invalid: u64,
+    worst_yield: Option<PiMcsYieldRecord>,
 }
 
 impl PiMcsSessionSummary {
@@ -785,6 +798,7 @@ impl PiMcsSessionSummary {
             yield_us: 0,
             yield_max_us: 0,
             yield_invalid: 0,
+            worst_yield: None,
         }
     }
 
@@ -833,10 +847,13 @@ impl PiMcsSessionSummary {
         };
         self.yields = self.yields.saturating_add(1);
         self.yield_us = self.yield_us.saturating_add(us);
-        self.yield_max_us = self.yield_max_us.max(us);
+        if self.worst_yield.is_none() || us > self.yield_max_us {
+            self.yield_max_us = us;
+            self.worst_yield = Some(record);
+        }
     }
 
-    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 7] {
+    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
         let mut lines = core::array::from_fn(|_| HeaplessString::new());
         let _ = write!(lines[0], "netstats: mcs_session schema=v1 generation={} conn={} before={} after={} timer_reject={} clear={}/{}",
             self.generation, self.connection, self.idle.cuts[0], self.idle.cuts[1], self.idle.cuts[2], self.idle.clear[0], self.idle.clear[1]);
@@ -859,6 +876,24 @@ impl PiMcsSessionSummary {
             "netstats: mcs_session_yield schema=v1 samples={} total_us={} max_us={} invalid={}",
             self.yields, self.yield_us, self.yield_max_us, self.yield_invalid
         );
+        match self
+            .worst_yield
+            .and_then(|record| record.context.map(|context| (record, context)))
+        {
+            Some((record, context)) => {
+                let _ = write!(lines[7],
+                    "netstats: mcs_session_yield_cut schema=v1 cause={} pending={:x} phase={} pub={} cmd={:x} stage={:x} drain={:x} ticks={:x}/{:x}",
+                    record.trigger.label(), record.pending_mask, context.phase,
+                    context.child_publication, context.accepted_commands, context.stages,
+                    context.drains, record.entered_ticks, record.resumed_ticks);
+            }
+            None => {
+                let _ = write!(
+                    lines[7],
+                    "netstats: mcs_session_yield_cut schema=v1 absent=yes"
+                );
+            }
+        }
         lines
     }
 }
@@ -877,7 +912,7 @@ pub(crate) fn record_session_idle(
         .record_idle(generation, connection, cut, mask, operator);
 }
 
-pub(crate) fn session_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 7] {
+pub(crate) fn session_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
     SESSION.lock().lines()
 }
 
@@ -979,6 +1014,13 @@ mod tests {
             connection_id: 11,
             pending_mask: 0,
             trigger: PiMcsYieldTrigger::NoProductiveSuccessor,
+            context: Some(PiMcsYieldContext {
+                accepted_commands: 55,
+                stages: 55,
+                drains: 54,
+                phase: 3,
+                child_publication: 2,
+            }),
         };
         summary.record_yield(sample);
         summary.record_idle(7, 0, PiMcsIdleCut::BeforeEnable, 0xffff, 0x3f);
@@ -1006,8 +1048,17 @@ mod tests {
             ..sample
         });
         assert_eq!(summary.yield_invalid, 3);
+        assert_eq!(summary.worst_yield, Some(sample));
+        summary.record_yield(PiMcsYieldRecord {
+            resumed_ticks: 270_100,
+            context: None,
+            ..sample
+        });
+        assert_eq!(summary.worst_yield, Some(sample));
+        assert!(summary.lines()[7].contains("phase=3 pub=2 cmd=37 stage=37 drain=36"));
         summary.record_idle(8, 11, PiMcsIdleCut::BeforeEnable, 0, 0);
         assert_eq!((summary.generation, summary.connection), (8, 11));
+        assert!(summary.worst_yield.is_none());
         assert_eq!(summary.idle.cuts, [1, 0, 0]);
         assert_eq!(summary.operator, [0; 6]);
         assert_eq!(
@@ -1138,6 +1189,7 @@ mod tests {
             connection_id: 9,
             pending_mask: 0x40,
             trigger: PiMcsYieldTrigger::ReserveGuard,
+            context: None,
         });
         assert_eq!(summary.samples, 1);
         assert_eq!(summary.pending_samples, 1);
@@ -1255,6 +1307,28 @@ mod tests {
         assert!(yield_lines
             .iter()
             .all(|line| !line.is_empty() && line.len() < DEFAULT_LINE_CAPACITY));
+
+        let mut session = PiMcsSessionSummary::new();
+        session.worst_yield = Some(PiMcsYieldRecord {
+            lane: PiMcsLane::Genet,
+            entered_ticks: u64::MAX,
+            resumed_ticks: u64::MAX,
+            counter_hz: PI4_COUNTER_HZ,
+            generation: u64::MAX,
+            connection_id: u64::MAX,
+            pending_mask: u32::MAX,
+            trigger: PiMcsYieldTrigger::NoProductiveSuccessor,
+            context: Some(PiMcsYieldContext {
+                accepted_commands: u64::MAX,
+                stages: u64::MAX,
+                drains: u64::MAX,
+                phase: u8::MAX,
+                child_publication: u8::MAX,
+            }),
+        });
+        let row = &session.lines()[7];
+        assert!(row.len() < DEFAULT_LINE_CAPACITY);
+        assert!(row.ends_with("ticks=ffffffffffffffff/ffffffffffffffff"));
 
         let mut guards = PiMcsBudgetGuardSummary::new();
         guards.total = [u64::MAX; PiMcsBudgetGuardStage::COUNT];
