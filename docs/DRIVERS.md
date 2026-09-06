@@ -944,7 +944,13 @@ reusable ownership pattern.
   at most every two elapsed seconds, through the existing synchronous
   command/Reply transport; it adds no timer or device authority. Pre-release
   UART cutover gives input and response tails priority and consumes a separate
-  outer turn for a due display poll. Cutover stops the root polling source.
+  outer turn for a due display poll. After cutover, the ordinary dedicated
+  Display phase retains one empty command across bounded service turns;
+  serial handoff does not stop the counter at six seconds. It can continue
+  through eight and ten seconds while the tile remains visible. USB/serial
+  keep their intervening operator turns. A normal frame first waits for any
+  retained empty command to retire, then disables further polls and takes
+  over immediately; readiness is never delayed to reach a counter value.
   Physical cadence is bounded by the next safe checkpoint and scheduling;
   hardware must verify the requested visible two-second cadence.
   Early HAL PCIe settle waits offer a checkpoint after each bounded chunk of
@@ -1877,8 +1883,21 @@ Only matching request, fingerprint, sealed runtime identity and slice permit
 clearing that acknowledgement and resuming the existing bounded action.
 Unacknowledged, stale or retired records do not authorize work. Serial, GENET,
 PCIe and CYW43/SDIO retain their physical-source arbitration boundaries. The
-early unbound USB/HDMI initial endpoint edge and bootstrap binding guard remain
-unchanged; this prewait repair alone does not prove an initial edge was received.
+bootstrap binding guard remains unchanged; the prewait repair alone does not
+prove an initial edge was received. The e11b four-boot matrix reproduced HDMI
+request 60 with fresh child progress still at 59/runtime-poll-ready and no
+DROW/DROA across several minutes. An unbound `NBSend` can miss the final
+ring-poll/endpoint-receive interval, so root may reconcile that exact initial
+rendezvous. Require the same active retained USB/HDMI command, fingerprint,
+runtime/capability generation, Issued phase, no prompted slice, no wait record
+or terminal, and the immediately preceding valid idle child record. Recheck
+the identity and frontier around the existing generated-period wake gate,
+then send at most one nonblocking endpoint hint and return to the outer
+rotation. Child progress and absence are observations restricting this hint;
+they never authorize physical work or a replacement command. Current-command
+progress, a DROW/DROA or terminal, changed identity, and every bound or
+physical-source runtime exclude this path. Call/Reply, the immutable child
+intake and one action per acknowledged slice remain unchanged.
 
 Explicit USB diagnostics add `command_frontier`, `command_wait` and
 `command_progress` for each mapped USB/HDMI runtime. These stable per-record

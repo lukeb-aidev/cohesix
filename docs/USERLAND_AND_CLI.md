@@ -461,6 +461,14 @@ does not select or override the canonical `NET_ACTIVE` backend, and no complete
 or partial batch proves DHCP, ARP, ICMP, TCP, throughput, QEMU parity, or Pi
 acceptance.
 
+On the physical Pi startup screen, `Cohesix starting...` is followed by a
+bounded elapsed-seconds counter refreshed at safe checkpoints about every two
+seconds. Serial cutover does not stop that counter at six seconds: it continues
+through eight and ten seconds while the startup tile remains visible. Normal
+console rendering takes over immediately when available; boot readiness never
+waits for a particular counter value. The isolated display runtime owns both
+the counter and the terminal, with USB and serial retaining operator turns.
+
 On the physical Pi local seat, serial may show `cohesix>` while USB is still
 starting, but HDMI does not show the interactive prompt until USB command input
 is admitted, the display path is healthy, and the canonical

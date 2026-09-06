@@ -262,6 +262,19 @@ and continuation stalls separate until a matching child receipt proves the
 first missing boundary. No snapshot, build or media result replaces actual
 USB/HDMI input, raw latency or transport repeatability proof.
 
+Pi e11b initial-wake restoration (non-claiming): retain both WiFi and both
+GENET boots before editing. The repeated HDMI 60/59 stall has a fresh previous
+idle child record and no DROW/DROA, distinguishing initial admission from a
+renderer or continuation stall. Focused contracts must reject current/foreign
+child progress, closed wake periods, changed identity and bound notifications;
+an exact unbound previous-idle request permits only one same-ticket endpoint
+hint per ordinary turn and generated period. Preserve the existing bound
+one-shot and DROW/DROA checks. Test the two-second counter through ten seconds
+and pending-command retirement before normal-frame takeover. Compile the exact
+Pi profile and run the narrow root-MCS QEMU canary. Fresh dual-transport Pi
+boots must prove display drainage, input liveness, raw TCP and mid/high pressure;
+the unmodified e11b performance gaps are not accepted or erased by this repair.
+
 ## Mandatory Acceptance Execution Contract
 
 This contract is normative whenever a milestone, release, or claim-tier result

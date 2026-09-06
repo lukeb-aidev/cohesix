@@ -229,6 +229,16 @@ changes. Root and display tests cover its bounded clock/raster semantics;
 only exact-image Pi evidence can prove visible two-second updates, clean
 terminal takeover, liveness and performance.
 
+The e11b follow-up keeps that counter scheduled across serial cutover through
+the ordinary retained Display phase until terminal takeover. It also repairs
+an unreceived initial USB/HDMI endpoint hint using the existing exact ticket,
+previous idle child record and generated wake-period gate. The complete host
+catalog, `tools/cohesix-py`, `.coh` operations, raw TCP and REST harnesses,
+generated consumers and report readers were reviewed together: their APIs,
+commands, framing, workloads, retries and schemas need no change. Existing
+USB command/wait/progress rows and send counters qualify the hardware repair;
+source checks or a successful flash cannot claim target performance.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or

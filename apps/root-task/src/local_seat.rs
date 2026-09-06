@@ -4305,6 +4305,9 @@ impl LocalSeatRuntime {
                 let Some((payload, reason, redraw)) = self.next_linked_hdmi_payload() else {
                     return false;
                 };
+                // This ordinary frame owns terminal takeover. The preceding
+                // ring-active guard first lets any retained startup poll retire.
+                crate::hal::finish_early_hdmi_boot_progress();
                 let receipt = self.hdmi_last_payload_receipt;
                 let retained = match build_linked_hdmi_retained_frame(
                     contract, payload, reason, redraw, receipt,

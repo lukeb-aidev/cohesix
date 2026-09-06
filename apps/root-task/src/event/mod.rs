@@ -13395,7 +13395,10 @@ where
                 // USB and serial have already released their own guards.
                 let response_owns_turn =
                     self.reboot_pending || self.physical_console_response_pending();
-                if !response_owns_turn && !self.pump_one_cyw43_bootstrap_hdmi_milestone() {
+                if !response_owns_turn
+                    && !crate::hal::poll_early_hdmi_boot_progress_after_cutover()
+                    && !self.pump_one_cyw43_bootstrap_hdmi_milestone()
+                {
                     if let Some(runtime) = self.local_seat.as_mut() {
                         if runtime.linked_hdmi_pending_work() {
                             if runtime.pump_linked_hdmi_once() {
@@ -15477,7 +15480,8 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_operator_display_pending(&self) -> bool {
-        !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
+        crate::hal::early_hdmi_boot_progress_due_after_cutover()
+            || !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
             || self
                 .pending_cyw43_bootstrap_hdmi_progress_milestone
                 .is_some()
@@ -15726,7 +15730,9 @@ where
             .as_ref()
             .is_some_and(|runtime| runtime.linked_hdmi_pending_work());
         let operator_turn = cyw43_bootstrap_operator_turn(
-            self.cyw43_bootstrap_hdmi_pending || local_seat_hdmi_pending,
+            self.cyw43_bootstrap_hdmi_pending
+                || local_seat_hdmi_pending
+                || crate::hal::early_hdmi_boot_progress_due_after_cutover(),
             self.cyw43_bootstrap_last_operator_turn_was_display,
             self.cyw43_bootstrap_local_seat_usb_service_due(),
             self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat,
@@ -15737,7 +15743,9 @@ where
         match operator_turn {
             Cyw43BootstrapOperatorTurn::Display => {
                 self.cyw43_bootstrap_last_operator_turn_was_display = true;
-                let _ = self.pump_one_cyw43_bootstrap_hdmi_milestone();
+                if !crate::hal::poll_early_hdmi_boot_progress_after_cutover() {
+                    let _ = self.pump_one_cyw43_bootstrap_hdmi_milestone();
+                }
                 self.poll_runtime(false, false, false);
                 self.cyw43_bootstrap_operator_turn_active = false;
                 return;
@@ -17844,10 +17852,11 @@ where
         if crate::serial::serial_root_uart_released_for_linked_runtime() {
             self.serial_root_uart_released_for_linked_runtime = true;
         }
-        if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-            || crate::serial::serial_linked_runtime_transport_active()
-        {
+        if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
             crate::hal::finish_early_hdmi_boot_progress();
+            return SerialLinkedRuntimeCutoverTurn::Complete;
+        }
+        if crate::serial::serial_linked_runtime_transport_active() {
             return SerialLinkedRuntimeCutoverTurn::Complete;
         }
 
@@ -17946,7 +17955,6 @@ where
                         .serial
                         .use_driver_task_client_after_attach_without_root_flush();
                 if cutover_ready {
-                    crate::hal::finish_early_hdmi_boot_progress();
                     let _ = self.try_emit_serial_line_with_kind(
                         "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
                         PendingConsoleOutputKind::Line,

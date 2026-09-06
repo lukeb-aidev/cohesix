@@ -12,6 +12,8 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(feature = "kernel")]
+use core::sync::atomic::AtomicBool;
 use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
 use core::{
@@ -23,6 +25,8 @@ use core::{
 // the steady local-seat retained frame owns terminal takeover and later redraws.
 #[cfg(feature = "kernel")]
 static EARLY_HDMI_PROGRESS_LAST_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "kernel")]
+static EARLY_HDMI_PROGRESS_RETAINED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "kernel")]
 fn early_hdmi_progress_due(last_us: u64, now_us: u64) -> bool {
@@ -100,6 +104,79 @@ pub(crate) fn poll_early_hdmi_boot_progress() -> bool {
 #[cfg(feature = "kernel")]
 pub(crate) fn finish_early_hdmi_boot_progress() {
     EARLY_HDMI_PROGRESS_LAST_US.store(0, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn early_hdmi_retained_progress_due(last_us: u64, retained: bool, now_us: u64) -> bool {
+    retained || early_hdmi_progress_due(last_us, now_us)
+}
+
+/// Keep startup feedback runnable after UART handoff until the ordinary frame
+/// owns takeover. A pending empty command must retire even if new polls stop.
+#[cfg(feature = "kernel")]
+pub(crate) fn early_hdmi_boot_progress_due_after_cutover() -> bool {
+    driver_task::physical_pi_driver_task_only_owner_state_active()
+        && crate::serial::serial_linked_runtime_transport_active()
+        && crate::kernel::pi4_root_boot_elapsed_us().is_some_and(|now| {
+            early_hdmi_retained_progress_due(
+                EARLY_HDMI_PROGRESS_LAST_US.load(Ordering::Acquire),
+                EARLY_HDMI_PROGRESS_RETAINED.load(Ordering::Acquire),
+                now,
+            )
+        })
+}
+
+/// Spend one dedicated Display turn on the same immutable empty command.
+/// Post-cutover work uses the ordinary retained transport, never a bootstrap
+/// Call/Reply. The next serial/USB rotation runs before another service slice.
+#[cfg(feature = "kernel")]
+pub(crate) fn poll_early_hdmi_boot_progress_after_cutover() -> bool {
+    if !early_hdmi_boot_progress_due_after_cutover() {
+        return false;
+    }
+    let retained = EARLY_HDMI_PROGRESS_RETAINED.load(Ordering::Acquire);
+    if !retained && driver_task::driver_task_ring_command_active(HDMI_TEXT_DRIVER_TASK_CONTRACT) {
+        // An ordinary frame already owns this ring and terminal takeover.
+        finish_early_hdmi_boot_progress();
+        return false;
+    }
+    let command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        driver_task::DriverTaskHotPath::HdmiText,
+        driver_task::DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        driver_task::DriverFrameDescriptor {
+            offset: driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: 0,
+            flags: 0,
+        },
+    );
+    match driver_task::run_driver_task_ring_service_retained_service_turn(
+        HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        command,
+    ) {
+        driver_task::DriverTaskRetainedServiceTurn::Pending => {
+            EARLY_HDMI_PROGRESS_RETAINED.store(true, Ordering::Release);
+        }
+        driver_task::DriverTaskRetainedServiceTurn::Complete(completion) => {
+            EARLY_HDMI_PROGRESS_RETAINED.store(false, Ordering::Release);
+            if completion.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result != 0
+                && EARLY_HDMI_PROGRESS_LAST_US.load(Ordering::Acquire) != 0
+            {
+                EARLY_HDMI_PROGRESS_LAST_US.store(
+                    crate::kernel::pi4_root_boot_elapsed_us().unwrap_or(0),
+                    Ordering::Release,
+                );
+            } else {
+                finish_early_hdmi_boot_progress();
+            }
+        }
+        driver_task::DriverTaskRetainedServiceTurn::Failed => {
+            EARLY_HDMI_PROGRESS_RETAINED.store(false, Ordering::Release);
+            finish_early_hdmi_boot_progress();
+        }
+    }
+    true
 }
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
@@ -7168,6 +7245,27 @@ mod tests {
         assert!(super::early_hdmi_progress_due(1, 2_000_001));
         assert!(!super::early_hdmi_progress_due(2_000_001, 2_000_002));
         assert!(super::early_hdmi_progress_due(2_000_001, 4_000_001));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn early_hdmi_retained_counter_runs_through_ten_seconds_and_retires() {
+        let mut last = 1;
+        for seconds in [2, 4, 6, 8, 10] {
+            let now = 1 + seconds * 1_000_000;
+            assert!(!super::early_hdmi_retained_progress_due(
+                last,
+                false,
+                now - 1
+            ));
+            assert!(super::early_hdmi_retained_progress_due(last, false, now));
+            last = now;
+        }
+        assert!(!super::early_hdmi_retained_progress_due(0, false, u64::MAX));
+        assert!(
+            super::early_hdmi_retained_progress_due(0, true, 1),
+            "terminal takeover cannot discard an already retained empty command"
+        );
     }
 
     use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};

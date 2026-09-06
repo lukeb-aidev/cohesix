@@ -1609,6 +1609,8 @@ pub const DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE: u16 = 1 << 14;
 /// notification when that notification is TCB-bound, or `NBSend` on the
 /// existing command endpoint when boot intentionally left it unbound. Neither
 /// route installs a reply cap. Completion still travels through the shared ring.
+/// An unbound retained USB/HDMI request may reconcile a missed endpoint hint
+/// only at the guarded previous-idle boundary described below.
 pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
 
 /// Kernel transport selected for one published driver-ring command.
@@ -1619,6 +1621,8 @@ pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_W
 /// protected by the early-bind guard use one nonblocking endpoint rendezvous.
 /// Any later explicit DROW wait uses the notification. Classic kernels retain
 /// the established nonblocking endpoint transport.
+/// Physical Pi previous-idle reconciliation preserves the same command and
+/// endpoint when the initial unbound rendezvous did not admit that command.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DriverTaskRingTransport {
@@ -3205,6 +3209,25 @@ fn driver_task_ring_read_one_way_wait_receipt(
     ring_root_ptr: usize,
 ) -> Option<DriverRuntimeOneWayWaitReceipt> {
     driver_task_ring_read_one_way_wait_record(ring_root_ptr, false)
+}
+
+/// Absence must be an observed zero commit, not a failed receipt validation.
+/// A malformed, torn or unreadable nonzero record excludes initial admission
+/// reconciliation just as a valid DROW/DROA does.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_one_way_wait_commit_absent(ring_root_ptr: usize) -> bool {
+    let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
+        return false;
+    };
+    let offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET)
+        + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice);
+    driver_task_ring_invalidate_root_range(ring_root_ptr + offset, core::mem::size_of::<u32>());
+    if ring.read_u32(offset) != Some(0) {
+        return false;
+    }
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_root_range(ring_root_ptr + offset, core::mem::size_of::<u32>());
+    ring.read_u32(offset) == Some(0)
 }
 
 #[cfg(feature = "kernel")]
@@ -15979,6 +16002,102 @@ enum DriverTaskMcsOneWayInitialWake {
     EndpointNonBlocking,
 }
 
+/// Only an unchanged previous idle frontier can justify reconciling a missed
+/// unbound endpoint rendezvous. This observation never admits device work; the
+/// immutable command and child intake remain its sole authority.
+#[cfg(feature = "kernel")]
+fn driver_task_unbound_previous_idle(
+    contract: DriverTaskContract,
+    request: u32,
+    progress: DriverTaskRingProgressRecord,
+) -> bool {
+    let task_key = if contract == HDMI_TEXT_DRIVER_TASK_CONTRACT {
+        DRIVER_TASK_KEY_HDMI_TEXT as u32
+    } else if contract == USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT {
+        DRIVER_TASK_KEY_USB_LOCAL_SEAT as u32
+    } else {
+        return false;
+    };
+    request != 0
+        && progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && progress.phase == DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY
+        && progress.aux0 == task_key
+        && progress.sequence.checked_add(1) == Some(request)
+}
+
+/// Reconcile one lost initial endpoint hint at the existing generated-period
+/// boundary. NBSend has no delivery acknowledgement: Issued alone cannot prove
+/// admission when an unbound child was between its final poll and Recv.
+///
+/// Only the same retained USB/HDMI command with its previous idle child record
+/// may be prompted again. A matching child phase, DROW/DROA, terminal, bound
+/// notification, changed capability generation or consumed slice stops this
+/// path. Each invocation emits at most one nonblocking hint, creates no Reply
+/// or physical retry, and returns to the ordinary outer operator rotation.
+#[cfg(feature = "kernel")]
+fn reconcile_driver_task_unbound_idle_with<I, P, E>(
+    context: DriverTaskMcsOneWayPrompt<'_>,
+    mut previous_idle: I,
+    admit_period: P,
+    send_endpoint: E,
+) -> bool
+where
+    I: FnMut() -> bool,
+    P: FnOnce() -> bool,
+    E: FnOnce(usize),
+{
+    let DriverTaskMcsOneWayPrompt {
+        slot,
+        notification_guard,
+        contract,
+        command,
+        request,
+        fingerprint,
+        ring_root_ptr,
+        mode,
+    } = context;
+    let identity_current = || {
+        mode == DriverTaskRingCommandMode::RetainedTurn
+            && (contract == HDMI_TEXT_DRIVER_TASK_CONTRACT
+                || contract == USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT)
+            && !notification_guard.notification_tcb_bound
+            && driver_task_ring_transport(true, command.flags)
+                == DriverTaskRingTransport::McsNotificationPrompt
+            && command.flags
+                & (DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE
+                    | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION)
+                == 0
+            && request != 0
+            && fingerprint != 0
+            && command.sequence as usize == request
+            && ring_root_ptr != 0
+            && slot.ring_root_ptr.load(Ordering::Acquire) == ring_root_ptr
+            && slot.active.load(Ordering::Acquire) != 0
+            && slot.request_seq.load(Ordering::Acquire) == request
+            && slot.active_command_fingerprint.load(Ordering::Acquire) == fingerprint
+            && slot.runtime_identity_token.load(Ordering::Acquire) != 0
+            && slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire)
+                == notification_guard.cap_generation
+            && slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire) == 0
+            && notification_guard.publication_still_live()
+            && driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
+            && slot.retained_priority_lease_phase.load(Ordering::Acquire)
+                == DriverTaskRetainedLeasePhase::Issued.as_usize()
+            && driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+    };
+    if !identity_current() || !previous_idle() || !admit_period() {
+        return false;
+    }
+    // The period check may inspect another shared record. Revalidate the
+    // complete retained identity and child frontier immediately before send.
+    if !identity_current() || !previous_idle() {
+        return false;
+    }
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    send_endpoint(notification_guard.endpoint);
+    true
+}
+
 #[cfg(feature = "kernel")]
 const fn driver_task_mcs_one_way_initial_wake(
     notification_tcb_bound: bool,
@@ -24700,6 +24819,48 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                         request,
                     );
                     if completion.sequence != request as u32 {
+                        if continuation == DriverTaskMcsOneWayContinuationResult::NotReady
+                            && physical_pi_driver_task_only_owner_state_active()
+                        {
+                            let _ = reconcile_driver_task_unbound_idle_with(
+                                DriverTaskMcsOneWayPrompt {
+                                    slot,
+                                    notification_guard,
+                                    contract,
+                                    command,
+                                    request,
+                                    fingerprint: command_fingerprint,
+                                    ring_root_ptr,
+                                    mode,
+                                },
+                                || {
+                                    driver_task_unbound_previous_idle(
+                                        contract,
+                                        request as u32,
+                                        driver_task_ring_read_progress_record(ring_root_ptr),
+                                    ) && driver_task_ring_one_way_wait_commit_absent(ring_root_ptr)
+                                        && read_driver_task_ring_completion(
+                                            &mut cache_counter_batch,
+                                            ring_root_ptr,
+                                            completion_ptr,
+                                            request,
+                                        )
+                                        .sequence
+                                            != request as u32
+                                },
+                                || admit_driver_task_retained_foreground_wake(slot, contract),
+                                |endpoint| {
+                                    crate::sel4::set_message_register(
+                                        0,
+                                        request as sel4_sys::seL4_Word,
+                                    );
+                                    crate::sel4::send_nb_unchecked(
+                                        endpoint as sel4_sys::seL4_CPtr,
+                                        sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                                    );
+                                },
+                            );
+                        }
                         // No exact parked receipt or terminal is visible yet.
                         // This is an ordinary asynchronous causal frontier,
                         // not a timeout; finish the root turn so the child can
@@ -37382,6 +37543,179 @@ mod tests {
             DriverTaskMcsOneWayPromptResult::AlreadySignalled,
         );
         assert_eq!(signals.get(), 1, "issued frame cannot be re-signalled");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn unbound_rendezvous_requires_previous_idle_operator_child() {
+        for (contract, key) in [
+            (HDMI_TEXT_DRIVER_TASK_CONTRACT, DRIVER_TASK_KEY_HDMI_TEXT),
+            (
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                DRIVER_TASK_KEY_USB_LOCAL_SEAT,
+            ),
+        ] {
+            let idle = DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 59,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+                aux0: key as u32,
+            };
+            assert!(driver_task_unbound_previous_idle(contract, 60, idle));
+            for rejected in [
+                DriverTaskRingProgressRecord { magic: 0, ..idle },
+                DriverTaskRingProgressRecord {
+                    sequence: 58,
+                    ..idle
+                },
+                DriverTaskRingProgressRecord {
+                    sequence: 60,
+                    ..idle
+                },
+                DriverTaskRingProgressRecord { phase: 0, ..idle },
+                DriverTaskRingProgressRecord {
+                    aux0: u32::MAX,
+                    ..idle
+                },
+            ] {
+                assert!(!driver_task_unbound_previous_idle(contract, 60, rejected));
+            }
+            assert!(!driver_task_unbound_previous_idle(contract, 0, idle));
+            assert!(!driver_task_unbound_previous_idle(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                60,
+                idle,
+            ));
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn unbound_rendezvous_rejects_nonzero_unvalidated_wait_commit() {
+        let mut page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let root = page.0.as_mut_ptr() as usize;
+        assert!(driver_task_ring_one_way_wait_commit_absent(root));
+        let offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET)
+            + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice);
+        page.0[offset / core::mem::size_of::<u32>()] = 1;
+        assert!(driver_task_ring_read_one_way_wait_receipt(root).is_none());
+        assert!(driver_task_ring_read_one_way_wait_record(root, true).is_none());
+        assert!(!driver_task_ring_one_way_wait_commit_absent(root));
+        assert!(!driver_task_ring_one_way_wait_commit_absent(0));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn unbound_rendezvous_reconciles_only_before_exact_child_admission() {
+        use core::cell::Cell;
+
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, b"row\n", 60);
+        commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, b"row\n", command);
+        slot.runtime_notification_tcb_bound
+            .store(0, Ordering::Release);
+        slot.runtime_identity_token
+            .store(0x7345_0003, Ordering::Release);
+        let context = || DriverTaskMcsOneWayPrompt {
+            slot: &slot,
+            notification_guard: acquire_driver_task_mcs_one_way_notification_guard(&slot, 0x77)
+                .expect("live operator notification generation"),
+            contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            command,
+            request: command.sequence as usize,
+            fingerprint,
+            ring_root_ptr,
+            mode: DriverTaskRingCommandMode::RetainedTurn,
+        };
+        let sends = Cell::new(0);
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                context(),
+                || {},
+                |_| panic!("unbound endpoint"),
+                |_| sends.set(sends.get() + 1),
+            ),
+            DriverTaskMcsOneWayPromptResult::Signalled
+        );
+        assert!(!reconcile_driver_task_unbound_idle_with(
+            context(),
+            || true,
+            || false,
+            |_| sends.set(sends.get() + 1),
+        ));
+        assert_eq!(
+            sends.get(),
+            1,
+            "closed generated period retains the command"
+        );
+        assert!(reconcile_driver_task_unbound_idle_with(
+            context(),
+            || true,
+            || true,
+            |endpoint| {
+                assert_eq!(endpoint, 0x77);
+                sends.set(sends.get() + 1);
+            },
+        ));
+        assert_eq!(sends.get(), 2);
+        assert!(driver_task_ring_exact_command_is_stable(
+            &slot,
+            ring_root_ptr,
+            command
+        ));
+        assert_eq!(
+            slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire),
+            0
+        );
+
+        let reads = Cell::new(0);
+        assert!(
+            !reconcile_driver_task_unbound_idle_with(
+                context(),
+                || {
+                    reads.set(reads.get() + 1);
+                    reads.get() == 1
+                },
+                || true,
+                |_| sends.set(sends.get() + 1),
+            ),
+            "child admission racing the period check suppresses the hint"
+        );
+        slot.mcs_one_way_last_prompted_slice
+            .store(1, Ordering::Release);
+        assert!(!reconcile_driver_task_unbound_idle_with(
+            context(),
+            || true,
+            || panic!("DROW already admitted"),
+            |_| sends.set(sends.get() + 1),
+        ));
+        slot.mcs_one_way_last_prompted_slice
+            .store(0, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint ^ 1, Ordering::Release);
+        assert!(!reconcile_driver_task_unbound_idle_with(
+            context(),
+            || true,
+            || panic!("changed identity must not reach period admission"),
+            |_| sends.set(sends.get() + 1),
+        ));
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.runtime_notification_tcb_bound
+            .store(1, Ordering::Release);
+        assert!(!reconcile_driver_task_unbound_idle_with(
+            context(),
+            || true,
+            || panic!("bound notification remains one-shot"),
+            |_| sends.set(sends.get() + 1),
+        ));
+        assert_eq!(sends.get(), 2);
     }
 
     #[cfg(feature = "kernel")]
