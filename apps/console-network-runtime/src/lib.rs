@@ -275,11 +275,13 @@ pub struct ChildTurnScheduler {
 /// follows the packet commit and is the bundle's publication barrier.
 #[must_use]
 pub const fn copied_command_egress_pair_allowed(
+    pi_profile: bool,
     direct_transport: bool,
     kind: ExchangeKind,
     egress_pending: bool,
 ) -> bool {
-    !direct_transport
+    pi_profile
+        && !direct_transport
         && matches!(kind, ExchangeKind::Command | ExchangeKind::CommandBatch)
         && egress_pending
 }
@@ -2479,9 +2481,14 @@ mod tests {
     #[test]
     fn copied_command_pair_excludes_lifecycle_and_direct_transports() {
         for kind in [ExchangeKind::Command, ExchangeKind::CommandBatch] {
-            assert!(copied_command_egress_pair_allowed(false, kind, true));
-            assert!(!copied_command_egress_pair_allowed(true, kind, true));
-            assert!(!copied_command_egress_pair_allowed(false, kind, false));
+            assert!(!copied_command_egress_pair_allowed(
+                false, false, kind, true
+            ));
+            assert!(copied_command_egress_pair_allowed(true, false, kind, true));
+            assert!(!copied_command_egress_pair_allowed(true, true, kind, true));
+            assert!(!copied_command_egress_pair_allowed(
+                true, false, kind, false
+            ));
         }
         for kind in [
             ExchangeKind::Ready,
@@ -2491,7 +2498,7 @@ mod tests {
             ExchangeKind::OutputDrained,
             ExchangeKind::ShutdownComplete,
         ] {
-            assert!(!copied_command_egress_pair_allowed(false, kind, true));
+            assert!(!copied_command_egress_pair_allowed(true, false, kind, true));
         }
     }
 

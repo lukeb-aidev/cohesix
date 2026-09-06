@@ -265,6 +265,7 @@ def test_copied_command_pair_commits_both_pages_before_its_only_wake() -> None:
         < publication.index("publish_exchange(")
         < publication.index("signal_durable_child_publication(")
     )
+    assert 'let pi_publication = cfg!(feature = "direct-genet")' in publication
     assert publication.count("publish_packet(") == 1
     assert publication.count("publish_exchange(") == 1
     assert publication.count("signal_durable_child_publication(") == 1

@@ -581,13 +581,14 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 );
             }
             ChildTurnUnit::PublishServiceEvent => {
-                let publication = if descriptor.direct_virtio() {
-                    service.pop_publication_event(descriptor.max_commands_per_wake)
-                } else {
+                let pi_publication = cfg!(feature = "direct-genet") && !descriptor.direct_virtio();
+                let publication = if pi_publication {
                     service.pop_publication_event_at(
                         descriptor.max_commands_per_wake,
                         now_ms(descriptor.timer_clock_hz),
                     )
+                } else {
+                    service.pop_publication_event(descriptor.max_commands_per_wake)
                 };
                 let runtime_event = match publication {
                     Ok(Some(event)) => event,
@@ -595,6 +596,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 };
                 let runtime_event_kind = runtime_event.kind();
                 if copied_command_egress_pair_allowed(
+                    pi_publication,
                     direct_transport,
                     runtime_event_kind,
                     service.egress_pending(),
@@ -622,9 +624,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     runtime_event_kind,
                     event_sequence,
                     runtime_event.connection_id(),
-                    if !descriptor.direct_virtio()
-                        && runtime_event_kind == ExchangeKind::CommandBatch
-                    {
+                    if pi_publication && runtime_event_kind == ExchangeKind::CommandBatch {
                         now_ms(descriptor.timer_clock_hz)
                     } else {
                         runtime_event.now_ms()
