@@ -78,10 +78,9 @@ flowchart TB
 ## Profiles and Toolchain
 
 The Cargo `release` profile keeps its existing artifact paths, fat LTO and
-single codegen unit. Its `root-task`, `console-network-runtime` and `smoltcp`
-packages select speed optimization level 3. The larger `pi4-driver-runtime`
-and other packages retain the workspace's maximum-size `z` policy to fit
-their declared image bounds. These choices seek to
+single codegen unit. Its `root-task` package selects speed optimization
+level 3. Other packages retain the workspace's maximum-size `z` policy to
+fit their declared image bounds. This choice seeks to
 reduce execution cost inside the fixed MCS reservations and apply to QEMU
 and Pi. The selected manifest's ELF/page admission and the rootfs size bound
 remain mandatory. Compiler optimization does not qualify target performance.
