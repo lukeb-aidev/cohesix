@@ -343,8 +343,8 @@ def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
     assert 'bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}' in source
 
 
-def test_pi4_image_build_clears_uboot_video_before_kernel_handoff() -> None:
-    """Cohesix owns a clean display while boot diagnostics remain on serial."""
+def test_pi4_image_build_retains_boot_video_until_isolated_hdmi_takeover() -> None:
+    """Boot handoff diagnostics remain visible until the isolated HDMI owner draws."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     boot_template = source[
@@ -364,9 +364,13 @@ def test_pi4_image_build_clears_uboot_video_before_kernel_handoff() -> None:
     )
     bootm = "bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}"
     assert diagnostic in handoff
-    assert "; cls; setenv stdout serial; setenv stderr serial; " in handoff
-    assert handoff.index(diagnostic) < handoff.index("; cls;")
-    assert handoff.index("; cls;") < handoff.index(bootm)
+    assert "; cls;" not in handoff
+    assert "; setenv stdout serial;" not in handoff
+    assert "; setenv stderr serial;" not in handoff
+    assert (
+        f"{diagnostic}; setenv stdout serial,vidconsole; "
+        f"setenv stderr serial,vidconsole; {bootm}"
+    ) in handoff
     assert (
         f"{bootm}; setenv stdout serial,vidconsole; "
         'setenv stderr serial,vidconsole; echo "[cohesix] returned from image"'

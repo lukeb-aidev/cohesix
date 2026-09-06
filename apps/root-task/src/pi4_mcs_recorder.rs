@@ -954,22 +954,12 @@ pub(crate) fn record_command_dispatch(
     }
 }
 
-pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 22] {
+pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 20] {
     let timing = TIMING.lock().lines();
     let yield_lines = YIELD.lock().lines();
     let budget_guard = BUDGET_GUARD.lock().lines();
     let dispatch = COMMAND_DISPATCH.lock().line("mcs_command_dispatch");
     let observe_dispatch = OBSERVE_DISPATCH.lock().line("mcs_observe_dispatch");
-    let mut progress = HeaplessString::new();
-    let _ = write!(
-        progress,
-        "netstats: mcs_quantum_progress schema=v1 command=0x1 child=0x2 stage=0x4 drain=0x8 ingress=0x10 token=0x20 queue=0x40",
-    );
-    let mut pending = HeaplessString::new();
-    let _ = write!(
-        pending,
-        "netstats: mcs_pending schema=v1 command_q=0x1 root_output=0x2 child_control=0x4 child_egress=0x8 child_event=0x10 continuation=0x20 wifi_driver=0x40 passive=0x80 operator=0x100 recovery=0x200",
-    );
     [
         timing[0].clone(),
         timing[1].clone(),
@@ -982,8 +972,6 @@ pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 22] {
         timing[8].clone(),
         dispatch,
         observe_dispatch,
-        progress,
-        pending,
         yield_lines[0].clone(),
         yield_lines[1].clone(),
         yield_lines[2].clone(),

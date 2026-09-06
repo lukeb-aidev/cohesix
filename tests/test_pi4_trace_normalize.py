@@ -2320,6 +2320,24 @@ def test_gate_summary_tracks_netstatus_tcp_ready_proof() -> None:
     assert record["NETTEST_PROOF"] == "no"
 
 
+def test_paired_registry_receipt_preserves_missing_evidence_and_indices() -> None:
+    """Compact registry evidence remains attributable without inventing a task."""
+    line = (
+        "[smp:registry/v1] base=0 count=2 registration=present,missing "
+        "generation0=1/2/3 generation1=none terminal=yes,unknown"
+    )
+    event = normalizer.parse_line(line, 1)
+    assert event is not None
+    assert event.domain == "driver"
+    assert event.raw == line
+    assert event.fields["base"] == "0"
+    assert event.fields["count"] == "2"
+    assert event.fields["registration"] == "present,missing"
+    assert event.fields["generation0"] == "1/2/3"
+    assert event.fields["generation1"] == "none"
+    assert event.fields["terminal"] == "yes,unknown"
+
+
 def test_owner_cpu_receipt_stays_passive_and_preserves_invalidity() -> None:
     """Kernel CPU receipts survive normalization without inventing acceptance."""
     line = (

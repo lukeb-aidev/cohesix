@@ -90,7 +90,7 @@ profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
 runbooks. `smp mcs` labels compiler truth `source=generated`, BootInfo
 `source=kernel`, and copied live state `source=runtime`; unavailable is not a
-missing registration. On Pi release profiles it also emits the 34-row
+missing registration. On Pi release profiles it also emits the 25-row
 aggregate-only `mcs_quantum*`, `mcs_yield*`, command-dispatch, pending-state,
 budget-guard and idle-fence batch documented below. These rows are not emitted by
 `netstats`. The command never calls `seL4_SchedContext_Consumed`, which would
@@ -303,7 +303,7 @@ adapter. Host tests and QEMU preserve the caller-time fallback, and the row
 grammar and schema remain unchanged.
 
 The detailed Pi composer/scheduler snapshot belongs to explicit `smp mcs`, not
-`netstats`. The Pi release batch contains exactly 22 additive rows:
+`netstats`. The Pi release batch contains exactly 20 measured rows:
 
 ```text
 netstats: mcs_quantum schema=v1 hz=<u64> samples=<u64> material=<u64> periods=<u64> invalid=<u64> invalid_period=<u64>
@@ -317,8 +317,6 @@ netstats: mcs_quantum_last schema=v1 lane=<wifi|genet> generation=<u64> conn=<u6
 netstats: mcs_quantum_exit schema=v1 yields=<u64> retains=<u64> fences=<u64> faults=<u64>
 netstats: mcs_command_dispatch schema=v1 samples=<u64> invalid=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
 netstats: mcs_observe_dispatch schema=v1 samples=<u64> invalid=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
-netstats: mcs_quantum_progress schema=v1 command=0x1 child=0x2 stage=0x4 drain=0x8 ingress=0x10 token=0x20 queue=0x40
-netstats: mcs_pending schema=v1 command_q=0x1 root_output=0x2 child_control=0x4 child_egress=0x8 child_event=0x10 continuation=0x20 wifi_driver=0x40 passive=0x80 operator=0x100 recovery=0x200
 netstats: mcs_yield schema=v1 hz=<u64> samples=<u64> invalid=<u64> pending=<u64> wifi=<u64> genet=<u64>
 netstats: mcs_yield_timing schema=v1 total_us=<u64> avg_us=<u64> max_us=<u64>
 netstats: mcs_yield_hist schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
@@ -330,7 +328,15 @@ netstats: mcs_budget_pending schema=v1 activation=<u64> attached=<u64> operator=
 netstats: mcs_budget_reason schema=v1 cap=<u64> clock=<u64> reserve=<u64> policy=<u64> mask=0x<hex>
 ```
 
-Five additive rows follow the existing 22-row batch: `mcs_idle schema=v1`
+Progress bits are command `0x1`, child `0x2`, stage `0x4`, drain `0x8`,
+ingress `0x10`, token `0x20`, queue `0x40`. Pending bits are command queue
+`0x1`, root output `0x2`, child control `0x4`, child egress `0x8`, child event
+`0x10`, continuation `0x20`, WiFi driver `0x40`, passive admission `0x80`,
+operator `0x100`, recovery `0x200`. These fixed legends are documented here;
+the former `mcs_quantum_progress` and `mcs_pending` legend rows are no longer
+emitted. Every measured counter remains in the snapshot.
+
+Five additive rows follow the 20-row batch: `mcs_idle schema=v1`
 contains `before`, `after`, `timer_reject`, `clear=<before>/<after>`,
 `last_cut=<0|1|2>` (before enable, after enable, timer rejected), and `mask`.
 Four `mcs_idle_fences schema=v1 base=<0|4|8|12> counts=<u64>,<u64>,<u64>,<u64>`
@@ -342,6 +348,27 @@ retained output, network work, ready child publication, and timer-enable
 rejection. These sample the existing predicates without changing them. A clear
 after-enable sample permits the existing wait but does not prove the syscall
 blocked, and timer rejection alone does not identify an inner HAL failure.
+
+Pi live registrations use bounded `[smp:registry/v1]` rows instead of one
+`[smp:mcs/v1] source=runtime task=...` row per task. `base` is the zero-based
+index into this snapshot's ordered generated non-Worker task rows; `count` is
+one or two. Comma-separated `registration` and `terminal` values have exactly
+that count, and `generation0`/`generation1` retain the corresponding decimal
+lease/supervisor/cap generations. Missing registration means `generationN=none`
+and `terminal=unknown`, never invented zero evidence. For example:
+
+```text
+[smp:registry/v1] base=0 count=2 registration=present,missing generation0=1/1/1 generation1=none terminal=yes,unknown
+```
+
+The selected four-core Pi profile's complete WiFi body is 64 lines, including
+all eight paired registration rows, four owner CPU rows and the end marker.
+It fits the existing 64-line synchronous TCP capture and 69-line physical
+body; the protocol terminal uses its existing separate reserve. Registry-busy
+and unavailable accounting states remain explicit. QEMU retains its existing
+per-task registration format. This is a Pi diagnostic text format change;
+consumers must use the versioned registry record and the same snapshot's task
+order rather than assuming a runtime row follows each generated task row.
 
 Pi MCS `smp mcs` also appends `[smp:consumed/v1]` kernel CPU evidence for the
 latest observed TCP lifecycle. The header reports decimal `generation`, `conn`,

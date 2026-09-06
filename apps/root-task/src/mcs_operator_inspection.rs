@@ -17,6 +17,69 @@ pub(crate) const CAPS_GENERATED_RECORDS: usize = 6;
 
 pub(crate) type OperatorLine = String<MCS_OPERATOR_DISPLAY_LINE_CAPACITY>;
 
+/// Copied registry evidence; absence never supplies invented generation values.
+#[cfg(any(feature = "release-pi4", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct McsRegistrationState {
+    pub(crate) generation: [u64; 3],
+    pub(crate) terminal: bool,
+}
+
+/// Pair adjacent non-Worker registrations without increasing console capacity.
+/// `base` indexes the ordered generated non-Worker task rows in this snapshot.
+#[cfg(any(feature = "release-pi4", test))]
+pub(crate) fn mcs_registration_pair_line(
+    base: u16,
+    registrations: &[Option<McsRegistrationState>],
+) -> Result<String<256>, fmt::Error> {
+    if registrations.is_empty()
+        || registrations.len() > 2
+        || base.checked_add((registrations.len() - 1) as u16).is_none()
+    {
+        return Err(fmt::Error);
+    }
+    let mut line = String::new();
+    write!(
+        line,
+        "[smp:registry/v1] base={base} count={} registration=",
+        registrations.len()
+    )?;
+    for (index, registration) in registrations.iter().enumerate() {
+        if index != 0 {
+            line.push(',').map_err(|_| fmt::Error)?;
+        }
+        line.push_str(if registration.is_some() {
+            "present"
+        } else {
+            "missing"
+        })
+        .map_err(|_| fmt::Error)?;
+    }
+    for (index, registration) in registrations.iter().enumerate() {
+        match registration {
+            Some(state) => write!(
+                line,
+                " generation{index}={}/{}/{}",
+                state.generation[0], state.generation[1], state.generation[2]
+            )?,
+            None => write!(line, " generation{index}=none")?,
+        }
+    }
+    line.push_str(" terminal=").map_err(|_| fmt::Error)?;
+    for (index, registration) in registrations.iter().enumerate() {
+        if index != 0 {
+            line.push(',').map_err(|_| fmt::Error)?;
+        }
+        line.push_str(
+            registration
+                .as_ref()
+                .map_or("unknown", |state| yes_no(state.terminal)),
+        )
+        .map_err(|_| fmt::Error)?;
+    }
+    Ok(line)
+}
+
 /// Copied live authority state rendered by `caps mcs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CapsRuntimeState {
@@ -172,6 +235,29 @@ pub(crate) fn caps_generated_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paired_registry_rows_preserve_maximum_width_generations() {
+        let registration = Some(McsRegistrationState {
+            generation: [u64::MAX; 3],
+            terminal: false,
+        });
+        let line = mcs_registration_pair_line(65534, &[registration; 2]).unwrap();
+        assert_eq!(line.as_str(), "[smp:registry/v1] base=65534 count=2 registration=present,present generation0=18446744073709551615/18446744073709551615/18446744073709551615 generation1=18446744073709551615/18446744073709551615/18446744073709551615 terminal=no,no");
+    }
+
+    #[test]
+    fn paired_registry_rows_distinguish_missing_and_zero_generations() {
+        let state = Some(McsRegistrationState {
+            generation: [0; 3],
+            terminal: true,
+        });
+        assert_eq!(mcs_registration_pair_line(0, &[None, state]).unwrap().as_str(), "[smp:registry/v1] base=0 count=2 registration=missing,present generation0=none generation1=0/0/0 terminal=unknown,yes");
+        assert_eq!(mcs_registration_pair_line(65535, &[None]).unwrap().as_str(), "[smp:registry/v1] base=65535 count=1 registration=missing generation0=none terminal=unknown");
+        assert!(mcs_registration_pair_line(0, &[]).is_err());
+        assert!(mcs_registration_pair_line(0, &[None; 3]).is_err());
+        assert!(mcs_registration_pair_line(65535, &[None; 2]).is_err());
+    }
 
     fn assert_display_safe(lines: &[OperatorLine]) {
         for line in lines {

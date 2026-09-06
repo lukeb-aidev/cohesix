@@ -1492,8 +1492,14 @@ USB keyboard readiness requires isolated-runtime command and first-report
 proof. A USB descriptor does not prove command readiness. `Ready to use`
 requires DHCP bound plus TCP-listener readiness but does not prove the stronger
 end-to-end `tcp_ready` predicate. HDMI may first show
-`Cohesix starting...` plus bounded stage feedback on a frame cleared immediately
-before the kernel handoff; stale U-Boot text under that tile is a failure. The
+`Cohesix starting...` plus bounded stage feedback. The boot script keeps
+serial and vidconsole output enabled through `bootm` and does not clear the
+handoff frame before jumping into seL4. Retained boot output remains visible
+until the isolated HDMI owner draws its bounded startup tile; the first
+ordinary HDMI frame clears and replaces the retained background. A blank
+introduced before the tile or stale boot text in the interactive frame is a
+failure. This preserves existing boot-video output; it does not add a kernel
+framebuffer renderer. The
 isolated HDMI runtime is constructed immediately after Serial and before
 PCIe/USB enumeration, while PCIe still precedes USB. The interactive
 `cohesix>` prompt is released only after the root console, USB command admission,

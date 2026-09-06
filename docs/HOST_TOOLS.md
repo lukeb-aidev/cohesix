@@ -27,6 +27,16 @@ lines as diagnostic text; `valid=false` and unfinished owner intervals must
 not become CPU utilization or performance claims. The field contract is in
 [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
 
+The complete host-tool catalogue (cohsh, coh, hive-gateway, swarmui,
+gpu-bridge-host, cas-tool, host-ticket-agent and host-sidecar-bridge), Python
+SDK/playbooks and raw/REST benchmark scripts retain opaque diagnostic bodies;
+none parses the retired Pi per-task registration rows or static bit legends.
+The Pi normalizer preserves the new `[smp:registry/v1]` records. The compact
+Pi MCS body changes diagnostic text only; framing, authentication, generated
+interfaces, namespaces, quotas, workloads, report schemas and thresholds need
+no change. Boot-video retention affects the generated Pi boot script and its
+handoff check, with no host-tool API change.
+
 ## Generated integration truth
 
 `coh-rtc` compiles
@@ -151,7 +161,7 @@ Pi `netstats` adds six fast-path rows (`cyw43_publication`,
 `cyw43_publication_cut`, `cyw43_productive_window`, `genet_compact`,
 `genet_compose`, and `genet_defer`)
 plus five isolated-seam rows only when that timing snapshot is available. The detailed
-27-row composer/Yield/idle-fence batch is intentionally restricted to explicit `smp mcs`;
+25-row composer/Yield/idle-fence batch is intentionally restricted to explicit `smp mcs`;
 it is not appended to ordinary `netstats`. Existing key/prefix-based consumers
 ignore these unknown additive rows unless they are later taught to consume
 them; no current parser derives readiness, quarantine, throughput, latency, or

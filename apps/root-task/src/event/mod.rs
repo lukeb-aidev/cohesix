@@ -20794,6 +20794,49 @@ where
         self.emit_caps_generated();
     }
 
+    #[cfg(feature = "release-pi4")]
+    fn emit_pi_mcs_registrations(
+        &mut self,
+        mut registration: impl FnMut(
+            u16,
+        )
+            -> Option<crate::mcs_operator_inspection::McsRegistrationState>,
+    ) {
+        let count = crate::generated::temporal_tasks()
+            .iter()
+            .filter(|task| task.kind != crate::generated::TemporalTaskKind::Worker)
+            .count();
+        for base in (0..count).step_by(2) {
+            let pair_count = (count - base).min(2);
+            let Ok(base) = u16::try_from(base) else {
+                self.emit_console_line("[smp:registry/v1] state=unavailable reason=index-range");
+                return;
+            };
+            let mut pair = [registration(base), None];
+            if pair_count == 2 {
+                let Some(next) = base.checked_add(1) else {
+                    self.emit_console_line(
+                        "[smp:registry/v1] state=unavailable reason=index-range",
+                    );
+                    return;
+                };
+                pair[1] = registration(next);
+            }
+            match crate::mcs_operator_inspection::mcs_registration_pair_line(
+                base,
+                &pair[..pair_count],
+            ) {
+                Ok(line) => self.emit_console_line(line.as_str()),
+                Err(_) => {
+                    self.emit_console_line(
+                        "[smp:registry/v1] state=unavailable reason=record-width",
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
     fn emit_smp_mcs(&mut self) {
         let temporal = crate::generated::temporal_authority_config();
         #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
@@ -20842,7 +20885,11 @@ where
             let _ = write!(line, "[smp:mcs/v1] source=generated core={} demand_us={} capacity_us={} reserve_us={} usable_us={}", core.core, demand, core.capacity_us, core.reserve_us, core.capacity_us.saturating_sub(core.reserve_us));
             self.emit_console_line(line.as_str());
         }
-        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        #[cfg(all(
+            feature = "kernel",
+            sel4_config_kernel_mcs,
+            not(feature = "release-pi4")
+        ))]
         let mut task_index = 0_u16;
         for task in temporal
             .tasks
@@ -20852,7 +20899,11 @@ where
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
             let _ = write!(line, "[smp:mcs/v1] source=generated task={} kind={} exec={} core={} sc=0x{:04x} sc_core={} budget_us={} period_us={} deadline_us={} refills={} prio={} mcp={} timeout={} admitted={}", task.id, temporal_kind_label(task.kind), temporal_execution_label(task.execution), task.core, task.scheduling_context_slot, task.sched_control_core, task.budget_us, task.period_us, task.deadline_us, task.max_refills, task.priority, task.mcp, timeout_policy_label(task.timeout_policy), yes_no(task.admitted));
             self.emit_console_line(line.as_str());
-            #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+            #[cfg(all(
+                feature = "kernel",
+                sel4_config_kernel_mcs,
+                not(feature = "release-pi4")
+            ))]
             {
                 if let Some(snapshot) = runtime {
                     let mut live = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
@@ -20870,6 +20921,22 @@ where
                 }
                 task_index = task_index.saturating_add(1);
             }
+        }
+        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs, feature = "release-pi4"))]
+        if let Some(snapshot) = runtime {
+            self.emit_pi_mcs_registrations(|index| {
+                snapshot.registry.registration(index).map(|entry| {
+                    let identity = entry.identity;
+                    crate::mcs_operator_inspection::McsRegistrationState {
+                        generation: [
+                            identity.lease_epoch,
+                            identity.supervisor_generation,
+                            identity.cap_generation,
+                        ],
+                        terminal: entry.terminal,
+                    }
+                })
+            });
         }
         for role in crate::generated::worker_resource_admission_config().executable_roles {
             let Some(task) = temporal
@@ -47512,6 +47579,9 @@ mod tests {
         net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        net.response_batch_capacity = Some(8);
         let mut pump = EventPump::new(
             serial,
             TestTimer::repeated(1, 1),
@@ -47520,15 +47590,24 @@ mod tests {
             &mut audit,
         )
         .with_network(&mut net);
-        // The host has no live target registry. Reserve each mandatory live
-        // registration row in the same physical queue; the real renderer
-        // supplies the selected manifest, counters and final marker below.
-        for _ in crate::generated::temporal_tasks()
+        // A QEMU-generated host fixture previously hid the Pi overflow. This
+        // regression requires the selected Pi manifest's complete registry.
+        let non_workers = crate::generated::temporal_tasks()
             .iter()
             .filter(|task| task.kind != crate::generated::TemporalTaskKind::Worker)
-        {
-            pump.emit_console_line("[smp:mcs/v1] source=runtime registration=present");
-        }
+            .count();
+        assert_eq!(
+            non_workers, 16,
+            "regenerate from the selected Pi manifest before this test"
+        );
+        // Host tests cannot query kernel registrations. Exercise the actual
+        // renderer with maximum-width copied evidence for every selected task.
+        pump.emit_pi_mcs_registrations(|_| {
+            Some(crate::mcs_operator_inspection::McsRegistrationState {
+                generation: [u64::MAX; 3],
+                terminal: true,
+            })
+        });
         // The host has no live session. Reserve the four selected WiFi owner
         // rows; the renderer below supplies the accounting header itself.
         for _ in 0..4 {
@@ -47543,18 +47622,64 @@ mod tests {
             pump.pending_console_output.len()
                 <= CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE
         );
+        // The same body must survive the smaller synchronous TCP capture.
+        let mut stream = PendingStream::new();
+        for row in &pump.pending_console_output {
+            assert!(
+                stream.lines.push(row.text.clone()).is_ok(),
+                "TCP body overflow"
+            );
+        }
+        assert_eq!(stream.lines.len(), 64);
+        assert_eq!(stream.lines.last().unwrap().as_str(), "[smp:mcs/v1] end");
+        assert_eq!(
+            stream
+                .lines
+                .iter()
+                .filter(|row| row.starts_with("[smp:registry/v1]"))
+                .count(),
+            8
+        );
+        assert_eq!(
+            stream
+                .lines
+                .iter()
+                .filter(|row| row.starts_with("[smp:consumed/v1]"))
+                .count(),
+            5
+        );
         assert_eq!(
             pump.pending_console_output
                 .iter()
                 .filter(|row| row.text.starts_with("netstats: mcs_"))
                 .count(),
-            27
+            25
         );
         assert!(!pump
             .pending_console_output
             .iter()
             .any(|row| row.text.starts_with("netstats: mcs_session")));
         pump.pending_console_output.clear();
+        pump.last_input_source = ConsoleInputSource::Net;
+        assert!(pump.begin_sync_response_capture("SMP"));
+        pump.emit_pi_mcs_registrations(|_| {
+            Some(crate::mcs_operator_inspection::McsRegistrationState {
+                generation: [u64::MAX; 3],
+                terminal: true,
+            })
+        });
+        for _ in 0..4 {
+            pump.emit_console_line("[smp:consumed/v1] task=reserved valid=false");
+        }
+        pump.emit_smp_mcs();
+        pump.emit_terminal_console_line("OK SMP mode=mcs");
+        assert!(!pump.finish_sync_response_capture(true, true));
+        let captured = pump.pending_stream.take().unwrap();
+        assert_eq!(captured.mode, PendingStreamMode::SyncSealed);
+        assert!(!captured.sync_capture_faulted);
+        assert_eq!(captured.lines, stream.lines);
+        assert_eq!(captured.terminal_line.as_deref(), Some("OK SMP mode=mcs"));
+        pump.last_input_source = ConsoleInputSource::Serial;
         pump.session = Some(SessionRole::Queen);
         pump.dispatch_command_now(Command::NetStats).unwrap();
         assert_eq!(
@@ -47732,7 +47857,7 @@ mod tests {
                 .find("[smp:mcs/v1] end")
                 .expect("smp mcs transcript must have an end marker");
             let runtime_lines: Vec<_> = rendered.match_indices("netstats: mcs_").collect();
-            assert_eq!(runtime_lines.len(), 27, "{rendered}");
+            assert_eq!(runtime_lines.len(), 25, "{rendered}");
             assert!(
                 runtime_lines
                     .iter()
@@ -47751,8 +47876,6 @@ mod tests {
                 "mcs_quantum_exit",
                 "mcs_command_dispatch",
                 "mcs_observe_dispatch",
-                "mcs_quantum_progress",
-                "mcs_pending",
                 "mcs_yield",
                 "mcs_yield_timing",
                 "mcs_yield_hist",
