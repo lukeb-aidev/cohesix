@@ -10514,6 +10514,20 @@ Changes:
     and report schemas were reviewed: no external format or consumer change.
     Discovery tasks remain `m26e-console-network-service-isolation` and
     `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`.
+  - Exact-772 optimized GENET bootstrap discriminator — `772f4a40b` builds and
+    passes image admission with an inspected 266,688-byte bootstrap/GENET call
+    chain inside the corrected 1-MiB stack. Verified RAM transfers and post-reset
+    CRCs reach exact BUILD and GENET owner-state readiness, but the shell does
+    not appear within 300 seconds; one subsequent serial PING also times out.
+    No TCP workload runs. The earlier stack defect alone cannot explain this
+    repeated boundary; the terminal instruction remains unknown. Retain the
+    failed boot and use four Pi bootstrap-trace-only raw UART receipts around
+    the owner-proof snapshot and fallible network-shell constructor. Preserve
+    optimization, constructor and driver behavior so the next physical boot
+    discriminates this gap. No source/build result claims a performance repair.
+    Full host-tool, Python, `.coh`, raw/REST benchmark and trace-consumer review:
+    additive bootstrap text is retained as diagnostic data, requires no parser
+    or workload change, and cannot create driver or performance acceptance.
   - Exact-8d34 performance evidence and rejected compiler experiment — two
     WiFi and two GENET cohorts completed before edits. WiFi raw64 reaches
     16.563/13.275 requests/s, p95 87.489/127.706 ms; GENET reaches

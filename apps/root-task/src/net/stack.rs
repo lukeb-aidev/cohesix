@@ -2855,8 +2855,16 @@ where
         crate::hal::driver_task::DriverTaskHotPath::GenetNic.as_u32() as usize,
         crate::drivers::driver_task_net::runtime_ring_service,
     );
+    #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+    crate::bootstrap::log::force_uart_line_raw(
+        "[diag net-bootstrap/v1] backend=genet cut=stack-construction.begin",
+    );
     let stack = NetStack::<GenetDriverTaskDevice>::new(hal, config, backend)
         .map_err(convert_console_error::<DriverTaskNetError>)?;
+    #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+    crate::bootstrap::log::force_uart_line_raw(
+        "[diag net-bootstrap/v1] backend=genet cut=stack-construction.ok",
+    );
     check_bootinfo_wrap(mark)?;
     Ok(DefaultNetStack::GenetDriverTask(Box::new(
         GenetNetStack::root(stack, config),

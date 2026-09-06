@@ -13523,7 +13523,15 @@ where
         None,
     );
     emit_net_driver_task_replay_status(config, hot_path, "owner-state", "ready");
+    #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+    crate::bootstrap::log::force_uart_line_raw(
+        "[diag net-bootstrap/v1] backend=genet cut=owner-proof.begin",
+    );
     crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(hot_path);
+    #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+    crate::bootstrap::log::force_uart_line_raw(
+        "[diag net-bootstrap/v1] backend=genet cut=owner-proof.return",
+    );
     Ok(())
 }
 

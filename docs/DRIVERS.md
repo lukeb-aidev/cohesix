@@ -1951,6 +1951,17 @@ and no-reply counters remain zero.
 
 ## 8. Build diagnostics for developers, not incidents
 
+Pi `release-pi4,bootstrap-trace` emits four bounded, unbuffered bootstrap
+receipts with prefix `[diag net-bootstrap/v1] backend=genet`: `cut=owner-proof.begin`
+and `cut=owner-proof.return` surround the post-owner diagnostic snapshot;
+`cut=stack-construction.begin` and `cut=stack-construction.ok` surround root-side
+network-shell construction. The latter appears only after a successful result.
+These receipts identify the first unfinished bootstrap operation when buffered
+logs and the shell are unavailable. They carry no target readiness or acceptance
+credit, run only during GENET bootstrap, and add no steady-state sampling.
+Trace consumers may preserve these lines without interpreting them as driver
+completion, ABI records or performance evidence.
+
 Diagnostics should make the owner state machine understandable without
 embedding a particular failure history in this document.
 

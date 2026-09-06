@@ -16,6 +16,54 @@ const USERLAND_SOURCE: &str = include_str!("../src/userland/mod.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
 #[test]
+fn pi_genet_boot_cuts_distinguish_proof_return_from_stack_success() {
+    // Independent receipt contract: a proof return is not stack admission,
+    // and a fallible constructor must not publish success before its result.
+    for (source, begin, operation, end) in [
+        (
+            DRIVER_SOURCE,
+            "backend=genet cut=owner-proof.begin",
+            "crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(hot_path);",
+            "backend=genet cut=owner-proof.return",
+        ),
+        (
+            STACK_SOURCE,
+            "backend=genet cut=stack-construction.begin",
+            "let stack = NetStack::<GenetDriverTaskDevice>::new(hal, config, backend)",
+            "backend=genet cut=stack-construction.ok",
+        ),
+    ] {
+        let begin = source.find(begin).expect("bounded pre-call receipt");
+        let operation = source[begin..].find(operation).expect("guarded operation") + begin;
+        let end = source.find(end).expect("distinct completion receipt");
+        assert!(begin < operation && operation < end);
+        assert_eq!(
+            source[..begin]
+                .rsplit_once("#[cfg(")
+                .unwrap()
+                .1
+                .lines()
+                .next(),
+            Some("all(feature = \"release-pi4\", feature = \"bootstrap-trace\"))]"),
+        );
+        assert_eq!(
+            source[..end]
+                .rsplit_once("#[cfg(")
+                .unwrap()
+                .1
+                .lines()
+                .next(),
+            Some("all(feature = \"release-pi4\", feature = \"bootstrap-trace\"))]"),
+        );
+        assert!(source[begin..end].contains("force_uart_line_raw("));
+        if source == STACK_SOURCE {
+            assert!(source[operation..end]
+                .contains(".map_err(convert_console_error::<DriverTaskNetError>)?;"));
+        }
+    }
+}
+
+#[test]
 fn direct_genet_final_sleep_check_adopts_only_durable_physical_work() {
     let adopt = RUNTIME_SOURCE
         .find("fn genet_runtime_adopt_direct_level")
