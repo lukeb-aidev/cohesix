@@ -162,7 +162,7 @@ flowchart TB
       GpuExecutor[GPU Worker executor]
       LoraExecutor[LoRA plus Heartbeat executor]
     end
-    ConsoleChild["Active console-network child\nTCP, authentication, and smoltcp\nQEMU VirtIO or Pi direct GENET peer"]
+    ConsoleChild["Active console-network child\nTCP, authentication, and smoltcp\nQEMU VirtIO, Pi direct GENET, or mediated Wi-Fi"]
     NineDoorChild["NineDoor child\none-shot bootstrap SC then passive"]
     subgraph WorkerPopulation["256 passive Worker children"]
       HeartbeatWorker[1 Heartbeat]
@@ -173,7 +173,8 @@ flowchart TB
     Drivers[Profile-selected isolated driver runtimes]
 
     Serial -->|console lines| EventPump
-    ConsoleChild <-->|control, events, and bootstrap packet copies| EventPump
+    ConsoleChild <-->|bounded control and events| EventPump
+    ConsoleChild <-->|Wi-Fi packet copies; GENET copies before handoff| EventPump
     EventPump <-->|after bootstrap, depth-one donated Call and Reply| NineDoorChild
     EventPump -->|control records and wake| WorkerSupervisor
     RootFault -->|fault handoff, Reply release, and revoke| WorkerSupervisor

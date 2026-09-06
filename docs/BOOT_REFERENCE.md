@@ -32,18 +32,25 @@ flowchart TB
   QRoot --> Common["allocator, manifest identity, and SMP plus MCS admission"]
   PRoot --> Common
   Common --> Critical["active root duties, console service,\nand two Worker executor lanes"]
-  Common --> Passive["passive NineDoor and selected\n256-Worker population"]
+  Common --> Passive["passive NineDoor and 256\npreconstructed suspended Workers"]
   Common --> Drivers["profile-selected isolated\ndriver runtimes"]
-  Critical --> Seals["bounded construction, fault-registry,\nand aggregate readiness evidence"]
+  Critical --> Seals["bounded construction and\nfault-registry seal"]
   Passive --> Seals
   Drivers --> Seals
-  Seals --> Console["serial prompt and optional authenticated TCP console"]
+  Seals --> Console["serial and local-seat prompt"]
+  Seals --> Network["profile-selected network startup\nand authenticated TCP listener readiness"]
+  Seals --> Admission["authorized Queen spawn"]
+  Admission --> Ready["resume the exact Worker\nand validate its durable READY record"]
 ```
 
 QEMU uses the selected `aarch64/virt` seL4 artifacts and PL011 serial. The Pi 4
 baseline uses `Pi firmware -> U-Boot -> seL4 binary image -> root-task`, with
 the Pi profile's serial and manifest-declared isolated driver runtimes. UEFI is
 not the Pi 4 acceptance path.
+
+Worker READY is observed after admission, not a prerequisite for the prompt.
+On the deferred Pi Wi-Fi path, network startup continues after the serial and
+local-seat prompt is published; TCP listener readiness remains a separate gate.
 
 ## Boot Stages
 
