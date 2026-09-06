@@ -63,6 +63,11 @@ protocol source are unchanged. Such an experiment does not change the raw
 request workload, throughput interval, p95 arithmetic or target thresholds.
 Compare fresh target receipts and retain stack/image/page admission plus
 the QEMU canary as separate qualification evidence.
+The Pi image builder selects level `3` for root-task alone, following the
+root-stack admission repair. Compare it against the sealed `8d0d5e7fe` two-WiFi,
+two-GENET matrix with the same 1-MiB stack. Earlier compiler candidates using
+the insufficient 256-KiB stack cannot establish an optimization regression or
+gain. Child budgets, compilation policy and wire workloads remain unchanged.
 
 Every performance claim must identify:
 

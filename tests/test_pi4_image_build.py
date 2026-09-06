@@ -84,6 +84,25 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
     assert "(default: release-pi4,bootstrap-trace)" in source
 
 
+def test_pi4_speed_profile_preserves_child_and_qemu_admission() -> None:
+    """Only the Pi root invocation may override the shared size profile."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    invocations = source.replace("\\\n", " ").split("cargo build")[1:]
+    overrides = [call for call in invocations if "--config" in call.split("\n")[0]]
+
+    assert len(overrides) == 1
+    command = shlex.split(overrides[0].split("\n")[0])
+    assert command[command.index("--config") + 1] == (
+        "profile.release.package.root-task.opt-level=3"
+    )
+    assert command[command.index("-p") + 1] == "root-task"
+    assert command[command.index("--features") + 1] == "$ROOT_TASK_FEATURES"
+    cargo = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    assert 'opt-level = "z"' in cargo.split("[profile.release]", 1)[1]
+    assert "[profile.release.package.root-task]" not in cargo
+
+
 def test_pi4_image_build_honors_the_staged_runner_job_budget() -> None:
     """U-Boot rebuilds must not bypass test-plan CPU limits."""
 
