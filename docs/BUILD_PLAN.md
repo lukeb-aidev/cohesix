@@ -10502,15 +10502,18 @@ Changes:
     owner maximum slice is only 99/158 us, with no elapsed-guard flag. These
     observations support reducing execution cost but do not prove which SC
     postpones any particular request. Replace maximum-size optimization only
-    for `root-task` with Cargo release package `opt-level = 3`; retain `z`
-    for the other packages.
+    for the Pi builder's `root-task` invocation with Cargo release package
+    `opt-level = 3`; retain workspace `z` for QEMU and the other packages.
     The initial driver level-3 candidate `ab0411baf` was rejected before
     packaging because its ELF spans 407 pages against the unchanged 320-page
     declaration. The level-`s` follow-up `710c28536` also exceeded admission
     at 329 pages. Preserve both failures and retain the original driver
     optimization instead of enlarging its image allowance. The next candidate
     `c0cccafc7` rejected the console-network image at 69 pages against 66,
-    so its console and smoltcp overrides are also removed. Preserve the release
+    so its console and smoltcp overrides are also removed. Root-only global
+    candidate `875de4f4b` passes Pi image admission but exceeds QEMU's fixed
+    archive capacity (9,733,276 versus 9,582,592 bytes). Scope the override
+    to the Pi build command and retain the QEMU profile. Preserve the release
     profile name, fat LTO, one codegen unit, panic/overflow settings, all
     generated object/page and rootfs bounds, MCS numerics, driver ownership,
     protocol behavior and QEMU scheduling. Reject an oversized artifact;
