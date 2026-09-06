@@ -563,18 +563,12 @@ impl TemporalAuthorityConfig {
                 }
                 _ => bail!("unsupported critical temporal task {required}"),
             };
-            // Root has two selected contracts: the compact two-refill QEMU
-            // context and the eight-refill Pi context. Kernel-specific refill
-            // capacity is independently checked by resource admission.
-            let root_refills_valid =
-                required != "root-control" || matches!(task.max_refills, 2 | 8);
-            let expected_sc_bits = if required == "root-control" && task.max_refills == 2 {
+            let expected_sc_bits = if required == "root-control" {
                 MIN_SCHED_CONTEXT_BITS
             } else {
                 8
             };
-            if !root_refills_valid
-                || task.kind != expected_kind
+            if task.kind != expected_kind
                 || task.execution != TemporalExecution::Active
                 || !task.critical_reserve
                 || task.scheduling_context_bits != expected_sc_bits
@@ -949,26 +943,6 @@ mod tests {
     #[test]
     fn exact_critical_topology_is_admitted() {
         valid_config().validate().expect("valid MCS topology");
-    }
-
-    #[test]
-    fn root_refill_contract_requires_its_matching_object_size() {
-        for (bits, refills, valid) in [
-            (7, 2, true),
-            (8, 8, true),
-            (7, 8, false),
-            (8, 2, false),
-            (8, 3, false),
-        ] {
-            let mut config = valid_config();
-            config.tasks[0].scheduling_context_bits = bits;
-            config.tasks[0].max_refills = refills;
-            assert_eq!(
-                config.validate().is_ok(),
-                valid,
-                "SC bits={bits}, refills={refills}"
-            );
-        }
     }
 
     #[test]

@@ -1411,34 +1411,27 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
     let qemu = include_str!("../../../configs/root_task.toml");
     let regression = include_str!("../../../configs/root_task_regression.toml");
     let pi4 = include_str!("../../../configs/root_task_pi4_uboot_aarch64.toml");
-    for (manifest, budget, refills, sc_bits, provenance) in [
+    for (manifest, budget, provenance) in [
         (
             qemu,
             9_000,
-            2,
-            7,
             "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             regression,
             9_000,
-            2,
-            7,
             "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             pi4,
             5_500,
-            8,
-            8,
-            "m26e-pi4-root-fragmented-refill-candidate-v28",
+            "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
         ),
     ] {
         let root = root_control_section(manifest);
         assert_exact_line(root, &format!("budget_us = {budget}"));
         assert_exact_line(root, "period_us = 10000");
-        assert_exact_line(root, &format!("max_refills = {refills}"));
-        assert_exact_line(root, &format!("scheduling_context_bits = {sc_bits}"));
+        assert_exact_line(root, "max_refills = 2");
         assert_exact_line(root, "timeout_policy = \"natural-postpone\"");
         assert_exact_line(root, &format!("wcet_provenance = \"{provenance}\""));
     }

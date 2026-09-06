@@ -299,8 +299,6 @@ fn pi4_uboot_profile_emits_network_policy() {
             .unwrap_or_else(|| panic!("temporal task {task_id}"))
     };
     let root = temporal_task("root-control");
-    assert_eq!(root["scheduling_context_bits"], 8);
-    assert_eq!(root["max_refills"], 8);
     let root_fault = temporal_task("root-fault");
     let console = temporal_task("console-network-service");
     let console_objects = &manifest["console_network_service"]["objects"];
@@ -313,7 +311,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(root["response_time_us"], 5_100);
     assert_eq!(
         root["wcet_provenance"],
-        "m26e-pi4-root-fragmented-refill-candidate-v28"
+        "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27"
     );
     assert_eq!(root_fault["core"], 0);
     assert_eq!(root_fault["sched_control_core"], 0);

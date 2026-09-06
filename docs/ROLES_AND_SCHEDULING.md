@@ -836,23 +836,13 @@ CPU budget or authorize another operation, signal, poll, retry, or owner.
 
 For both Pi network modes, root-control selects core 0 and console-network
 selects core 2 at priority/MCP 200/200. Root retains
-`5,500 us / 10,000 us`, eight refill records in an 8-bit SC, and exact
-2,500-us WCET;
+`5,500 us / 10,000 us`, max-two-refill scheduling, and exact 2,500-us WCET;
 console retains its unchanged `3,000 us / 10,000 us` budget/period, 3,000-us
 WCET, and eight refill records in its existing 8-bit SC. Root-fault returns to
 core 0 without any budget, period, priority, fault, Reply, or ownership change.
 Direct GENET, mediated WiFi, and QEMU direct-VirtIO all retain signal-only child
 handoff; only the exact Pi causal wait described above may bridge a finite
 post-commit publication boundary.
-
-Root's eight-record Pi candidate preserves separate replenishments across
-short blocking/wake intervals. In the selected kernel, `schedule_used` delays
-the existing tail when the refill queue is full; the former two-record object
-could merge these fragments even below the total reservation. The 256-byte SC
-fits the selected ABI's ten-record capacity. This changes neither execution
-authority nor admission bounds and does not establish that refill merging
-caused a measured packet tail. Fresh exact-image WiFi and GENET evidence is
-required; no full-head reserve may be inferred from Yield or Consumed.
 
 The compiler records exact root/console response bounds `5,100/3,000 us`,
 HDMI/PCIe/GPU-executor bounds `5,200/3,300/8,300 us`, root-fault at 2,600 us,
