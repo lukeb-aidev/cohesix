@@ -61,6 +61,21 @@ incremental = false
 strip = "debuginfo"
 split-debuginfo = "off"
 
+# The isolated packet path must minimize CPU spent inside its fixed MCS
+# reservations. Keep the release artifact/profile identity and all safety
+# settings; image construction still enforces each declared ELF/page bound.
+[profile.release.package.root-task]
+opt-level = 3
+
+[profile.release.package.console-network-runtime]
+opt-level = 3
+
+[profile.release.package.pi4-driver-runtime]
+opt-level = 3
+
+[profile.release.package.smoltcp]
+opt-level = 3
+
 [workspace.package]
 edition = "2021"
 license = "MIT"

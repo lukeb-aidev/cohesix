@@ -10493,6 +10493,31 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact-8d34 target execution-cost candidate — the unchanged source
+    `8d34ed972f23eafadda07729e3fced120cd1fef1` completes two WiFi and two
+    GENET cohorts before edits. WiFi reaches 16.563/13.275 requests/s and
+    GENET p95 remains 5.825/5.625 ms; all four raw64, representative scripts,
+    Worker32 and medium16/high32 application workloads pass. Root consumes
+    approximately 72–73 ms across each 64-request GENET session; the packet
+    owner maximum slice is only 99/158 us, with no elapsed-guard flag. These
+    observations support reducing execution cost but do not prove which SC
+    postpones any particular request. Replace maximum-size optimization only
+    for `root-task`, `console-network-runtime`, `pi4-driver-runtime`, and
+    `smoltcp` with Cargo release package `opt-level = 3`. Preserve the release
+    profile name, fat LTO, one codegen unit, panic/overflow settings, all
+    generated object/page and rootfs bounds, MCS numerics, driver ownership,
+    protocol behavior and QEMU scheduling. Reject an oversized artifact;
+    do not enlarge its declaration to qualify this candidate. The owning
+    discovery boundaries are `m26e-console-network-service-isolation` and
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`. Complete host-tool,
+    `tools/cohesix-py`, generated-contract and benchmark compatibility review:
+    this changes generated machine code but no public API, package identity,
+    command, workload, measurement arithmetic, evidence schema or artifact
+    path. Host consumers need no implementation change. Exact Pi compilation,
+    artifact admission, generated/Test Plan checks and the pinned QEMU 10.1
+    root-MCS canary qualify only the source/build; fresh Pi raw and functional
+    evidence must establish any speedup. The remaining WiFi voluntary handoffs
+    and GENET per-request scheduling attribution stay open until measured.
   - console-network ABI — advance the common READY/ABI identity to v4 and add child event `CommandBatch = 27`, encoding version 1, with one through eight exact same-connection authenticated commands. Each record retains its own `now_ms`, length, and UTF-8 bytes inside the unchanged 2368-byte payload and four-page/capability topology.
   - restricted child — use generated `max_commands_per_wake <= 8` to coalesce only consecutive command events that fit the fixed page. A lifecycle or connection-identity event is an absolute fence; a single command remains the legacy `Command` record.
   - root boundary — validate the complete private batch, reserve the complete bounded command-queue capacity before mutation, then admit exact FIFO command/timestamp records. Any malformed, over-capacity, cross-identity, or stale batch fails closed without partial execution.

@@ -77,6 +77,14 @@ flowchart TB
 
 ## Profiles and Toolchain
 
+The Cargo `release` profile keeps its existing artifact paths, fat LTO and
+single codegen unit. Its `root-task`, `console-network-runtime`,
+`pi4-driver-runtime` and `smoltcp` packages select speed optimization level 3
+to reduce execution cost inside the fixed MCS reservations; other packages
+retain the workspace size policy. The same package settings apply to QEMU
+and Pi. The selected manifest's ELF/page admission and the rootfs size bound
+remain mandatory. Compiler optimization does not qualify target performance.
+
 | Target | Manifest | seL4 build truth |
 | --- | --- | --- |
 | QEMU `aarch64/virt` | `configs/root_task.toml` | Canonical validated `SEL4_BUILD_DIR` at `out/sel4/profile-v2/qemu-smp-production`; explicit alternatives are diagnostic unless a named profile contract passes. |
