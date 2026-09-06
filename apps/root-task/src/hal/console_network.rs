@@ -1134,7 +1134,19 @@ impl ConsoleNetworkRuntime {
         } else {
             None
         };
-        let egress = if badge & seL4_Word::from(WAKE_PACKET_TX_READY) != 0 {
+        // The accepted command event is the barrier for the optional packet;
+        // an older watermark-only wake cannot consume a partial bundle.
+        let paired_egress = self
+            .boundary
+            .command_companion_pending(
+                self.shared_frames[1].as_slice(),
+                event.as_ref(),
+                self.direct_data_plane(),
+            )
+            .map_err(|boundary| {
+                ConsoleNetworkPollError::new(ConsoleNetworkPollStage::Egress, boundary)
+            })?;
+        let egress = if paired_egress || badge & seL4_Word::from(WAKE_PACKET_TX_READY) != 0 {
             Some(
                 self.boundary
                     .accept_egress(self.shared_frames[1].as_slice())

@@ -27,9 +27,9 @@ use console_network_runtime::abi::{
 #[cfg(feature = "direct-virtio")]
 use console_network_runtime::abi::{DIRECT_VIRTIO_IRQ_HANDLER_SLOT, WAKE_DIRECT_VIRTIO_IRQ};
 use console_network_runtime::{
-    direct_control_wake_service_due, direct_service_repoll_required, ChildTurnReadiness,
-    ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService, ControlApplyOutcome, RuntimeError,
-    ServicePollOutcome,
+    copied_command_egress_pair_allowed, direct_control_wake_service_due,
+    direct_service_repoll_required, ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit,
+    ConsoleNetworkService, ControlApplyOutcome, RuntimeError, ServicePollOutcome,
 };
 #[cfg(feature = "direct-genet")]
 use console_network_runtime::{
@@ -581,12 +581,40 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 );
             }
             ChildTurnUnit::PublishServiceEvent => {
-                let runtime_event =
-                    match service.pop_publication_event(descriptor.max_commands_per_wake) {
-                        Ok(Some(event)) => event,
+                let publication = if descriptor.direct_virtio() {
+                    service.pop_publication_event(descriptor.max_commands_per_wake)
+                } else {
+                    service.pop_publication_event_at(
+                        descriptor.max_commands_per_wake,
+                        now_ms(descriptor.timer_clock_hz),
+                    )
+                };
+                let runtime_event = match publication {
+                    Ok(Some(event)) => event,
+                    Ok(None) | Err(_) => enter_standard_fault(),
+                };
+                let runtime_event_kind = runtime_event.kind();
+                if copied_command_egress_pair_allowed(
+                    direct_transport,
+                    runtime_event_kind,
+                    service.egress_pending(),
+                ) {
+                    let mut egress = [0u8; ETHERNET_FRAME_BYTES];
+                    let length = match service.take_packet(&mut egress) {
+                        Ok(Some(length)) => length,
                         Ok(None) | Err(_) => enter_standard_fault(),
                     };
-                let runtime_event_kind = runtime_event.kind();
+                    packet_tx_sequence = next_sequence(packet_tx_sequence);
+                    publish_packet(
+                        packet_tx,
+                        descriptor.generation,
+                        packet_tx_sequence,
+                        &egress[..length],
+                    );
+                    // Do not signal the packet separately: root must observe
+                    // the following complete command event before accepting
+                    // this companion page and returning their single credit.
+                }
                 event_sequence = next_sequence(event_sequence);
                 publish_exchange(
                     event,
@@ -594,7 +622,13 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     runtime_event_kind,
                     event_sequence,
                     runtime_event.connection_id(),
-                    runtime_event.now_ms(),
+                    if !descriptor.direct_virtio()
+                        && runtime_event_kind == ExchangeKind::CommandBatch
+                    {
+                        now_ms(descriptor.timer_clock_hz)
+                    } else {
+                        runtime_event.now_ms()
+                    },
                     0,
                     runtime_event.payload_bytes(),
                 );

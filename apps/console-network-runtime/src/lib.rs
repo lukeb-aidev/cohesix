@@ -270,6 +270,20 @@ pub struct ChildTurnScheduler {
     service_pending: bool,
 }
 
+/// One copied command publication may also retire the already prepared TCP
+/// packet. Both pages remain protected by the same credit; the event commit
+/// follows the packet commit and is the bundle's publication barrier.
+#[must_use]
+pub const fn copied_command_egress_pair_allowed(
+    direct_transport: bool,
+    kind: ExchangeKind,
+    egress_pending: bool,
+) -> bool {
+    !direct_transport
+        && matches!(kind, ExchangeKind::Command | ExchangeKind::CommandBatch)
+        && egress_pending
+}
+
 impl ChildTurnScheduler {
     /// Construct an empty retained child scheduler.
     #[must_use]
@@ -859,11 +873,25 @@ impl TransportSession {
         &mut self,
         max_commands_per_wake: u16,
     ) -> Result<Option<ServiceEvent>, RuntimeError> {
+        self.pop_publication_event_at(max_commands_per_wake, None)
+    }
+
+    /// Preserve each command's creation time inside the existing batch payload
+    /// while recording the distinct publication preparation time in its header.
+    /// `None` retains the qualified legacy/QEMU representation.
+    pub fn pop_publication_event_at(
+        &mut self,
+        max_commands_per_wake: u16,
+        publication_ms: Option<u64>,
+    ) -> Result<Option<ServiceEvent>, RuntimeError> {
         let Some(first) = self.events.pop_front() else {
             return Ok(None);
         };
         let limit = usize::from(max_commands_per_wake).min(COMMAND_BATCH_MAX_RECORDS);
-        if first.kind != ExchangeKind::Command || limit <= 1 {
+        if first.kind != ExchangeKind::Command
+            || limit == 0
+            || (limit == 1 && publication_ms.is_none())
+        {
             return Ok(Some(first));
         }
 
@@ -896,7 +924,7 @@ impl TransportSession {
             }
         }
 
-        if builder.record_count() == 1 {
+        if builder.record_count() == 1 && publication_ms.is_none() {
             return Ok(Some(first));
         }
 
@@ -911,7 +939,7 @@ impl TransportSession {
         Ok(Some(ServiceEvent {
             kind: ExchangeKind::CommandBatch,
             connection_id: first.connection_id,
-            now_ms: first.now_ms,
+            now_ms: publication_ms.unwrap_or(first.now_ms),
             payload,
         }))
     }
@@ -1619,6 +1647,16 @@ impl<'a> ConsoleNetworkService<'a> {
         max_commands_per_wake: u16,
     ) -> Result<Option<ServiceEvent>, RuntimeError> {
         self.session.pop_publication_event(max_commands_per_wake)
+    }
+
+    /// Pi publication timestamp with unchanged per-command policy timestamps.
+    pub fn pop_publication_event_at(
+        &mut self,
+        max_commands_per_wake: u16,
+        publication_ms: u64,
+    ) -> Result<Option<ServiceEvent>, RuntimeError> {
+        self.session
+            .pop_publication_event_at(max_commands_per_wake, Some(publication_ms))
     }
 
     /// Whether one typed service event is retained for publication.
@@ -2436,6 +2474,63 @@ mod tests {
         let command = session.pop_event().unwrap();
         assert_eq!(command.kind(), ExchangeKind::Command);
         assert_eq!(command.payload().unwrap(), "cat /proc/boot");
+    }
+
+    #[test]
+    fn copied_command_pair_excludes_lifecycle_and_direct_transports() {
+        for kind in [ExchangeKind::Command, ExchangeKind::CommandBatch] {
+            assert!(copied_command_egress_pair_allowed(false, kind, true));
+            assert!(!copied_command_egress_pair_allowed(true, kind, true));
+            assert!(!copied_command_egress_pair_allowed(false, kind, false));
+        }
+        for kind in [
+            ExchangeKind::Ready,
+            ExchangeKind::Connected,
+            ExchangeKind::Authenticated,
+            ExchangeKind::Disconnected,
+            ExchangeKind::OutputDrained,
+            ExchangeKind::ShutdownComplete,
+        ] {
+            assert!(!copied_command_egress_pair_allowed(false, kind, true));
+        }
+    }
+
+    #[test]
+    fn publication_timestamp_preserves_single_command_creation_and_fifo_limit() {
+        let mut session = TransportSession::new(descriptor()).unwrap();
+        session.begin(7, 10).unwrap();
+        let connected = session
+            .pop_publication_event_at(1, Some(15))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (connected.kind(), connected.now_ms()),
+            (ExchangeKind::Connected, 10)
+        );
+        session.ingest(&framed(b"AUTH secret"), 20).unwrap();
+        session.pop_event().unwrap();
+        session.ingest(&framed(b"PING"), 30).unwrap();
+        session.ingest(&framed(b"help"), 31).unwrap();
+
+        let batch = session
+            .pop_publication_event_at(1, Some(45))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (batch.kind(), batch.connection_id(), batch.now_ms()),
+            (ExchangeKind::CommandBatch, 7, 45)
+        );
+        let mut cursor = abi::CommandBatchCursor::validate(batch.payload_bytes()).unwrap();
+        assert_eq!(
+            cursor.next_command(batch.payload_bytes()),
+            Ok(Some((30, "PING")))
+        );
+        assert_eq!(cursor.next_command(batch.payload_bytes()), Ok(None));
+        let next = session.pop_publication_event(8).unwrap().unwrap();
+        assert_eq!(
+            (next.kind(), next.now_ms(), next.payload().unwrap()),
+            (ExchangeKind::Command, 31, "help")
+        );
     }
 
     #[test]

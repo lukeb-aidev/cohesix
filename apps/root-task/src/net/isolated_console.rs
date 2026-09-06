@@ -1144,6 +1144,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 }
                 #[cfg(any(test, feature = "release-pi4"))]
                 let root_observed_ms = isolated_seam_observation_ms(self.last_now_ms);
+                #[cfg(any(test, feature = "release-pi4"))]
+                let mut first_created_ms = None;
                 loop {
                     let command = match cursor.next_command(payload) {
                         Ok(Some(command)) => command,
@@ -1154,6 +1156,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                         }
                     };
                     let (now_ms, command) = command;
+                    #[cfg(any(test, feature = "release-pi4"))]
+                    if first_created_ms.is_none() {
+                        first_created_ms = Some(now_ms);
+                    }
                     let mut line = HeaplessString::new();
                     if line.push_str(command).is_err() {
                         self.fail_closed("command-batch-admission");
@@ -1177,8 +1183,13 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                         self.counters.tcp_console_recv_ready.saturating_add(1);
                 }
                 #[cfg(any(test, feature = "release-pi4"))]
-                self.seam_telemetry
-                    .record_command_or_batch_observed(event.now_ms(), root_observed_ms);
+                if let Some(created_ms) = first_created_ms {
+                    self.seam_telemetry.record_command_publication(
+                        created_ms,
+                        event.now_ms(),
+                        root_observed_ms,
+                    );
+                }
             }
             ExchangeKind::Disconnected => {
                 #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
@@ -1305,6 +1316,14 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             }
         };
         let publication_observed = turn.publication_observed();
+        #[cfg(any(test, feature = "release-pi4"))]
+        let paired_publication = turn.egress.is_some()
+            && turn.event.as_ref().is_some_and(|event| {
+                matches!(
+                    event.kind(),
+                    ExchangeKind::Command | ExchangeKind::CommandBatch
+                )
+            });
         let mut activity = turn.input_progress_observed();
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         if D::driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
@@ -1358,6 +1377,11 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             self.pending_egress = Some(egress);
         }
         if publication_observed {
+            #[cfg(any(test, feature = "release-pi4"))]
+            if paired_publication {
+                self.seam_telemetry.paired_publications =
+                    self.seam_telemetry.paired_publications.saturating_add(1);
+            }
             activity = true;
             if acknowledge_publication {
                 return self.acknowledge_child_publication(activity);

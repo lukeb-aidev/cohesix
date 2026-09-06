@@ -72,12 +72,12 @@ def test_runtime_and_compiler_contract_remain_no_std_and_path_identical() -> Non
     assert 'entry_symbol = "_start"' in compiler_manifest
 
 
-def test_abi_v5_batches_keep_one_page_and_exact_eight_record_bounds() -> None:
+def test_abi_v6_batches_keep_one_page_and_exact_eight_record_bounds() -> None:
     """Response and command batches remain binary, bounded, and cap-neutral."""
 
     source = ABI_LIB.read_text(encoding="utf-8")
 
-    assert "pub const ABI_VERSION: u16 = 5;" in source
+    assert "pub const ABI_VERSION: u16 = 6;" in source
     assert "SendBatch = 3," in source
     assert "CommandBatch = 27," in source
     assert "pub const SHARED_PAGE_BYTES: usize = 4096;" in source
@@ -124,7 +124,7 @@ def test_runtime_polls_retained_work_or_blocks_directly_and_spends_ack() -> None
     )[0]
     ready = target.index("ExchangeKind::Ready,")
     ready_signal = target.index(
-        "signal_slot(descriptor.supervisor_wake_notification_slot);", ready
+        "signal_durable_child_publication(", ready
     )
     loop_start = target.index("    loop {", ready_signal)
     readiness = target.index("let readiness = ChildTurnReadiness::new(", loop_start)
@@ -251,6 +251,41 @@ def test_runtime_polls_retained_work_or_blocks_directly_and_spends_ack() -> None
         "if !core::mem::take(&mut publication_credit_available)"
     ) < shutdown.index(
         "ExchangeKind::ShutdownComplete"
+    )
+
+
+def test_copied_command_pair_commits_both_pages_before_its_only_wake() -> None:
+    """Partial bundles must never expose credit through an early packet signal."""
+    source = RUNTIME_KERNEL.read_text(encoding="utf-8")
+    publication = source.split("ChildTurnUnit::PublishServiceEvent => {", 1)[1]
+    publication = publication.split("ChildTurnUnit::PublishEgress => {", 1)[0]
+    assert (
+        publication.index("copied_command_egress_pair_allowed(")
+        < publication.index("publish_packet(")
+        < publication.index("publish_exchange(")
+        < publication.index("signal_durable_child_publication(")
+    )
+    assert publication.count("publish_packet(") == 1
+    assert publication.count("publish_exchange(") == 1
+    assert publication.count("signal_durable_child_publication(") == 1
+    assert "signal_slot(" not in publication
+    signal = source.split("fn signal_durable_child_publication(", 1)[1]
+    signal = signal.split("\n}", 1)[0]
+    assert signal.count("signal_slot(") == 2
+    assert (
+        signal.index("signal_slot(publication_slot);")
+        < signal.index("if !descriptor.direct_virtio()")
+        < signal.index("signal_slot(descriptor.root_control_wake_notification_slot);")
+    )
+    assert "service.poll" not in publication
+
+    root = ROOT_HAL.read_text(encoding="utf-8").split("pub fn poll_turn(", 1)[1]
+    root = root.split("fn reset_unmap_direct_device", 1)[0]
+    assert (
+        root.index(".accept_event(")
+        < root.index(".command_companion_pending(")
+        < root.index(".accept_egress(")
+        < root.index("self.publication_ack_owed =")
     )
 
 
@@ -401,7 +436,7 @@ def test_control_bytes_are_kind_validated_and_drain_tracks_exact_output() -> Non
         "publish_completion_watermark(event, None, Some(sequence));"
     )
     completion_signal = apply_control.index(
-        "signal_slot(descriptor.supervisor_wake_notification_slot);",
+        "signal_durable_child_publication(",
         completion,
     )
     assert (

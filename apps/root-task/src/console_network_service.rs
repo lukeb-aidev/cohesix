@@ -1068,6 +1068,34 @@ impl ConsoleNetworkBoundary {
             .map_err(Into::into)
     }
 
+    /// Observe a copied Pi companion only after accepting its command barrier.
+    /// A watermark-only wake or direct transport cannot inspect or retire it.
+    pub fn command_companion_pending(
+        &self,
+        input_page: &[u8],
+        accepted_event: Option<&ConsoleNetworkEvent>,
+        direct_transport: bool,
+    ) -> Result<bool, BoundaryError> {
+        if !self.contract.cross_core_signal_only
+            || direct_transport
+            || !accepted_event.is_some_and(|event| {
+                matches!(
+                    event.kind(),
+                    ExchangeKind::Command | ExchangeKind::CommandBatch
+                )
+            })
+        {
+            return Ok(false);
+        }
+        PacketPage::publication_pending(
+            input_page,
+            PacketDirection::Egress,
+            self.generation,
+            self.last_egress_sequence,
+        )
+        .map_err(Into::into)
+    }
+
     /// Retire exact packet/control input ownership from the negotiated
     /// child-published watermark pair.
     pub fn accept_completion_watermarks(
@@ -1438,6 +1466,73 @@ mod tests {
         ConsoleNetworkYieldToAdmission, ServiceState,
     };
     use console_network_abi::{WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK};
+
+    #[test]
+    fn command_companion_requires_barrier_and_exact_unconsumed_packet() {
+        use super::{ConsoleNetworkBoundary, ConsoleNetworkEvent};
+        use console_network_abi::{ExchangeKind, PacketDirection, PacketPage, SHARED_PAGE_BYTES};
+
+        let mut boundary = ConsoleNetworkBoundary::new(27).unwrap();
+        boundary.contract.cross_core_signal_only = true;
+        let mut event = ConsoleNetworkEvent {
+            kind: ExchangeKind::CommandBatch,
+            connection_id: 7,
+            now_ms: 100,
+            related_sequence: 0,
+            payload: heapless::Vec::new(),
+        };
+        let mut packet = [0; SHARED_PAGE_BYTES];
+        PacketPage::initialize_into(&mut packet, PacketDirection::Egress, 27).unwrap();
+        assert_eq!(
+            boundary.command_companion_pending(&packet, Some(&event), false),
+            Ok(false)
+        );
+        PacketPage::publish_into(&mut packet, PacketDirection::Egress, 27, 1, &[1, 2, 3, 4])
+            .unwrap();
+        // Packet commit precedes the event. An older completion wake must not
+        // consume this partial bundle or earn a credit.
+        assert_eq!(
+            boundary.command_companion_pending(&packet, None, false),
+            Ok(false)
+        );
+        assert_eq!(
+            boundary.command_companion_pending(&[], Some(&event), true),
+            Ok(false)
+        );
+        boundary.contract.cross_core_signal_only = false;
+        assert_eq!(
+            boundary.command_companion_pending(&[], Some(&event), false),
+            Ok(false)
+        );
+        boundary.contract.cross_core_signal_only = true;
+        event.kind = ExchangeKind::OutputDrained;
+        assert_eq!(
+            boundary.command_companion_pending(&[], Some(&event), false),
+            Ok(false)
+        );
+        for kind in [ExchangeKind::Command, ExchangeKind::CommandBatch] {
+            event.kind = kind;
+            assert_eq!(
+                boundary.command_companion_pending(&packet, Some(&event), false),
+                Ok(true)
+            );
+        }
+        // The read is passive; only accepting the bytes retires the sequence.
+        boundary.accept_egress(&packet).unwrap();
+        assert_eq!(
+            boundary.command_companion_pending(&packet, Some(&event), false),
+            Ok(false)
+        );
+        PacketPage::publish_into(&mut packet, PacketDirection::Egress, 27, 2, &[5]).unwrap();
+        assert_eq!(
+            boundary.command_companion_pending(&packet, Some(&event), false),
+            Ok(true)
+        );
+        PacketPage::initialize_into(&mut packet, PacketDirection::Egress, 28).unwrap();
+        assert!(boundary
+            .command_companion_pending(&packet, Some(&event), false)
+            .is_err());
+    }
 
     fn exact_yield_to_admission() -> ConsoleNetworkYieldToAdmission {
         ConsoleNetworkYieldToAdmission {

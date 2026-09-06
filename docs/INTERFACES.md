@@ -223,7 +223,21 @@ fixed 2368-byte payload bound, and never batches across a lifecycle or
 connection-identity event. Root validates the complete private copy and
 reserves capacity for every command before admitting any of them. One batch
 consumes one publication credit; it does not add capability, scheduling, or
-command authority.
+command authority. Physical Pi command publications use this existing batch
+encoding even for one command: the exchange header samples publication start,
+while each nested record retains command creation time for policy. QEMU keeps
+its qualified timestamp and single-command representation.
+
+On the copied Pi WiFi path, one credited command publication may additionally
+carry one already-prepared egress packet. The child commits the packet first,
+then commits the Command/CommandBatch event as the bundle barrier, and signals
+only the event notification followed by root fan-in. Root may inspect that
+companion packet level only after accepting the command event; a watermark-only
+wake cannot consume a partial bundle. It validates the packet generation and
+sequence, copies both records, and returns one global publication credit only
+after durable adapter retention. There is no separate packet signal for this
+bundle, no additional service poll, and no lifecycle-event pairing. Direct
+GENET and QEMU do not relay a companion packet through root.
 
 One complete wire-frame or wire-train commit may retain one following bounded
 service cycle. A no-progress cycle quiesces; pending state without sendability
@@ -241,8 +255,8 @@ contract is unchanged.
 ABI v6 assigns the descriptor's former `reserved0` field to fixed child slot 6.
 HAL mints into that slot only a Write-only, badge-1 capability to the additional
 root-control wake notification; it grants no Read, Reply, Grant, scheduling,
-packet, or policy authority. After committing any durable child event or packet
-TX publication, the child signals the existing component-specific notification
+packet, or policy authority. After committing a durable child event, standalone packet TX publication, or
+complete copied command/packet bundle, the child signals the existing component-specific notification
 first and this fan-in notification second. Both notifications are coalescing
 scheduling hints. The sequence-last shared record remains authoritative, so
 root must recheck the exact durable condition before sleeping and must never

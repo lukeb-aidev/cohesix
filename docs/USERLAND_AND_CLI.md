@@ -242,7 +242,7 @@ netstats: cyw43_productive_window schema=v1 opened=<u64> idle_admitted=<u64> clo
 netstats: genet_compact schema=v1 stage=<u64> deferred=<u64> fault=<u64> unsupported=<u64> dispatch=<u64> stage_turns=<u64> rotations=<u64>
 netstats: genet_compose schema=v1 composed=<u64> no_pending=<u64> not_sealed=<u64> backpressure=<u64> identity_drift=<u64>
 netstats: genet_defer schema=v1 passive=<u64> command=<u64> compose_open=<u64> compose_backpressure=<u64> fence=<u64> prior_batch=<u64> control_busy=<u64> output_missing=<u64> stage_backpressure=<u64>
-netstats: isolated_seam schema=v1 name=<command-publish-root-observe|dispatch-stage|stage-control-observe|stage-output-drained|output-drained-root-observe> samples=<u64> invalid=<u64> total_ms=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
+netstats: isolated_seam schema=v2 name=<command-created-root-observe|command-created-publish|command-publish-root-observe|dispatch-stage|stage-control-observe|stage-output-drained|output-drained-root-observe> n=<u64> bad=<u64> ms=<total>/<last>/<max> h=<hex>/<hex>/<hex>/<hex>/<hex> hs=<0|1> [pairs=<u64>]
 ```
 
 `cyw43_publication` counts exact transient-publication-credit candidates,
@@ -291,22 +291,34 @@ sum therefore equals the aggregate `genet_compact deferred` count.
 classification does not authorize a retry, admission, child-control successor,
 or acceptance claim.
 
-The five optional `isolated_seam` names measure child command publication to
-validated root observation, root dispatch to first durable `StageOutput`,
-`StageOutput` to observed control-consumption watermark, `StageOutput` to the
-child's `OutputDrained` publication, and that publication to validated root
-observation. The shared control watermark carries no timestamp, so
-`stage-control-observe` intentionally combines child control consumption and
-the later root observation; it cannot independently assign those two portions
-without a shared-ABI change. These millisecond ages accept zero age when both
-timestamps are nonzero, reject a zero endpoint or backwards pair into
-`invalid`, and saturate sample and total arithmetic; `avg_ms` is the integer
-average of valid samples. On a physical Pi release target, both sides use the
-same absolute `CNTVCT_EL0` epoch scaled by generated `TIMER_CLOCK_HZ`; root
-elapsed/smoltcp milliseconds are not an endpoint of these ages. The physical
-stack wrappers forward the exact dispatch observation into the isolated
-adapter. Host tests and QEMU preserve the caller-time fallback, and the row
-grammar and schema remain unchanged.
+The seven optional `isolated_seam schema=v2` rows distinguish command creation
+to root observation, creation to publication start, publication start to root
+observation, root dispatch to first durable `StageOutput`, `StageOutput` to
+observed control-consumption watermark, `StageOutput` to `OutputDrained`
+publication, and that publication to root observation. Command samples describe
+the first command in each bounded batch. `pairs` appears only on
+`command-created-publish` and counts command/egress bundles accepted under one
+publication credit; zero means no pairing has been observed.
+
+`n`, `bad`, and the `ms=total/last/max` components are decimal saturating u64
+counters. The five hexadecimal `h` counts describe integer millisecond ages
+0, 1, 2–3, 4–7, and at least 8. Display counts clip at `ffff`; `hs=1` explicitly
+reports clipping, while internal bins retain full u64 width. Zero age is valid
+when both endpoints are nonzero; zero endpoints or backwards pairs increment
+`bad` without changing samples or histogram. Mean age is `total/n` when n is
+nonzero. Every row fits the existing 256-byte line bound.
+
+The old v1 name `command-publish-root-observe` actually included waiting inside
+the child before publication. v2 corrects that ambiguity with separate creation
+and publication timestamps. The control watermark has no timestamp, so
+`stage-control-observe` still includes both child consumption and later root
+observation. `stage-output-drained` includes peer TCP acknowledgment retirement
+and publication waiting, not just response emission. These intervals overlap
+and must not be summed into a wire latency estimate. Millisecond bins diagnose
+stages; raw framed TCP remains authoritative for the 1.845 ms GENET target.
+Both Pi endpoints use the absolute `CNTVCT_EL0` epoch and generated
+`TIMER_CLOCK_HZ`. Host tests retain their caller-time fallback; QEMU release
+omits this Pi accounting. External request/response framing is unchanged.
 
 The detailed Pi composer/scheduler snapshot belongs to explicit `smp mcs`, not
 `netstats`. The Pi release batch contains exactly 20 measured rows:

@@ -35040,43 +35040,8 @@ where
                             (progress, active_tail, units, state)
                         });
                         #[cfg(feature = "release-pi4")]
-                        let isolated_seam_lines = net.isolated_seam_diagnostics().map(|seams| {
-                            let format_seam = |name: &str,
-                                               seam: crate::net::isolated_seam::IsolatedSeamAgeDiagnostic| {
-                                format_message(format_args!(
-                                    "netstats: isolated_seam schema=v1 name={} samples={} invalid={} total_ms={} avg_ms={} last_ms={} max_ms={}",
-                                    name,
-                                    seam.samples,
-                                    seam.invalid_samples,
-                                    seam.total_ms,
-                                    seam.average_ms(),
-                                    seam.last_ms,
-                                    seam.max_ms,
-                                ))
-                            };
-                            [
-                                format_seam(
-                                    "command-publish-root-observe",
-                                    seams.command_publish_to_root_observe,
-                                ),
-                                format_seam(
-                                    "dispatch-stage",
-                                    seams.dispatch_to_stage,
-                                ),
-                                format_seam(
-                                    "stage-control-observe",
-                                    seams.stage_to_control_observe,
-                                ),
-                                format_seam(
-                                    "stage-output-drained",
-                                    seams.stage_to_output_drained,
-                                ),
-                                format_seam(
-                                    "output-drained-root-observe",
-                                    seams.output_drained_publish_to_root_observe,
-                                ),
-                            ]
-                        });
+                        let isolated_seam_lines =
+                            net.isolated_seam_diagnostics().map(|seams| seams.lines());
                         let line_one = format_message(format_args!(
                             "netstats: rx_pkts={} tx_pkts={} rx_used={} tx_used={} polls={}",
                             stats.rx_packets,
@@ -44019,6 +43984,8 @@ mod tests {
         send_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
         response_batch_capacity: Option<usize>,
         isolated_diagnostics: Option<IsolatedConsoleDiagnostics>,
+        #[cfg(feature = "release-pi4")]
+        isolated_seams: Option<crate::net::isolated_seam::IsolatedSeamDiagnostics>,
         isolated_stage_attempt_on_poll: Option<usize>,
         isolated_stage_progress_on_poll: Option<usize>,
         isolated_stage_drain_on_poll: Option<usize>,
@@ -44085,6 +44052,8 @@ mod tests {
                 send_observer: None,
                 response_batch_capacity: None,
                 isolated_diagnostics: None,
+                #[cfg(feature = "release-pi4")]
+                isolated_seams: None,
                 isolated_stage_attempt_on_poll: None,
                 isolated_stage_progress_on_poll: None,
                 isolated_stage_drain_on_poll: None,
@@ -44451,6 +44420,13 @@ mod tests {
 
         fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
             self.isolated_diagnostics
+        }
+
+        #[cfg(feature = "release-pi4")]
+        fn isolated_seam_diagnostics(
+            &self,
+        ) -> Option<crate::net::isolated_seam::IsolatedSeamDiagnostics> {
+            self.isolated_seams
         }
 
         fn status_report(&self) -> NetStatusReport {
@@ -47630,6 +47606,8 @@ mod tests {
         net.active_conn_id = Some(7);
         net.authenticated_conn_id = Some(7);
         net.response_batch_capacity = Some(8);
+        net.isolated_diagnostics = Some(cyw43_transient_test_diagnostics());
+        net.isolated_seams = Some(crate::net::isolated_seam::IsolatedSeamDiagnostics::default());
         let mut pump = EventPump::new(
             serial,
             TestTimer::repeated(1, 1),
@@ -47750,6 +47728,36 @@ mod tests {
             .iter()
             .any(|row| row.text.starts_with("OK NETSTATS")));
         assert!(pump.pending_console_output.len() <= CONSOLE_OUTPUT_BACKLOG_LINES);
+        assert_eq!(
+            pump.pending_console_output
+                .iter()
+                .filter(|row| row.text.starts_with("netstats: isolated_seam schema=v2"))
+                .count(),
+            7
+        );
+        let serial_body: std::vec::Vec<_> = pump
+            .pending_console_output
+            .iter()
+            .filter(|row| row.text.starts_with("net"))
+            .map(|row| row.text.clone())
+            .collect();
+        assert!(
+            serial_body.len() <= 64,
+            "complete NETSTATS body must fit TCP capture"
+        );
+        pump.pending_console_output.clear();
+        pump.last_input_source = ConsoleInputSource::Net;
+        assert!(pump.begin_sync_response_capture("NETSTATS"));
+        pump.dispatch_command_now(Command::NetStats).unwrap();
+        assert!(!pump.finish_sync_response_capture(true, true));
+        let captured = pump.pending_stream.take().unwrap();
+        assert!(!captured.sync_capture_faulted);
+        assert_eq!(captured.lines.as_slice(), serial_body.as_slice());
+        assert!(captured
+            .terminal_line
+            .as_deref()
+            .unwrap()
+            .starts_with("OK NETSTATS"));
     }
 
     #[cfg(feature = "kernel")]

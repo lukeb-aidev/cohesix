@@ -1016,6 +1016,15 @@ and consumers validate the committed identity before acting. A missing,
 duplicate, stale, or uncredited record fails closed instead of creating a
 hidden retry or spin loop.
 
+The copied Pi console child may use one publication credit for one ready
+Command/CommandBatch event plus one already-prepared egress packet. Packet
+commit precedes the event commit, which is the barrier for both pages; only
+the event notification and root fan-in are signalled. Root validates and
+retains both before its single ACK. Watermark-only wakes cannot admit a partial
+bundle. This is bounded publication work, not another service cycle or a new
+SC grant; direct GENET, QEMU, lifecycle events, owner locality and all generated
+budgets retain their existing paths.
+
 ### 3. Namespace schedule queue
 
 `/queen/schedule/ctl` is a bounded namespace control queue for requested work.
