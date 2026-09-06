@@ -10534,9 +10534,11 @@ Changes:
     Its exact ELF proves a 266,688-byte lower bound for the nested boot,
     network initialization and proof-reporting frames against the unchanged
     262,144-byte root stack; the terminal instruction remains unobserved.
-    Allocate the boxed `NetStack` destination before initializing its value
-    through safe `Box::write`, then inspect the exact optimized target frames
-    before another physical attempt. Preserve every field, storage reservation,
+    The `a5e1add5b` destination-first `Box::write` attempt leaves that frame
+    unchanged and is rejected before hardware execution. Keep the large cold
+    `with_ipv4` constructor out of driver initialization through an explicit
+    no-inline boundary, then inspect the exact optimized target frames before
+    another physical attempt. Preserve every field, storage reservation,
     initialization/error path, memory bound and driver/service owner. Host
     stack tests cover existing reservation and network contracts; they cannot
     prove target frame size or physical recovery. The full host-tool suite,

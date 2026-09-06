@@ -4128,6 +4128,10 @@ impl<D: NetDevice> NetStack<D> {
         Self::with_ipv4(hal, ip, prefix, gateway, config, backend, init_guard)
     }
 
+    // Keep the large cold construction frame out of driver initialization.
+    // Inlining it retains network temporaries across owner/proof calls and
+    // can exceed the root boot stack before network construction even starts.
+    #[inline(never)]
     fn with_ipv4(
         hal: &mut impl Hardware<Error = HalError>,
         ip: Ipv4Address,
@@ -4275,107 +4279,100 @@ impl<D: NetDevice> NetStack<D> {
                 init_now_ms,
             );
 
-        // Allocate the destination before constructing this large value. The
-        // exact target stack check must cover this constructor together with
-        // its bootstrap callers; a final heap allocation alone is not proof
-        // that LLVM avoided a full temporary on the boot stack.
-        let mut stack = Box::write(
-            Box::new_uninit(),
-            Self {
-                clock,
-                device,
-                interface,
-                sockets,
-                _reservation: reservation,
-                init_attempt: attempt,
-                icmp_echo_handle: SocketHandle::default(),
-                icmp_echo_pending_since_ms: None,
-                icmp_echo_next_poll_ms: None,
-                icmp_echo_arp_probe_sent: false,
-                icmp_echo_reply_constructed_this_turn: false,
-                tcp_handle: SocketHandle::default(),
-                tcp_standby_handle: SocketHandle::default(),
-                standby_listener_armed: false,
-                standby_pending_since_ms: None,
-                server: TcpConsoleServer::new(
-                    console_config.auth_token,
-                    console_config.idle_timeout_ms,
-                ),
-                outbound: OutboundCoalescer::new(),
-                telemetry: NetTelemetry::default(),
-                backend,
-                mode: console_config.policy.mode,
-                interface_policy: console_config.policy.interface,
-                wifi_credentials: console_config.wifi_credentials,
+        let mut stack = Box::new(Self {
+            clock,
+            device,
+            interface,
+            sockets,
+            _reservation: reservation,
+            init_attempt: attempt,
+            icmp_echo_handle: SocketHandle::default(),
+            icmp_echo_pending_since_ms: None,
+            icmp_echo_next_poll_ms: None,
+            icmp_echo_arp_probe_sent: false,
+            icmp_echo_reply_constructed_this_turn: false,
+            tcp_handle: SocketHandle::default(),
+            tcp_standby_handle: SocketHandle::default(),
+            standby_listener_armed: false,
+            standby_pending_since_ms: None,
+            server: TcpConsoleServer::new(
+                console_config.auth_token,
+                console_config.idle_timeout_ms,
+            ),
+            outbound: OutboundCoalescer::new(),
+            telemetry: NetTelemetry::default(),
+            backend,
+            mode: console_config.policy.mode,
+            interface_policy: console_config.policy.interface,
+            wifi_credentials: console_config.wifi_credentials,
+            wifi_connection_generation,
+            #[cfg(feature = "kernel")]
+            wifi_association_supervisor,
+            wifi_static_address_pending: false,
+            ip,
+            gateway,
+            prefix_len: prefix,
+            listen_port: console_config.listen_port,
+            session_active: false,
+            disconnect_phase: ConsoleDisconnectPhase::Idle,
+            disconnect_phase_started_ms: None,
+            disconnect_reason: NetConsoleDisconnectReason::Quit,
+            disconnect_forced_aborts: 0,
+            listener_announced: false,
+            listener_defer_reason: None,
+            active_client_id: None,
+            client_counter: 0,
+            auth_state: AuthState::Start,
+            session_state: SessionState::default(),
+            conn_bytes_read: 0,
+            conn_bytes_written: 0,
+            events: HeaplessVec::new(),
+            service_logged: false,
+            last_poll_snapshot: None,
+            peer_endpoint: None,
+            dhcp_handle: None,
+            dhcp: dhcp_enabled.then(|| DhcpClient::new(console_config.policy.dhcp)),
+            dhcp_started: false,
+            dhcp_restart_after_ms: None,
+            wifi_dhcp_last_eapol_rx: 0,
+            wifi_dhcp_eapol_quiet_since_ms: None,
+            wifi_dhcp_eapol_settle_logged: false,
+            wifi_rx_admission_blocked: false,
+            wifi_rx_admission_next_retry_ms: 0,
+            udp_beacon_handle: None,
+            udp_echo_handle: None,
+            tcp_smoke_handle: None,
+            tcp_smoke_out_handle: None,
+            #[cfg(feature = "net-outbound-probe")]
+            tcp_probe_handle: None,
+            counters: NetCounters::default(),
+            cyw43_generation_proof_baseline: Cyw43GenerationProofBaseline::capture(
                 wifi_connection_generation,
-                #[cfg(feature = "kernel")]
-                wifi_association_supervisor,
-                wifi_static_address_pending: false,
-                ip,
-                gateway,
-                prefix_len: prefix,
-                listen_port: console_config.listen_port,
-                session_active: false,
-                disconnect_phase: ConsoleDisconnectPhase::Idle,
-                disconnect_phase_started_ms: None,
-                disconnect_reason: NetConsoleDisconnectReason::Quit,
-                disconnect_forced_aborts: 0,
-                listener_announced: false,
-                listener_defer_reason: None,
-                active_client_id: None,
-                client_counter: 0,
-                auth_state: AuthState::Start,
-                session_state: SessionState::default(),
-                conn_bytes_read: 0,
-                conn_bytes_written: 0,
-                events: HeaplessVec::new(),
-                service_logged: false,
-                last_poll_snapshot: None,
-                peer_endpoint: None,
-                dhcp_handle: None,
-                dhcp: dhcp_enabled.then(|| DhcpClient::new(console_config.policy.dhcp)),
-                dhcp_started: false,
-                dhcp_restart_after_ms: None,
-                wifi_dhcp_last_eapol_rx: 0,
-                wifi_dhcp_eapol_quiet_since_ms: None,
-                wifi_dhcp_eapol_settle_logged: false,
-                wifi_rx_admission_blocked: false,
-                wifi_rx_admission_next_retry_ms: 0,
-                udp_beacon_handle: None,
-                udp_echo_handle: None,
-                tcp_smoke_handle: None,
-                tcp_smoke_out_handle: None,
-                #[cfg(feature = "net-outbound-probe")]
-                tcp_probe_handle: None,
-                counters: NetCounters::default(),
-                cyw43_generation_proof_baseline: Cyw43GenerationProofBaseline::capture(
-                    wifi_connection_generation,
-                    NetCounters::default(),
-                ),
-                self_test: SelfTestState::new(stage_policy.allow_selftest),
-                stage_policy,
-                tx_only_sent: false,
-                tcp_smoke_outbound_sent: false,
-                tcp_smoke_outbound_connecting: false,
-                tcp_smoke_last_attempt_ms: 0,
-                #[cfg(feature = "net-outbound-probe")]
-                probe_sent: false,
-                #[cfg(feature = "net-outbound-probe")]
-                probe_last_attempt_ms: 0,
-                #[cfg(feature = "net-outbound-probe")]
-                probe_fail_count: 0,
-                #[cfg(feature = "net-outbound-probe")]
-                probe_last_log_ms: 0,
-                #[cfg(feature = "net-outbound-probe")]
-                probe_warned_once: false,
-                #[cfg(feature = "net-outbound-probe")]
-                probe_hint_logged: false,
-                last_now_ms: None,
-                same_tick_poll_count: 0,
-                time_stall_warned: false,
-                budgeted_phase: BudgetedNetPhase::Interface,
-            },
-        );
+                NetCounters::default(),
+            ),
+            self_test: SelfTestState::new(stage_policy.allow_selftest),
+            stage_policy,
+            tx_only_sent: false,
+            tcp_smoke_outbound_sent: false,
+            tcp_smoke_outbound_connecting: false,
+            tcp_smoke_last_attempt_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_sent: false,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_last_attempt_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_fail_count: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_last_log_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_warned_once: false,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_hint_logged: false,
+            last_now_ms: None,
+            same_tick_poll_count: 0,
+            time_stall_warned: false,
+            budgeted_phase: BudgetedNetPhase::Interface,
+        });
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
         stack.initialise_icmp_echo_socket()?;
