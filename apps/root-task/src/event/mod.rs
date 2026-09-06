@@ -6088,14 +6088,14 @@ fn direct_genet_continuation_mode_for_contract(
         && service.admitted
         && root.core == 0
         && root.scheduling_context_slot == 1
-        && root.scheduling_context_bits == 7
+        && root.scheduling_context_bits == 8
         && root.sched_control_core == 0
         && root.budget_us == 5_500
         && root.period_us == 10_000
         && root.deadline_us == 10_000
         && root.blocking_us == 0
         && root.jitter_us == 0
-        && root.max_refills == 2
+        && root.max_refills == 8
         && root.priority == 200
         && root.mcp == 200
         && root.timeout_badge == 653_131_777
@@ -63089,14 +63089,14 @@ mod tests {
             .expect("generated console-network service task must exist");
         root.core = 0;
         root.scheduling_context_slot = 1;
-        root.scheduling_context_bits = 7;
+        root.scheduling_context_bits = 8;
         root.sched_control_core = 0;
         root.budget_us = 5_500;
         root.period_us = 10_000;
         root.deadline_us = 10_000;
         root.blocking_us = 0;
         root.jitter_us = 0;
-        root.max_refills = 2;
+        root.max_refills = 8;
         root.priority = 200;
         root.mcp = 200;
         root.timeout_badge = 653_131_777;
@@ -63193,6 +63193,14 @@ mod tests {
 
         for drifted_root in [
             crate::generated::TemporalTaskConfig { core: 1, ..root },
+            crate::generated::TemporalTaskConfig {
+                scheduling_context_bits: 7,
+                ..root
+            },
+            crate::generated::TemporalTaskConfig {
+                max_refills: 2,
+                ..root
+            },
             crate::generated::TemporalTaskConfig {
                 budget_us: 5_499,
                 ..root

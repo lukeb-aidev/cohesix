@@ -299,7 +299,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                 )
             } else {
                 (
-                    "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
+                    "m26e-pi4-root-fragmented-refill-candidate-v28",
                     5_500,
                     5_100,
                     200,
@@ -315,7 +315,15 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             assert_eq!(root["timeout_policy"], "natural-postpone", "{profile}");
             assert_eq!(root["budget_us"], expected_budget, "{profile}");
             assert_eq!(root["period_us"], 10_000, "{profile}");
-            assert_eq!(root["max_refills"], 2, "{profile}");
+            assert_eq!(
+                root["max_refills"],
+                if *profile == "configs/root_task.toml" {
+                    2
+                } else {
+                    8
+                },
+                "{profile}"
+            );
             assert_eq!(
                 root["response_time_us"], expected_root_response,
                 "{profile}"
