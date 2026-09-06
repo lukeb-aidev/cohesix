@@ -71,7 +71,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.release.package.pi4-driver-runtime]
-opt-level = 3
+opt-level = "s"
 
 [profile.release.package.smoltcp]
 opt-level = 3
