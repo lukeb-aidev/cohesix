@@ -1925,7 +1925,17 @@ only inside explicit `smp mcs`, before `[smp:mcs/v1] end`. It contains exactly
 27 bounded rows: nine `mcs_quantum*` rows, command-publication-to-dispatch and
 root-observation-to-dispatch rows, fixed progress and ten-bit pending legends,
 six `mcs_yield*` rows, three schema-stable budget rows, and five passive
-`mcs_idle*` rows. The separate Pi `netstats` body contains eight
+`mcs_idle*` rows. The selected Pi MCS cross-core topology additionally emits up
+to five `[smp:consumed/v1]` lines for retained lifecycle CPU-accounting evidence.
+Test exact cumulative differences, intervening drains, missing/error samples,
+backwards counters, generation replacement, late asynchronous completion,
+single-claim bounds and maximum-width rendering. Reserve all four WiFi owner
+rows in the linked-serial backlog test. Fresh Pi evidence must show valid
+start/end pairs through the existing root/console and driver-supervisor cap
+owners, bounded measurement wall costs, and no unexpected fault before using
+the totals to select a repair. These asynchronous kernel receipts are not
+per-packet CPU measurements or automatic proof of refill exhaustion. The
+separate Pi `netstats` body contains eight
 `mcs_session*` rows. Exercise linked serial backpressure with the full
 selected non-Worker registration allowance and require the `smp mcs` end marker,
 all session rows in `netstats`, and the protocol ACK within unchanged capacity.

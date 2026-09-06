@@ -343,6 +343,23 @@ rejection. These sample the existing predicates without changing them. A clear
 after-enable sample permits the existing wait but does not prove the syscall
 blocked, and timer rejection alone does not identify an inner HAL failure.
 
+Pi MCS `smp mcs` also appends `[smp:consumed/v1]` kernel CPU evidence for the
+latest observed TCP lifecycle. The header reports decimal `generation`, `conn`,
+`hz`, boolean `ended`, and hexadecimal `selected`, `pending`, `claimed` role
+masks (root-control bit 0, console-network bit 1, GENET bit 2, CYW43 bit 3,
+SDIO bit 4). GENET selects three owners and WiFi four, so the batch contains
+at most five nonempty lines including the header. Per-owner `cpu_us` is a
+decimal difference of cumulative kernel Consumed receipts. `cap_gen`, `begin`
+and `end` are hexadecimal pairs; each time pair brackets that owner's actual
+sampling syscall in the generated virtual-counter epoch. `valid=false` makes
+the numeric placeholder unusable as a CPU measurement. Missing samples,
+errors, backwards clocks or totals, and generation changes invalidate a pair.
+Read these retained rows before opening another TCP connection. Observed
+Connected/Disconnected boundaries differ from the host benchmark interval;
+driver-owner sampling is asynchronous and its own wall cost is visible.
+These totals do not localize a packet or prove that a refill was exhausted.
+No rows are emitted during the traffic itself, and QEMU does not collect them.
+
 Eight `mcs_session*` v1 rows retain the latest observed nonzero TCP connection
 and runtime generation after disconnect, until a different nonzero identity
 is observed. Zero/absent identity never erases this evidence; it is not an

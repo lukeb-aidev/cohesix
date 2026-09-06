@@ -20902,6 +20902,16 @@ where
         for line in crate::pi4_mcs_recorder::idle_snapshot_lines() {
             self.emit_console_line(line.as_str());
         }
+        #[cfg(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            any(sel4_config_kernel_mcs, test)
+        ))]
+        for line in crate::pi4_mcs_consumed::lines() {
+            if !line.is_empty() {
+                self.emit_console_line(line.as_str());
+            }
+        }
         self.emit_console_line("[smp:mcs/v1] end");
     }
 
@@ -47518,6 +47528,11 @@ mod tests {
             .filter(|task| task.kind != crate::generated::TemporalTaskKind::Worker)
         {
             pump.emit_console_line("[smp:mcs/v1] source=runtime registration=present");
+        }
+        // The host has no live session. Reserve the four selected WiFi owner
+        // rows; the renderer below supplies the accounting header itself.
+        for _ in 0..4 {
+            pump.emit_console_line("[smp:consumed/v1] task=reserved valid=false");
         }
         pump.emit_smp_mcs();
         assert_eq!(

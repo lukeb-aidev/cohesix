@@ -298,6 +298,9 @@ static DRIVER_FAULT_REPLY_BUSY: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_CNODE: AtomicUsize = AtomicUsize::new(0);
 static TARGET_DRIVER_SUPERVISOR_CNODE: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+static TARGET_DRIVER_ACCOUNTING_SIGNAL: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_TCB_CAP_SLOTS: [AtomicUsize; FAULT_REGISTRY_CAPACITY] =
     [const { AtomicUsize::new(0) }; FAULT_REGISTRY_CAPACITY];
 static TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -1445,8 +1448,28 @@ pub fn root_control_consumed_time_us() -> Result<u64, CriticalTcbConstructionErr
     {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
-    sel4::sched_context_consumed(sel4_sys::seL4_CapInitThreadSC)
-        .map_err(|error| sel4_error("critical.root-control-consumed", error))
+    let result = sel4::sched_context_consumed(sel4_sys::seL4_CapInitThreadSC)
+        .map_err(|error| sel4_error("critical.root-control-consumed", error));
+    #[cfg(feature = "release-pi4")]
+    crate::pi4_mcs_consumed::record_drain(
+        crate::pi4_mcs_consumed::Role::Root,
+        result.as_ref().ok().copied(),
+    );
+    result
+}
+
+/// Publish a bounded CPU-accounting request before prompting its existing
+/// driver owner. This cap is the already generated one-hot supervisor signal;
+/// root never invokes a moved driver SC. Fault records retain precedence.
+#[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+pub(crate) fn signal_driver_accounting_request() {
+    let cap = TARGET_DRIVER_ACCOUNTING_SIGNAL.load(Ordering::Acquire) as seL4_CPtr;
+    if cap != sel4_sys::seL4_CapNull
+        && TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.load(Ordering::Acquire)
+        && !TARGET_FATAL.load(Ordering::Acquire)
+    {
+        sel4::signal_unchecked(cap);
+    }
 }
 
 /// Construct the exact MCS critical-domain topology in a suspended state.
@@ -1693,6 +1716,8 @@ pub fn construct_critical_tcb_runtime(
             Ordering::Acquire,
         )
         .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+    TARGET_DRIVER_ACCOUNTING_SIGNAL.store(signals.driver_supervisor as usize, Ordering::Release);
     for (index, handle) in handles.iter().enumerate() {
         register_target_fault_source(
             handle.id,
@@ -2601,6 +2626,8 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
                 Some(CHILD_EMERGENCY_SIGNAL_SLOT),
             );
         }
+        #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+        let mut fault_work_observed = false;
         for _ in 0..DRIVER_FAULT_RECORD_CAPACITY {
             let record = match deferred_record.take() {
                 Some(record) => Some(record),
@@ -2616,6 +2643,10 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
             let Some(record) = record else {
                 break;
             };
+            #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+            {
+                fault_work_observed = true;
+            }
             match crate::hal::driver_task::root_driver_supervisor_contain_fault(
                 record,
                 ipc_buffer_vaddr as usize,
@@ -2656,6 +2687,16 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
         };
         if retry {
             sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);
+        }
+        #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+        if !retry && !fault_work_observed && !TARGET_FATAL.load(Ordering::Acquire) {
+            if let Some((request, role)) = crate::pi4_mcs_consumed::driver_request() {
+                let sample = crate::hal::driver_task::driver_supervisor_consumed_sample(role);
+                crate::pi4_mcs_consumed::store(request, role, sample);
+                if crate::pi4_mcs_consumed::driver_pending() {
+                    sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);
+                }
+            }
         }
     }
 }

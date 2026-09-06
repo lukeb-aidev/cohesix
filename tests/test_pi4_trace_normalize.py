@@ -2320,6 +2320,22 @@ def test_gate_summary_tracks_netstatus_tcp_ready_proof() -> None:
     assert record["NETTEST_PROOF"] == "no"
 
 
+def test_owner_cpu_receipt_stays_passive_and_preserves_invalidity() -> None:
+    """Kernel CPU receipts survive normalization without inventing acceptance."""
+    line = (
+        "[smp:consumed/v1] task=driver-genet valid=false cpu_us=0 "
+        "cap_gen=1/2 begin=100/110 end=200/210"
+    )
+    event = normalizer.parse_line(line, 1)
+    assert event is not None
+    assert event.domain == "driver"
+    assert event.raw == line
+    assert event.fields["valid"] == "false"
+    assert event.fields["cpu_us"] == "0"
+    assert event.fields["begin"] == "100/110"
+    assert event.fields["end"] == "200/210"
+
+
 def test_gate_summary_keeps_selected_network_after_passive_component_state() -> None:
     events = normalizer.parse_events(
         [

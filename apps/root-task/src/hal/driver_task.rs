@@ -9919,6 +9919,52 @@ pub fn driver_contract_for_runtime_slot(runtime_slot: u16) -> Option<DriverTaskC
     }
 }
 
+/// Sample one already-owned network-driver SC from driver-supervisor CSpace.
+/// Only the supervisor entry calls this function. Root retains no callable
+/// copy of the moved SC; generation and admission fences surround the read.
+#[cfg(all(feature = "kernel", feature = "release-pi4", sel4_config_kernel_mcs))]
+pub(crate) fn driver_supervisor_consumed_sample(
+    role: crate::pi4_mcs_consumed::Role,
+) -> crate::pi4_mcs_consumed::Sample {
+    use crate::pi4_mcs_consumed::{record_drain, Role, Sample};
+    let contract = match role {
+        Role::Genet => GENET_DRIVER_TASK_CONTRACT,
+        Role::Cyw43 => CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        Role::Sdio => SDIO_HOST_DRIVER_TASK_CONTRACT,
+        Role::Root | Role::Console => return Sample::default(),
+    };
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return Sample::default();
+    };
+    let permitted = pi4_driver_task_runtime_image_spec_for_contract(contract)
+        .and_then(|spec| driver_task_temporal_config(spec.hot_path))
+        .is_some_and(|task| task.admitted && task.consumed_time_evidence);
+    let generation = slot.mcs_cap_generation.load(Ordering::Acquire);
+    let sc = slot.mcs_sched_context.load(Ordering::Acquire);
+    let admitted = || {
+        slot.mcs_supervisor_authority_ready.load(Ordering::Acquire) == 1
+            && slot.mcs_command_admission_open.load(Ordering::Acquire) != 0
+            && slot.mcs_call_phase.load(Ordering::Acquire) <= DRIVER_TASK_MCS_CALL_ASSOCIATED
+    };
+    if !permitted || generation == 0 || sc == 0 || !admitted() {
+        return Sample::default();
+    }
+    let entered = crate::arch::aarch64::timer::timer_counter_ticks();
+    let result = crate::sel4::sched_context_consumed(sc as sel4_sys::seL4_CPtr);
+    let returned = crate::arch::aarch64::timer::timer_counter_ticks();
+    record_drain(role, result.ok());
+    Sample::capture(
+        role,
+        u64::from(generation),
+        entered,
+        returned,
+        result.is_ok()
+            && admitted()
+            && slot.mcs_cap_generation.load(Ordering::Acquire) == generation
+            && slot.mcs_sched_context.load(Ordering::Acquire) == sc,
+    )
+}
+
 /// Return the exact generated fault-registry slot for one linked runtime.
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn driver_runtime_registry_slot(contract: DriverTaskContract) -> Option<u16> {

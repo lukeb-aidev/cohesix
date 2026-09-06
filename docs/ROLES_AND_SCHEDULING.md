@@ -928,6 +928,26 @@ context remains the hard execution bound, while every inner phase, queue, fault
 check, and operator-debt rule remains bounded. This QEMU service composition
 does not alter the physical Pi rotor or any Pi hardware owner.
 
+On the selected physical-Pi cross-core signal-only console topology, observed
+TCP Connected/Disconnected edges bracket kernel Consumed evidence for
+root-control, console-network and GENET, or root-control, console-network,
+CYW43 and SDIO. Root invokes only its retained root/console SC caps. A bounded
+request in the existing shared root critical-domain state precedes one signal
+through the generated driver-supervisor capability. Driver-supervisor drains
+fault work first and samples at most one selected, admitted driver SC from its
+own CSpace per wake. The finite WiFi remainder uses its existing self-signal;
+there is no timer, retry of a claimed sample, new capability, device action or
+fault Reply use. A fault turn suppresses diagnostic work. Missing or contended
+samples remain incomplete, and capability-generation drift invalidates a pair.
+Existing root Consumed drains contribute to a cumulative evidence sum without
+changing their returned values or their passive-admission order. Each sampling
+syscall has entry/return virtual-counter timestamps, since the selected kernel
+may stall a remote SC while reading its accounting. Owner intervals are
+asynchronous and do not identify an individual packet or prove refill
+exhaustion. Consumed clears evidence, not budget, and the kernel's current
+per-core accounting can enter a later receipt. QEMU and retired YieldTo
+comparison topologies do not start these samples.
+
 Physical-Pi serial, local-seat, and TCP ingress always admits bounded raw input,
 echo, parsing, and root-owned diagnostics while NineDoor is attached. Only a
 parsed command that can enter passive NineDoor validates the generated active

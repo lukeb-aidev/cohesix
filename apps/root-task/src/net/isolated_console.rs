@@ -1042,6 +1042,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 self.disconnect_issued = false;
             }
             ExchangeKind::Connected => {
+                #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+                self.runtime
+                    .sample_tcp_session_consumed(connection_id, false);
                 // A new child connection identity cannot inherit commands
                 // retained for any earlier authenticated peer.
                 self.lines.clear();
@@ -1178,6 +1181,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     .record_command_or_batch_observed(event.now_ms(), root_observed_ms);
             }
             ExchangeKind::Disconnected => {
+                #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+                self.runtime
+                    .sample_tcp_session_consumed(connection_id, true);
                 // Root observes lifecycle events before command lines. Retire
                 // every not-yet-dispatched command with the disconnected
                 // identity so it cannot execute after a replacement connects.

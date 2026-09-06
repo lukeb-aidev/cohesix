@@ -140,6 +140,13 @@ pub(crate) mod qemu_flight_recorder;
 /// Bounded physical-Pi composer-quantum and scheduler-Yield timing diagnostics.
 pub(crate) mod pi4_mcs_recorder;
 
+#[cfg(all(
+    feature = "kernel",
+    feature = "release-pi4",
+    any(sel4_config_kernel_mcs, test)
+))]
+pub(crate) mod pi4_mcs_consumed;
+
 #[cfg(feature = "kernel")]
 /// Deterministic lifecycle state machine for operator control.
 pub mod lifecycle;

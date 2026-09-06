@@ -19,6 +19,14 @@ mount, ticket, federation, lifecycle, and PEFT procedures live in
 See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
 evidence terms.
 
+The Pi `[smp:consumed/v1]` diagnostic rows extend only explicit `smp mcs` text.
+The host-tool catalog, `tools/cohesix-py`, generated integration contracts and
+raw/REST benchmark workloads retain their existing framing, authentication,
+namespace, quota, report and acceptance contracts. Consumers may retain these
+lines as diagnostic text; `valid=false` and unfinished owner intervals must
+not become CPU utilization or performance claims. The field contract is in
+[USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
+
 ## Generated integration truth
 
 `coh-rtc` compiles

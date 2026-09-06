@@ -892,6 +892,53 @@ impl ConsoleNetworkRuntime {
         self.direct_genet_yield_accounting
     }
 
+    /// Bracket a physical TCP identity through the SCs already owned by each
+    /// supervisor. This runs at observed lifecycle edges, never per packet.
+    /// A delayed or fault-preempted driver sample remains explicitly missing.
+    #[cfg(all(feature = "release-pi4", sel4_config_kernel_mcs))]
+    pub(crate) fn sample_tcp_session_consumed(&self, connection: u64, finish: bool) {
+        use crate::pi4_mcs_consumed::{self as accounting, Role, Sample};
+        let contract = self.boundary.contract();
+        if !self.activated
+            || self.containment_started
+            || self.contained
+            || self.direct_virtio()
+            || !contract.cross_core_signal_only
+            || contract.yield_to_child_after_signal
+        {
+            return;
+        }
+        let Some(request) =
+            accounting::request(self.generation(), connection, self.direct_genet(), finish)
+        else {
+            return;
+        };
+        let entered = crate::arch::aarch64::timer::timer_counter_ticks();
+        let result = super::critical_tcb::root_control_consumed_time_us();
+        let returned = crate::arch::aarch64::timer::timer_counter_ticks();
+        accounting::store(
+            request,
+            Role::Root,
+            Sample::capture(Role::Root, 1, entered, returned, result.is_ok()),
+        );
+        let entered = crate::arch::aarch64::timer::timer_counter_ticks();
+        let result = sel4::sched_context_consumed(self.scheduling_context);
+        let returned = crate::arch::aarch64::timer::timer_counter_ticks();
+        accounting::record_drain(Role::Console, result.ok());
+        accounting::store(
+            request,
+            Role::Console,
+            Sample::capture(
+                Role::Console,
+                self.generation(),
+                entered,
+                returned,
+                result.is_ok(),
+            ),
+        );
+        super::critical_tcb::signal_driver_accounting_request();
+    }
+
     /// Stage one virtual/admitted NIC packet and signal its exact one-hot wake.
     pub fn stage_ingress(&mut self, packet: &[u8]) -> Result<u64, BoundaryError> {
         if self.direct_data_plane() || !self.activated || self.contained {
