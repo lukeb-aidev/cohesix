@@ -20929,9 +20929,9 @@ where
                     let identity = entry.identity;
                     crate::mcs_operator_inspection::McsRegistrationState {
                         generation: [
-                            identity.lease_epoch,
-                            identity.supervisor_generation,
-                            identity.cap_generation,
+                            u64::from(identity.lease_epoch),
+                            u64::from(identity.supervisor_generation),
+                            u64::from(identity.cap_generation),
                         ],
                         terminal: entry.terminal,
                     }
