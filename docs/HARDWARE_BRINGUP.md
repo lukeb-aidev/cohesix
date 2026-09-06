@@ -82,6 +82,12 @@ single codegen unit and maximum-size `z` optimization for Pi and QEMU. The
 selected manifest's ELF/page admission, stack and rootfs size bounds remain
 mandatory. A compiler-profile experiment must qualify exact target stack use
 as well as artifact size; compilation alone does not qualify boot or performance.
+The root image reserves a 1-MiB initial stack, separate from its unchanged
+2-MiB bootstrap heap. Exact size-optimized Pi code exceeds 512 KiB along the
+retained bootstrap/GENET call chain before deeper calls. The previous 256-KiB
+stack allowed downward writes into the adjacent heap. The mapped gap above
+the stack separates IPC storage and is not a downward overflow guard. Child
+stack/page declarations and rootfs archive limits remain independently enforced.
 
 | Target | Manifest | seL4 build truth |
 | --- | --- | --- |

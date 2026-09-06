@@ -1253,8 +1253,15 @@ progress magic, sequence, phase, and auxiliary identity before a replacement
 generation can observe it. Production AArch64 coverage must configure the
 EventPump in place, borrow it through both ordinary and deferred console loops,
 retain the CYW43 supervisor in place while beginning its boot episode exactly
-once, and retain material emitted headroom within the 256-KiB root stack; a
+once, and retain material emitted headroom within the 1-MiB root stack; a
 source-level linker-size check alone is insufficient.
+The exact size-optimized Pi bootstrap/GENET call chain exceeds 512 KiB before
+deeper callees. The old 256-KiB declaration was insufficient even on images
+that completed hardware boots. Bind frame inspection to the exact unstripped
+ELF, include outlined stack-probe helpers and retained callers, and preserve
+failed candidates. The mapped gap above the downward-growing root stack is
+IPC separation, not overflow detection; do not infer heap safety from boot
+success or the layout equality test.
 Runtime
 tests must drive the retained Linux-ordered
 GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms

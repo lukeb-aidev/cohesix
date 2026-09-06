@@ -10511,7 +10511,25 @@ Changes:
     `a5e1add5b` leaves that bound unchanged, while the no-inline `0cf98579f`
     variant still requires at least 265,568 bytes. Both are rejected statically
     before hardware execution. Restore the original `z` profile and constructor;
-    preserve all failed evidence and unchanged memory/SC admission bounds.
+    preserve all failed evidence and unchanged child/SC admission bounds.
+  - Root bootstrap stack admission repair — the exact restored size-optimized
+    `bc6bf415d` Pi ELF also violates the prior 256-KiB declaration: retained
+    `kernel::start` (24,368 bytes), `kernel::bootstrap` (303,824 bytes), and
+    GENET construction (208,688 bytes) already total 536,880 bytes before deeper
+    calls. Outlined probe loops are included; direct call edges are verified.
+    Reject this candidate before flash. Set the root linker reservation and
+    independent layout policy to 1 MiB, with headroom for deeper service calls,
+    retaining the 2-MiB heap, child declarations, SC policy and archive limits.
+    Correct the misleading guard comment: the mapped gap above the stack only
+    separates IPC storage and cannot detect downward overflow into the heap.
+    This repairs a measured memory-layout defect, not a compiler speed claim.
+    Inspect exact emitted frames and memory admission, run layout contracts and
+    the shared root-MCS QEMU canary, then require fresh physical boot evidence.
+    No existing successful boot establishes absence of prior heap corruption;
+    no specific NineDoor fault or latency sample is attributed to it without
+    further evidence. Full host-tool/Python/benchmark compatibility review:
+    initial image memory footprint changes by 768 KiB; packaging and loader
+    consume the ELF bounds. Wire/API/workload/report formats need no change.
   - Deadline-complete WiFi causal waits — retain the distinct persistent/steady
     parent deadline classification, but permit its bounded fan-in wait after
     exact physical WiFi topology and the existing PCIe timer's live, sealed

@@ -89,8 +89,8 @@ fn linker_stack_size_matches_bootstrap_policy_guard() {
     let guard_size = parse_hex_assignment(&layout, "const EXPECTED_STACK_SIZE");
     assert_eq!(
         guard_size,
-        256 * 1024,
-        "root stack policy must remain 256 KiB"
+        1024 * 1024,
+        "root stack policy must admit the measured boot chain with service headroom"
     );
     assert_eq!(
         linker_size, guard_size,

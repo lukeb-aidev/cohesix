@@ -7,8 +7,8 @@ OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 
 HEAP_SIZE = 0x00200000;      /* 2 MiB bootstrap heap for 1500-worker envelopes. */
-__stack_guard = 0x00002000;  /* Guard page to catch stack overruns. */
-__stack_size = 0x00040000;   /* 256 KiB for the retained EventPump + CYW43 supervisor chain. */
+__stack_guard = 0x00002000;  /* Mapped separation from the following IPC buffer, not a downward guard. */
+__stack_size = 0x00100000;   /* 1 MiB: emitted bootstrap/GENET frames exceed 512 KiB before deeper callees. */
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
@@ -99,10 +99,9 @@ SECTIONS
   } :data
 
   /*
-  * Leave a guard gap below the IPC buffer to avoid stack overflows corrupting
-  * the kernel-provided IPC buffer page (and the bootinfo frame that follows
-  * it). The init thread stack must never run right up against the IPC buffer
-  * mapping.
+  * Retain separation below the kernel-provided IPC buffer page and bootinfo.
+  * This mapped gap is above the downward-growing stack: it does not detect
+  * downward overflow. Exact emitted stack bounds must protect the heap below.
   */
   . = ALIGN(0x1000);
   .stack_guard (NOLOAD) : ALIGN(16) {
