@@ -60,7 +60,7 @@ image, target, workload, comparator, and required Test Plan state are complete.
 
 Bind compiler-profile changes to a new exact image even when scheduling and
 protocol source are unchanged. Release package speed optimization for
-`root-task`, `console-network-runtime`, `pi4-driver-runtime` and `smoltcp`
+`root-task`, `console-network-runtime` and `smoltcp`
 does not change the raw request workload, throughput interval, p95 arithmetic
 or target thresholds. Compare fresh target receipts and retain image/page
 admission plus the QEMU canary as separate qualification evidence.

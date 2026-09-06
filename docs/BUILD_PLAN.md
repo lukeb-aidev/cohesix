@@ -10503,11 +10503,12 @@ Changes:
     observations support reducing execution cost but do not prove which SC
     postpones any particular request. Replace maximum-size optimization only
     for `root-task`, `console-network-runtime`, and `smoltcp` with Cargo
-    release package `opt-level = 3`; select `s` for `pi4-driver-runtime`.
+    release package `opt-level = 3`; retain `z` for `pi4-driver-runtime`.
     The initial driver level-3 candidate `ab0411baf` was rejected before
     packaging because its ELF spans 407 pages against the unchanged 320-page
-    declaration. Preserve that failure and use the less aggressive size
-    policy instead of enlarging the image allowance. Preserve the release
+    declaration. The level-`s` follow-up `710c28536` also exceeded admission
+    at 329 pages. Preserve both failures and retain the original driver
+    optimization instead of enlarging its image allowance. Preserve the release
     profile name, fat LTO, one codegen unit, panic/overflow settings, all
     generated object/page and rootfs bounds, MCS numerics, driver ownership,
     protocol behavior and QEMU scheduling. Reject an oversized artifact;
