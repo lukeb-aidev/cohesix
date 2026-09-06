@@ -957,7 +957,7 @@ fn pi_root_idle_receive_multiplexes_endpoint_and_fanin_after_the_final_fence() {
         2,
         "the exact enable Call must be fenced by complete durable predicates"
     );
-    assert!(prepare.contains("before_enable.exact_direct_genet_topology"));
+    assert!(prepare.contains("before_enable.exact_network_fanin_topology"));
 
     let evidence_end = event[prepare_end..]
         .find("/// Return whether attached WiFi")
