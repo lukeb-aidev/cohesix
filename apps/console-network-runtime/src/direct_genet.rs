@@ -16,14 +16,15 @@
 use core::sync::atomic::{fence, AtomicU64, AtomicU8, Ordering};
 
 use console_network_runtime::abi::{
-    DirectGenetConsumerCommit, DirectGenetControlPage, DirectGenetCursorRole,
+    DirectGenetConsumerCommit, DirectGenetControlState, DirectGenetCursorRole,
     DirectGenetCursorState, DirectGenetDirection, DirectGenetError, DirectGenetLayout,
     DirectGenetProducerCommit, DirectGenetRingSnapshot, DirectGenetSlotPage, DirectGenetSlotRecord,
-    DIRECT_GENET_CONTROL_HEADER_BYTES, DIRECT_GENET_CURSOR_STATE_BYTES,
-    DIRECT_GENET_POISON_INVALID_CONTROL, DIRECT_GENET_POISON_INVALID_CURSOR,
-    DIRECT_GENET_POISON_INVALID_SLOT, DIRECT_GENET_POISON_STALE_GENERATION,
-    DIRECT_GENET_RX_CONSUMER_STATE_OFFSET, DIRECT_GENET_RX_PRODUCER_STATE_OFFSET,
-    DIRECT_GENET_RX_SLOT_COUNT, DIRECT_GENET_SLOT_COMMIT_OFFSET, DIRECT_GENET_SLOT_HEADER_BYTES,
+    DIRECT_GENET_CONTROL_HEADER_BYTES, DIRECT_GENET_CONTROL_STATE_BYTES,
+    DIRECT_GENET_CURSOR_STATE_BYTES, DIRECT_GENET_POISON_INVALID_CONTROL,
+    DIRECT_GENET_POISON_INVALID_CURSOR, DIRECT_GENET_POISON_INVALID_SLOT,
+    DIRECT_GENET_POISON_STALE_GENERATION, DIRECT_GENET_RX_CONSUMER_STATE_OFFSET,
+    DIRECT_GENET_RX_PRODUCER_STATE_OFFSET, DIRECT_GENET_RX_SLOT_COUNT,
+    DIRECT_GENET_SLOT_COMMIT_OFFSET, DIRECT_GENET_SLOT_HEADER_BYTES,
     DIRECT_GENET_SLOT_PAYLOAD_OFFSET, DIRECT_GENET_TX_CONSUMER_STATE_OFFSET,
     DIRECT_GENET_TX_PRODUCER_STATE_OFFSET, DIRECT_GENET_TX_SLOT_COUNT, ETHERNET_FRAME_BYTES,
     SHARED_PAGE_BYTES,
@@ -341,7 +342,13 @@ impl DirectGenetLink {
     fn control_sample(
         &self,
         direction: DirectGenetDirection,
-    ) -> Result<([u8; SHARED_PAGE_BYTES], DirectGenetRingSnapshot), DirectGenetError> {
+    ) -> Result<
+        (
+            [u8; DIRECT_GENET_CONTROL_STATE_BYTES],
+            DirectGenetRingSnapshot,
+        ),
+        DirectGenetError,
+    > {
         let (producer_offset, consumer_offset) = match direction {
             DirectGenetDirection::Rx => (
                 DIRECT_GENET_RX_PRODUCER_STATE_OFFSET,
@@ -372,7 +379,7 @@ impl DirectGenetLink {
         if generation == 0 || seal == 0 || producer_commit == 0 || consumer_commit == 0 {
             return Err(DirectGenetError::StateChanged);
         }
-        let mut snapshot = [0u8; SHARED_PAGE_BYTES];
+        let mut snapshot = [0u8; DIRECT_GENET_CONTROL_STATE_BYTES];
         self.copy_control_header_without_commits(&mut snapshot);
         snapshot[CONTROL_GENERATION_OFFSET..CONTROL_GENERATION_OFFSET + 8]
             .copy_from_slice(&generation.to_le_bytes());
@@ -412,14 +419,20 @@ impl DirectGenetLink {
         {
             return Err(DirectGenetError::StateChanged);
         }
-        let ring = DirectGenetControlPage::snapshot(&snapshot, self.generation, direction)?;
+        let ring = DirectGenetControlState::snapshot(&snapshot, self.generation, direction)?;
         Ok((snapshot, ring))
     }
 
     fn owner_sample(
         &self,
         role: DirectGenetCursorRole,
-    ) -> Result<([u8; SHARED_PAGE_BYTES], DirectGenetCursorState), DirectGenetError> {
+    ) -> Result<
+        (
+            [u8; DIRECT_GENET_CONTROL_STATE_BYTES],
+            DirectGenetCursorState,
+        ),
+        DirectGenetError,
+    > {
         let state_offset = role.offset();
         let generation = self.read_shared_atomic_u64(
             self.control_vaddr,
@@ -436,7 +449,7 @@ impl DirectGenetLink {
         if generation == 0 || seal == 0 || state_commit == 0 {
             return Err(DirectGenetError::StateChanged);
         }
-        let mut snapshot = [0u8; SHARED_PAGE_BYTES];
+        let mut snapshot = [0u8; DIRECT_GENET_CONTROL_STATE_BYTES];
         self.copy_control_header_without_commits(&mut snapshot);
         snapshot[CONTROL_GENERATION_OFFSET..CONTROL_GENERATION_OFFSET + 8]
             .copy_from_slice(&generation.to_le_bytes());
@@ -467,7 +480,7 @@ impl DirectGenetLink {
         {
             return Err(DirectGenetError::StateChanged);
         }
-        let state = DirectGenetControlPage::cursor_state(&snapshot, self.generation, role)?;
+        let state = DirectGenetControlState::cursor_state(&snapshot, self.generation, role)?;
         Ok((snapshot, state))
     }
 
@@ -477,7 +490,7 @@ impl DirectGenetLink {
         reason: u32,
     ) -> Result<(), DirectGenetError> {
         let (mut page, state) = self.owner_sample(role)?;
-        let _ = DirectGenetControlPage::poison_owner(
+        let _ = DirectGenetControlState::poison_owner(
             &mut page,
             self.generation,
             role,
@@ -500,7 +513,7 @@ impl DirectGenetLink {
         initial: DirectGenetRingSnapshot,
     ) -> Result<DirectGenetConsumerCommit, DirectGenetError> {
         let mut page = self.control_snapshot_for_commit(initial.direction)?;
-        let staged = DirectGenetControlPage::commit_consumer(&mut page, initial)?;
+        let staged = DirectGenetControlState::commit_consumer(&mut page, initial)?;
         self.publish_sequence_last_region(
             self.control_vaddr,
             DIRECT_GENET_RX_CONSUMER_STATE_OFFSET,
@@ -518,7 +531,7 @@ impl DirectGenetLink {
         initial: DirectGenetRingSnapshot,
     ) -> Result<DirectGenetProducerCommit, DirectGenetError> {
         let mut page = self.control_snapshot_for_commit(initial.direction)?;
-        let staged = DirectGenetControlPage::commit_producer(&mut page, initial)?;
+        let staged = DirectGenetControlState::commit_producer(&mut page, initial)?;
         self.publish_sequence_last_region(
             self.control_vaddr,
             DIRECT_GENET_TX_PRODUCER_STATE_OFFSET,
@@ -534,7 +547,7 @@ impl DirectGenetLink {
     fn control_snapshot_for_commit(
         &self,
         direction: DirectGenetDirection,
-    ) -> Result<[u8; SHARED_PAGE_BYTES], DirectGenetError> {
+    ) -> Result<[u8; DIRECT_GENET_CONTROL_STATE_BYTES], DirectGenetError> {
         let stable = self.snapshot(direction)?;
         let (page, rechecked) = self.control_sample(direction)?;
         if rechecked != stable {
@@ -641,7 +654,10 @@ impl DirectGenetLink {
         }
     }
 
-    fn copy_control_header_without_commits(&self, output: &mut [u8; SHARED_PAGE_BYTES]) {
+    fn copy_control_header_without_commits(
+        &self,
+        output: &mut [u8; DIRECT_GENET_CONTROL_STATE_BYTES],
+    ) {
         self.copy_from_shared(
             self.control_vaddr,
             0,

@@ -312,6 +312,16 @@ guard/cap/stalled Yield. Sustained legal work remains bounded by GENET's exact
 standard, protocol, cursor, DMA, IRQ, and paired-containment faults remain
 terminal.
 
+Runtime-private control snapshots use the exact 320-byte header/cursor prefix
+through `DirectGenetControlState`. This avoids clearing and copying an unrelated
+4-KiB scratch page at every ring visit. `DirectGenetControlPage` still requires
+the complete 4-KiB mapped-page representation; initialization still scrubs it
+in full. Both codecs share the same identity, poison, occupancy, sequence and
+commit validation. This is an additive private-copy API, not a smaller mapping
+or a wire-layout/version change. Shared acquire/recheck loads, sequence-last
+cursor publication, final reconciliation and reciprocal wake rules remain at
+the existing runtime boundaries.
+
 Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
 and TX-consumer records. Console-network ABI v6 additionally assigns the

@@ -923,14 +923,19 @@ reusable ownership pattern.
 - Map framebuffer pages into the display child without a steady root VSpace
   alias.
 - After the immutable framebuffer range, format, alignment, pitch, and geometry
-  are admitted, the child may write one fixed two-line startup tile in the safe
-  area: `Cohesix starting...` followed by `Initializing services...`. It
+  are admitted, the child begins takeover with one fixed two-line startup tile
+  in the safe area: `Cohesix starting...` followed by `Initializing services...`. It
   validates both complete glyph rows before the first store and issues one
   device-store barrier after the bounded raster. This is early physical
-  progress only: it grants no root alias, prompt, USB readiness, mailbox/HVS
-  authority, or full-surface clear. Invalid geometry performs zero stores, and
-  the first ordinary generation-bound frame clears and replaces the tile
-  through the existing takeover cursor.
+  progress only: it grants no root alias, prompt, USB readiness or mailbox/HVS
+  authority. The same immutable init command then clears the surrounding boot
+  background through the retained frame cursor, using the existing format- and
+  budget-scaled row bound (at most 80 physical rows per turn). It preserves
+  every tile pixel and publishes init completion only after the full surface
+  is cleared. This starts with the banner instead of waiting for USB or the
+  first ordinary frame, and never blanks the screen before the banner.
+  Invalid geometry performs zero stores. The first ordinary generation-bound
+  frame still clears and replaces the tile through its existing takeover path.
 - Before terminal takeover, a canonical empty HDMI `SubmitFrame` (fixed ring
   offset, HDMI role, zero auxiliaries/frame flags and exact generated budget)
   may refresh only the second tile row after two seconds in exported CNTVCT

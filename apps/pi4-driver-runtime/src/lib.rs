@@ -37,16 +37,18 @@ use core::{
 mod pair_handoff;
 
 #[cfg(test)]
+use console_network_abi::DirectGenetControlPage;
+#[cfg(test)]
 use console_network_abi::DIRECT_GENET_RX_SLOT_COUNT;
 use console_network_abi::{
-    DirectGenetControlPage, DirectGenetCursorRole, DirectGenetDirection, DirectGenetError,
+    DirectGenetControlState, DirectGenetCursorRole, DirectGenetDirection, DirectGenetError,
     DirectGenetRingSnapshot, DirectGenetRuntimeDiagnostic, DirectGenetSlotPage,
-    DirectGenetSlotRecord, DIRECT_GENET_CONTROL_HEADER_BYTES, DIRECT_GENET_CURSOR_COMMIT_OFFSET,
-    DIRECT_GENET_CURSOR_STATE_BYTES, DIRECT_GENET_POISON_INVALID_CONTROL,
-    DIRECT_GENET_POISON_INVALID_CURSOR, DIRECT_GENET_POISON_INVALID_SLOT,
-    DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES, DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET,
-    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE, DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED,
-    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED,
+    DirectGenetSlotRecord, DIRECT_GENET_CONTROL_HEADER_BYTES, DIRECT_GENET_CONTROL_STATE_BYTES,
+    DIRECT_GENET_CURSOR_COMMIT_OFFSET, DIRECT_GENET_CURSOR_STATE_BYTES,
+    DIRECT_GENET_POISON_INVALID_CONTROL, DIRECT_GENET_POISON_INVALID_CURSOR,
+    DIRECT_GENET_POISON_INVALID_SLOT, DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET, DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED, DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_IRQ_ACK_PENDING,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
@@ -11039,7 +11041,9 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         return turn;
     }
 
-    let turn = if let Some(turn) = service_hdmi_frame_command_turn(command) {
+    let turn = if let Some(turn) = service_hdmi_startup_command_turn(task_key, command) {
+        turn
+    } else if let Some(turn) = service_hdmi_frame_command_turn(command) {
         turn
     } else if let Some(turn) = service_usb_controller_init_command_turn(command) {
         turn
@@ -13945,6 +13949,7 @@ fn validate_runtime_init_descriptor_with_wait_support(
         || descriptor.hot_path != command.arg0
         || descriptor.role_bit != command.arg1
         || !descriptor.sealed_identity_valid_for_task(task_key as u32)
+        || (descriptor.hot_path == HOT_PATH_HDMI_TEXT && command.budget.max_frames == 0)
     {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
@@ -13969,12 +13974,11 @@ fn validate_runtime_init_descriptor_with_wait_support(
         ) {
             return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
         }
-        // Publish one exact child-owned startup tile after immutable
-        // framebuffer authority is admitted. This bounded write gives the
-        // physical operator immediate progress without granting root an alias,
-        // running the full-surface takeover clear, or exposing a prompt before
-        // USB command admission. The first explicit frame still owns the
-        // complete retained clear and replaces this tile.
+        // Begin child-owned takeover with the startup tile, preserving boot
+        // output until this first visible Cohesix write. The same retained
+        // init command clears the surrounding background in bounded turns;
+        // it cannot complete while stale boot pixels remain. Root gains no
+        // framebuffer alias and USB command admission still owns the prompt.
         if hdmi_render_early_progress_tile(&descriptor).is_none() {
             return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
         }
@@ -13988,11 +13992,7 @@ fn validate_runtime_init_descriptor_with_wait_support(
                 | ENGINE_STATE_HW_READY,
             Ordering::AcqRel,
         );
-        publish_runtime_progress(
-            command.sequence,
-            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
-            command.aux0,
-        );
+        HDMI_FRAME_CURSOR.with_mut(|cursor| cursor.begin(command, true));
     }
     if descriptor.hot_path == HOT_PATH_PCIE_ROOT
         && !adopt_hal_prepared_pcie_runtime_descriptor(descriptor)
@@ -14040,7 +14040,15 @@ fn service_runtime_init_for_test(
     command: DriverTaskCommandRecord,
     descriptor: DriverRuntimeInitDescriptor,
 ) -> DriverTaskCompletionRecord {
-    validate_runtime_init_descriptor(task_key, command, descriptor)
+    let completion = validate_runtime_init_descriptor(task_key, command, descriptor);
+    if descriptor.hot_path != HOT_PATH_HDMI_TEXT || completion.code == COMPLETION_FAULT {
+        return completion;
+    }
+    loop {
+        if let RuntimeCommandTurn::Complete(completion) = service_hdmi_startup_clear_turn(command) {
+            return completion;
+        }
+    }
 }
 
 fn role_for_hot_path(hot_path: u32) -> Option<u32> {
@@ -50138,7 +50146,13 @@ fn genet_direct_write_shared_u64(
 fn genet_direct_control_sample(
     direction: DirectGenetDirection,
     generation: u64,
-) -> Result<([u8; SHARED_PAGE_BYTES], DirectGenetRingSnapshot), DirectGenetError> {
+) -> Result<
+    (
+        [u8; DIRECT_GENET_CONTROL_STATE_BYTES],
+        DirectGenetRingSnapshot,
+    ),
+    DirectGenetError,
+> {
     #[cfg(all(not(target_os = "none"), test))]
     if TEST_GENET_DIRECT_FORCE_STATE_CHANGE_ON_SAMPLE.swap(false, Ordering::AcqRel) {
         return Err(DirectGenetError::StateChanged);
@@ -50159,7 +50173,7 @@ fn genet_direct_control_sample(
         genet_direct_read_shared_u64(0, producer_offset + DIRECT_GENET_CURSOR_COMMIT_OFFSET)?;
     let first_consumer_commit =
         genet_direct_read_shared_u64(0, consumer_offset + DIRECT_GENET_CURSOR_COMMIT_OFFSET)?;
-    let mut page = [0u8; SHARED_PAGE_BYTES];
+    let mut page = [0u8; DIRECT_GENET_CONTROL_STATE_BYTES];
     genet_direct_copy_from_shared(0, 0, &mut page[..DIRECT_GENET_CONTROL_HEADER_BYTES])?;
     genet_direct_copy_from_shared(
         0,
@@ -50188,7 +50202,7 @@ fn genet_direct_control_sample(
     {
         return Err(DirectGenetError::StateChanged);
     }
-    let snapshot = DirectGenetControlPage::snapshot(&page, generation, direction)?;
+    let snapshot = DirectGenetControlState::snapshot(&page, generation, direction)?;
     Ok((page, snapshot))
 }
 
@@ -50213,7 +50227,7 @@ fn genet_direct_control_generation() -> Result<u64, DirectGenetError> {
 }
 
 fn genet_direct_publish_cursor_line(
-    staged_page: &[u8; SHARED_PAGE_BYTES],
+    staged_page: &[u8; DIRECT_GENET_CONTROL_STATE_BYTES],
     role: DirectGenetCursorRole,
 ) -> Result<(), DirectGenetError> {
     let state_offset = role.offset();
@@ -50229,11 +50243,11 @@ fn genet_direct_publish_cursor_line(
 }
 
 fn genet_direct_commit_producer(
-    staged_page: &mut [u8; SHARED_PAGE_BYTES],
+    staged_page: &mut [u8; DIRECT_GENET_CONTROL_STATE_BYTES],
     initial: DirectGenetRingSnapshot,
 ) -> Result<console_network_abi::DirectGenetProducerCommit, DirectGenetError> {
     let (sequence, _) = initial.next_producer()?;
-    let _ = DirectGenetControlPage::commit_producer(staged_page, initial)?;
+    let _ = DirectGenetControlState::commit_producer(staged_page, initial)?;
     let role = match initial.direction {
         DirectGenetDirection::Rx => DirectGenetCursorRole::RxProducer,
         DirectGenetDirection::Tx => DirectGenetCursorRole::TxProducer,
@@ -50244,7 +50258,7 @@ fn genet_direct_commit_producer(
 }
 
 fn genet_direct_commit_consumer(
-    staged_page: &mut [u8; SHARED_PAGE_BYTES],
+    staged_page: &mut [u8; DIRECT_GENET_CONTROL_STATE_BYTES],
     initial: DirectGenetRingSnapshot,
 ) -> Result<console_network_abi::DirectGenetConsumerCommit, DirectGenetError> {
     #[cfg(all(not(target_os = "none"), test))]
@@ -50254,7 +50268,7 @@ fn genet_direct_commit_consumer(
         TEST_GENET_DIRECT_TX_COMMIT_AFTER_DMA.store(true, Ordering::Release);
     }
     let (sequence, _) = initial.next_consumer()?;
-    let _ = DirectGenetControlPage::commit_consumer(staged_page, initial)?;
+    let _ = DirectGenetControlState::commit_consumer(staged_page, initial)?;
     let role = match initial.direction {
         DirectGenetDirection::Rx => DirectGenetCursorRole::RxConsumer,
         DirectGenetDirection::Tx => DirectGenetCursorRole::TxConsumer,
@@ -50272,7 +50286,7 @@ fn genet_direct_poison_owner(
     reason: u32,
 ) -> Result<(), DirectGenetError> {
     let (mut page, _) = genet_direct_control_sample(direction, generation)?;
-    let _ = DirectGenetControlPage::poison_owner(
+    let _ = DirectGenetControlState::poison_owner(
         &mut page,
         generation,
         role,
@@ -55061,6 +55075,80 @@ fn hdmi_frame_complete(
     ))
 }
 
+/// Finish the same startup command that published the first visible tile.
+/// Each retained turn clears only the existing admitted row budget. The tile
+/// stays visible throughout, so clearing cannot create a pre-banner blank or
+/// erase the boot timer. No ordinary-frame or USB readiness is needed.
+fn service_hdmi_startup_command_turn(
+    task_key: usize,
+    command: DriverTaskCommandRecord,
+) -> Option<RuntimeCommandTurn> {
+    if command.opcode != OPCODE_SERVICE
+        || command.arg0 != HOT_PATH_HDMI_TEXT
+        || command.aux0 != DRIVER_RUNTIME_INIT_AUX
+    {
+        return None;
+    }
+    let active = HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.phase != HdmiFramePhase::Idle);
+    if active {
+        return Some(service_hdmi_startup_clear_turn(command));
+    }
+    let completion = service_command_immediate(task_key, command);
+    if completion.code == COMPLETION_FAULT || command.sequence == 0 {
+        return Some(RuntimeCommandTurn::Complete(completion));
+    }
+    Some(RuntimeCommandTurn::Pending)
+}
+
+fn service_hdmi_startup_clear_turn(command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
+    let next_row = HDMI_FRAME_CURSOR.with_ref(|cursor| {
+        (cursor.active_for(command) && cursor.phase == HdmiFramePhase::Clear)
+            .then_some(cursor.next_row as usize)
+    });
+    let Some(start_row) = next_row else {
+        return hdmi_frame_mismatch(command);
+    };
+    let cleared_to = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        if !hdmi_cell_plane_geometry_admitted(descriptor) {
+            return None;
+        }
+        let height = descriptor.framebuffer.height as usize;
+        let rows = hdmi_first_frame_clear_rows_per_turn_budgeted(
+            descriptor.framebuffer.vaddr,
+            descriptor.framebuffer.width,
+            descriptor.framebuffer.pitch,
+            descriptor.framebuffer.format,
+            descriptor.budget_us,
+        )
+        .min(command.budget.max_frames as usize);
+        let end_row = start_row.saturating_add(rows).min(height);
+        let state = HdmiRenderState::framebuffer_only_from_descriptor(descriptor);
+        state
+            .clear_startup_background_rows(start_row, end_row.saturating_sub(start_row))
+            .then_some((end_row, height))
+    });
+    let Some((end_row, height)) = cleared_to else {
+        HDMI_EARLY_PROGRESS_START.store(0, Ordering::Release);
+        HDMI_RUNTIME_FLAGS.store(0, Ordering::Release);
+        return hdmi_frame_fault(command, FAULT_DEVICE_UNAVAILABLE);
+    };
+    device_store_completion_barrier();
+    if end_row != height {
+        HDMI_FRAME_CURSOR.with_mut(|cursor| cursor.next_row = end_row as u32);
+        return RuntimeCommandTurn::Pending;
+    }
+    HDMI_FRAME_CURSOR.with_mut(HdmiFrameCursor::reset);
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+        command.aux0,
+    );
+    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
+        command.sequence,
+        HOT_PATH_HDMI_TEXT,
+    ))
+}
+
 fn service_hdmi_frame_command_turn(command: DriverTaskCommandRecord) -> Option<RuntimeCommandTurn> {
     if !hdmi_frame_command_candidate(command) {
         return None;
@@ -55998,6 +56086,41 @@ impl HdmiRenderState {
             row_count.min(self.framebuffer_height.saturating_sub(start_row)),
             HDMI_BG_COLOR,
         );
+        true
+    }
+
+    fn clear_startup_background_rows(&self, start_row: usize, row_count: usize) -> bool {
+        let Some(end_row) = start_row.checked_add(row_count) else {
+            return false;
+        };
+        if row_count == 0
+            || end_row > self.framebuffer_height
+            || !HDMI_EARLY_PROGRESS_LINES
+                .iter()
+                .enumerate()
+                .all(|(row, line)| self.raster_row_span_admitted(row, line.len()))
+        {
+            return false;
+        }
+        for row in start_row..end_row {
+            let tile_line = row
+                .checked_sub(self.safe_y)
+                .map(|relative| relative / CHAR_HEIGHT)
+                .and_then(|index| HDMI_EARLY_PROGRESS_LINES.get(index));
+            if let Some(line) = tile_line {
+                let tile_end = self.safe_x + line.len() * CHAR_WIDTH;
+                self.fill_physical_rect(0, row, self.safe_x, 1, HDMI_BG_COLOR);
+                self.fill_physical_rect(
+                    tile_end,
+                    row,
+                    self.framebuffer_width - tile_end,
+                    1,
+                    HDMI_BG_COLOR,
+                );
+            } else if !self.clear_full_framebuffer_rows(row, 1) {
+                return false;
+            }
+        }
         true
     }
 
@@ -84899,7 +85022,7 @@ mod tests {
         DirectGenetControlPage::commit_producer(&mut control, initial)
             .expect("peer commits direct GENET producer cursor");
         genet_direct_publish_cursor_line(
-            &control,
+            control[..320].try_into().unwrap(),
             match direction {
                 DirectGenetDirection::Rx => DirectGenetCursorRole::RxProducer,
                 DirectGenetDirection::Tx => DirectGenetCursorRole::TxProducer,
@@ -84922,7 +85045,7 @@ mod tests {
         let receipt = DirectGenetControlPage::commit_consumer(&mut control, initial)
             .expect("peer commits direct GENET consumer cursor");
         genet_direct_publish_cursor_line(
-            &control,
+            control[..320].try_into().unwrap(),
             match direction {
                 DirectGenetDirection::Rx => DirectGenetCursorRole::RxConsumer,
                 DirectGenetDirection::Tx => DirectGenetCursorRole::TxConsumer,
@@ -137639,6 +137762,44 @@ mod tests {
         assert_eq!(hdmi_refresh_early_progress(later), None);
         assert_eq!(read_framebuffer_byte(second_line_byte - 1), 0x3c);
         assert_eq!(read_framebuffer_byte(after_second_line_byte), 0xc3);
+        let state = HdmiRenderState::framebuffer_only_from_descriptor(&descriptor);
+        let before_clear = TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire);
+        for (start, count) in [(0, 0), (64, 1), (63, 2), (usize::MAX, 2)] {
+            assert!(!state.clear_startup_background_rows(start, count));
+        }
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
+            before_clear
+        );
+        let tile_bytes: std::vec::Vec<_> = (0..32)
+            .flat_map(|row| {
+                let columns = if row < 16 { 19 * 8 } else { 24 * 8 };
+                (0..columns * 3).map(move |byte| {
+                    let address = first_tile_byte + row * width * 3 + byte;
+                    (address, read_framebuffer_byte(address))
+                })
+            })
+            .collect();
+        let end = descriptor.framebuffer.vaddr as usize + framebuffer_bytes as usize;
+        write_framebuffer_byte(end, 0xa7);
+        for row in 0..64 {
+            assert!(state.clear_startup_background_rows(row, 1));
+        }
+        for (address, byte) in tile_bytes {
+            assert_eq!(read_framebuffer_byte(address), byte);
+        }
+        for address in [
+            first_tile_byte - 1,
+            after_first_line_byte,
+            second_line_byte - 1,
+            after_second_line_byte,
+        ] {
+            assert_eq!(read_framebuffer_byte(address), 0);
+        }
+        assert_eq!(read_framebuffer_byte(end), 0xa7);
+        assert!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire) - before_clear <= width * 64 * 3
+        );
         descriptor.framebuffer.pitch = 1;
         RUNTIME_DESCRIPTOR.store(descriptor);
         TEST_FRAMEBUFFER_WRITE_STORES.store(0, Ordering::Release);
@@ -138090,17 +138251,29 @@ mod tests {
         let after_second_line_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
             + (safe.y + CHAR_HEIGHT) * descriptor.framebuffer.pitch as usize
             + (safe.x + HDMI_EARLY_PROGRESS_LINES[1].len() * CHAR_WIDTH) * FB_BYTES_PER_PIXEL_32;
-        write_framebuffer_u32(
+        fill_framebuffer_u32(
             DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize,
             admission_sentinel,
+            640 * 480,
         );
         write_framebuffer_u32(early_tile_addr, admission_sentinel);
         write_framebuffer_u32(after_first_line_addr, admission_sentinel);
         write_framebuffer_u32(second_line_addr, admission_sentinel);
         write_framebuffer_u32(after_second_line_addr, admission_sentinel);
         TEST_FRAMEBUFFER_WRITE_STORES.store(0, Ordering::Release);
+        let mut empty_grant = init;
+        empty_grant.budget.max_frames = 0;
         assert_eq!(
-            service_runtime_init_for_test(
+            validate_runtime_init_descriptor(
+                runtime_task_key_for_hot_path(HOT_PATH_HDMI_TEXT),
+                empty_grant,
+                descriptor,
+            ),
+            DriverTaskCompletionRecord::fault(init.sequence, FAULT_REJECTED_COMMAND),
+        );
+        assert_eq!(TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire), 0);
+        assert_eq!(
+            validate_runtime_init_descriptor(
                 runtime_task_key_for_hot_path(HOT_PATH_HDMI_TEXT),
                 init,
                 descriptor
@@ -138141,6 +138314,70 @@ mod tests {
         assert!(early_tile_stores <= HDMI_EARLY_PROGRESS_MAX_STORES);
         assert!(HDMI_CELL_PLANE.with_ref(HdmiCellPlane::cold_engine_init_ready));
         let early_tile_first_pixel = read_framebuffer_u32(early_tile_addr);
+        let tile_pixels: std::vec::Vec<_> = (16..48)
+            .flat_map(|row| {
+                let end = if row < 32 { 12 + 19 * 8 } else { 12 + 24 * 8 };
+                (12..end).map(move |col| {
+                    let address = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize + (row * 640 + col) * 4;
+                    (address, read_framebuffer_u32(address))
+                })
+            })
+            .collect();
+        let mismatched = DriverTaskCommandRecord {
+            sequence: init.sequence + 1,
+            ..init
+        };
+        assert_eq!(
+            service_hdmi_startup_command_turn(0, mismatched),
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault(mismatched.sequence, FAULT_REJECTED_COMMAND,)
+            )),
+        );
+        assert_eq!(
+            TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire),
+            early_tile_stores
+        );
+        let mut startup_complete = false;
+        for _ in 0..480 {
+            let before = TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire);
+            let turn = service_hdmi_startup_command_turn(0, init).unwrap();
+            assert!(TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire) - before <= 80 * 640);
+            for &(address, pixel) in &tile_pixels {
+                assert_eq!(
+                    read_framebuffer_u32(address),
+                    pixel,
+                    "takeover must preserve the visible startup tile"
+                );
+            }
+            if let RuntimeCommandTurn::Complete(completion) = turn {
+                assert_eq!(
+                    completion,
+                    DriverTaskCompletionRecord::progress(30, HOT_PATH_HDMI_TEXT)
+                );
+                startup_complete = true;
+                break;
+            }
+        }
+        assert!(
+            startup_complete,
+            "the finite framebuffer must complete its bounded clear"
+        );
+        for row in 0..480 {
+            for col in 0..640 {
+                let protected = ((16..32).contains(&row) && (12..164).contains(&col))
+                    || ((32..48).contains(&row) && (12..204).contains(&col));
+                if !protected {
+                    assert_eq!(
+                        read_framebuffer_u32(
+                            DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize + (row * 640 + col) * 4
+                        ),
+                        0xff00_0000,
+                        "startup completion must remove all U-Boot background pixels"
+                    );
+                }
+            }
+        }
+        let early_tile_stores = TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire);
         let engine_init = DriverTaskCommandRecord {
             sequence: 31,
             opcode: OPCODE_SERVICE,
@@ -138158,8 +138395,8 @@ mod tests {
         );
         assert_eq!(
             read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
-            admission_sentinel,
-            "engine admission must not widen the exact early tile",
+            0xff00_0000,
+            "engine admission must preserve the cleared startup background",
         );
         assert_eq!(
             read_framebuffer_u32(early_tile_addr),
@@ -138203,10 +138440,7 @@ mod tests {
             TEST_FRAMEBUFFER_WRITE_STORES.load(Ordering::Acquire) - early_tile_stores,
             24 * 16 * 4,
         );
-        assert_eq!(
-            read_framebuffer_u32(after_second_line_addr),
-            admission_sentinel
-        );
+        assert_eq!(read_framebuffer_u32(after_second_line_addr), 0xff00_0000);
         assert_eq!(
             read_framebuffer_u32(early_tile_addr),
             early_tile_first_pixel

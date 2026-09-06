@@ -1411,6 +1411,8 @@ pub const DIRECT_GENET_RX_CONSUMER_STATE_OFFSET: usize = 128;
 pub const DIRECT_GENET_TX_PRODUCER_STATE_OFFSET: usize = 192;
 /// TX-consumer state offset in the control page.
 pub const DIRECT_GENET_TX_CONSUMER_STATE_OFFSET: usize = 256;
+/// Exact private copy of the header and four cursor lines; the mapped page stays 4 KiB.
+pub const DIRECT_GENET_CONTROL_STATE_BYTES: usize = 320;
 /// Cache-line-aligned offset of the GENET-owner diagnostic record.
 ///
 /// The record is observational and carries no packet, IRQ, or command
@@ -2806,13 +2808,114 @@ impl DirectGenetControlPage {
         Ok(())
     }
 
-    /// Acquire one stable live producer/consumer snapshot.
+    /// Acquire one stable live producer/consumer snapshot from a complete page.
     pub fn snapshot(
         input: &[u8],
         generation: u64,
         direction: DirectGenetDirection,
     ) -> Result<DirectGenetRingSnapshot, DirectGenetError> {
         if input.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        DirectGenetControlState::snapshot(
+            &input[..DIRECT_GENET_CONTROL_STATE_BYTES],
+            generation,
+            direction,
+        )
+    }
+
+    /// Acquire one exact live owner cursor from a complete page.
+    pub fn cursor_state(
+        input: &[u8],
+        generation: u64,
+        role: DirectGenetCursorRole,
+    ) -> Result<DirectGenetCursorState, DirectGenetError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        DirectGenetControlState::cursor_state(
+            &input[..DIRECT_GENET_CONTROL_STATE_BYTES],
+            generation,
+            role,
+        )
+    }
+
+    /// Commit the next producer cursor with the existing final-state and wake checks.
+    pub fn commit_producer(
+        page: &mut [u8],
+        initial: DirectGenetRingSnapshot,
+    ) -> Result<DirectGenetProducerCommit, DirectGenetError> {
+        // Preserve the full-page API's cursor-before-layout error ordering.
+        let _ = initial.next_producer()?;
+        let _ = initial
+            .producer_state_sequence
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        if page.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        DirectGenetControlState::commit_producer(
+            &mut page[..DIRECT_GENET_CONTROL_STATE_BYTES],
+            initial,
+        )
+    }
+
+    /// Commit the next consumer cursor with the existing final-state and wake checks.
+    pub fn commit_consumer(
+        page: &mut [u8],
+        initial: DirectGenetRingSnapshot,
+    ) -> Result<DirectGenetConsumerCommit, DirectGenetError> {
+        let _ = initial.next_consumer()?;
+        let _ = initial
+            .consumer_state_sequence
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        if page.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        DirectGenetControlState::commit_consumer(
+            &mut page[..DIRECT_GENET_CONTROL_STATE_BYTES],
+            initial,
+        )
+    }
+
+    /// Permanently poison one owner cursor without changing the rest of the page.
+    pub fn poison_owner(
+        page: &mut [u8],
+        generation: u64,
+        role: DirectGenetCursorRole,
+        expected_state_sequence: u64,
+        reason: u32,
+    ) -> Result<DirectGenetPoison, DirectGenetError> {
+        if page.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        DirectGenetControlState::poison_owner(
+            &mut page[..DIRECT_GENET_CONTROL_STATE_BYTES],
+            generation,
+            role,
+            expected_state_sequence,
+            reason,
+        )
+    }
+}
+
+/// Codec for an exact private copy of the direct-link header and cursor lines.
+///
+/// This is not a mapped-page admission API. Callers must separately validate
+/// their complete shared mapping and retain acquire/recheck and sequence-last
+/// publication at that mapping. Unrelated diagnostic and reserved page bytes
+/// have no cursor authority and need not be materialized on every ring visit.
+pub struct DirectGenetControlState;
+
+impl DirectGenetControlState {
+    /// Acquire one stable live producer/consumer snapshot.
+    pub fn snapshot(
+        input: &[u8],
+        generation: u64,
+        direction: DirectGenetDirection,
+    ) -> Result<DirectGenetRingSnapshot, DirectGenetError> {
+        if input.len() != DIRECT_GENET_CONTROL_STATE_BYTES {
             return Err(DirectGenetError::InvalidLayout);
         }
         let header = decode_direct_genet_control_header(input)?;
@@ -3113,7 +3216,7 @@ fn encode_direct_genet_control_header(output: &mut [u8], header: DirectGenetCont
 fn decode_direct_genet_control_header(
     input: &[u8],
 ) -> Result<DirectGenetControlHeader, DirectGenetError> {
-    if input.len() != SHARED_PAGE_BYTES {
+    if input.len() != DIRECT_GENET_CONTROL_STATE_BYTES {
         return Err(DirectGenetError::InvalidLayout);
     }
     Ok(DirectGenetControlHeader {
@@ -3171,7 +3274,7 @@ fn decode_direct_genet_cursor_state_allow_poison(
     generation: u64,
     role: DirectGenetCursorRole,
 ) -> Result<DirectGenetCursorState, DirectGenetError> {
-    if input.len() != SHARED_PAGE_BYTES {
+    if input.len() != DIRECT_GENET_CONTROL_STATE_BYTES {
         return Err(DirectGenetError::InvalidLayout);
     }
     let offset = role.offset();
@@ -3204,7 +3307,7 @@ fn write_direct_genet_cursor_state(
     page: &mut [u8],
     state: DirectGenetCursorState,
 ) -> Result<(), DirectGenetError> {
-    if page.len() != SHARED_PAGE_BYTES {
+    if page.len() != DIRECT_GENET_CONTROL_STATE_BYTES {
         return Err(DirectGenetError::InvalidLayout);
     }
     let role = direct_genet_cursor_role(state.role)?;
@@ -5996,6 +6099,89 @@ mod tests {
         );
         assert_eq!(direct_genet_slot_index(DirectGenetDirection::Rx, 16), Ok(0));
         assert_eq!(direct_genet_slot_index(DirectGenetDirection::Tx, 17), Ok(0));
+    }
+
+    #[test]
+    fn direct_genet_compact_control_preserves_page_bounds_and_cursor_bytes() {
+        assert_eq!(DIRECT_GENET_CONTROL_STATE_BYTES, 320);
+        let mut page = [0u8; 4096];
+        DirectGenetControlPage::initialize_into(&mut page, 7).unwrap();
+        page[320..].fill(0xa5);
+        for direction in [DirectGenetDirection::Rx, DirectGenetDirection::Tx] {
+            let mut state: [u8; 320] = page[..320].try_into().unwrap();
+            let initial = DirectGenetControlState::snapshot(&state, 7, direction).unwrap();
+            assert_eq!(initial.producer_cursor, 0);
+            assert_eq!(initial.consumer_cursor, 0);
+            let produced = DirectGenetControlState::commit_producer(&mut state, initial).unwrap();
+            assert_eq!(produced.sequence, 1);
+            assert!(produced.data_notification_due);
+            let producer_offset = if direction == DirectGenetDirection::Rx {
+                64
+            } else {
+                192
+            };
+            assert_eq!(
+                &state[producer_offset + 16..producer_offset + 24],
+                &1u64.to_le_bytes()
+            );
+            assert_eq!(
+                &state[producer_offset + 24..producer_offset + 32],
+                &2u64.to_le_bytes()
+            );
+            assert_eq!(
+                &state[producer_offset + 56..producer_offset + 64],
+                &2u64.to_le_bytes()
+            );
+            let queued = DirectGenetControlState::snapshot(&state, 7, direction).unwrap();
+            let consumed = DirectGenetControlState::commit_consumer(&mut state, queued).unwrap();
+            assert_eq!(consumed.sequence, 1);
+            assert_eq!(
+                DirectGenetControlState::snapshot(&state, 7, direction)
+                    .unwrap()
+                    .occupancy(),
+                0
+            );
+            let page_initial = DirectGenetControlPage::snapshot(&page, 7, direction).unwrap();
+            DirectGenetControlPage::commit_producer(&mut page, page_initial).unwrap();
+            let page_queued = DirectGenetControlPage::snapshot(&page, 7, direction).unwrap();
+            DirectGenetControlPage::commit_consumer(&mut page, page_queued).unwrap();
+            assert_eq!(&page[..320], &state);
+            assert!(page[320..].iter().all(|byte| *byte == 0xa5));
+        }
+        for len in 0..=321 {
+            let result =
+                DirectGenetControlState::snapshot(&page[..len], 7, DirectGenetDirection::Rx);
+            if len == 320 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result, Err(DirectGenetError::InvalidLayout));
+            }
+            assert_eq!(
+                DirectGenetControlPage::snapshot(&page[..len], 7, DirectGenetDirection::Rx),
+                Err(DirectGenetError::InvalidLayout)
+            );
+        }
+        assert_eq!(
+            DirectGenetControlState::snapshot(&page, 7, DirectGenetDirection::Rx),
+            Err(DirectGenetError::InvalidLayout)
+        );
+        let mut state: [u8; 320] = page[..320].try_into().unwrap();
+        DirectGenetControlState::poison_owner(
+            &mut state,
+            7,
+            DirectGenetCursorRole::RxProducer,
+            2,
+            DIRECT_GENET_POISON_INVALID_CURSOR,
+        )
+        .unwrap();
+        assert_eq!(
+            DirectGenetControlState::snapshot(&state, 7, DirectGenetDirection::Rx),
+            Err(DirectGenetError::Poisoned(DirectGenetPoison {
+                role: DirectGenetCursorRole::RxProducer,
+                reason: DIRECT_GENET_POISON_INVALID_CURSOR,
+            }))
+        );
+        assert!(DirectGenetControlState::snapshot(&state, 7, DirectGenetDirection::Tx).is_ok());
     }
 
     #[test]

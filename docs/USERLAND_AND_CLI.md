@@ -522,7 +522,10 @@ does not select or override the canonical `NET_ACTIVE` backend, and no complete
 or partial batch proves DHCP, ARP, ICMP, TCP, throughput, QEMU parity, or Pi
 acceptance.
 
-On the physical Pi startup screen, `Cohesix starting...` is followed by a
+On the physical Pi startup screen, the first `Cohesix starting...` tile starts
+the display child's bounded clear of the surrounding U-Boot background. The
+banner stays visible throughout that startup command; clearing does not wait
+for USB readiness or the interactive console. The banner is followed by a
 bounded elapsed-seconds counter refreshed at safe checkpoints about every two
 seconds. Serial cutover does not stop that counter at six seconds: it continues
 through eight and ten seconds while the startup tile remains visible. Normal

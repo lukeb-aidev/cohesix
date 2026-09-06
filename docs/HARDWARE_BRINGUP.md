@@ -1495,10 +1495,13 @@ end-to-end `tcp_ready` predicate. HDMI may first show
 `Cohesix starting...` plus bounded stage feedback. The boot script keeps
 serial and vidconsole output enabled through `bootm` and does not clear the
 handoff frame before jumping into seL4. Retained boot output remains visible
-until the isolated HDMI owner draws its bounded startup tile; the first
-ordinary HDMI frame clears and replaces the retained background. A blank
-introduced before the tile or stale boot text in the interactive frame is a
-failure. This preserves existing boot-video output; it does not add a kernel
+until the isolated HDMI owner draws its bounded startup tile and immediately
+begins clearing the surrounding boot background. The same retained init
+command completes the full clear in bounded row slices while preserving the
+tile; it does not wait for USB readiness or the ordinary console frame. A
+blank introduced before the tile, old boot text after HDMI init completion,
+or stale text in the interactive frame is a failure. This preserves existing
+boot-video output; it does not add a kernel
 framebuffer renderer. The
 isolated HDMI runtime is constructed immediately after Serial and before
 PCIe/USB enumeration, while PCIe still precedes USB. The interactive
