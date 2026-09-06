@@ -1362,11 +1362,10 @@ impl<'a> ConsoleNetworkService<'a> {
         let mut tcp = TcpSocket::new(TcpSocketBuffer::new(tcp_rx), TcpSocketBuffer::new(tcp_tx));
         #[cfg(feature = "direct-genet")]
         {
-            // Pi's direct-GENET/CYW43 console is an interactive request/response
-            // path. Emit the receive ACK in the ingress-coupled stack cycle and
-            // never retain a small response behind an earlier unacknowledged
-            // segment. QEMU retains its already-qualified TCP policy.
-            tcp.set_ack_delay(None);
+            // Keep the stack's bounded ACK timer so a prompt reply can carry
+            // the receive ACK without an extra packet/publication round trip.
+            // Response data must never wait for either that timer or an
+            // earlier unacknowledged segment. QEMU retains its TCP policy.
             tcp.set_nagle_enabled(false);
         }
         tcp.listen(IpListenEndpoint::from(descriptor.listener_port))
@@ -1946,12 +1945,185 @@ mod tests {
 
         assert_eq!(
             socket.ack_delay(),
-            None,
-            "interactive ACKs must stay in the receive-coupled stack cycle",
+            Some(smoltcp::time::Duration::from_millis(10)),
+            "a reply may carry the ACK, with the pinned stack's bounded fallback",
         );
         assert!(
             !socket.nagle_enabled(),
             "bounded console frames must not wait behind an unacknowledged segment",
+        );
+    }
+
+    #[cfg(feature = "direct-genet")]
+    #[test]
+    fn pi_prompt_response_carries_ack_and_does_not_wait_for_peer_ack() {
+        assert_pi_ack_path(true);
+    }
+
+    #[cfg(feature = "direct-genet")]
+    #[test]
+    fn pi_missing_response_emits_ack_at_stack_deadline() {
+        assert_pi_ack_path(false);
+    }
+
+    #[cfg(feature = "direct-genet")]
+    fn assert_pi_ack_path(prompt_response: bool) {
+        use smoltcp::wire::TcpPacket;
+
+        let mut server_rx = [0u8; 4096];
+        let mut server_tx = [0u8; 4096];
+        let mut server_storage = [SocketStorage::EMPTY];
+        let mut service = ConsoleNetworkService::new(
+            descriptor(),
+            &mut server_rx,
+            &mut server_tx,
+            &mut server_storage,
+        )
+        .unwrap();
+        let mut client_device = SharedFrameDevice::new();
+        let mut client_interface = Interface::new(
+            InterfaceConfig::new(HardwareAddress::Ethernet(EthernetAddress([
+                2, 0, 0, 0, 0, 2,
+            ]))),
+            &mut client_device,
+            Instant::from_millis(0),
+        );
+        client_interface.update_ip_addrs(|addresses| {
+            addresses
+                .push(IpCidr::new(Ipv4Address::new(10, 0, 2, 16).into(), 24))
+                .unwrap();
+        });
+        let mut client_rx = [0u8; 4096];
+        let mut client_tx = [0u8; 4096];
+        let mut client_storage = [SocketStorage::EMPTY];
+        let mut client_sockets = SocketSet::new(&mut client_storage[..]);
+        let mut client_socket = TcpSocket::new(
+            TcpSocketBuffer::new(&mut client_rx[..]),
+            TcpSocketBuffer::new(&mut client_tx[..]),
+        );
+        client_socket.set_ack_delay(None);
+        client_socket.set_nagle_enabled(false);
+        let client_handle = client_sockets.add(client_socket);
+        client_sockets
+            .get_mut::<TcpSocket>(client_handle)
+            .connect(
+                client_interface.context(),
+                (Ipv4Address::new(10, 0, 2, 15), descriptor().listener_port),
+                49_152,
+            )
+            .unwrap();
+
+        // Establish the real two-stack session with injected time. This is a
+        // TCP packet contract, without a model of target MCS or IPC timing.
+        let mut auth_sent = false;
+        let mut auth_response = std::vec::Vec::new();
+        for _ in 0..64 {
+            drive_network_turn(
+                &mut service,
+                &mut client_interface,
+                &mut client_device,
+                &mut client_sockets,
+                1,
+            )
+            .unwrap();
+            while service.pop_event().is_some() {}
+            let client = client_sockets.get_mut::<TcpSocket>(client_handle);
+            if !auth_sent && client.state() == TcpState::Established {
+                client.send_slice(&framed(b"AUTH secret")).unwrap();
+                auth_sent = true;
+            }
+            if client.can_recv() {
+                let mut chunk = [0u8; 64];
+                let length = client.recv_slice(&mut chunk).unwrap();
+                auth_response.extend_from_slice(&chunk[..length]);
+            }
+        }
+        assert_eq!(auth_response, framed(b"OK AUTH"));
+        assert!(service.session.authenticated());
+        assert_eq!(
+            service
+                .sockets
+                .get::<TcpSocket>(service.tcp_handle)
+                .send_queue(),
+            0
+        );
+        let mut packet = [0u8; ETHERNET_FRAME_BYTES];
+        assert_eq!(client_device.pop_egress(&mut packet).unwrap(), None);
+        assert_eq!(service.take_packet(&mut packet).unwrap(), None);
+
+        let ping = framed(b"PING");
+        client_sockets
+            .get_mut::<TcpSocket>(client_handle)
+            .send_slice(&ping)
+            .unwrap();
+        client_interface.poll(
+            Instant::from_millis(100),
+            &mut client_device,
+            &mut client_sockets,
+        );
+        let length = client_device.pop_egress(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert_eq!(tcp.payload(), ping);
+        let expected_ack = tcp.seq_number() + ping.len();
+        service.ingest_packet(&packet[..length]).unwrap();
+        poll_complete_service_cycle(&mut service, 100).unwrap();
+        let event = service.pop_event().unwrap();
+        assert_eq!(event.kind(), ExchangeKind::Command);
+        assert_eq!(event.payload().unwrap(), "PING");
+        assert_eq!(
+            service.take_packet(&mut packet).unwrap(),
+            None,
+            "command admission must not require a standalone ACK publication"
+        );
+
+        let response_time = if prompt_response {
+            101
+        } else {
+            poll_complete_service_cycle(&mut service, 109).unwrap();
+            assert_eq!(service.take_packet(&mut packet).unwrap(), None);
+            poll_complete_service_cycle(&mut service, 110).unwrap();
+            let length = service.take_packet(&mut packet).unwrap().unwrap();
+            let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+            let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+            let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+            assert_eq!(tcp.ack_number(), expected_ack);
+            assert!(
+                tcp.payload().is_empty(),
+                "missing root output cannot suppress the due ACK"
+            );
+            111
+        };
+        let (batch, length) = send_batch_payload(&["PONG", "OK PING reply=pong"]);
+        service
+            .apply_control(1, ExchangeKind::SendBatch, &batch[..length])
+            .unwrap();
+        poll_complete_service_cycle(&mut service, response_time).unwrap();
+        let length = service.take_packet(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert_eq!(tcp.ack_number(), expected_ack);
+        assert_eq!(
+            decode_wire_train(tcp.payload()),
+            [b"PONG".as_slice(), b"OK PING reply=pong"]
+        );
+        assert_eq!(service.take_packet(&mut packet).unwrap(), None);
+
+        // Do not deliver the first response to the peer: the next bounded
+        // response must still leave immediately, independently of peer ACKs.
+        service
+            .apply_control(1, ExchangeKind::SendLine, b"next-response")
+            .unwrap();
+        poll_complete_service_cycle(&mut service, response_time).unwrap();
+        let length = service.take_packet(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert_eq!(
+            decode_wire_train(tcp.payload()),
+            [b"next-response".as_slice()]
         );
     }
 

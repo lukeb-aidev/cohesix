@@ -1544,9 +1544,11 @@ transport:
   ABI v13 because of the later generic one-way wait handshake above.
 - The Pi direct-GENET-feature isolated authenticated console socket, used by
   both selected Pi network modes, is an interactive control path, not a bulk
-  stream. It disables delayed ACK and Nagle so one bounded receive
-  cycle can emit its ACK immediately and a later small response cannot wait
-  behind an unacknowledged response segment. This changes no frame, queue,
+  stream. It retains smoltcp 0.13.1's 10 ms ACK timer so a prompt response can
+  carry the receive ACK without an additional packet handoff. Missing or slow
+  root output cannot suppress the due ACK. Nagle remains disabled, so response
+  data waits for neither the ACK timer nor an unacknowledged earlier response.
+  This changes no frame, queue,
   listener, authentication, ownership, or MCS contract; QEMU retains its
   already-qualified TCP policy.
 - The root's unchanged direct-GENET `ServiceTick` is a timer hint, not work

@@ -1105,6 +1105,14 @@ NineDoor containment retains the exact fatal transport reason (`REVOKED`,
 `STALE_IDENTITY`, or `INVALID_ABI`) in its bounded deferred diagnostic before
 revoking the generation. This does not add hot-path output; rendering still
 occurs only during the ordinary retained-output turn after containment.
+Its terminal-fault line also retains `label`, `len`, `mr0`, and `mr1` from
+the existing kernel fault mailbox. Label and message registers are unsigned
+lowercase hexadecimal; length is decimal. Missing registers remain zero and
+the exact length determines validity. For the selected AArch64 MCS timeout
+layout, MR0 is Timeout Data and MR1 is the kernel's Consumed value. This is
+not the available refill budget or necessarily CPU consumed by that one call.
+The existing generation/class/sequence prefix, bounded line capacity,
+containment order, and terminal teardown behavior are unchanged.
 
 The synchronous request and response message-register identities are each
 published only after an AArch64 release fence over the corresponding cached

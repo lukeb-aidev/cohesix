@@ -269,6 +269,20 @@ commands, framing, workloads, retries and schemas need no change. Existing
 USB command/wait/progress rows and send counters qualify the hardware repair;
 source checks or a successful flash cannot claim target performance.
 
+The fabc657cb four-boot follow-up changes Pi TCP packet scheduling only: keep
+the pinned stack's bounded ACK timer, permit response/ACK coalescing, and keep
+Nagle disabled. The NineDoor fault line adds existing raw kernel operands
+after its unchanged generation/class/sequence prefix. The complete catalog
+(`cohsh`, `coh`, `coh-status`, Hive Gateway, GPU/sidecar bridges, host-ticket
+agent, CAS tools, SwarmUI), `tools/cohesix-py`, `.coh` scripts, generated
+consumers, serial/Pi helpers, and raw/REST benchmark/report consumers were
+reviewed. Their framing, terminal responses, authentication, quotas, commands,
+timeouts, retries, workloads, and report schemas require no change. The
+service-evidence fixture includes the additive fault operands; its prefix
+parser remains compatible. Packet and diagnostic tests qualify those host
+contracts, while fresh unchanged-image Pi boots must establish performance
+and service repeatability.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or

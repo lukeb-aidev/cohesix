@@ -6979,8 +6979,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       source-checked. A host predicate or QEMU pass cannot establish Gate 8
       timing.
       Isolated-console construction must also prove
-      delayed ACK and Nagle are disabled for its bounded interactive socket;
-      that host contract is not evidence of Pi latency.
+      Nagle is disabled and the pinned stack's 10 ms ACK timer remains active.
+      Real two-stack packet tests must prove that a prompt framed PONG/terminal
+      response carries the receive ACK without a preceding standalone ACK,
+      missing root output still emits its ACK at the deadline, and another
+      small response transmits before its predecessor is acknowledged.
+      These host contracts are not evidence of Pi latency.
       Generated-profile and ABI tests must prove that only the exact Pi
       `bcmgenet-v5` profile derives the direct GENET link: one CPU-only 32-page
       semantic range, zero physical/DMA/device-visible authority, page 0
@@ -9734,6 +9738,14 @@ fault/failure/teardown records must precede cleanup diagnostics, console must
 precede NineDoor, queue admission must precede diagnostic commit, backpressure
 must retain the record without eviction, and admission plus flush must occur on
 distinct ordinary turns.
+The retained NineDoor terminal-fault diagnostic must preserve the mailbox's
+exact label, length and first two message registers, including zero values,
+without another syscall or hot-path formatting. Exact rendered fixtures must
+cover maximum-width operands within the existing line capacity and preserve
+the generation-mismatch branch. The host service-evidence validator must still
+accept the unchanged prefix with these additive operands. Fresh Pi faults,
+when present, bind their interpretation to the selected kernel ABI; Consumed
+does not establish the remaining head refill or isolated per-call CPU demand.
 The QEMU run must additionally show that init/root-control is accounted, every
 compiler-declared child is constructed suspended, and the exact fault registry
 is sealed before the console child resumes. The retained V26/V13 lifecycle canary uses one exact boot and no concurrent gateway

@@ -1240,7 +1240,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         "generation_fenced=yes state=terminal"
     )
     service_uart_texts = (
-        "[ninedoor-service] generation=1 terminal-fault class=Standard sequence=1\n"
+        "[ninedoor-service] generation=1 terminal-fault class=Standard sequence=1 "
+        "label=5 len=4 mr0=200000 mr1=0\n"
         f"{ninedoor_teardown}\n",
         "[ninedoor-service] generation=1 terminal-revoke state=local\n"
         f"{ninedoor_teardown}\n",

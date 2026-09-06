@@ -273,6 +273,10 @@ pub(crate) enum NineDoorContainmentDiagnostic {
         observed_generation: u32,
         fault_class: FaultClass,
         sequence: u64,
+        fault_label: u64,
+        fault_length: u16,
+        fault_mr0: u64,
+        fault_mr1: u64,
     },
     InvalidMailbox {
         generation: u64,
@@ -302,9 +306,13 @@ impl NineDoorContainmentDiagnostic {
                 observed_generation,
                 fault_class,
                 sequence,
+                fault_label,
+                fault_length,
+                fault_mr0,
+                fault_mr1,
             } if expected_generation == u64::from(observed_generation) => write!(
                 line,
-                "[ninedoor-service] generation={expected_generation} terminal-fault class={fault_class:?} sequence={sequence}"
+                "[ninedoor-service] generation={expected_generation} terminal-fault class={fault_class:?} sequence={sequence} label={fault_label:x} len={fault_length} mr0={fault_mr0:x} mr1={fault_mr1:x}"
             )?,
             Self::Fault {
                 expected_generation,
@@ -914,6 +922,10 @@ impl NineDoorBridge {
                         observed_generation: record.identity.supervisor_generation,
                         fault_class: record.fault_class,
                         sequence: record.sequence,
+                        fault_label: record.fault_label,
+                        fault_length: record.fault_length,
+                        fault_mr0: record.fault_mr0,
+                        fault_mr1: record.fault_mr1,
                     });
                     faulted = true;
                 }
@@ -12914,12 +12926,16 @@ mod tests {
             observed_generation: 7,
             fault_class: FaultClass::Timeout,
             sequence: 11,
+            fault_label: 6,
+            fault_length: 2,
+            fault_mr0: 0x123,
+            fault_mr1: 0x456,
         }
         .render()
         .expect("bounded fault diagnostic");
         assert_eq!(
             fault.as_str(),
-            "[ninedoor-service] generation=7 terminal-fault class=Timeout sequence=11"
+            "[ninedoor-service] generation=7 terminal-fault class=Timeout sequence=11 label=6 len=2 mr0=123 mr1=456"
         );
 
         let mismatch = NineDoorContainmentDiagnostic::Fault {
@@ -12927,6 +12943,10 @@ mod tests {
             observed_generation: u32::MAX,
             fault_class: FaultClass::Standard,
             sequence: u64::MAX,
+            fault_label: u64::MAX,
+            fault_length: u16::MAX,
+            fault_mr0: u64::MAX,
+            fault_mr1: u64::MAX,
         }
         .render()
         .expect("bounded mismatch diagnostic");
@@ -12947,6 +12967,28 @@ mod tests {
         assert!(fault.len() < DEFAULT_LINE_CAPACITY);
         assert!(mismatch.len() < DEFAULT_LINE_CAPACITY);
         assert!(teardown.len() < DEFAULT_LINE_CAPACITY);
+
+        let maximum = NineDoorContainmentDiagnostic::Fault {
+            expected_generation: u64::from(u32::MAX),
+            observed_generation: u32::MAX,
+            fault_class: FaultClass::Standard,
+            sequence: u64::MAX,
+            fault_label: u64::MAX,
+            fault_length: u16::MAX,
+            fault_mr0: u64::MAX,
+            fault_mr1: u64::MAX,
+        }
+        .render()
+        .expect("maximum kernel fault operands fit the existing line bound");
+        assert_eq!(
+            maximum.as_str(),
+            concat!(
+                "[ninedoor-service] generation=4294967295 terminal-fault class=Standard ",
+                "sequence=18446744073709551615 label=ffffffffffffffff len=65535 ",
+                "mr0=ffffffffffffffff mr1=ffffffffffffffff",
+            )
+        );
+        assert!(maximum.len() < DEFAULT_LINE_CAPACITY);
     }
 
     #[test]

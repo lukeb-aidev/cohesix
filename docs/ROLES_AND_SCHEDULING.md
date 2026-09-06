@@ -660,11 +660,12 @@ network progress. This changes no SC budget, period, priority, owner, queue, or
 retry bound.
 
 The Pi direct-GENET-feature authenticated console's isolated TCP socket,
-shared by the selected WiFi and wired modes, disables delayed ACK and Nagle for
-the bounded interactive request/response protocol. This keeps its transport ACK
-in the receive-coupled cycle and prevents one small response from waiting behind
-an unacknowledged segment; it does not create another listener, queue, transport
-owner, or scheduling authority. QEMU retains its already-qualified TCP policy.
+shared by the selected WiFi and wired modes, retains the pinned smoltcp stack's
+10 ms ACK timer and disables Nagle. A prompt response carries the receive ACK
+without a separate packet/publication round trip; a missing response still
+leaves a due ACK obligation. Response data waits for neither that timer nor an
+earlier unacknowledged segment. This changes no listener, queue, transport owner,
+or scheduling authority. QEMU retains its already-qualified TCP policy.
 
 QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an
