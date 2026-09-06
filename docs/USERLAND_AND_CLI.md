@@ -321,28 +321,27 @@ Both Pi endpoints use the absolute `CNTVCT_EL0` epoch and generated
 omits this Pi accounting. External request/response framing is unchanged.
 
 The detailed Pi composer/scheduler snapshot belongs to explicit `smp mcs`, not
-`netstats`. The Pi release batch contains exactly 20 measured rows:
+`netstats`. The Pi release batch contains 17 lifetime rows plus three global
+idle rows. Version-2 records combine related version-1 rows without dropping
+any measured value:
 
 ```text
 netstats: mcs_quantum schema=v1 hz=<u64> samples=<u64> material=<u64> periods=<u64> invalid=<u64> invalid_period=<u64>
-netstats: mcs_quantum_state schema=v1 pending=<u64> stalled=<u64>
 netstats: mcs_quantum_lane schema=v1 wifi=<u64> genet=<u64>
 netstats: mcs_quantum_total schema=v1 period_us=<u64> run_us=<u64>
 netstats: mcs_quantum_timing schema=v1 period_avg_us=<u64> period_max_us=<u64> run_avg_us=<u64> run_max_us=<u64>
 netstats: mcs_quantum_period schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
 netstats: mcs_quantum_run schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
 netstats: mcs_quantum_last schema=v1 lane=<wifi|genet> generation=<u64> conn=<u64> progress=0x<hex> pending=0x<hex>->0x<hex> period_us=<u64> run_us=<u64> exit=<YIELD|RETAIN|FENCE|FAULT>
-netstats: mcs_quantum_exit schema=v1 yields=<u64> retains=<u64> fences=<u64> faults=<u64>
+netstats: mcs_quantum_exit schema=v2 yields=<u64> retains=<u64> fences=<u64> faults=<u64> pending=<u64> stalled=<u64>
 netstats: mcs_command_dispatch schema=v1 samples=<u64> invalid=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
 netstats: mcs_observe_dispatch schema=v1 samples=<u64> invalid=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
 netstats: mcs_yield schema=v1 hz=<u64> samples=<u64> invalid=<u64> pending=<u64> wifi=<u64> genet=<u64>
 netstats: mcs_yield_timing schema=v1 total_us=<u64> avg_us=<u64> max_us=<u64>
 netstats: mcs_yield_hist schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
-netstats: mcs_yield_cause_a schema=v1 reserve=<u64> no_successor=<u64> passive=<u64>
-netstats: mcs_yield_cause_b schema=v1 recovery=<u64> operator=<u64> other=<u64>
+netstats: mcs_yield_cause schema=v2 reserve=<u64> no_successor=<u64> passive=<u64> recovery=<u64> operator=<u64> other=<u64>
 netstats: mcs_yield_last schema=v1 lane=<wifi|genet> generation=<u64> conn=<u64> pending=0x<hex> trigger=<RESERVE_GUARD|NO_PRODUCTIVE_SUCCESSOR|PASSIVE_ADMISSION|RECOVERY_FENCE|OPERATOR_ROTATION|OTHER_BOUNDARY> hiatus_us=<u64>
-netstats: mcs_budget_guard schema=v1 activation=<u64> attached=<u64> operator=<u64> driver=<u64>
-netstats: mcs_budget_pending schema=v1 activation=<u64> attached=<u64> operator=<u64> driver=<u64>
+netstats: mcs_budget_guard schema=v2 totals=<u64>,<u64>,<u64>,<u64> pending=<u64>,<u64>,<u64>,<u64>
 netstats: mcs_budget_reason schema=v1 cap=<u64> clock=<u64> reserve=<u64> policy=<u64> mask=0x<hex>
 ```
 
@@ -352,13 +351,18 @@ ingress `0x10`, token `0x20`, queue `0x40`. Pending bits are command queue
 `0x10`, continuation `0x20`, WiFi driver `0x40`, passive admission `0x80`,
 operator `0x100`, recovery `0x200`. These fixed legends are documented here;
 the former `mcs_quantum_progress` and `mcs_pending` legend rows are no longer
-emitted. Every measured counter remains in the snapshot.
+emitted. Every measured counter remains in the snapshot. The `totals` and
+`pending` lists use activation, attached, bootstrap operator, bootstrap driver
+order. The former `mcs_quantum_state`, `mcs_yield_cause_a`,
+`mcs_yield_cause_b` and `mcs_budget_pending` rows are folded into the
+version-2 records above.
 
-Five additive rows follow the 20-row batch: `mcs_idle schema=v1`
+Three global idle rows follow in `smp mcs`: `mcs_idle schema=v1`
 contains `before`, `after`, `timer_reject`, `clear=<before>/<after>`,
 `last_cut=<0|1|2>` (before enable, after enable, timer rejected), and `mask`.
-Four `mcs_idle_fences schema=v1 base=<0|4|8|12> counts=<u64>,<u64>,<u64>,<u64>`
-rows count every set fence bit, saturating independently; co-occurring fences
+Two `mcs_idle_fences schema=v2 base=<0|8> counts=<eight decimal u64 values>`
+rows retain all sixteen fence counters formerly split over four v1 rows and
+count every set fence bit, saturating independently; co-occurring fences
 are not mutually exclusive. Bits 0..15 are inexact topology, unavailable child
 level, staged IPC, physical input, serial output, display, reboot,
 recovery/containment, handoff, passive admission, local fault, physical response,
@@ -379,10 +383,11 @@ and `terminal=unknown`, never invented zero evidence. For example:
 [smp:registry/v1] base=0 count=2 registration=present,missing generation0=1/1/1 generation1=none terminal=yes,unknown
 ```
 
-The selected four-core Pi profile's complete WiFi body is 49 lines, including
+The selected four-core Pi profile's complete WiFi body is 64 lines, including
 all eight paired registration rows, eight owner CPU rows, the passive-timeout
-receipt and the end marker. Lifetime network timing remains in `netstats`,
-avoiding duplication in the bounded `smp mcs` body.
+receipt, all seventeen lifetime MCS timing rows, three global idle rows and
+the end marker. Latest-session rows remain in `netstats`; no diagnostic
+batch is silently omitted to fit a response.
 It fits the existing 64-line synchronous TCP capture and 69-line physical
 body; the protocol terminal uses its existing separate reserve. Registry-busy
 and unavailable accounting states remain explicit. QEMU retains its existing
@@ -424,7 +429,11 @@ queued USB bytes and USB readiness/recovery service debt as `serial_rx`,
 These are independently sampled predicates and can co-occur; none changes the
 operator decision. `mcs_session_yield` reports `samples`, `total_us`, `max_us`
 and `invalid` for the existing exact Yield wall-time samples carrying this
-identity. Backwards/zero clocks are invalid, and all counts/sums saturate.
+identity. Additive `causes` contains six decimal valid-sample counts ordered
+reserve guard, no productive successor, passive admission, recovery fence,
+operator rotation and other boundary. Invalid samples do not enter these
+counts. Cause counts saturate at `u32::MAX`; the existing aggregate counters
+remain `u64`. Backwards/zero clocks are invalid, and all counts/sums saturate.
 `mcs_session_yield_cut` retains the pre-Yield work context for the first
 maximum-duration valid sample in that session, or `absent=yes`. `cause` is the
 existing exclusive Yield trigger; `pending`, `cmd`, `stage`, `drain` and the

@@ -20992,8 +20992,13 @@ where
             );
             self.emit_console_line(line.as_str());
         }
-        // Lifetime network timing remains in NETSTATS. Reserve this bounded
-        // SMP body for scheduling contracts, idle receipts and every CPU row.
+        // Compact versioned lifetime and idle rows preserve every counter
+        // while the complete selected Pi SMP body fits 64 lines, including
+        // every owner CPU row and the end marker.
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        for line in crate::pi4_mcs_recorder::snapshot_lines() {
+            self.emit_console_line(line.as_str());
+        }
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         for line in crate::pi4_mcs_recorder::idle_snapshot_lines() {
             self.emit_console_line(line.as_str());
@@ -47683,7 +47688,7 @@ mod tests {
                 "TCP body overflow"
             );
         }
-        assert_eq!(stream.lines.len(), 49);
+        assert_eq!(stream.lines.len(), 64);
         assert_eq!(stream.lines.last().unwrap().as_str(), "[smp:mcs/v1] end");
         assert_eq!(
             stream
@@ -47706,7 +47711,7 @@ mod tests {
                 .iter()
                 .filter(|row| row.text.starts_with("netstats: mcs_"))
                 .count(),
-            5
+            20
         );
         assert!(!pump
             .pending_console_output
@@ -47748,6 +47753,13 @@ mod tests {
             .pending_console_output
             .iter()
             .any(|row| row.text.starts_with("netstats: mcs_session_yield_cut")));
+        assert_eq!(
+            pump.pending_console_output
+                .iter()
+                .filter(|row| row.text.starts_with("netstats: mcs_idle"))
+                .count(),
+            0
+        );
         assert!(pump
             .pending_console_output
             .iter()
@@ -47772,7 +47784,8 @@ mod tests {
             .collect();
         assert!(
             serial_body.len() <= 64,
-            "complete NETSTATS body must fit TCP capture"
+            "complete NETSTATS body must fit TCP capture: {} lines",
+            serial_body.len()
         );
         pump.pending_console_output.clear();
         pump.last_input_source = ConsoleInputSource::Net;
@@ -47942,7 +47955,7 @@ mod tests {
                 .find("[smp:mcs/v1] end")
                 .expect("smp mcs transcript must have an end marker");
             let runtime_lines: Vec<_> = rendered.match_indices("netstats: mcs_").collect();
-            assert_eq!(runtime_lines.len(), 25, "{rendered}");
+            assert_eq!(runtime_lines.len(), 20, "{rendered}");
             assert!(
                 runtime_lines
                     .iter()
@@ -47951,7 +47964,6 @@ mod tests {
             );
             for row in [
                 "mcs_quantum",
-                "mcs_quantum_state",
                 "mcs_quantum_lane",
                 "mcs_quantum_timing",
                 "mcs_quantum_total",
@@ -47964,11 +47976,9 @@ mod tests {
                 "mcs_yield",
                 "mcs_yield_timing",
                 "mcs_yield_hist",
-                "mcs_yield_cause_a",
-                "mcs_yield_cause_b",
+                "mcs_yield_cause",
                 "mcs_yield_last",
                 "mcs_budget_guard",
-                "mcs_budget_pending",
                 "mcs_budget_reason",
             ] {
                 assert_eq!(
@@ -47976,7 +47986,16 @@ mod tests {
                         .lines()
                         .filter(|line| line.starts_with("netstats: ")
                             && line["netstats: ".len()..].starts_with(row)
-                            && line["netstats: ".len() + row.len()..].starts_with(" schema=v1"))
+                            && line["netstats: ".len() + row.len()..].starts_with(
+                                if matches!(
+                                    row,
+                                    "mcs_quantum_exit" | "mcs_yield_cause" | "mcs_budget_guard"
+                                ) {
+                                    " schema=v2"
+                                } else {
+                                    " schema=v1"
+                                }
+                            ))
                         .count(),
                     1,
                     "missing or duplicated Pi runtime MCS row {row}: {rendered}"

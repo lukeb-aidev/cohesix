@@ -1406,6 +1406,17 @@ transport:
   the sealed command remains pending. SDIO remains the sole issuer and must
   independently validate the same immutable command and generation before
   touching hardware.
+- A generic CYW43/SDIO notification-source pass under MCS does not call
+  `seL4_Yield` merely because the runtime has that role. Source priority still
+  consumes a separate bounded arbitration pass, retains any sealed command,
+  and returns through ordinary immutable command/grant and recovery checks.
+  This also covers a coalesced source after an atomic terminal handoff.
+  NaturalPostpone remains the CPU bound; charging the remaining head after
+  an empty or stale source is unnecessary. Classic cooperative behavior,
+  GENET's guarded DPC window, explicit retained-grant recovery/failure yields,
+  physical operation limits, deadlines and sole-owner authority are unchanged.
+  Fresh Pi evidence must measure the effect on the observed near-period
+  CYW43/SDIO handoff delays; source inspection alone is not throughput proof.
 - Within one CYW43 root-granted foreground turn, observing and consuming one
   exact successful SDIO child terminal under a sealed finite cold parent does
   not consume that turn's sole new-submission slot. The admitted cold set is

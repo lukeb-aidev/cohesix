@@ -289,7 +289,7 @@ impl PiMcsYieldSummary {
         self.last_trigger = record.trigger;
     }
 
-    fn lines(self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 6] {
+    fn lines(self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
         let average_ticks = if self.samples == 0 {
             0
         } else {
@@ -331,15 +331,10 @@ impl PiMcsYieldSummary {
         let mut trigger_primary = HeaplessString::new();
         let _ = write!(
             trigger_primary,
-            "netstats: mcs_yield_cause_a schema=v1 reserve={} no_successor={} passive={}",
+            "netstats: mcs_yield_cause schema=v2 reserve={} no_successor={} passive={} recovery={} operator={} other={}",
             self.triggers[PiMcsYieldTrigger::ReserveGuard.index()],
             self.triggers[PiMcsYieldTrigger::NoProductiveSuccessor.index()],
             self.triggers[PiMcsYieldTrigger::PassiveAdmission.index()],
-        );
-        let mut trigger_secondary = HeaplessString::new();
-        let _ = write!(
-            trigger_secondary,
-            "netstats: mcs_yield_cause_b schema=v1 recovery={} operator={} other={}",
             self.triggers[PiMcsYieldTrigger::RecoveryFence.index()],
             self.triggers[PiMcsYieldTrigger::OperatorRotation.index()],
             self.triggers[PiMcsYieldTrigger::OtherBoundary.index()],
@@ -355,14 +350,7 @@ impl PiMcsYieldSummary {
             self.last_trigger.label(),
             last_us,
         );
-        [
-            counts,
-            timing,
-            buckets,
-            trigger_primary,
-            trigger_secondary,
-            last,
-        ]
+        [counts, timing, buckets, trigger_primary, last]
     }
 }
 
@@ -398,20 +386,15 @@ impl PiMcsBudgetGuardSummary {
         self.reason_mask |= reason_mask;
     }
 
-    fn lines(self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 3] {
+    fn lines(self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 2] {
         let mut stages = HeaplessString::new();
         let _ = write!(
             stages,
-            "netstats: mcs_budget_guard schema=v1 activation={} attached={} operator={} driver={}",
+            "netstats: mcs_budget_guard schema=v2 totals={},{},{},{} pending={},{},{},{}",
             self.total[PiMcsBudgetGuardStage::Activation.index()],
             self.total[PiMcsBudgetGuardStage::Attached.index()],
             self.total[PiMcsBudgetGuardStage::BootstrapOperator.index()],
             self.total[PiMcsBudgetGuardStage::BootstrapDriver.index()],
-        );
-        let mut pending = HeaplessString::new();
-        let _ = write!(
-            pending,
-            "netstats: mcs_budget_pending schema=v1 activation={} attached={} operator={} driver={}",
             self.pending[PiMcsBudgetGuardStage::Activation.index()],
             self.pending[PiMcsBudgetGuardStage::Attached.index()],
             self.pending[PiMcsBudgetGuardStage::BootstrapOperator.index()],
@@ -427,7 +410,7 @@ impl PiMcsBudgetGuardSummary {
             self.reasons[3],
             self.reason_mask,
         );
-        [stages, pending, reasons]
+        [stages, reasons]
     }
 }
 
@@ -562,7 +545,7 @@ impl PiMcsTimingSummary {
         }
     }
 
-    fn lines(self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 9] {
+    fn lines(self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
         let period_average_ticks = if self.period_samples == 0 {
             0
         } else {
@@ -591,12 +574,6 @@ impl PiMcsTimingSummary {
             self.period_samples,
             self.invalid_samples,
             self.invalid_period_samples,
-        );
-        let mut state = HeaplessString::new();
-        let _ = write!(
-            state,
-            "netstats: mcs_quantum_state schema=v1 pending={} stalled={}",
-            self.pending_samples, self.stalled_samples,
         );
         let mut lanes = HeaplessString::new();
         let _ = write!(
@@ -661,15 +638,16 @@ impl PiMcsTimingSummary {
         let mut exits = HeaplessString::new();
         let _ = write!(
             exits,
-            "netstats: mcs_quantum_exit schema=v1 yields={} retains={} fences={} faults={}",
+            "netstats: mcs_quantum_exit schema=v2 yields={} retains={} fences={} faults={} pending={} stalled={}",
             self.exits[PiMcsExit::Yield.index()],
             self.exits[PiMcsExit::Retain.index()],
             self.exits[PiMcsExit::Fence.index()],
             self.exits[PiMcsExit::Fault.index()],
+            self.pending_samples,
+            self.stalled_samples,
         );
         [
             counts,
-            state,
             lanes,
             totals,
             timing,
@@ -750,21 +728,25 @@ impl PiMcsIdleSummary {
         self.last_cut = index as u8;
     }
 
-    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 3] {
         let mut lines = core::array::from_fn(|_| HeaplessString::new());
         let _ = write!(lines[0],
             "netstats: mcs_idle schema=v1 before={} after={} timer_reject={} clear={}/{} last_cut={} mask=0x{:04x}",
             self.cuts[0], self.cuts[1], self.cuts[2], self.clear[0], self.clear[1], self.last_cut, self.last_mask);
-        for group in 0..4 {
-            let i = group * 4;
+        for group in 0..2 {
+            let i = group * 8;
             let _ = write!(
                 lines[group + 1],
-                "netstats: mcs_idle_fences schema=v1 base={} counts={},{},{},{}",
+                "netstats: mcs_idle_fences schema=v2 base={} counts={},{},{},{},{},{},{},{}",
                 i,
                 self.fences[i],
                 self.fences[i + 1],
                 self.fences[i + 2],
-                self.fences[i + 3]
+                self.fences[i + 3],
+                self.fences[i + 4],
+                self.fences[i + 5],
+                self.fences[i + 6],
+                self.fences[i + 7]
             );
         }
         lines
@@ -784,6 +766,7 @@ struct PiMcsSessionSummary {
     yield_us: u64,
     yield_max_us: u64,
     yield_invalid: u64,
+    yield_causes: [u32; PiMcsYieldTrigger::COUNT],
     worst_yield: Option<PiMcsYieldRecord>,
 }
 
@@ -798,6 +781,7 @@ impl PiMcsSessionSummary {
             yield_us: 0,
             yield_max_us: 0,
             yield_invalid: 0,
+            yield_causes: [0; PiMcsYieldTrigger::COUNT],
             worst_yield: None,
         }
     }
@@ -846,6 +830,8 @@ impl PiMcsSessionSummary {
             return;
         };
         self.yields = self.yields.saturating_add(1);
+        let cause = &mut self.yield_causes[record.trigger.index()];
+        *cause = cause.saturating_add(1);
         self.yield_us = self.yield_us.saturating_add(us);
         if self.worst_yield.is_none() || us > self.yield_max_us {
             self.yield_max_us = us;
@@ -873,8 +859,10 @@ impl PiMcsSessionSummary {
             self.operator[0], self.operator[1], self.operator[2], self.operator[3], self.operator[4], self.operator[5]);
         let _ = write!(
             lines[6],
-            "netstats: mcs_session_yield schema=v1 samples={} total_us={} max_us={} invalid={}",
-            self.yields, self.yield_us, self.yield_max_us, self.yield_invalid
+            "netstats: mcs_session_yield schema=v1 samples={} total_us={} max_us={} invalid={} causes={},{},{},{},{},{}",
+            self.yields, self.yield_us, self.yield_max_us, self.yield_invalid,
+            self.yield_causes[0], self.yield_causes[1], self.yield_causes[2],
+            self.yield_causes[3], self.yield_causes[4], self.yield_causes[5]
         );
         match self
             .worst_yield
@@ -920,7 +908,7 @@ pub(crate) fn record_idle_fence(cut: PiMcsIdleCut, mask: u32) {
     IDLE.lock().record(cut, mask);
 }
 
-pub(crate) fn idle_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 5] {
+pub(crate) fn idle_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 3] {
     IDLE.lock().lines()
 }
 
@@ -954,7 +942,7 @@ pub(crate) fn record_command_dispatch(
     }
 }
 
-pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 20] {
+pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 17] {
     let timing = TIMING.lock().lines();
     let yield_lines = YIELD.lock().lines();
     let budget_guard = BUDGET_GUARD.lock().lines();
@@ -969,7 +957,6 @@ pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 20] {
         timing[5].clone(),
         timing[6].clone(),
         timing[7].clone(),
-        timing[8].clone(),
         dispatch,
         observe_dispatch,
         yield_lines[0].clone(),
@@ -977,10 +964,8 @@ pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 20] {
         yield_lines[2].clone(),
         yield_lines[3].clone(),
         yield_lines[4].clone(),
-        yield_lines[5].clone(),
         budget_guard[0].clone(),
         budget_guard[1].clone(),
-        budget_guard[2].clone(),
     ]
 }
 
@@ -1036,6 +1021,7 @@ mod tests {
             ..sample
         });
         assert_eq!(summary.yield_invalid, 3);
+        assert_eq!(summary.yield_causes, [0, 1, 0, 0, 0, 0]);
         assert_eq!(summary.worst_yield, Some(sample));
         summary.record_yield(PiMcsYieldRecord {
             resumed_ticks: 270_100,
@@ -1044,9 +1030,11 @@ mod tests {
         });
         assert_eq!(summary.worst_yield, Some(sample));
         assert!(summary.lines()[7].contains("phase=3 pub=2 cmd=37 stage=37 drain=36"));
+        assert!(summary.lines()[6].ends_with("causes=0,2,0,0,0,0"));
         summary.record_idle(8, 11, PiMcsIdleCut::BeforeEnable, 0, 0);
         assert_eq!((summary.generation, summary.connection), (8, 11));
         assert!(summary.worst_yield.is_none());
+        assert_eq!(summary.yield_causes, [0; 6]);
         assert_eq!(summary.idle.cuts, [1, 0, 0]);
         assert_eq!(summary.operator, [0; 6]);
         assert_eq!(
@@ -1069,13 +1057,33 @@ mod tests {
         summary.yield_us = u64::MAX;
         summary.yield_max_us = u64::MAX;
         summary.yield_invalid = u64::MAX;
+        summary.yield_causes = [u32::MAX; 6];
+        let sample = PiMcsYieldRecord {
+            lane: PiMcsLane::Wifi,
+            entered_ticks: 54,
+            resumed_ticks: 108,
+            counter_hz: PI4_COUNTER_HZ,
+            generation: u64::MAX,
+            connection_id: u64::MAX,
+            pending_mask: 0,
+            trigger: PiMcsYieldTrigger::ReserveGuard,
+            context: None,
+        };
+        summary.worst_yield = Some(sample);
+        summary.record_yield(sample);
+        assert_eq!(summary.yield_causes, [u32::MAX; 6]);
+        assert_eq!(summary.yields, u64::MAX);
+        assert_eq!(summary.yield_us, u64::MAX);
+        assert_eq!(summary.yield_max_us, u64::MAX);
         summary.record_idle(u64::MAX, u64::MAX, PiMcsIdleCut::BeforeEnable, 0xffff, 0x3f);
         assert_eq!(summary.idle.fences, [u64::MAX; 16]);
         assert_eq!(summary.operator, [u64::MAX; 6]);
         let lines = summary.lines();
         assert!(lines[0].ends_with("clear=18446744073709551615/18446744073709551615"));
         assert!(lines[5].ends_with("usb_service=18446744073709551615"));
-        assert!(lines[6].ends_with("invalid=18446744073709551615"));
+        assert!(lines[6].contains("invalid=18446744073709551615 causes="));
+        assert!(lines[6]
+            .ends_with("causes=4294967295,4294967295,4294967295,4294967295,4294967295,4294967295"));
         for line in lines {
             assert!(line.len() < DEFAULT_LINE_CAPACITY);
         }
@@ -1096,12 +1104,21 @@ mod tests {
         );
         assert_eq!(summary.last_cut, 2);
         assert_eq!(summary.last_mask, 0x8000);
+        assert_eq!(
+            summary.lines()[1],
+            "netstats: mcs_idle_fences schema=v2 base=0 counts=0,0,0,1,0,1,0,0"
+        );
+        assert_eq!(
+            summary.lines()[2],
+            "netstats: mcs_idle_fences schema=v2 base=8 counts=0,0,0,0,0,0,1,1"
+        );
         summary.cuts = [u64::MAX; 3];
         summary.clear = [u64::MAX; 2];
         summary.fences = [u64::MAX; 16];
         summary.record(PiMcsIdleCut::BeforeEnable, 0xffff);
         assert_eq!(summary.cuts, [u64::MAX; 3]);
         assert_eq!(summary.fences, [u64::MAX; 16]);
+        assert_eq!(summary.lines()[2], "netstats: mcs_idle_fences schema=v2 base=8 counts=18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615");
         for line in summary.lines() {
             assert!(!line.is_empty());
             assert!(line.len() < DEFAULT_LINE_CAPACITY);
@@ -1147,7 +1164,9 @@ mod tests {
         let lines = summary.lines();
         assert!(lines.iter().all(|line| !line.is_empty()));
         assert!(lines.iter().all(|line| line.len() < DEFAULT_LINE_CAPACITY));
-        assert!(lines[5].starts_with("netstats: mcs_quantum_period schema=v1"));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("netstats: mcs_quantum_period schema=v1")));
     }
 
     #[test]
@@ -1185,7 +1204,7 @@ mod tests {
         assert_eq!(summary.buckets[4], 1);
         assert!(summary.lines()[1].contains("avg_us=10000"));
         assert!(summary.lines()[3].contains("reserve=1"));
-        assert!(summary.lines()[5].contains("trigger=RESERVE_GUARD"));
+        assert!(summary.lines()[4].contains("trigger=RESERVE_GUARD"));
     }
 
     #[test]
@@ -1276,6 +1295,7 @@ mod tests {
         assert!(timing_lines
             .iter()
             .all(|line| !line.is_empty() && line.len() < DEFAULT_LINE_CAPACITY));
+        assert_eq!(timing_lines[7], "netstats: mcs_quantum_exit schema=v2 yields=18446744073709551615 retains=18446744073709551615 fences=18446744073709551615 faults=18446744073709551615 pending=18446744073709551615 stalled=18446744073709551615");
 
         let mut yields = PiMcsYieldSummary::new();
         yields.samples = u64::MAX;
@@ -1295,6 +1315,7 @@ mod tests {
         assert!(yield_lines
             .iter()
             .all(|line| !line.is_empty() && line.len() < DEFAULT_LINE_CAPACITY));
+        assert_eq!(yield_lines[3], "netstats: mcs_yield_cause schema=v2 reserve=18446744073709551615 no_successor=18446744073709551615 passive=18446744073709551615 recovery=18446744073709551615 operator=18446744073709551615 other=18446744073709551615");
 
         let mut session = PiMcsSessionSummary::new();
         session.worst_yield = Some(PiMcsYieldRecord {
@@ -1327,5 +1348,6 @@ mod tests {
         assert!(guard_lines
             .iter()
             .all(|line| !line.is_empty() && line.len() < DEFAULT_LINE_CAPACITY));
+        assert_eq!(guard_lines[0], "netstats: mcs_budget_guard schema=v2 totals=18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615 pending=18446744073709551615,18446744073709551615,18446744073709551615,18446744073709551615");
     }
 }

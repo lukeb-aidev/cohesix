@@ -69549,11 +69549,18 @@ fn runtime_signal_one_way_completion(
 }
 
 #[cfg(any(target_os = "none", test))]
-const fn runtime_terminal_source_service_requires_yield(route: RuntimeNotificationRoute) -> bool {
-    matches!(
-        route,
-        RuntimeNotificationRoute::SdioOwner | RuntimeNotificationRoute::Cyw43Client
-    )
+const fn runtime_terminal_source_service_requires_yield(
+    route: RuntimeNotificationRoute,
+    kernel_mcs: bool,
+) -> bool {
+    // A source quantum ends this arbitration pass, not the kernel reservation.
+    // MCS already bounds CPU execution and resumes the exact cursor. Yield
+    // would charge the remaining head even for a stale/quiescent source.
+    !kernel_mcs
+        && matches!(
+            route,
+            RuntimeNotificationRoute::SdioOwner | RuntimeNotificationRoute::Cyw43Client
+        )
 }
 
 #[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
@@ -69567,11 +69574,14 @@ struct RuntimeTerminalDeferredSource {
 const fn runtime_terminal_deferred_source(
     route: RuntimeNotificationRoute,
     badge: u32,
+    kernel_mcs: bool,
 ) -> Option<RuntimeTerminalDeferredSource> {
     match runtime_idle_service_badge(route, badge) {
         Some(service_badge) => Some(RuntimeTerminalDeferredSource {
             badge: service_badge,
-            must_yield_before_foreground: runtime_terminal_source_service_requires_yield(route),
+            must_yield_before_foreground: runtime_terminal_source_service_requires_yield(
+                route, kernel_mcs,
+            ),
         }),
         None => None,
     }
@@ -69624,7 +69634,11 @@ fn runtime_retain_terminal_handoff_wake(
             // after the retired command's captured terminal evidence is
             // published. This prevents source state from becoming the prior
             // command's pending mask and keeps park time out of its cadence.
-            deferred_source = runtime_terminal_deferred_source(notification_route, badge);
+            deferred_source = runtime_terminal_deferred_source(
+                notification_route,
+                badge,
+                cfg!(sel4_config_kernel_mcs),
+            );
         }
         RuntimeWake::None => {}
     }
@@ -69828,11 +69842,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 pcie_timer_block_after_irq(last_sequence, task_key_marker);
                             pending_command_gate.complete();
                         }
-                        // CYW43/SDIO source service retains its established MCS
-                        // handoff. GENET direct DPC keeps its guarded local
-                        // continuation and must not acquire a generic Yield.
+                        // Source priority ends this pass. MCS keeps its
+                        // reservation while the next pass revalidates durable
+                        // command/grant state; classic keeps cooperative Yield.
+                        // GENET retains its own guarded direct-DPC window.
                         if root_prompt
-                            && runtime_terminal_source_service_requires_yield(notification_route)
+                            && runtime_terminal_source_service_requires_yield(
+                                notification_route,
+                                cfg!(sel4_config_kernel_mcs),
+                            )
                         {
                             runtime_yield_current_tcb();
                         }
@@ -70300,7 +70318,10 @@ pub fn runtime_main(task_key: usize) -> ! {
                         runtime_notification_service_badge(notification_route, badge)
                     {
                         let _ = service_runtime_notification(service_badge);
-                        if runtime_terminal_source_service_requires_yield(notification_route) {
+                        if runtime_terminal_source_service_requires_yield(
+                            notification_route,
+                            cfg!(sel4_config_kernel_mcs),
+                        ) {
                             runtime_yield_current_tcb();
                         }
                         continue;
@@ -71066,12 +71087,16 @@ pub fn runtime_main(task_key: usize) -> ! {
                             pending_command_gate.complete();
                         }
                         if root_prompt
-                            && runtime_terminal_source_service_requires_yield(notification_route)
+                            && runtime_terminal_source_service_requires_yield(
+                                notification_route,
+                                cfg!(sel4_config_kernel_mcs),
+                            )
                         {
                             runtime_yield_current_tcb();
                         }
-                        // Physical-source priority remains a hard activation
-                        // boundary; the sealed prompted command remains pending.
+                        // Physical-source priority remains a separate
+                        // arbitration pass; the sealed command stays pending
+                        // for ordinary immutable command/grant validation.
                         continue;
                     }
                     // The notification is only a prompt. Re-enter arbitration
@@ -71809,9 +71834,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                     pending_intake = pcie_timer_block_after_irq(last_sequence, task_key_marker);
                     pending_command_gate.complete();
                 }
-                // CYW43/SDIO persistent-source priority is a hard activation
-                // boundary. Even a rejected or already-quiescent source cannot
-                // fall through into foreground physical I/O in this refill.
+                // The source consumed its own bounded arbitration pass.
+                // Return through ordinary intake/grant validation under MCS;
+                // a notification alone never authorizes foreground I/O.
                 if source.must_yield_before_foreground {
                     runtime_yield_current_tcb();
                 }
@@ -88985,20 +89010,28 @@ mod tests {
             ),
             Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
         );
-        assert!(runtime_terminal_source_service_requires_yield(
+        for route in [
             RuntimeNotificationRoute::SdioOwner,
-        ));
-        assert!(runtime_terminal_source_service_requires_yield(
             RuntimeNotificationRoute::Cyw43Client,
-        ));
+        ] {
+            assert!(
+                !runtime_terminal_source_service_requires_yield(route, true),
+                "a bounded MCS source pass must not forfeit the remaining reservation"
+            );
+            assert!(
+                runtime_terminal_source_service_requires_yield(route, false),
+                "classic cooperative scheduling retains its boundary"
+            );
+        }
         assert!(
-            !runtime_terminal_source_service_requires_yield(RuntimeNotificationRoute::Genet),
+            !runtime_terminal_source_service_requires_yield(RuntimeNotificationRoute::Genet, true),
             "GENET retains its own guarded direct-DPC window",
         );
         assert_eq!(
             runtime_terminal_deferred_source(
                 RuntimeNotificationRoute::SdioOwner,
                 DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+                true,
             ),
             None,
             "a pure peer baton is not physical-source work",
@@ -89007,12 +89040,13 @@ mod tests {
             runtime_terminal_deferred_source(
                 RuntimeNotificationRoute::SdioOwner,
                 DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                true,
             ),
             Some(RuntimeTerminalDeferredSource {
                 badge: DRIVER_RUNTIME_SDIO_IRQ_BADGE,
-                must_yield_before_foreground: true,
+                must_yield_before_foreground: false,
             }),
-            "a coalesced CARD_INT is serviced only after terminal evidence and then yields",
+            "a coalesced CARD_INT follows terminal evidence and retains the MCS reservation",
         );
     }
 

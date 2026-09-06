@@ -825,6 +825,14 @@ contains the direct generation. The packet-slice duration high-water and
 dense-window reason fields observe these decisions but do not supply
 scheduling authority or target acceptance.
 
+Generic CYW43/SDIO notification service under MCS ends its bounded arbitration
+pass without a role-only Yield. The next pass still validates the sealed
+command and exact grant; source work cannot manufacture another operation.
+NaturalPostpone enforces the unchanged CPU reservation, while classic source
+scheduling and explicit recovery/grant-failure yields retain their boundaries.
+This removes a voluntary full-head charge after even a quiescent source; it
+changes no driver budget, physical ownership, deadline, or retry count.
+
 CYW43 and SDIO remain separate active core-3 runtimes at priority 184 with
 unchanged `1,500 us / 10,000 us` budgets, natural-postpone behavior, WCETs,
 Reply/fault paths, and sole physical-owner boundaries. Their 8-bit scheduling
@@ -833,6 +841,14 @@ AArch64 MCS ABI holds ten records at that object size, and compiler validation
 binds the calculation to the exact selected kernel/profile/build identity and
 rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
 CPU budget or authorize another operation, signal, poll, retry, or owner.
+
+Root-control reuses the kernel-created `seL4_CapInitThreadSC`; it does not
+allocate a new SC from the manifest size. The selected kernel exports that cap
+with `seL4_MinSchedContextBits=7`, which permits exactly two refill records.
+A manifest-only enlargement is invalid and must be rejected by the compiler.
+Other active owners allocate their declared SC objects and may use larger
+refill queues within the selected ABI. Changing root's object requires a
+separate explicit activation handoff and accounting-cap contract.
 
 For both Pi network modes, root-control selects core 0 and console-network
 selects core 2 at priority/MCP 200/200. Root retains
