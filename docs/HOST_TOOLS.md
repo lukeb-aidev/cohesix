@@ -271,7 +271,9 @@ source checks or a successful flash cannot claim target performance.
 
 The fabc657cb four-boot follow-up changes Pi TCP packet scheduling only: keep
 the pinned stack's bounded ACK timer, permit response/ACK coalescing, and keep
-Nagle disabled. The NineDoor fault line adds existing raw kernel operands
+Nagle disabled. The direct-GENET command wait preserves due protocol timers
+and peer-ready retained egress in at most three existing child units while
+keeping its background-work latch closed. The NineDoor fault line adds existing raw kernel operands
 after its unchanged generation/class/sequence prefix. The complete catalog
 (`cohsh`, `coh`, `coh-status`, Hive Gateway, GPU/sidecar bridges, host-ticket
 agent, CAS tools, SwarmUI), `tools/cohesix-py`, `.coh` scripts, generated

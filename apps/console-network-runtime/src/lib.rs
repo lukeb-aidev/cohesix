@@ -103,16 +103,29 @@ fn close_transition_service_due(
 /// root supplies the command's bounded control successor.
 ///
 /// Direct VirtIO retains its qualified work-conserving behavior. Only the
-/// physical direct-GENET child in the Pi same-core root/console profile
+/// physical direct-GENET child in the selected Pi root/console profile
 /// suppresses an ACK-only idle quantum after a command publication.
-/// Publication ACKs, link wakes, and empty control hints do not release either
-/// the pre-wait or post-wait direct-service gate.
+/// Publication ACKs, link wakes, and empty control hints do not release the
+/// command fence. Due protocol timers retain one bounded service cycle without
+/// granting unrelated background work or releasing the command latch.
 #[must_use]
 pub const fn direct_genet_command_publication_quiesces(
     exact_direct_genet: bool,
     kind: ExchangeKind,
 ) -> bool {
     exact_direct_genet && matches!(kind, ExchangeKind::Command | ExchangeKind::CommandBatch)
+}
+
+/// Preserve a due protocol timer and its queued TX while root prepares output.
+/// A full TX ring requires a peer wake before a retained frame is actionable.
+#[must_use]
+pub const fn direct_genet_command_timer_service_due(
+    command_quiesced: bool,
+    timer_due: bool,
+    egress_pending: bool,
+    tx_waiting_for_peer: bool,
+) -> bool {
+    command_quiesced && (timer_due || (egress_pending && !tx_waiting_for_peer))
 }
 
 /// Return whether one exact root control record releases a quiesced command.
@@ -1846,6 +1859,28 @@ mod tests {
     }
 
     #[test]
+    fn command_wait_preserves_due_timers_and_peer_bounded_egress() {
+        assert!(!direct_genet_command_timer_service_due(
+            false, true, true, false
+        ));
+        assert!(!direct_genet_command_timer_service_due(
+            true, false, false, false
+        ));
+        assert!(direct_genet_command_timer_service_due(
+            true, true, false, false
+        ));
+        assert!(direct_genet_command_timer_service_due(
+            true, false, true, false
+        ));
+        assert!(!direct_genet_command_timer_service_due(
+            true, false, true, true
+        ));
+        assert!(direct_genet_command_timer_service_due(
+            true, true, true, true
+        ));
+    }
+
+    #[test]
     fn only_new_exact_direct_genet_control_releases_command_quiesce() {
         assert!(direct_genet_command_control_releases_quiesce(
             true,
@@ -2081,8 +2116,10 @@ mod tests {
         let response_time = if prompt_response {
             101
         } else {
+            assert!(!service.timer_service_due(109));
             poll_complete_service_cycle(&mut service, 109).unwrap();
             assert_eq!(service.take_packet(&mut packet).unwrap(), None);
+            assert!(service.timer_service_due(110));
             poll_complete_service_cycle(&mut service, 110).unwrap();
             let length = service.take_packet(&mut packet).unwrap().unwrap();
             let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
@@ -2093,6 +2130,7 @@ mod tests {
                 tcp.payload().is_empty(),
                 "missing root output cannot suppress the due ACK"
             );
+            assert!(!service.timer_service_due(110));
             111
         };
         let (batch, length) = send_batch_payload(&["PONG", "OK PING reply=pong"]);

@@ -6984,6 +6984,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       response carries the receive ACK without a preceding standalone ACK,
       missing root output still emits its ACK at the deadline, and another
       small response transmits before its predecessor is acknowledged.
+      While direct GENET awaits root control, source contracts must route a
+      due child timer or peer-ready retained egress through both service-entry
+      gates with a three-unit limit and without clearing the command latch.
+      Pure predicates must reject background/empty work and blocked retained
+      TX without a due timer. Real TCP tests must also expose the exact ACK
+      deadline through `timer_service_due`, clearing it when the ACK is staged.
       These host contracts are not evidence of Pi latency.
       Generated-profile and ABI tests must prove that only the exact Pi
       `bcmgenet-v5` profile derives the direct GENET link: one CPU-only 32-page

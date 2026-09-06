@@ -666,6 +666,13 @@ without a separate packet/publication round trip; a missing response still
 leaves a due ACK obligation. Response data waits for neither that timer nor an
 earlier unacknowledged segment. This changes no listener, queue, transport owner,
 or scheduling authority. QEMU retains its already-qualified TCP policy.
+While direct GENET awaits the root command control, its command latch still
+suppresses background service. A due child-owned protocol timer, or its queued
+egress once the peer can accept it, admits at most three existing service
+units. Both pre-wait and post-wait gates use that same decision; the command
+latch remains closed until a newly sequenced applied root control arrives.
+This preserves ACK/retransmit/close obligations without reopening the ordinary
+64-unit quantum. A blocked TX frame remains retained for a peer wake.
 
 QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an

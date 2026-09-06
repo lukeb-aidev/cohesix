@@ -34,6 +34,7 @@ use console_network_runtime::{
 #[cfg(feature = "direct-genet")]
 use console_network_runtime::{
     direct_genet_command_control_releases_quiesce, direct_genet_command_publication_quiesces,
+    direct_genet_command_timer_service_due,
 };
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
@@ -270,6 +271,22 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         let direct_genet_command_quiesced = awaiting_root_command_control;
         #[cfg(not(feature = "direct-genet"))]
         let direct_genet_command_quiesced = false;
+        #[cfg(feature = "direct-genet")]
+        let command_timer_service_due = direct_genet_command_timer_service_due(
+            direct_genet_command_quiesced,
+            direct_genet_command_quiesced
+                && service.timer_service_due(now_ms(descriptor.timer_clock_hz)),
+            service.egress_pending(),
+            direct_tx_waiting_for_peer,
+        );
+        #[cfg(all(not(feature = "direct-genet"), feature = "direct-virtio"))]
+        let command_timer_service_due = false;
+        #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
+        let direct_service_allowed = !direct_genet_command_quiesced || command_timer_service_due;
+        #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
+        if command_timer_service_due {
+            direct_service_pending = true;
+        }
         let egress_publication_pending = !direct_transport && service.egress_pending();
         let readiness = ChildTurnReadiness::new(
             !completions.is_empty(),
@@ -288,7 +305,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 | ChildTurnUnit::IngestPacket
                 | ChildTurnUnit::ApplyControl => true,
                 #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
-                ChildTurnUnit::Idle => direct_service_pending && !direct_genet_command_quiesced,
+                ChildTurnUnit::Idle => direct_service_pending && direct_service_allowed,
                 #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
                 ChildTurnUnit::Idle => false,
             }
@@ -393,13 +410,22 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
         if direct_transport
             && direct_service_pending
-            && !direct_genet_command_quiesced
+            && direct_service_allowed
             && unit == ChildTurnUnit::Idle
         {
             direct_service_pending = false;
             let mut quantum_units = 0usize;
             let mut cycle_progress = false;
-            while quantum_units < DIRECT_SERVICE_QUANTUM_UNITS
+            // A due timer while awaiting root may finish one three-unit
+            // stack/session cycle, never the background 64-unit quantum.
+            // The command latch stays closed; a blocked TX frame remains
+            // retained until the peer makes it actionable.
+            let quantum_unit_limit = if command_timer_service_due {
+                3
+            } else {
+                DIRECT_SERVICE_QUANTUM_UNITS
+            };
+            while quantum_units < quantum_unit_limit
                 && completions.is_empty()
                 && !service.service_event_pending()
             {
@@ -534,7 +560,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             #[cfg(not(feature = "direct-genet"))]
             let direct_link_work_pending = false;
             direct_service_pending |= direct_service_repoll_required(
-                quantum_units == DIRECT_SERVICE_QUANTUM_UNITS,
+                quantum_units == quantum_unit_limit,
                 !completions.is_empty(),
                 service.service_event_pending(),
                 service.egress_pending(),
@@ -645,7 +671,8 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     // before an ACK or link wake may spend this child's SC on
                     // the 64-unit idle NIC loop. Only a newly sequenced control
                     // record clears the latch; an empty or stale control wake
-                    // does not. QEMU direct VirtIO never enters it.
+                    // does not. Due timers use the separate bounded cycle
+                    // above. QEMU direct VirtIO never enters this latch.
                     direct_service_pending = false;
                     awaiting_root_command_control = true;
                 }

@@ -977,10 +977,10 @@ fn compact_control_hook_is_genet_only_and_virtio_fails_closed() {
 #[test]
 fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
     let pre_wait = CONSOLE_KERNEL_SOURCE
-        .find("ChildTurnUnit::Idle => direct_service_pending && !direct_genet_command_quiesced")
+        .find("ChildTurnUnit::Idle => direct_service_pending && direct_service_allowed")
         .expect("command quiesce fences the pre-wait direct-service admission");
     let post_wait = CONSOLE_KERNEL_SOURCE
-        .find("&& !direct_genet_command_quiesced\n            && unit == ChildTurnUnit::Idle")
+        .find("&& direct_service_allowed\n            && unit == ChildTurnUnit::Idle")
         .expect("command quiesce fences the post-wait direct-service admission");
     let command_publication = CONSOLE_KERNEL_SOURCE
         .find("awaiting_root_command_control = true")
@@ -991,4 +991,14 @@ fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
     assert!(pre_wait < command_publication);
     assert!(post_wait < command_publication);
     assert!(command_publication < exact_control);
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "let direct_service_allowed = !direct_genet_command_quiesced || command_timer_service_due"
+    ));
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "direct_genet_command_quiesced\n                && service.timer_service_due(now_ms(descriptor.timer_clock_hz))"
+    ));
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "let quantum_unit_limit = if command_timer_service_due {\n                3\n            } else {\n                DIRECT_SERVICE_QUANTUM_UNITS\n            }"
+    ));
+    assert!(CONSOLE_KERNEL_SOURCE.contains("while quantum_units < quantum_unit_limit"));
 }
