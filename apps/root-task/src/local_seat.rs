@@ -2105,6 +2105,8 @@ fn format_usb_keyboard_command_ready_display_detail(
 #[derive(Debug)]
 pub struct LocalSeatRuntime {
     status: LocalSeatStatus,
+    #[cfg(test)]
+    hdmi_framebuffer_present_override: Option<bool>,
     keyboard_queue: VecDeque<u8>,
     input_echo_preview: String,
     input_echo_escape_state: u8,
@@ -2319,6 +2321,8 @@ impl LocalSeatRuntime {
     pub fn new(status: LocalSeatStatus) -> Self {
         Self {
             status,
+            #[cfg(test)]
+            hdmi_framebuffer_present_override: None,
             keyboard_queue: VecDeque::new(),
             input_echo_preview: String::new(),
             input_echo_escape_state: 0,
@@ -4055,15 +4059,46 @@ impl LocalSeatRuntime {
         }
     }
 
-    /// Return whether local-seat HDMI has queued work waiting for an idle turn.
+    /// Whether this boot supplied framebuffer authority for the linked display.
+    /// Firmware discovery precedes local-seat construction; attaching a monitor
+    /// later cannot create a missing mapping in this runtime generation.
+    #[must_use]
+    pub(crate) fn linked_hdmi_framebuffer_present(&self) -> bool {
+        #[cfg(test)]
+        if let Some(present) = self.hdmi_framebuffer_present_override {
+            return present;
+        }
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            crate::hal::driver_task::hdmi_runtime_framebuffer_hint().is_some()
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            true
+        }
+    }
+
+    /// Return whether queued display work can run in this boot. Preserve an
+    /// already-retained command's completion debt independently of new output.
     #[must_use]
     pub fn linked_hdmi_pending_work(&self) -> bool {
         self.linked_hdmi_retained_frame_pending()
-            || self.linked_hdmi_redraw_pending()
-            || self.linked_hdmi_output_ready_to_issue()
-            || (self.hdmi_input_row_dirty && self.hdmi_scrollback_offset == 0)
-            || (self.hdmi_rendered_viewport_valid
-                && self.hdmi_rendered_scrollback_offset != self.hdmi_scrollback_offset)
+            || (self.linked_hdmi_framebuffer_present()
+                && (self.linked_hdmi_redraw_pending()
+                    || self.linked_hdmi_output_ready_to_issue()
+                    || (self.hdmi_input_row_dirty && self.hdmi_scrollback_offset == 0)
+                    || (self.hdmi_rendered_viewport_valid
+                        && self.hdmi_rendered_scrollback_offset != self.hdmi_scrollback_offset)))
     }
 
     /// Return whether a network-origin console line should be mirrored to HDMI.
@@ -4077,11 +4112,17 @@ impl LocalSeatRuntime {
             .hdmi_pending_bytes
             .len()
             .saturating_add(self.hdmi_redraw_bytes.len());
-        queued_bytes <= LINKED_LOCAL_SEAT_NET_MIRROR_PENDING_BYTE_LIMIT
+        self.linked_hdmi_framebuffer_present()
+            && queued_bytes <= LINKED_LOCAL_SEAT_NET_MIRROR_PENDING_BYTE_LIMIT
             && self.hdmi_no_reply_cooldown == 0
             && self.hdmi_redraw_no_reply_streak == 0
             && !self.hdmi_stale_after_retry_exhaustion
             && self.hdmi_backpressure_bytes == 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_linked_hdmi_framebuffer_present_for_test(&mut self, present: bool) {
+        self.hdmi_framebuffer_present_override = Some(present);
     }
 
     #[cfg(test)]
@@ -7696,6 +7737,11 @@ fn local_seat_completion_status(
     target_os = "none"
 ))]
 fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
+    if crate::hal::driver_task::hdmi_runtime_framebuffer_hint().is_none() {
+        // No physical framebuffer was discovered for this boot. Retrying an
+        // engine command cannot create its missing HAL mapping or authority.
+        return false;
+    }
     if LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire) {
         return true;
     }

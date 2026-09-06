@@ -150,7 +150,13 @@ advance with no new drop. `usb probe-kbd` reports `attached` only after its live
 retained service turn completes; a cached ready latch with a pending request is
 `keyboard-unavailable continuation=pending`. The same passive status also
 reports HDMI queue state separately from the isolated display driver's
-completion receipt.
+completion receipt. With no boot framebuffer it reports `state=unavailable`,
+`blocker=framebuffer-not-admitted`, `receipt=none`, and
+`next_action=reboot-with-display-connected`. Completed command counters alone
+cannot prove readiness: without a registered display owner, they report
+`state=unproven`, `blocker=driver-task-owner-unproven`, and `receipt=none`.
+The `ready` completion receipt requires framebuffer presence, a registered
+owner, a completed turn, no outstanding turn, and healthy retry state.
 
 Mapped USB and HDMI runtimes additionally report three bounded rows:
 `usb: command_frontier` has `seq=request/command/completion`, lease `phase`,

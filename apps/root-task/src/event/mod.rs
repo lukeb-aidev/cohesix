@@ -15547,6 +15547,14 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_operator_display_pending(&self) -> bool {
+        if let Some(runtime) = self.local_seat.as_ref() {
+            if !runtime.linked_hdmi_framebuffer_present() {
+                // Queued startup milestones are not runnable without a
+                // framebuffer. Only a retained command can still owe a
+                // completion; keep all serial and USB predicates independent.
+                return runtime.linked_hdmi_pending_work();
+            }
+        }
         crate::hal::early_hdmi_boot_progress_due_after_cutover()
             || !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
             || self
@@ -22655,37 +22663,21 @@ where
             crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         );
         let outstanding = Self::hdmi_current_outstanding(active, submitted, completed);
-        let (state, blocker, receipt, next_action) = if trace.stale_after_retry_exhaustion {
-            (
-                "degraded",
-                "snapshot-stale-after-retry-exhaustion",
-                "none",
-                "inspect-hdmi-driver-receipt",
-            )
-        } else if trace.redraw_no_reply_streak != 0 {
-            (
-                "degraded",
-                "redraw-no-reply-streak",
-                "none",
-                "inspect-hdmi-driver-receipt",
-            )
-        } else if outstanding != 0 {
-            (
-                "busy",
-                "driver-task-turn-outstanding",
-                "pending",
-                "rerun-hdmi-status",
-            )
-        } else if completed != 0 {
-            ("ready", "none", "driver-task-completion", "none")
-        } else {
-            (
-                "unproven",
-                "completion-receipt-missing",
-                "none",
-                "wait-for-first-display-completion",
-            )
-        };
+        let framebuffer_present = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.linked_hdmi_framebuffer_present());
+        let owner_registered = crate::hal::driver_task::driver_task_runtime_owner_state_registered(
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        );
+        let (state, blocker, receipt, next_action) = Self::hdmi_completion_status(
+            framebuffer_present,
+            owner_registered,
+            completed,
+            outstanding,
+            trace.stale_after_retry_exhaustion,
+            trace.redraw_no_reply_streak,
+        );
         let status = format_message(format_args!(
             "hdmi: status mode=passive source={source} state={state} blocker={blocker} receipt={receipt} next_action={next_action}"
         ));
@@ -22703,6 +22695,62 @@ where
             Self::yes_no(trace.stale_after_retry_exhaustion),
         ));
         self.emit_console_line(driver.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn hdmi_completion_status(
+        framebuffer_present: bool,
+        owner_registered: bool,
+        completed: u64,
+        outstanding: u64,
+        stale_after_retry_exhaustion: bool,
+        redraw_no_reply_streak: u8,
+    ) -> (&'static str, &'static str, &'static str, &'static str) {
+        if !framebuffer_present {
+            (
+                "unavailable",
+                "framebuffer-not-admitted",
+                "none",
+                "reboot-with-display-connected",
+            )
+        } else if stale_after_retry_exhaustion {
+            (
+                "degraded",
+                "snapshot-stale-after-retry-exhaustion",
+                "none",
+                "inspect-hdmi-driver-receipt",
+            )
+        } else if redraw_no_reply_streak != 0 {
+            (
+                "degraded",
+                "redraw-no-reply-streak",
+                "none",
+                "inspect-hdmi-driver-receipt",
+            )
+        } else if outstanding != 0 {
+            (
+                "busy",
+                "driver-task-turn-outstanding",
+                "pending",
+                "rerun-hdmi-status",
+            )
+        } else if completed != 0 && owner_registered {
+            ("ready", "none", "driver-task-completion", "none")
+        } else if completed != 0 {
+            (
+                "unproven",
+                "driver-task-owner-unproven",
+                "none",
+                "inspect-hdmi-driver-receipt",
+            )
+        } else {
+            (
+                "unproven",
+                "completion-receipt-missing",
+                "none",
+                "wait-for-first-display-completion",
+            )
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -57193,6 +57241,92 @@ mod tests {
             .inject_linked_hdmi_pending_bytes_for_test(0);
         pump.cyw43_bootstrap_hdmi_pending = true;
         assert!(pump.pi_root_control_idle_fence_evidence().display_pending);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_idle_display_ignores_absent_framebuffer_and_preserves_buffered_output() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(32);
+        local_seat.set_linked_hdmi_framebuffer_present_for_test(false);
+        assert!(!local_seat.linked_hdmi_pending_work());
+        assert!(!local_seat.can_accept_network_origin_mirror());
+        let before = local_seat.display_trace();
+        assert!(!local_seat.pump_linked_hdmi_once());
+        assert_eq!(local_seat.display_trace(), before);
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_local_seat(&mut local_seat);
+        pump.cyw43_bootstrap_hdmi_pending = true;
+        assert!(!pump.linked_runtime_operator_display_pending());
+        assert!(!pump.pi_root_control_idle_fence_evidence().display_pending);
+        assert_eq!(pump.local_seat.as_ref().unwrap().display_trace(), before);
+
+        // Availability alone restores scheduling of the original bytes; the
+        // headless decision must neither consume output nor clear its debt.
+        pump.local_seat
+            .as_mut()
+            .unwrap()
+            .set_linked_hdmi_framebuffer_present_for_test(true);
+        assert!(pump.pi_root_control_idle_fence_evidence().display_pending);
+        assert!(pump.local_seat.as_ref().unwrap().linked_hdmi_pending_work());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn hdmi_completion_status_requires_framebuffer_and_owner_authority() {
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(false, false, 5, 0, false, 0),
+            (
+                "unavailable",
+                "framebuffer-not-admitted",
+                "none",
+                "reboot-with-display-connected"
+            ),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(true, false, 5, 0, false, 0),
+            (
+                "unproven",
+                "driver-task-owner-unproven",
+                "none",
+                "inspect-hdmi-driver-receipt"
+            ),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(true, true, 5, 0, false, 0),
+            ("ready", "none", "driver-task-completion", "none"),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(true, true, 5, 1, false, 0),
+            (
+                "busy",
+                "driver-task-turn-outstanding",
+                "pending",
+                "rerun-hdmi-status"
+            ),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(true, true, 5, 0, true, 0).0,
+            "degraded",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(true, true, 5, 0, false, 1).0,
+            "degraded",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_completion_status(true, false, 0, 0, false, 0).0,
+            "unproven",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

@@ -21116,6 +21116,32 @@ def test_hdmi_passive_status_requires_driver_completion_receipt() -> None:
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
 
 
+def test_hdmi_passive_status_rejects_unavailable_or_unproven_display() -> None:
+    """Fault completions cannot prove a headless or unregistered display ready."""
+
+    cases = (
+        ("unavailable", "framebuffer-not-admitted", "reboot-with-display-connected"),
+        ("unproven", "driver-task-owner-unproven", "inspect-hdmi-driver-receipt"),
+    )
+    for state, blocker, next_action in cases:
+        record = normalizer.summarize_gates(
+            normalizer.parse_events(
+                [
+                    f"hdmi: status mode=passive source=usb-status state={state} "
+                    f"blocker={blocker} receipt=none next_action={next_action}",
+                    "hdmi: driver contract=hdmi-text counters=present active=no "
+                    "submitted=5 completed=5 outstanding=0 no_reply_streak=0 "
+                    "cooldown=0 stale=no",
+                ]
+            )
+        ).to_record()
+        assert record["HDMI_STATUS_STATE"] == state
+        assert record["HDMI_STATUS_BLOCKER"] == blocker
+        assert record["HDMI_STATUS_RECEIPT"] == "none"
+        assert record["HDMI_DRIVER_OUTSTANDING"] == 0
+        assert record["HDMI_RESPONSIVE_PROOF"] == "no"
+
+
 def test_hdmi_passive_status_rejects_missing_or_inconsistent_driver_receipt() -> None:
     """Passive ready text cannot replace one exact current driver receipt."""
 

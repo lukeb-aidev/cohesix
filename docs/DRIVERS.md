@@ -922,6 +922,12 @@ reusable ownership pattern.
 
 - Map framebuffer pages into the display child without a steady root VSpace
   alias.
+- A boot without a firmware framebuffer has no runnable new display work.
+  Root preserves bounded display history and any retained command completion,
+  but does not retry display attachment, admit nonessential network mirroring,
+  or fence event-driven idle on output that cannot render. Serial and USB input
+  remain independent. Connecting a display later cannot create missing boot
+  mapping authority; reboot with the display connected to exercise rendering.
 - After the immutable framebuffer range, format, alignment, pitch, and geometry
   are admitted, the child begins takeover with one fixed two-line startup tile
   in the safe area: `Cohesix starting...` followed by `Initializing services...`. It
