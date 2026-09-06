@@ -1501,10 +1501,15 @@ transport:
   its physical one-way owner is Idle and every operator, output, child and
   recovery fence is empty. Retained commands and root-polled deadlines forbid
   this path; their existing causal waits remain separate.
+  A retained WiFi parent may use its causal wait with root-polled deadline
+  debt only after the same exact PCIe timer lifetime is live. Root polls its
+  absolute timer before and after enable, then rechecks physical completion,
+  child publication and operator/fault/recovery fences. Each wake returns to
+  the existing parent-deadline observation without renewing activation caps.
   QEMU and classic profiles retain their selected paths.
 - The existing isolated `pcie-root` runtime owns one additional, separately
-  tagged Pi BCM system-timer channel-3 duty solely to make that global idle
-  receive deadline-complete. Its ten-page PCIe host aperture remains contiguous
+  tagged Pi BCM system-timer channel-3 duty to make the global idle receive and
+  retained WiFi parent wait deadline-complete. Its ten-page PCIe host aperture remains contiguous
   and separately tagged. Page eleven maps only physical `0xFE003000`; level IRQ
   99 uses badge 2048, handler slot 4, and the runtime's local notification slot
   3. Because that page precedes root's mailbox/watchdog mappings in the same

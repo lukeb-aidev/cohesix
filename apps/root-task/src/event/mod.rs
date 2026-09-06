@@ -4842,12 +4842,13 @@ fn cyw43_authenticated_response_episode_decision(
 }
 
 /// Decide whether the exact physical/console debt has a guaranteed fan-in
-/// producer. Root-polled deadlines and visible or invalid child state always
-/// return to ordinary arbitration, even if a separate response is queued.
+/// producer. A root-polled deadline additionally requires the exact live timer
+/// producer; visible or invalid child state always returns to arbitration.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn cyw43_causal_wait_debt_authorized(
     condition: crate::hal::driver_task::DriverTaskOneWayCompletionCondition,
     response_publication_pending: bool,
+    deadline_timer_enabled: bool,
 ) -> bool {
     matches!(
         condition,
@@ -4856,6 +4857,10 @@ const fn cyw43_causal_wait_debt_authorized(
         condition,
         crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle
     ) && response_publication_pending)
+        || (matches!(
+            condition,
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired
+        ) && deadline_timer_enabled)
 }
 
 /// A visible publication requires arbitration, not waiting or refill
@@ -4908,11 +4913,27 @@ fn cyw43_causal_wait_requires_a_guaranteed_fanin_producer() {
         Idle, Ready, Revoked, RootDeadlinePollRequired, SignalBoundWaiting,
     };
 
-    assert!(cyw43_causal_wait_debt_authorized(SignalBoundWaiting, false));
-    assert!(cyw43_causal_wait_debt_authorized(Idle, true));
-    assert!(!cyw43_causal_wait_debt_authorized(Idle, false));
-    for condition in [RootDeadlinePollRequired, Ready, Revoked] {
-        assert!(!cyw43_causal_wait_debt_authorized(condition, true));
+    for response_pending in [false, true] {
+        for timer_enabled in [false, true] {
+            for condition in [
+                Idle,
+                SignalBoundWaiting,
+                RootDeadlinePollRequired,
+                Ready,
+                Revoked,
+            ] {
+                let expected = match condition {
+                    SignalBoundWaiting => true,
+                    Idle => response_pending,
+                    RootDeadlinePollRequired => timer_enabled,
+                    Ready | Revoked => false,
+                };
+                assert_eq!(
+                    cyw43_causal_wait_debt_authorized(condition, response_pending, timer_enabled),
+                    expected,
+                );
+            }
+        }
     }
 }
 
@@ -14325,7 +14346,8 @@ where
     /// sequence-last terminal publication, or an authenticated console control
     /// still awaiting the isolated child's exact consumption watermark. Durable
     /// state remains the authority; the coalesced badge only wakes root to
-    /// re-read it.
+    /// re-read it. A retained physical parent with a root-polled deadline also
+    /// requires the exact live PCIe timer so the next rotor can poll that duty.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn pi_root_control_cyw43_causal_wait_fence_clear(&mut self) -> bool {
         let local_fault_pending = self.net.as_deref().is_none_or(|net| {
@@ -14373,22 +14395,60 @@ where
             return false;
         }
 
-        let physical_condition =
+        let mut physical_condition =
             crate::hal::driver_task::active_driver_task_one_way_completion_condition(
                 crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
             );
+        let deadline_timer_enabled = if physical_condition
+            == crate::hal::driver_task::DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired
+        {
+            let exact_network_fanin_topology =
+                crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                    && self.net.as_deref().is_some_and(|net| {
+                        net.driver_task_contract()
+                            == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+                            && net.isolated_console_diagnostics().is_some()
+                    });
+            let _ = self.poll_runtime_timer_prelude_checked();
+            if !self.pi_root_control_cyw43_causal_wait_fence_clear()
+                || !crate::hal::driver_task::ensure_pi_root_idle_timer_enabled(
+                    exact_network_fanin_topology,
+                )
+            {
+                return false;
+            }
+            // Enable is a synchronous owner Call. Consume the current absolute
+            // timer duty and re-read durable physical and child state after it;
+            // a terminal arriving during the Call must never become a wait.
+            let _ = self.poll_runtime_timer_prelude_checked();
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+            physical_condition =
+                crate::hal::driver_task::active_driver_task_one_way_completion_condition(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                );
+            if self
+                .net
+                .as_deref()
+                .and_then(crate::net::NetPoller::console_child_publication_pending)
+                != Some(false)
+            {
+                return false;
+            }
+            true
+        } else {
+            false
+        };
         match physical_condition {
             crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting => {
                 // The exact post-action frontier or child terminal is a
                 // guaranteed fan-in producer.
             }
-            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle => {}
-            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired
-            | crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Ready
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle
+            | crate::hal::driver_task::DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired => {}
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Ready
             | crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Revoked => {
-                // A root-polled deadline, visible terminal, or invalid identity
-                // must return to ordinary arbitration even when a distinct
-                // console response is also in flight.
+                // Visible work or invalid identity requires ordinary arbitration
+                // even when a distinct console response is also in flight.
                 return false;
             }
         };
@@ -14427,8 +14487,11 @@ where
         // recovery or containment cut. Re-read every common fence after those
         // operations so a live response episode cannot turn newly pending
         // recovery into an unbounded notification wait.
-        cyw43_causal_wait_debt_authorized(physical_condition, response_publication_pending)
-            && self.pi_root_control_cyw43_causal_wait_fence_clear()
+        cyw43_causal_wait_debt_authorized(
+            physical_condition,
+            response_publication_pending,
+            deadline_timer_enabled,
+        ) && self.pi_root_control_cyw43_causal_wait_fence_clear()
     }
 
     /// Nonblocking side of the same exact condition-before-wait cut. The

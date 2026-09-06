@@ -293,8 +293,15 @@ different: after durable revalidation proves either an exact signal-bound
 finite one-way CYW43 operation whose sequence-last terminal is still absent, or
 an exact staged console response whose child-consumption or `OutputDrained`
 publication is still owed, root polls once and waits only if that poll is
-empty. Persistent and steady CYW43 parents retain root-polled deadlines and
-cannot wait. A stable terminal or durable child publication visible at the cut
+empty. Persistent and steady CYW43 parents retain root-polled deadlines. They
+may wait only after the exact physical WiFi topology proves the PCIe-owned
+5-ms timer is live. Root polls its absolute timer duty before enable and again
+after the synchronous owner Call, then rechecks the physical completion,
+empty child-publication level and every operator/fault/recovery fence. Timer
+wakes return to the outer rotor and its existing parent-deadline observation;
+they grant no work credit and do not reset the 64-turn or causal-wait bounds.
+Timer rejection retains the existing arbitration/Yield path. A stable terminal
+or durable child publication visible at the cut
 returns to the rotor instead of waiting. Attached WiFi spends its existing
 one-shot outer recheck on that durable level even when the corresponding
 notification has already coalesced or been consumed; a stagnant level cannot
@@ -326,7 +333,7 @@ eligible copied frame in that same receive operation without duplicating it.
 After accepting the control watermark,
 root may wait again only while the root-local response batch retains the same
 generation, authenticated connection, and nonzero control sequence and records
-control-complete without output-drained. Bare physical idle, deadline,
+control-complete without output-drained. Bare physical idle, an unbacked deadline,
 recovery, containment, quarantine, reboot, and operator-owned cuts grant no
 causal wait authority.
 The selected timeout policy for root control and the active console child is
@@ -554,7 +561,8 @@ weaken physical-console priority. Ready WiFi may use the same global-idle
 receive only when its physical one-way owner reports Idle, with no retained
 command, root-polled deadline, recovery, or child publication. Its full
 operator/output/network fences and lifetime-bound timer proof are identical.
-An in-flight WiFi operation continues to use its separate causal wait.
+An in-flight WiFi operation uses its separate causal wait, with the same exact
+timer enable proof when its parent also requires root deadline observation.
 
 The global-idle operator predicate requires no remaining USB readiness or
 recovery service debt. It is intentionally stricter than the compact network
@@ -568,7 +576,7 @@ priority/MCP, core, and terminal timeout contract owns one additional exact BCM
 system-timer C3 duty: discontiguous page `0xFE003000`, level IRQ 99, badge 2048,
 handler slot 4, local notification slot 3, and 5,000-us interval. Descriptor
 adoption publishes `Disarmed` without programming C3. The first exact
-direct-GENET enable programs it once; each bounded IRQ turn clears and
+physical-network enable programs it once; each bounded IRQ turn clears and
 self-rearms C3, signals the existing root fan-in, then acknowledges. After that
 IRQ service, the owner immediately re-enters its existing combined command-
 endpoint/local-notification receive, so a Reply-bearing command or the next

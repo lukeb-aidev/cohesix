@@ -4128,10 +4128,6 @@ impl<D: NetDevice> NetStack<D> {
         Self::with_ipv4(hal, ip, prefix, gateway, config, backend, init_guard)
     }
 
-    // Keep the large cold construction frame out of driver initialization.
-    // Inlining it retains network temporaries across owner/proof calls and
-    // can exceed the root boot stack before network construction even starts.
-    #[inline(never)]
     fn with_ipv4(
         hal: &mut impl Hardware<Error = HalError>,
         ip: Ipv4Address,

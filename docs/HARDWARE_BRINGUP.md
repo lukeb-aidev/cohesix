@@ -78,12 +78,10 @@ flowchart TB
 ## Profiles and Toolchain
 
 The Cargo `release` profile keeps its existing artifact paths, fat LTO,
-single codegen unit and maximum-size `z` optimization. The Pi image builder
-overrides only `root-task` to speed optimization level 3 for that invocation,
-to reduce execution cost inside its fixed MCS reservation. Child packages
-and QEMU retain the workspace policy and their existing image bounds. The
-selected manifest's ELF/page admission and rootfs size bound remain mandatory.
-Compiler optimization does not qualify target performance.
+single codegen unit and maximum-size `z` optimization for Pi and QEMU. The
+selected manifest's ELF/page admission, stack and rootfs size bounds remain
+mandatory. A compiler-profile experiment must qualify exact target stack use
+as well as artifact size; compilation alone does not qualify boot or performance.
 
 | Target | Manifest | seL4 build truth |
 | --- | --- | --- |

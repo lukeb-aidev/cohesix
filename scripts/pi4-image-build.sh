@@ -1974,7 +1974,7 @@ build_pi4_image() {
     package_driver_runtime_raw_cpio "$embedded_runtime_cpio" "$sel4_artifact_dir"
 
 
-    log "Building root-task (${ROOT_TASK_FEATURES}, opt-level=3)"
+    log "Building root-task (${ROOT_TASK_FEATURES})"
     require_dir "${PI4_WIFI_FIRMWARE_DIR}"
     log "Using Pi4 WiFi firmware bundle: ${PI4_WIFI_FIRMWARE_DIR}"
       COHESIX_BUILD_STAMP="$EXACT_BUILD_TIMESTAMP" \
@@ -1987,7 +1987,6 @@ build_pi4_image() {
       COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
       COHESIX_PI4_WIFI_FIRMWARE_DIR="${PI4_WIFI_FIRMWARE_DIR}" \
       cargo build \
-        --config 'profile.release.package.root-task.opt-level=3' \
         --locked \
         --target aarch64-unknown-none \
         --release \

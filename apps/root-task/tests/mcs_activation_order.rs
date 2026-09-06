@@ -292,7 +292,7 @@ fn wifi_ready_deadline_observes_only_one_child_publication_before_network_work()
 }
 
 #[test]
-fn wifi_causal_wait_excludes_root_polled_deadline_parents() {
+fn wifi_causal_wait_requires_a_live_timer_for_root_polled_deadline_parents() {
     let driver = include_str!("../src/hal/driver_task.rs");
     let classifier_start = driver
         .find("pub(crate) fn active_driver_task_one_way_completion_condition(")
@@ -307,7 +307,7 @@ fn wifi_causal_wait_excludes_root_polled_deadline_parents() {
             .matches("DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired")
             .count(),
         2,
-        "persistent and steady parents must leave root runnable for its deadline poll",
+        "persistent and steady parents must preserve their distinct deadline duty",
     );
     assert!(classifier.contains("DriverTaskOneWayCompletionCondition::SignalBoundWaiting"));
 
@@ -329,6 +329,26 @@ fn wifi_causal_wait_excludes_root_polled_deadline_parents() {
     assert!(wifi_guard.contains("DriverTaskOneWayCompletionCondition::Idle"));
     assert!(wifi_guard.contains("DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired"));
     assert!(!wifi_guard.contains("diagnostics.awaiting_batch_drain"));
+    let enable = wifi_guard
+        .find("ensure_pi_root_idle_timer_enabled(")
+        .expect("root deadline waits require a live isolated timer");
+    assert!(wifi_guard[..enable].contains("physical_pi_driver_task_only_owner_state_active()"));
+    assert!(wifi_guard[..enable].contains("poll_runtime_timer_prelude_checked()"));
+    let after_enable = &wifi_guard[enable..];
+    let timer_poll = after_enable
+        .find("poll_runtime_timer_prelude_checked()")
+        .unwrap();
+    let physical_recheck = after_enable
+        .find("active_driver_task_one_way_completion_condition(")
+        .unwrap();
+    let child_recheck = after_enable
+        .find("console_child_publication_pending")
+        .unwrap();
+    let final_fence = after_enable
+        .rfind("pi_root_control_cyw43_causal_wait_fence_clear()")
+        .unwrap();
+    assert!(timer_poll < physical_recheck && physical_recheck < child_recheck);
+    assert!(child_recheck < final_fence);
 
     let genet_start = event
         .find("pub(crate) fn pi_root_control_productive_child_wait_eligible(")

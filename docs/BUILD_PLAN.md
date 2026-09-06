@@ -10493,57 +10493,42 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
-  - Exact-8d34 target execution-cost candidate — the unchanged source
-    `8d34ed972f23eafadda07729e3fced120cd1fef1` completes two WiFi and two
-    GENET cohorts before edits. WiFi reaches 16.563/13.275 requests/s and
-    GENET p95 remains 5.825/5.625 ms; all four raw64, representative scripts,
-    Worker32 and medium16/high32 application workloads pass. Root consumes
-    approximately 72–73 ms across each 64-request GENET session; the packet
-    owner maximum slice is only 99/158 us, with no elapsed-guard flag. These
-    observations support reducing execution cost but do not prove which SC
-    postpones any particular request. Replace maximum-size optimization only
-    for the Pi builder's `root-task` invocation with Cargo release package
-    `opt-level = 3`; retain workspace `z` for QEMU and the other packages.
-    The initial driver level-3 candidate `ab0411baf` was rejected before
-    packaging because its ELF spans 407 pages against the unchanged 320-page
-    declaration. The level-`s` follow-up `710c28536` also exceeded admission
-    at 329 pages. Preserve both failures and retain the original driver
-    optimization instead of enlarging its image allowance. The next candidate
-    `c0cccafc7` rejected the console-network image at 69 pages against 66,
-    so its console and smoltcp overrides are also removed. Root-only global
-    candidate `875de4f4b` passes Pi image admission but exceeds QEMU's fixed
-    archive capacity (9,733,276 versus 9,582,592 bytes). Scope the override
-    to the Pi build command and retain the QEMU profile. Preserve the release
-    profile name, fat LTO, one codegen unit, panic/overflow settings, all
-    generated object/page and rootfs bounds, MCS numerics, driver ownership,
-    protocol behavior and QEMU scheduling. Reject an oversized artifact;
-    do not enlarge its declaration to qualify this candidate. The owning
-    discovery boundaries are `m26e-console-network-service-isolation` and
-    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`. Complete host-tool,
-    `tools/cohesix-py`, generated-contract and benchmark compatibility review:
-    this changes generated machine code but no public API, package identity,
-    command, workload, measurement arithmetic, evidence schema or artifact
-    path. Host consumers need no implementation change. Exact Pi compilation,
-    artifact admission, generated/Test Plan checks and the pinned QEMU 10.1
-    root-MCS canary qualify only the source/build; fresh Pi raw and functional
-    evidence must establish any speedup. The remaining WiFi voluntary handoffs
-    and GENET per-request scheduling attribution stay open until measured.
-  - Optimized Pi bootstrap stack restoration — the first physical `e3fc025cb`
-    GENET RAM boot verifies all transfer CRCs and exact BUILD, then stops after
-    driver owner initialization before the shell. No TCP attempt is admitted.
-    Its exact ELF proves a 266,688-byte lower bound for the nested boot,
-    network initialization and proof-reporting frames against the unchanged
-    262,144-byte root stack; the terminal instruction remains unobserved.
-    The `a5e1add5b` destination-first `Box::write` attempt leaves that frame
-    unchanged and is rejected before hardware execution. Keep the large cold
-    `with_ipv4` constructor out of driver initialization through an explicit
-    no-inline boundary, then inspect the exact optimized target frames before
-    another physical attempt. Preserve every field, storage reservation,
-    initialization/error path, memory bound and driver/service owner. Host
-    stack tests cover existing reservation and network contracts; they cannot
-    prove target frame size or physical recovery. The full host-tool suite,
-    Python SDK, generated interfaces and benchmark workloads retain the same
-    API, allocation shape, wire protocol and report schema and need no change.
+  - Exact-8d34 performance evidence and rejected compiler experiment — two
+    WiFi and two GENET cohorts completed before edits. WiFi raw64 reaches
+    16.563/13.275 requests/s, p95 87.489/127.706 ms; GENET reaches
+    404.704/382.062 requests/s, p95 5.825/5.625 ms. All four functional,
+    Worker32, medium16 and high32 workloads pass, including boot-paired wire
+    audits. WiFi records 106/152 root Yields, 105/151 at the other-boundary
+    cut; their elapsed handoffs total 0.769/1.029 seconds. GENET records five
+    root Yields per session; packet-owner maximum slices of 99/158 us do not
+    hit the elapsed guard. These observations do not identify a per-request
+    SC exhaustion cause. The speed-optimization experiment is fully rejected:
+    driver and console variants exceed declared page bounds, global root
+    optimization exceeds QEMU archive capacity, and the Pi-only `e3fc025cb`
+    physical boot stops before shell construction. Its exact ELF proves nested
+    frames of at least 266,688 bytes against the 262,144-byte root stack; the
+    terminal instruction is unobserved. Destination-first construction in
+    `a5e1add5b` leaves that bound unchanged, while the no-inline `0cf98579f`
+    variant still requires at least 265,568 bytes. Both are rejected statically
+    before hardware execution. Restore the original `z` profile and constructor;
+    preserve all failed evidence and unchanged memory/SC admission bounds.
+  - Deadline-complete WiFi causal waits — retain the distinct persistent/steady
+    parent deadline classification, but permit its bounded fan-in wait after
+    exact physical WiFi topology and the existing PCIe timer's live, sealed
+    lifetime are proven. Poll root's absolute timer before and after the enable
+    Call, then re-read physical completion, empty child publication and all
+    operator/recovery/fault fences. A timer hint returns to the normal rotor and
+    parent-deadline observation. Ready, revoked, unknown child state or rejected
+    timer proof cannot authorize blocking. Preserve the existing activation and
+    causal-wait caps, physical ownership, scheduling numerics and GENET path.
+    Discovery tasks: `m26e-console-network-service-isolation` and
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`. Pure classifier tests,
+    condition-before-block source guards, exact Pi build and pinned QEMU 10.1
+    root-MCS canary qualify only the candidate; fresh Pi raw evidence must
+    establish any performance gain. Complete host-tool, `tools/cohesix-py`,
+    generated-contract and benchmark compatibility review finds no changed API,
+    command, wire format, workload, measurement arithmetic, report schema,
+    artifact path or object declaration; those consumers need no code change.
   - console-network ABI — advance the common READY/ABI identity to v4 and add child event `CommandBatch = 27`, encoding version 1, with one through eight exact same-connection authenticated commands. Each record retains its own `now_ms`, length, and UTF-8 bytes inside the unchanged 2368-byte payload and four-page/capability topology.
   - restricted child — use generated `max_commands_per_wake <= 8` to coalesce only consecutive command events that fit the fixed page. A lifecycle or connection-identity event is an absolute fence; a single command remains the legacy `Command` record.
   - root boundary — validate the complete private batch, reserve the complete bounded command-queue capacity before mutation, then admit exact FIFO command/timestamp records. Any malformed, over-capacity, cross-identity, or stale batch fails closed without partial execution.
