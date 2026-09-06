@@ -223,6 +223,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    NaturalPostpone,")?;
     writeln!(mod_contents, "    ReplenishOnce,")?;
     writeln!(mod_contents, "    ReturnError,")?;
+    writeln!(mod_contents, "    ResumeOnceReturnError,")?;
     writeln!(mod_contents, "    FailStop,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
@@ -3105,6 +3106,7 @@ fn timeout_policy_to_rust(policy: TimeoutPolicy) -> &'static str {
         TimeoutPolicy::NaturalPostpone => "TimeoutPolicy::NaturalPostpone",
         TimeoutPolicy::ReplenishOnce => "TimeoutPolicy::ReplenishOnce",
         TimeoutPolicy::ReturnError => "TimeoutPolicy::ReturnError",
+        TimeoutPolicy::ResumeOnceReturnError => "TimeoutPolicy::ResumeOnceReturnError",
         TimeoutPolicy::FailStop => "TimeoutPolicy::FailStop",
     }
 }

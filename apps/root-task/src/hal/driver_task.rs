@@ -9931,6 +9931,10 @@ pub(crate) fn driver_supervisor_consumed_sample(
         Role::Genet => GENET_DRIVER_TASK_CONTRACT,
         Role::Cyw43 => CYW43_WIFI_DRIVER_TASK_CONTRACT,
         Role::Sdio => SDIO_HOST_DRIVER_TASK_CONTRACT,
+        Role::Serial => SERIAL_DRIVER_TASK_CONTRACT,
+        Role::Usb => USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+        Role::Hdmi => HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        Role::Pcie => PCIE_ROOT_DRIVER_TASK_CONTRACT,
         Role::Root | Role::Console => return Sample::default(),
     };
     let Some(slot) = driver_task_slot_for_contract(contract) else {
@@ -17726,13 +17730,13 @@ fn pi_root_idle_timer_slot_live(slot: &DriverTaskCommandSlot) -> bool {
 
 #[cfg(feature = "kernel")]
 const fn pi_root_idle_timer_enable_plan(
-    exact_direct_genet_topology: bool,
+    exact_network_fanin_topology: bool,
     owner_active: bool,
     descriptor_sealed: bool,
     descriptor: DriverRuntimeInitDescriptor,
     state: Option<DriverRuntimePcieTimerState>,
 ) -> PiRootIdleTimerEnablePlan {
-    if !exact_direct_genet_topology || !owner_active || !descriptor_sealed {
+    if !exact_network_fanin_topology || !owner_active || !descriptor_sealed {
         return PiRootIdleTimerEnablePlan::Reject;
     }
     let Some(state) = state else {
@@ -17754,13 +17758,13 @@ const fn pi_root_idle_timer_enable_plan(
     }
 }
 
-/// Enable the PCIe-owned root scheduling timer for one exact direct-GENET
-/// lifetime. WiFi and every inexact topology fail before any ring publication
+/// Enable the PCIe-owned root scheduling timer for one exact physical-network
+/// fan-in lifetime. Every inexact topology fails before any ring publication
 /// or IPC. A durable Enabled record makes all later calls read-only.
 #[cfg(feature = "kernel")]
 #[must_use]
-pub(crate) fn ensure_pi_root_idle_timer_enabled(exact_direct_genet_topology: bool) -> bool {
-    if !exact_direct_genet_topology {
+pub(crate) fn ensure_pi_root_idle_timer_enabled(exact_network_fanin_topology: bool) -> bool {
+    if !exact_network_fanin_topology {
         return false;
     }
     let hot_path = DriverTaskHotPath::PcieRoot;
@@ -29901,7 +29905,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi_root_idle_timer_enable_plan_is_direct_genet_exact_and_once_only() {
+    fn pi_root_idle_timer_enable_plan_requires_exact_fanin_and_once_only() {
         let mut descriptor = runtime_init_test_mcs_descriptor(DRIVER_TASK_KEY_PCIE_ROOT as u32);
         descriptor.hot_path = DriverTaskHotPath::PcieRoot.as_u32();
         descriptor.role_bit = DriverTaskHotPath::PcieRoot.role_bit() as u32;
@@ -29923,7 +29927,7 @@ mod tests {
         assert_eq!(
             pi_root_idle_timer_enable_plan(false, true, true, descriptor, Some(disarmed)),
             PiRootIdleTimerEnablePlan::Reject,
-            "WiFi and every non-direct topology must perform zero enable Call",
+            "Every topology without an exact fan-in must perform zero enable Call",
         );
         assert_eq!(
             pi_root_idle_timer_enable_plan(true, false, true, descriptor, Some(disarmed)),

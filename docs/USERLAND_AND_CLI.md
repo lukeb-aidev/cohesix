@@ -379,8 +379,10 @@ and `terminal=unknown`, never invented zero evidence. For example:
 [smp:registry/v1] base=0 count=2 registration=present,missing generation0=1/1/1 generation1=none terminal=yes,unknown
 ```
 
-The selected four-core Pi profile's complete WiFi body is 64 lines, including
-all eight paired registration rows, four owner CPU rows and the end marker.
+The selected four-core Pi profile's complete WiFi body is 49 lines, including
+all eight paired registration rows, eight owner CPU rows, the passive-timeout
+receipt and the end marker. Lifetime network timing remains in `netstats`,
+avoiding duplication in the bounded `smp mcs` body.
 It fits the existing 64-line synchronous TCP capture and 69-line physical
 body; the protocol terminal uses its existing separate reserve. Registry-busy
 and unavailable accounting states remain explicit. QEMU retains its existing
@@ -392,8 +394,9 @@ Pi MCS `smp mcs` also appends `[smp:consumed/v1]` kernel CPU evidence for the
 latest observed TCP lifecycle. The header reports decimal `generation`, `conn`,
 `hz`, boolean `ended`, and hexadecimal `selected`, `pending`, `claimed` role
 masks (root-control bit 0, console-network bit 1, GENET bit 2, CYW43 bit 3,
-SDIO bit 4). GENET selects three owners and WiFi four, so the batch contains
-at most five nonempty lines including the header. Per-owner `cpu_us` is a
+SDIO bit 4, serial bit 5, USB bit 6, HDMI bit 7, PCIe bit 8). GENET selects
+seven owners and WiFi eight, so the batch contains at most nine nonempty lines
+including the header. Per-owner `cpu_us` is a
 decimal difference of cumulative kernel Consumed receipts. `cap_gen`, `begin`
 and `end` are hexadecimal pairs; each time pair brackets that owner's actual
 sampling syscall in the generated virtual-counter epoch. `valid=false` makes
@@ -404,6 +407,9 @@ Connected/Disconnected boundaries differ from the host benchmark interval;
 driver-owner sampling is asynchronous and its own wall cost is visible.
 These totals do not localize a packet or prove that a refill was exhausted.
 No rows are emitted during the traffic itself, and QEMU does not collect them.
+`[smp:passive-timeout/v1]` reports the cumulative kernel fault `resumes`, latest
+resettable `last_sc_consumed_us` evidence, and `limit_per_call=1`. Reading it
+performs no kernel operation and changes no recovery state.
 
 Eight `mcs_session*` v1 rows retain the latest observed nonzero TCP connection
 and runtime generation after disconnect, until a different nonzero identity
@@ -604,7 +610,7 @@ then local-seat input first. During an authenticated session it gives bounded
 TCP response flushing priority while continuing to service both physical
 inputs and fatal output.
 
-The selected internal contract is manifest schema 1.16 and console ABI/READY
+The selected internal contract is manifest schema 1.17 and console ABI/READY
 v6. Root may authorize one through eight already-ordered response lines in one
 binary `SendBatch` control, but the child still emits one ordinary
 length-prefixed line per replenishment-bounded Session unit. For one exact

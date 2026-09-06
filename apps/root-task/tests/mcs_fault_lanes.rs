@@ -184,6 +184,9 @@ fn terminal_critical_fault_commits_one_resumable_action_per_refill() {
     let resolve_service_start = entry
         .find("RootFaultCriticalTurn::ResolveService =>")
         .expect("service resolution turn");
+    let resume_service_start = entry
+        .find("RootFaultCriticalTurn::ResumeService =>")
+        .expect("passive timeout resume turn");
     let suspend_start = entry
         .find("RootFaultCriticalTurn::SuspendCritical =>")
         .expect("suspend turn");
@@ -193,7 +196,8 @@ fn terminal_critical_fault_commits_one_resumable_action_per_refill() {
     assert!(
         prime_start < receive_start
             && receive_start < classify_start
-            && classify_start < resolve_service_start
+            && classify_start < resume_service_start
+            && resume_service_start < resolve_service_start
             && resolve_service_start < suspend_start
             && suspend_start < signal_start
     );
@@ -216,7 +220,7 @@ fn terminal_critical_fault_commits_one_resumable_action_per_refill() {
     assert!(!receive_turn.contains("handle_target_fault("));
     assert!(!receive_turn.contains("root_fault_tcb_control_cap("));
 
-    let classify_turn = &entry[classify_start..resolve_service_start];
+    let classify_turn = &entry[classify_start..resume_service_start];
     let classify = classify_turn
         .find("let disposition = match handle_target_fault(")
         .expect("sealed-registry classification");
@@ -375,7 +379,7 @@ fn service_fault_cursor_retries_without_loss_and_admits_one_action_per_refill() 
     let classify = source_section(
         entry,
         "RootFaultCriticalTurn::Classify =>",
-        "RootFaultCriticalTurn::ResolveService =>",
+        "RootFaultCriticalTurn::ResumeService =>",
     );
     let service_route = source_section(
         classify,
@@ -383,13 +387,17 @@ fn service_fault_cursor_retries_without_loss_and_admits_one_action_per_refill() 
         "} else {",
     );
     let route_commit = service_route
-        .find("commit_root_fault_turn(RootFaultCriticalTurn::ResolveService);")
-        .expect("service resolution successor");
+        .find("commit_root_fault_turn(successor);")
+        .expect("service classification successor");
     let route_yield = service_route
         .find("sel4::yield_now();")
         .expect("service classification boundary");
     assert!(route_commit < route_yield);
     assert_eq!(service_route.matches("sel4::yield_now();").count(), 1);
+    assert!(service_route.contains("Ok(true) => RootFaultCriticalTurn::ResumeService"));
+    assert!(service_route.contains("Ok(false) => RootFaultCriticalTurn::ResolveService"));
+    assert!(service_route.contains("FaultHandoffError::Contended"));
+    assert!(service_route.contains("RootFaultCriticalTurn::Classify"));
     for forbidden in [
         "clear_pending_target_fault",
         "resolve_target_fault",
@@ -399,7 +407,32 @@ fn service_fault_cursor_retries_without_loss_and_admits_one_action_per_refill() 
     ] {
         assert!(
             !service_route.contains(forbidden),
-            "classification must remain scalar-only: {forbidden}"
+            "classification cannot perform recovery or lose the fault: {forbidden}"
+        );
+    }
+
+    let resume = source_section(
+        entry,
+        "RootFaultCriticalTurn::ResumeService =>",
+        "RootFaultCriticalTurn::ResolveService =>",
+    );
+    let resume_commit = resume
+        .find("commit_root_fault_turn(RootFaultCriticalTurn::Receive);")
+        .expect("resume commits the recurring receive before Reply");
+    let resume_reply = resume.find("sel4::reply_to(").expect("kernel fault Reply");
+    assert!(resume_commit < resume_reply);
+    assert_eq!(resume.matches("sel4::reply_to(").count(), 1);
+    assert!(resume.contains("CHILD_REPLY_SLOT"));
+    assert!(resume.contains("seL4_MessageInfo::new(0, 0, 0, 0)"));
+    assert_eq!(resume.matches("sel4::yield_now();").count(), 1);
+    for forbidden in [
+        "suspend_tcb",
+        "configure",
+        "recover_target_passive_service_call(",
+    ] {
+        assert!(
+            !resume.contains(forbidden),
+            "resume must preserve the Call: {forbidden}"
         );
     }
 
@@ -551,7 +584,7 @@ fn passive_service_recovery_replies_once_during_call_and_zero_between_calls() {
     );
     assert_eq!(prepare.matches("resolve_target_fault(badge)?").count(), 1);
     assert!(prepare.contains("task.execution == TemporalExecution::Passive"));
-    assert!(prepare.contains("task.timeout_policy == TimeoutPolicy::ReturnError"));
+    assert!(prepare.contains("TimeoutPolicy::ReturnError | TimeoutPolicy::ResumeOnceReturnError"));
     assert!(!prepare.contains("suspend_tcb"));
     assert!(!prepare.contains("reply_to"));
     assert!(!prepare.contains("publish_target_service_fault"));

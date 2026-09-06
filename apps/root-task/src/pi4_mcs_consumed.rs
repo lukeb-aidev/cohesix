@@ -11,7 +11,7 @@ use spin::Mutex;
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
-const ROLES: usize = 5;
+const ROLES: usize = 9;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Role {
@@ -20,6 +20,10 @@ pub(crate) enum Role {
     Genet = 2,
     Cyw43 = 3,
     Sdio = 4,
+    Serial = 5,
+    Usb = 6,
+    Hdmi = 7,
+    Pcie = 8,
 }
 
 impl Role {
@@ -30,10 +34,14 @@ impl Role {
             Self::Genet => "driver-genet",
             Self::Cyw43 => "driver-cyw43",
             Self::Sdio => "driver-sdio",
+            Self::Serial => "driver-serial",
+            Self::Usb => "driver-usb",
+            Self::Hdmi => "driver-hdmi",
+            Self::Pcie => "driver-pcie",
         }
     }
 
-    const fn bit(self) -> u8 {
+    const fn bit(self) -> u16 {
         1 << self as usize
     }
 }
@@ -44,6 +52,10 @@ const ALL_ROLES: [Role; ROLES] = [
     Role::Genet,
     Role::Cyw43,
     Role::Sdio,
+    Role::Serial,
+    Role::Usb,
+    Role::Hdmi,
+    Role::Pcie,
 ];
 
 /// Cumulative software receipt of every Consumed drain for this owner. Existing
@@ -111,9 +123,9 @@ struct Session {
     generation: u64,
     connection: u64,
     finish: bool,
-    selected: u8,
-    pending: u8,
-    claimed: u8,
+    selected: u16,
+    pending: u16,
+    claimed: u16,
     begin: [Option<Sample>; ROLES],
     end: [Option<Sample>; ROLES],
 }
@@ -159,6 +171,10 @@ impl Session {
             self.connection = connection;
             self.selected = Role::Root.bit()
                 | Role::Console.bit()
+                | Role::Serial.bit()
+                | Role::Usb.bit()
+                | Role::Hdmi.bit()
+                | Role::Pcie.bit()
                 | if genet {
                     Role::Genet.bit()
                 } else {
@@ -204,9 +220,17 @@ impl Session {
     }
 
     fn claim_driver(&mut self) -> Option<(Request, Role)> {
-        let role = [Role::Genet, Role::Cyw43, Role::Sdio]
-            .into_iter()
-            .find(|role| self.pending & role.bit() != 0)?;
+        let role = [
+            Role::Genet,
+            Role::Cyw43,
+            Role::Sdio,
+            Role::Serial,
+            Role::Usb,
+            Role::Hdmi,
+            Role::Pcie,
+        ]
+        .into_iter()
+        .find(|role| self.pending & role.bit() != 0)?;
         self.pending &= !role.bit();
         self.claimed |= role.bit();
         Some((
@@ -238,7 +262,7 @@ pub(crate) fn store(request: Request, role: Role, sample: Sample) {
     }
 }
 
-/// The supervisor admits at most one selected network-driver read per wake.
+/// The supervisor admits at most one selected physical-driver read per wake.
 /// A finite remainder reuses its existing self-signal; no timer or polling lane
 /// is introduced. Missing, stale, or raced samples remain visibly incomplete.
 pub(crate) fn driver_request() -> Option<(Request, Role)> {
@@ -248,7 +272,7 @@ pub(crate) fn driver_request() -> Option<(Request, Role)> {
 pub(crate) fn driver_pending() -> bool {
     SESSION
         .try_lock()
-        .is_some_and(|session| session.pending & 0b11100 != 0)
+        .is_some_and(|session| session.pending & 0b111111100 != 0)
 }
 
 pub(crate) fn lines() -> [String<DEFAULT_LINE_CAPACITY>; ROLES + 1] {
@@ -314,16 +338,16 @@ mod tests {
     fn asynchronous_late_begin_cannot_complete_an_end_or_replacement_session() {
         let mut session = Session::new();
         let start = session.request(1, 1, false, false).unwrap();
-        assert_eq!(session.selected, 0b11011);
+        assert_eq!(session.selected, 0b111111011);
         session.request(1, 1, false, true).unwrap();
         session.store(start, Role::Cyw43, sample(1, 10, 0));
         assert_eq!(session.begin[3], None);
-        assert_eq!(session.pending, 0b11011);
+        assert_eq!(session.pending, 0b111111011);
         let replacement = session.request(1, 2, true, false).unwrap();
         assert_ne!(start, replacement);
         session.store(start, Role::Root, sample(1, 20, 10));
         assert_eq!(session.begin[0], None);
-        assert_eq!(session.selected, 0b00111);
+        assert_eq!(session.selected, 0b111100111);
         assert!(session.request(1, 1, false, true).is_none());
     }
 
@@ -349,7 +373,7 @@ mod tests {
         let mut session = Session::new();
         session.generation = u64::MAX;
         session.connection = u64::MAX;
-        session.selected = 0b11111;
+        session.selected = 0b111111111;
         session.finish = true;
         for index in 0..ROLES {
             session.begin[index] = Some(Sample {
@@ -384,8 +408,11 @@ mod tests {
         let begin = session.request(1, 1, false, false).unwrap();
         assert_eq!(session.claim_driver(), Some((begin, Role::Cyw43)));
         assert_eq!(session.claim_driver(), Some((begin, Role::Sdio)));
+        for role in [Role::Serial, Role::Usb, Role::Hdmi, Role::Pcie] {
+            assert_eq!(session.claim_driver(), Some((begin, role)));
+        }
         assert_eq!(session.claim_driver(), None);
-        assert_eq!(session.claimed, 0b11000);
+        assert_eq!(session.claimed, 0b111111000);
         assert_eq!(session.pending, 0b00011);
         let end = session.request(1, 1, false, true).unwrap();
         assert_eq!(session.claim_driver(), Some((end, Role::Cyw43)));

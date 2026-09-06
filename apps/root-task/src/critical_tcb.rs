@@ -469,6 +469,62 @@ pub struct PassiveServiceRecoveryContract {
     pub root_fault_reply_slot: u32,
 }
 
+/// An armed, monotonically numbered passive Call can resume its first kernel
+/// budget timeout. This is not an application retry: a second timeout for the
+/// same Call, a standard fault, or an unrecognised donor must be contained.
+/// Timeout MR1 is resettable SC accounting and cannot prove remaining budget.
+#[must_use]
+pub const fn passive_timeout_resume_allowed(
+    fault_class: FaultClass,
+    fault_length: u16,
+    donor_badge: u64,
+    expected_donor_badge: u64,
+    call_sequence: u64,
+    resumed_call_sequence: u64,
+    recovery_ready: bool,
+) -> bool {
+    matches!(fault_class, FaultClass::Timeout)
+        && fault_length == 2
+        && expected_donor_badge != 0
+        && donor_badge == expected_donor_badge
+        && call_sequence != 0
+        && call_sequence > resumed_call_sequence
+        && recovery_ready
+}
+
+#[cfg(test)]
+mod passive_timeout_tests {
+    use super::{passive_timeout_resume_allowed, FaultClass};
+
+    #[test]
+    fn passive_timeout_resume_requires_one_exact_armed_call_and_donor() {
+        let allowed = |class, length, badge, sequence, prior, ready| {
+            passive_timeout_resume_allowed(class, length, badge, 0x26ee0001, sequence, prior, ready)
+        };
+        assert!(allowed(FaultClass::Timeout, 2, 0x26ee0001, 7, 0, true));
+        // An interrupted operation can resume once, without reissuing it.
+        assert!(!allowed(FaultClass::Timeout, 2, 0x26ee0001, 7, 7, true));
+        assert!(allowed(FaultClass::Timeout, 2, 0x26ee0001, 8, 7, true));
+        assert!(!allowed(FaultClass::Timeout, 2, 0x26ee0001, 6, 7, true));
+        assert!(!allowed(FaultClass::Timeout, 2, 0x26ee0001, 0, 0, true));
+        assert!(!allowed(FaultClass::Standard, 2, 0x26ee0001, 7, 0, true));
+        for length in [0, 1, 3, u16::MAX] {
+            assert!(!allowed(
+                FaultClass::Timeout,
+                length,
+                0x26ee0001,
+                7,
+                0,
+                true
+            ));
+        }
+        for badge in [0, 0x26ee0008, u64::MAX] {
+            assert!(!allowed(FaultClass::Timeout, 2, badge, 7, 0, true));
+        }
+        assert!(!allowed(FaultClass::Timeout, 2, 0x26ee0001, 7, 0, false));
+    }
+}
+
 /// Why a service is not eligible for the passive donated-Call recovery path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassiveServiceRecoveryContractError {
@@ -495,7 +551,10 @@ pub fn passive_service_recovery_contract(
         || !config.enabled
         || task.kind != TemporalTaskKind::Service
         || task.execution != TemporalExecution::Passive
-        || task.timeout_policy != TimeoutPolicy::ReturnError
+        || !matches!(
+            task.timeout_policy,
+            TimeoutPolicy::ReturnError | TimeoutPolicy::ResumeOnceReturnError
+        )
         || task.allowed_donors != ["root-control"]
         || task.reply_objects != 1
         || task.max_donation_depth != 1

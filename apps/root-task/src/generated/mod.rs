@@ -166,6 +166,7 @@ pub enum TimeoutPolicy {
     NaturalPostpone,
     ReplenishOnce,
     ReturnError,
+    ResumeOnceReturnError,
     FailStop,
 }
 
@@ -1051,9 +1052,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.16";
+pub const MANIFEST_SCHEMA: &str = "1.17";
 pub const MANIFEST_SHA256: &str =
-    "8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66";
+    "f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

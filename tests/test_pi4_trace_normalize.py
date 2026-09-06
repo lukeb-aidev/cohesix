@@ -2354,6 +2354,18 @@ def test_owner_cpu_receipt_stays_passive_and_preserves_invalidity() -> None:
     assert event.fields["end"] == "200/210"
 
 
+def test_passive_timeout_resume_receipt_preserves_kernel_accounting() -> None:
+    """A resume receipt remains diagnostic evidence, without a success claim."""
+    line = "[smp:passive-timeout/v1] resumes=1 last_sc_consumed_us=121 limit_per_call=1"
+    event = normalizer.parse_line(line, 1)
+    assert event is not None
+    assert event.domain == "driver"
+    assert event.raw == line
+    assert event.fields["resumes"] == "1"
+    assert event.fields["last_sc_consumed_us"] == "121"
+    assert event.fields["limit_per_call"] == "1"
+
+
 def test_gate_summary_keeps_selected_network_after_passive_component_state() -> None:
     events = normalizer.parse_events(
         [

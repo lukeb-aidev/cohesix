@@ -86,6 +86,8 @@ pub enum TimeoutPolicy {
     ReplenishOnce,
     /// Return one typed failure to a blocked caller, then contain the task.
     ReturnError,
+    /// Resume one donated-budget timeout per NineDoor Call, then return error and contain.
+    ResumeOnceReturnError,
     /// Stop without attempting recursive recovery.
     FailStop,
 }
@@ -166,6 +168,17 @@ impl TemporalTaskConfig {
                 "non-root-control temporal task {} must not declare a VirtIO Operator serial I/O byte bound",
                 self.id
             );
+        }
+        if self.timeout_policy == TimeoutPolicy::ResumeOnceReturnError
+            && (self.id != "ninedoor-service"
+                || self.kind != TemporalTaskKind::Service
+                || self.execution != TemporalExecution::Passive
+                || self.allowed_donors != ["root-control"]
+                || self.reply_objects != 1
+                || self.max_donation_depth != 1
+                || !self.locality_bound)
+        {
+            bail!("bounded timeout resume requires the sole local NineDoor donation chain");
         }
         match self.execution {
             TemporalExecution::Active => {

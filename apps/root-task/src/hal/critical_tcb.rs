@@ -310,6 +310,12 @@ static TARGET_SERVICE_RECOVERY_STATES: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACI
     [const { AtomicUsize::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 static TARGET_SERVICE_CALL_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
     [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+// Root-fault is the sole writer while the exact caller is blocked. These
+// monotonic request identities never reopen a completed or terminal Call.
+static TARGET_SERVICE_RESUMED_CALL_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
+    [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+static TARGET_SERVICE_TIMEOUT_RESUMES: AtomicU64 = AtomicU64::new(0);
+static TARGET_SERVICE_RESUME_CONSUMED: AtomicU64 = AtomicU64::new(0);
 static TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
     [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 static TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
@@ -606,6 +612,7 @@ fn revoke_target_service_recovery_reply_with(
     TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES[mailbox].store(0, Ordering::Release);
     TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES[mailbox].store(0, Ordering::Release);
     TARGET_SERVICE_RECOVERY_FAULT_CLASSES[mailbox].store(0, Ordering::Release);
+    TARGET_SERVICE_RESUMED_CALL_SEQUENCES[mailbox].store(0, Ordering::Release);
     TARGET_SERVICE_RECOVERY_STATES[mailbox].store(SERVICE_RECOVERY_UNREGISTERED, Ordering::Release);
     Ok(())
 }
@@ -2102,6 +2109,7 @@ enum RootFaultCriticalTurn {
     PublishService = 6,
     SuspendCritical = 7,
     SignalEmergency = 8,
+    ResumeService = 9,
 }
 
 #[inline(never)]
@@ -2129,6 +2137,7 @@ fn current_root_fault_turn() -> RootFaultCriticalTurn {
         6 => RootFaultCriticalTurn::PublishService,
         7 => RootFaultCriticalTurn::SuspendCritical,
         8 => RootFaultCriticalTurn::SignalEmergency,
+        9 => RootFaultCriticalTurn::ResumeService,
         _ => target_fail_stop(
             "[critical] root-fault cursor invalid",
             Some(CHILD_EMERGENCY_SIGNAL_SLOT),
@@ -2180,8 +2189,65 @@ fn prepare_target_service_fault(
         fault_handler_tcb_cap: root_fault_tcb_control_cap(registration.task_index)?,
         recover_passive_call: task.kind == TemporalTaskKind::Service
             && task.execution == TemporalExecution::Passive
-            && task.timeout_policy == TimeoutPolicy::ReturnError,
+            && matches!(
+                task.timeout_policy,
+                TimeoutPolicy::ReturnError | TimeoutPolicy::ResumeOnceReturnError
+            ),
     })
+}
+
+/// Claim the sole kernel fault resume for the currently blocked NineDoor Call.
+/// The registry and generated donor contract are checked before touching the
+/// per-Call claim. The normal service fault cursor owns every rejected case.
+fn claim_target_passive_timeout_resume(
+    fault: PendingTargetFault,
+) -> Result<bool, CriticalTcbConstructionError> {
+    let (registration, fault_class) = resolve_target_fault(fault.fault_badge)?;
+    let task = generated::temporal_tasks()
+        .get(usize::from(registration.task_index))
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    if task.timeout_policy != TimeoutPolicy::ResumeOnceReturnError
+        || fault.fault_label != sel4_sys::SEL4_MCS_FAULT_TIMEOUT_LABEL as seL4_Word
+    {
+        return Ok(false);
+    }
+    let contract = passive_service_recovery_contract(task.id)
+        .map_err(|_| CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let donor = generated::temporal_tasks()
+        .iter()
+        .find(|candidate| candidate.id == "root-control")
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let mailbox = contract.mailbox;
+    let sequence = TARGET_SERVICE_CALL_SEQUENCES[mailbox].load(Ordering::Acquire);
+    if !crate::critical_tcb::passive_timeout_resume_allowed(
+        fault_class,
+        fault.fault_length,
+        fault.fault_mr0 as u64,
+        donor.timeout_badge,
+        sequence,
+        TARGET_SERVICE_RESUMED_CALL_SEQUENCES[mailbox].load(Ordering::Acquire),
+        TARGET_SERVICE_RECOVERY_STATES[mailbox].load(Ordering::Acquire) == SERVICE_RECOVERY_READY,
+    ) {
+        return Ok(false);
+    }
+    TARGET_SERVICE_RESUMED_CALL_SEQUENCES[mailbox].store(sequence, Ordering::Release);
+    TARGET_SERVICE_RESUME_CONSUMED.store(fault.fault_mr1 as u64, Ordering::Release);
+    TARGET_SERVICE_TIMEOUT_RESUMES.fetch_add(1, Ordering::Relaxed);
+    Ok(true)
+}
+
+/// Passive evidence only; reading this row performs no kernel call or recovery.
+pub fn passive_timeout_resume_diagnostic() -> heapless::String<192> {
+    let mut line = heapless::String::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "[smp:passive-timeout/v1] resumes={} last_sc_consumed_us={} limit_per_call=1",
+            TARGET_SERVICE_TIMEOUT_RESUMES.load(Ordering::Acquire),
+            TARGET_SERVICE_RESUME_CONSUMED.load(Ordering::Acquire),
+        ),
+    );
+    line
 }
 
 fn handle_target_fault(
@@ -2335,7 +2401,24 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                     ),
                 };
                 if is_generated_service_fault_badge(fault_badge) {
-                    commit_root_fault_turn(RootFaultCriticalTurn::ResolveService);
+                    let successor = match claim_target_passive_timeout_resume(PendingTargetFault {
+                        fault_label,
+                        fault_badge,
+                        fault_length,
+                        fault_mr0,
+                        fault_mr1,
+                    }) {
+                        Ok(true) => RootFaultCriticalTurn::ResumeService,
+                        Ok(false) => RootFaultCriticalTurn::ResolveService,
+                        Err(CriticalTcbConstructionError::FaultHandoff(
+                            FaultHandoffError::Contended,
+                        )) => RootFaultCriticalTurn::Classify,
+                        Err(_) => target_fail_stop(
+                            "[critical] passive timeout classification failed",
+                            Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                        ),
+                    };
+                    commit_root_fault_turn(successor);
                     sel4::yield_now();
                 } else {
                     clear_pending_target_fault();
@@ -2384,6 +2467,21 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                         }
                     }
                 }
+            }
+            RootFaultCriticalTurn::ResumeService => {
+                // A zero-label, zero-length Timeout Reply changes no saved
+                // registers. The selected kernel resumes the same instruction
+                // and postpones the donated SC if its refill is not ready.
+                // The original service Call/Reply association remains intact;
+                // no request, side effect, budget or generation is restarted.
+                clear_pending_target_fault();
+                commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                sel4::reply_to(
+                    CHILD_REPLY_SLOT,
+                    sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
+                    [0; 4],
+                );
+                sel4::yield_now();
             }
             RootFaultCriticalTurn::ResolveService => {
                 let PendingTargetFault {

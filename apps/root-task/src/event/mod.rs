@@ -152,6 +152,7 @@ const fn timeout_policy_label(value: crate::generated::TimeoutPolicy) -> &'stati
         crate::generated::TimeoutPolicy::NaturalPostpone => "natural-postpone",
         crate::generated::TimeoutPolicy::ReplenishOnce => "replenish-once",
         crate::generated::TimeoutPolicy::ReturnError => "return-error",
+        crate::generated::TimeoutPolicy::ResumeOnceReturnError => "resume-once-return-error",
         crate::generated::TimeoutPolicy::FailStop => "fail-stop",
     }
 }
@@ -951,7 +952,7 @@ pub(crate) enum PiRootControlIdlePreparation {
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct PiRootControlIdleFenceEvidence {
-    exact_direct_genet_topology: bool,
+    exact_network_fanin_topology: bool,
     ipc_staged: bool,
     physical_operator_pending: bool,
     serial_output_pending: bool,
@@ -971,7 +972,7 @@ struct PiRootControlIdleFenceEvidence {
 #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
 fn pi_root_control_idle_fence_mask(e: PiRootControlIdleFenceEvidence) -> u32 {
     let bits = [
-        !e.exact_direct_genet_topology,
+        !e.exact_network_fanin_topology,
         e.child_publication_pending.is_none(),
         e.ipc_staged,
         e.physical_operator_pending,
@@ -996,7 +997,7 @@ fn pi_root_control_idle_fence_mask(e: PiRootControlIdleFenceEvidence) -> u32 {
 const fn pi_root_control_idle_preparation(
     evidence: PiRootControlIdleFenceEvidence,
 ) -> PiRootControlIdlePreparation {
-    if !evidence.exact_direct_genet_topology || evidence.child_publication_pending.is_none() {
+    if !evidence.exact_network_fanin_topology || evidence.child_publication_pending.is_none() {
         return PiRootControlIdlePreparation::Yield;
     }
     if evidence.ipc_staged
@@ -1017,6 +1018,22 @@ const fn pi_root_control_idle_preparation(
     } else {
         PiRootControlIdlePreparation::Wait
     }
+}
+
+/// Global WiFi idle cannot strand a retained command, root-polled deadline or
+/// unconsumed terminal. In-flight waits use the separate causal path.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn pi_wifi_global_idle_owner_clear(
+    selected: bool,
+    recovery_pending: bool,
+    condition: crate::hal::driver_task::DriverTaskOneWayCompletionCondition,
+) -> bool {
+    selected
+        && !recovery_pending
+        && matches!(
+            condition,
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle
+        )
 }
 
 /// Whether one compact direct-GENET command may carry the current operator
@@ -5165,20 +5182,15 @@ struct PiRootControlConsumedSample {
     sampled_at_ticks: u64,
 }
 
-/// Root-control reserve proof for one retained passive command.
+/// Bounded pre-dispatch lease for one retained passive command.
 ///
-/// `seL4_SchedContext_Consumed` clears `scConsumed`, but it cannot clear the
-/// current core's `ksConsumed`. The selected seL4 `handleYield` preserves their
-/// sum while relinquishing the refill, so a consumed-time sample immediately
-/// after Yield still describes pre-Yield work and cannot prove fresh reserve.
-/// We instead drain that preserved evidence once after Yield, then measure the
-/// bounded resume-to-WCET-leaf wall interval with CNTVCT. There is no blocking
-/// child operation in that interval, so preemption only makes the strict wall
-/// lease more conservative. Equality or excess cannot authorize the WCET leaf,
-/// but it also cannot destroy an already parsed command merely because a
-/// higher-priority cross-core episode covered that one wall lease. The command
-/// may cross one further explicit Yield boundary before the existing typed
-/// refusal; the strict comparison itself is unchanged on both attempts.
+/// Consumed resets accounting evidence; Yield relinquishes only the current
+/// head refill. Neither proves that the next head contains the full configured
+/// budget. Drain preserved pre-Yield accounting once, then retain the strict
+/// resume-to-dispatch wall lease to bound root preparation. A fragmented donor
+/// can still time out inside NineDoor. The generated per-Call timeout policy
+/// handles that kernel suspension without replaying the request; the wall lease
+/// is not a proof of available CPU or immunity from kernel timeout.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PiRootControlConsumedWindow {
@@ -5414,8 +5426,8 @@ impl PiRootControlConsumedWindow {
         // must already be prepared by the caller. The exact comparison and
         // final sample starts the declared 2,500-us dispatch WCET leaf. That
         // leaf includes this strict comparison, the direct dispatch, and its
-        // bounded response/epilogue, so strict inequality leaves the complete
-        // WCET available inside the 2,750-us root-control budget.
+        // bounded response/epilogue. This bounds preparation against the
+        // configured envelope; it cannot reveal the current refill's size.
         let observed_ticks = sample_ticks();
         if observed_ticks == 0 {
             *self = Self::Invalid(PiRootControlConsumedInvalid::Counter);
@@ -10730,7 +10742,8 @@ where
     ///
     /// The caller must pass the CNTVCT value captured by `sel4::yield_now`
     /// before running any EventPump or recovery work. The drained value is not
-    /// an admission oracle; only the strict resume-to-WCET-leaf wall lease is.
+    /// a remaining-budget oracle. The strict wall lease bounds preparation;
+    /// the generated timeout policy covers a fragmented donated refill.
     #[cfg(feature = "kernel")]
     pub fn resume_pi_root_control_passive_admission_after_yield(&mut self, resumed_at_ticks: u64) {
         #[cfg(all(
@@ -14110,7 +14123,7 @@ where
     }
 
     /// Recheck every root-owned level that could otherwise be stranded by the
-    /// exact direct-GENET idle receive.
+    /// exact physical-network idle receive.
     ///
     /// A periodic isolated timer producer is only a bounded wake hint. Root's
     /// existing absolute `KernelTimer` deadline remains authoritative and is
@@ -14137,7 +14150,7 @@ where
             return before_preparation;
         }
         if !crate::hal::driver_task::ensure_pi_root_idle_timer_enabled(
-            before_enable.exact_direct_genet_topology,
+            before_enable.exact_network_fanin_topology,
         ) {
             #[cfg(feature = "release-pi4")]
             self.record_pi_root_control_idle_fence(
@@ -14206,8 +14219,17 @@ where
             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
         let direct_genet_mode_available = self.selected_direct_genet_continuation_mode().is_some();
         let network_service_quarantined = self.network_service_quarantined;
+        let wifi_selected = self.linked_runtime_cyw43_lane_selected();
+        let wifi_idle = wifi_selected
+            && pi_wifi_global_idle_owner_clear(
+                wifi_selected,
+                crate::drivers::driver_task_net::cyw43_recovery_required(),
+                crate::hal::driver_task::active_driver_task_one_way_completion_condition(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ),
+            );
         let (
-            exact_direct_genet_topology,
+            exact_network_fanin_topology,
             local_fault_pending,
             network_work_pending,
             child_publication_pending,
@@ -14232,11 +14254,12 @@ where
                 });
                 (
                     physical_pi_owner_state
-                        && net.driver_task_contract()
-                            == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
                         && diagnostics.is_some()
-                        && direct_genet_mode_available
-                        && !network_service_quarantined,
+                        && !network_service_quarantined
+                        && ((net.driver_task_contract()
+                            == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+                            && direct_genet_mode_available)
+                            || wifi_idle),
                     net.console_service_local_fault_pending()
                         || net.console_service_local_containment_pending(),
                     net.console_service_pending()
@@ -14264,7 +14287,7 @@ where
             || self.console_network_quarantine_cleanup_pending
             || self.pending_console_network_quarantine_diagnostic.is_some();
         PiRootControlIdleFenceEvidence {
-            exact_direct_genet_topology,
+            exact_network_fanin_topology,
             ipc_staged: self.ipc.has_staged_bootstrap(),
             physical_operator_pending: self
                 .linked_physical_operator_work()
@@ -20969,10 +20992,8 @@ where
             );
             self.emit_console_line(line.as_str());
         }
-        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
-        for line in crate::pi4_mcs_recorder::snapshot_lines() {
-            self.emit_console_line(line.as_str());
-        }
+        // Lifetime network timing remains in NETSTATS. Reserve this bounded
+        // SMP body for scheduling contracts, idle receipts and every CPU row.
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         for line in crate::pi4_mcs_recorder::idle_snapshot_lines() {
             self.emit_console_line(line.as_str());
@@ -20987,6 +21008,10 @@ where
                 self.emit_console_line(line.as_str());
             }
         }
+        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        self.emit_console_line(
+            crate::hal::critical_tcb::passive_timeout_resume_diagnostic().as_str(),
+        );
         self.emit_console_line("[smp:mcs/v1] end");
     }
 
@@ -47634,11 +47659,13 @@ mod tests {
                 terminal: true,
             })
         });
-        // The host has no live session. Reserve the four selected WiFi owner
+        // The host has no live session. Reserve the eight selected WiFi owner
         // rows; the renderer below supplies the accounting header itself.
-        for _ in 0..4 {
+        for _ in 0..8 {
             pump.emit_console_line("[smp:consumed/v1] task=reserved valid=false");
         }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        pump.emit_console_line("[smp:passive-timeout/v1] state=reserved");
         pump.emit_smp_mcs();
         assert_eq!(
             pump.pending_console_output.last().unwrap().text.as_str(),
@@ -47656,7 +47683,7 @@ mod tests {
                 "TCP body overflow"
             );
         }
-        assert_eq!(stream.lines.len(), 64);
+        assert_eq!(stream.lines.len(), 49);
         assert_eq!(stream.lines.last().unwrap().as_str(), "[smp:mcs/v1] end");
         assert_eq!(
             stream
@@ -47672,14 +47699,14 @@ mod tests {
                 .iter()
                 .filter(|row| row.starts_with("[smp:consumed/v1]"))
                 .count(),
-            5
+            9
         );
         assert_eq!(
             pump.pending_console_output
                 .iter()
                 .filter(|row| row.text.starts_with("netstats: mcs_"))
                 .count(),
-            25
+            5
         );
         assert!(!pump
             .pending_console_output
@@ -47694,9 +47721,11 @@ mod tests {
                 terminal: true,
             })
         });
-        for _ in 0..4 {
+        for _ in 0..8 {
             pump.emit_console_line("[smp:consumed/v1] task=reserved valid=false");
         }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        pump.emit_console_line("[smp:passive-timeout/v1] state=reserved");
         pump.emit_smp_mcs();
         pump.emit_terminal_console_line("OK SMP mode=mcs");
         assert!(!pump.finish_sync_response_capture(true, true));
@@ -57370,9 +57399,37 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn pi_wifi_global_idle_rejects_every_retained_or_unknown_owner_boundary() {
+        use crate::hal::driver_task::DriverTaskOneWayCompletionCondition as Condition;
+        assert!(pi_wifi_global_idle_owner_clear(
+            true,
+            false,
+            Condition::Idle
+        ));
+        assert!(!pi_wifi_global_idle_owner_clear(
+            false,
+            false,
+            Condition::Idle
+        ));
+        assert!(!pi_wifi_global_idle_owner_clear(
+            true,
+            true,
+            Condition::Idle
+        ));
+        for condition in [
+            Condition::SignalBoundWaiting,
+            Condition::RootDeadlinePollRequired,
+            Condition::Ready,
+            Condition::Revoked,
+        ] {
+            assert!(!pi_wifi_global_idle_owner_clear(true, false, condition));
+        }
+    }
+
+    #[test]
     fn pi_root_control_idle_fence_rejects_every_runnable_level() {
         let idle = PiRootControlIdleFenceEvidence {
-            exact_direct_genet_topology: true,
+            exact_network_fanin_topology: true,
             child_publication_pending: Some(false),
             ..PiRootControlIdleFenceEvidence::default()
         };
@@ -57423,7 +57480,7 @@ mod tests {
         );
 
         let mut wrong_topology = idle;
-        wrong_topology.exact_direct_genet_topology = false;
+        wrong_topology.exact_network_fanin_topology = false;
         #[cfg(feature = "release-pi4")]
         {
             assert_eq!(pi_root_control_idle_fence_mask(idle), 0);

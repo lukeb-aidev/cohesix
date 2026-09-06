@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn root_fault_turn_candidate_is_exactly_accounted() {
-        for manifest in [qemu_manifest(), pi4_manifest()] {
+        for (manifest, response_us) in [(qemu_manifest(), 2_400), (pi4_manifest(), 2_600)] {
             let root_fault = manifest
                 .temporal_authority
                 .tasks
@@ -550,7 +550,7 @@ mod tests {
             assert_eq!(root_fault.budget_us, 3_000);
             assert_eq!(root_fault.period_us, 10_000);
             assert_eq!(root_fault.wcet_us, 2_400);
-            assert_eq!(root_fault.response_time_us, 2_400);
+            assert_eq!(root_fault.response_time_us, response_us);
             assert_eq!(
                 root_fault.wcet_provenance,
                 "m26e-qemu-root-fault-service-units-candidate-v6"

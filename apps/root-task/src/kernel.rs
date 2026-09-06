@@ -8608,7 +8608,7 @@ mod tests {
     #[test]
     fn pi4_physical_manifest_projection_keeps_identity_and_selected_policy() {
         for line in [
-            "manifest.schema=1.16",
+            "manifest.schema=1.17",
             "manifest.profile=pi4-uboot-aarch64",
             "manifest.sha256=abc",
             "manifest.worker_runtime.scheduling.profile=mcs",

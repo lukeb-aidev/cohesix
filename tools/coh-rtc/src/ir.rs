@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.16";
+const SCHEMA_VERSION: &str = "1.17";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -1933,7 +1933,11 @@ impl Manifest {
             || task.priority != service.priority
             || task.mcp != service.mcp
             || task.timeout_badge != service.timeout_badge
-            || task.timeout_policy != crate::temporal::TimeoutPolicy::ReturnError
+            || !matches!(
+                task.timeout_policy,
+                crate::temporal::TimeoutPolicy::ReturnError
+                    | crate::temporal::TimeoutPolicy::ResumeOnceReturnError
+            )
             || task.allowed_donors.as_slice() != ["root-control"]
             || task.reply_objects != 1
             || task.max_donation_depth != 1
@@ -4451,6 +4455,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bounded_timeout_resume_is_only_the_exact_passive_ninedoor_contract() {
+        let path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
+        let manifest = load_manifest(&path).expect("load Pi manifest");
+        manifest
+            .validate_with_base(path.parent())
+            .expect("admitted Pi policy");
+        let ninedoor = manifest
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "ninedoor-service")
+            .expect("NineDoor task");
+        assert_eq!(
+            ninedoor.timeout_policy,
+            TimeoutPolicy::ResumeOnceReturnError
+        );
+        for id in ["root-control", "console-network-service", "driver-genet"] {
+            let mut invalid = manifest.clone();
+            invalid
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == id)
+                .expect("declared task")
+                .timeout_policy = TimeoutPolicy::ResumeOnceReturnError;
+            assert!(invalid.validate_with_base(path.parent()).is_err(), "{id}");
+        }
+        for donor in ["root-worker-executor-gpu", "root-fault"] {
+            let mut invalid = manifest.clone();
+            invalid
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == "ninedoor-service")
+                .expect("NineDoor task")
+                .allowed_donors = vec![donor.to_owned()];
+            assert!(
+                invalid.validate_with_base(path.parent()).is_err(),
+                "{donor}"
+            );
+        }
+    }
+
     fn pi4_driver_genet_task(manifest: &mut Manifest) -> &mut TemporalTaskConfig {
         manifest
             .temporal_authority
@@ -5134,6 +5182,17 @@ mod tests {
         let mut manifest = fixture_manifest();
         manifest.profile.name = profile_name.to_owned();
         manifest.root_task.driver_images.irqs.insert(1, genet_irq());
+        manifest.root_task.driver_images.irqs.push(pcie_timer_irq());
+        // This fixture starts from QEMU, whose dormant PCIe image has no C3
+        // page. The Pi profile must include the distinct system-timer page.
+        manifest
+            .root_task
+            .driver_images
+            .images
+            .iter_mut()
+            .find(|image| image.hot_path == "pcie-root")
+            .expect("fixture PCIe image")
+            .mmio_pages = 11;
         manifest.features.net_console = false;
         manifest.hw.no_nic = true;
         manifest.hw.network.enabled = false;

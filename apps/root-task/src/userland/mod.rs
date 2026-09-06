@@ -5293,6 +5293,26 @@ where
                         activation_window.consume_nonblocking_fanin_hint();
                         continue 'supervisor;
                     }
+                    #[cfg(all(
+                        feature = "release-pi4",
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    ))]
+                    if service_ready_before_control
+                        && bootstrap_service_ready_published
+                        && pump.prepare_pi_root_control_idle_wait()
+                            == PiRootControlIdlePreparation::Wait
+                        && wait_pi_root_control_idle_fanin(pump)
+                    {
+                        // All operator, recovery, output and network levels
+                        // are empty, and the physical owner has no outstanding
+                        // root command or polled deadline. The existing timer
+                        // and producer fan-in keep the next event wakeable.
+                        // Close this software episode without forfeiting the SC.
+                        activation_window.reset();
+                        continue 'supervisor;
+                    }
                     deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                     continue 'supervisor;
                 }

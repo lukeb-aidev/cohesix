@@ -155,7 +155,11 @@ impl NineDoorServiceContract {
             || temporal.priority != config.priority
             || temporal.mcp != config.mcp
             || temporal.timeout_badge != config.timeout_badge
-            || temporal.timeout_policy != crate::generated::TimeoutPolicy::ReturnError
+            || !matches!(
+                temporal.timeout_policy,
+                crate::generated::TimeoutPolicy::ReturnError
+                    | crate::generated::TimeoutPolicy::ResumeOnceReturnError
+            )
             || temporal.allowed_donors != ["root-control"]
             || !temporal.locality_bound
             || temporal.reply_objects != 1

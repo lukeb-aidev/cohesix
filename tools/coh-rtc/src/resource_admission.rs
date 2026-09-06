@@ -910,7 +910,11 @@ impl WorkerResourceAdmissionConfig {
             .iter()
             .filter(|task| {
                 task.execution == TemporalExecution::Passive
-                    && task.timeout_policy == crate::temporal::TimeoutPolicy::ReturnError
+                    && matches!(
+                        task.timeout_policy,
+                        crate::temporal::TimeoutPolicy::ReturnError
+                            | crate::temporal::TimeoutPolicy::ResumeOnceReturnError
+                    )
             })
             .count();
         let root_fault = self

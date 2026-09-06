@@ -1458,10 +1458,10 @@ transport:
   restart burst and changes no device deadline, operation cardinality, owner,
   or QEMU/generic path.
 - When the selected physical Pi MCS root-control task is in the exact
-  direct-GENET topology, the compiler-owned root-control
+  direct-GENET or ready WiFi topology, the compiler-owned root-control
   fan-in is bound to the init root-control TCB when that TCB's temporal runtime
   is activated. Descriptor replay leaves the PCIe-owned timer disarmed in every
-  mode. After a completed empty quantum, the direct-GENET ordinary global-idle
+  mode. After a completed empty quantum, the physical-network global-idle
   exit consumes exactly one nonblocking multiplexed receive. If that receive is
   empty, root rechecks timer, endpoint, serial/local-seat/display, network,
   fault, recovery, containment, quarantine, and reboot state. At the first
@@ -1486,9 +1486,10 @@ transport:
   The old response token is retired; a failed recheck cannot rearm itself.
   Reserve, operator, recovery, fault, and other fenced exits retain their
   explicit handoff; no future network request, badge, or elapsed interval is
-  inferred. WiFi never enables this timer or enters this global-idle receive
-  and may block only for a currently issued finite operation or exact
-  current-transaction causal child.
+  inferred. Ready WiFi can use the same timer-backed idle receive only when
+  its physical one-way owner is Idle and every operator, output, child and
+  recovery fence is empty. Retained commands and root-polled deadlines forbid
+  this path; their existing causal waits remain separate.
   QEMU and classic profiles retain their selected paths.
 - The existing isolated `pcie-root` runtime owns one additional, separately
   tagged Pi BCM system-timer channel-3 duty solely to make that global idle
@@ -1502,9 +1503,9 @@ transport:
   only the timer. `pcie-root` consumes that retained capability through the
   exclusive child-VSpace path, leaving no root alias. Descriptor adoption
   publishes an identity-bound `Disarmed` state and does not program C3. Only
-  the first exact direct-GENET synchronous enable programs C3 at 5,000 us,
+  the first exact physical-network synchronous enable programs C3 at 5,000 us,
   exactly half its unchanged generated 10,000-us period, and publishes
-  `Enabled`; WiFi remains `Disarmed`. One IRQ service clears the source, reads
+  `Enabled`; WiFi requires its owner-idle fence before enabling. One IRQ service clears the source, reads
   `CLO`, arms the next compare, orders and reads back the device state, signals
   the existing root fan-in, and acknowledges the IRQ. It then blocks on the
   existing combined command-endpoint/local-notification receive;

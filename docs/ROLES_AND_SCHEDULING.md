@@ -356,9 +356,10 @@ Ordinary current-refill exhaustion postpones execution instead of converting a
 retained multi-turn device lifetime into a terminal driver fault. Standard
 faults and explicit device deadlines remain terminal, and PCIe retains its
 selected terminal timeout policy. Its completed C3 IRQ duty clears/rearms,
-signals root and ACKs before explicitly retiring the unused head refill; the
-two-refill terminal owner does not inherit the natural-postpone drivers'
-indefinite short-wait continuation. The compare remains 5,000 us, while IRQ
+signals root and ACKs before blocking on its combined endpoint/notification.
+Its four-refill terminal context retains the two timer-duty fragments and
+enable/call carry-in; it does not Yield after the IRQ or inherit the
+natural-postpone drivers' indefinite continuation. The compare remains 5,000 us, while IRQ
 dispatch remains subject to the unchanged 400/10,000-us reservation.
 The temporal adjustment changes neither QEMU scheduling nor driver ownership;
 the shared HDMI grant values change without changing the pointer-free record
@@ -549,9 +550,11 @@ the latter is only a hint, while the former is copied to staged root storage
 before returning. Every wake restarts operator/recovery-first arbitration.
 Post-response, reserve, operator, recovery, and fault exits retain their
 explicit handoff, so the receive cannot speculate about a future request or
-weaken physical-console priority. WiFi never enters this global-idle receive;
-it never enables the timer and may block only for a currently issued finite
-operation or an exact current-transaction causal child.
+weaken physical-console priority. Ready WiFi may use the same global-idle
+receive only when its physical one-way owner reports Idle, with no retained
+command, root-polled deadline, recovery, or child publication. Its full
+operator/output/network fences and lifetime-bound timer proof are identical.
+An in-flight WiFi operation continues to use its separate causal wait.
 
 The global-idle operator predicate requires no remaining USB readiness or
 recovery service debt. It is intentionally stricter than the compact network
@@ -939,11 +942,11 @@ does not alter the physical Pi rotor or any Pi hardware owner.
 On the selected physical-Pi cross-core signal-only console topology, observed
 TCP Connected/Disconnected edges bracket kernel Consumed evidence for
 root-control, console-network and GENET, or root-control, console-network,
-CYW43 and SDIO. Root invokes only its retained root/console SC caps. A bounded
+CYW43 and SDIO, plus serial, USB, HDMI and PCIe on either lane. Root invokes only its retained root/console SC caps. A bounded
 request in the existing shared root critical-domain state precedes one signal
 through the generated driver-supervisor capability. Driver-supervisor drains
 fault work first and samples at most one selected, admitted driver SC from its
-own CSpace per wake. The finite WiFi remainder uses its existing self-signal;
+own CSpace per wake. The finite physical-driver remainder uses its existing self-signal;
 there is no timer, retry of a claimed sample, new capability, device action or
 fault Reply use. A fault turn suppresses diagnostic work. Missing or contended
 samples remain incomplete, and capability-generation drift invalidates a pair.
@@ -976,8 +979,10 @@ final admission sample. That sample closes the strict wall interval from the
 immediate post-Yield counter capture to the final admission/WCET cut.
 `CallArm` retains the final fault frontier. Passive dispatch is admitted only
 when that wall lease is strictly below the checked
-`budget_us - wcet_us` limit, currently 3,000 us, so the complete declared
-2,500 us WCET remains inside the SC. The strict comparison, direct dispatch,
+`budget_us - wcet_us` limit, currently 3,000 us. This bounds root preparation
+against the configured envelope; it does not prove that the current head
+refill contains the declared 2,500 us WCET. Yield relinquishes only one head,
+and Consumed cannot reveal the remaining refill queue. The strict comparison, direct dispatch,
 and bounded response/epilogue are all inside that declared WCET; no mutable
 validity or policy work may be inserted between the cut and dispatch. Equality
 or excess ends that lease without dispatch. The first expired lease retains the
@@ -992,6 +997,20 @@ accounting samples latches admission closed and emits one bounded operator
 marker. Exact cross multiplication preserves the strict microsecond boundary
 without a rounded-down admission; preemption only makes the wall lease more
 conservative.
+The Pi schema-1.17 `resume-once-return-error` policy covers this donation
+boundary. Root-fault may send one zero-label, zero-length kernel Timeout Reply
+for each monotonically numbered, currently armed NineDoor Call. It requires
+the exact service fault registration, timeout label, two-word payload, sole
+root-control SC badge and ready recovery lane. It resumes the same instruction,
+retaining the original request, service Reply object, SC and generation; it
+never restarts a request or reconfigures budget. The kernel postpones execution
+when the donated SC is not ready. A second timeout for that Call, standard
+fault, malformed payload, wrong donor or missing/stale Call follows the existing
+typed caller failure and terminal containment. Timeout MR1 is retained evidence,
+not a per-Call CPU limit. The resume has a finite per-Call bound and retains
+kernel reservation enforcement; it does not establish the candidate WCET or
+promise immunity from arbitrary service defects. QEMU retains `return-error`.
+
 Unrelated raw input and root-owned diagnostics remain live before a passive
 command is retained. The QEMU direct-VirtIO branch exits before this Pi-only
 boundary and keeps its existing counter guard.

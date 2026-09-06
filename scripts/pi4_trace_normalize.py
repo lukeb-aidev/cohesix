@@ -2402,6 +2402,7 @@ def classify_domain(line: str) -> str | None:
     if (
         "DRIVER_TASK" in line
         or line.startswith("[smp:consumed/v1]")
+        or line.startswith("[smp:passive-timeout/v1]")
         or line.startswith("[smp:registry/v1]")
         or line.startswith("PI4_CADENCE ")
         or "SCHED_CONTRACT" in line
