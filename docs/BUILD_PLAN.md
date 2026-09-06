@@ -10528,6 +10528,20 @@ Changes:
     root-MCS canary qualify only the source/build; fresh Pi raw and functional
     evidence must establish any speedup. The remaining WiFi voluntary handoffs
     and GENET per-request scheduling attribution stay open until measured.
+  - Optimized Pi bootstrap stack restoration — the first physical `e3fc025cb`
+    GENET RAM boot verifies all transfer CRCs and exact BUILD, then stops after
+    driver owner initialization before the shell. No TCP attempt is admitted.
+    Its exact ELF proves a 266,688-byte lower bound for the nested boot,
+    network initialization and proof-reporting frames against the unchanged
+    262,144-byte root stack; the terminal instruction remains unobserved.
+    Allocate the boxed `NetStack` destination before initializing its value
+    through safe `Box::write`, then inspect the exact optimized target frames
+    before another physical attempt. Preserve every field, storage reservation,
+    initialization/error path, memory bound and driver/service owner. Host
+    stack tests cover existing reservation and network contracts; they cannot
+    prove target frame size or physical recovery. The full host-tool suite,
+    Python SDK, generated interfaces and benchmark workloads retain the same
+    API, allocation shape, wire protocol and report schema and need no change.
   - console-network ABI — advance the common READY/ABI identity to v4 and add child event `CommandBatch = 27`, encoding version 1, with one through eight exact same-connection authenticated commands. Each record retains its own `now_ms`, length, and UTF-8 bytes inside the unchanged 2368-byte payload and four-page/capability topology.
   - restricted child — use generated `max_commands_per_wake <= 8` to coalesce only consecutive command events that fit the fixed page. A lifecycle or connection-identity event is an absolute fence; a single command remains the legacy `Command` record.
   - root boundary — validate the complete private batch, reserve the complete bounded command-queue capacity before mutation, then admit exact FIFO command/timestamp records. Any malformed, over-capacity, cross-identity, or stale batch fails closed without partial execution.
