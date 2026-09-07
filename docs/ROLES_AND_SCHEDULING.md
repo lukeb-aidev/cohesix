@@ -39,6 +39,13 @@ executable record proves configured admission; a QEMU or Pi claim still
 requires target evidence for the exact kernel, resolved manifest, root image,
 Worker archive, and ABI version.
 
+At a GENET condition-before-block cut, a newly ready durable child publication
+returns to ordinary arbitration without a causal-wait charge. A coalesced
+notification cannot change that accounting compared with an empty poll observing
+the same publication. Actual receive returns and hints without ready publication
+retain the existing 64-return guard, and productive work retains its separate
+64-quantum guard. This grants no extra polling, timer, SC budget or work authority.
+
 The Pi manifest retains `max_workers=256` and per-role
 `namespace_capacity=256`, and its complete maximum mix declares all 256 as
 executable children. Its 16-bit root CNode exposes 65,536 slots; the generated

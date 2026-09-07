@@ -6524,7 +6524,7 @@ impl PiRootControlProductiveContinuation {
 /// child level won the race and ordinary outer arbitration must run.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DirectGenetCausalFaninState {
+pub(crate) enum DirectGenetCausalFaninState {
     Wait,
     Arbitrate,
     Closed,
@@ -14239,6 +14239,15 @@ where
         &self,
         expected: PiRootControlProductiveContinuation,
     ) -> bool {
+        self.pi_root_control_productive_child_fanin_state(expected)
+            == DirectGenetCausalFaninState::Wait
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn pi_root_control_productive_child_fanin_state(
+        &self,
+        expected: PiRootControlProductiveContinuation,
+    ) -> DirectGenetCausalFaninState {
         let fence_clear = self.pi_root_control_productive_continuation_fence_clear(expected);
         let control_publication_owed = self
             .net
@@ -14258,7 +14267,7 @@ where
             response_batch_debt,
             child_publication_pending,
             fence_clear,
-        ) == DirectGenetCausalFaninState::Wait
+        )
     }
 
     /// Preserve physical-operator service while waiting on exact console debt.
@@ -14271,9 +14280,10 @@ where
     pub(crate) fn prepare_pi_root_control_productive_child_wait(
         &mut self,
         expected: PiRootControlProductiveContinuation,
-    ) -> bool {
-        if !self.pi_root_control_productive_child_wait_eligible(expected) {
-            return false;
+    ) -> DirectGenetCausalFaninState {
+        let state = self.pi_root_control_productive_child_fanin_state(expected);
+        if state != DirectGenetCausalFaninState::Wait {
+            return state;
         }
         let exact_network_fanin_topology =
             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -14281,10 +14291,10 @@ where
         let _ = self.poll_runtime_timer_prelude_checked();
         if !crate::hal::driver_task::ensure_pi_root_idle_timer_enabled(exact_network_fanin_topology)
         {
-            return false;
+            return DirectGenetCausalFaninState::Closed;
         }
         let _ = self.poll_runtime_timer_prelude_checked();
-        self.pi_root_control_productive_child_wait_eligible(expected)
+        self.pi_root_control_productive_child_fanin_state(expected)
     }
 
     /// Return whether the exact stage-bearing request already has durable
@@ -14300,26 +14310,8 @@ where
         &self,
         expected: PiRootControlProductiveContinuation,
     ) -> bool {
-        let fence_clear = self.pi_root_control_productive_continuation_fence_clear(expected);
-        let control_publication_owed = self
-            .net
-            .as_deref()
-            .and_then(crate::net::NetPoller::console_child_control_publication_owed);
-        let response_batch_debt = self
-            .net
-            .as_deref()
-            .and_then(crate::net::NetPoller::console_response_batch_debt);
-        let child_publication_pending = self
-            .net
-            .as_deref()
-            .and_then(crate::net::NetPoller::console_child_publication_service_pending);
-        direct_genet_causal_fanin_state(
-            expected,
-            control_publication_owed,
-            response_batch_debt,
-            child_publication_pending,
-            fence_clear,
-        ) == DirectGenetCausalFaninState::Arbitrate
+        self.pi_root_control_productive_child_fanin_state(expected)
+            == DirectGenetCausalFaninState::Arbitrate
     }
 
     /// Recheck a newer durable publication after the preceding response drained.

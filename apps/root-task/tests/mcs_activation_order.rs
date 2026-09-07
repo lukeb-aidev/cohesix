@@ -726,7 +726,10 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("fn wait_pi_root_control_genet_causal_fanin<")
         .expect("GENET must retain a separate exact-identity recheck wrapper");
     let wifi_helper = &wait_helper[..genet_start];
-    assert!(wifi_helper.contains("|_, polled| matches!(polled, RootControlReceiveOutcome::Empty)"));
+    assert!(wifi_helper.contains("if matches!(polled, RootControlReceiveOutcome::Empty)"));
+    assert!(wifi_helper.contains("DirectGenetCausalFaninState::Wait"));
+    assert!(wifi_helper.contains("DirectGenetCausalFaninState::Closed"));
+    assert!(!wifi_helper.contains("DirectGenetCausalFaninState::Arbitrate"));
     assert_eq!(
         wifi_helper
             .matches("pump.wait_pi_root_control_receive()")
@@ -761,7 +764,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .unwrap();
     let preparation = &event[preparation_start..preparation_end];
     let first_debt = preparation
-        .find("self.pi_root_control_productive_child_wait_eligible(expected)")
+        .find("self.pi_root_control_productive_child_fanin_state(expected)")
         .unwrap();
     let first_timer = preparation
         .find("self.poll_runtime_timer_prelude_checked()")
@@ -773,7 +776,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .rfind("self.poll_runtime_timer_prelude_checked()")
         .unwrap();
     let final_debt = preparation
-        .rfind("self.pi_root_control_productive_child_wait_eligible(expected)")
+        .rfind("self.pi_root_control_productive_child_fanin_state(expected)")
         .unwrap();
     assert!(
         first_debt < first_timer
@@ -807,6 +810,16 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("productive_window.record_causal_child_wait();")
         .map(|offset| causal_wait + offset)
         .expect("steady GENET causal waits share the bounded activation cap");
+    let ready_arm = steady[causal_wait..]
+        .find("RootControlCausalWaitOutcome::PublicationReady")
+        .map(|offset| causal_wait + offset)
+        .unwrap();
+    let charged_arm = steady[causal_wait..]
+        .find("RootControlCausalWaitOutcome::ObservedWork")
+        .map(|offset| causal_wait + offset)
+        .unwrap();
+    assert!(ready_arm < charged_arm && charged_arm < record_wait);
+    assert!(!steady[ready_arm..charged_arm].contains("record_causal_child_wait"));
     let eligibility = steady
         .find("productive_window.nonblocking_fanin_hint_eligible()")
         .expect("ordinary no-successor must be the sole fan-in hint cut");

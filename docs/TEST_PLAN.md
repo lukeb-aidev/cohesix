@@ -9124,6 +9124,14 @@ scripts/ci/test_plan_run.sh --target qemu \
   --state-dir out/test-plan/m26e-console-qemu-v17
 ```
 
+The GENET causal-wait regression must give the same uncharged arbitration
+outcome for a pre-receive durable child publication with an empty poll or a
+coalesced hint. A real receive remains charged even when it returns a hint;
+an endpoint is retained exactly once and unavailable Reply authority cannot
+receive. Source binding must preserve both 64-count bounds and the unchanged
+WiFi empty-poll-only selector. Compare fresh physical Yield routes and complete
+raw TCP sessions; host outcomes do not establish a latency improvement.
+
 The compiler and root-boundary tests must agree on the exact image path and
 entrypoint, retained anchor, one-MiB child untyped, 32 stack pages, one IPC
 page, one init page, and four ordinary shared pages. The base child retains 60

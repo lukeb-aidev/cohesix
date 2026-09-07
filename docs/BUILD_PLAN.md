@@ -10493,6 +10493,23 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET ready-publication charge equivalence — the unchanged `40b7ff26f`
+    pair reduces console CPU about 30% but retains p95 7.112/6.082 ms and
+    in-flight causal-limit Yields. Preserve the final typed Wait/Arbitrate/Closed
+    result across the existing single poll/recheck/receive helper. A durable
+    publication seen before receiving returns to ordinary arbitration without
+    charging the causal-wait allowance, whether the poll observed an empty
+    notification or a coalesced hint. Actual receive returns, endpoints and
+    hints without ready publication retain their existing charge. Preserve
+    both 64-count bounds, unslid clocks, periodic operator wake, all fences and
+    unchanged WiFi empty-poll-only routing. No added accounting syscall or
+    numeric scheduling change. Test notification equivalence, real-wait charge,
+    retained endpoints, unavailable Reply authority and exact production branch
+    ordering. Qualify exact Pi/layout and pinned QEMU, then repeat both modes.
+    Discovery: `m26e-console-network-service-isolation`. The complete host-tool
+    suite, Python SDK, generated contracts, raw/REST workloads, diagnostic
+    readers and report schemas need no changes. Other latency tails and the
+    earlier WiFi recovery quarantine remain open pending physical evidence.
   - Pi TCP execution-cost candidate — the sealed unchanged `c47da0a6d`
     two-GENET/two-WiFi matrix retains GENET p95 6.595/6.752 ms and console-child
     CPU 32.395/32.329 ms per full 64-request session. Compile only Pi

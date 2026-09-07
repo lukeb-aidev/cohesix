@@ -74,6 +74,14 @@ an observed receive or another root path. These brackets include kernel and
 existing endpoint handling, and cannot establish exact sleep or consumed CPU.
 Keep all omission and invalid counts; an unretained bracket is not a zero.
 
+Own-root `SchedContext_Consumed` receipts drain committed `scConsumed` only.
+The selected kernel can retain live execution in `ksConsumed` until a scheduler
+commit; a zero drain does not mean zero CPU since the preceding user sample.
+Whole-session root totals have live accounting uncertainty at their edges.
+Never relabel differences between adjacent own-root drains as phase CPU. Remote
+console sampling stalls the other-core child before draining its SC. Retain
+that distinction when comparing execution cost with elapsed poll/Yield traces.
+
 ## Qualification Rules
 
 Bind compiler-profile changes to a new exact image even when scheduling and

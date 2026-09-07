@@ -726,16 +726,21 @@ where
                     .then(|| productive_window.causal_child_wait_identity())
                     .flatten();
                 if let Some(identity) = causal_child_wait {
-                    if pump.pi_root_control_productive_child_wait_eligible(identity)
-                        && wait_pi_root_control_genet_causal_fanin(pump, identity)
-                    {
-                        // The exact staged control sequence remains authority
-                        // before sleep. The wake carries no work identity, so
-                        // restart at the outer recovery/operator fence and
-                        // consume durable child output through the ordinary
-                        // Network rotor.
-                        productive_window.record_causal_child_wait();
-                        continue;
+                    if pump.pi_root_control_productive_child_wait_eligible(identity) {
+                        match wait_pi_root_control_genet_causal_fanin(pump, identity) {
+                            RootControlCausalWaitOutcome::PublicationReady => {
+                                // No receive was attempted: the exact durable
+                                // level returns through bounded outer arbitration.
+                                continue;
+                            }
+                            RootControlCausalWaitOutcome::ObservedWork => {
+                                // Actual receive returns and hints without a
+                                // ready publication keep the existing wait cap.
+                                productive_window.record_causal_child_wait();
+                                continue;
+                            }
+                            RootControlCausalWaitOutcome::NoWork => {}
+                        }
                     }
                     if pump.pi_root_control_productive_child_publication_ready(identity) {
                         // The child won the condition-before-block race. Its
@@ -2210,41 +2215,73 @@ where
         )
     )
 ))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootControlCausalWaitOutcome {
+    NoWork,
+    ObservedWork,
+    PublicationReady,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
+))]
 fn pi_root_control_condition_before_causal_wait<State, Poll, Recheck, Wait>(
     state: &mut State,
     mut poll: Poll,
     mut recheck: Recheck,
     mut wait: Wait,
-) -> bool
+) -> RootControlCausalWaitOutcome
 where
     Poll: FnMut(&mut State) -> RootControlReceiveOutcome,
-    Recheck: FnMut(&mut State, RootControlReceiveOutcome) -> bool,
+    Recheck:
+        FnMut(&mut State, RootControlReceiveOutcome) -> crate::event::DirectGenetCausalFaninState,
     Wait: FnMut(&mut State) -> RootControlReceiveOutcome,
 {
+    use crate::event::DirectGenetCausalFaninState;
+
     let polled = poll(state);
     core::sync::atomic::fence(Ordering::Acquire);
+    let mut publication_ready = false;
     let observed = match polled {
-        // A coalesced edge can belong to the peripheral quantum just finished.
-        // It cannot by itself require another device rotor. Revalidate the
-        // exact owed child publication and every operator/recovery fence after
-        // consuming it; a fresh durable level returns to ordinary arbitration.
-        RootControlReceiveOutcome::Empty | RootControlReceiveOutcome::Fanin
-            if recheck(state, polled) =>
-        {
-            wait(state)
+        RootControlReceiveOutcome::Empty | RootControlReceiveOutcome::Fanin => {
+            match recheck(state, polled) {
+                DirectGenetCausalFaninState::Wait => wait(state),
+                DirectGenetCausalFaninState::Arbitrate => {
+                    // The same durable publication must have the same charge
+                    // whether or not its coalesced notification was pending.
+                    // Ordinary work remains bounded by the productive cap.
+                    publication_ready = true;
+                    polled
+                }
+                DirectGenetCausalFaninState::Closed => polled,
+            }
         }
         // Endpoint payload was already retained by the dispatcher. Never
         // receive again before outer arbitration has consumed that storage.
-        RootControlReceiveOutcome::Empty
-        | RootControlReceiveOutcome::Fanin
-        | RootControlReceiveOutcome::Endpoint
-        | RootControlReceiveOutcome::Unavailable => polled,
+        RootControlReceiveOutcome::Endpoint | RootControlReceiveOutcome::Unavailable => polled,
     };
     core::sync::atomic::fence(Ordering::Acquire);
-    matches!(
+    if publication_ready {
+        RootControlCausalWaitOutcome::PublicationReady
+    } else if matches!(
         observed,
         RootControlReceiveOutcome::Fanin | RootControlReceiveOutcome::Endpoint
-    )
+    ) {
+        RootControlCausalWaitOutcome::ObservedWork
+    } else {
+        RootControlCausalWaitOutcome::NoWork
+    }
 }
 
 #[cfg(all(
@@ -2277,9 +2314,15 @@ where
     pi_root_control_condition_before_causal_wait(
         pump,
         |pump| pump.poll_pi_root_control_receive(),
-        |_, polled| matches!(polled, RootControlReceiveOutcome::Empty),
+        |_, polled| {
+            if matches!(polled, RootControlReceiveOutcome::Empty) {
+                crate::event::DirectGenetCausalFaninState::Wait
+            } else {
+                crate::event::DirectGenetCausalFaninState::Closed
+            }
+        },
         |pump| pump.wait_pi_root_control_receive(),
-    )
+    ) != RootControlCausalWaitOutcome::NoWork
 }
 
 /// Direct GENET alone consumes a stale hint before revalidating its exact
@@ -2305,7 +2348,7 @@ fn wait_pi_root_control_genet_causal_fanin<
 >(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     expected: crate::event::PiRootControlProductiveContinuation,
-) -> bool
+) -> RootControlCausalWaitOutcome
 where
     D: crate::serial::SerialDriver,
     T: TimerSource,
@@ -8659,19 +8702,19 @@ mod tests {
     ))]
     #[test]
     fn causal_fanin_rechecks_exact_debt_after_one_poll_before_one_wait() {
+        use super::RootControlCausalWaitOutcome::{NoWork, ObservedWork};
+        use crate::event::DirectGenetCausalFaninState::{Closed, Wait};
         use crate::event::RootControlReceiveOutcome::{Empty, Endpoint, Fanin, Unavailable};
 
-        // A notification alone has no work authority. If the exact child debt
-        // and all fences survive a fresh check, receive once without another
-        // peripheral quantum. Endpoint storage and unavailable Reply authority
-        // must return before any recheck or second receive.
-        for (polled, eligible, expected_rechecks, expected_waits, observed) in [
-            (Fanin, true, 1, 1, true),
-            (Empty, true, 1, 1, true),
-            (Fanin, false, 1, 0, true),
-            (Empty, false, 1, 0, false),
-            (Endpoint, true, 0, 0, true),
-            (Unavailable, true, 0, 0, false),
+        // Endpoint storage and unavailable Reply authority return before any
+        // recheck or receive. An unproductive hint retains its existing charge.
+        for (polled, decision, rechecks, waits, outcome) in [
+            (Fanin, Wait, 1, 1, ObservedWork),
+            (Empty, Wait, 1, 1, ObservedWork),
+            (Fanin, Closed, 1, 0, ObservedWork),
+            (Empty, Closed, 1, 0, NoWork),
+            (Endpoint, Wait, 0, 0, ObservedWork),
+            (Unavailable, Wait, 0, 0, NoWork),
         ] {
             let mut calls = [0u8; 3];
             let result = super::pi_root_control_condition_before_causal_wait(
@@ -8683,7 +8726,7 @@ mod tests {
                 |calls, _| {
                     assert_eq!(calls[0], 1);
                     calls[1] += 1;
-                    eligible
+                    decision
                 },
                 |calls| {
                     assert_eq!(calls[1], 1);
@@ -8691,41 +8734,87 @@ mod tests {
                     Endpoint
                 },
             );
-            assert_eq!(calls, [1, expected_rechecks, expected_waits]);
-            assert_eq!(result, observed);
+            assert_eq!(calls, [1, rechecks, waits]);
+            assert_eq!(result, outcome);
         }
-        // A second coalesced edge still returns through outer arbitration;
-        // this helper must never drain an unbounded notification stream.
+        // One receive is still charged even when it returns a coalesced wake.
         let mut waits = 0;
-        assert!(super::pi_root_control_condition_before_causal_wait(
-            &mut waits,
-            |_| Fanin,
-            |_, _| true,
-            |waits| {
-                *waits += 1;
-                Fanin
-            },
-        ));
+        assert_eq!(
+            super::pi_root_control_condition_before_causal_wait(
+                &mut waits,
+                |_| Fanin,
+                |_, _| Wait,
+                |waits| {
+                    *waits += 1;
+                    Fanin
+                },
+            ),
+            ObservedWork
+        );
         assert_eq!(waits, 1);
-        assert!(!super::pi_root_control_condition_before_causal_wait(
-            &mut (),
-            |_| Empty,
-            |_, _| true,
-            |_| Unavailable,
-        ));
+        assert_eq!(
+            super::pi_root_control_condition_before_causal_wait(
+                &mut (),
+                |_| Empty,
+                |_, _| Wait,
+                |_| Unavailable,
+            ),
+            NoWork
+        );
+        // The WiFi empty-poll-only selector keeps all four prior outcomes.
         for polled in [Empty, Fanin, Endpoint, Unavailable] {
             let mut waits = 0;
-            let observed = super::pi_root_control_condition_before_causal_wait(
+            let outcome = super::pi_root_control_condition_before_causal_wait(
                 &mut waits,
                 |_| polled,
-                |_, polled| matches!(polled, Empty),
+                |_, polled| {
+                    if matches!(polled, Empty) {
+                        Wait
+                    } else {
+                        Closed
+                    }
+                },
                 |waits| {
                     *waits += 1;
                     Fanin
                 },
             );
             assert_eq!(waits, u8::from(matches!(polled, Empty)));
-            assert_eq!(observed, !matches!(polled, Unavailable));
+            assert_eq!(outcome != NoWork, !matches!(polled, Unavailable));
+        }
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn ready_child_publication_has_the_same_charge_with_or_without_a_hint() {
+        use super::RootControlCausalWaitOutcome::PublicationReady;
+        use crate::event::DirectGenetCausalFaninState::Arbitrate;
+        use crate::event::RootControlReceiveOutcome::{Empty, Fanin};
+
+        for polled in [Empty, Fanin] {
+            let mut calls = [0u8; 3];
+            let outcome = super::pi_root_control_condition_before_causal_wait(
+                &mut calls,
+                |calls| {
+                    calls[0] += 1;
+                    polled
+                },
+                |calls, observed| {
+                    assert_eq!(observed, polled);
+                    calls[1] += 1;
+                    Arbitrate
+                },
+                |calls| {
+                    calls[2] += 1;
+                    Fanin
+                },
+            );
+            assert_eq!(calls, [1, 1, 0]);
+            assert_eq!(outcome, PublicationReady);
         }
     }
 
