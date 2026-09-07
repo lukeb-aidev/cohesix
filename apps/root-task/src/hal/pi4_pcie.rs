@@ -32,9 +32,11 @@ const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT: usize = 0x4070;
 const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI: usize = 0x4080;
 const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI: usize = 0x4084;
 const BCM2711_PCIE_MISC_HARD_PCIE_HARD_DEBUG: usize = 0x4204;
-const BCM2711_PCIE_INTR2_CPU_CLR: usize = 0x4308;
-const BCM2711_PCIE_INTR2_CPU_MASK_SET: usize = 0x4310;
+// BCM2711 uses the dedicated 32-source MSI bank. The legacy 0x4300
+// bank used by older STB cores is not part of this board's MSI path.
+const BCM2711_PCIE_MSI_INTR2_STATUS: usize = 0x4500;
 const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
+const BCM2711_PCIE_MSI_INTR2_MASK_STATUS: usize = 0x450c;
 const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
 const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
@@ -1120,7 +1122,6 @@ fn prove_pi4_vl805_pcie_ownership(
     let status_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_MISC_PCIE_STATUS, "pi4-pcie-status")?;
     let status_reg = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_PCIE_STATUS)?;
-    mask_and_clear_pcie_irq_sources(status_page);
 
     let config_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_EXT_CFG_DATA, "pi4-pcie-ext-data")?;
@@ -1447,7 +1448,7 @@ fn ensure_pi4_pcie_root_ready(
                 | PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_128,
         );
         configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
-        mask_and_clear_pcie_irq_sources(status_page);
+        mask_and_clear_pcie_irq_sources(status_page)?;
         configure_pi4_pcie_outbound_window(status_page)?;
         notify_vl805_reset_after_pcie_ready(
             hal,
@@ -1516,7 +1517,7 @@ fn ensure_pi4_pcie_root_ready(
             | PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_128,
     );
     configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
-    mask_and_clear_pcie_irq_sources(status_page);
+    mask_and_clear_pcie_irq_sources(status_page)?;
 
     mmio_clear_bits_u32_flush(sw_init_reg, PCIE_RGR1_SW_INIT_1_PERST_MASK);
     fence(Ordering::SeqCst);
@@ -2047,50 +2048,51 @@ fn pcie_reg_page(offset: usize) -> Result<(usize, usize), HalError> {
     Ok((paddr & !PAGE_MASK, paddr & PAGE_MASK))
 }
 
-fn mask_and_clear_pcie_irq_sources(status_page_virt: usize) {
-    if let (Ok(cpu_mask_set), Ok(cpu_clr), Ok(msi_mask_set), Ok(msi_clr)) = (
-        same_page_reg_virt(status_page_virt, BCM2711_PCIE_INTR2_CPU_MASK_SET),
-        same_page_reg_virt(status_page_virt, BCM2711_PCIE_INTR2_CPU_CLR),
-        same_page_reg_virt(status_page_virt, BCM2711_PCIE_MSI_INTR2_MASK_SET),
-        same_page_reg_virt(status_page_virt, BCM2711_PCIE_MSI_INTR2_CLR),
-    ) {
-        let cpu_mask = mmio_write_u32_flush(cpu_mask_set, u32::MAX);
-        let cpu_clear = mmio_write_u32_flush(cpu_clr, u32::MAX);
-        let msi_mask = mmio_write_u32_flush(msi_mask_set, u32::MAX);
-        let msi_clear = mmio_write_u32_flush(msi_clr, u32::MAX);
-        let trusted_readback =
-            pcie_irq_source_mask_readback_trusted(cpu_mask, cpu_clear, msi_mask, msi_clear);
-        if trusted_readback {
-            PCIE_IRQ_SOURCES_MASKED_PROVEN.store(1, Ordering::Release);
-        }
-        let mut line = heapless::String::<192>::new();
-        if trusted_readback {
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 bcm2711-pcie irq sources masked proof=trusted source=hal-ext-cfg readback=0x{cpu_mask:08x}/0x{cpu_clear:08x}/0x{msi_mask:08x}/0x{msi_clear:08x}"
-                ),
-            );
-        } else {
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 bcm2711-pcie irq sources masked proof=untrusted reason=sentinel-readback source=hal-ext-cfg readback=0x{cpu_mask:08x}/0x{cpu_clear:08x}/0x{msi_mask:08x}/0x{msi_clear:08x}"
-                ),
-            );
-        }
-        boot_log::force_uart_line(line.as_str());
+fn mask_and_clear_pcie_irq_sources(status_page_virt: usize) -> Result<(), HalError> {
+    PCIE_IRQ_SOURCES_MASKED_PROVEN.store(0, Ordering::Release);
+    let (mask_set, clear, mask_status, status) = pcie_msi_irq_registers(status_page_virt)?;
+    boot_log::force_uart_line(
+        "[local-seat] vl805 bcm2711-pcie irq quiesce begin bank=msi mask=0x4510 clear=0x4508",
+    );
+    // Follow BCM2711 U-Boot setup after root reset/window admission: mask
+    // the dedicated MSI bank and clear pending sources. W1S/W1C aliases are
+    // commands, not readback state; flush through their status registers.
+    mmio_write_u32(mask_set, u32::MAX);
+    fence(Ordering::SeqCst);
+    let masked = mmio_read_u32(mask_status);
+    mmio_write_u32(clear, u32::MAX);
+    fence(Ordering::SeqCst);
+    let pending = mmio_read_u32(status);
+    fence(Ordering::SeqCst);
+    let trusted = pcie_irq_source_mask_readback_trusted(masked, pending);
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie irq sources masked proof={} bank=msi mask_status=0x{masked:08x} pending=0x{pending:08x} source=hal",
+            if trusted { "trusted" } else { "untrusted" },
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    if !trusted {
+        return Err(HalError::Unsupported("pcie-msi-irq-quiesce"));
     }
+    PCIE_IRQ_SOURCES_MASKED_PROVEN.store(1, Ordering::Release);
+    Ok(())
+}
+
+fn pcie_msi_irq_registers(page: usize) -> Result<(usize, usize, usize, usize), HalError> {
+    Ok((
+        same_page_reg_virt(page, BCM2711_PCIE_MSI_INTR2_MASK_SET)?,
+        same_page_reg_virt(page, BCM2711_PCIE_MSI_INTR2_CLR)?,
+        same_page_reg_virt(page, BCM2711_PCIE_MSI_INTR2_MASK_STATUS)?,
+        same_page_reg_virt(page, BCM2711_PCIE_MSI_INTR2_STATUS)?,
+    ))
 }
 
 #[inline]
-const fn pcie_irq_source_mask_readback_trusted(
-    cpu_mask: u32,
-    cpu_clear: u32,
-    msi_mask: u32,
-    msi_clear: u32,
-) -> bool {
-    cpu_mask != u32::MAX && cpu_clear != u32::MAX && msi_mask != u32::MAX && msi_clear != u32::MAX
+const fn pcie_irq_source_mask_readback_trusted(masked: u32, pending: u32) -> bool {
+    masked == u32::MAX && pending == 0
 }
 
 #[inline]
@@ -3106,20 +3108,38 @@ mod tests {
     }
 
     #[test]
-    fn pcie_irq_source_mask_proof_rejects_sentinel_readbacks() {
+    fn pcie_msi_registers_use_bcm2711_bank_and_separate_status() {
+        // BCM2711 MSI bank: W1S 0x4510, W1C 0x4508, mask 0x450c,
+        // pending 0x4500. The legacy STB bank at 0x4300 is not selected.
+        assert_eq!(
+            pcie_msi_irq_registers(0x6000_0000),
+            Ok((0x6000_0510, 0x6000_0508, 0x6000_050c, 0x6000_0500))
+        );
+        for invalid in [0, 1, 0x6000_0001] {
+            assert_eq!(
+                pcie_msi_irq_registers(invalid),
+                Err(HalError::Unsupported("pcie-reg-page-virt"))
+            );
+        }
+    }
+
+    #[test]
+    fn pcie_irq_source_mask_proof_requires_all_masked_and_none_pending() {
+        assert!(pcie_irq_source_mask_readback_trusted(0xffff_ffff, 0));
+        assert!(!pcie_irq_source_mask_readback_trusted(0, 0));
+        for bit in 0..32 {
+            assert!(!pcie_irq_source_mask_readback_trusted(
+                0xffff_ffff ^ (1 << bit),
+                0
+            ));
+            assert!(!pcie_irq_source_mask_readback_trusted(
+                0xffff_ffff,
+                1 << bit
+            ));
+        }
         assert!(!pcie_irq_source_mask_readback_trusted(
-            u32::MAX,
-            u32::MAX,
-            u32::MAX,
-            u32::MAX
-        ));
-        assert!(!pcie_irq_source_mask_readback_trusted(0, u32::MAX, 0, 0));
-        assert!(pcie_irq_source_mask_readback_trusted(0, 0, 0, 0));
-        assert!(pcie_irq_source_mask_readback_trusted(
-            0x0000_0001,
-            0,
-            0x0000_0002,
-            0
+            0xffff_ffff,
+            0xffff_ffff
         ));
     }
 

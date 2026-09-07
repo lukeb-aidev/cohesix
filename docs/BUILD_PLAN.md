@@ -10493,6 +10493,29 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact-b8e293bc9 shared PCIe bootstrap recovery — the user's WiFi and GENET
+    boots both halt with kernel SError at `0x624cc`, immediately following the
+    first write to legacy interrupt MASK_SET at `0xfd504310`. Preserve both
+    exact serial segments and the shared capture window in
+    `out/bench/b8e293bc9-failed-boots/baseline.json`; individual reset wall times
+    are unobserved and this is not a four-boot performance matrix. Restore the
+    workspace `z` compiler profile because root-only level `3` has no repeatable
+    dual-backend performance result. Keep the proven 1-MiB stack, occupied TLS
+    storage and nonzero PCIe cache-publication repairs. Match selected BCM2711
+    U-Boot setup: quiesce the dedicated MSI bank after root reset/window setup,
+    use command aliases only for writes and separate mask/pending status for
+    proof, never access the legacy STB bank as an additional MSI bank. Clear
+    the prior proof before an attempt and return typed errors for invalid
+    addresses or unsuccessful masking; retain endpoint interrupt suppression.
+    Add bounded begin/result receipts and exact register/status contracts;
+    compile and inspect the exact Pi image and stack before fresh hardware.
+    No MCS numerics, physical owner, manifest, ABI, protocol or workload change.
+    Full host-tool suite, Python library, generated contracts, raw/REST and
+    trace consumers require no implementation or schema changes; the private
+    HAL boot diagnostic fields are documented in DRIVERS. Discovery remains
+    `m26e-console-network-service-isolation` and
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`. Source qualification
+    cannot close SError recovery, GENET recovery or either performance target.
   - Exact-1894029de PCIe mapping publication repair — the unchanged two-WiFi,
     two-GENET matrix completes before edits. Both GENET boots prove code word
     `0x34` changes from `0x91002100` to PCIe BAR2 value `0x11` before network
@@ -10562,8 +10585,9 @@ Changes:
     These asynchronous session receipts motivate reducing root execution cost
     but cannot prove a particular request exhausted its SC. Re-evaluate speed
     optimization now that both backend boots pass the corrected stack layout:
-    the canonical Pi builder selects level `3` only for root-task, leaving
-    QEMU, child packages and dependencies at `z`. Preserve constructor logic,
+    the experiment selected level `3` only for root-task, leaving
+    QEMU, child packages and dependencies at `z`. The b8e recovery above retires
+    that experiment without a repeatable performance gain. Preserve constructor logic,
     all scheduling numerics, physical ownership, memory declarations and archive
     limits. Require exact Pi compilation, retained ELF/call-frame and image
     admission, then fresh raw and pressure hardware evidence before attributing

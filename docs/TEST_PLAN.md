@@ -1280,6 +1280,16 @@ host tests do not simulate physical mappings. Fresh Pi GENET evidence must
 retain unchanged text samples through construction and then establish a live
 TCP console before performance workloads. Keep WiFi and GENET boot evidence
 separate on the same exact image.
+For BCM2711 interrupt quiescence, independent register-layout tests bind the
+dedicated MSI command and status offsets, reject invalid page bases, and require
+all 32 mask bits set with no pending source. All-zero or all-one bus readbacks
+are not a successful paired proof. Inspect the exact Pi ELF to exclude legacy
+`0x4308`/`0x4310` accesses and reads from MSI W1S/W1C aliases. Fresh WiFi and
+GENET boots must pass the shared PCIe preparation boundary without a kernel
+SError before TCP is admitted. Preserve `KERNEL INVALID VECTOR ENTRY!`, SError,
+`halting...` and userspace fault receipts as terminal failures, not silent
+readiness timeouts. Returning to the workspace `z` build profile preserves the
+1-MiB stack/TLS/address repairs and requires a fresh emitted-frame review.
 Runtime
 tests must drive the retained Linux-ordered
 GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms

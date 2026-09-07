@@ -1988,6 +1988,21 @@ require a nonzero page-aligned virtual base; invalid bases return
 from turning PCIe register offsets into writes to low root text. Physical
 mapping, capability admission and the existing PCIe owner remain unchanged.
 
+BCM2711 HAL interrupt quiescence uses only the dedicated MSI bank at offset
+`0x4500`, matching the selected U-Boot controller setup. The older STB interrupt
+bank at `0x4300` is not a second MSI bank to mask. Perform quiescence after the
+root reset and inbound-window setup, or after proving an already-live root.
+Write all 32 bits to MASK_SET (`0x4510`) and CLEAR (`0x4508`); read MASK_STATUS
+(`0x450c`) and STATUS (`0x4500`) instead of reading the W1S/W1C command aliases.
+Publish the existing masked-source proof only for mask `0xffffffff` and no
+pending sources. Invalid addresses or a failed status check leave the proof
+false and return a typed HAL error. Endpoint INTx/MSI/MSI-X suppression remains
+part of the existing VL805 ownership proof. The bounded boot receipt identifies
+`bank=msi`, `mask_status` and `pending`; it grants no network acceptance.
+The selected source is `third_party/u-boot/drivers/pci/pcie_brcmstb.c`;
+[Linux v6.12 brcmstb](https://github.com/torvalds/linux/blob/v6.12/drivers/pci/controller/pcie-brcmstb.c)
+likewise selects one interrupt bank by controller revision.
+
 Diagnostics should make the owner state machine understandable without
 embedding a particular failure history in this document.
 
