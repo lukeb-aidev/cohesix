@@ -10505,6 +10505,12 @@ Changes:
     must never receive again. This is bounded by one poll and at most one wait,
     with the same 64-return/quantum caps, clock, cursor, SC and physical owners.
     There is no repeated notification drain, increased allowance or reset.
+    Require the existing identity-bound PCIe periodic wake before this GENET
+    receive, enabling it once if still Disarmed. The mixed fan-in can name
+    operator bytes not yet imported into root queues, and TCP backpressure
+    cannot strand their service. Observe absolute timer duty around the typed
+    enable and repeat the full exact debt/operator/recovery check afterwards;
+    a rejected timer retains ordinary arbitration. No timer interval changes.
     Test closure order, state-change rejection, endpoint retention and a second
     coalesced wake; qualify exact Pi layout and pinned QEMU root-MCS before
     fresh dual-mode raw/CPU/Yield/receive and functional/pressure comparison.

@@ -14261,6 +14261,32 @@ where
         ) == DirectGenetCausalFaninState::Wait
     }
 
+    /// Preserve physical-operator service while waiting on exact console debt.
+    /// A consumed fan-in may name bytes still held by a serial/USB child; the
+    /// root-owned queue fence alone cannot prove that publication empty. TCP
+    /// backpressure can also outlive this root turn. The existing PCIe timer
+    /// must therefore remain live, with all predicates repeated after its
+    /// once-only synchronous enable and the absolute timer-duty observation.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn prepare_pi_root_control_productive_child_wait(
+        &mut self,
+        expected: PiRootControlProductiveContinuation,
+    ) -> bool {
+        if !self.pi_root_control_productive_child_wait_eligible(expected) {
+            return false;
+        }
+        let exact_network_fanin_topology =
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                && self.selected_direct_genet_continuation_mode().is_some();
+        let _ = self.poll_runtime_timer_prelude_checked();
+        if !crate::hal::driver_task::ensure_pi_root_idle_timer_enabled(exact_network_fanin_topology)
+        {
+            return false;
+        }
+        let _ = self.poll_runtime_timer_prelude_checked();
+        self.pi_root_control_productive_child_wait_eligible(expected)
+    }
+
     /// Return whether the exact stage-bearing request already has durable
     /// child output ready for ordinary root observation.
     ///

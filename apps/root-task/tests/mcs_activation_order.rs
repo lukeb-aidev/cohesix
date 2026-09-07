@@ -738,7 +738,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("|pump| pump.poll_pi_root_control_receive()")
         .unwrap();
     let exact_recheck = genet_helper
-        .find("|pump, _| pump.pi_root_control_productive_child_wait_eligible(expected)")
+        .find("|pump, _| pump.prepare_pi_root_control_productive_child_wait(expected)")
         .expect("GENET must recheck the same exact debt after consuming the edge");
     let genet_wait = genet_helper
         .find("|pump| pump.wait_pi_root_control_receive()")
@@ -750,6 +750,39 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
             .count(),
         1
     );
+
+    let event = include_str!("../src/event/mod.rs");
+    let preparation_start = event
+        .find("pub(crate) fn prepare_pi_root_control_productive_child_wait(")
+        .expect("a consumed physical hint requires a live periodic operator wake");
+    let preparation_end = event[preparation_start..]
+        .find("/// Return whether the exact stage-bearing request")
+        .map(|offset| preparation_start + offset)
+        .unwrap();
+    let preparation = &event[preparation_start..preparation_end];
+    let first_debt = preparation
+        .find("self.pi_root_control_productive_child_wait_eligible(expected)")
+        .unwrap();
+    let first_timer = preparation
+        .find("self.poll_runtime_timer_prelude_checked()")
+        .unwrap();
+    let enable = preparation
+        .find("ensure_pi_root_idle_timer_enabled(")
+        .unwrap();
+    let final_timer = preparation
+        .rfind("self.poll_runtime_timer_prelude_checked()")
+        .unwrap();
+    let final_debt = preparation
+        .rfind("self.pi_root_control_productive_child_wait_eligible(expected)")
+        .unwrap();
+    assert!(
+        first_debt < first_timer
+            && first_timer < enable
+            && enable < final_timer
+            && final_timer < final_debt
+    );
+    assert!(preparation.contains("physical_pi_driver_task_only_owner_state_active()"));
+    assert!(preparation.contains("self.selected_direct_genet_continuation_mode().is_some()"));
 
     let steady_start = source
         .find("fn enter_root_console_loop<")

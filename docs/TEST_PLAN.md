@@ -2462,7 +2462,10 @@ prove all of the following:
   empty notifications/publications cannot renew it or reset the 64-quantum
   work bound, clock or causal-wait count. The exact GENET causal helper must
   poll once and recheck durable debt and all fences before at most one wait,
-  including when the first result is only a fan-in hint. A changed predicate
+  including when the first result is only a fan-in hint. Require exact physical
+  topology and the existing live PCIe periodic wake before the receive; cover
+  once-only enable, rejection, absolute timer-duty observation around enable
+  and fresh debt/operator/recovery checks after its typed Call. A changed predicate
   must suppress the wait; endpoint retention and unavailable Reply authority
   must suppress both recheck and wait. A second coalesced edge returns through
   outer arbitration, never an unbounded drain. WiFi's causal helper remains

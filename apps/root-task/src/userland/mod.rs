@@ -2315,7 +2315,7 @@ where
     pi_root_control_condition_before_causal_wait(
         pump,
         |pump| pump.poll_pi_root_control_receive(),
-        |pump, _| pump.pi_root_control_productive_child_wait_eligible(expected),
+        |pump, _| pump.prepare_pi_root_control_productive_child_wait(expected),
         |pump| pump.wait_pi_root_control_receive(),
     )
 }

@@ -313,7 +313,14 @@ an exact staged console response whose child-consumption or `OutputDrained`
 publication is still owed, root polls once. Direct GENET then rechecks
 that exact debt and every continuation fence after an empty or fan-in-only
 result; if they remain valid it receives once, without reissuing the peripheral
-rotor merely because a coalesced edge was present. A fresh durable child level
+rotor merely because a coalesced edge was present. Before that receive it
+requires the existing lifetime-bound PCIe periodic timer, using its once-only
+typed enable when Disarmed. Root observes absolute timer duty around enable
+and repeats exact debt and all fences after the Call. The periodic wake
+preserves physical-operator service even when the consumed edge named input
+still held by a child or TCP backpressure stalls the console. Timer rejection
+returns to existing arbitration; no interval or reservation changes.
+A fresh durable child level
 or closed fence returns to outer arbitration. An endpoint result has retained
 payload ownership and must never enter that second receive. A second edge
 returns through the outer rotor, never an inner notification-draining loop.
