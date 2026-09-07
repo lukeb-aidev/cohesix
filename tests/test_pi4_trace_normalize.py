@@ -981,6 +981,22 @@ def test_direct_genet_rows_have_no_network_or_acceptance_authority(
     )
 
 
+def test_root_recovery_callsite_is_passive_evidence() -> None:
+    """Root call sites and terminal operands never manufacture gate evidence."""
+    rows = [
+        "wifi: deferred_recovery scheduler_root site=000000030000341d "
+        "terminal=yes completion=0002/0000/00000010 "
+        "evidence=first-root-call+exact-terminal",
+        "wifi: deferred_recovery scheduler_root site=bad status=ready gate=10 detail=fault",
+    ]
+    events = normalizer.parse_events(rows)
+    assert [event.raw for event in events] == rows
+    assert all(event.fields["diagnostic"] == "passive-root-recovery" for event in events)
+    assert normalizer.summarize_gates(events).to_record() == (
+        normalizer.summarize_gates([]).to_record()
+    )
+
+
 def test_pair_handoff_rows_are_payload_not_boot_acceptance() -> None:
     """A complete-looking first-child trace cannot manufacture boot gates."""
     rows = [

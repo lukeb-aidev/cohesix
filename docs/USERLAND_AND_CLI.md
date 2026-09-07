@@ -141,6 +141,18 @@ load-fw`, and `wifi retry` spellings
 remain recognized only to return one typed linked-runtime ownership refusal;
 they do not invoke a debug callback, snapshot traversal, or physical operation.
 
+A retained recovery also emits `wifi: deferred_recovery scheduler_root`.
+Its 16-digit hexadecimal `site` packs a source tag in the upper 32 bits and
+an exact-build source line in the lower 32 bits: 1 = `hal/driver_task.rs`,
+2 = `drivers/driver_task_net.rs`, 3 = `event/mod.rs`, 4 = `userland/mod.rs`,
+15 = another source; zero is unavailable. It records the first root recovery
+request, including propagated retained-lease failures, and clears at accepted
+Gate 8. `terminal=yes` binds the hexadecimal code/detail/result triple to the
+exact root command sequence in the same retained scheduler tuple. With
+`terminal=no`, zeros mean unavailable. These are passive first-fault operands,
+not new fault, liveness or performance authority. The atomic recovery batch
+contains at most 13 rows; the compact eight-body-line `wifi diag` bound remains.
+
 `wifi rx-trace <0..5>` is serial/local-seat only. Supply exactly one ASCII digit
 from 0 through 5; invalid input returns
 `ERR WIFI reason=policy detail=rx-trace-page-required-0-through-5`.

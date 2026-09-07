@@ -16513,7 +16513,7 @@ where
             self.cyw43_bootstrap_hdmi_progress
                 .observe(1, frontier, self.now_ms);
         }
-        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 12>::new();
+        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 13>::new();
         if let Some(recovery) = recovery {
             for line in [
                 Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
@@ -16527,6 +16527,7 @@ where
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_root_line(recovery),
             ] {
                 if lines.push(line).is_err() {
                     return false;
@@ -27785,6 +27786,21 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_root_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler_root site={:016x} terminal={} completion={:04x}/{:04x}/{:08x} evidence=first-root-call+exact-terminal",
+            scheduler.root_recovery_callsite,
+            Self::yes_no(scheduler.child_terminal_observed),
+            scheduler.child_completion[0],
+            scheduler.child_completion[1],
+            scheduler.child_completion[2],
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_deferred_recovery_scheduler_edge_line(
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -29085,6 +29101,7 @@ where
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_root_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -30436,6 +30453,7 @@ where
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_root_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -42692,6 +42710,8 @@ mod tests {
                 root_doorbell_issued: true,
                 root_signal_returned: true,
                 root_parent_deadline_expired: true,
+                root_recovery_callsite: u64::MAX,
+                child_completion: [u32::MAX; 3],
                 child_terminal_observed: true,
                 child_wait_receipt_observed: true,
                 child_bus_episode_observed: true,
@@ -42856,6 +42876,7 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_root_line(recovery),
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(Some(owner)),
             KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(terminal),
@@ -42886,12 +42907,14 @@ mod tests {
         assert!(lines[5].contains(
             "request=4294967295 issued=yes accepted=yes finite_tx=yes join_tx_committed=yes"
         ));
-        assert!(lines[23].contains(
+        assert!(lines[24].contains(
             "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
         ));
-        assert!(lines[24].contains(
+        assert!(lines[25].contains(
             "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes join_tx_committed=yes"
         ));
+        assert!(lines[17]
+            .contains("site=ffffffffffffffff terminal=yes completion=ffffffff/ffffffff/ffffffff"));
         assert!(lines[6].contains(
             "refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown",
         ));
@@ -43004,10 +43027,10 @@ mod tests {
         assert!(lines[16].contains(
             "captured=yes host=ffffffff/ffffffff/ffffffff/ffffffff/ffffffff/ffffffff dma_tail=ffffffff/ffffffff/ffffffff"
         ));
-        assert!(lines[17].contains("active=yes generation=1"));
-        assert!(lines[17].contains("cmd=0x0000001a id=37"));
-        assert!(lines[19].contains("code=5 code_name=fault"));
-        assert!(lines[19].contains("detail=0x0001 detail_name=rejected-command"));
+        assert!(lines[18].contains("active=yes generation=1"));
+        assert!(lines[18].contains("cmd=0x0000001a id=37"));
+        assert!(lines[20].contains("code=5 code_name=fault"));
+        assert!(lines[20].contains("detail=0x0001 detail_name=rejected-command"));
         for (result, expected) in [
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
@@ -43056,14 +43079,14 @@ mod tests {
             control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
             "{control_fault_line}",
         );
-        assert!(lines[20].contains("offset=0 len=0"));
-        assert!(lines[21].contains("terminal=no owner_conflict=yes"));
-        assert!(lines[21].contains("owner_scope=root-logical-capture"));
-        assert!(lines[21].contains("owner_cmd=0x0000001a owner_id=37"));
-        assert!(lines[22].contains(
+        assert!(lines[21].contains("offset=0 len=0"));
+        assert!(lines[22].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[22].contains("owner_scope=root-logical-capture"));
+        assert!(lines[22].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[23].contains(
             "service_turns=4294967295 join_starts=4294967295 control_progress=ordinary-network-turn"
         ));
-        assert!(lines[18].contains("completion_sequence=3907 exact_request_match=yes"));
+        assert!(lines[19].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
             "wifi: logical_control_owner active=no",
@@ -58971,17 +58994,18 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_root_line(recovery),
         ];
         let retained: Vec<&str> = pump
             .pending_cyw43_bootstrap_serial_milestones
             .iter()
             .map(|line| line.as_str())
             .collect();
-        assert_eq!(retained.len(), 12);
-        for (actual, expected) in retained.iter().take(11).zip(expected.iter()) {
+        assert_eq!(retained.len(), 13);
+        for (actual, expected) in retained.iter().take(12).zip(expected.iter()) {
             assert_eq!(*actual, expected.as_str());
         }
-        assert_eq!(retained[11], pair_recovery);
+        assert_eq!(retained[12], pair_recovery);
 
         // Model the next PoisonGeneration teardown after the output
         // transaction is already retained. The causal snapshot and its queued

@@ -5180,6 +5180,8 @@ pub(crate) struct Cyw43FirstRecoverySchedulerSnapshot {
     pub(crate) root_doorbell_issued: bool,
     pub(crate) root_signal_returned: bool,
     pub(crate) root_parent_deadline_expired: bool,
+    pub(crate) root_recovery_callsite: u64,
+    pub(crate) child_completion: [u32; 3],
     pub(crate) child_terminal_observed: bool,
     pub(crate) child_wait_receipt_observed: bool,
     pub(crate) child_bus_episode_observed: bool,
@@ -5223,6 +5225,7 @@ struct Cyw43FirstRecoverySchedulerState {
     root_doorbell_issued: AtomicU32,
     root_signal_returned: AtomicU32,
     root_parent_deadline_expired: AtomicU32,
+    child_completion: [AtomicU32; 3],
     child_terminal_observed: AtomicU32,
     child_wait_receipt_observed: AtomicU32,
     child_bus_episode_observed: AtomicU32,
@@ -5266,6 +5269,7 @@ impl Cyw43FirstRecoverySchedulerState {
             root_doorbell_issued: AtomicU32::new(0),
             root_signal_returned: AtomicU32::new(0),
             root_parent_deadline_expired: AtomicU32::new(0),
+            child_completion: [const { AtomicU32::new(0) }; 3],
             child_terminal_observed: AtomicU32::new(0),
             child_wait_receipt_observed: AtomicU32::new(0),
             child_bus_episode_observed: AtomicU32::new(0),
@@ -6410,7 +6414,9 @@ pub fn cyw43_sdio_pair_restart_required() -> bool {
 /// subsystem lock use this seam to preserve fail-closed ordering; the normal
 /// recovery supervisor consumes the sticky request after that lock is released.
 #[cfg(feature = "kernel")]
+#[track_caller]
 pub fn request_cyw43_sdio_pair_restart() {
+    record_first_cyw43_root_recovery_callsite(core::panic::Location::caller());
     poison_cyw43_sdio_network_priority_lease_if_owned();
     latch_cyw43_sdio_pair_restart_request(Cyw43SdioPairRestartCause::RootRequest);
 }
@@ -6432,8 +6438,45 @@ pub(crate) fn record_cyw43_sdio_persistent_parent_invalid_cause() {
 /// This records evidence only. The caller must still commit its typed deferred
 /// recovery and use the single pair-restart seam immediately afterward.
 #[cfg(feature = "kernel")]
+#[track_caller]
 pub(crate) fn record_cyw43_sdio_root_request_cause() {
+    record_first_cyw43_root_recovery_callsite(core::panic::Location::caller());
     record_first_cyw43_sdio_pair_restart_cause(Cyw43SdioPairRestartCause::RootRequest);
+}
+
+// The root is the sole writer. One atomic word preserves the first request
+// call site even when the scheduler tuple was captured just before poisoning.
+// Gate 8 retires both records. This is provenance, never recovery authority.
+#[cfg(feature = "kernel")]
+static CYW43_FIRST_ROOT_RECOVERY_CALLSITE: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "kernel")]
+fn cyw43_root_recovery_callsite(file: &str, line: u32) -> u64 {
+    let source = if file.ends_with("hal/driver_task.rs") {
+        1u64
+    } else if file.ends_with("drivers/driver_task_net.rs") {
+        2
+    } else if file.ends_with("event/mod.rs") {
+        3
+    } else if file.ends_with("userland/mod.rs") {
+        4
+    } else {
+        15
+    };
+    (source << 32) | u64::from(line)
+}
+
+#[cfg(feature = "kernel")]
+fn record_first_cyw43_root_recovery_callsite(location: &core::panic::Location<'_>) {
+    let first_cause = CYW43_SDIO_PAIR_RESTART_FIRST_CAUSE.load(Ordering::Acquire);
+    if first_cause == 0 || first_cause == Cyw43SdioPairRestartCause::RootRequest as u32 {
+        let _ = CYW43_FIRST_ROOT_RECOVERY_CALLSITE.compare_exchange(
+            0,
+            cyw43_root_recovery_callsite(location.file(), location.line()),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
 }
 
 /// Return the immutable first recovery authority for passive diagnostics.
@@ -14433,9 +14476,11 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
             == root_command_sequence;
     let root_parent_deadline_expired = root_persistent_command
         && driver_task_persistent_transaction_lifetime_expired(slot) == Some(true);
-    let child_terminal_observed = root_command_sequence != 0
-        && driver_task_ring_stable_completion_snapshot(ring_root_ptr)
-            .is_some_and(|completion| completion.sequence == root_command_sequence);
+    let child_completion = (root_command_sequence != 0)
+        .then(|| driver_task_ring_stable_completion_snapshot(ring_root_ptr))
+        .flatten()
+        .filter(|completion| completion.sequence == root_command_sequence);
+    let child_terminal_observed = child_completion.is_some();
     let child_wait_receipt_observed = root_command.is_some_and(|command| {
         driver_task_ring_read_persistent_wait_receipt(ring_root_ptr).is_some_and(|receipt| {
             receipt.request_sequence == command.sequence
@@ -14498,6 +14543,20 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     CYW43_FIRST_RECOVERY_SCHEDULER
         .root_parent_deadline_expired
         .store(u32::from(root_parent_deadline_expired), Ordering::Relaxed);
+    for (target, value) in
+        CYW43_FIRST_RECOVERY_SCHEDULER
+            .child_completion
+            .iter()
+            .zip(child_completion.map_or([0; 3], |completion| {
+                [
+                    u32::from(completion.code),
+                    u32::from(completion.detail),
+                    completion.result,
+                ]
+            }))
+    {
+        target.store(value, Ordering::Relaxed);
+    }
     CYW43_FIRST_RECOVERY_SCHEDULER
         .child_terminal_observed
         .store(u32::from(child_terminal_observed), Ordering::Relaxed);
@@ -14674,6 +14733,10 @@ pub(crate) fn first_cyw43_recovery_scheduler_snapshot(
             .root_parent_deadline_expired
             .load(Ordering::Relaxed)
             != 0,
+        root_recovery_callsite: CYW43_FIRST_ROOT_RECOVERY_CALLSITE.load(Ordering::Acquire),
+        child_completion: core::array::from_fn(|index| {
+            CYW43_FIRST_RECOVERY_SCHEDULER.child_completion[index].load(Ordering::Relaxed)
+        }),
         child_terminal_observed: CYW43_FIRST_RECOVERY_SCHEDULER
             .child_terminal_observed
             .load(Ordering::Relaxed)
@@ -14768,6 +14831,7 @@ pub(crate) fn clear_first_cyw43_recovery_scheduler_snapshot() {
             Ordering::Acquire,
         );
     }
+    CYW43_FIRST_ROOT_RECOVERY_CALLSITE.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_RESTART_FIRST_CAUSE.store(0, Ordering::Release);
 }
 
@@ -15139,6 +15203,7 @@ fn driver_task_retained_contract_owns_pair_recovery(contract: DriverTaskContract
 /// a full pair restart creates an unbounded recovery amplifier. A non-pair
 /// request that crossed the sequence issue boundary remains locally poisoned.
 #[cfg(feature = "kernel")]
+#[track_caller]
 fn fail_driver_task_retained_priority_lease(
     slot: &DriverTaskCommandSlot,
     contract: DriverTaskContract,
@@ -35520,6 +35585,57 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn first_recovery_root_callsite_and_exact_terminal_are_passive() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("recovery evidence lock");
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+        assert_eq!(
+            CYW43_FIRST_ROOT_RECOVERY_CALLSITE.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            cyw43_root_recovery_callsite("apps/root-task/src/event/mod.rs", 42),
+            0x0000_0003_0000_002a
+        );
+        assert_eq!(
+            cyw43_root_recovery_callsite("apps/root-task/src/drivers/driver_task_net.rs", 7),
+            0x0000_0002_0000_0007
+        );
+        assert_eq!(
+            cyw43_root_recovery_callsite("apps/root-task/src/userland/mod.rs", 9),
+            0x0000_0004_0000_0009
+        );
+        assert_eq!(
+            cyw43_root_recovery_callsite("unknown", u32::MAX),
+            0x0000_000f_ffff_ffff
+        );
+        let mut ring = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / 4],
+        ));
+        seed_first_recovery_scheduler_root(ring.0.as_mut_ptr() as usize, 610, 1, 0);
+        let completion = DRIVER_TASK_RING_COMPLETION_OFFSET / 4;
+        // Independent ABI words: exact request, detail 0x1234/code 2, result.
+        ring.0[completion..completion + 3].copy_from_slice(&[610, 0x1234_0002, 0x89ab_cdef]);
+        let line = line!() + 1;
+        request_cyw43_sdio_pair_restart();
+        let first = first_cyw43_recovery_scheduler_snapshot().expect("committed first fault");
+        assert!(first.child_terminal_observed);
+        assert_eq!(first.child_completion, [2, 0x1234, 0x89ab_cdef]);
+        assert_eq!(first.root_recovery_callsite, (1u64 << 32) | u64::from(line));
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        assert_eq!(first_cyw43_recovery_scheduler_snapshot(), Some(first));
+        reset_cyw43_sdio_pair_recovery_for_test();
+        assert_eq!(
+            CYW43_FIRST_ROOT_RECOVERY_CALLSITE.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(first_cyw43_recovery_scheduler_snapshot(), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn first_recovery_scheduler_snapshot_survives_poison_scrub_and_second_fault() {
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
             .lock()
@@ -35570,6 +35686,7 @@ mod tests {
         first_ring.0[22] = 0x3101_0001;
         assert_eq!(driver_task_pair_handoff_snapshot(), [None, None]);
         first_ring.0[22] = trace_words[1];
+        let first_request_line = line!() + 1;
         request_cyw43_sdio_pair_restart();
         assert_eq!(
             cyw43_sdio_network_priority_lease_snapshot().phase,
@@ -35597,6 +35714,11 @@ mod tests {
         assert!(retained.root_doorbell_issued);
         assert!(retained.root_signal_returned);
         assert!(!retained.root_parent_deadline_expired);
+        assert_eq!(
+            retained.root_recovery_callsite,
+            (1u64 << 32) | u64::from(first_request_line)
+        );
+        assert_eq!(retained.child_completion, [0; 3]);
         assert!(!retained.child_terminal_observed);
         assert!(!retained.child_wait_receipt_observed);
         assert!(!retained.child_bus_episode_observed);

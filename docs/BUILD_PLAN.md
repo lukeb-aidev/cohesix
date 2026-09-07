@@ -10493,6 +10493,20 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact-6f26 first WiFi recovery provenance — four unchanged boots retain
+    WiFi raw passes at 26.984/29.039 requests/s and GENET latency failures at
+    8.134/5.995 ms p95. W01 then loses QUIT after successful AUTH/HELP/TAIL;
+    root remains live while the pair quarantines. Preserve the first root
+    recovery call site and exact CYW43 completion before scrub, without changing
+    any owner, recovery decision, deadline, scheduling number or physical path.
+    Emit one bounded passive `scheduler_root` row in the existing recovery
+    transaction and verbose snapshot. The full host-tool suite, Python SDK,
+    generated interfaces and raw/REST workloads require no contract change;
+    the trace normalizer preserves this diagnostic without gate authority.
+    Require first-wins/reset, exact-sequence, complete bounded-output checks,
+    exact Pi layout qualification and fresh physical fault evidence before a
+    behavioral repair. Discovery: `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`
+    and `m26e-console-network-service-isolation`.
   - GENET productive-progress wake recheck — after the unchanged `223133490`
     dual-mode comparison, renew one nonblocking fan-in race allowance only
     when a private exact productive continuation is successfully consumed.

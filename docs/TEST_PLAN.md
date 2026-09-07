@@ -2428,6 +2428,14 @@ prove all of the following:
   `wifi_post_dhcp_rx` coverage must increment exactly once at each actual
   smoltcp delivery boundary and must prove that trace-only `rx-preserve` and
   `rx-deliver` observations do not double-count one frame.
+- First root pair-recovery provenance must retain the exact call-site word
+  through later faults and transport scrub, clear it only with the existing
+  accepted-Gate-8 first-fault reset, and bind completion code/detail/result to
+  an exact stable command sequence. Unknown or absent terminals are unavailable,
+  never zero-valued successful device operations. Cover maximum-width
+  `scheduler_root` output and the complete 13-row atomic recovery transaction;
+  preserve the compact diagnostic limit and every existing recovery predicate.
+  Host-tool and benchmark consumers treat the row as passive evidence only.
 - Cached packet/poll diagnostic coverage must preserve repeated SYN/data
   identities, exclude pure ACK/payload storage, expose 96-entry eviction and
   generation/flow replacement, and distinguish missing timestamp metadata from
