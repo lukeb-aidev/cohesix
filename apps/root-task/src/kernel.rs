@@ -4701,6 +4701,20 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line(
             "[critical] root-control accounted; six restricted TCBs constructed suspended",
         );
+        #[cfg(feature = "release-pi4")]
+        {
+            crate::sel4::complete_bootstrap_ipc_trace();
+            crate::hal::critical_tcb::activate_bootstrap_fault_receivers(&runtime).map_err(
+                |error| {
+                    BootError::Fatal(format!(
+                        "bootstrap fault/emergency receivers failed to activate: {error:?}"
+                    ))
+                },
+            )?;
+            boot_log::force_uart_line(
+                "[critical] bootstrap fault/emergency receivers active registry=unsealed recovery=disabled",
+            );
+        }
         Box::leak(Box::new(runtime))
     };
     #[cfg(sel4_config_kernel_mcs)]
@@ -5652,6 +5666,8 @@ fn bootstrap<P: Platform>(
             // Every restricted duty below is now charged to its generated SC.
             // Keep the IPC readiness guard active, but end synchronous UART
             // breadcrumbs before they can consume a child's steady budget.
+            // Pi already closed this trace before its early fault receivers.
+            #[cfg(not(feature = "release-pi4"))]
             crate::sel4::complete_bootstrap_ipc_trace();
             crate::hal::critical_tcb::activate_critical_tcb_runtime(critical_runtime).map_err(
                 |error| {

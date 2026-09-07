@@ -64,6 +64,44 @@ fn pi_genet_boot_cuts_distinguish_proof_return_from_stack_success() {
 }
 
 #[test]
+fn pi_genet_constructor_receipts_are_ordered_and_physical_owner_gated() {
+    // A success receipt follows its own fallible boundary, and the shared
+    // constructor must not emit GENET evidence for the WiFi adapter.
+    let mut cursor = STACK_SOURCE.find("pub fn new<H>(").unwrap();
+    for (operation, receipt) in [
+        ("NetStackInitGuard::begin", "cut=init-guard.ok"),
+        ("Box::new(D::create_with_stage", "cut=device-allocation.ok"),
+        ("StorageReservation::acquire", "cut=storage-reservation.ok"),
+        ("let mut stack = Box::new(Self", "cut=stack-allocation.ok"),
+        ("stack.initialise_socket()?", "cut=tcp-sockets.ok"),
+    ] {
+        let operation = STACK_SOURCE[cursor..].find(operation).unwrap() + cursor;
+        let receipt = STACK_SOURCE[operation..].find(receipt).unwrap() + operation;
+        assert!(operation < receipt);
+        assert_eq!(
+            STACK_SOURCE[..receipt]
+                .rsplit_once("#[cfg(")
+                .unwrap()
+                .1
+                .lines()
+                .next(),
+            Some("all(feature = \"release-pi4\", feature = \"bootstrap-trace\"))]"),
+        );
+        cursor = receipt;
+    }
+    let helper = STACK_SOURCE
+        .split_once("fn trace_genet_constructor_cut(")
+        .unwrap()
+        .1;
+    let helper = helper.split_once("fn add_icmp_echo_socket(").unwrap().0;
+    assert!(helper.contains(
+        "if D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT"
+    ));
+    assert_eq!(helper.matches("force_uart_line_raw(line)").count(), 1);
+    assert!(!helper.contains("backend"));
+}
+
+#[test]
 fn direct_genet_final_sleep_check_adopts_only_durable_physical_work() {
     let adopt = RUNTIME_SOURCE
         .find("fn genet_runtime_adopt_direct_level")

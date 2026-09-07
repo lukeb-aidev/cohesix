@@ -7334,11 +7334,15 @@ totals, a zero-object NineDoor SC inventory, or double-counting the one-shot
 object must fail.
 
 The critical topology tests must account for the init TCB exactly once as the
-real `root-control` domain and exactly four distinct restricted children:
+real `root-control` domain and exactly six distinct restricted children:
 `root-fault`, `root-emergency`, `root-worker-supervisor`, and
-`root-driver-supervisor`. Reject a duplicate, phantom fifth control child,
+`root-driver-supervisor`, plus the GPU and LoRA Worker executor duties. Reject
+a duplicate, phantom seventh restricted child,
 missing kernel object, shared child CNode/TCB/SC/Reply/retention cap, wrong core,
-idle/trampoline entrypoint, or activation before registry seal. Critical
+idle/trampoline entrypoint, or service/recovery activation before registry seal.
+Only Pi's existing root-fault and root-emergency receivers may start early for
+the unsealed bootstrap fail-stop reporting contract below; QEMU retains sealed
+activation for every restricted duty. Critical
 permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU compiler fixture must assert root-control remains on core 0 with
 `9000 us / 10000 us`, `8500 us` WCET, `8500 us` response, and
@@ -8717,8 +8721,19 @@ and non-VirtIO/Pi phase behavior must remain unchanged. A complete idle line
 immediately before a root-control timeout at the outer yield is a failed QEMU
 phase, not qualification evidence.
 The source-order regression must additionally prove that the bounded
-synchronous bootstrap IPC trace completes after registry seal and before any
-restricted child activation. It must reject root-control temporal activation
+synchronous bootstrap IPC trace completes before any restricted receiver runs:
+after registry seal on QEMU, or before Pi's early fault/emergency activation.
+Pi must start only those two existing receivers before fallible device/service
+construction; every Worker/service activation and every registry-based recovery
+still requires the complete seal. Unsealed fault reporting must preserve copied
+badge/label/length/MR0..MR3, suppress absent registers, latch fatal state, and
+emit at most sixteen raw bytes per replenished turn without logging/registry
+locks, normal output queues, heap allocation, or a Reply. A failed early resume
+must roll back already-resumed receivers or latch fatal state. The later
+activation must consume the early activation once without resuming either
+receiver again. Fresh Pi fault evidence is required to prove this path; a
+successful QEMU boot preserves its unchanged late activation only.
+It must reject root-control temporal activation
 from kernel bootstrap: the one HAL transition is guarded in userland and may be
 called only at the serial console, deferred-network supervisor, or non-serial
 pump event-loop seam. After the successful MCS bind and timeout-endpoint setup,

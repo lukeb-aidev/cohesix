@@ -265,6 +265,8 @@ static TARGET_WORKER_CONTROL: WorkerControlQueue = WorkerControlQueue::new();
 static TARGET_FAULT_REGISTRY: Mutex<FaultRegistry> = Mutex::new(FaultRegistry::new());
 static TARGET_FAULT_REGISTRY_SEALED: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_RECEIVER_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "release-pi4")]
+static TARGET_BOOTSTRAP_FAULT_RECEIVERS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TARGET_FATAL: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static TARGET_RECOVERED_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
@@ -1189,6 +1191,9 @@ pub fn replace_target_fault_source(
 
 /// Seal the target registry after all critical/service/Worker/driver TCBs exist.
 pub fn seal_target_fault_registry() -> Result<(), CriticalTcbConstructionError> {
+    if TARGET_FATAL.load(Ordering::Acquire) {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
     if TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
         return Err(CriticalTcbConstructionError::RegistrySealed);
     }
@@ -1335,11 +1340,47 @@ pub(crate) fn target_any_service_fault_pending() -> Result<bool, CriticalTcbCons
     .map_err(CriticalTcbConstructionError::FaultHandoff)
 }
 
-/// Resume all six restricted duties only after exact registry construction.
+/// Start only the existing Pi fault/emergency receivers before fallible device
+/// and service construction. An unsealed fault is terminal: it never consults
+/// the mutable registry or attempts service recovery.
+#[cfg(feature = "release-pi4")]
+pub fn activate_bootstrap_fault_receivers(
+    runtime: &CriticalTcbRuntime,
+) -> Result<(), CriticalTcbConstructionError> {
+    if TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire)
+        || TARGET_FATAL.load(Ordering::Acquire)
+        || runtime.handles[1].id != ROOT_FAULT_ID
+        || runtime.handles[2].id != ROOT_EMERGENCY_ID
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    TARGET_FAULT_RECEIVER_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    for index in 1..3 {
+        if let Err(error) = sel4::resume_tcb(runtime.handles[index].tcb_cap as seL4_CPtr) {
+            let mut rollback_complete = true;
+            for prior in 1..index {
+                rollback_complete &=
+                    sel4::suspend_tcb(runtime.handles[prior].tcb_cap as seL4_CPtr).is_ok();
+            }
+            if rollback_complete {
+                TARGET_FAULT_RECEIVER_ACTIVE.store(false, Ordering::Release);
+            } else {
+                TARGET_FATAL.store(true, Ordering::Release);
+            }
+            return Err(sel4_error("critical.bootstrap-receiver-resume", error));
+        }
+    }
+    TARGET_BOOTSTRAP_FAULT_RECEIVERS_ACTIVE.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// Resume the remaining restricted duties only after exact registry construction.
 ///
 /// The init/root-control TCB retains its bootstrap scheduling context until
 /// userland has finished construction and is about to enter the steady event
-/// loop. Applying its generated 2.75 ms budget here would charge remaining
+/// loop. Applying its generated steady budget here would charge remaining
 /// bootstrap work to a steady-state WCET contract and can trigger a legitimate
 /// timeout before the runtime boundary exists.
 pub fn activate_critical_tcb_runtime(
@@ -1351,12 +1392,25 @@ pub fn activate_critical_tcb_runtime(
     if TARGET_FATAL.load(Ordering::Acquire) {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
-    TARGET_FAULT_RECEIVER_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    #[cfg(feature = "release-pi4")]
+    let first_child = if TARGET_BOOTSTRAP_FAULT_RECEIVERS_ACTIVE.swap(false, Ordering::AcqRel) {
+        if !TARGET_FAULT_RECEIVER_ACTIVE.load(Ordering::Acquire) {
+            return Err(CriticalTcbConstructionError::RuntimeNotReady);
+        }
+        3
+    } else {
+        1
+    };
+    #[cfg(not(feature = "release-pi4"))]
+    let first_child = 1;
+    if first_child == 1 {
+        TARGET_FAULT_RECEIVER_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    }
     #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
     cohesix_critical_runtime_qemu_evidence_arm();
-    for index in 1..CRITICAL_TCB_COUNT {
+    for index in first_child..CRITICAL_TCB_COUNT {
         let tcb = runtime.handles[index].tcb_cap as seL4_CPtr;
         if let Err(error) = sel4::resume_tcb(tcb) {
             let mut rollback_complete = true;
@@ -1758,6 +1812,35 @@ fn target_fail_stop(reason: &'static str, emergency_cap: Option<seL4_CPtr>) -> !
     crate::debug_uart::debug_uart_line(reason);
     if let Some(cap) = emergency_cap.filter(|cap| *cap != sel4_sys::seL4_CapNull) {
         sel4::signal_unchecked(cap);
+    }
+    loop {
+        sel4::yield_now();
+    }
+}
+
+/// A bootstrap fault may interrupt a logger or registry lock owner. Print only
+/// copied fault operands through the kernel debug sink, in sixteen-byte turns
+/// with an explicit replenishment boundary before every chunk. No registry,
+/// heap, normal log queue, device operation, or fault Reply is used here.
+#[cfg(feature = "release-pi4")]
+fn bootstrap_fault_fail_stop(
+    receiver: &'static str,
+    badge: seL4_Word,
+    label: seL4_Word,
+    length: seL4_Word,
+    registers: [seL4_Word; 4],
+) -> ! {
+    TARGET_FATAL.store(true, Ordering::Release);
+    let line = crate::critical_tcb::bootstrap_fault_line(
+        receiver == ROOT_EMERGENCY_ID,
+        badge,
+        label,
+        length,
+        registers,
+    );
+    for chunk in line.as_bytes().chunks(16) {
+        sel4::yield_now();
+        sel4::debug_put_bytes_unlocked(chunk);
     }
     loop {
         sel4::yield_now();
@@ -2332,6 +2415,7 @@ fn handle_target_fault(
 }
 
 extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
+    #[cfg(not(feature = "release-pi4"))]
     if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
         target_fail_stop(
             "[critical] root-fault started before exact registry seal",
@@ -2357,6 +2441,16 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 let mut badge = 0;
                 let (info, message_registers) =
                     sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+                #[cfg(feature = "release-pi4")]
+                if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
+                    bootstrap_fault_fail_stop(
+                        "root-fault",
+                        badge,
+                        info.label(),
+                        info.length(),
+                        message_registers,
+                    );
+                }
                 let fault_length = info.length().min(seL4_Word::from(u16::MAX)) as u16;
                 // Only copied message values cross this refill boundary. The
                 // single Reply object stays in its fixed child CSpace slot,
@@ -2604,7 +2698,19 @@ extern "C" fn root_emergency_entry(_arg0: seL4_Word) -> ! {
     #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
     cohesix_root_emergency_qemu_evidence_wait();
     let mut badge = 0;
-    let _ = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+    let (info, registers) = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+    #[cfg(feature = "release-pi4")]
+    if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
+        bootstrap_fault_fail_stop(
+            "root-emergency",
+            badge,
+            info.label(),
+            info.length(),
+            registers,
+        );
+    }
+    #[cfg(not(feature = "release-pi4"))]
+    let _ = (info, registers);
     target_fail_stop("[critical] root-emergency fail-stop", None)
 }
 

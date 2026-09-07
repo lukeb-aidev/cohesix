@@ -4109,6 +4109,10 @@ impl<D: NetDevice> NetStack<D> {
         H: Hardware<Error = HalError>,
     {
         let init_guard = NetStackInitGuard::begin::<D::Error>(NET_INIT_TAG)?;
+        #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+        Self::trace_genet_constructor_cut(
+            "[diag net-bootstrap/v1] backend=genet cut=init-guard.ok",
+        );
         info!("[net-console] init: constructing smoltcp stack");
         debug_assert_ne!(config.listen_port, 0, "TCP console port must be non-zero");
         if cfg!(feature = "dev-virt") && backend.uses_dev_virt_defaults() {
@@ -4208,6 +4212,10 @@ impl<D: NetDevice> NetStack<D> {
             .validate()
             .map_err(|err| NetStackError::DriverTaskContract(err.reason()))?;
         let mut device = Box::new(D::create_with_stage(hal, &console_config, stage)?);
+        #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+        Self::trace_genet_constructor_cut(
+            "[diag net-bootstrap/v1] backend=genet cut=device-allocation.ok",
+        );
         BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
         let mac = device.mac();
         let bringup_status = device.bringup_status_label().unwrap_or("ready");
@@ -4231,6 +4239,10 @@ impl<D: NetDevice> NetStack<D> {
             &attempt,
             attempt.tag,
         )?;
+        #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+        Self::trace_genet_constructor_cut(
+            "[diag net-bootstrap/v1] backend=genet cut=storage-reservation.ok",
+        );
         BOOTINFO_WINDOW_GUARD.check("net.init.storage.post");
 
         let init_now_ms = crate::hal::timebase().now_ms();
@@ -4377,12 +4389,20 @@ impl<D: NetDevice> NetStack<D> {
             time_stall_warned: false,
             budgeted_phase: BudgetedNetPhase::Interface,
         });
+        #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+        Self::trace_genet_constructor_cut(
+            "[diag net-bootstrap/v1] backend=genet cut=stack-allocation.ok",
+        );
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
         stack.initialise_icmp_echo_socket()?;
         if stage_policy.allow_tcp {
             stack.initialise_socket()?;
         }
+        #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+        Self::trace_genet_constructor_cut(
+            "[diag net-bootstrap/v1] backend=genet cut=tcp-sockets.ok",
+        );
         if dhcp_enabled {
             stack.initialise_dhcp_socket()?;
             let _ = stack.start_dhcp_if_ready(init_now_ms);
@@ -4414,6 +4434,15 @@ impl<D: NetDevice> NetStack<D> {
         log_bootinfo_mark("net.init.post", &attempt)?;
         init_guard.commit_online();
         Ok(stack)
+    }
+
+    /// Bootstrap-only cuts distinguish a fault from a still-running constructor
+    /// without adding sampling or authority to either steady network path.
+    #[cfg(all(feature = "release-pi4", feature = "bootstrap-trace"))]
+    fn trace_genet_constructor_cut(line: &'static str) {
+        if D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT {
+            crate::bootstrap::log::force_uart_line_raw(line);
+        }
     }
 
     fn add_icmp_echo_socket(&mut self) {

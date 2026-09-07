@@ -34,6 +34,72 @@ pub const CRITICAL_TCB_COUNT: usize = 7;
 /// seL4 supplies two base replenishments; manifests record the total bound.
 pub const MCS_BASE_REFILLS: u8 = 2;
 
+/// Complete bootstrap-fault text from copied kernel operands. The longest
+/// receiver name and seven maximum-width u64 values require 259 bytes including
+/// CRLF, so 320 bytes retains the terminal action without truncation. Registers
+/// beyond the reported message length are never presented as fault evidence.
+#[cfg(any(test, feature = "release-pi4"))]
+pub(crate) fn bootstrap_fault_line(
+    emergency: bool,
+    badge: u64,
+    label: u64,
+    length: u64,
+    registers: [u64; 4],
+) -> heapless::String<320> {
+    use core::fmt::Write as _;
+    let mut line = heapless::String::new();
+    let _ = write!(
+        line,
+        "[critical:bootstrap-fault/v1] receiver={} badge=0x{:x} label={} len={} mr0=0x{:x} mr1=0x{:x} mr2=0x{:x} mr3=0x{:x} registry=unsealed action=fail-stop\r\n",
+        if emergency { "root-emergency" } else { "root-fault" },
+        badge,
+        label,
+        length,
+        if length > 0 { registers[0] } else { 0 },
+        if length > 1 { registers[1] } else { 0 },
+        if length > 2 { registers[2] } else { 0 },
+        if length > 3 { registers[3] } else { 0 },
+    );
+    line
+}
+
+#[cfg(test)]
+mod bootstrap_fault_tests {
+    use super::bootstrap_fault_line;
+
+    #[test]
+    fn maximum_fault_operands_retain_every_field_and_terminal_action() {
+        let line = bootstrap_fault_line(true, u64::MAX, u64::MAX, u64::MAX, [u64::MAX; 4]);
+        assert_eq!(line.len(), 259);
+        assert_eq!(
+            line.as_str(),
+            concat!(
+                "[critical:bootstrap-fault/v1] receiver=root-emergency ",
+                "badge=0xffffffffffffffff label=18446744073709551615 len=18446744073709551615 ",
+                "mr0=0xffffffffffffffff mr1=0xffffffffffffffff ",
+                "mr2=0xffffffffffffffff mr3=0xffffffffffffffff ",
+                "registry=unsealed action=fail-stop\r\n",
+            )
+        );
+    }
+
+    #[test]
+    fn short_fault_messages_cannot_export_stale_registers() {
+        for (length, expected) in [
+            (0, "mr0=0x0 mr1=0x0 mr2=0x0 mr3=0x0"),
+            (1, "mr0=0x11 mr1=0x0 mr2=0x0 mr3=0x0"),
+            (2, "mr0=0x11 mr1=0x22 mr2=0x0 mr3=0x0"),
+            (3, "mr0=0x11 mr1=0x22 mr2=0x33 mr3=0x0"),
+            (4, "mr0=0x11 mr1=0x22 mr2=0x33 mr3=0x44"),
+        ] {
+            let line = bootstrap_fault_line(false, 1, 5, length, [0x11, 0x22, 0x33, 0x44]);
+            assert!(line.starts_with("[critical:bootstrap-fault/v1] receiver=root-fault "));
+            assert!(line.contains(expected));
+            assert!(line.ends_with(" registry=unsealed action=fail-stop\r\n"));
+        }
+    }
+}
+
 const REQUIRED_CRITICAL_TCBS: [&str; CRITICAL_TCB_COUNT] = [
     "root-control",
     "root-fault",

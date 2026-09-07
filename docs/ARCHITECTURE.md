@@ -228,8 +228,13 @@ The init TCB is the generated `root-control` owner and runs the authoritative
 event loop. Root constructs six restricted active-SC children for root-fault,
 root-emergency, Worker supervision, driver supervision, and the two bounded
 passive-Worker executor lanes. The generated
-fault registry is sealed before any service or Worker child resumes; root-fault
-then becomes the sole receiver on one shared standard/timeout fault endpoint.
+fault registry is sealed before any service or Worker child resumes. On Pi,
+the existing root-fault and root-emergency receivers start immediately after
+their own construction, before device and network-stack construction. An
+unsealed fault latches fatal state and reports the copied badge, label, length
+and four message registers in bounded raw UART chunks; it cannot consult the
+mutable registry, reply, or invoke recovery. QEMU retains activation after
+sealing. Root-fault is the sole receiver on one shared standard/timeout fault endpoint.
 It blocks in `Recv` with one Reply object and resolves the exact badge and class
 against the sealed registry after receive. The selected console child retains
 its reserved timeout identity in that topology but does not install it as a TCB

@@ -47,6 +47,15 @@ window fail closed. Image-size changes must not let an earlier constructor
 consume a later service's anchor; constructor order does not confer ownership
 of another service's reserved slot.
 
+On Pi, the existing root-fault and root-emergency receivers start immediately
+after their construction, before fallible device and network construction.
+Until the exact fault registry is sealed, either receiver can only report the
+copied kernel fault operands and fail stop; it cannot inspect mutable registry
+state, recover a service, or Reply to the fault. Fatal output uses bounded raw
+UART chunks independent of ordinary logging locks and queues. The remaining
+restricted duties and all service/Worker recovery retain the registry seal
+prerequisite. QEMU retains sealed activation for every restricted duty.
+
 Ordinary Worker service drains its existing bounded immediate fault/policy
 work, then snapshots the claimed-slot bitmap under the existing projection
 lock. It checks every claimed slot in manifest order using that call's time

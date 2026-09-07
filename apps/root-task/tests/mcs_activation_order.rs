@@ -55,10 +55,14 @@ fn qemu_children_seal_before_any_service_activation() {
         "activate_target_service()",
         "activate_console_network_child()",
     ];
+    let mut after = 0;
     let positions = markers.map(|marker| {
-        source
+        let position = source[after..]
             .find(marker)
-            .unwrap_or_else(|| unreachable!("kernel boot path must contain {marker}"))
+            .map(|offset| after + offset)
+            .unwrap_or_else(|| unreachable!("kernel boot path must contain {marker}"));
+        after = position + marker.len();
+        position
     });
     assert!(
         positions.windows(2).all(|pair| pair[0] < pair[1]),
@@ -1206,8 +1210,9 @@ fn bootstrap_ipc_trace_finishes_before_restricted_children_run() {
     let seal = source
         .find("seal_target_fault_registry()")
         .expect("kernel boot path must seal the exact fault registry");
-    let trace_complete = source
+    let trace_complete = source[seal..]
         .find("complete_bootstrap_ipc_trace()")
+        .map(|offset| seal + offset)
         .expect("kernel boot path must close the synchronous bootstrap IPC trace");
     let restricted_activation = source
         .find("activate_critical_tcb_runtime(critical_runtime)")
@@ -1215,14 +1220,86 @@ fn bootstrap_ipc_trace_finishes_before_restricted_children_run() {
 
     assert_eq!(
         source.matches("complete_bootstrap_ipc_trace()").count(),
-        1,
-        "bootstrap IPC trace completion must remain a single boot boundary",
+        2,
+        "Pi and QEMU have separate guarded trace-completion boundaries",
     );
     assert!(
         seal < trace_complete && trace_complete < restricted_activation,
         "bootstrap IPC trace must finish after registry seal and before restricted activation: \
          seal={seal}, trace_complete={trace_complete}, activation={restricted_activation}",
     );
+    assert!(source[..trace_complete]
+        .ends_with("#[cfg(not(feature = \"release-pi4\"))]\n            crate::sel4::",));
+    let pi_start = source.find("#[cfg(feature = \"release-pi4\")]\n        {\n            crate::sel4::complete_bootstrap_ipc_trace()").unwrap();
+    let pi_activate = source[pi_start..]
+        .find("activate_bootstrap_fault_receivers(&runtime)")
+        .unwrap()
+        + pi_start;
+    assert!(pi_start < pi_activate && pi_activate < seal);
+}
+
+#[test]
+fn pi_bootstrap_receivers_do_not_admit_unsealed_service_recovery() {
+    let source = include_str!("../src/hal/critical_tcb.rs");
+    let start = source
+        .find("pub fn activate_bootstrap_fault_receivers(")
+        .unwrap();
+    let end = source[start..]
+        .find("pub fn activate_critical_tcb_runtime(")
+        .unwrap()
+        + start;
+    let early = &source[start..end];
+    assert!(early.contains("runtime.handles[1].id != ROOT_FAULT_ID"));
+    assert!(early.contains("runtime.handles[2].id != ROOT_EMERGENCY_ID"));
+    assert!(early.contains("for index in 1..3"));
+    assert!(early.contains("TARGET_FAULT_RECEIVER_ACTIVE\n        .compare_exchange(false, true"));
+    assert!(early.contains("for prior in 1..index"));
+    assert!(early.contains("TARGET_FATAL.store(true, Ordering::Release)"));
+    let late_end = source[end..]
+        .find("/// Stable external-QEMU observation point")
+        .unwrap()
+        + end;
+    let late = &source[end..late_end];
+    assert!(late.contains("TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire)"));
+    assert!(late.contains("TARGET_BOOTSTRAP_FAULT_RECEIVERS_ACTIVE.swap(false, Ordering::AcqRel)"));
+    assert!(late.contains("for index in first_child..CRITICAL_TCB_COUNT"));
+    let entry = &source[source.find("extern \"C\" fn root_fault_entry").unwrap()..];
+    let receive = entry.find("let (info, message_registers)").unwrap();
+    let unsealed = entry[receive..]
+        .find("if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire)")
+        .unwrap()
+        + receive;
+    let terminal = entry[unsealed..]
+        .find("bootstrap_fault_fail_stop(")
+        .unwrap()
+        + unsealed;
+    let publication = entry[terminal..]
+        .find("publish_pending_target_fault(")
+        .unwrap()
+        + terminal;
+    assert!(receive < unsealed && unsealed < terminal && terminal < publication);
+    let reporter_start = source.find("fn bootstrap_fault_fail_stop(").unwrap();
+    let reporter_end = source[reporter_start..]
+        .find("/// Emit the Pi-only root-control")
+        .unwrap()
+        + reporter_start;
+    let reporter = &source[reporter_start..reporter_end];
+    assert!(reporter.contains("chunks(16)"));
+    assert!(reporter.contains("sel4::yield_now();\n        sel4::debug_put_bytes_unlocked(chunk)"));
+    for forbidden in [
+        ".lock()",
+        "try_lock",
+        "log_buffer",
+        "resolve_target_fault",
+        "reply_with",
+        "Box::",
+        "unsafe",
+    ] {
+        assert!(
+            !reporter.contains(forbidden),
+            "bootstrap reporter must not use {forbidden}"
+        );
+    }
 }
 
 #[test]

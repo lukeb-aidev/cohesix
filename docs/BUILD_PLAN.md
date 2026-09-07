@@ -10493,6 +10493,29 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact-17e bootstrap fault reporting repair — two WiFi cohorts complete raw,
+    functional and pressure tests before edits, but reach only 15.583/16.811
+    requests/s with p95 114.550/115.978 ms. GENET's controlled boot expires its
+    300-second shell deadline; two externally reset attempts repeat the same
+    `stack-construction.begin` stop after `owner-proof.return`. Their shared
+    outer capture interval is retained without fabricated per-reset packet
+    timing. No GENET TCP test runs. Start only the existing Pi root-fault and
+    root-emergency receivers after their construction, before the vulnerable
+    constructor; keep full registry sealing mandatory for service/Worker
+    activation and recovery. Unsealed faults retain copied raw operands and
+    emit sixteen-byte raw UART chunks across explicit replenishment boundaries,
+    independently of logging/registry locks and normal queues. QEMU retains
+    late receiver activation. Narrow GENET-only constructor cuts distinguish
+    allocation/storage/socket frontiers if no fault arrives. Preserve all SC,
+    capability, memory, driver, protocol and generated numeric contracts.
+    Full host-tool suite, `tools/cohesix-py`, raw/REST workloads, generated
+    consumers and trace parsers reviewed: additive bootstrap fatal text requires
+    no external grammar, workload or report-schema change. Source and QEMU
+    regression checks cannot prove this Pi fault branch, the constructor fix,
+    or either performance goal; exact Pi failure operands and fresh target
+    validation remain required. Discovery tasks are
+    `m26e-console-network-service-isolation` and
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`.
   - Exact-8d0 root execution-cost experiment after stack repair — the unchanged
     1-MiB-stack image completed two WiFi and two GENET boots before edits.
     All raw64, four command scripts, Worker32, medium16/high32 application and
