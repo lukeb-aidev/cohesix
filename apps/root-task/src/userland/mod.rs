@@ -1307,6 +1307,10 @@ impl DeferredCyw43ActivationWindow {
         self.logical_turns = self.logical_turns.saturating_add(1);
         if productive {
             self.productive_units = self.productive_units.saturating_add(1);
+            // Material, identity-checked Network progress opens one new race
+            // observation. A badge or an unproductive turn cannot renew it,
+            // and neither logical nor productive activation credit is reset.
+            self.nonblocking_fanin_hint_consumed = false;
         }
     }
 
@@ -5299,19 +5303,29 @@ where
                         target_os = "none",
                         sel4_config_kernel_mcs
                     ))]
-                    if service_ready_before_control
-                        && bootstrap_service_ready_published
-                        && pump.prepare_pi_root_control_idle_wait()
-                            == PiRootControlIdlePreparation::Wait
-                        && wait_pi_root_control_idle_fanin(pump)
-                    {
-                        // All operator, recovery, output and network levels
-                        // are empty, and the physical owner has no outstanding
-                        // root command or polled deadline. The existing timer
-                        // and producer fan-in keep the next event wakeable.
-                        // Close this software episode without forfeiting the SC.
-                        activation_window.reset();
-                        continue 'supervisor;
+                    if service_ready_before_control && bootstrap_service_ready_published {
+                        match pi_root_control_idle_route(
+                            pump.prepare_pi_root_control_idle_wait(),
+                            activation_window.nonblocking_fanin_hint_available(),
+                        ) {
+                            PiRootControlIdleRoute::RetryOuter => {
+                                // Durable work raced the final idle cut. Spend
+                                // one recheck through full operator/recovery
+                                // arbitration instead of forfeiting the refill.
+                                activation_window.consume_nonblocking_fanin_hint();
+                                continue 'supervisor;
+                            }
+                            PiRootControlIdleRoute::Block
+                                if wait_pi_root_control_idle_fanin(pump) =>
+                            {
+                                // Only the complete empty cut ends this
+                                // episode. A wake begins ordinary arbitration
+                                // with a fresh software cap, not a lost refill.
+                                activation_window.reset();
+                                continue 'supervisor;
+                            }
+                            PiRootControlIdleRoute::Block | PiRootControlIdleRoute::Yield => {}
+                        }
                     }
                     deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                     continue 'supervisor;
@@ -8441,6 +8455,39 @@ mod tests {
             super::pi_root_control_idle_route(Yield, true),
             super::PiRootControlIdleRoute::Yield,
         );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_idle_retry_requires_new_progress_and_keeps_activation_cap() {
+        use crate::event::PiRootControlIdlePreparation::Retry;
+        let mut window = super::DeferredCyw43ActivationWindow::new();
+        for completed in 0..64 {
+            assert!(window.resumable_turn_admitted(true));
+            assert_eq!(
+                super::pi_root_control_idle_route(Retry, window.nonblocking_fanin_hint_available()),
+                super::PiRootControlIdleRoute::RetryOuter,
+            );
+            window.consume_nonblocking_fanin_hint();
+            assert_eq!(
+                super::pi_root_control_idle_route(Retry, window.nonblocking_fanin_hint_available()),
+                super::PiRootControlIdleRoute::Yield,
+            );
+            window.record_attached_network_turn(true);
+            assert_eq!(window.logical_turns, completed + 1);
+            assert_eq!(window.productive_units, completed + 1);
+        }
+        assert!(!window.resumable_turn_admitted(true));
+        window.reset();
+        window.consume_nonblocking_fanin_hint();
+        window.record_attached_network_turn(false);
+        window.record_operator_turn();
+        window.record_driver_turn(true);
+        assert!(!window.nonblocking_fanin_hint_available());
     }
 
     #[cfg(all(

@@ -313,11 +313,24 @@ Timer rejection retains the existing arbitration/Yield path. A stable terminal
 or durable child publication visible at the cut
 returns to the rotor instead of waiting. Attached WiFi spends its existing
 one-shot outer recheck on that durable level even when the corresponding
-notification has already coalesced or been consumed; a stagnant level cannot
-renew the allowance. A fully fenced direct-GENET global-idle receive closes
+notification has already coalesced or been consumed. Its final idle `Retry`
+result uses that same allowance instead of falling through to Yield. Only an
+identity-checked productive attached Network turn renews the allowance; a
+stagnant level, badge, operator turn or bootstrap driver operation cannot.
+Renewal leaves both activation counters and the 64-turn cap intact. A fully
+fenced direct-GENET global-idle receive closes
 the finished software transaction cursor and its work count before fresh
 outer arbitration. A causal child wait does not close that cursor. Neither
 operation resets or expands the kernel scheduling context.
+
+GENET's ordinary rotor does not open CYW43 operation turns or derive WiFi
+admission snapshots. The SDIO deadline fault hint and general fault/control
+service remain in their existing positions. Root validates the immutable
+generated GENET continuation topology once at EventPump construction; live
+generation, connection, publication, operator and recovery fences are still
+checked at every use. Frequent operator arbitration reads only queued-byte and
+recovery fields, and consults USB parser readiness only for nonempty ingress.
+USB service debt remains independent of parser readiness.
 
 Attached WiFi may also retain its existing activation after one exact NetData
 op8 admission frontier advances. The same immutable request, descriptor,

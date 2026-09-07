@@ -71,6 +71,14 @@ remain required; restoring the compiler setting alone does not prove recovery.
 Earlier candidates with the insufficient 256-KiB stack cannot establish a
 compiler regression or gain. Child budgets and wire workloads remain unchanged.
 
+The subsequent WiFi idle-Retry and GENET root-overhead candidate uses the
+existing raw workload and gates. Compare WiFi session actual Yield count/time
+and pending-work idle cuts, and GENET root CPU plus request-to-ACK and
+ACK-to-terminal distributions against an exact working image. Fewer source
+calls, smaller emitted frames, host tests and QEMU are qualification only.
+The candidate still needs fresh boot-paired, repeatable Pi measurements after
+bootstrap recovery; a single faster WiFi run is insufficient evidence.
+
 Every performance claim must identify:
 
 - milestone task and harness version or commit;

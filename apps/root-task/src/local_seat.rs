@@ -4643,6 +4643,28 @@ impl LocalSeatRuntime {
         false
     }
 
+    /// Observe root-owned ingress without constructing the diagnostic record.
+    /// Linked USB publication and recovery remain independently serviced.
+    #[must_use]
+    pub(crate) fn buffered_keyboard_input_pending(&self) -> bool {
+        !self.keyboard_queue.is_empty()
+    }
+
+    /// Read only the retained recovery fields required by operator arbitration.
+    #[must_use]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    pub(crate) const fn keyboard_service_recovery(&self) -> (bool, u64) {
+        (
+            self.keyboard_recovery_aux_pending,
+            self.keyboard_poll_no_reply_streak,
+        )
+    }
+
     /// Return keyboard ingress counters for `usb status` diagnostics.
     #[must_use]
     pub fn keyboard_trace(&self) -> LocalSeatKeyboardTrace {
@@ -9561,9 +9583,11 @@ mod tests {
             buffer_lines: 4,
         });
 
+        assert!(!runtime.buffered_keyboard_input_pending());
         runtime.enable_backend_keyboard_polling();
         runtime.poll_backend_keyboard();
         assert_eq!(runtime.enqueue_keyboard_bytes(b"abc"), 3);
+        assert!(runtime.buffered_keyboard_input_pending());
         let mut drained = [0u8; 2];
         assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 2);
         runtime.echo_input_bytes(&drained);
@@ -9577,6 +9601,8 @@ mod tests {
         assert_eq!(trace.drained_bytes, 2);
         assert_eq!(trace.echoed_bytes, 2);
         assert_eq!(trace.dropped_bytes, 0);
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 1);
+        assert!(!runtime.buffered_keyboard_input_pending());
     }
 
     #[test]

@@ -10493,6 +10493,24 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Pi WiFi idle Retry and GENET root overhead — route the attached WiFi final
+    idle `Retry` through the existing one-shot outer recheck. Renew that hint
+    only after proven productive attached Network progress without resetting
+    either activation counter or the 64-turn cap. Exact GENET rotor units no
+    longer open unrelated CYW43 operation/cache/retirement scopes, and NIC
+    selection precedes WiFi admission snapshot derivation. Validate immutable
+    generated GENET continuation topology once per EventPump; retain all live
+    transaction and fault fences. Read narrow local-seat ingress/recovery
+    fields and avoid parser-readiness queries for empty ingress. Preserve
+    operator service, SDIO deadline fault hints, MCS numerics, driver ownership,
+    all protocol/manifest/ABI and workload contracts. Exercise progress/cap,
+    topology drift, GENET operator ownership, USB input/debt and WiFi rotor
+    contracts; qualify exact Pi code/stack and pinned QEMU root-MCS before
+    delivery. Existing session Yield/CPU/idle and wire timing receipts remain
+    the discriminator. This is a candidate optimization, not proof of either
+    target; fresh repeatable dual-mode raw TCP remains required. Complete host
+    tools, `tools/cohesix-py`, generated contracts, raw/REST benchmarks, `.coh`
+    workloads and trace consumers require no changes to code or schemas.
   - Exact-b8e293bc9 shared PCIe bootstrap recovery — the user's WiFi and GENET
     boots both halt with kernel SError at `0x624cc`, immediately following the
     first write to legacy interrupt MASK_SET at `0xfd504310`. Preserve both

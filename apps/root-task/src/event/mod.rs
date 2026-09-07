@@ -8455,6 +8455,11 @@ where
     pi_root_control_consumed_window: PiRootControlConsumedWindow,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pi_root_control_productive_continuation_identity: Option<PiRootControlProductiveContinuation>,
+    // Generated topology is immutable for this image. Validate it once when
+    // constructing the pump; every retained transaction still checks its live
+    // generation, connection, publication and operator/fault fences.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    direct_genet_continuation_mode: Option<DirectGenetContinuationMode>,
     #[cfg(all(test, feature = "kernel", feature = "net-console"))]
     direct_genet_continuation_mode_test_override: Option<DirectGenetContinuationMode>,
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
@@ -9181,6 +9186,8 @@ where
             pi_root_control_consumed_window: PiRootControlConsumedWindow::Empty,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             pi_root_control_productive_continuation_identity: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            direct_genet_continuation_mode: direct_genet_continuation_mode_from_generated(),
             #[cfg(all(test, feature = "kernel", feature = "net-console"))]
             direct_genet_continuation_mode_test_override: None,
             #[cfg(all(feature = "kernel", feature = "release-pi4"))]
@@ -11871,11 +11878,20 @@ where
             let _ = self.poll_serial_linked_runtime_cutover_after_prompt();
             return;
         }
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let cyw43_outer_turn_required = !self.net.as_ref().is_some_and(|net| {
+            net.driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+        });
+        #[cfg(all(feature = "kernel", not(feature = "net-console")))]
+        let cyw43_outer_turn_required = true;
         #[cfg(feature = "kernel")]
-        crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
-        #[cfg(feature = "kernel")]
-        let _cyw43_outer_event_turn =
-            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
+        let _cyw43_outer_event_turn = cyw43_outer_turn_required.then(|| {
+            // GENET cannot issue CYW43 operations. Do not reset WiFi's policy
+            // caches and acquire its retirement locks for each Ethernet rotor
+            // unit. Unattached/bootstrap and WiFi paths keep the full guard.
+            crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer()
+        });
         #[cfg(feature = "kernel")]
         let _ = crate::hal::driver_task::poll_driver_task_sdio_deadline_fault_hint();
         #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -13618,7 +13634,7 @@ where
         if self.direct_genet_continuation_mode_test_override.is_some() {
             return self.direct_genet_continuation_mode_test_override;
         }
-        direct_genet_continuation_mode_from_generated()
+        self.direct_genet_continuation_mode
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -14742,7 +14758,7 @@ where
         expected: ConsoleResponseIdentity,
     ) -> bool {
         let sync_identity = self.sync_response_identity();
-        if direct_genet_continuation_mode_from_generated()
+        if self.direct_genet_continuation_mode
             != Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
             || self.network_service_quarantined
             || self.reboot_pending
@@ -14792,7 +14808,7 @@ where
     fn service_direct_genet_compact_command_successor(
         &mut self,
     ) -> Option<(crate::net::DirectGenetCommandControlOutcome, bool)> {
-        if direct_genet_continuation_mode_from_generated()
+        if self.direct_genet_continuation_mode
             != Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
             || self.network_service_quarantined
             || self.reboot_pending
@@ -15697,12 +15713,13 @@ where
         &self,
         serial_rx_activity: bool,
     ) -> bool {
-        cyw43_network_dispatch_admissible(
-            crate::drivers::driver_task_net::cyw43_service_work_snapshot(),
-        ) && (self.linked_runtime_cyw43_rx_admission_pending
-            || self.linked_runtime_cyw43_durable_resume.is_some()
-            || self.linked_runtime_cyw43_priority_work_due())
-            && self.linked_runtime_cyw43_lane_selected()
+        self.linked_runtime_cyw43_lane_selected()
+            && cyw43_network_dispatch_admissible(
+                crate::drivers::driver_task_net::cyw43_service_work_snapshot(),
+            )
+            && (self.linked_runtime_cyw43_rx_admission_pending
+                || self.linked_runtime_cyw43_durable_resume.is_some()
+                || self.linked_runtime_cyw43_priority_work_due())
             && !self.network_service_quarantined
             && !self.reboot_pending
             && self
@@ -18332,7 +18349,7 @@ where
             || self
                 .local_seat
                 .as_ref()
-                .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
+                .is_some_and(|runtime| runtime.buffered_keyboard_input_pending())
     }
 
     fn physical_console_response_pending(&self) -> bool {
@@ -18344,9 +18361,13 @@ where
             .local_seat
             .as_ref()
             .map(|runtime| {
+                let input_pending = runtime.buffered_keyboard_input_pending();
+                // Parser readiness cannot affect classification of an empty
+                // queue. USB recovery/service debt is independently sampled
+                // below, including when the parser is not yet command-ready.
                 (
-                    runtime.keyboard_trace().queued_bytes != 0,
-                    runtime.keyboard_parser_ingress_ready(),
+                    input_pending,
+                    input_pending && runtime.keyboard_parser_ingress_ready(),
                 )
             })
             .unwrap_or((false, false));
@@ -18366,7 +18387,7 @@ where
             || self
                 .local_seat
                 .as_ref()
-                .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
+                .is_some_and(|runtime| runtime.buffered_keyboard_input_pending())
     }
 
     #[cfg(test)]
@@ -18383,10 +18404,10 @@ where
         target_os = "none"
     ))]
     fn linked_local_seat_usb_service_pending(&self) -> bool {
-        let trace = self
+        let recovery = self
             .local_seat
             .as_ref()
-            .map(|runtime| runtime.keyboard_trace())
+            .map(|runtime| runtime.keyboard_service_recovery())
             .unwrap_or_default();
         let (polling_enabled, command_ready) = self
             .local_seat
@@ -18405,10 +18426,7 @@ where
             crate::local_seat::linked_local_seat_usb_keyboard_ready(),
             crate::local_seat::linked_local_seat_usb_first_report_ready(),
             crate::local_seat::linked_local_seat_usb_first_byte_ready(),
-            (
-                trace.recovery_aux_pending,
-                trace.driver_task_no_reply_streak,
-            ),
+            recovery,
         )
     }
 
@@ -57297,6 +57315,32 @@ mod tests {
     }
 
     #[test]
+    fn empty_usb_ingress_classification_is_independent_of_parser_readiness() {
+        for parser_ready in [false, true] {
+            assert_eq!(
+                LinkedPhysicalOperatorWork::classify(false, false, parser_ready, false),
+                LinkedPhysicalOperatorWork::Idle,
+            );
+            assert_eq!(
+                LinkedPhysicalOperatorWork::classify(false, false, parser_ready, true),
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            );
+            assert_eq!(
+                LinkedPhysicalOperatorWork::classify(true, false, parser_ready, true),
+                LinkedPhysicalOperatorWork::Input,
+            );
+        }
+        assert_eq!(
+            LinkedPhysicalOperatorWork::classify(false, true, false, false),
+            LinkedPhysicalOperatorWork::UsbServiceDebt,
+        );
+        assert_eq!(
+            LinkedPhysicalOperatorWork::classify(false, true, true, false),
+            LinkedPhysicalOperatorWork::Input,
+        );
+    }
+
+    #[test]
     fn blocked_usb_bytes_release_network_fence_without_losing_operator_turn() {
         for usb_service_pending in [false, true] {
             let blocked =
@@ -62659,6 +62703,7 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut genet = FakeNet::new();
         genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        let wifi_turn_before = crate::drivers::driver_task_net::cyw43_outer_event_turn_id();
 
         {
             let mut pump =
@@ -62678,6 +62723,11 @@ mod tests {
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Network,
                 "one complete wired rotation must stop before repeating its starting NIC phase",
+            );
+            assert_eq!(
+                crate::drivers::driver_task_net::cyw43_outer_event_turn_id(),
+                wifi_turn_before,
+                "GENET operator arbitration cannot open an unrelated WiFi operation turn",
             );
         }
 

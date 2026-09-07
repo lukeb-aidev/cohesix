@@ -9167,6 +9167,19 @@ be replied or retained through exactly that object; an unavailable/null or
 duplicate Reply installation fails before activation. Classic and QEMU
 selection must retain their qualified receive/binding behavior.
 
+Attached WiFi's final idle `Retry` must return through full outer arbitration
+only while its one-shot race allowance remains available. Tests must show
+that productive attached Network progress renews the allowance, that empty
+turns and repeated hints do not, and that renewal cannot reset or exceed the
+64-turn activation cap. GENET's complete operator rotor must preserve serial
+and network service without opening a CYW43 operation turn. USB arbitration
+must retain input and recovery/service debt while skipping parser readiness
+for an empty ingress queue; exact generated GENET topology drift must still
+reject continuation. Shared changes require the pinned QEMU root-MCS canary
+and an exact Pi compile/stack review. Session CPU/Yield/idle receipts and
+boot-paired raw wire timing must show the physical effect; host checks and
+compiler call elimination do not establish a performance gain.
+
 At the physical-Pi exact direct-GENET ordinary global-idle exit, tests must
 prove a completed empty quantum precedes exactly one nonblocking multiplexed
 receive. If that receive is empty, root must prove timer, endpoint, durable
