@@ -79,9 +79,12 @@ flowchart TB
 
 The Cargo `release` profile keeps its existing artifact paths, fat LTO,
 single codegen unit and size-oriented `z` optimization. The Pi builder selects
-level `3` for the root-task package alone; isolated children, dependencies and
-QEMU retain `z`. Earlier speed-profile boots failed at independently repaired
-stack and PCIe defects and supplied no valid performance comparison. The
+level `3` for root-task and, in a separate child build, console-network-runtime
+and its smoltcp dependency. Other children, root dependencies and QEMU retain
+`z`. The Pi console speed profile requires exactly 69 image pages; the
+manifest, compiler and constructor account for all three additional pages
+relative to the 66-page size build. Earlier speed-profile boots failed at
+independently repaired stack and PCIe defects and supplied no valid performance comparison. The
 post-repair candidate must retain the nonzero PCIe mapping, correct IRQ bank,
 disjoint TLS and admitted stack, then pass exact emitted-code checks before
 RAM testing. The selected manifest's ELF/page admission, stack and rootfs size
@@ -212,7 +215,7 @@ payloads, and rootfs bounds before staging. Both Pi production and diagnostic
 profiles require `KernelRootCNodeSizeBits=16`. The resulting 65,536-slot root
 CSpace admits the manifest's complete 256-Worker population, linked-runtime
 images, isolated HDMI framebuffer mapping, and post-construction reserve while
-consuming 19,513 slots and leaving 46,023 compiler-accounted slots free. The
+consuming 19,516 slots and leaving 46,020 compiler-accounted slots free. The
 profile wrapper preserves that declared value and uses 13 bits only for profiles
 that omit the setting.
 An older Pi build cache reporting 13 or 14 bits is stale and must be rebuilt
@@ -1118,15 +1121,15 @@ throughput measurement, repeat it as a poller, or treat its rows as packet or
 acceptance proof. Follow it with independent host ARP, ICMP, raw TCP,
 authenticated `cohsh`, and capture evidence.
 
-The selected direct-GENET console image has a 66-page PT_LOAD footprint and a
-service inventory of 104 frames and 161 retained root CSpace slots. The one-page
-increase is one immutable executable image frame and its retained mapping cap;
-it does not enlarge any data-plane or scheduling budget. The 32
+The selected direct-GENET console image has a 69-page PT_LOAD footprint and a
+service inventory of 107 frames and 164 retained root CSpace slots. The
+speed-profile increase from 66 pages is three executable image frames and
+their retained mapping caps; it does not enlarge any data-plane or scheduling budget. The 32
 direct pages are reused GENET-owned external frames, so they add mapping-cap
 slots rather than data-plane frame objects and do not enlarge the one-MiB child
 untyped. Construction and stage checks must reject an image exceeding the
-66-page admission or a resource projection that drifts from the generated
-104-frame/161-slot contract, but they are not proof that a Pi reached READY or
+69-page admission or a resource projection that drifts from the generated
+107-frame/164-slot contract, but they are not proof that a Pi reached READY or
 moved a packet.
 
 A dispatched authenticated command still performs no TCP flush in root's

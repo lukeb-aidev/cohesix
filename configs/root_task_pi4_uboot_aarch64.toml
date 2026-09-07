@@ -688,14 +688,14 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 104
+frames = 107
 endpoints = 0
 notifications = 2
 fault_caps = 1
 timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
-cspace_slots = 161
+cspace_slots = 164
 untyped_bytes = 1048576
 
 [[temporal_authority.worker_classes]]
@@ -985,14 +985,14 @@ cnodes = 16
 vspaces = 16
 page_tables = 528
 asids = 16
-frames = 4079
+frames = 4082
 endpoints = 31
 notifications = 34
 fault_caps = 16
 timeout_fault_caps = 16
 reply_objects = 15
 scheduling_contexts = 16
-cspace_slots = 9273
+cspace_slots = 9276
 untyped_bytes = 100663296
 
 [[worker_resource_admission.executable_roles]]

@@ -42,8 +42,8 @@ Worker archive, and ABI version.
 The Pi manifest retains `max_workers=256` and per-role
 `namespace_capacity=256`, and its complete maximum mix declares all 256 as
 executable children. Its 16-bit root CNode exposes 65,536 slots; the generated
-fixed, per-Worker, and post-construction-reserve inventory consumes 19,513 and
-leaves 46,023 slots of deterministic headroom. This static admission does not
+fixed, per-Worker, and post-construction-reserve inventory consumes 19,516 and
+leaves 46,020 slots of deterministic headroom. This static admission does not
 prove construction, READY, driver coexistence, scheduling behavior, or
 performance on Pi hardware.
 

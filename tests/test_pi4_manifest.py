@@ -180,10 +180,10 @@ def test_pi4_genet_object_delta_is_backend_derived_without_a_source_toggle() -> 
     assert network["backend"] == "bcmgenet-v5"
     assert "direct_genet" not in console
     assert console.get("direct_virtio", False) is False
-    assert console["objects"]["frames"] == 104
-    assert console["objects"]["cspace_slots"] == 161
-    assert fixed["frames"] == 4_079
-    assert fixed["cspace_slots"] == 9_273
+    assert console["objects"]["frames"] == 107
+    assert console["objects"]["cspace_slots"] == 164
+    assert fixed["frames"] == 4_082
+    assert fixed["cspace_slots"] == 9_276
     assert worker_supervisor["cspace_cap_count"] == 17
 
 

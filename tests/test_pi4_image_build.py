@@ -84,8 +84,8 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
     assert "(default: release-pi4,bootstrap-trace)" in source
 
 
-def test_pi4_build_scopes_speed_profile_to_root_package() -> None:
-    """Only the Pi root invocation may override the workspace size profile."""
+def test_pi4_build_scopes_speed_profile_to_root_and_tcp_packages() -> None:
+    """Pi speed flags cannot spread to unrelated children or QEMU builds."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     invocations = source.replace("\\\n", " ").split("cargo build")[1:]
@@ -98,9 +98,20 @@ def test_pi4_build_scopes_speed_profile_to_root_package() -> None:
     assert '--target aarch64-unknown-none' in root_call
     assert '--features "$ROOT_TASK_FEATURES"' in root_call
     assert source.count("profile.release.package.root-task.opt-level=3") == 1
+    runtime_args = source.split("local -a sel4_runtime_build_args=(", 1)[1].split(
+        "\n    )", 1
+    )[0]
+    assert '--features "console-network-runtime/direct-genet"' in runtime_args
+    for package in ("console-network-runtime", "smoltcp"):
+        flag = f"profile.release.package.{package}.opt-level=3"
+        assert f"--config '{flag}'" in runtime_args
+        assert flag not in root_call
+        assert source.count(flag) == 1
+    assert "profile.release.opt-level" not in source
     cargo = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
     assert 'opt-level = "z"' in cargo.split("[profile.release]", 1)[1]
-    assert "[profile.release.package.root-task]" not in cargo
+    for package in ("root-task", "console-network-runtime", "smoltcp"):
+        assert f"[profile.release.package.{package}]" not in cargo
 
 
 def test_pi4_image_build_honors_the_staged_runner_job_budget() -> None:

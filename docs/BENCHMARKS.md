@@ -81,15 +81,18 @@ protocol source are unchanged. Such an experiment does not change the raw
 request workload, throughput interval, p95 arithmetic or target thresholds.
 Compare fresh target receipts and retain stack/image/page admission plus
 the QEMU canary as separate qualification evidence.
-The Pi builder selects root-task level `3` after the stack, TLS, PCIe mapping
-and interrupt-bank repairs. Compare against the sealed `31cf29b35` unchanged
-two-WiFi/two-GENET matrix, including owner CPU totals and raw wire distributions.
-GENET root CPU remains about 70 ms per 64-request session and p95 exceeds
-5.5 ms; one WiFi throughput result also misses its gate. Earlier speed-profile
-boot failures do not establish a performance result. The candidate must keep
-the repaired invariants and qualify exact emitted frames and image admission
-before fresh dual-mode measurement. Child budgets, compilation and wire
-workloads remain unchanged. Build success alone is not recovery or speedup.
+The Pi builder selects level `3` for root-task and separately for the console
+runtime and smoltcp. Compare this TCP execution-cost candidate with the sealed
+`c47da0a6d` two-WiFi/two-GENET matrix: GENET p95 is 6.595/6.752 ms and the console
+child consumes 32.395/32.329 ms per complete 64-request session. Root CPU is
+73.204/58.001 ms; these aggregate totals do not identify any particular wait
+or refill as the cause. One WiFi boot misses throughput because of connection
+establishment delay. Preserve that first-attempt failure in the comparison.
+The Pi child requires 69 image pages instead of 66, with three additional
+frames and mapping caps declared together. Earlier 69/66 admission failures
+never reached hardware and establish no speed result. Other children and QEMU
+keep the size profile. Scheduling, protocol, workload and target thresholds
+remain unchanged. Build success alone is not recovery or speedup.
 
 The subsequent WiFi idle-Retry and GENET root-overhead candidate uses the
 existing raw workload and gates. Compare WiFi session actual Yield count/time

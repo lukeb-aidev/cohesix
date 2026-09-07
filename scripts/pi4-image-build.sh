@@ -1930,9 +1930,11 @@ build_pi4_image() {
     worker_image_manifest="${worker_output_dir}/${PI4_WORKER_IMAGE_MANIFEST_NAME}"
     worker_manifest_tool="${SCRIPT_DIR}/worker_image_manifest.py"
 
-    log "Building 26e child/runtime images for Pi4 root-task"
+    log "Building Pi4 runtimes (console-network-runtime and smoltcp opt-level=3)"
     local -a sel4_runtime_build_args=(
         build --locked --target "$sel4_target" --release
+        --config 'profile.release.package.console-network-runtime.opt-level=3'
+        --config 'profile.release.package.smoltcp.opt-level=3'
         --features "console-network-runtime/direct-genet"
     )
     for sel4_target_package in "${sel4_runtime_packages[@]}"; do

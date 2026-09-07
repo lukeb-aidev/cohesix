@@ -465,7 +465,7 @@ pub(crate) const fn expected_runtime_image_pages(
 ) -> Option<u16> {
     match (direct_virtio, direct_genet) {
         (true, false) => Some(62),
-        (false, true) => Some(66),
+        (false, true) => Some(69),
         (false, false) => Some(60),
         (true, true) => None,
     }
@@ -1568,8 +1568,8 @@ mod tests {
     fn exact_backend_selects_qemu_pi_and_mediated_object_inventories() {
         assert_eq!(expected_runtime_image_pages(true, false), Some(62));
         assert_eq!(expected_object_inventory(true, false), Ok((134, 162)));
-        assert_eq!(expected_runtime_image_pages(false, true), Some(66));
-        assert_eq!(expected_object_inventory(false, true), Ok((104, 161)));
+        assert_eq!(expected_runtime_image_pages(false, true), Some(69));
+        assert_eq!(expected_object_inventory(false, true), Ok((107, 164)));
         assert_eq!(expected_runtime_image_pages(false, false), Some(60));
         assert_eq!(expected_object_inventory(false, false), Ok((98, 123)));
         assert_eq!(expected_runtime_image_pages(true, true), None);
