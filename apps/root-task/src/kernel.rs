@@ -7508,7 +7508,10 @@ fn classify_root_control_observation(
     if mode == RootControlReceiveMode::Blocking {
         return RootControlReceiveOutcome::Endpoint;
     }
-    // An all-zero nonblocking return is the kernel's empty-queue result. The
+    // Our receive-only AArch64 wrapper seeds x1 to zero: the selected kernel
+    // clears only the badge on an empty NBRecv and preserves that input tag.
+    // This wrapper contract, not a generic seL4 MessageInfo guarantee, makes
+    // the all-zero nonblocking result usable as an empty-queue observation. The
     // sole in-tree unbadged label-zero producer is bootstrap/log `send_frame`:
     // it uses NBSend and encodes an operation plus byte length, so its
     // MessageInfo always carries at least two words and is not ambiguous with

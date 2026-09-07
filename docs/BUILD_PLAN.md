@@ -10493,6 +10493,22 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Empty receive register restoration — discovered through
+    `m26e-console-network-service-isolation`, restore the
+    `m26e-mcs-abi-foundation` receive contract after the unchanged `425b75684`
+    two-WiFi/two-GENET matrix. The selected seL4 16 kernel clears only the
+    badge on failed NBRecv. The emitted steady root path leaves `now_ms` in
+    AArch64 x1, while root interprets that stale MessageInfo as endpoint work.
+    Seed x1 to zero in the receive-only assembly for MCS and classic bindings;
+    real IPC still supplies its tag, bound notifications remain badge-first,
+    and send/receive retains its outgoing MessageInfo. Preserve all Reply,
+    donated-call, queue, retry, timer, SC and operator fences. Verify the trap
+    register contract, existing empty/real-message classifiers, exact QEMU and
+    Pi compilation, emitted instructions and fresh unchanged dual-mode boots.
+    The full host-tool suite, `tools/cohesix-py`, compiler/generated contracts,
+    `.coh` scripts, raw/REST workloads, benchmark arithmetic, trace consumers
+    and report schemas require no change: no public surface or target setting
+    changes. Build or static correctness does not establish a speedup.
   - WiFi first RX-batch rejection operands — under
     `m26e-qemu-shared-control-path-performance`, discovered through
     `m26e-console-network-service-isolation`, the sealed unchanged `02dd1a964`

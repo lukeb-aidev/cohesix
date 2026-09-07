@@ -1602,6 +1602,19 @@ seconds. The live boot-paired capture prefixes are diagnostic, not sealed
 acceptance evidence. Medium/high REST pressure is withheld at the first failed
 invariant, and this WiFi boot proves neither GENET nor August parity.
 
+The root empty-receive regression requires the actual AArch64 x1 trap input
+to be zero in receive-only MCS and classic bindings. Selected seL4 16 clears
+only badge x0 on an empty nonblocking receive. Source binding checks must
+therefore inspect the assembly input, not a host stub or initialized Rust
+output alone. Retain the independent root classifier cases for empty NBRecv,
+real nonzero unbadged IPC, blocking zero-tag IPC and badge-first notification
+wakes. Inspect the emitted root steady path, compile both selected operational
+profiles and run the canonical QEMU root-MCS canary before fresh Pi proof.
+Existing raw TCP, causal-wait/receive diagnostics, first-attempt functional
+workloads and medium/high pressure on two WiFi and two GENET boots measure
+its effect. These checks establish neither an upstream absent-MessageInfo
+promise nor Pi performance from QEMU alone.
+
 The next source oracle retains ae2's corrected signal-only mediated-WiFi path.
 Focused coverage must prove that mediated WiFi is signal-only even when
 authenticated while direct GENET retains its guarded handoff; selected-MCS

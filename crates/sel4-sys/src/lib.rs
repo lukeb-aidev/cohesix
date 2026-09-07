@@ -417,7 +417,12 @@ mod imp {
         reply: seL4_Word,
     ) {
         let mut badge = src;
-        let mut info: seL4_Word;
+        // seL4 16 doNBRecvFailedTransfer clears only the badge; it leaves
+        // AArch64 x1 untouched. Seed MessageInfo in the actual input register
+        // so an empty NBRecv/NBWait cannot expose stale caller register state.
+        // A real IPC overwrites x1 with the sender's tag. Notification callers
+        // must still classify their badge before inspecting MessageInfo.
+        let mut info: seL4_Word = 0;
         let scno = sys;
         let msg0: seL4_Word;
         let msg1: seL4_Word;
@@ -431,7 +436,7 @@ mod imp {
             out("x3") msg1,
             out("x4") msg2,
             out("x5") msg3,
-            out("x1") info,
+            inout("x1") info,
             inout("x0") badge,
             in("x7") scno,
             in("x6") reply,
@@ -445,7 +450,7 @@ mod imp {
             out("x3") msg1,
             out("x4") msg2,
             out("x5") msg3,
-            out("x1") info,
+            inout("x1") info,
             inout("x0") badge,
             in("x7") scno,
             options(nostack)

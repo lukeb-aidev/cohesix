@@ -618,6 +618,17 @@ operator/output/network fences and lifetime-bound timer proof are identical.
 An in-flight WiFi operation uses its separate causal wait, with the same exact
 timer enable proof when its parent also requires root deadline observation.
 
+The AArch64 receive-only wrapper seeds MessageInfo register x1 to zero before
+its trap. The selected seL4 16 empty NBRecv/NBWait path clears only badge x0
+and preserves x1; zero initialization of a Rust output variable alone does
+not supply that input register. This is a local wrapper contract, not a
+portable seL4 guarantee about absent-message data. Real IPC overwrites x1
+with its tag. Root classifies its declared fan-in badge first; a blocking
+non-fan-in receive remains an endpoint delivery even with a zero tag.
+Nonblocking unbadged root producers must use a nonzero label or length;
+bootstrap log frames already contain at least two words. Send/receive traps
+retain their outgoing tag and do not use the receive-only zero seed.
+
 The global-idle operator predicate requires no remaining USB readiness or
 recovery service debt. It is intentionally stricter than the compact network
 response fence, which may cross that debt after giving the operator rotor its

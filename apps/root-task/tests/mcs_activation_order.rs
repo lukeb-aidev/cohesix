@@ -1257,6 +1257,36 @@ fn root_control_mcs_receive_preserves_reply_and_staged_message_ownership() {
 }
 
 #[test]
+fn root_control_empty_poll_has_a_zero_seeded_aarch64_message_info_register() {
+    // Selected seL4 16 doNBRecvFailedTransfer writes badge x0 only. This ABI
+    // guard checks the actual trap input, not the outer Rust output variable
+    // or a host mock that would hide the kernel's untouched x1 register.
+    let bindings = include_str!("../../../crates/sel4-sys/src/lib.rs");
+    let start = bindings
+        .find("unsafe fn arm_sys_recv(")
+        .expect("receive trap");
+    let end = bindings[start..]
+        .find("unsafe fn arm_sys_send_recv(")
+        .map(|offset| start + offset)
+        .expect("separate send/receive trap");
+    let receive = &bindings[start..end];
+    assert!(receive.contains("let mut info: seL4_Word = 0;"));
+    assert_eq!(receive.matches("inout(\"x1\") info,").count(), 2);
+    assert!(!receive
+        .lines()
+        .any(|line| line.trim() == "out(\"x1\") info,"));
+    // Send/receive must retain its outgoing tag rather than adopting the
+    // receive-only seed; received nonzero tags remain kernel outputs.
+    let send_receive_end = bindings[end..]
+        .find("*out_info = info;")
+        .map(|offset| end + offset)
+        .expect("send/receive tag output");
+    let send_receive = &bindings[end..send_receive_end];
+    assert!(send_receive.contains("let mut info = info_arg;"));
+    assert_eq!(send_receive.matches("inout(\"x1\") info,").count(), 2);
+}
+
+#[test]
 fn root_control_bound_notification_is_pi_only_and_precedes_runtime_receive() {
     let critical = include_str!("../src/hal/critical_tcb.rs");
     let activation_start = critical
