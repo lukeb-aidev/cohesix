@@ -48,6 +48,17 @@ belong in [DRIVERS.md](DRIVERS.md) and
   evidence. The Python `MockBackend` is instead filesystem-backed; see
   [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md).
 
+The host gateway optionally spaces telemetry transactions that were already
+queued when the previous transaction completed:
+`hive-gateway --concurrent-telemetry-gap-us 1000`. The range is `0..=1000`
+microseconds and the default is `0` (disabled). Idle requests acquire no added
+delay. The gap is between broker transactions, which can contain a batch;
+execution and control traffic retain priority before the next telemetry turn.
+Host timer resolution can make the observed gap longer than requested. This
+option trades dispatch delay for smoother sustained demand; compare complete
+REST request or batch times as well as wire latency before enabling it. It does
+not change direct `cohsh`/raw TCP behavior or target scheduling reservations.
+
 ## Root console
 
 The root console appears as `cohesix>` after root-task console initialization.

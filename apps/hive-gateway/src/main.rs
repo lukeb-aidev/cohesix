@@ -218,6 +218,9 @@ struct Cli {
     /// Override pooled telemetry session capacity for this gateway process.
     #[arg(long)]
     pool_telemetry_sessions: Option<u16>,
+    /// Minimum microseconds between telemetry transactions already queued together (0 disables).
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=1000))]
+    concurrent_telemetry_gap_us: u64,
     /// Max milliseconds to wait for a control broker response after enqueue.
     #[arg(
         long = "broker-control-response-timeout-ms",
@@ -1301,8 +1304,12 @@ async fn main() -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let broker_metrics = Arc::new(BrokerMetrics::default());
     seed_relay_metrics_from_env(&broker_metrics);
-    let broker_client =
-        build_gateway_broker(pool.clone(), broker_metrics.clone(), shutdown.clone());
+    let broker_client = build_gateway_broker(
+        pool.clone(),
+        broker_metrics.clone(),
+        shutdown.clone(),
+        config.concurrent_telemetry_gap,
+    );
 
     let state = AppState {
         inner: Arc::new(GatewayInner {
@@ -1382,6 +1389,7 @@ struct GatewayConfig {
     ticket: Option<String>,
     pool_control_sessions: Option<u16>,
     pool_telemetry_sessions: Option<u16>,
+    concurrent_telemetry_gap: Duration,
     broker_timeouts: BrokerTimeouts,
     control_write_retry_window_ms: u64,
     mock: bool,
@@ -1537,6 +1545,7 @@ impl GatewayConfig {
             ticket,
             pool_control_sessions,
             pool_telemetry_sessions,
+            concurrent_telemetry_gap: Duration::from_micros(cli.concurrent_telemetry_gap_us),
             broker_timeouts: BrokerTimeouts {
                 control_response_ms: broker_control_response_timeout_ms,
                 telemetry_response_ms: broker_telemetry_response_timeout_ms,
@@ -2234,6 +2243,7 @@ fn build_gateway_broker(
     pool: SharedPool,
     metrics: Arc<BrokerMetrics>,
     shutdown: Arc<AtomicBool>,
+    concurrent_telemetry_gap: Duration,
 ) -> GatewayBrokerClient {
     let (execution_tx, execution_rx) = mpsc::sync_channel(BROKER_EXECUTION_QUEUE_CAPACITY);
     let (control_tx, control_rx) = mpsc::sync_channel(BROKER_CONTROL_QUEUE_CAPACITY);
@@ -2246,6 +2256,7 @@ fn build_gateway_broker(
             execution_rx,
             control_rx,
             telemetry_rx,
+            concurrent_telemetry_gap,
         );
     });
     GatewayBrokerClient {
@@ -2262,7 +2273,9 @@ fn run_broker_dispatcher(
     execution_rx: Receiver<BrokerCommand>,
     control_rx: Receiver<BrokerCommand>,
     telemetry_rx: Receiver<BrokerCommand>,
+    concurrent_telemetry_gap: Duration,
 ) {
+    let mut queued_telemetry_finished: Option<Instant> = None;
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
@@ -2304,10 +2317,25 @@ fn run_broker_dispatcher(
             }
         }
 
+        let spacing = queued_telemetry_delay(
+            concurrent_telemetry_gap,
+            queued_telemetry_finished.map(|finished| finished.elapsed()),
+            metrics.telemetry_waiters.load(Ordering::Relaxed) != 0,
+        );
+        if !spacing.is_zero() {
+            // No transport or pool lease is held. Revisit execution and control
+            // before telemetry after this bounded wait, as in the idle path.
+            thread::sleep(spacing);
+            continue;
+        }
+
         match telemetry_rx.try_recv() {
             Ok(command) => {
                 dispatched = true;
                 dispatch_telemetry_command(&pool, &metrics, command, &telemetry_rx);
+                queued_telemetry_finished = (!concurrent_telemetry_gap.is_zero()
+                    && metrics.telemetry_waiters.load(Ordering::Relaxed) != 0)
+                    .then(Instant::now);
             }
             Err(TryRecvError::Empty) => {
                 if dispatched {
@@ -2327,6 +2355,21 @@ fn run_broker_dispatcher(
         thread::sleep(Duration::from_millis(BROKER_IDLE_WAIT_MS));
     }
     pool.shutdown();
+}
+
+/// Idle requests acquire no delay; only a backlog observed at the previous
+/// transaction's completion can retain the configured spacing deadline.
+fn queued_telemetry_delay(
+    gap: Duration,
+    elapsed_since_backlogged_completion: Option<Duration>,
+    waiting: bool,
+) -> Duration {
+    if !waiting {
+        return Duration::ZERO;
+    }
+    elapsed_since_backlogged_completion
+        .map(|elapsed| gap.saturating_sub(elapsed))
+        .unwrap_or(Duration::ZERO)
 }
 
 fn dispatch_control_command(
@@ -4915,6 +4958,43 @@ mod tests {
     }
 
     #[test]
+    fn queued_telemetry_spacing_requires_backlog_and_expires_without_extension() {
+        let gap = Duration::from_millis(1);
+        assert_eq!(queued_telemetry_delay(gap, None, true), Duration::ZERO);
+        assert_eq!(
+            queued_telemetry_delay(gap, Some(Duration::ZERO), false),
+            Duration::ZERO
+        );
+        assert_eq!(
+            queued_telemetry_delay(Duration::ZERO, Some(Duration::ZERO), true),
+            Duration::ZERO
+        );
+        assert_eq!(
+            queued_telemetry_delay(gap, Some(Duration::from_micros(400)), true),
+            Duration::from_micros(600)
+        );
+        assert_eq!(queued_telemetry_delay(gap, Some(gap), true), Duration::ZERO);
+        assert_eq!(
+            queued_telemetry_delay(gap, Some(Duration::from_millis(2)), true),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn queued_telemetry_cli_defaults_off_and_bounds_the_operator_wait() {
+        let default = Cli::try_parse_from(["hive-gateway"]).expect("default arguments");
+        assert_eq!(default.concurrent_telemetry_gap_us, 0);
+        let enabled =
+            Cli::try_parse_from(["hive-gateway", "--concurrent-telemetry-gap-us", "1000"])
+                .expect("one millisecond maximum");
+        assert_eq!(enabled.concurrent_telemetry_gap_us, 1000);
+        assert!(
+            Cli::try_parse_from(["hive-gateway", "--concurrent-telemetry-gap-us", "1001",])
+                .is_err()
+        );
+    }
+
+    #[test]
     fn cacheable_read_path_includes_proc_host_and_gpu() {
         assert!(is_cacheable_read_path("/proc/root/reachable"));
         assert!(is_cacheable_read_path("/host/systemd/ssh.service/status"));
@@ -5754,6 +5834,7 @@ mod tests {
             ticket: None,
             pool_control_sessions: Some(3),
             pool_telemetry_sessions: Some(12),
+            concurrent_telemetry_gap: Duration::ZERO,
             broker_timeouts: BrokerTimeouts {
                 control_response_ms: DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
                 telemetry_response_ms: DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
