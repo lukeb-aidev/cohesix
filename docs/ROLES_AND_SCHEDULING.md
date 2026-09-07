@@ -310,8 +310,17 @@ read; ordinary zero takes the existing bounded Yield. One exact causal cut is
 different: after durable revalidation proves either an exact signal-bound
 finite one-way CYW43 operation whose sequence-last terminal is still absent, or
 an exact staged console response whose child-consumption or `OutputDrained`
-publication is still owed, root polls once and waits only if that poll is
-empty. Persistent and steady CYW43 parents retain root-polled deadlines. They
+publication is still owed, root polls once. Direct GENET then rechecks
+that exact debt and every continuation fence after an empty or fan-in-only
+result; if they remain valid it receives once, without reissuing the peripheral
+rotor merely because a coalesced edge was present. A fresh durable child level
+or closed fence returns to outer arbitration. An endpoint result has retained
+payload ownership and must never enter that second receive. A second edge
+returns through the outer rotor, never an inner notification-draining loop.
+The existing logical causal-return and completed-quantum limits stay at 64;
+no notification or wait resets them. WiFi retains its separate causal helper
+and waits only after its existing empty poll. Persistent and steady CYW43
+parents retain root-polled deadlines. They
 may wait only after the exact physical WiFi topology proves the PCIe-owned
 5-ms timer is live. Root polls its absolute timer duty before enable and again
 after the synchronous owner Call, then rechecks the physical completion,

@@ -10493,6 +10493,25 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET condition-after-hint repair — both unchanged `75a5be626` boots
+    reach the causal-return limit of 64 with an exact response still pending,
+    only 15–21 completed quanta and no productive-cap or policy rejection.
+    The complete traces contain only seven/five blocking-receive invocations;
+    most logical returns therefore came from a nonblocking fan-in observation.
+    After the existing single poll, revalidate the same exact child debt and
+    full operator/recovery fence. An empty poll or fan-in-only hint may then
+    enter the existing single receive; a new durable publication returns to
+    ordinary arbitration. A retained endpoint or unavailable Reply authority
+    must never receive again. This is bounded by one poll and at most one wait,
+    with the same 64-return/quantum caps, clock, cursor, SC and physical owners.
+    There is no repeated notification drain, increased allowance or reset.
+    Test closure order, state-change rejection, endpoint retention and a second
+    coalesced wake; qualify exact Pi layout and pinned QEMU root-MCS before
+    fresh dual-mode raw/CPU/Yield/receive and functional/pressure comparison.
+    Discovery: `m26e-console-network-service-isolation`. The complete host-tool
+    catalog/suite, Python SDK, generated interfaces, diagnostic readers and
+    raw/REST workloads/report schemas require no changes. No target gain or
+    reliability closure is established until fresh physical evidence passes.
   - Exact final GENET Yield decision — the unchanged c45d79075 pair retains
     p95 7.603/7.670 ms while complete receive traces total only 453/421 us.
     Recorded explicit Yields overlap several slow PINGs, but 21/20 of 64 exceed

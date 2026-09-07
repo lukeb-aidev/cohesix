@@ -722,8 +722,30 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("|pump| pump.wait_pi_root_control_receive()")
         .expect("exact causal debt may block on the bound endpoint/fan-in receive");
     assert!(prewait_poll < blocking_wait);
+    let genet_start = wait_helper
+        .find("fn wait_pi_root_control_genet_causal_fanin<")
+        .expect("GENET must retain a separate exact-identity recheck wrapper");
+    let wifi_helper = &wait_helper[..genet_start];
+    assert!(wifi_helper.contains("|_, polled| matches!(polled, RootControlReceiveOutcome::Empty)"));
     assert_eq!(
-        wait_helper
+        wifi_helper
+            .matches("pump.wait_pi_root_control_receive()")
+            .count(),
+        1
+    );
+    let genet_helper = &wait_helper[genet_start..];
+    let genet_poll = genet_helper
+        .find("|pump| pump.poll_pi_root_control_receive()")
+        .unwrap();
+    let exact_recheck = genet_helper
+        .find("|pump, _| pump.pi_root_control_productive_child_wait_eligible(expected)")
+        .expect("GENET must recheck the same exact debt after consuming the edge");
+    let genet_wait = genet_helper
+        .find("|pump| pump.wait_pi_root_control_receive()")
+        .unwrap();
+    assert!(genet_poll < exact_recheck && exact_recheck < genet_wait);
+    assert_eq!(
+        genet_helper
             .matches("pump.wait_pi_root_control_receive()")
             .count(),
         1
@@ -745,7 +767,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .map(|offset| causal_identity + offset)
         .expect("steady GENET must re-read live child debt before blocking");
     let causal_wait = steady[durable_debt..]
-        .find("wait_pi_root_control_causal_fanin(pump)")
+        .find("wait_pi_root_control_genet_causal_fanin(pump, identity)")
         .map(|offset| durable_debt + offset)
         .expect("steady GENET must block only after the exact debt check");
     let record_wait = steady[causal_wait..]

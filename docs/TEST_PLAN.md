@@ -2460,7 +2460,13 @@ prove all of the following:
   is copied while its one-shot root ACK is owed. Verify idle only after credit
   retirement, with malformed/stale page rejection even while credit is owed. Productive GENET tokens may renew one wake recheck;
   empty notifications/publications cannot renew it or reset the 64-quantum
-  work bound, clock or causal-wait count. Keep existing SMP/CPU reports complete. Run recorder coverage
+  work bound, clock or causal-wait count. The exact GENET causal helper must
+  poll once and recheck durable debt and all fences before at most one wait,
+  including when the first result is only a fan-in hint. A changed predicate
+  must suppress the wait; endpoint retention and unavailable Reply authority
+  must suppress both recheck and wait. A second coalesced edge returns through
+  outer arbitration, never an unbounded drain. WiFi's causal helper remains
+  separate. Keep existing SMP/CPU reports complete. Run recorder coverage
   with `driver-tests-pi4`; QEMU does not compile the Pi recorder. Compile the
   exact Pi observer and run the pinned QEMU root-MCS canary before hardware.
   Read traces only after the first untouched raw TCP attempt and before later
