@@ -2509,19 +2509,6 @@ prove all of the following:
   receive header and at most 16 brackets
   require slowest-first retention, stable ties, generation reset, invalid-clock
   rejection and saturating totals. Keep the full command within 58 body rows.
-  The GENET-only receive CPU probe retains a prefix of at most 128 receive
-  identities and requests at most two `Consumed` reads per identity from the
-  existing driver supervisor. Test once-only claims, cancelled late baselines,
-  bounded storage, replacement-session rejection, capability-generation/error
-  drift, counter reversal and complete maximum-width rows. The optional `gc`
-  field is hexadecimal GENET CPU microseconds or `na`; `gb` and `ge` retain
-  both syscall entry/return ticks. Require a baseline sampled before the
-  receive ends and an end sample after that end; never substitute zero for an
-  incomplete pair. The receive bracket includes the baseline-request prompt.
-  These asynchronous probes add observer work and are convergence diagnostics,
-  not proof of SC eligibility or an unchanged-image performance comparison.
-  Formatting performs no SC read. Existing lifecycle accounting must include
-  every intermediate drain, and fault containment precedes probe service.
   A newly staged exact GENET response remains eligible after immediate control
   consumption until its drain; reject stale, missing, zero-sequence or completed
   debt and never override an invalid extant control with fallback debt.

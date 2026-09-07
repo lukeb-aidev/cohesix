@@ -2897,16 +2897,9 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
             if let Some((request, role)) = crate::pi4_mcs_consumed::driver_request() {
                 let sample = crate::hal::driver_task::driver_supervisor_consumed_sample(role);
                 crate::pi4_mcs_consumed::store(request, role, sample);
-            } else if let Some(request) = crate::pi4_mcs_consumed::receive_request() {
-                let sample = crate::hal::driver_task::driver_supervisor_consumed_sample(
-                    crate::pi4_mcs_consumed::Role::Genet,
-                );
-                crate::pi4_mcs_consumed::store_receive(request, sample);
-            }
-            if crate::pi4_mcs_consumed::driver_pending()
-                || crate::pi4_mcs_consumed::receive_pending()
-            {
-                sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);
+                if crate::pi4_mcs_consumed::driver_pending() {
+                    sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);
+                }
             }
         }
     }

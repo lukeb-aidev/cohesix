@@ -954,13 +954,6 @@ impl PiMcsSessionSummary {
                 record.end,
                 record.hz
             );
-            #[cfg(any(sel4_config_kernel_mcs, test))]
-            crate::pi4_mcs_consumed::append_receive_cpu(
-                &mut lines[index + 1],
-                record.generation,
-                record.connection,
-                record.begin,
-            );
         }
         lines
     }

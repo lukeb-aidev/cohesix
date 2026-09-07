@@ -1258,17 +1258,6 @@ unchanged.
   mutation; descriptor publication, cache/barrier ordering, and sequence-last
   direct-ring commits are unchanged. This reduces the per-frame volatile-copy
   operation count without widening a DMA mapping or moving device authority.
-- The Pi root receive trace may request two asynchronous GENET `Consumed`
-  samples through the existing driver supervisor for each of its first 128
-  receive intervals. The supervisor retains sole SC authority, handles faults
-  and lifecycle samples first, and admits at most one read per existing wake.
-  Missing or delayed baselines remain unavailable; samples never select work,
-  alter a reservation or mint a refill. The existing receive rows append `gc`
-  (hexadecimal CPU microseconds or `na`), `gb` and `ge` (owner syscall entry and
-  return counter pairs). Their margins expose observer delay. This bounded
-  GENET convergence probe preserves runtime ABI v13 and the 58-row diagnostic
-  envelope; it is inactive on WiFi and QEMU. It must not be interpreted as
-  direct evidence of kernel release-queue eligibility.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
   direct-GENET diagnostic-v6 record occupies the formerly reserved bytes
