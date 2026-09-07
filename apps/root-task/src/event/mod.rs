@@ -14366,6 +14366,21 @@ where
                 begin: crate::arch::aarch64::timer::timer_counter_ticks(),
             })
         });
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        if let Some(record) = receive_cut {
+            if crate::pi4_mcs_consumed::receive_begin(
+                record.generation,
+                record.connection,
+                record.begin,
+            ) {
+                crate::hal::critical_tcb::signal_driver_accounting_request();
+            }
+        }
         let outcome = self.ipc.wait_root_control_receive(self.now_ms);
         #[cfg(all(
             feature = "release-pi4",
@@ -14375,6 +14390,14 @@ where
         ))]
         if let Some(mut record) = receive_cut {
             record.end = crate::arch::aarch64::timer::timer_counter_ticks();
+            if crate::pi4_mcs_consumed::receive_finish(
+                record.generation,
+                record.connection,
+                record.begin,
+                record.end,
+            ) {
+                crate::hal::critical_tcb::signal_driver_accounting_request();
+            }
             record.outcome = match outcome {
                 RootControlReceiveOutcome::Empty => {
                     crate::pi4_mcs_recorder::PiMcsReceiveOutcome::Empty

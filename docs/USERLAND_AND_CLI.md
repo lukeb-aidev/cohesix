@@ -243,11 +243,24 @@ microseconds with earlier samples first on ties. Header `generation`, `conn`,
 `hz` are decimal while `cmd` and the two `ticks` values are hex. `outcome` is
 `empty`, `endpoint`, `fanin` or `unavailable`, preserving the returned receive
 classification. Two CNTVCT reads bracket the existing receive only while a
-nonzero Pi TCP identity is live; no receive or accounting operation is added.
-These intervals include existing endpoint handling and preemption, and do not
-measure CPU or prove that root slept throughout. Invalid clocks are counted;
+nonzero Pi TCP identity is live. The GENET convergence probe also requests
+asynchronous CPU samples through the existing driver supervisor for at most
+128 receives per connection. It adds no receive, timer, capability or scheduling
+authority. The bracket includes the baseline-request prompt, existing endpoint
+handling and preemption; elapsed time does not measure CPU or prove that root
+slept throughout. Invalid clocks are counted;
 `omitted` counts valid brackets excluded by the bounded retention. The complete
 command is bounded to 58 body rows before its terminal acknowledgement.
+
+On an instrumented GENET session a receive row appends hexadecimal `gc` CPU
+microseconds and `gb`/`ge` entry/return counter pairs for the supervisor's two
+actual `Consumed` calls. `gc=na` denotes a missing, late, stale or invalid pair,
+including receives beyond the 128-entry prefix. A valid baseline must finish
+before the receive ends, and its end sample must start after that receive end.
+The asynchronous margins are part of the evidence; do not divide `gc` by the
+root interval without accounting for them. These reads add observer work and
+do not expose kernel refill eligibility. WiFi and QEMU do not request them.
+Displaying the cached rows performs no CPU-accounting operation.
 
 The Pi USB inventory separates passive inspection from active operations:
 `usb status`, `usb dump-state`, and `usb diag` are passive, while
