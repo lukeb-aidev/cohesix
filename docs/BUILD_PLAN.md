@@ -10493,6 +10493,21 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact-1894029de PCIe mapping publication repair — the unchanged two-WiFi,
+    two-GENET matrix completes before edits. Both GENET boots prove code word
+    `0x34` changes from `0x91002100` to PCIe BAR2 value `0x11` before network
+    construction, then fault at that address. The first successful mapping
+    cache compare-exchange returned its previous zero instead of the new page;
+    register offsets therefore addressed low root text. Return the published
+    page or existing winner, and reject zero or unaligned page bases before
+    register access. Preserve HAL ownership, mapping/capability policy, memory,
+    SC, driver, protocol and workload bounds. Test first publication, existing
+    winner and invalid address contracts; retain exact Pi code-integrity and
+    network proof before claiming recovery or performance. Complete host-tool,
+    Python library, generated interface, raw/REST benchmark and trace-consumer
+    review finds no consumer, schema or workload change. Discovery remains
+    `m26e-console-network-service-isolation` and
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`.
   - Exact-7b6 bootstrap storage and instruction investigation — collect two
     WiFi and two GENET boots before edits. Both GENET boots report the same
     root UserException at PC `0x34` after `stack-allocation.ok`; the saved ELF

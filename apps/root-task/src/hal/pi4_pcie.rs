@@ -1919,20 +1919,28 @@ fn map_pcie_reg_page_cached(
     };
     let cached = cache.load(Ordering::Acquire);
     if cached != 0 {
-        return Ok(cached);
+        return same_page_reg_virt(cached, 0);
     }
 
     let (page_paddr, _) = pcie_reg_page(reg_offset)?;
     let mut prefix_maps = Vec::new();
     let frame = map_device_exact(hal, page_paddr, label, &mut prefix_maps)?;
     let page_virt = frame.ptr().as_ptr() as usize;
-    let stored = cache
-        .compare_exchange(0, page_virt, Ordering::AcqRel, Ordering::Acquire)
-        .unwrap_or_else(|stored| stored);
+    let stored = publish_pcie_reg_page(cache, page_virt)?;
     if stored == page_virt {
         core::mem::forget(frame);
     }
     Ok(stored)
+}
+
+/// Return the published mapping, including on the first successful insertion.
+/// Compare-exchange returns the previous zero on success, never the new page.
+fn publish_pcie_reg_page(cache: &AtomicUsize, page_virt: usize) -> Result<usize, HalError> {
+    let page_virt = same_page_reg_virt(page_virt, 0)?;
+    match cache.compare_exchange(0, page_virt, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => Ok(page_virt),
+        Err(stored) => same_page_reg_virt(stored, 0),
+    }
 }
 
 fn map_device_exact(
@@ -2022,6 +2030,11 @@ const fn should_log_exact_map_retry(attempt: usize, max_attempts: usize) -> bool
 }
 
 fn same_page_reg_virt(page_virt: usize, reg_offset: usize) -> Result<usize, HalError> {
+    // A missing or malformed mapping must fail before register offsets can
+    // turn it into an address in the root image's mapped low text pages.
+    if page_virt == 0 || page_virt & PAGE_MASK != 0 {
+        return Err(HalError::Unsupported("pcie-reg-page-virt"));
+    }
     page_virt
         .checked_add(reg_offset & PAGE_MASK)
         .ok_or(HalError::Unsupported("pcie-reg-virt"))
@@ -2541,6 +2554,60 @@ const fn div_ceil(value: usize, divisor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pcie_page_publication_returns_new_mapping_on_first_insert() {
+        let cache = AtomicUsize::new(0);
+        let mapped = publish_pcie_reg_page(&cache, 0x6000_0000).expect("valid mapped page");
+        assert_eq!(mapped, 0x6000_0000);
+        assert_eq!(cache.load(Ordering::Acquire), 0x6000_0000);
+        assert_eq!(
+            same_page_reg_virt(mapped, 0x4034).expect("BAR2 low register"),
+            0x6000_0034
+        );
+    }
+
+    #[test]
+    fn pcie_page_publication_returns_existing_winner_without_replacing_it() {
+        let cache = AtomicUsize::new(0x6100_0000);
+        assert_eq!(
+            publish_pcie_reg_page(&cache, 0x6200_0000).expect("existing mapped page"),
+            0x6100_0000
+        );
+        assert_eq!(cache.load(Ordering::Acquire), 0x6100_0000);
+    }
+
+    #[test]
+    fn pcie_page_publication_rejects_invalid_candidate_and_cached_mapping() {
+        for invalid in [0, 1, 0x6000_0001] {
+            let cache = AtomicUsize::new(0);
+            assert!(matches!(
+                publish_pcie_reg_page(&cache, invalid),
+                Err(HalError::Unsupported("pcie-reg-page-virt"))
+            ));
+            assert_eq!(cache.load(Ordering::Acquire), 0);
+        }
+        let cache = AtomicUsize::new(0x6100_0001);
+        assert!(matches!(
+            publish_pcie_reg_page(&cache, 0x6200_0000),
+            Err(HalError::Unsupported("pcie-reg-page-virt"))
+        ));
+        assert_eq!(cache.load(Ordering::Acquire), 0x6100_0001);
+    }
+
+    #[test]
+    fn pcie_register_address_rejects_missing_or_unaligned_page() {
+        for page in [0, 1, 0x6000_0001] {
+            assert!(matches!(
+                same_page_reg_virt(page, 0x4034),
+                Err(HalError::Unsupported("pcie-reg-page-virt"))
+            ));
+        }
+        assert_eq!(
+            same_page_reg_virt(0x6000_0000, 0x4068).expect("mapped status register"),
+            0x6000_0068
+        );
+    }
 
     #[test]
     fn pcie_status_requires_link_and_root_complex_mode() {

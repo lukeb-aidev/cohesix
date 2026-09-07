@@ -1272,6 +1272,14 @@ this storage repair. For the Pi GENET instruction frontier, compare every
 Root entry, IPC installation, fault-receiver activation and constructor cuts
 must remain separately identifiable. Data reads cannot establish instruction
 cache contents, and source/build or QEMU evidence cannot close the Pi fault.
+PCIe cache tests independently require the first successful publication to
+return its new mapped page, an occupied cache to retain its existing winner,
+and zero or unaligned candidates, cached addresses and register bases to fail
+before MMIO. These are atomic publication and address-arithmetic contracts;
+host tests do not simulate physical mappings. Fresh Pi GENET evidence must
+retain unchanged text samples through construction and then establish a live
+TCP console before performance workloads. Keep WiFi and GENET boot evidence
+separate on the same exact image.
 Runtime
 tests must drive the retained Linux-ordered
 GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms

@@ -1979,6 +1979,15 @@ with the retained exact ELF; matching data reads alone do not prove the bytes
 fetched by the instruction cache. These boot-only diagnostics grant no recovery
 or acceptance credit and do not add steady-state sampling.
 
+HAL's PCIe register-page cache returns the newly mapped address on its first
+successful publication, or the existing winner if another publication won.
+The previous zero returned by a successful atomic compare-exchange is never a
+mapping. Cache hits, publication results and register-address construction
+require a nonzero page-aligned virtual base; invalid bases return
+`pcie-reg-page-virt` before any register access. This prevents a missing mapping
+from turning PCIe register offsets into writes to low root text. Physical
+mapping, capability admission and the existing PCIe owner remain unchanged.
+
 Diagnostics should make the owner state machine understandable without
 embedding a particular failure history in this document.
 
