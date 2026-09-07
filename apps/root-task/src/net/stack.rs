@@ -4442,6 +4442,11 @@ impl<D: NetDevice> NetStack<D> {
     fn trace_genet_constructor_cut(line: &'static str) {
         if D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT {
             crate::bootstrap::log::force_uart_line_raw(line);
+            #[cfg(target_os = "none")]
+            crate::bootstrap::layout::trace_root_text(
+                line.strip_prefix("[diag net-bootstrap/v1] backend=genet cut=")
+                    .unwrap_or(line),
+            );
         }
     }
 

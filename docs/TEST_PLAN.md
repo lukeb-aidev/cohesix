@@ -1262,6 +1262,16 @@ ELF, include outlined stack-probe helpers and retained callers, and preserve
 failed candidates. The mapped gap above the downward-growing root stack is
 IPC separation, not overflow detection; do not infer heap safety from boot
 success or the layout equality test.
+Bootstrap TLS storage tests must establish the eight-byte base word at offset
+zero, sixteen-byte alignment and occupied size, and disjoint adjacent cells.
+Exact AArch64 ELF inspection must prove one sixteen-byte `__tls_base` object
+with no overlapping writable symbol; a host layout test cannot prove linker
+placement. The shared root-MCS QEMU canary covers entry and live operation after
+this storage repair. For the Pi GENET instruction frontier, compare every
+`root-text/v1` checksum and offset-`0x34` word with the retained exact ELF.
+Root entry, IPC installation, fault-receiver activation and constructor cuts
+must remain separately identifiable. Data reads cannot establish instruction
+cache contents, and source/build or QEMU evidence cannot close the Pi fault.
 Runtime
 tests must drive the retained Linux-ordered
 GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms

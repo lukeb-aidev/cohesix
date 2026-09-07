@@ -40,6 +40,14 @@ must use artifacts generated from its selected `configs/root_task*.toml` file.
 The selected `SEL4_BUILD_DIR` supplies exact kernel headers, configuration,
 object sizes, platform metadata, and timer truth.
 
+The root bootstrap TLS-base cell is real, sixteen-byte-aligned storage owned
+by `sel4-sys`, alongside its atomic accessors. The runtime entry crate does not
+redeclare that symbol. Publishing a base address grants no mutable ownership
+of the TLS image; its unsafe mutable accessor requires exclusive caller
+ownership. The current libsel4 IPC-buffer pointer remains separately installed
+from BootInfo. Exact ELF inspection must confirm the TLS cell occupies sixteen
+bytes and does not overlap other writable symbols.
+
 ### 1.1 Current implementation boundary
 
 The selected source profiles define one four-core SMP+MCS architecture for QEMU

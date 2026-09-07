@@ -10,6 +10,43 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 
+/// Storage for the root runtime's bootstrap TLS-base word. Alignment alone
+/// does not reserve bytes: the exported object must own the complete word.
+#[cfg(any(target_os = "none", test))]
+#[repr(C, align(16))]
+struct TlsBaseCell {
+    address: core::sync::atomic::AtomicUsize,
+}
+
+#[cfg(any(target_os = "none", test))]
+impl TlsBaseCell {
+    const fn new() -> Self {
+        Self {
+            address: core::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tls_storage_tests {
+    use super::TlsBaseCell;
+    use core::sync::atomic::Ordering;
+
+    #[test]
+    fn exported_tls_word_has_storage_and_c_layout() {
+        // The AArch64 bootstrap ABI owns one eight-byte word at offset zero
+        // with sixteen-byte alignment; padding is storage, not an alias.
+        assert_eq!(core::mem::size_of::<TlsBaseCell>(), 16);
+        assert_eq!(core::mem::align_of::<TlsBaseCell>(), 16);
+        assert_eq!(core::mem::offset_of!(TlsBaseCell, address), 0);
+        let cells = [TlsBaseCell::new(), TlsBaseCell::new()];
+        assert_eq!(cells[0].address.load(Ordering::Relaxed), 0);
+        cells[0].address.store(0x1234_5000, Ordering::Release);
+        assert_eq!(cells[0].address.load(Ordering::Acquire), 0x1234_5000);
+        assert_eq!(cells[1].address.load(Ordering::Relaxed), 0);
+    }
+}
+
 #[cfg(target_os = "none")]
 mod imp {
     use core::arch::asm;
@@ -2531,34 +2568,28 @@ mod imp {
         }
     }
 
-    #[inline(always)]
-    unsafe fn tls_base_ptr() -> *mut TlsImage {
-        extern "C" {
-            static mut __tls_base: usize;
-        }
+    // Keep the exported storage and its accessors in one crate so an external
+    // zero-sized declaration cannot silently alias a following BSS object.
+    #[no_mangle]
+    static __tls_base: super::TlsBaseCell = super::TlsBaseCell::new();
 
-        let ptr = core::ptr::addr_of_mut!(__tls_base);
-        let mut base: usize;
-        core::arch::asm!("ldr {}, [{ptr}]", out(reg) base, ptr = in(reg) ptr, options(nostack));
-        base as *mut TlsImage
+    pub fn tls_set_base(ptr: *mut TlsImage) {
+        __tls_base
+            .address
+            .store(ptr as usize, core::sync::atomic::Ordering::Release);
     }
 
-    pub unsafe fn tls_set_base(ptr: *mut TlsImage) {
-        extern "C" {
-            static mut __tls_base: usize;
-        }
-
-        let addr = ptr as usize;
-        let dest_ptr = core::ptr::addr_of_mut!(__tls_base);
-        core::arch::asm!("str {value}, [{dst}]", value = in(reg) addr, dst = in(reg) dest_ptr, options(nostack));
-    }
-
+    /// The caller owns the pointed-to image exclusively for the returned
+    /// reference's lifetime; publishing its address does not confer ownership.
     pub unsafe fn tls_image_mut() -> Option<&'static mut TlsImage> {
-        let base = tls_base_ptr();
+        let base = __tls_base
+            .address
+            .load(core::sync::atomic::Ordering::Acquire) as *mut TlsImage;
         if base.is_null() {
             return None;
         }
-
+        // SAFETY: The caller guarantees the published image is valid, live,
+        // aligned, and exclusively borrowed for the returned reference.
         Some(&mut *base)
     }
 

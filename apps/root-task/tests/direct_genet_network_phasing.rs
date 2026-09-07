@@ -98,7 +98,10 @@ fn pi_genet_constructor_receipts_are_ordered_and_physical_owner_gated() {
         "if D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT"
     ));
     assert_eq!(helper.matches("force_uart_line_raw(line)").count(), 1);
-    assert!(!helper.contains("backend"));
+    // A literal diagnostic prefix may name the backend; instance state must
+    // not replace the exact type-owned contract as the admission predicate.
+    assert!(!helper.contains("self.backend"));
+    assert!(helper.contains("crate::bootstrap::layout::trace_root_text("));
 }
 
 #[test]

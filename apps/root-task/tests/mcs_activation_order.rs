@@ -4,6 +4,29 @@
 // Author: Lukas Bower
 
 #[test]
+fn bootstrap_text_samples_are_bounded_and_do_not_repair_or_schedule() {
+    let layout = include_str!("../src/bootstrap/layout.rs");
+    let start = layout.find("pub(crate) fn trace_root_text(").unwrap();
+    let end = layout[start..].find("#[derive(Copy, Clone").unwrap() + start;
+    let probe = &layout[start..end];
+    assert!(probe.contains("checked_add(4096).filter(|end| *end <= text_end)"));
+    assert!(probe.contains("let start = text_start + 4;"));
+    assert!(probe.contains("(start..end).step_by(4)"));
+    assert_eq!(probe.matches("core::ptr::read_volatile(").count(), 1);
+    for forbidden in ["write_volatile", "Page_Map", "yield_now", "Box::", "Vec::"] {
+        assert!(
+            !probe.contains(forbidden),
+            "probe must not contain {forbidden}"
+        );
+    }
+    let runtime = include_str!("../../../crates/sel4-runtime/src/lib.rs");
+    assert!(!runtime.contains("__tls_base"));
+    let bindings = include_str!("../../../crates/sel4-sys/src/lib.rs");
+    assert_eq!(bindings.matches("static __tls_base:").count(), 1);
+    assert!(!bindings.contains("static mut __tls_base: usize"));
+}
+
+#[test]
 fn driver_containment_release_reaches_root_through_existing_fault_cap() {
     let source = include_str!("../src/hal/critical_tcb.rs");
     let start = source

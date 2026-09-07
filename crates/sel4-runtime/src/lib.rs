@@ -10,15 +10,6 @@ use core::ptr;
 
 use sel4_sys::seL4_BootInfo;
 
-#[cfg(target_arch = "aarch64")]
-#[repr(align(16))]
-struct TlsBaseCell;
-
-#[cfg(target_arch = "aarch64")]
-#[no_mangle]
-#[used]
-static mut __tls_base: TlsBaseCell = TlsBaseCell;
-
 #[cfg(all(target_arch = "aarch64", target_os = "none"))]
 extern "C" {
     static __stack_top: u8;

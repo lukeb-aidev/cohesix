@@ -34,6 +34,57 @@ extern "C" {
     static __stack_top: u8;
 }
 
+#[cfg(any(test, all(feature = "release-pi4", feature = "bootstrap-trace")))]
+fn root_text_word_checksum(mut hash: u32, word: u32) -> u32 {
+    for byte in word.to_le_bytes() {
+        hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// Observe the first mapped text page at fixed bootstrap boundaries. The
+/// loaded ELF supplies the independent expected checksum and instruction word;
+/// this sample neither changes mappings nor repairs or resumes a fault.
+#[cfg(all(
+    feature = "release-pi4",
+    feature = "bootstrap-trace",
+    target_os = "none"
+))]
+pub(crate) fn trace_root_text(cut: &str) {
+    let text_start = core::ptr::addr_of!(__text_start) as usize;
+    let text_end = core::ptr::addr_of!(__text_end) as usize;
+    let Some(end) = text_start.checked_add(4096).filter(|end| *end <= text_end) else {
+        force_uart_line("[diag root-text/v1] state=invalid-linker-span");
+        return;
+    };
+    if text_start & 4095 != 0 {
+        force_uart_line("[diag root-text/v1] state=unaligned-linker-span");
+        return;
+    }
+    // Exclude the entry word at virtual zero: never form or dereference a null
+    // Rust pointer even though the selected kernel maps the first text page.
+    let start = text_start + 4;
+    let mut hash = 0x811c_9dc5u32;
+    let mut word_34 = 0u32;
+    for address in (start..end).step_by(4) {
+        // SAFETY: The linker-aligned interval is wholly within the first
+        // kernel-mapped root text page, remains mapped throughout bootstrap,
+        // and each non-null address is u32-aligned. Only volatile reads occur;
+        // no reference or write alias is created over executable storage.
+        let word = unsafe { core::ptr::read_volatile(address as *const u32) };
+        hash = root_text_word_checksum(hash, word);
+        if address - text_start == 0x34 {
+            word_34 = word;
+        }
+    }
+    let mut line = String::<224>::new();
+    let _ = write!(
+        line,
+        "[diag root-text/v1] cut={cut} start=0x{start:x} bytes=4092 fnv1a32=0x{hash:08x} word34=0x{word_34:08x}",
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct LayoutSnapshot {
     text_start: usize,
@@ -288,7 +339,7 @@ pub fn dump_and_sanity_check() -> LayoutSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutError, LayoutSnapshot, EXPECTED_STACK_SIZE};
+    use super::{root_text_word_checksum, LayoutError, LayoutSnapshot, EXPECTED_STACK_SIZE};
 
     #[test]
     fn layout_validation_flags_overlap() {
@@ -300,6 +351,16 @@ mod tests {
 
         let layout = LayoutSnapshot::new(0, 1, 1, 2, 2, 3, 3, 4, 6, 6);
         assert_eq!(layout.validate(), Err(LayoutError::StackOrder(6, 6)));
+    }
+
+    #[test]
+    fn root_text_checksum_uses_fnv1a_over_little_endian_bytes() {
+        // FNV-1a 32-bit reference vectors: four zero bytes, and "hell".
+        assert_eq!(root_text_word_checksum(0x811c_9dc5, 0), 0x4b95_f515);
+        assert_eq!(
+            root_text_word_checksum(0x811c_9dc5, 0x6c6c_6568),
+            0x1c71_77e6
+        );
     }
 
     #[test]

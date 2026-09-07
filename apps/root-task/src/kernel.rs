@@ -335,6 +335,12 @@ fn install_init_ipc_buffer(
     assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
     boot_guard.record_ipc_buffer(Some(addr), Some(IpcBufferMode::InstalledEarly));
     boot_guard.record_invariant("ipc_buffer.installed");
+    #[cfg(all(
+        feature = "release-pi4",
+        feature = "bootstrap-trace",
+        target_os = "none"
+    ))]
+    layout::trace_root_text("ipc-installed");
 
     Ok((ipc_buffer_ptr, IpcBufferMode::InstalledEarly))
 }
@@ -3333,6 +3339,12 @@ impl Drop for BootStateGuard {
 /// here ensures we always enter the event-pump userland path or loudly fall
 /// back to the UART console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
+    #[cfg(all(
+        feature = "release-pi4",
+        feature = "bootstrap-trace",
+        target_os = "none"
+    ))]
+    layout::trace_root_text("root-entry");
     let boot_state = state::state();
     if boot_state != BootState::Cold {
         log::error!(
@@ -4714,6 +4726,8 @@ fn bootstrap<P: Platform>(
             boot_log::force_uart_line(
                 "[critical] bootstrap fault/emergency receivers active registry=unsealed recovery=disabled",
             );
+            #[cfg(all(feature = "bootstrap-trace", target_os = "none"))]
+            layout::trace_root_text("fault-receivers-active");
         }
         Box::leak(Box::new(runtime))
     };

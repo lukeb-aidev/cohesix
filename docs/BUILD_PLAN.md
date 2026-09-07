@@ -10493,6 +10493,26 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact-7b6 bootstrap storage and instruction investigation — collect two
+    WiFi and two GENET boots before edits. Both GENET boots report the same
+    root UserException at PC `0x34` after `stack-allocation.ok`; the saved ELF
+    contains a valid ADD instruction there. Independently, the exported
+    zero-sized `__tls_base` aliases local-seat flags despite an eight-byte
+    bootstrap store. Let `sel4-sys` own both the real, aligned atomic word and
+    its accessors; remove the mismatched runtime declaration. Retain bounded
+    Pi bootstrap samples of the first text page, excluding its null-address
+    entry word, at root entry, IPC installation, fault-receiver activation,
+    and GENET constructor cuts. Compare these with the exact ELF to distinguish
+    live code alteration from a saved-image or instruction-cache question.
+    Preserve all scheduling, mapping, owner, memory-reservation and external
+    interface contracts. This repairs proven storage corruption but does not
+    yet attribute the GENET exception or prove either performance goal.
+    Review the complete host-tool suite, Python library, raw/REST workloads,
+    generated contracts and trace consumers: additive diagnostic text needs
+    no consumer or report-schema change. Exact builds, symbol-size/non-overlap
+    checks, focused contracts and the shared root-MCS QEMU canary precede fresh
+    Pi proof. Discovery remains console-network isolation and driver-runtime
+    MCS/CYW43 coexistence.
   - Exact-17e bootstrap fault reporting repair — two WiFi cohorts complete raw,
     functional and pressure tests before edits, but reach only 15.583/16.811
     requests/s with p95 114.550/115.978 ms. GENET's controlled boot expires its

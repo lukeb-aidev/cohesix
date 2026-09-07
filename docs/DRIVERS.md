@@ -1969,6 +1969,16 @@ credit, run only during GENET bootstrap, and add no steady-state sampling.
 Trace consumers may preserve these lines without interpreting them as driver
 completion, ABI records or performance evidence.
 
+Pi bootstrap also emits `[diag root-text/v1]` at root entry, IPC installation,
+fault-receiver activation and the GENET constructor cuts. Each sample reads
+4092 bytes starting four bytes after the linker text base, reports FNV-1a32
+over their little-endian bytes and the word at text offset `0x34`, and performs
+no writes, mapping changes or scheduling operations. The entry word is excluded
+to avoid a null Rust pointer on the selected zero-based image. Compare samples
+with the retained exact ELF; matching data reads alone do not prove the bytes
+fetched by the instruction cache. These boot-only diagnostics grant no recovery
+or acceptance credit and do not add steady-state sampling.
+
 Diagnostics should make the owner state machine understandable without
 embedding a particular failure history in this document.
 
