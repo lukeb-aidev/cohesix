@@ -10511,6 +10511,27 @@ Changes:
     target; fresh repeatable dual-mode raw TCP remains required. Complete host
     tools, `tools/cohesix-py`, generated contracts, raw/REST benchmarks, `.coh`
     workloads and trace consumers require no changes to code or schemas.
+  - Exact-6ffce5702 cold PCIe handoff recovery — one WiFi and one GENET
+    boot halt with SError before either network driver starts. Preserve both
+    serial slices and their shared capture window in
+    `out/bench/6ffce5702-failed-boots/baseline.json`; these failures provide no
+    performance matrix. Correct host text sampling to the runtime interval
+    `[4,4096)`: both boots match the exact ELF (`bbe04ea4`, word34 `d2850e89`),
+    so the current evidence does not show text drift. Selected U-Boot removes
+    the bridge with INIT/PERST asserted and SerDes powered down. Make SW_INIT
+    the first controller access; verify reset release before hard-debug,
+    configuration, MSI or status access. Retain the existing settle bounds,
+    physical ownership and endpoint proof. Separate in-progress from completed
+    phase admission and rearm all typed failures. Remove the unreachable
+    status-only shortcut and its unsafe pre-reset diagnostic read. Retain the
+    prior WiFi idle-Retry/productive-rearm and GENET root hot-path changes;
+    neither has fresh Pi performance evidence yet. Compile and inspect the
+    exact Pi image before the next physical attempt. Full host-tool suite,
+    `tools/cohesix-py`, generated contracts, raw/REST benchmark workloads and
+    report schemas require no changes; private HAL receipt changes are
+    documented in DRIVERS. Discovery remains
+    `m26e-console-network-service-isolation` and
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`. No target is relaxed.
   - Exact-b8e293bc9 shared PCIe bootstrap recovery — the user's WiFi and GENET
     boots both halt with kernel SError at `0x624cc`, immediately following the
     first write to legacy interrupt MASK_SET at `0xfd504310`. Preserve both

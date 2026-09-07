@@ -1988,6 +1988,22 @@ require a nonzero page-aligned virtual base; invalid bases return
 from turning PCIe register offsets into writes to low root text. Physical
 mapping, capability admission and the existing PCIe owner remain unchanged.
 
+BCM2711 cold admission begins at `SW_INIT_1` (`0x9210`). The selected
+U-Boot OS-prepare removal hook asserts PERST and INIT and powers down SerDes;
+status, configuration and interrupt registers must not be sampled before
+bridge reset release. Assert INIT/PERST, retain the existing 100-us settle,
+clear INIT and verify its readback while PERST remains asserted. Only then
+clear SerDes IDDQ and retain its existing 100-us settle. Configure inbound
+windows and interrupt quiescence, release PERST with readback, wait the existing
+100 ms, then read link status. All-one reset/SerDes readbacks or inconsistent
+reset bits return typed HAL errors before accessing the next register bank.
+The bounded receipts identify `first_access=sw-init`, bridge release and SerDes
+release; the old pre-reset `status_before` sample is deliberately absent.
+Per-phase admission distinguishes idle, in-progress and completed setup.
+Only completed setup permits reuse, and even reuse checks reset/SerDes release
+before reading status. Every failed attempt rearms the phase; status bits alone
+never skip initial root setup. Exact endpoint configuration remains mandatory.
+
 BCM2711 HAL interrupt quiescence uses only the dedicated MSI bank at offset
 `0x4500`, matching the selected U-Boot controller setup. The older STB interrupt
 bank at `0x4300` is not a second MSI bank to mask. Perform quiescence after the

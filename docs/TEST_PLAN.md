@@ -1280,6 +1280,14 @@ host tests do not simulate physical mappings. Fresh Pi GENET evidence must
 retain unchanged text samples through construction and then establish a live
 TCP console before performance workloads. Keep WiFi and GENET boot evidence
 separate on the same exact image.
+Cold BCM2711 admission tests bind INIT/PERST and SerDes readback masks to the
+selected U-Boot controller contract and distinguish in-progress admission from
+completed setup and rearmed failures using local atomic storage. Inspect the
+exact Pi ELF to verify that the first controller read is `SW_INIT_1` (`0x9210`),
+bridge release precedes hard-debug access, and link status follows PERST
+release and settling. No pre-reset status sample is valid. Host tests prove
+these pure state/readback predicates; fresh dual-mode Pi boots must establish
+the physical reset order and live networking before raw performance tests.
 For BCM2711 interrupt quiescence, independent register-layout tests bind the
 dedicated MSI command and status offsets, reject invalid page bases, and require
 all 32 mask bits set with no pending source. All-zero or all-one bus readbacks

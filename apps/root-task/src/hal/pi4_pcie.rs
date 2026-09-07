@@ -560,10 +560,42 @@ impl Pi4PcieProofPhase {
     }
 }
 
-fn finish_pi4_pcie_root_init_attempt(phase: Pi4PcieProofPhase, ready: bool) {
-    if !ready {
-        phase.root_init_latch().store(0, Ordering::Release);
+// A completed attempt may be reused; an in-progress attempt never admits MMIO.
+const PCIE_ROOT_INIT_IDLE: usize = 0;
+const PCIE_ROOT_INIT_ACTIVE: usize = 1;
+const PCIE_ROOT_INIT_READY: usize = 2;
+
+fn begin_pi4_pcie_root_init_attempt(latch: &AtomicUsize) -> Result<bool, HalError> {
+    match latch.compare_exchange(
+        PCIE_ROOT_INIT_IDLE,
+        PCIE_ROOT_INIT_ACTIVE,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => Ok(true),
+        Err(PCIE_ROOT_INIT_READY) => Ok(false),
+        Err(_) => Err(HalError::Unsupported("pcie-root-init-in-progress")),
     }
+}
+
+fn finish_pi4_pcie_root_init_attempt(latch: &AtomicUsize, ready: bool) {
+    latch.store(
+        if ready {
+            PCIE_ROOT_INIT_READY
+        } else {
+            PCIE_ROOT_INIT_IDLE
+        },
+        Ordering::Release,
+    );
+}
+
+const fn pcie_reset_readback_matches(observed: u32, expected: u32) -> bool {
+    observed != u32::MAX
+        && observed & (PCIE_RGR1_SW_INIT_1_INIT_MASK | PCIE_RGR1_SW_INIT_1_PERST_MASK) == expected
+}
+
+const fn pcie_serdes_released(observed: u32) -> bool {
+    observed != u32::MAX && observed & PCIE_HARD_DEBUG_SERDES_IDDQ_MASK == 0
 }
 
 fn notify_vl805_reset_after_pcie_ready(
@@ -589,7 +621,6 @@ fn notify_vl805_reset_after_pcie_ready(
     let result = match pi4_wifi::notify_vl805_reset(hal) {
         Ok(result) => result,
         Err(err) => {
-            finish_pi4_pcie_root_init_attempt(phase, false);
             let mut fail = heapless::String::<240>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut fail,
@@ -723,15 +754,6 @@ pub const fn vl805_post_mailbox_ext_cfg_retry_needed(
     runtime_touch_enabled: bool,
 ) -> bool {
     runtime_touch_enabled && mmio == high_bar_mmio && !fresh_runtime_ready
-}
-
-const fn pcie_root_ready_fast_path_allowed(_phase: Pi4PcieProofPhase, _status: u32) -> bool {
-    // Raw BCM2711 status bits are only advisory before Cohesix has refreshed the
-    // root window and proved the exact VL805 config tuple. Recent Pi 4 boots
-    // exposed status values with PORT/DL/PHY bits set while EXT_CFG still read
-    // root-port garbage, so status alone must never skip the controlled root
-    // init path.
-    false
 }
 
 #[inline]
@@ -1432,83 +1454,82 @@ fn ensure_pi4_pcie_root_ready(
     status_reg: usize,
     phase: Pi4PcieProofPhase,
 ) -> Result<u32, HalError> {
-    let status_before = mmio_read_u32(status_reg);
-    let misc_ctrl = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_MISC_CTRL)?;
-    let rc_bar1 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO)?;
-    let rc_bar2_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO)?;
-    let rc_bar2_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI)?;
-    let rc_bar3 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO)?;
-    if pcie_root_ready_fast_path_allowed(phase, status_before) {
-        remember_pi4_pcie_link_and_rc_ready(status_before);
-        mmio_clear_set_bits_u32_flush(
-            misc_ctrl,
-            PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK,
-            PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK
-                | PCIE_MISC_MISC_CTRL_CFG_READ_UR_MODE_MASK
-                | PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_128,
-        );
-        configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
-        mask_and_clear_pcie_irq_sources(status_page)?;
-        configure_pi4_pcie_outbound_window(status_page)?;
-        notify_vl805_reset_after_pcie_ready(
-            hal,
-            phase,
-            "post-mailbox-pcie-ready",
-            "pcie-ready-after-firmware-notify",
-        )?;
-        let mut line = heapless::String::<208>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie root-init ready stage={} status=0x{status_before:08x} action=refresh-windows-vl805-notify source=hal",
-                phase.label()
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return Ok(status_before);
-    }
+    let fresh = begin_pi4_pcie_root_init_attempt(phase.root_init_latch())?;
+    let result = prepare_pi4_pcie_root(hal, status_page, status_reg, phase, fresh);
+    finish_pi4_pcie_root_init_attempt(
+        phase.root_init_latch(),
+        result
+            .as_ref()
+            .is_ok_and(|status| pcie_status_link_up_and_rc(*status)),
+    );
+    result
+}
 
-    if phase
-        .root_init_latch()
-        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie root-init skipped stage={} status=0x{status_before:08x} reason=already-attempted",
-                phase.label()
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return Ok(status_before);
-    }
-
+fn prepare_pi4_pcie_root(
+    hal: &mut KernelHal<'_>,
+    status_page: usize,
+    status_reg: usize,
+    phase: Pi4PcieProofPhase,
+    fresh: bool,
+) -> Result<u32, HalError> {
+    // U-Boot's OS_PREPARE remove hook leaves INIT/PERST asserted and SerDes
+    // powered down. SW_INIT is the only controller register we may access
+    // until INIT is released. Even a diagnostic status read can raise SError.
     let init_page = map_pcie_reg_page_cached(hal, BCM2711_PCIE_RGR1_SW_INIT_1, "pi4-pcie-sw-init")?;
     let sw_init_reg = same_page_reg_virt(init_page, BCM2711_PCIE_RGR1_SW_INIT_1)?;
     let hard_debug = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_HARD_PCIE_HARD_DEBUG)?;
+
+    if !fresh {
+        if !pcie_reset_readback_matches(mmio_read_u32(sw_init_reg), 0) {
+            return Err(HalError::Unsupported("pcie-root-reset-unconfirmed"));
+        }
+        if !pcie_serdes_released(mmio_read_u32(hard_debug)) {
+            return Err(HalError::Unsupported("pcie-serdes-release-unconfirmed"));
+        }
+        return Ok(mmio_read_u32(status_reg));
+    }
 
     let mut begin = heapless::String::<208>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut begin,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie root-init begin stage={} status_before=0x{status_before:08x} source=hal",
+            "[local-seat] vl805 bcm2711-pcie root-init begin stage={} first_access=sw-init source=hal",
             phase.label()
         ),
     );
     boot_log::force_uart_line(begin.as_str());
 
-    mmio_set_bits_u32_flush(
+    let reset_asserted = mmio_set_bits_u32_flush(
         sw_init_reg,
         PCIE_RGR1_SW_INIT_1_INIT_MASK | PCIE_RGR1_SW_INIT_1_PERST_MASK,
     );
+    if !pcie_reset_readback_matches(
+        reset_asserted,
+        PCIE_RGR1_SW_INIT_1_INIT_MASK | PCIE_RGR1_SW_INIT_1_PERST_MASK,
+    ) {
+        return Err(HalError::Unsupported("pcie-root-reset-assert-unconfirmed"));
+    }
     pcie_spin_delay(PCIE_SHORT_SETTLE_SPINS);
 
-    mmio_clear_bits_u32_flush(sw_init_reg, PCIE_RGR1_SW_INIT_1_INIT_MASK);
-    mmio_clear_bits_u32_flush(hard_debug, PCIE_HARD_DEBUG_SERDES_IDDQ_MASK);
+    let bridge_released = mmio_clear_bits_u32_flush(sw_init_reg, PCIE_RGR1_SW_INIT_1_INIT_MASK);
+    if !pcie_reset_readback_matches(bridge_released, PCIE_RGR1_SW_INIT_1_PERST_MASK) {
+        return Err(HalError::Unsupported("pcie-root-reset-release-unconfirmed"));
+    }
+    boot_log::force_uart_line(
+        "[local-seat] vl805 bcm2711-pcie bridge-reset released readback=confirmed",
+    );
+    let serdes = mmio_clear_bits_u32_flush(hard_debug, PCIE_HARD_DEBUG_SERDES_IDDQ_MASK);
+    if !pcie_serdes_released(serdes) {
+        return Err(HalError::Unsupported("pcie-serdes-release-unconfirmed"));
+    }
     pcie_spin_delay(PCIE_SHORT_SETTLE_SPINS);
+    boot_log::force_uart_line("[local-seat] vl805 bcm2711-pcie serdes released readback=confirmed");
 
+    let misc_ctrl = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_MISC_CTRL)?;
+    let rc_bar1 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO)?;
+    let rc_bar2_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO)?;
+    let rc_bar2_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI)?;
+    let rc_bar3 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO)?;
     mmio_clear_set_bits_u32_flush(
         misc_ctrl,
         PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK,
@@ -1519,7 +1540,10 @@ fn ensure_pi4_pcie_root_ready(
     configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
     mask_and_clear_pcie_irq_sources(status_page)?;
 
-    mmio_clear_bits_u32_flush(sw_init_reg, PCIE_RGR1_SW_INIT_1_PERST_MASK);
+    let endpoint_released = mmio_clear_bits_u32_flush(sw_init_reg, PCIE_RGR1_SW_INIT_1_PERST_MASK);
+    if !pcie_reset_readback_matches(endpoint_released, 0) {
+        return Err(HalError::Unsupported("pcie-perst-release-unconfirmed"));
+    }
     fence(Ordering::SeqCst);
     pcie_spin_delay(PCIE_POST_PERST_SETTLE_SPINS);
 
@@ -1533,25 +1557,20 @@ fn ensure_pi4_pcie_root_ready(
 
     let ready = remember_pi4_pcie_link_and_rc_ready(status_after);
     if ready {
-        if let Err(err) = configure_pi4_pcie_outbound_window(status_page) {
-            finish_pi4_pcie_root_init_attempt(phase, false);
-            return Err(err);
-        }
+        configure_pi4_pcie_outbound_window(status_page)?;
         notify_vl805_reset_after_pcie_ready(
             hal,
             phase,
             "post-pcie-perst",
             "pcie-perst-after-firmware-notify",
         )?;
-    } else {
-        finish_pi4_pcie_root_init_attempt(phase, false);
     }
 
     let mut done = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut done,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_before=0x{status_before:08x} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback retry={}",
+            "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback retry={}",
             phase.label(),
             ready as u8,
             PCIE_POST_PERST_SETTLE_MS,
@@ -2679,19 +2698,23 @@ mod tests {
     }
 
     #[test]
-    fn root_init_never_trusts_status_bits_without_live_config_proof() {
-        let ready = BCM2711_PCIE_STATUS_PORT
-            | BCM2711_PCIE_STATUS_DL_ACTIVE
-            | BCM2711_PCIE_STATUS_PHY_LINK_UP;
-
-        assert!(!pcie_root_ready_fast_path_allowed(
-            Pi4PcieProofPhase::Initial,
-            ready
-        ));
-        assert!(!pcie_root_ready_fast_path_allowed(
-            Pi4PcieProofPhase::PostMailboxReset,
-            ready
-        ));
+    fn bcm2711_reset_readback_requires_each_reset_stage_and_rejects_missing_device() {
+        // BCM2711 RGR1_SW_INIT_1: INIT bit 1, PERST bit 0. Other bits are preserved.
+        for upper in [0, 0x100, 0x8000_0000] {
+            for expected in [3, 1, 0] {
+                for actual in 0..4 {
+                    assert_eq!(
+                        pcie_reset_readback_matches(upper | actual, expected),
+                        actual == expected
+                    );
+                }
+                assert!(!pcie_reset_readback_matches(u32::MAX, expected));
+            }
+        }
+        assert!(pcie_serdes_released(0));
+        assert!(pcie_serdes_released(0x8000_0000));
+        assert!(!pcie_serdes_released(0x0800_0000));
+        assert!(!pcie_serdes_released(u32::MAX));
     }
 
     #[test]
@@ -3144,16 +3167,16 @@ mod tests {
     }
 
     #[test]
-    fn failed_root_init_attempt_rearms_phase_latch_for_retry() {
-        let phase = Pi4PcieProofPhase::PostMailboxReset;
-        phase.root_init_latch().store(1, Ordering::Release);
-        finish_pi4_pcie_root_init_attempt(phase, false);
-        assert_eq!(phase.root_init_latch().load(Ordering::Acquire), 0);
-
-        phase.root_init_latch().store(1, Ordering::Release);
-        finish_pi4_pcie_root_init_attempt(phase, true);
-        assert_eq!(phase.root_init_latch().load(Ordering::Acquire), 1);
-        phase.root_init_latch().store(0, Ordering::Release);
+    fn root_init_attempt_admits_reuse_only_after_completed_proof_and_rearms_failure() {
+        let latch = AtomicUsize::new(0);
+        assert!(begin_pi4_pcie_root_init_attempt(&latch).unwrap());
+        assert!(begin_pi4_pcie_root_init_attempt(&latch).is_err());
+        finish_pi4_pcie_root_init_attempt(&latch, false);
+        assert!(begin_pi4_pcie_root_init_attempt(&latch).unwrap());
+        finish_pi4_pcie_root_init_attempt(&latch, true);
+        assert!(!begin_pi4_pcie_root_init_attempt(&latch).unwrap());
+        finish_pi4_pcie_root_init_attempt(&latch, false);
+        assert!(begin_pi4_pcie_root_init_attempt(&latch).unwrap());
     }
 
     #[test]
