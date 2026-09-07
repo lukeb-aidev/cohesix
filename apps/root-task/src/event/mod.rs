@@ -12788,7 +12788,7 @@ where
                     self.serial_console_turn_active = false;
                     return;
                 }
-                self.poll_runtime(true, serial_rx_activity || self.serial.tx_pending(), false);
+                self.poll_linked_operator_runtime(serial_rx_activity || self.serial.tx_pending());
                 #[cfg(feature = "net-console")]
                 {
                     self.refresh_linked_runtime_cyw43_durable_resume();
@@ -12835,7 +12835,7 @@ where
                 if self.pi_root_control_passive_admission_pending() {
                     return;
                 }
-                self.poll_runtime(true, serial_input || local_input, false);
+                self.poll_linked_operator_runtime(serial_input || local_input);
                 #[cfg(feature = "net-console")]
                 {
                     self.refresh_linked_runtime_cyw43_durable_resume();
@@ -13501,7 +13501,7 @@ where
                 // phase, so a hardware-facing command cannot compose with the
                 // USB poll that delivered it.
                 self.poll_local_seat_backend_for_ingress();
-                self.poll_runtime(true, false, false);
+                self.poll_linked_operator_runtime(false);
                 #[cfg(feature = "usb")]
                 self.maybe_emit_usb_console_startup_feedback();
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
@@ -13527,7 +13527,7 @@ where
                         }
                     }
                 }
-                self.poll_runtime(true, false, false);
+                self.poll_linked_operator_runtime(false);
                 #[cfg(feature = "net-console")]
                 {
                     self.linked_runtime_network_due_after_display = self.net.is_some()
@@ -13632,6 +13632,30 @@ where
         } else {
             LinkedRuntimeServicePhase::Serial
         }
+    }
+
+    /// Keep ordinary authenticated GENET maintenance in Dispatch. Every device
+    /// phase still runs and samples time; urgent work restores the full tail.
+    #[cfg(feature = "kernel")]
+    fn poll_linked_operator_runtime(&mut self, physical_input_active: bool) {
+        #[cfg(feature = "net-console")]
+        let defer_control_tail = self.linked_runtime_service_phase
+            != LinkedRuntimeServicePhase::Dispatch
+            && !physical_input_active
+            && !self.reboot_pending
+            && !self.network_service_quarantined
+            && !self.physical_console_response_pending()
+            && !self.stream_end_pending
+            && !self.pending_stream_active()
+            && !self.sync_response_pending()
+            && !self
+                .linked_physical_operator_work()
+                .needs_operator_rotation()
+            && self.isolated_direct_genet_response_lane_attached()
+            && !self.deferred_containment_work_pending();
+        #[cfg(not(feature = "net-console"))]
+        let defer_control_tail = false;
+        self.poll_runtime_inner(true, physical_input_active, false, !defer_control_tail);
     }
 
     /// Return whether the exact physical direct-GENET child owns the bounded
@@ -62893,6 +62917,137 @@ mod tests {
         }
 
         assert_eq!(wifi.polls, 0, "quarantine must never poll CYW43");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_operator_maintenance_preserves_identity_and_urgent_fallbacks() {
+        struct LinkedRuntimeTestReset;
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        use crate::hal::driver_task::{
+            CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
+        };
+        // An ordinary GENET rotation services IPC once, at Dispatch. Missing
+        // authentication, identity drift and urgent work retain every old cut.
+        for (contract, authenticated, generation, input, quarantined, reboot, expected) in [
+            (
+                GENET_DRIVER_TASK_CONTRACT,
+                true,
+                1,
+                false,
+                false,
+                false,
+                [0, 0, 1, 1],
+            ),
+            (
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                true,
+                1,
+                false,
+                false,
+                false,
+                [1, 2, 3, 4],
+            ),
+            (
+                GENET_DRIVER_TASK_CONTRACT,
+                false,
+                1,
+                false,
+                false,
+                false,
+                [1, 2, 3, 4],
+            ),
+            (
+                GENET_DRIVER_TASK_CONTRACT,
+                true,
+                2,
+                false,
+                false,
+                false,
+                [1, 2, 3, 4],
+            ),
+            (
+                GENET_DRIVER_TASK_CONTRACT,
+                true,
+                1,
+                true,
+                false,
+                false,
+                [1, 2, 3, 4],
+            ),
+            (
+                GENET_DRIVER_TASK_CONTRACT,
+                true,
+                1,
+                false,
+                true,
+                false,
+                [1, 2, 3, 4],
+            ),
+            (
+                GENET_DRIVER_TASK_CONTRACT,
+                true,
+                1,
+                false,
+                false,
+                true,
+                [1, 2, 3, 4],
+            ),
+        ] {
+            let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+            let units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let ipc = CountingIpc::new(dispatches.clone(), units);
+            let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+                4096,
+            >::new(
+            ));
+            let mut net = FakeNet::new();
+            net.driver_contract = contract;
+            net.active_conn_id = Some(1);
+            net.authenticated_conn_id = authenticated.then_some(1);
+            net.response_identity_generation = generation;
+            net.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+                generation: 1,
+                command_queue: 0,
+                output_queue: 0,
+                pending_egress: false,
+                awaiting_batch_drain: false,
+                producer_open: false,
+                ..cyw43_transient_test_diagnostics()
+            });
+            let mut audit = AuditLog::new();
+            let mut pump = EventPump::new(
+                serial,
+                TestTimer::repeated(8, 1),
+                ipc,
+                TicketTable::<4>::new(),
+                &mut audit,
+            )
+            .with_network(&mut net);
+            pump.network_service_quarantined = quarantined;
+            pump.reboot_pending = reboot;
+            pump.reboot_ack_failed = reboot;
+            for (phase, count) in [
+                LinkedRuntimeServicePhase::Serial,
+                LinkedRuntimeServicePhase::LocalSeat,
+                LinkedRuntimeServicePhase::Dispatch,
+                LinkedRuntimeServicePhase::Display,
+            ]
+            .into_iter()
+            .zip(expected)
+            {
+                pump.linked_runtime_service_phase = phase;
+                pump.poll_linked_operator_runtime(input);
+                assert_eq!(dispatches.get(), count, "phase={phase:?}");
+            }
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

@@ -1549,10 +1549,15 @@ may traverse `Network -> Dispatch -> Network` inside three of the existing five
 units, stage at most its exact response, then return to Serial and stop with a
 second queued command still unaccepted. QEMU direct-VirtIO must remain on its
 existing early branch and public diagnostic output must remain byte-compatible.
-For both physical backends, the Network leaf may omit only the composite root
-control tail already serviced by Serial, LocalSeat, Dispatch, and Display; it
-must retain timer, NIC, and display-ready reconciliation, and cannot suppress
-recovery, containment, response, operator, or reboot debt. Focused source,
+For both physical backends, the Network leaf omits the composite root control
+tail and retains timer, NIC and display-ready reconciliation. For exact
+ordinary authenticated direct GENET, verify one maintenance dispatch per
+Serial/LocalSeat/Dispatch/Display rotation, at Dispatch, with no device phase
+removed. Missing authentication, identity drift, WiFi, physical input/response,
+stream/synchronous output, reboot, quarantine or containment work must retain
+the full prior maintenance cuts. Check the existing passive-admission,
+physical-input and reboot contracts; no recovery or operator debt may be
+suppressed. Compare root CPU and raw p95 before claiming a performance gain. Focused source,
 QEMU, profile, build, image-identity, and flash checks are rejection gates only.
 Fresh same-image WiFi and GENET boots must each pass the canonical first-attempt
 `.coh` scripts, a 64-request single-connection framed run, and medium/high REST

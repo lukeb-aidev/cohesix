@@ -10493,6 +10493,22 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET operator maintenance rotation — the exact `33227d8da` four-boot
+    comparison meets both WiFi gates twice, while GENET p95 remains 5.43/5.62 ms.
+    Retain the coherent-memory correction. During exact authenticated direct
+    GENET with no physical input/response, stream/synchronous output, reboot,
+    quarantine or containment debt, run composite IPC/Worker/bootstrap/output
+    maintenance in Dispatch once per operator rotation. Serial, LocalSeat and
+    Display keep their physical work and timer/reconciliation preludes; Network
+    retains its existing no-control-tail contract. Urgent work, missing or
+    mismatched identity and WiFi preserve all existing maintenance cuts. Do not
+    change SC numerics, wake allowances, the 64-quantum cap, device ownership or
+    command semantics. Test maintenance counts and fallbacks, preserve passive
+    admission and physical-operator contracts, qualify exact Pi and QEMU, then
+    compare raw CPU/latency and functional/pressure evidence on fresh hardware.
+    Host-tool suite, Python SDK, generated interfaces and raw/REST workloads are
+    compatible without consumer changes. Repetition is source-proven; its
+    contribution to GENET latency must be measured.
   - Pi coherent driver control memory — after the unchanged `1096630c9`
     two-WiFi/two-GENET matrix, map CPU-only control and SHARED resources as
     identical cacheable Normal/XN memory in root, owner and reciprocal driver

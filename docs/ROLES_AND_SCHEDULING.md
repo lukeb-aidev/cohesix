@@ -941,6 +941,16 @@ repository-wide constants.
 
 ### 2. Root-task service turns
 
+For the linked Pi operator rotation, exact authenticated direct GENET may run
+composite root IPC/Worker/bootstrap/output maintenance once in Dispatch when
+no physical input/response, stream/synchronous output, reboot, quarantine or
+containment work is pending. Serial, LocalSeat and Display still perform their
+bounded physical responsibilities and timer/reconciliation preludes. Network
+keeps its existing timer/NIC-only tail. Missing or mismatched connection and
+runtime identity, WiFi and urgent work retain the full existing maintenance
+cuts. This selection does not change kernel budgets, the 64-quantum activation
+bound, passive-service admission or root's physical-operator precedence.
+
 Kernel budgets do not replace application scheduling. Root continues to admit
 bounded logical units through its event pump, including operator input,
 response flushing, timers, network handoff, driver supervision, Worker
