@@ -33,7 +33,14 @@ LINUX_BUILDER_CARGO=""
 LINUX_BUILDER_CARGO_HOME=""
 LINUX_BUILDER_MAX_GLIBC=""
 PI4_STAGE_DIR=""
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${ROOT_DIR}/out/sel4/profile-v2/qemu-smp-production}"
+MACOS_ARTIFACT=""
+MACOS_RESULT=""
+LINUX_ARTIFACT=""
+LINUX_RESULT=""
+LINUX_USE_ACCEPTED_TOOLS=0
+SOURCE_DIGEST=""
+MACOS_OUT_DIR=""
+LINUX_OUT_DIR=""
 IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
 PYTHON_WHEEL_DIR="${PYTHON_WHEEL_DIR:-${ROOT_DIR}/out/python-wheels}"
 PYTHON_PACKAGE_MANIFEST="${PYTHON_PACKAGE_MANIFEST:-${ROOT_DIR}/out/python-compat/m26e-python-package.json}"
@@ -48,7 +55,9 @@ releases/<release-name>-Pi4 bundles and archives. With --linux, it also creates
 the peer releases/<release-name>-linux bundle and archive.
 
 With --linux, builds Linux ARM64 host tools and the final Linux release tarball
-on the explicitly selected remote builder. Use --linux-only to omit macOS.
+on the explicitly selected remote builder. Rebuilt tools must match the accepted
+Linux artifact byte-for-byte. Prefer --linux-use-accepted-tools after native
+build/test qualification. Use --linux-only to omit macOS and Pi4 output.
 
 Release options:
   --name <name>                       Required when creating bundles
@@ -57,8 +66,14 @@ Release options:
   --linux                             Also create the remote-built Linux bundle
   --linux-only                        Create only the remote-built Linux bundle
   --pi4-stage-dir <path>              Exact canonical Pi 4 SD staging directory
+  --macos-artifact <path>             Retained native Mac QEMU artifact manifest
+  --macos-result <path>               Passing TCP result for that exact artifact
+  --linux-artifact <path>             Retained native Linux KVM artifact manifest
+  --linux-result <path>               Passing TCP result for that exact artifact
+  --linux-use-accepted-tools          Copy tested Linux tools without rebuilding them
 
-Remote Linux builder options (all required with --linux except --key):
+Remote Linux builder options (--host/--user/--release-dir/--max-glibc are
+required with --linux; build/output locations only when rebuilding tools):
   --linux-builder-host <host>         SSH hostname or address
   --linux-builder-user <user>         SSH username
   --linux-builder-key <path>          Optional SSH key; omit for SSH agent/config auth
@@ -71,8 +86,6 @@ Remote Linux builder options (all required with --linux except --key):
   --linux-host-tools-manifest <path>  Local destination for build provenance JSON
 
 Env overrides:
-  SEL4_BUILD_DIR (defaults to $REPO/out/sel4/profile-v2/qemu-smp-production;
-                  the selected tree must pass qemu_smp_production release validation)
   IMPLEMENTATION_SURFACE_INVENTORY (defaults to the canonical generated inventory;
                                     intended only for non-mutating pre-regeneration validation)
   PYTHON_WHEEL_DIR (defaults to out/python-wheels; must contain one target-neutral wheel)
@@ -115,6 +128,20 @@ while [[ $# -gt 0 ]]; do
     --linux-only)
       LINUX_BUNDLE=1
       LINUX_ONLY=1
+      shift
+      ;;
+    --macos-artifact|--macos-result|--linux-artifact|--linux-result)
+      [[ $# -ge 2 ]] || { echo "$1 requires a path" >&2; exit 1; }
+      case "$1" in
+        --macos-artifact) MACOS_ARTIFACT="$2" ;;
+        --macos-result) MACOS_RESULT="$2" ;;
+        --linux-artifact) LINUX_ARTIFACT="$2" ;;
+        --linux-result) LINUX_RESULT="$2" ;;
+      esac
+      shift 2
+      ;;
+    --linux-use-accepted-tools)
+      LINUX_USE_ACCEPTED_TOOLS=1
       shift
       ;;
     --pi4-stage-dir)
@@ -469,13 +496,6 @@ for relative in release["forbidden_paths"]:
 PY
 
   validate_pi4_stage_identity
-
-  local gic_config="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
-  require_file "$gic_config"
-  local gic_version
-  gic_version="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$gic_config")"
-  [[ "$gic_version" == "3" ]] || fail \
-    "runtime release requires QEMU GICv3; selected kernel reports GIC${gic_version}"
 }
 
 validate_pi4_stage_identity() {
@@ -588,8 +608,17 @@ for name in sorted(expected):
             raise SystemExit(f"wrong Linux ARM64 host tool: {binary}: {description}")
     else:
         raise SystemExit(f"unknown host-tool platform: {platform}")
+    if platform == "linux":
+        import re
+        ceiling = os.environ["EXPECTED_MAX_GLIBC"]
+        if re.fullmatch(r"[0-9]+\.[0-9]+", ceiling) is None:
+            raise SystemExit("Linux GLIBC ceiling must have x.y form")
+        maximum = tuple(map(int, ceiling.split(".")))
+        versions = re.findall(rb"GLIBC_([0-9]+\.[0-9]+)", binary.read_bytes())
+        if any(tuple(map(int, value.split(b"."))) > maximum for value in versions):
+            raise SystemExit(f"Linux host tool exceeds GLIBC {ceiling}: {name}")
 
-if platform == "linux":
+if platform == "linux" and os.environ["HOST_PROVENANCE"]:
     provenance_path = Path(os.environ["HOST_PROVENANCE"])
     if not provenance_path.is_file() or provenance_path.is_symlink():
         raise SystemExit(f"Linux host-tool provenance missing: {provenance_path}")
@@ -627,20 +656,13 @@ if platform == "linux":
 PY
 }
 
-validate_release_sel4_profile() {
-  local profile_python="${ROOT_DIR}/out/toolchain/sel4-profile-venv/bin/python"
-  local profile_tool="${ROOT_DIR}/scripts/sel4_profile.py"
-
-  [[ -x "$profile_python" ]] || fail \
-    "canonical seL4 profile Python is missing: $profile_python (run toolchain/setup_macos_arm64.sh)"
-  [[ -f "$profile_tool" ]] || fail "seL4 profile validator is missing: $profile_tool"
-  "$profile_python" "$profile_tool" validate \
-    --profile qemu_smp_production \
-    --build-dir "$SEL4_BUILD_DIR" \
-    --require-source \
-    --require-artifacts \
-    --for-release \
-    || fail "release input does not satisfy qemu_smp_production"
+validate_tested_inputs() {
+  local host="$1" artifact="$2" result="$3"
+  [[ -n "$artifact" && -n "$result" ]] || fail \
+    "--${host}-artifact and --${host}-result are required"
+  python3 "${ROOT_DIR}/scripts/release_inputs.py" \
+    --artifact "$artifact" --result "$result" \
+    --source-digest "$SOURCE_DIGEST" --host "$host"
 }
 
 require_file() {
@@ -750,8 +772,7 @@ Verify the release manifest and image digest before writing media:
 
 ```bash
 shasum -a 256 --check MANIFEST.sha256
-cd image
-shasum -a 256 --check cohesix-pi4-sd.img.sha256
+(cd image && shasum -a 256 --check cohesix-pi4-sd.img.sha256)
 ```
 
 Writing the image destroys the selected card. Resolve the exact removable
@@ -789,6 +810,15 @@ bundle_release() {
   local bundle_name="$1"
   local host_tools_dir="$2"
   local archive_mode="${3:-local}"
+  local artifact="$MACOS_ARTIFACT" result="$MACOS_RESULT" host="macos"
+  OUT_DIR="$MACOS_OUT_DIR"
+  if [[ "$archive_mode" == "remote-linux" ]]; then
+    artifact="$LINUX_ARTIFACT"
+    result="$LINUX_RESULT"
+    host="linux"
+    OUT_DIR="$LINUX_OUT_DIR"
+  fi
+  STAGING_DIR="${OUT_DIR}/staging"
   local bundle_dir="${RELEASES_DIR}/${bundle_name}"
   local tarball="${RELEASES_DIR}/${bundle_name}.tar.gz"
 
@@ -919,10 +949,11 @@ bundle_release() {
     cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
   done < <(release_inventory_values versioned_migrations)
 
-  GIC_CFG="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
-  GIC_VER="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$GIC_CFG")"
-  [[ "$GIC_VER" == "3" ]] || fail "release runner requires GICv3"
-  printf "%s\n" "$GIC_VER" > "${bundle_dir}/image/gic-version.txt"
+  # Each accepted artifact has already verified its own native GICv3 profile.
+  printf '3\n' > "${bundle_dir}/image/gic-version.txt"
+  python3 "${ROOT_DIR}/scripts/release_inputs.py" \
+    --artifact "$artifact" --result "$result" --host "$host" \
+    --source-digest "$SOURCE_DIGEST" --bundle "$bundle_dir"
 
   cat <<'EOF' > "${bundle_dir}/qemu/run.sh"
 #!/usr/bin/env bash
@@ -937,6 +968,24 @@ IMAGE_DIR="${ROOT_DIR}/image"
 
 QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
 HOST_OS="$(uname -s 2>/dev/null || true)"
+RELEASE_PROFILE="$(
+  python3 - "$ROOT_DIR/BUILD_PROVENANCE.json" <<'PY_PROFILE'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+profiles = {"macos": ("qemu_smp_production", 24000000),
+            "linux": ("qemu_smp_kvm_production", 31250000)}
+host = record["host"]
+if (record["sel4_profile"], record["timer_clock_hz"]) != profiles[host]:
+    raise SystemExit("release profile/timer mismatch")
+print({"macos": "Darwin", "linux": "Linux"}[host], record["timer_clock_hz"])
+PY_PROFILE
+)"
+read -r RELEASE_HOST RELEASE_TIMER_CLOCK_HZ <<< "$RELEASE_PROFILE"
+[[ "$HOST_OS" == "$RELEASE_HOST" ]] || {
+  echo "[qemu] bundle requires $RELEASE_HOST; use the native host bundle" >&2
+  exit 1
+}
 QEMU_HOST_ADDR="${QEMU_HOST_ADDR:-127.0.0.1}"
 TCP_PORT="${TCP_PORT:-31337}"
 UDP_PORT="${UDP_PORT:-31338}"
@@ -1055,8 +1104,8 @@ resolve_qemu_cpu_arg() {
   if [[ "$HOST_OS" == "Linux" && "$accel" == "kvm" ]]; then
     cpu_model="host"
   fi
-  if [[ "$accel" == "tcg" || ( "$HOST_OS" == "Linux" && "$accel" == "kvm" ) ]]; then
-    cpu_model="${cpu_model},cntfrq=24000000"
+  if [[ "$accel" == "tcg" ]]; then
+    cpu_model="${cpu_model},cntfrq=${RELEASE_TIMER_CLOCK_HZ}"
   fi
   echo "$cpu_model"
 }
@@ -1284,7 +1333,7 @@ PY
       ;;
   esac
 
-  echo "Release bundle ready: ${bundle_dir}"
+  echo "Release candidate assembled: ${bundle_dir}"
   echo "Tarball: ${tarball}"
 }
 
@@ -1335,7 +1384,7 @@ bundle_pi4_release() {
 
   COPYFILE_DISABLE=1 tar --no-xattrs \
     -C "$RELEASES_DIR" -czf "$tarball" "$bundle_name"
-  echo "Pi 4 release bundle ready: ${bundle_dir}"
+  echo "Pi 4 release candidate assembled: ${bundle_dir}"
   echo "Tarball: ${tarball}"
 }
 
@@ -1351,13 +1400,10 @@ if [[ -z "$RELEASE_VERSION" ]]; then
   RELEASE_VERSION="$(release_inventory_scalar version)"
 fi
 [[ -n "$PI4_STAGE_DIR" ]] || fail "--pi4-stage-dir is required"
-if [[ "$CHECK_MANIFEST" -eq 1 && "$LINUX_BUNDLE" -eq 1 ]]; then
-  fail "--check-manifest is read-only and cannot be combined with --linux"
-fi
 if [[ "$CHECK_MANIFEST" -eq 0 ]]; then
   [[ -n "$RELEASE_NAME" ]] || fail "--name is required when creating release bundles"
-  [[ "$RELEASE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
-    fail "release name contains unsupported characters"
+  [[ "$RELEASE_NAME" == "Cohesix-${RELEASE_VERSION}" ]] || \
+    fail "release name must be Cohesix-${RELEASE_VERSION}"
   local_status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)"
   [[ -z "$local_status" ]] || fail "release creation requires a clean source checkout"
 fi
@@ -1365,6 +1411,19 @@ MACOS_BUNDLE_NAME="${RELEASE_NAME}-MacOS"
 LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
 PI4_BUNDLE_NAME="${RELEASE_NAME}-Pi4"
 
+SOURCE_DIGEST="$(python3 "${ROOT_DIR}/scripts/ci/qemu_artifact.py" source-digest --repo-root "$ROOT_DIR")"
+if [[ "$LINUX_ONLY" -ne 1 ]]; then
+  MACOS_OUT_DIR="$(validate_tested_inputs macos "$MACOS_ARTIFACT" "$MACOS_RESULT")"
+  OUT_DIR="$MACOS_OUT_DIR"
+  DEFAULT_HOST_TOOLS_DIR="${MACOS_OUT_DIR}/host-tools"
+fi
+if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
+  LINUX_OUT_DIR="$(validate_tested_inputs linux "$LINUX_ARTIFACT" "$LINUX_RESULT")"
+  if [[ "$LINUX_ONLY" -eq 1 ]]; then
+    OUT_DIR="$LINUX_OUT_DIR"
+  fi
+fi
+STAGING_DIR="${OUT_DIR}/staging"
 require_dir "$OUT_DIR"
 require_file "${STAGING_DIR}/elfloader"
 require_file "${STAGING_DIR}/kernel.elf"
@@ -1386,50 +1445,43 @@ require_dir "${ROOT_DIR}/apps/swarmui/frontend"
 require_dir "${ROOT_DIR}/docs"
 require_dir "${ROOT_DIR}/scripts/cohsh"
 
-validate_release_sel4_profile
 validate_release_inventory_inputs
-
-if [[ "$CHECK_MANIFEST" -eq 1 ]]; then
-  validate_host_tools_inputs "$DEFAULT_HOST_TOOLS_DIR" macos
-  echo "[release] Exact compiler-generated release manifest and inputs: PASS"
-  exit 0
-fi
-
 if [[ "$LINUX_ONLY" -ne 1 ]]; then
   validate_host_tools_inputs "$DEFAULT_HOST_TOOLS_DIR" macos
 fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
-  for required in \
-    "$LINUX_BUILDER_HOST" \
-    "$LINUX_BUILDER_USER" \
-    "$LINUX_BUILDER_BUILD_DIR" \
-    "$LINUX_BUILDER_RELEASE_DIR" \
-    "$LINUX_BUILDER_CARGO" \
-    "$LINUX_BUILDER_CARGO_HOME" \
-    "$LINUX_BUILDER_MAX_GLIBC" \
-    "$LINUX_HOST_TOOLS_DIR" \
-    "$LINUX_HOST_TOOLS_MANIFEST"; do
-    [[ -n "$required" ]] || \
-      fail "--linux requires every documented remote builder and local output argument"
-  done
-  sync_args=(
-    build-tools
-    --host "$LINUX_BUILDER_HOST"
-    --user "$LINUX_BUILDER_USER"
-    --remote-build-dir "$LINUX_BUILDER_BUILD_DIR"
-    --remote-cargo "$LINUX_BUILDER_CARGO"
-    --remote-cargo-home "$LINUX_BUILDER_CARGO_HOME"
-    --local-out "$LINUX_HOST_TOOLS_DIR"
-    --manifest-out "$LINUX_HOST_TOOLS_MANIFEST"
-    --max-glibc-version "$LINUX_BUILDER_MAX_GLIBC"
-  )
-  if [[ -n "$LINUX_BUILDER_KEY" ]]; then
-    sync_args+=(--key "$LINUX_BUILDER_KEY")
+  [[ -n "$LINUX_BUILDER_MAX_GLIBC" ]] || fail "--linux-builder-max-glibc is required"
+  if [[ "$CHECK_MANIFEST" -eq 0 ]]; then
+    for required in "$LINUX_BUILDER_HOST" "$LINUX_BUILDER_USER" "$LINUX_BUILDER_RELEASE_DIR"; do
+      [[ -n "$required" ]] || fail "--linux requires the archive builder host, user and release directory"
+    done
   fi
-  "${ROOT_DIR}/scripts/linux_host_tools_sync.sh" "${sync_args[@]}"
-  validate_host_tools_inputs \
-    "$LINUX_HOST_TOOLS_DIR" linux "$LINUX_HOST_TOOLS_MANIFEST"
+  if [[ "$LINUX_USE_ACCEPTED_TOOLS" -eq 1 || "$CHECK_MANIFEST" -eq 1 ]]; then
+    LINUX_HOST_TOOLS_DIR="${LINUX_OUT_DIR}/host-tools"
+    validate_host_tools_inputs "$LINUX_HOST_TOOLS_DIR" linux
+  else
+    for required in "$LINUX_BUILDER_BUILD_DIR" "$LINUX_BUILDER_CARGO" \
+      "$LINUX_BUILDER_CARGO_HOME" "$LINUX_HOST_TOOLS_DIR" "$LINUX_HOST_TOOLS_MANIFEST"; do
+      [[ -n "$required" ]] || fail "Linux rebuild requires all documented build/output arguments"
+    done
+    sync_args=(build-tools --host "$LINUX_BUILDER_HOST" --user "$LINUX_BUILDER_USER"
+      --remote-build-dir "$LINUX_BUILDER_BUILD_DIR" --remote-cargo "$LINUX_BUILDER_CARGO"
+      --remote-cargo-home "$LINUX_BUILDER_CARGO_HOME" --local-out "$LINUX_HOST_TOOLS_DIR"
+      --manifest-out "$LINUX_HOST_TOOLS_MANIFEST" --max-glibc-version "$LINUX_BUILDER_MAX_GLIBC")
+    if [[ -n "$LINUX_BUILDER_KEY" ]]; then sync_args+=(--key "$LINUX_BUILDER_KEY"); fi
+    "${ROOT_DIR}/scripts/linux_host_tools_sync.sh" "${sync_args[@]}"
+    validate_host_tools_inputs "$LINUX_HOST_TOOLS_DIR" linux "$LINUX_HOST_TOOLS_MANIFEST"
+    while IFS= read -r selected_path; do
+      cmp -s "${LINUX_HOST_TOOLS_DIR}/${selected_path#bin/}" \
+        "${LINUX_OUT_DIR}/host-tools/${selected_path#bin/}" || \
+        fail "rebuilt Linux tool differs from its accepted artifact: $selected_path; qualify the new build first"
+    done < <(release_inventory_values host_tools)
+  fi
+fi
+if [[ "$CHECK_MANIFEST" -eq 1 ]]; then
+  echo "[release] Tested native artifacts and exact compiler-selected release inputs: PASS"
+  exit 0
 fi
 
 if [[ "$LINUX_ONLY" -ne 1 ]]; then

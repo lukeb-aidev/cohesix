@@ -344,62 +344,98 @@ access.
 
 ## Release factory
 
-Milestone 26e release creation uses the primary source host for the pinned QEMU
-and Pi build inputs, and one explicitly selected remote Linux ARM64 builder for
-Linux host binaries and final Linux archive compression. The remote host must be
-prepared in advance; the release path does not install packages, add apt
-repositories, or infer a builder from a machine name. This is especially
-important on Jetson systems, where generic desktop NVIDIA development packages
-can conflict with the board-managed runtime.
+Milestone 26e task `m26e-production-surface-truth-and-stub-retirement` owns
+this workflow. The next candidate is `Cohesix-1.0.0-beta`; the compiler inventory
+owns its version, notes and exact file sets. Historical releases are immutable.
+Prepare the selected Linux AArch64 NVIDIA host in advance. Jetson is one reference
+builder; use its board-managed NVIDIA packages. Release scripts do not install
+system packages or infer host, user, NVMe, cargo or authentication paths.
 
-First validate the compiler-selected QEMU inputs, Python package, macOS host
-tools, and exact canonical Pi SD stage without mutating a release:
+Build and test a single clean source commit before assembly. Retain the entire
+QEMU evidence tree on each native host, including its relative artifact/result
+paths and logs. Mac uses `qemu_smp_production` (HVF, 24 MHz); the supported Linux
+host uses `qemu_smp_kvm_production` (KVM, native 31.25 MHz, `-cpu host`). Never copy
+the Mac guest into the Linux distribution or force a KVM counter frequency.
+Native builds enable `coh` FUSE on both hosts and NVML on Linux.
+
+The normal staged Mac run supplies the default-manifest artifact and its passing
+`base` TCP result. On the provisioned Linux builder, run the equivalent native
+regression lane from the same clean commit:
 
 ```bash
-scripts/release_bundle.sh --check-manifest \
-  --pi4-stage-dir <local-pi4-stage>
+COHESIX_SEL4_PROFILE=qemu_smp_kvm_production \
+SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-kvm-production" \
+COHSH_LOG_ROOT="$PWD/out/regression-logs/release-linux" \
+  scripts/cohsh/run_regression_batch.sh
 ```
 
-To create peer MacOS, Linux, and Pi4 bundles, provide every
-environment-specific builder and output location explicitly:
+The selected Linux seL4 profile must already be built and validated by
+`scripts/sel4_profile.py`; see TEST_PLAN's Linux KVM lane. This lane builds all
+eight native tools along with the guest. Download the complete retained Linux
+evidence tree into an ignored local directory, preserving relative paths. The
+factory accepts its `qemu-artifact.json` plus the matching `base.json` TCP result.
+Mac input selection uses the equivalent files from its own accepted tree.
+`scripts/release_inputs.py` verifies source identity, native profile, every guest
+and tool hash, and the passing result. Archival verification on Mac does not
+assert that Mac can execute Linux artifacts; launch checks remain native.
+
+Build the exact Pi stage and target-neutral Python wheel using their existing
+canonical workflows. The Pi stage must identify the same clean commit. Then run
+the read-only release preflight, substituting the retained paths below:
 
 ```bash
-scripts/release_bundle.sh \
-  --name <release-name> \
-  --version <inventory-version> \
-  --force \
-  --linux \
+scripts/release_bundle.sh --check-manifest --linux \
+  --macos-artifact <mac-qemu-artifact.json> --macos-result <mac-base.json> \
+  --linux-artifact <linux-qemu-artifact.json> --linux-result <linux-base.json> \
+  --linux-builder-max-glibc <major.minor> --pi4-stage-dir <local-pi4-stage>
+```
+
+Assemble the three peer folders and archives under `releases/` on Mac, retaining
+Linux archive compression on the selected remote ARM64 builder:
+
+```bash
+scripts/release_bundle.sh --name Cohesix-1.0.0-beta --version 1.0.0-beta \
+  --linux --linux-use-accepted-tools \
+  --macos-artifact <mac-qemu-artifact.json> --macos-result <mac-base.json> \
+  --linux-artifact <linux-qemu-artifact.json> --linux-result <linux-base.json> \
   --pi4-stage-dir <local-pi4-stage> \
-  --linux-builder-host <host> \
-  --linux-builder-user <user> \
-  --linux-builder-build-dir <remote-build-root> \
+  --linux-builder-host <host> --linux-builder-user <user> \
   --linux-builder-release-dir <remote-release-root> \
-  --linux-builder-cargo <remote-cargo-path> \
-  --linux-builder-cargo-home <remote-cargo-cache> \
-  --linux-builder-max-glibc <major.minor> \
-  --linux-host-tools-dir <local-linux-tools-dir> \
-  --linux-host-tools-manifest <local-provenance-json>
+  --linux-builder-max-glibc <major.minor>
 ```
 
-Add `--linux-builder-key <path>` only when normal SSH agent/config
-authentication is insufficient. An NVMe-backed builder is selected by passing
-NVMe-backed build and release roots; no NVMe, host, user, home, cargo, or key
-location is embedded in either release script.
+Add `--linux-builder-key <path>` only when SSH agent/config authentication is
+insufficient. Existing output requires explicit `--force`. With
+`--linux-use-accepted-tools`, the exact tested binaries are copied. Without it,
+the existing remote rebuild path additionally requires
+`--linux-builder-build-dir`, `--linux-builder-cargo`,
+`--linux-builder-cargo-home`, `--linux-host-tools-dir` and
+`--linux-host-tools-manifest`; every rebuilt binary must still match its accepted
+artifact, otherwise qualify the new build first. The independently callable
+`scripts/linux_host_tools_sync.sh build-tools` remains available for native
+host-tool preparation. Its source archive includes the complete tracked generated
+contract directory, including both Python target contracts.
 
-The compiler inventory names every file under the accepted Pi SD stage. The
-release gate verifies the primary/fallback sealed image pair and its current
-source identity, rejects stage-set drift, and builds a separate peer
-`<release-name>-Pi4/` folder and archive beside `<release-name>-MacOS/` and
-`<release-name>-linux/`. The Pi bundle contains a compact raw MBR/FAT32 image,
-its SHA-256 sidecar, layout/provenance metadata, release documentation, and its
-own exact manifest. Image capacity is derived from the selected payload rather
-than from a physical card. The metadata records `minimum_target_bytes`; the
-image works on any SD card at least that large, with additional card capacity
-left unallocated and no filesystem expansion required for boot. This is a
-flash payload and build/provenance artifact, not whole-media readback or Pi
-hardware acceptance; follow
-[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md) for destructive media operations and
-fresh physical proof.
+Each host bundle contains `BUILD_PROVENANCE.json` with source, accepted artifact
+and TCP-result identities, native profile/timer, and exact guest/tool hashes.
+The Pi bundle contains a compact raw MBR/FAT32 image, its SHA-256 sidecar and
+`cohesix-pi4-portable-sd-image/v2` metadata including the sealed boot identity.
+Image capacity derives from the payload. Any card at least `minimum_target_bytes`
+can hold it; additional capacity stays unallocated. Assembly verifies the raw
+image's embedded files but remains packaging evidence.
+
+Run [TEST_PLAN Conditional G](TEST_PLAN.md#conditional-g--release-bundle-validation-macos-linux-and-pi4)
+after assembly. It boots the packaged QEMU launcher on each native host and
+requires readback and a fresh configured Pi boot from the distributed image.
+A candidate folder or archive alone is not permission to claim release acceptance.
+
+Compatibility review for this change: all eight host tools retain their CLI,
+namespace and wire contracts; Linux `coh` retains the release's FUSE/NVML features
+in the native QEMU build as well. `tools/cohesix-py` retains its wheel version and
+target contracts and is exercised from the extracted package. `rest_perf_harness.py`,
+QEMU pressure and Pi performance scripts retain workload/report schemas and target
+acceptance authority; only the release artifact selection and installation
+qualification workflow change.
 
 ## Tool catalog
 

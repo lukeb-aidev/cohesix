@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "0f004df4b80d024181608adef0c28b52d566cc67ad44d5cc11414ffd09a2f5b4",
+  "source_sha256": "da3b2184af23f30e97949e76102bd759a0c7792cd5ff2ad497a9330c8f646d30",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -4218,6 +4218,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:configs/host_integration_acceptance.toml",
+      "kind": "tracked_surface",
+      "path": "configs/host_integration_acceptance.toml",
+      "implementation_class": "contract",
+      "owner": "host-integration-compiler",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "packaged Python compatibility tests; rule=release-host-integration-matrix",
+      "package_disposition": "release_test_support",
+      "evidence_requirement": "extracted Python compatibility tests",
+      "current_observed_mode": "host_integration_matrix_source",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:configs/root_task.toml",
       "kind": "tracked_surface",
       "path": "configs/root_task.toml",
@@ -5604,9 +5618,9 @@
       "evidence_eligible": false
     },
     {
-      "id": "tracked:releases/RELEASE_NOTES-0.1.0-alpha1.md",
+      "id": "tracked:releases/RELEASE_NOTES-1.0.0-beta.md",
       "kind": "tracked_surface",
-      "path": "releases/RELEASE_NOTES-0.1.0-alpha1.md",
+      "path": "releases/RELEASE_NOTES-1.0.0-beta.md",
       "implementation_class": "contract",
       "owner": "release-tooling",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -6360,6 +6374,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:scripts/driver_runtime_manifest.py",
+      "kind": "tracked_surface",
+      "path": "scripts/driver_runtime_manifest.py",
+      "implementation_class": "contract",
+      "owner": "host-integration-auditor",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "packaged worker evidence reader import; rule=release-driver-manifest-reader",
+      "package_disposition": "release_test_support",
+      "evidence_requirement": "extracted Python compatibility tests",
+      "current_observed_mode": "manifest_contract_reader",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:scripts/setup_environment.sh",
       "kind": "tracked_surface",
       "path": "scripts/setup_environment.sh",
@@ -6372,6 +6400,34 @@
       "evidence_requirement": "shell validation and exact output hash",
       "current_observed_mode": "host_setup_entrypoint",
       "evidence_eligible": true
+    },
+    {
+      "id": "tracked:scripts/worker_image_manifest.py",
+      "kind": "tracked_surface",
+      "path": "scripts/worker_image_manifest.py",
+      "implementation_class": "contract",
+      "owner": "host-integration-auditor",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "packaged worker evidence reader import; rule=release-worker-manifest-reader",
+      "package_disposition": "release_test_support",
+      "evidence_requirement": "extracted Python compatibility tests",
+      "current_observed_mode": "manifest_contract_reader",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:scripts/worker_task_evidence.py",
+      "kind": "tracked_surface",
+      "path": "scripts/worker_task_evidence.py",
+      "implementation_class": "diagnostic",
+      "owner": "host-integration-auditor",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "packaged Python compatibility tests; rule=release-worker-evidence-reader",
+      "package_disposition": "release_test_support",
+      "evidence_requirement": "extracted Python compatibility tests",
+      "current_observed_mode": "typed_evidence_reader",
+      "evidence_eligible": false
     },
     {
       "id": "tracked:seL4/README.md",
@@ -7447,7 +7503,7 @@
   ],
   "release": {
     "schema": "cohesix-runtime-release-manifest/v2",
-    "version": "0.1.0-alpha1",
+    "version": "1.0.0-beta",
     "host_tools": [
       "bin/cas-tool",
       "bin/coh",
@@ -7669,13 +7725,18 @@
     ],
     "support_files": [
       "LICENSE.txt",
+      "configs/host_integration_acceptance.toml",
+      "scripts/worker_task_evidence.py",
+      "scripts/driver_runtime_manifest.py",
+      "scripts/worker_image_manifest.py",
       "configs/root_task.toml",
-      "releases/RELEASE_NOTES-0.1.0-alpha1.md",
+      "releases/RELEASE_NOTES-1.0.0-beta.md",
       "scripts/ci/python_compat_run.sh",
       "scripts/setup_environment.sh"
     ],
     "versioned_migrations": [],
     "generated_bundle_files": [
+      "BUILD_PROVENANCE.json",
       "MANIFEST.sha256",
       "VERSION.txt",
       "python/dist/cohesix-0.2.0a2-py3-none-any.whl",
@@ -7699,6 +7760,7 @@
       "resources/fixtures/cas_signing_key.hex"
     ],
     "expected_bundle_files": [
+      "BUILD_PROVENANCE.json",
       "LICENSE.txt",
       "MANIFEST.sha256",
       "QUICKSTART.md",
@@ -7730,6 +7792,7 @@
       "configs/generated/root_task_topology.json",
       "configs/generated/swarmui_defaults.toml",
       "configs/generated/swarmui_defaults.toml.sha256",
+      "configs/host_integration_acceptance.toml",
       "configs/root_task.toml",
       "docs/ARCHITECTURE.md",
       "docs/COHESIX_LOGO.png",
@@ -7825,7 +7888,10 @@
       "scripts/cohsh/telemetry_push_create.coh",
       "scripts/cohsh/telemetry_ring.coh",
       "scripts/cohsh/worker_host_model.coh",
+      "scripts/driver_runtime_manifest.py",
       "scripts/setup_environment.sh",
+      "scripts/worker_image_manifest.py",
+      "scripts/worker_task_evidence.py",
       "tests/fixtures/transcripts/abuse/core.txt",
       "tests/fixtures/transcripts/abuse/serial.txt",
       "tests/fixtures/transcripts/abuse/tcp.txt",
@@ -7906,6 +7972,20 @@
     ],
     "asset_records": [
       {
+        "id": "release-asset:BUILD_PROVENANCE.json",
+        "kind": "generated_bundle_file",
+        "path": "BUILD_PROVENANCE.json",
+        "implementation_class": "contract",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "compiler-generated exact release manifest; exact release source `release builder`",
+        "package_disposition": "generated_release_contract",
+        "evidence_requirement": "exact file-set and SHA-256 validation",
+        "current_observed_mode": "generated_release_metadata",
+        "evidence_eligible": false
+      },
+      {
         "id": "release-asset:LICENSE.txt",
         "kind": "support_file",
         "path": "LICENSE.txt",
@@ -7969,7 +8049,7 @@
         "owner": "release-tooling",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
-        "selection_source": "release.version; rule=release-current-notes; exact release source `releases/RELEASE_NOTES-0.1.0-alpha1.md`",
+        "selection_source": "release.version; rule=release-current-notes; exact release source `releases/RELEASE_NOTES-1.0.0-beta.md`",
         "package_disposition": "versioned_release_document",
         "evidence_requirement": "version and exact output hash must agree",
         "current_observed_mode": "current_release_notes",
@@ -8337,6 +8417,20 @@
         "package_disposition": "generated_release_contract",
         "evidence_requirement": "exact file-set and SHA-256 validation",
         "current_observed_mode": "generated_contract",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:configs/host_integration_acceptance.toml",
+        "kind": "support_file",
+        "path": "configs/host_integration_acceptance.toml",
+        "implementation_class": "contract",
+        "owner": "host-integration-compiler",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "packaged Python compatibility tests; rule=release-host-integration-matrix; exact release source `configs/host_integration_acceptance.toml`",
+        "package_disposition": "release_test_support",
+        "evidence_requirement": "extracted Python compatibility tests",
+        "current_observed_mode": "host_integration_matrix_source",
         "evidence_eligible": false
       },
       {
@@ -9712,6 +9806,20 @@
         "evidence_eligible": false
       },
       {
+        "id": "release-asset:scripts/driver_runtime_manifest.py",
+        "kind": "support_file",
+        "path": "scripts/driver_runtime_manifest.py",
+        "implementation_class": "contract",
+        "owner": "host-integration-auditor",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "packaged worker evidence reader import; rule=release-driver-manifest-reader; exact release source `scripts/driver_runtime_manifest.py`",
+        "package_disposition": "release_test_support",
+        "evidence_requirement": "extracted Python compatibility tests",
+        "current_observed_mode": "manifest_contract_reader",
+        "evidence_eligible": false
+      },
+      {
         "id": "release-asset:scripts/setup_environment.sh",
         "kind": "support_file",
         "path": "scripts/setup_environment.sh",
@@ -9724,6 +9832,34 @@
         "evidence_requirement": "shell validation and exact output hash",
         "current_observed_mode": "host_setup_entrypoint",
         "evidence_eligible": true
+      },
+      {
+        "id": "release-asset:scripts/worker_image_manifest.py",
+        "kind": "support_file",
+        "path": "scripts/worker_image_manifest.py",
+        "implementation_class": "contract",
+        "owner": "host-integration-auditor",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "packaged worker evidence reader import; rule=release-worker-manifest-reader; exact release source `scripts/worker_image_manifest.py`",
+        "package_disposition": "release_test_support",
+        "evidence_requirement": "extracted Python compatibility tests",
+        "current_observed_mode": "manifest_contract_reader",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:scripts/worker_task_evidence.py",
+        "kind": "support_file",
+        "path": "scripts/worker_task_evidence.py",
+        "implementation_class": "diagnostic",
+        "owner": "host-integration-auditor",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "packaged Python compatibility tests; rule=release-worker-evidence-reader; exact release source `scripts/worker_task_evidence.py`",
+        "package_disposition": "release_test_support",
+        "evidence_requirement": "extracted Python compatibility tests",
+        "current_observed_mode": "typed_evidence_reader",
+        "evidence_eligible": false
       },
       {
         "id": "release-asset:tests/fixtures/transcripts/abuse/core.txt",

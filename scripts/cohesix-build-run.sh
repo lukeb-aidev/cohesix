@@ -1286,6 +1286,8 @@ PY
     # Build with `--features fuse` by default so operators can mount without a manual rebuild.
     if [[ "$HOST_OS" == "Darwin" ]]; then
         COH_BUILD_ARGS+=(--features fuse)
+    elif [[ "$HOST_OS" == "Linux" ]]; then
+        COH_BUILD_ARGS+=(--features fuse,nvml)
     fi
     log "Building coh CLI via: cargo ${COH_BUILD_ARGS[*]}"
     cargo "${COH_BUILD_ARGS[@]}"

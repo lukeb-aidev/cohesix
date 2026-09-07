@@ -59,6 +59,7 @@ def create_artifact_inputs(tmp_path: Path) -> dict[str, Path]:
         "staging/elfloader",
         "staging/kernel.elf",
         "staging/rootserver",
+        "staging/cohesix/manifest.json",
         "cohesix-system.cpio",
         "host-tools/cohsh",
         "host-tools/hive-gateway",

@@ -1269,6 +1269,50 @@ evidence_requirement = "Python 3.11 and 3.13 wheel smoke plus referenced target 
 current_observed_mode = "projection_compatibility_runner"
 
 [[tracked_rules]]
+id = "release-host-integration-matrix"
+exact = "configs/host_integration_acceptance.toml"
+class = "contract"
+owner = "host-integration-compiler"
+production_reachable = false
+selection_source = "packaged Python compatibility tests"
+package_disposition = "release_test_support"
+evidence_requirement = "extracted Python compatibility tests"
+current_observed_mode = "host_integration_matrix_source"
+
+[[tracked_rules]]
+id = "release-worker-evidence-reader"
+exact = "scripts/worker_task_evidence.py"
+class = "diagnostic"
+owner = "host-integration-auditor"
+production_reachable = false
+selection_source = "packaged Python compatibility tests"
+package_disposition = "release_test_support"
+evidence_requirement = "extracted Python compatibility tests"
+current_observed_mode = "typed_evidence_reader"
+
+[[tracked_rules]]
+id = "release-driver-manifest-reader"
+exact = "scripts/driver_runtime_manifest.py"
+class = "contract"
+owner = "host-integration-auditor"
+production_reachable = false
+selection_source = "packaged worker evidence reader import"
+package_disposition = "release_test_support"
+evidence_requirement = "extracted Python compatibility tests"
+current_observed_mode = "manifest_contract_reader"
+
+[[tracked_rules]]
+id = "release-worker-manifest-reader"
+exact = "scripts/worker_image_manifest.py"
+class = "contract"
+owner = "host-integration-auditor"
+production_reachable = false
+selection_source = "packaged worker evidence reader import"
+package_disposition = "release_test_support"
+evidence_requirement = "extracted Python compatibility tests"
+current_observed_mode = "manifest_contract_reader"
+
+[[tracked_rules]]
 id = "release-license"
 exact = "LICENSE.txt"
 class = "contract"
@@ -1281,7 +1325,7 @@ current_observed_mode = "license_contract"
 
 [[tracked_rules]]
 id = "release-current-notes"
-exact = "releases/RELEASE_NOTES-0.1.0-alpha1.md"
+exact = "releases/RELEASE_NOTES-1.0.0-beta.md"
 class = "contract"
 owner = "release-tooling"
 production_reachable = false
@@ -1436,7 +1480,7 @@ expected_artifacts = [
 
 [release]
 schema = "cohesix-runtime-release-manifest/v2"
-version = "0.1.0-alpha1"
+version = "1.0.0-beta"
 host_tools = [
   "bin/cas-tool",
   "bin/coh",
@@ -1664,8 +1708,12 @@ ui_assets = [
 
 support_files = [
   "LICENSE.txt",
+  "configs/host_integration_acceptance.toml",
+  "scripts/worker_task_evidence.py",
+  "scripts/driver_runtime_manifest.py",
+  "scripts/worker_image_manifest.py",
   "configs/root_task.toml",
-  "releases/RELEASE_NOTES-0.1.0-alpha1.md",
+  "releases/RELEASE_NOTES-1.0.0-beta.md",
   "scripts/ci/python_compat_run.sh",
   "scripts/setup_environment.sh",
 ]
@@ -1673,6 +1721,7 @@ support_files = [
 versioned_migrations = []
 
 generated_bundle_files = [
+  "BUILD_PROVENANCE.json",
   "MANIFEST.sha256",
   "VERSION.txt",
   "python/dist/cohesix-0.2.0a2-py3-none-any.whl",

@@ -268,9 +268,8 @@ build_tools() {
         Cargo.lock \
         rust-toolchain.toml \
         .cargo/config.toml \
-        configs/generated/cohesix_python_qemu_smp_production.json \
         scripts/rustc-wrapper.sh
-      git ls-files -z --cached apps crates tools tests resources
+      git ls-files -z --cached apps crates tools tests resources configs/generated
     } | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -czf "$source_tarball"
   )
   local source_sha256
@@ -353,14 +352,14 @@ export CARGO_BUILD_JOBS=1
 export CARGO_TARGET_DIR="$target_dir"
 cd "$source_dir"
 
-"$cargo_bin" build --release -p gpu-bridge-host
-"$cargo_bin" build --release -p cas-tool
-"$cargo_bin" build --release -p hive-gateway
-"$cargo_bin" build --release -p host-ticket-agent
-"$cargo_bin" build --release -p host-sidecar-bridge --features tcp
-"$cargo_bin" build --release -p cohsh --features tcp
-"$cargo_bin" build --release -p coh --features fuse,nvml
-RUSTFLAGS='-C debuginfo=0' "$cargo_bin" build --release -p swarmui
+"$cargo_bin" build --locked --release -p gpu-bridge-host
+"$cargo_bin" build --locked --release -p cas-tool
+"$cargo_bin" build --locked --release -p hive-gateway
+"$cargo_bin" build --locked --release -p host-ticket-agent
+"$cargo_bin" build --locked --release -p host-sidecar-bridge --features tcp
+"$cargo_bin" build --locked --release -p cohsh --features tcp
+"$cargo_bin" build --locked --release -p coh --features fuse,nvml
+RUSTFLAGS='-C debuginfo=0' "$cargo_bin" build --locked --release -p swarmui
 
 bins=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool swarmui hive-gateway host-ticket-agent)
 rm -rf "$stage_dir"

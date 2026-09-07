@@ -50,6 +50,7 @@ QEMU_REQUIRED_FILES = (
     "staging/elfloader",
     "staging/kernel.elf",
     "staging/rootserver",
+    "staging/cohesix/manifest.json",
     "cohesix-system.cpio",
     "host-tools/cohsh",
     "host-tools/hive-gateway",
@@ -555,7 +556,9 @@ def verify_file_record(root: Path, record: Mapping[str, Any]) -> None:
         )
 
 
-def verify_qemu_launch_contract(document: Mapping[str, Any]) -> dict[str, Any]:
+def verify_qemu_launch_contract(
+    document: Mapping[str, Any], *, verify_local_runtime: bool = True,
+) -> dict[str, Any]:
     """Verify immutable host, binary, accelerator, and machine claim truth."""
 
     qemu = document.get("qemu")
@@ -578,7 +581,7 @@ def verify_qemu_launch_contract(document: Mapping[str, Any]) -> dict[str, Any]:
     if set(qemu) != expected_keys:
         raise EvidenceError("artifact QEMU launch context has invalid fields")
     host_system = qemu.get("host_system")
-    if host_system != platform.system():
+    if verify_local_runtime and host_system != platform.system():
         raise EvidenceError(
             "artifact QEMU host differs from the verifying host: "
             f"expected {host_system}, got {platform.system()}"
@@ -594,15 +597,19 @@ def verify_qemu_launch_contract(document: Mapping[str, Any]) -> dict[str, Any]:
     binary_path = binary.get("path")
     if not isinstance(binary_path, str) or not Path(binary_path).is_absolute():
         raise EvidenceError("artifact QEMU binary path must be absolute")
-    resolved_binary = resolve_qemu_binary(binary_path)
-    if (
-        str(resolved_binary) != binary_path
-        or resolved_binary.stat().st_size != binary.get("size")
-        or sha256_file(resolved_binary) != binary.get("sha256")
-        or not isinstance(binary.get("version"), str)
-        or not str(binary["version"]).strip()
-    ):
-        raise EvidenceError("artifact QEMU binary identity changed")
+    require_tagged_digest(str(binary.get("sha256", "")), "recorded QEMU digest")
+    if not isinstance(binary.get("size"), int) or binary["size"] <= 0:
+        raise EvidenceError("recorded QEMU size is invalid")
+    if not isinstance(binary.get("version"), str) or not binary["version"].strip():
+        raise EvidenceError("recorded QEMU version is missing")
+    if verify_local_runtime:
+        resolved_binary = resolve_qemu_binary(binary_path)
+        if (
+            str(resolved_binary) != binary_path
+            or resolved_binary.stat().st_size != binary.get("size")
+            or sha256_file(resolved_binary) != binary.get("sha256")
+        ):
+            raise EvidenceError("artifact QEMU binary identity changed")
     accelerator = qemu.get("accelerator")
     if accelerator not in {"hvf", "kvm", "tcg"}:
         raise EvidenceError(f"unsupported recorded QEMU accelerator: {accelerator!r}")
@@ -706,8 +713,13 @@ def verify_artifact_document(
     expected_source_digest: str | None = None,
     expected_action_id: str | None = None,
     expected_catalog_action_digest: str | None = None,
+    verify_local_runtime: bool = True,
 ) -> dict[str, Any]:
-    """Validate an artifact document and every file it covers."""
+    """Verify bytes and recorded claims; packaging may inspect a foreign host.
+
+    Disabling local runtime checks only permits archival inspection. All launch
+    and target acceptance callers retain the default local executable checks.
+    """
 
     document = read_json(require_file(path, "QEMU artifact manifest"))
     if document.get("schema") != ARTIFACT_SCHEMA:
@@ -772,7 +784,7 @@ def verify_artifact_document(
             + ", ".join(missing_required)
         )
 
-    verify_qemu_launch_contract(document)
+    verify_qemu_launch_contract(document, verify_local_runtime=verify_local_runtime)
     verify_embedded_launch_record(document, artifact_root)
 
     expected_id = sha256_bytes(canonical_bytes(artifact_identity_material(document)))
@@ -1790,8 +1802,9 @@ def verify_result_document(
     expected_action_id: str,
     expected_catalog_action_digest: str,
     expected_evidence_root: Path,
+    verify_local_runtime: bool = True,
 ) -> dict[str, Any]:
-    """Validate one transport result for aggregation."""
+    """Validate one transport result; archival inspection cannot launch a target."""
 
     document = read_json(require_file(path, "transport result"))
     if document.get("schema") != RESULT_SCHEMA:
@@ -1888,6 +1901,7 @@ def verify_result_document(
                 raise EvidenceError(f"artifact manifest hash mismatch in {path}")
             artifact = verify_artifact_document(
                 artifact_manifest,
+                verify_local_runtime=verify_local_runtime,
                 expected_source_digest=expected_source_digest,
                 expected_action_id=str(artifact_record.get("action_id", "")),
                 expected_catalog_action_digest=str(

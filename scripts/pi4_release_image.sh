@@ -91,6 +91,7 @@ done
 
 python3 - "$STAGE_DIR" "$OUTPUT_IMAGE" "$OUTPUT_METADATA" "$OUTPUT_SHA256" <<'PY'
 from pathlib import Path
+import json
 import sys
 
 stage = Path(sys.argv[1]).resolve()
@@ -107,6 +108,12 @@ if not entries or any(path.is_symlink() for path in entries):
     raise SystemExit("Pi 4 stage must be non-empty and contain no symlinks")
 if any(not path.is_file() and not path.is_dir() for path in entries):
     raise SystemExit("Pi 4 stage contains a non-regular entry")
+identity = stage / "pi4-image-identity.json"
+if not identity.is_file():
+    raise SystemExit("Pi 4 stage must contain its sealed pi4-image-identity.json")
+record = json.loads(identity.read_text())
+if not record.get("build_marker") or not record.get("git_commit"):
+    raise SystemExit("Pi 4 stage identity must contain build_marker and git_commit")
 PY
 
 if [[ "$FORCE" -eq 0 ]]; then
@@ -358,7 +365,8 @@ for path in sorted(stage.rglob("*"), key=lambda item: item.as_posix()):
         }
     )
 payload = {
-    "schema": "cohesix-pi4-portable-sd-image/v1",
+    "schema": "cohesix-pi4-portable-sd-image/v2",
+    "boot_identity": json.loads((stage / "pi4-image-identity.json").read_text()),
     "filesystem": "FAT32",
     "image_filename": Path(sys.argv[2]).name,
     "image_sha256": image_sha256,

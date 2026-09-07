@@ -922,7 +922,7 @@ from that catalog.
 | `performance.gateway-telemetry` | conditional | `performance` | conditional / qemu, pi4 | evidence-only: telemetry-summary-matrix, ops-csv, ramp-csv, ramp-svg |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
-| `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | evidence-only: macos-bundle-result, ubuntu-bundle-result |
+| `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
 <!-- test-plan-catalog:end -->
 
 `performance.gateway-telemetry` may be selected alongside either target, but
@@ -7323,18 +7323,107 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
   - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only and single-active-interface. On the physical driver-task profile, bounded credentials select CYW43 and selected-CYW43 attach/join/runtime failure is fatal driver evidence rather than wired fallback; QEMU/host compatibility profiles may retain absent-device fallback coverage. Final 26b compatibility evidence still requires Pi 4 hardware captures proving join + DHCP and documenting which fallback profile, if any, was exercised.
 
-### Conditional G — Release bundle validation (macOS + Ubuntu)
-Run the catalogued host-tool, replay, and UI bundle checks from a clean
-extraction directory, never from repository build output.
-- macOS bundle: `releases/Cohesix-0.9.0-beta-MacOS.tar.gz`
-- Ubuntu bundle: `releases/Cohesix-0.9.0-beta-linux.tar.gz`
-- Current releases also emit a peer `releases/<release-name>-Pi4.tar.gz`.
-  Validate its exact manifest, image SHA-256, MBR partition starting at LBA
-  2048, FAT32 payload, metadata `minimum_target_bytes`, and embedded file hashes.
-  Prove the image writes to media exactly that size or larger; unused capacity
-  on a larger card remains unallocated and does not affect boot.
-- Ensure headless Linux uses `xvfb-run` for SwarmUI.
-- The release bundle includes Python tests and fixtures for running `python3 -m pytest tools/cohesix-py/tests`.
+### Conditional G — Release bundle validation (macOS, Linux and Pi4)
+
+This is mandatory when shipping the three `Cohesix-1.0.0-beta` archives. It runs
+after the applicable five-stage plan and all M26e hardware, pressure,
+repeatability, Worker/full-system and review gates. Stage 05 alone does not run
+this conditional action. Follow [HOST_TOOLS release factory](HOST_TOOLS.md#release-factory)
+to build/test on Mac and the selected Linux ARM64 builder and assemble candidates
+under `releases/`. The catalogued `release.bundle-validation` action is an
+executable final verifier and requires all three installation result records.
+
+Extract each archive into a fresh directory outside the source checkout and
+outside `releases/`. Keep the original tarball beside its extracted folder.
+Do not reuse repository binaries, a prior release extraction, or a rebuilt guest.
+Prepare Python/pytest and the existing Playwright dependencies on each host;
+Linux also requires `xvfb-run`. Configure `COH_AUTH_TOKEN` or
+`COHSH_AUTH_TOKEN` securely in the environment; it is never recorded in argv.
+
+On Mac, and then independently on Linux using the `-linux` paths:
+
+```bash
+python3 scripts/release_qualify.py host \
+  --bundle <clean-extraction>/Cohesix-1.0.0-beta-MacOS \
+  --archive <clean-extraction>/Cohesix-1.0.0-beta-MacOS.tar.gz \
+  --port 31337 --output <fresh-evidence>/macos/result.json
+```
+
+The command checks the exact manifest and archive, executes all eight native
+binaries, checks replay, installs the packaged wheel into an isolated temporary
+venv, runs `python/cohesix-py/tests`, boots the packaged `qemu/run.sh`, runs its
+packaged authenticated TCP EXPECT script, and runs the existing SwarmUI replay
+presentation suite against the extraction. The selected TCP port and its next
+two ports must be free. The Linux image uses the native KVM timer/profile;
+Mac uses HVF. The final record remains installation smoke evidence, not a new
+M26e performance or full-system claim.
+
+For the first Pi4 SD-image release, qualify the actual distributed `.img`:
+
+1. Extract `Cohesix-1.0.0-beta-Pi4.tar.gz` into its own clean directory. Verify
+   its manifest and image SHA-256. Identify a removable whole SD card whose byte
+   capacity is at least the metadata's `minimum_target_bytes`. Follow the
+   packaged QUICKSTART and HARDWARE_BRINGUP device-identification rules to write
+   the raw image. This is an explicitly selected whole-card installation, not
+   the routine stage-to-existing-FAT development reflash.
+2. Before booting or changing the card's FAT contents, read back the exact image
+   prefix. Supply the same explicit whole-disk device (macOS raw device or Linux
+   block device) used for the write. Elevate this read-only command if needed:
+
+   ```bash
+   python3 scripts/release_qualify.py media \
+     --bundle <clean-extraction>/Cohesix-1.0.0-beta-Pi4 \
+     --archive <clean-extraction>/Cohesix-1.0.0-beta-Pi4.tar.gz \
+     --device <explicit-whole-disk-device> \
+     --output <fresh-evidence>/media/result.json
+   ```
+
+   The verifier reads exactly the distributed image length, rejects a smaller
+   card or mismatched bytes, and retains the device and image identity. Extra
+   card capacity remains outside the image and unallocated. Layout validation
+   requires one FAT32 MBR partition at LBA 2048 and the exact compiler payload.
+3. Eject and freshly boot that card. Use the single serial owner to retain a
+   new log containing exactly this one boot. Exercise initial network setup and
+   confirm authenticated networking. This verifies the first-install path;
+   do not silently import a development card's saved `cohesix.env`. Select wired
+   or Wi-Fi according to the release claim; the full M26e every-boot acceptance
+   requirements remain independently applicable.
+4. After observing successful provisioning, run the packaged-client TCP check:
+
+   ```bash
+   python3 scripts/release_qualify.py pi4 \
+     --bundle <clean-extraction>/Cohesix-1.0.0-beta-Pi4 \
+     --archive <clean-extraction>/Cohesix-1.0.0-beta-Pi4.tar.gz \
+     --media-result <fresh-evidence>/media/result.json \
+     --serial-log <fresh-single-boot-serial.log> \
+     --host-bundle <clean-extraction>/Cohesix-1.0.0-beta-MacOS \
+     --host <pi-ip> --provisioning-verified \
+     --output <fresh-evidence>/pi4/result.json
+   ```
+
+   `--provisioning-verified` records the operator's observed initial-configuration
+   check. The tool independently checks the media/archive binding, sealed build
+   marker, one root-console boot and the packaged authenticated TCP operation.
+   It does not turn this smoke into complete Pi hardware/performance acceptance.
+
+Copy each result directory with all its logs back to the release host. Then run
+the executable catalog action with a fresh final output directory:
+
+```bash
+python3 scripts/release_qualify.py verify \
+  --macos-result <fresh-evidence>/macos/result.json \
+  --linux-result <fresh-evidence>/linux/result.json \
+  --pi4-result <fresh-evidence>/pi4/result.json \
+  --releases-dir releases --output <fresh-evidence>/final/result.json
+```
+
+The catalog exposes the same inputs as `TP_RELEASE_MACOS_RESULT`,
+`TP_RELEASE_LINUX_RESULT`, `TP_RELEASE_PI4_RESULT`, `TP_RELEASE_DIR` and
+`TP_RELEASE_RESULT`. Missing/failed checks, changed logs or archives, an old
+version, or different source commits fail closed. Retain the final result and
+the complete evidence directories with the release delivery record. Only after
+this gate and the independently required M26e acceptance/reviewer gates pass may
+the candidate archives be published.
 
 ### Automated Stage 05 — Release governance and attestation
 - `scripts/ci/test_plan_stage_05_due_diligence.sh`
@@ -7404,7 +7493,8 @@ python3 scripts/ci/check_implementation_surfaces.py \
   --inventory configs/generated/implementation_surface_inventory.json
 cargo test -p root-task --tests production_fallbacks
 cargo test -p gpu-bridge-host
-scripts/release_bundle.sh --check-manifest --pi4-stage-dir out/pi4-sd
+scripts/release_bundle.sh --check-manifest --pi4-stage-dir out/pi4-sd \
+  --macos-artifact <accepted-mac-artifact.json> --macos-result <accepted-mac-base.json>
 scripts/check-generated.sh
 ```
 
@@ -7418,8 +7508,8 @@ retired, or not-enabled row cannot satisfy target, release, attestation,
 integration, or use-case evidence.
 
 `scripts/release_bundle.sh --check-manifest --pi4-stage-dir <path>` validates the
-inventory-selected version, exact host-tool architecture, selected GICv3
-kernel, QEMU target-image sources, and the compiler-owned exact Pi 4 SD staging
+inventory-selected version, source-bound accepted host/guest hashes and native
+GICv3/timer profile, passing TCP evidence, and the compiler-owned exact Pi 4 SD staging
 set. The Pi gate rejects missing, extra, linked, stale, non-current, or
 primary/fallback-divergent files and re-verifies the sealed image identity. It
 also validates every individually listed document, script, Python artifact, UI

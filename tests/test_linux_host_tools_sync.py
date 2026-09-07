@@ -3,8 +3,9 @@
 # Copyright 2026 Lukas Bower
 
 from pathlib import Path
+import os
 import subprocess
-
+import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "linux_host_tools_sync.sh"
@@ -64,11 +65,50 @@ def test_remote_builder_packages_compile_time_inputs() -> None:
 
     assert "git ls-files -z --cached" in source
     assert "apps crates tools tests resources" in source
-    assert "configs/generated/cohesix_python_qemu_smp_production.json" in source
+    assert "tests resources configs/generated" in source
     assert "rust-toolchain.toml" in source
     assert "does not match pinned" in source
     assert "toolchain_channel" in source
     assert "status --porcelain=v1 --untracked-files=all" in source
+
+
+def test_transferred_archive_contains_both_gateway_compile_time_contracts(
+    tmp_path: Path,
+) -> None:
+    """Execute the actual archive recipe against an isolated tracked source tree."""
+    repo = tmp_path / "source"
+    repo.mkdir()
+    required = [
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/config.toml",
+        "scripts/rustc-wrapper.sh",
+        "configs/generated/cohesix_python_qemu_smp_production.json",
+        "configs/generated/cohesix_python_pi4_production.json",
+    ]
+    for relative in required:
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n")
+    ignored = repo / "configs/generated/untracked-secret.json"
+    ignored.write_text("must not enter the source transfer\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", *required], check=True)
+    source = SCRIPT.read_text()
+    start = source.index(
+        '  (\n    cd "$ROOT_DIR"', source.index('log "Packaging the exact clean')
+    )
+    end = source.index("\n  local source_sha256", start)
+    archive = tmp_path / "source.tar.gz"
+    env = {**os.environ, "ROOT_DIR": str(repo), "source_tarball": str(archive)}
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", source[start:end]], env=env, check=True
+    )
+    with tarfile.open(archive) as handle:
+        names = set(handle.getnames())
+    assert set(required) <= names
+    assert "configs/generated/untracked-secret.json" not in names
 
 
 def test_remote_builder_fails_before_ssh_when_locations_are_missing() -> None:
