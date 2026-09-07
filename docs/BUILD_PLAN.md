@@ -10493,6 +10493,23 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Isolated peer-first close restoration — sealed `5e54f83d9` two-WiFi and
+    two-GENET evidence proves improved WiFi raw throughput but also a W01
+    sequential connection refusal. The sole isolated TCP socket starts a
+    simultaneous FIN exchange and rejects replacement SYNs until the final
+    FIN retransmission. Restore the existing peer-first close contract for
+    exact authenticated root Disconnect controls: drain application and TCP
+    output, wait up to one second for the peer FIN, and close from CloseWait;
+    expire the bounded drain or peer grace by abort, without renewing either
+    deadline on duplicate controls. Preserve independent authentication/error
+    close, end/relisten and revocation, existing socket/buffer inventory, ABI,
+    scheduling and benchmark bounds. Discovery task:
+    `m26e-console-network-service-isolation`. Reproduce FIN ordering with the
+    real two-stack host fixture, qualify exact Pi and pinned QEMU, and require
+    fresh immediate sequential scripts on both physical backends. The complete
+    host-tool suite, Python SDK, generated contracts and raw/REST workloads
+    already require exact QUIT acknowledgement and peer EOF; no consumer or
+    schema changes are needed. This repair does not establish GENET latency.
   - Pi root execution cost after memory repairs — the sealed `31cf29b35`
     two-WiFi/two-GENET matrix leaves GENET root CPU at 69.2/71.0 ms per
     64-request session and p95 at 5.75/5.57 ms. Maintenance consolidation has

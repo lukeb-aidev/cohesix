@@ -45,6 +45,82 @@ const _: () = assert!(SESSION_WIRE_OUTPUT_BYTES >= SEND_BATCH_LINE_BYTES + FRAME
 const INVALID_LENGTH_OUTPUT_RESERVE: usize = 3;
 const INVALID_LENGTH_FRAME: &[u8] = b"ERR FRAME reason=invalid-length";
 
+// Preserve the console's peer-first close contract in the isolated owner.
+// These are close-phase bounds, independent of authentication and idle time.
+const ROOT_CLOSE_DRAIN_MS: u64 = 10_000;
+const ROOT_CLOSE_PEER_GRACE_MS: u64 = 1_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootClosePhase {
+    Inactive,
+    Drain(Option<u64>),
+    PeerWait(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SocketCloseAction {
+    Wait,
+    Close,
+    Abort,
+}
+
+impl RootClosePhase {
+    fn action(
+        &mut self,
+        now_ms: u64,
+        state: TcpState,
+        application_drained: bool,
+        tcp_drained: bool,
+    ) -> SocketCloseAction {
+        match *self {
+            Self::Inactive => {
+                if application_drained {
+                    SocketCloseAction::Close
+                } else {
+                    SocketCloseAction::Wait
+                }
+            }
+            Self::Drain(started) => {
+                let started = started.unwrap_or(now_ms);
+                *self = Self::Drain(Some(started));
+                if application_drained && tcp_drained {
+                    if state == TcpState::Established {
+                        *self = Self::PeerWait(now_ms);
+                        SocketCloseAction::Wait
+                    } else {
+                        SocketCloseAction::Close
+                    }
+                } else if now_ms.saturating_sub(started) >= ROOT_CLOSE_DRAIN_MS {
+                    SocketCloseAction::Abort
+                } else {
+                    SocketCloseAction::Wait
+                }
+            }
+            Self::PeerWait(started) => {
+                if state != TcpState::Established && application_drained && tcp_drained {
+                    SocketCloseAction::Close
+                } else if now_ms.saturating_sub(started) >= ROOT_CLOSE_PEER_GRACE_MS {
+                    SocketCloseAction::Abort
+                } else {
+                    SocketCloseAction::Wait
+                }
+            }
+        }
+    }
+
+    fn service_due(self, now_ms: u64, application_drained: bool, tcp_drained: bool) -> bool {
+        match self {
+            Self::Inactive => application_drained,
+            Self::Drain(None) => true,
+            Self::Drain(Some(started)) => {
+                (application_drained && tcp_drained)
+                    || now_ms.saturating_sub(started) >= ROOT_CLOSE_DRAIN_MS
+            }
+            Self::PeerWait(started) => now_ms.saturating_sub(started) >= ROOT_CLOSE_PEER_GRACE_MS,
+        }
+    }
+}
+
 /// Decide whether a direct NIC service loop may poll locally without a new
 /// notification. A retained egress frame alone cannot justify polling after
 /// the NIC reported ring backpressure; only peer rearm or independently
@@ -1311,6 +1387,7 @@ pub struct ConsoleNetworkService<'a> {
     session: TransportSession,
     next_connection_id: u64,
     last_tcp_state: TcpState,
+    root_close: RootClosePhase,
     poll_unit: ServicePollUnit,
     terminal: bool,
 }
@@ -1393,6 +1470,7 @@ impl<'a> ConsoleNetworkService<'a> {
             session: TransportSession::new(descriptor)?,
             next_connection_id: 1,
             last_tcp_state: TcpState::Listen,
+            root_close: RootClosePhase::Inactive,
             poll_unit: ServicePollUnit::StackIngress,
             terminal: false,
         })
@@ -1441,11 +1519,20 @@ impl<'a> ConsoleNetworkService<'a> {
             .interface
             .poll_at(timestamp, &self.sockets)
             .is_some_and(|deadline| deadline <= timestamp);
-        let state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
+        let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
+        let state = socket.state();
         timer_service_due_from_levels(
             tcp_timer_due,
             self.session.deadline_service_due(now_ms),
-            close_transition_service_due(state, self.last_tcp_state, self.session.close_ready()),
+            close_transition_service_due(
+                state,
+                self.last_tcp_state,
+                self.root_close.service_due(
+                    now_ms,
+                    self.session.close_ready(),
+                    socket.send_queue() == 0,
+                ),
+            ),
         )
     }
 
@@ -1500,7 +1587,12 @@ impl<'a> ConsoleNetworkService<'a> {
             ValidatedRootControl::SendBatch(cursor) => {
                 self.session.queue_authorized_batch(payload, cursor)?;
             }
-            ValidatedRootControl::Disconnect => self.session.request_disconnect(),
+            ValidatedRootControl::Disconnect => {
+                if self.session.authenticated() && self.root_close == RootClosePhase::Inactive {
+                    self.root_close = RootClosePhase::Drain(None);
+                }
+                self.session.request_disconnect();
+            }
         }
         Ok(ControlApplyOutcome::Applied)
     }
@@ -1623,8 +1715,16 @@ impl<'a> ConsoleNetworkService<'a> {
                 committed_wire_output = true;
             }
         }
-        if self.session.close_ready() {
-            self.sockets.get_mut::<TcpSocket>(self.tcp_handle).close();
+        let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+        match self.root_close.action(
+            now_ms,
+            socket.state(),
+            self.session.close_ready(),
+            socket.send_queue() == 0,
+        ) {
+            SocketCloseAction::Wait => {}
+            SocketCloseAction::Close => socket.close(),
+            SocketCloseAction::Abort => socket.abort(),
         }
 
         let current = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
@@ -1632,6 +1732,7 @@ impl<'a> ConsoleNetworkService<'a> {
             || (current == TcpState::Closed && self.last_tcp_state != TcpState::Closed)
         {
             self.session.end(now_ms)?;
+            self.root_close = RootClosePhase::Inactive;
             if current == TcpState::TimeWait {
                 // The sole listener cannot remain captive to smoltcp's close
                 // timer: a replacement SYN restarts that timer and can keep
@@ -1697,6 +1798,7 @@ impl<'a> ConsoleNetworkService<'a> {
     pub fn revoke(&mut self) {
         self.sockets.get_mut::<TcpSocket>(self.tcp_handle).abort();
         self.session.revoke();
+        self.root_close = RootClosePhase::Inactive;
         self.terminal = true;
     }
 
@@ -1725,6 +1827,92 @@ mod tests {
         ArpOperation, ArpPacket, ArpRepr, EthernetFrame, EthernetProtocol, EthernetRepr,
         Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Packet, Ipv4Repr,
     };
+
+    #[test]
+    fn root_close_waits_for_ack_and_has_nonrenewable_phase_deadlines() {
+        let mut close = RootClosePhase::Drain(None);
+        assert!(close.service_due(100, false, false));
+        assert_eq!(
+            close.action(100, TcpState::Established, false, false),
+            SocketCloseAction::Wait
+        );
+        assert!(!close.service_due(101, true, false));
+        assert_eq!(
+            close.action(101, TcpState::Established, true, false),
+            SocketCloseAction::Wait
+        );
+        assert_eq!(close, RootClosePhase::Drain(Some(100)));
+        assert_eq!(
+            close.action(10_099, TcpState::Established, true, false),
+            SocketCloseAction::Wait
+        );
+        assert!(close.service_due(10_100, true, false));
+        assert_eq!(
+            close.action(10_100, TcpState::Established, true, false),
+            SocketCloseAction::Abort
+        );
+
+        let mut close = RootClosePhase::Drain(None);
+        assert_eq!(
+            close.action(200, TcpState::Established, true, true),
+            SocketCloseAction::Wait
+        );
+        assert_eq!(close, RootClosePhase::PeerWait(200));
+        assert!(!close.service_due(1_199, true, true));
+        assert_eq!(
+            close.action(1_199, TcpState::Established, true, true),
+            SocketCloseAction::Wait
+        );
+        assert_eq!(close, RootClosePhase::PeerWait(200));
+        assert!(close.service_due(1_200, true, true));
+        assert_eq!(
+            close.action(1_200, TcpState::Established, true, true),
+            SocketCloseAction::Abort
+        );
+
+        let mut close = RootClosePhase::PeerWait(200);
+        assert_eq!(
+            close.action(300, TcpState::CloseWait, true, true),
+            SocketCloseAction::Close
+        );
+        let mut close = RootClosePhase::Inactive;
+        assert_eq!(
+            close.action(300, TcpState::Established, true, true),
+            SocketCloseAction::Close
+        );
+        assert_eq!(
+            close.action(300, TcpState::Established, false, true),
+            SocketCloseAction::Wait
+        );
+    }
+
+    #[test]
+    fn duplicate_root_disconnect_does_not_renew_peer_grace_or_survive_revoke() {
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 4096];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        service.session.begin(1, 0).unwrap();
+        service.session.state = AuthState::Authenticated;
+        service
+            .apply_control(1, ExchangeKind::Disconnect, b"")
+            .unwrap();
+        service
+            .root_close
+            .action(100, TcpState::Established, true, true);
+        service
+            .apply_control(1, ExchangeKind::Disconnect, b"")
+            .unwrap();
+        assert_eq!(service.root_close, RootClosePhase::PeerWait(100));
+        assert_eq!(
+            service.apply_control(2, ExchangeKind::Disconnect, b""),
+            Ok(ControlApplyOutcome::StaleConnection)
+        );
+        assert_eq!(service.root_close, RootClosePhase::PeerWait(100));
+        service.revoke();
+        assert_eq!(service.root_close, RootClosePhase::Inactive);
+    }
 
     #[test]
     fn direct_tx_backpressure_blocks_until_peer_or_independent_work() {
@@ -4059,8 +4247,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn peer_initiated_close_relistens_without_root_disconnect_control() {
+    fn check_peer_first_close(root_disconnect: bool) {
         let mut server_rx = [0u8; 4096];
         let mut server_tx = [0u8; 4096];
         let mut server_storage = [SocketStorage::EMPTY];
@@ -4156,6 +4343,39 @@ mod tests {
             [ExchangeKind::Connected, ExchangeKind::Authenticated]
         );
 
+        if root_disconnect {
+            service
+                .apply_control(1, ExchangeKind::SendLine, b"OK QUIT")
+                .unwrap();
+            service
+                .apply_control(1, ExchangeKind::Disconnect, b"")
+                .unwrap();
+            let mut reply = std::vec::Vec::new();
+            for _ in 0..64 {
+                now_ms += 1;
+                drive_network_turn(
+                    &mut service,
+                    &mut client_interface,
+                    &mut client_device,
+                    &mut client_sockets,
+                    now_ms,
+                )
+                .unwrap();
+                let client = client_sockets.get_mut::<TcpSocket>(client_handle);
+                while client.can_recv() {
+                    let mut chunk = [0u8; 64];
+                    let n = client.recv_slice(&mut chunk).unwrap();
+                    reply.extend_from_slice(&chunk[..n]);
+                }
+                assert_eq!(
+                    service.sockets.get::<TcpSocket>(service.tcp_handle).state(),
+                    TcpState::Established,
+                    "root Disconnect must preserve the peer-first FIN contract after OK QUIT"
+                );
+            }
+            assert_eq!(reply, framed(b"OK QUIT"));
+        }
+
         let client = client_sockets.get_mut::<TcpSocket>(client_handle);
         assert_eq!(client.state(), TcpState::Established);
         client.close();
@@ -4198,6 +4418,16 @@ mod tests {
         );
         assert!(events.iter().all(|event| event.connection_id() == 1));
         assert_eq!(events[2].payload().unwrap(), "reason=closed");
+    }
+
+    #[test]
+    fn peer_initiated_close_relistens_without_root_disconnect_control() {
+        check_peer_first_close(false);
+    }
+
+    #[test]
+    fn root_disconnect_drains_quit_then_waits_for_peer_fin_before_relisten() {
+        check_peer_first_close(true);
     }
 
     #[test]

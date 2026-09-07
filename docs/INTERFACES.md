@@ -540,6 +540,12 @@ numeric fields return `ERR` and produce no documented side effect.
   disconnect as success. After exact `OK QUIT`, a TCP client half-closes its
   write side and requires peer EOF on the same connection within the existing
   timeout; QUIT is not retried after an ambiguous send or close.
+  The isolated owner drains its application and TCP output before an
+  authenticated root-authorized close. It then waits at most one second for
+  the peer FIN and closes from `CloseWait`, avoiding simultaneous FIN on clean
+  QUIT. A ten-second drain expiry or peer-grace expiry aborts the connection;
+  duplicate Disconnect controls cannot extend either deadline. Authentication
+  rejection and independent peer EOF retain their own close behavior.
 - An `ERR` is terminal for that command and must not be treated as a successful
   no-op.
 

@@ -8718,6 +8718,17 @@ incoming SYN cannot re-arm smoltcp's `10 s` close delay indefinitely. The old
 generation must publish one `Disconnected` and clear its auth/output state;
 the existing `Closed` path and all retry/timeout policies remain unchanged.
 
+The isolated authenticated root-Disconnect path must also preserve peer-first
+QUIT: a real two-stack fixture drains exact `OK QUIT` while the server remains
+`Established`, then the client half-closes and the server closes from
+`CloseWait`, emits one `Disconnected` and relistens. Pure close-state checks
+cover application/TCP drain, the ten-second drain bound, one-second peer grace,
+expiry by abort, duplicate/stale controls without deadline renewal, revocation,
+and unchanged independent rejection/EOF behavior. Waiting for a future peer
+deadline cannot make every empty direct-GENET wake runnable. Fresh physical
+evidence must include immediate sequential scripts on both backends; passing
+host fixtures cannot excuse a SYN refusal or missing terminal on hardware.
+
 The V26 root lifecycle guard is distinct from V13's child `TimeWait` repair.
 After one successful root Disconnect publication, neither `ControlCompleted`
 nor `OutputDrained` may reopen that semantic transaction for the same
