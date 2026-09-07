@@ -9886,6 +9886,27 @@ but ordinary Pi scheduling remains unchanged and fresh Pi evidence is pending.
 
 ### Milestone 26e linked-driver MCS and coexistence gate
 
+For root CPU-sharing synchronization changes, verify all seven HAL role mapping
+classes, including private uncached DMA and the two coherent CPU-only SPSC
+exceptions. Preserve sequence-last command/grant publication, stable completion
+and RX-queue reads, bounds, poison handling and retained-request identity with
+the existing focused HAL contracts. Test both historical maintenance receipts
+and `uncached-plus-root-barriers` receipts; the latter must reject missing,
+malformed or nonzero cache-operation counters. Exact target disassembly must
+show barriers and accesses without shared-handoff cache syscalls, while DMA and
+image maintenance remain present. Inspect retained bootstrap/GENET stack frames
+against the 1 MiB root stack and run the pinned QEMU root-MCS canary.
+
+Fresh Pi comparison uses the same first-attempt raw64 workload, all selected CPU
+rows, bounded diagnostics, representative scripts and medium/high pressure on
+two WiFi and two GENET boots. Keep boot-paired complete capture records and
+preserve incomplete first capture audits separately. Compare root consumed CPU
+and wire timing without interpreting a barrier count as a kernel operation or a
+wall interval as consumed CPU. The unchanged `db420f1c1` matrix passed functional
+workloads but failed WiFi throughput and GENET p95; it establishes the baseline,
+not performance acceptance for the synchronization candidate. MCS reservations,
+elapsed guards, physical ownership and all target thresholds remain unchanged.
+
 Run the QEMU-first driver gate against
 `out/sel4/profile-v2/qemu-smp-production`; do not substitute Pi hardware or a
 classic target build:

@@ -10493,6 +10493,23 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Root CPU-sharing synchronization — after the unchanged `db420f1c1` two-WiFi,
+    two-GENET matrix, remove kernel cache-maintenance calls from HAL-owned
+    shared control and payload handoffs. Control pages and ordinary payloads
+    are identically uncached; serial/GENET CPU-only SPSC payloads are identically
+    coherent Normal memory. Preserve all range checks, release/acquire barriers,
+    sequence-last publication, stable rereads, owner/generation fences and
+    physical DMA/image maintenance. Remove obsolete cache-call accounting;
+    the fixed counter fields remain present and zero for these shared handoffs.
+    Emit `cache_policy=uncached-plus-root-barriers`; the trace normalizer accepts
+    this only with four explicit zero cache counters and retains historical
+    maintenance receipts. Test mapping classes, publication/queue contracts and
+    both receipt policies; inspect exact emitted Pi code and retained stack,
+    then run pinned QEMU root-MCS and fresh dual-mode Pi raw/functional/pressure
+    checks. The redundant work is source-proven; its performance contribution
+    remains a hypothesis until measured. Complete host tools, Python library,
+    generated manifests/ABIs, `.coh` workloads and raw/REST arithmetic require
+    no implementation or schema changes beyond the affected trace consumer.
   - Pi WiFi idle Retry and GENET root overhead — route the attached WiFi final
     idle `Retry` through the existing one-shot outer recheck. Renew that hint
     only after proven productive attached Network progress without resetting

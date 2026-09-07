@@ -7487,41 +7487,32 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_ram_region_attr_uses_normal_memory_only_for_cpu_spsc_links() {
-        assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(
-                super::driver_task::DriverTaskHotPath::SerialConsole,
-                false,
-            ),
-            super::runtime_cacheable_xn_attributes()
-        );
-        assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(
-                super::driver_task::DriverTaskHotPath::SerialConsole,
-                true,
-            ),
-            super::runtime_uncached_xn_attributes()
-        );
-        assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(
-                super::driver_task::DriverTaskHotPath::SdioHost,
-                false,
-            ),
-            super::runtime_uncached_xn_attributes()
-        );
-        assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(
-                super::driver_task::DriverTaskHotPath::GenetNic,
-                false,
-            ),
-            super::runtime_cacheable_xn_attributes()
-        );
-        assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(
-                super::driver_task::DriverTaskHotPath::GenetNic,
-                true,
-            ),
-            super::runtime_uncached_xn_attributes()
-        );
+        use super::driver_task::DriverTaskHotPath::*;
+        // The seven admitted roles use only these two CPU-sharing classes.
+        // DMA remains uncached and private for every role, without exception.
+        for (role, cpu_cacheable) in [
+            (SerialConsole, true),
+            (UsbKeyboard, false),
+            (HdmiText, false),
+            (GenetNic, true),
+            (Cyw43Wifi, false),
+            (SdioHost, false),
+            (PcieRoot, false),
+        ] {
+            let expected = if cpu_cacheable {
+                super::runtime_cacheable_xn_attributes()
+            } else {
+                super::runtime_uncached_xn_attributes()
+            };
+            assert_eq!(
+                super::KernelHal::runtime_ram_region_attr(role, false),
+                expected
+            );
+            assert_eq!(
+                super::KernelHal::runtime_ram_region_attr(role, true),
+                super::runtime_uncached_xn_attributes(),
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

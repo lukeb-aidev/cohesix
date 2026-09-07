@@ -700,6 +700,29 @@ reusable ownership pattern.
 | SDIO host | SDHCI, CMD52/CMD53, card interrupt, DMA channel, and physical bus service. | HAL admits MMIO/DMA/IRQs; CYW43 requests bounded service through the generated reciprocal link. |
 | PCIe root | Declared PCIe-controller service after HAL platform admission. | HAL retains root-complex, firmware/reset, topology, and resource-admission authority. |
 
+HAL-owned root/runtime control rings have identical uncached mappings in all
+participants. Shared payloads are also uncached except the CPU-only serial and
+GENET SPSC regions described below, which have identical coherent Normal
+aliases. These are CPU-sharing ranges; driver-private DMA frames are allocated
+without root aliases. Root and child therefore use release/acquire memory
+barriers at shared publication and observation boundaries. They retain all
+volatile/atomic accesses, sequence-last commits, stable rereads and complete
+range validation. Root must not issue kernel cache-clean/invalidate calls for
+these shared ranges. This removes redundant kernel entries and cache-log work,
+without changing mappings or device DMA/image cache maintenance. The selected
+seL4 AArch64 mapping code is authoritative; Device memory is non-cacheable as
+described in the [Armv8-A memory model](https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/Armv8-A%20memory%20model%20guide.pdf?revision=58b1dd0a-3800-4218-b21a-f95a0332034c).
+
+`DRIVER_TASK_DMA_PROOF` emits
+`cache_policy=uncached-plus-root-barriers`. Its four existing `cache_*` counters
+are explicitly zero because CPU-sharing barriers are not cache-maintenance
+operations. The canonical counter record and seven-row `smp activity` projection
+retain their layouts and zero cache-operation fields. These counts do not cover
+driver-private DMA maintenance or executable-image loading. The normalizer
+retains historical `uncached-plus-root-maintenance` receipts and requires four
+explicit zero cache counters for the new policy; the remaining DMA/owner proof
+requirements are unchanged.
+
 ### 7.1 Serial pattern
 
 - On selected MCS builds, a notification bound to a runtime TCB may satisfy the

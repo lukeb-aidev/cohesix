@@ -2470,6 +2470,39 @@ def test_gate_summary_nettest_error_clears_stale_success_proof() -> None:
     assert record["NETTEST_PROOF"] == "no"
 
 
+@pytest.mark.parametrize(
+    ("policy", "clean_ops", "ready"),
+    [
+        ("uncached-plus-root-maintenance", "1", True),
+        ("uncached-plus-root-barriers", "0", True),
+        ("uncached-plus-root-barriers", "1", False),
+        ("uncached-plus-root-barriers", "invalid", False),
+        ("uncached-plus-root-barriers", None, False),
+        ("unknown", "0", False),
+    ],
+)
+def test_driver_dma_proof_distinguishes_shared_barriers_from_cache_operations(
+    policy: str, clean_ops: str | None, ready: bool,
+) -> None:
+    line = (
+        "DRIVER_TASK_DMA_PROOF contract=bcmgenet-v5 hot_path=genet-nic "
+        "status=ready profile=bounded-no-iommu descriptor=present root_pointer=no "
+        "dma_pages=64 bus_address_policy=hal-bounded-bus-address "
+        f"cache_policy={policy} cache_clean_ops={clean_ops} cache_clean_bytes=0 "
+        "cache_invalidate_ops=0 cache_invalidate_bytes=0"
+    )
+    if clean_ops is None:
+        line = line.replace("cache_clean_ops=None ", "")
+    events = normalizer.parse_events([line])
+    assert len(events) == 1
+    assert normalizer.is_ready_driver_task_dma_proof(events[0]) is ready
+    # A valid sharing policy grants no DMA authority on its own.
+    events = normalizer.parse_events([
+        line.replace("root_pointer=no", "root_pointer=yes")
+    ])
+    assert not normalizer.is_ready_driver_task_dma_proof(events[0])
+
+
 def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     """Runtime/DMA proof needs live Pi owner-state and counter-qualified timing."""
 

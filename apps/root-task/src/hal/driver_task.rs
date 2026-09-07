@@ -2874,8 +2874,8 @@ const SDIO_ROOT_SEQUENCE_MAX: usize = 0x7fff_ffff;
 fn driver_task_shared_store_barrier() {
     fence(Ordering::Release);
     #[cfg(target_arch = "aarch64")]
-    // SAFETY: Driver-task rings are shared normal memory across root and linked
-    // runtimes. The store barrier publishes command and payload writes before
+    // SAFETY: HAL admits identical CPU-sharing aliases in root and linked
+    // runtimes. The store barrier orders command and payload writes before
     // IPC notification makes the sequence observable to the runtime.
     unsafe {
         core::arch::asm!("dmb ishst", options(nostack, preserves_flags));
@@ -2900,15 +2900,21 @@ fn driver_task_ring_publish_barrier(_ring_root_ptr: usize) {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_clean_root_range(vaddr: usize, len: usize) {
-    driver_task_shared_store_barrier();
-    let _ = crate::hal::cache::cache_clean(sel4_sys::seL4_CapInitThreadVSpace, vaddr, len);
+fn driver_task_shared_publish_range(_vaddr: usize, _len: usize) {
+    // HAL maps control rings identically uncached in every participant. Shared
+    // payload pages are also uncached, except CPU-only serial/GENET SPSC pages
+    // with identical coherent Normal mappings. None is a device DMA buffer.
+    // Match the runtime's release protocol: kernel cache maintenance adds no
+    // visibility to either mapping class and needlessly enters the kernel on
+    // every cursor/grant publication. Callers retain complete range validation.
     driver_task_shared_store_barrier();
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_invalidate_root_range(vaddr: usize, len: usize) {
-    let _ = crate::hal::cache::cache_invalidate(sel4_sys::seL4_CapInitThreadVSpace, vaddr, len);
+fn driver_task_shared_acquire_range(_vaddr: usize, _len: usize) {
+    // These HAL-owned CPU-sharing aliases need ordering, not cache eviction.
+    // Keep every volatile/atomic acquire and stable two-read check at callers;
+    // physical DMA and executable-image cache maintenance use separate paths.
     driver_task_shared_load_barrier();
 }
 
@@ -2939,23 +2945,22 @@ fn driver_task_ring_stage_command_record(
         core::ptr::write_volatile(command_ptr, staged_command);
     }
     reset_driver_task_mcs_one_way_wait_state(slot);
-    driver_task_ring_clear_continuation_grant(slot, ring_root_ptr);
-    driver_task_ring_clean_root_range(
+    driver_task_ring_clear_continuation_grant(ring_root_ptr);
+    driver_task_shared_publish_range(
         completion_ptr as usize,
         core::mem::size_of::<DriverTaskCompletionRecord>(),
     );
-    driver_task_record_cache_clean(slot, core::mem::size_of::<DriverTaskCompletionRecord>());
-    driver_task_ring_clean_root_range(
+
+    driver_task_shared_publish_range(
         command_ptr as usize,
         core::mem::size_of::<DriverTaskCommandRecord>(),
     );
-    driver_task_record_cache_clean(slot, core::mem::size_of::<DriverTaskCommandRecord>());
+
     driver_task_ring_publish_barrier(ring_root_ptr);
 }
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_commit_command_sequence(
-    slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
     command_ptr: *mut DriverTaskCommandRecord,
     sequence: u32,
@@ -2965,8 +2970,8 @@ fn driver_task_ring_commit_command_sequence(
     unsafe {
         core::ptr::write_volatile(command_ptr as *mut u32, sequence);
     }
-    driver_task_ring_clean_root_range(command_ptr as usize, core::mem::size_of::<u32>());
-    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>());
+    driver_task_shared_publish_range(command_ptr as usize, core::mem::size_of::<u32>());
+
     driver_task_ring_publish_barrier(ring_root_ptr);
 }
 
@@ -3025,7 +3030,7 @@ const fn driver_task_runtime_continuation_fingerprint(command: DriverTaskCommand
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_clear_continuation_grant(slot: &DriverTaskCommandSlot, ring_root_ptr: usize) {
+fn driver_task_ring_clear_continuation_grant(ring_root_ptr: usize) {
     let grant_ptr =
         (ring_root_ptr + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)) as *mut u32;
     let words = usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES) / core::mem::size_of::<u32>();
@@ -3038,11 +3043,10 @@ fn driver_task_ring_clear_continuation_grant(slot: &DriverTaskCommandSlot, ring_
         }
         index = index.saturating_add(1);
     }
-    driver_task_ring_clean_root_range(
+    driver_task_shared_publish_range(
         grant_ptr as usize,
         usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES),
     );
-    driver_task_record_cache_clean(slot, usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES));
 }
 
 #[cfg(feature = "kernel")]
@@ -3052,10 +3056,7 @@ fn driver_task_ring_read_continuation_grant(
     let base_offset = usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
     let base = ring_root_ptr + base_offset;
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
-    driver_task_ring_invalidate_root_range(
-        base,
-        usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES),
-    );
+    driver_task_shared_acquire_range(base, usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES));
     let word = |offset: usize| ring.read_u32(base_offset.checked_add(offset)?);
     let grant_id_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id);
     let first_grant_id = word(grant_id_offset)?;
@@ -3084,7 +3085,7 @@ fn driver_task_ring_read_continuation_grant(
         ))?,
     };
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(base + grant_id_offset, core::mem::size_of::<u32>());
+    driver_task_shared_acquire_range(base + grant_id_offset, core::mem::size_of::<u32>());
     (word(grant_id_offset)? == first_grant_id
         && grant.magic == DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC)
         .then_some(grant)
@@ -3103,7 +3104,7 @@ fn driver_task_ring_read_steady_service_progress(
     let base_offset = usize::from(DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET);
     let base = ring_root_ptr + base_offset;
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         base,
         usize::from(DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES),
     );
@@ -3138,7 +3139,7 @@ fn driver_task_ring_read_steady_service_progress(
         committed_slice: first_commit,
     };
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
+    driver_task_shared_acquire_range(base + commit_offset, core::mem::size_of::<u32>());
     (word(commit_offset)? == first_commit
         && progress.magic == DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC
         && progress.valid())
@@ -3158,7 +3159,7 @@ fn driver_task_ring_read_persistent_wait_receipt(
     let base_offset = usize::from(DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET);
     let base = ring_root_ptr + base_offset;
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         base,
         usize::from(DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES),
     );
@@ -3194,7 +3195,7 @@ fn driver_task_ring_read_persistent_wait_receipt(
         committed_wait_epoch: first_commit,
     };
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
+    driver_task_shared_acquire_range(base + commit_offset, core::mem::size_of::<u32>());
     (word(commit_offset)? == first_commit && receipt.valid()).then_some(receipt)
 }
 
@@ -3221,12 +3222,12 @@ fn driver_task_ring_one_way_wait_commit_absent(ring_root_ptr: usize) -> bool {
     };
     let offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET)
         + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice);
-    driver_task_ring_invalidate_root_range(ring_root_ptr + offset, core::mem::size_of::<u32>());
+    driver_task_shared_acquire_range(ring_root_ptr + offset, core::mem::size_of::<u32>());
     if ring.read_u32(offset) != Some(0) {
         return false;
     }
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(ring_root_ptr + offset, core::mem::size_of::<u32>());
+    driver_task_shared_acquire_range(ring_root_ptr + offset, core::mem::size_of::<u32>());
     ring.read_u32(offset) == Some(0)
 }
 
@@ -3238,10 +3239,7 @@ fn driver_task_ring_read_one_way_wait_record(
     let base_offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET);
     let base = ring_root_ptr + base_offset;
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
-    driver_task_ring_invalidate_root_range(
-        base,
-        usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES),
-    );
+    driver_task_shared_acquire_range(base, usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES));
     let word = |offset: usize| ring.read_u32(base_offset.checked_add(offset)?);
     let commit_offset = core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice);
     let first_commit = word(commit_offset)?;
@@ -3270,7 +3268,7 @@ fn driver_task_ring_read_one_way_wait_record(
         committed_wait_slice: first_commit,
     };
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
+    driver_task_shared_acquire_range(base + commit_offset, core::mem::size_of::<u32>());
     (word(commit_offset)? == first_commit
         && if acknowledged {
             receipt.acknowledged()
@@ -3406,33 +3404,27 @@ fn driver_task_stable_command_snapshot_with(
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_stable_command_snapshot(
-    slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
 ) -> Option<DriverTaskCommandRecord> {
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let command_bytes = core::mem::size_of::<DriverTaskCommandRecord>();
     driver_task_stable_command_snapshot_with(|| {
-        driver_task_ring_invalidate_root_range(ring_root_ptr, command_bytes);
+        driver_task_shared_acquire_range(ring_root_ptr, command_bytes);
         let first = ring.read_command()?;
         driver_task_shared_load_barrier();
-        driver_task_ring_invalidate_root_range(ring_root_ptr, command_bytes);
+        driver_task_shared_acquire_range(ring_root_ptr, command_bytes);
         let second = ring.read_command()?;
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-        driver_task_counter_add(
-            &slot.counters.cache_invalidate_bytes,
-            command_bytes.saturating_mul(2),
-        );
+
         Some((first, second))
     })
 }
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_exact_command_is_stable(
-    slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
     expected: DriverTaskCommandRecord,
 ) -> bool {
-    driver_task_ring_stable_command_snapshot(slot, ring_root_ptr) == Some(expected)
+    driver_task_ring_stable_command_snapshot(ring_root_ptr) == Some(expected)
 }
 
 #[cfg(feature = "kernel")]
@@ -3465,7 +3457,7 @@ fn driver_task_steady_service_parent_completion_identity_matches(
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
         && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0
         && slot.retained_grant_id.load(Ordering::Acquire) == 0
-        && driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
 }
 
 #[cfg(feature = "kernel")]
@@ -3540,7 +3532,7 @@ fn driver_task_persistent_transaction_parent_identity_matches(
                             | DriverTaskRetainedLeasePhase::RestoreBus
                             | DriverTaskRetainedLeasePhase::ReadyToComplete
                     )
-                ) && driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request))
+                ) && driver_task_ring_exact_completion_is_stable(ring_root_ptr, request))
         }
         && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) == 0
@@ -3549,7 +3541,7 @@ fn driver_task_persistent_transaction_parent_identity_matches(
             .retained_persistent_transaction_start_ticks
             .load(Ordering::Acquire)
             != 0
-        && driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
 }
 
 /// Return whether one exact issued op11 is durably armed on CYW43's wait.
@@ -3572,7 +3564,7 @@ fn driver_task_persistent_transaction_wait_armed(
         ring_root_ptr,
         request,
         snapshot.command_fingerprint,
-    ) || driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+    ) || driver_task_ring_exact_completion_is_stable(ring_root_ptr, request)
     {
         return false;
     }
@@ -3592,7 +3584,7 @@ fn driver_task_persistent_transaction_wait_armed(
         ring_root_ptr,
         request,
         snapshot.command_fingerprint,
-    ) && !driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+    ) && !driver_task_ring_exact_completion_is_stable(ring_root_ptr, request)
         && driver_task_ring_read_persistent_wait_receipt(ring_root_ptr) == Some(receipt)
 }
 
@@ -3814,11 +3806,7 @@ pub(crate) struct Cyw43SteadyServiceParentDiagnostic {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_exact_completion_is_stable(
-    slot: &DriverTaskCommandSlot,
-    ring_root_ptr: usize,
-    request: u32,
-) -> bool {
+fn driver_task_ring_exact_completion_is_stable(ring_root_ptr: usize, request: u32) -> bool {
     let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
         return false;
     };
@@ -3827,17 +3815,12 @@ fn driver_task_ring_exact_completion_is_stable(
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_completion_record(ring_root_ptr);
     let second = ring.read_completion();
-    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-    driver_task_counter_add(
-        &slot.counters.cache_invalidate_bytes,
-        2usize.saturating_mul(core::mem::size_of::<DriverTaskCompletionRecord>()),
-    );
+
     matches!((first, second), (Some(first), Some(second)) if first == second && second.sequence == request)
 }
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_stable_completion_snapshot(
-    slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
 ) -> Option<DriverTaskCompletionRecord> {
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
@@ -3846,11 +3829,7 @@ fn driver_task_ring_stable_completion_snapshot(
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_completion_record(ring_root_ptr);
     let second = ring.read_completion_snapshot()?;
-    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-    driver_task_counter_add(
-        &slot.counters.cache_invalidate_bytes,
-        2usize.saturating_mul(core::mem::size_of::<DriverTaskCompletionRecord>()),
-    );
+
     (first == second).then_some(second)
 }
 
@@ -3890,7 +3869,7 @@ pub(crate) fn cyw43_retained_parent_condition(
             command_fingerprint,
         )
         || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
         || !driver_task_retained_uses_root_grant(CYW43_WIFI_DRIVER_TASK_CONTRACT, command)
     {
         return Cyw43RetainedParentCondition::NotExact;
@@ -3908,7 +3887,7 @@ pub(crate) fn cyw43_retained_parent_condition(
     ) {
         return Cyw43RetainedParentCondition::NotExact;
     }
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return Cyw43RetainedParentCondition::TerminalVisible;
     }
     match phase {
@@ -4009,8 +3988,8 @@ pub(crate) fn cyw43_exact_retained_terminal_visible(expected_request: u32) -> bo
         && command.sequence == request
         && ring_root_ptr != 0
         && slot.active_command_fingerprint.load(Ordering::Acquire) != 0
-        && driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
-        && driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+        && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+        && driver_task_ring_exact_completion_is_stable(ring_root_ptr, request)
 }
 
 /// Recheck durable terminal state immediately before suppressing one issued op7.
@@ -4045,7 +4024,7 @@ pub(crate) fn cyw43_steady_service_parent_condition(
     {
         return Cyw43SteadyServiceParentCondition::NotExact;
     }
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return Cyw43SteadyServiceParentCondition::TerminalVisible;
     }
     // Scheduler coverage and the current lease phase govern only whether an
@@ -4068,7 +4047,7 @@ pub(crate) fn cyw43_steady_service_parent_condition(
     }
     // Close the expiry race with the same exact stable fence. A terminal that
     // committed while the counter was sampled always wins over recovery.
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return Cyw43SteadyServiceParentCondition::TerminalVisible;
     }
     driver_task_counter_add(&slot.counters.aborts, 1);
@@ -4112,7 +4091,7 @@ pub(crate) fn cyw43_steady_service_parent_diagnostic() -> Option<Cyw43SteadyServ
             request,
             command_fingerprint,
         );
-    let completion = driver_task_ring_stable_completion_snapshot(slot, ring_root_ptr);
+    let completion = driver_task_ring_stable_completion_snapshot(ring_root_ptr);
     let exact_terminal = completion.is_some_and(|completion| completion.sequence == request);
     let condition = if !issued {
         "not-issued"
@@ -4170,7 +4149,7 @@ pub(crate) fn cyw43_persistent_transaction_parent_condition(
     {
         return Cyw43PersistentTransactionParentCondition::NotExact;
     }
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return Cyw43PersistentTransactionParentCondition::TerminalVisible;
     }
     if !driver_task_persistent_transaction_lifetime_expired(slot).unwrap_or(false) {
@@ -4178,7 +4157,7 @@ pub(crate) fn cyw43_persistent_transaction_parent_condition(
     }
     // Close the expiry race. A terminal committed while CNTVCT was sampled
     // always wins over fault containment.
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return Cyw43PersistentTransactionParentCondition::TerminalVisible;
     }
     driver_task_counter_add(&slot.counters.aborts, 1);
@@ -4188,7 +4167,6 @@ pub(crate) fn cyw43_persistent_transaction_parent_condition(
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_publish_continuation_grant(
-    slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
     command: DriverTaskCommandRecord,
     grant_id: u32,
@@ -4217,8 +4195,8 @@ fn driver_task_ring_publish_continuation_grant(
     let consumed_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id);
     write(grant_id_offset, 0);
     write(consumed_offset, 0);
-    driver_task_ring_clean_root_range(base + grant_id_offset, core::mem::size_of::<u32>() * 2);
-    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>() * 2);
+    driver_task_shared_publish_range(base + grant_id_offset, core::mem::size_of::<u32>() * 2);
+
     for (offset, value) in [
         (
             core::mem::offset_of!(DriverRuntimeContinuationGrant, magic),
@@ -4239,11 +4217,11 @@ fn driver_task_ring_publish_continuation_grant(
     ] {
         write(offset, value);
     }
-    driver_task_ring_clean_root_range(base, grant_id_offset);
-    driver_task_record_cache_clean(slot, grant_id_offset);
+    driver_task_shared_publish_range(base, grant_id_offset);
+
     write(grant_id_offset, grant.grant_id);
-    driver_task_ring_clean_root_range(base + grant_id_offset, core::mem::size_of::<u32>());
-    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>());
+    driver_task_shared_publish_range(base + grant_id_offset, core::mem::size_of::<u32>());
+
     true
 }
 
@@ -4264,7 +4242,7 @@ fn driver_task_ring_publish_command_record(
         command,
         completion_reset,
     );
-    driver_task_ring_commit_command_sequence(slot, ring_root_ptr, command_ptr, command.sequence);
+    driver_task_ring_commit_command_sequence(ring_root_ptr, command_ptr, command.sequence);
 }
 
 #[cfg(feature = "kernel")]
@@ -4283,7 +4261,7 @@ fn driver_task_ring_read_cadence_record(
 ) -> Option<DriverRuntimeCadenceRecord> {
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let read = || {
-        driver_task_ring_invalidate_root_range(
+        driver_task_shared_acquire_range(
             ring_root_ptr + usize::from(DRIVER_RUNTIME_CADENCE_OFFSET),
             usize::from(DRIVER_RUNTIME_CADENCE_BYTES),
         );
@@ -4302,7 +4280,7 @@ fn driver_task_ring_read_serial_rx_state(
 ) -> Option<DriverRuntimeSerialRxState> {
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let read = || {
-        driver_task_ring_invalidate_root_range(
+        driver_task_shared_acquire_range(
             ring_root_ptr + usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET),
             usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES),
         );
@@ -4321,7 +4299,7 @@ fn driver_task_ring_read_pcie_timer_state(
 ) -> Option<DriverRuntimePcieTimerState> {
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let read = || {
-        driver_task_ring_invalidate_root_range(
+        driver_task_shared_acquire_range(
             ring_root_ptr + usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET),
             usize::from(DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES),
         );
@@ -4335,7 +4313,7 @@ fn driver_task_ring_read_pcie_timer_state(
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRingProgressRecord {
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize,
         core::mem::size_of::<DriverTaskRingProgressRecord>(),
     );
@@ -4351,7 +4329,7 @@ fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRing
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_invalidate_completion_record(ring_root_ptr: usize) {
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
         core::mem::size_of::<DriverTaskCompletionRecord>(),
     );
@@ -4946,7 +4924,7 @@ fn driver_task_ring_read_usb_oldgood_receipt(
     let base = ring_root_ptr.checked_add(usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET))?;
     driver_task_usb_oldgood_stable_read_with(
         || {
-            driver_task_ring_invalidate_root_range(
+            driver_task_shared_acquire_range(
                 base,
                 usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES),
             );
@@ -5641,54 +5619,23 @@ impl DriverTaskCounterCells {
     }
 }
 
-#[cfg(feature = "kernel")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DriverTaskCacheCounterBatch {
-    invalidate_ops: usize,
-    invalidate_bytes: usize,
-}
-
-#[cfg(feature = "kernel")]
-impl DriverTaskCacheCounterBatch {
-    const fn new() -> Self {
-        Self {
-            invalidate_ops: 0,
-            invalidate_bytes: 0,
-        }
-    }
-
-    fn record_completion_invalidate(&mut self, ring_root_ptr: usize) {
-        driver_task_ring_invalidate_completion_record(ring_root_ptr);
-        self.invalidate_ops = self.invalidate_ops.saturating_add(1);
-        self.invalidate_bytes = self
-            .invalidate_bytes
-            .saturating_add(core::mem::size_of::<DriverTaskCompletionRecord>());
-    }
-
-    fn flush(self, slot: &DriverTaskCommandSlot) {
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, self.invalidate_ops);
-        driver_task_counter_add(&slot.counters.cache_invalidate_bytes, self.invalidate_bytes);
-    }
-}
-
 /// Read one stable completion snapshot for a retained request.
 #[cfg(feature = "kernel")]
 fn read_driver_task_ring_completion(
-    cache_counter_batch: &mut DriverTaskCacheCounterBatch,
     ring_root_ptr: usize,
     completion_ptr: *const DriverTaskCompletionRecord,
     request: usize,
 ) -> DriverTaskCompletionRecord {
-    cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
     // SAFETY: The caller validated that `completion_ptr` addresses the fixed
     // completion record inside the admitted shared ring page.
     let first = unsafe { core::ptr::read_volatile(completion_ptr) };
     if first.sequence != request as u32 {
         return first;
     }
-    cache_counter_batch.record_completion_invalidate(ring_root_ptr);
-    // SAFETY: The second volatile read follows the acquire-side cache
-    // invalidation and addresses the same validated completion record.
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    // SAFETY: The second volatile read follows the acquire-side memory
+    // barrier and addresses the same validated completion record.
     unsafe { core::ptr::read_volatile(completion_ptr) }
 }
 
@@ -6120,12 +6067,6 @@ fn driver_task_counter_add(cell: &AtomicUsize, value: usize) {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_record_cache_clean(slot: &DriverTaskCommandSlot, bytes: usize) {
-    driver_task_counter_add(&slot.counters.cache_clean_ops, 1);
-    driver_task_counter_add(&slot.counters.cache_clean_bytes, bytes);
-}
-
-#[cfg(feature = "kernel")]
 fn driver_task_record_completion_counters(
     slot: &DriverTaskCommandSlot,
     completion: DriverTaskCompletionRecord,
@@ -6415,7 +6356,7 @@ fn cyw43_sdio_pair_restart_already_latched() -> bool {
 /// Check the sole pair-recovery condition using a queue sample already taken
 /// by the root service scheduler.
 ///
-/// Reusing the sample avoids another cache-maintenance round trip on the
+/// Reusing the sample avoids another complete shared-record sample on the
 /// ordinary Network path. The sample remains passive until a current poisoned
 /// generation is also bound to the active physical DPC owner and both restart
 /// contexts.
@@ -7545,7 +7486,7 @@ fn ordinary_driver_task_one_way_completion_condition_for_slot(
     let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
     let endpoint = slot.endpoint.load(Ordering::Acquire);
     let wait_cap_generation = slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire);
-    let Some(command) = driver_task_ring_stable_command_snapshot(slot, ring_root_ptr) else {
+    let Some(command) = driver_task_ring_stable_command_snapshot(ring_root_ptr) else {
         return DriverTaskOneWayCompletionCondition::Revoked;
     };
     let notification_guard = acquire_driver_task_mcs_one_way_notification_guard(slot, endpoint);
@@ -7578,11 +7519,11 @@ fn ordinary_driver_task_one_way_completion_condition_for_slot(
         || !notification_guard.is_some_and(|guard| {
             guard.notification_tcb_bound && guard.cap_generation == wait_cap_generation
         })
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
     {
         return DriverTaskOneWayCompletionCondition::Revoked;
     }
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request_u32) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request_u32) {
         return DriverTaskOneWayCompletionCondition::Ready;
     }
     let Some(receipt) = driver_task_ring_read_one_way_wait_receipt(ring_root_ptr) else {
@@ -7699,11 +7640,11 @@ pub(crate) fn active_driver_task_one_way_completion_condition(
             command_fingerprint,
         )
         || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
     {
         return DriverTaskOneWayCompletionCondition::Revoked;
     }
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return DriverTaskOneWayCompletionCondition::Ready;
     }
     if DriverTaskRetainedLeasePhase::from_usize(
@@ -7821,11 +7762,11 @@ fn active_driver_task_retained_request_for_slot(
     }
 
     // A raw shared-page load is a fast hint, not authority to destroy the
-    // pair. Only the uncommon invalid candidate pays for bounded cache
-    // invalidation and a stable two-read snapshot. Re-reading the phase and
+    // pair. Only the uncommon invalid candidate pays for an ordered, stable
+    // two-read snapshot. Re-reading the phase and
     // doorbell after that snapshot also closes a concurrent Issue transition;
-    // ordinary valid TCP traffic keeps the zero-maintenance fast path.
-    let Some(command) = driver_task_ring_stable_command_snapshot(slot, ring_root_ptr) else {
+    // ordinary valid TCP traffic keeps the single-read classification path.
+    let Some(command) = driver_task_ring_stable_command_snapshot(ring_root_ptr) else {
         return Some(DriverTaskRetainedRequestState::Invalid { request });
     };
     let Some(phase) = DriverTaskRetainedLeasePhase::from_usize(
@@ -8192,7 +8133,7 @@ pub(crate) fn cyw43_sdio_network_persistent_parent_pre_wait(
             request,
             snapshot.command_fingerprint,
         )
-        && !driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+        && !driver_task_ring_exact_completion_is_stable(ring_root_ptr, request)
         && !driver_task_persistent_transaction_wait_armed(slot, snapshot)
 }
 
@@ -8227,12 +8168,12 @@ fn cyw43_sdio_network_persistent_parent_condition_for_slot(
     ) {
         return Cyw43SdioNetworkPersistentParentCondition::Invalid;
     }
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return Cyw43SdioNetworkPersistentParentCondition::Terminal;
     }
     if driver_task_persistent_transaction_wait_armed(slot, snapshot) {
         Cyw43SdioNetworkPersistentParentCondition::Waiting
-    } else if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    } else if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         Cyw43SdioNetworkPersistentParentCondition::Terminal
     } else {
         Cyw43SdioNetworkPersistentParentCondition::PreWait
@@ -8337,7 +8278,7 @@ fn cyw43_sdio_network_persistent_parent_condition_after_recheck_with(
 /// Classify an outer persistent parent across one complete same-boundary recheck.
 ///
 /// A single invalid composite sample can span root's Issue transition or one
-/// non-coherent shared-command cache line. It is therefore only a prompt to
+/// concurrent shared-command publication. It is therefore only a prompt to
 /// resample the same immutable identity, never pair-recovery authority. The
 /// second result remains passive and is routed to the canonical policy owner.
 #[cfg(feature = "kernel")]
@@ -8368,7 +8309,7 @@ fn cyw43_sdio_network_active_parent_progress_visible_for_slot(
         DriverTaskRetainedRequestState::Invalid { .. } => return false,
     };
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
-    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+    if driver_task_ring_exact_completion_is_stable(ring_root_ptr, request) {
         return true;
     }
     if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
@@ -11635,9 +11576,12 @@ pub fn driver_task_bus_owner_transport_caps_with_shared(
     Some((endpoint, ring_frame_cap, shared_frame_caps))
 }
 
+#[cfg(test)]
+static DRIVER_TASK_TEST_RX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+
 /// Return one stable, passive sample of the CYW43 private-RX queue level.
 ///
-/// The runtime's sequence-last record is authoritative. Root invalidates and
+/// The runtime's sequence-last record is authoritative. Root orders and
 /// samples it twice; the child-to-root notification is deliberately absent
 /// from this decision path.
 #[cfg(feature = "kernel")]
@@ -11645,6 +11589,9 @@ pub fn driver_task_bus_owner_transport_caps_with_shared(
 pub(crate) fn driver_task_cyw43_rx_queue_state_snapshot() -> Option<DriverRuntimeCyw43RxQueueState>
 {
     const SNAPSHOT_ATTEMPTS: usize = 3;
+
+    #[cfg(test)]
+    DRIVER_TASK_TEST_RX_QUEUE_SAMPLES.fetch_add(1, Ordering::Relaxed);
 
     let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
     if slot.root_ring_writers.load(Ordering::Acquire) != 0 {
@@ -11661,16 +11608,12 @@ pub(crate) fn driver_task_cyw43_rx_queue_state_snapshot() -> Option<DriverRuntim
 
     let mut attempt = 0usize;
     while attempt < SNAPSHOT_ATTEMPTS {
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let first = ring.read_cyw43_rx_queue_state()?;
         driver_task_shared_load_barrier();
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let second = ring.read_cyw43_rx_queue_state()?;
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-        driver_task_counter_add(
-            &slot.counters.cache_invalidate_bytes,
-            record_bytes.saturating_mul(2),
-        );
+
         if let Some(snapshot) = DriverRuntimeCyw43RxQueueState::stable_snapshot(first, second) {
             return Some(snapshot);
         }
@@ -12088,16 +12031,12 @@ fn driver_task_cyw43_bus_episode_snapshot_for_slot(
 
     let mut attempt = 0usize;
     while attempt < SNAPSHOT_ATTEMPTS {
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let first = driver_task_read_cyw43_bus_episode_record(record_ptr)?;
         driver_task_shared_load_barrier();
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let second = driver_task_read_cyw43_bus_episode_record(record_ptr)?;
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-        driver_task_counter_add(
-            &slot.counters.cache_invalidate_bytes,
-            record_bytes.saturating_mul(2),
-        );
+
         if let Some(snapshot) = DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(first, second) {
             return Some(snapshot);
         }
@@ -12137,16 +12076,12 @@ fn driver_task_cyw43_dpc_client_snapshot_for_slot(
 
     let mut attempt = 0usize;
     while attempt < SNAPSHOT_ATTEMPTS {
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let first = driver_task_read_cyw43_dpc_client_record(record_ptr)?;
         driver_task_shared_load_barrier();
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let second = driver_task_read_cyw43_dpc_client_record(record_ptr)?;
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-        driver_task_counter_add(
-            &slot.counters.cache_invalidate_bytes,
-            record_bytes.saturating_mul(2),
-        );
+
         if let Some(snapshot) = DriverRuntimeCyw43DpcClientRecord::stable_snapshot(first, second) {
             return Some(snapshot);
         }
@@ -12185,16 +12120,12 @@ fn driver_task_cyw43_dpc_child_timing_snapshot_for_slot(
 
     let mut attempt = 0usize;
     while attempt < SNAPSHOT_ATTEMPTS {
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let first = driver_task_read_cyw43_dpc_child_timing_record(record_ptr)?;
         driver_task_shared_load_barrier();
-        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        driver_task_shared_acquire_range(record_ptr, record_bytes);
         let second = driver_task_read_cyw43_dpc_child_timing_record(record_ptr)?;
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-        driver_task_counter_add(
-            &slot.counters.cache_invalidate_bytes,
-            record_bytes.saturating_mul(2),
-        );
+
         if first == second && second.committed() {
             return Some(second);
         }
@@ -12230,16 +12161,12 @@ fn driver_task_cyw43_rx_batch_record_snapshot_for_slot(
         return None;
     }
 
-    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    driver_task_shared_acquire_range(record_ptr, record_bytes);
     let first = driver_task_read_cyw43_rx_batch_record(record_ptr)?;
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    driver_task_shared_acquire_range(record_ptr, record_bytes);
     let second = driver_task_read_cyw43_rx_batch_record(record_ptr)?;
-    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-    driver_task_counter_add(
-        &slot.counters.cache_invalidate_bytes,
-        record_bytes.saturating_mul(2),
-    );
+
     DriverRuntimeCyw43RxBatchRecord::stable_snapshot(first, second)
 }
 
@@ -12304,16 +12231,12 @@ fn driver_task_cyw43_rx_batch_ack_snapshot_for_slot(
     if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43RxBatchAck>()) {
         return None;
     }
-    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    driver_task_shared_acquire_range(record_ptr, record_bytes);
     let first = driver_task_read_cyw43_rx_batch_ack(record_ptr)?;
     driver_task_shared_load_barrier();
-    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    driver_task_shared_acquire_range(record_ptr, record_bytes);
     let second = driver_task_read_cyw43_rx_batch_ack(record_ptr)?;
-    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
-    driver_task_counter_add(
-        &slot.counters.cache_invalidate_bytes,
-        record_bytes.saturating_mul(2),
-    );
+
     DriverRuntimeCyw43RxBatchAck::stable_snapshot(first, second)
 }
 
@@ -12401,7 +12324,7 @@ pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
     unsafe {
         core::ptr::write_volatile(record_ptr as *mut DriverRuntimeCyw43RxBatchAck, staged);
     }
-    driver_task_ring_clean_root_range(record_ptr, record_bytes);
+    driver_task_shared_publish_range(record_ptr, record_bytes);
     let commit_ptr = record_ptr
         + core::mem::offset_of!(
             DriverRuntimeCyw43RxBatchAck,
@@ -12412,12 +12335,8 @@ pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
     unsafe {
         core::ptr::write_volatile(commit_ptr as *mut u32, batch.queue_commit_sequence);
     }
-    driver_task_ring_clean_root_range(commit_ptr, core::mem::size_of::<u32>());
-    driver_task_counter_add(&slot.counters.cache_clean_ops, 2);
-    driver_task_counter_add(
-        &slot.counters.cache_clean_bytes,
-        record_bytes.saturating_add(core::mem::size_of::<u32>()),
-    );
+    driver_task_shared_publish_range(commit_ptr, core::mem::size_of::<u32>());
+
     if !driver_task_cyw43_rx_batch_ack_snapshot_for_slot(slot)
         .is_some_and(|ack| ack.matches_batch(batch))
     {
@@ -12466,7 +12385,7 @@ fn copy_driver_task_cyw43_rx_batch_payload(
         }
         let chunk = (DRIVER_TASK_RING_PAGE_BYTES - page_offset).min(dest.len() - copied);
         let source = root_ptr.checked_add(page_offset)?;
-        driver_task_ring_invalidate_root_range(source, chunk);
+        driver_task_shared_acquire_range(source, chunk);
         // SAFETY: `source` is bounded to one HAL-published private batch page
         // and `dest` is a live mutable caller slice. `copy` also preserves the
         // contract if a diagnostic caller deliberately supplies an overlapping
@@ -12474,8 +12393,7 @@ fn copy_driver_task_cyw43_rx_batch_payload(
         unsafe {
             core::ptr::copy(source as *const u8, dest.as_mut_ptr().add(copied), chunk);
         }
-        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 1);
-        driver_task_counter_add(&slot.counters.cache_invalidate_bytes, chunk);
+
         copied = copied.saturating_add(chunk);
     }
     driver_task_shared_load_barrier();
@@ -12731,9 +12649,9 @@ pub(crate) fn driver_task_sdio_dpc_ring_snapshot() -> Option<DriverTaskSdioDpcRi
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let dpc_ptr = ring_root_ptr + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
     let dpc_len = core::mem::size_of::<DriverRuntimeDpcEventRing>();
-    driver_task_ring_invalidate_root_range(dpc_ptr, dpc_len);
+    driver_task_shared_acquire_range(dpc_ptr, dpc_len);
     let first = ring.read_dpc_ring()?;
-    driver_task_ring_invalidate_root_range(dpc_ptr, dpc_len);
+    driver_task_shared_acquire_range(dpc_ptr, dpc_len);
     let second = ring.read_dpc_ring()?;
     driver_task_shared_load_barrier();
     stable_sdio_dpc_ring_snapshot(first, second)
@@ -12760,7 +12678,7 @@ pub(crate) fn driver_task_pair_handoff_snapshot(
         }
         let ring = DriverTaskRingView::new(ptr)?;
         let read_record = || {
-            driver_task_ring_invalidate_root_range(
+            driver_task_shared_acquire_range(
                 ptr.checked_add(DRIVER_RUNTIME_PAIR_HANDOFF_OFFSET)?,
                 44,
             );
@@ -12805,12 +12723,12 @@ pub(crate) fn driver_task_sdio_command_ring_snapshot() -> Option<DriverTaskSdioC
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let command_bytes = core::mem::size_of::<DriverTaskCommandRecord>();
     let read_records = || {
-        driver_task_ring_invalidate_root_range(ring_root_ptr, command_bytes);
+        driver_task_shared_acquire_range(ring_root_ptr, command_bytes);
         let command = ring.read_command()?;
         driver_task_ring_invalidate_completion_record(ring_root_ptr);
         let completion = ring.read_completion_snapshot()?;
         let fault_frame = if driver_task_sdio_fault_frame_descriptor_valid(completion) {
-            driver_task_ring_invalidate_root_range(
+            driver_task_shared_acquire_range(
                 ring_root_ptr.checked_add(completion.frame.offset as usize)?,
                 usize::from(completion.frame.len),
             );
@@ -12870,7 +12788,7 @@ fn driver_task_committed_engine_init_turn(
     if request == 0 || ring_root_ptr == 0 || slot.active.load(Ordering::Acquire) != 0 {
         return None;
     }
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         ring_root_ptr,
         core::mem::size_of::<DriverTaskCommandRecord>(),
     );
@@ -14496,7 +14414,7 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     let root_request = u32::try_from(slot.request_seq.load(Ordering::Acquire)).unwrap_or(0);
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let root_command = (ring_root_ptr != 0)
-        .then(|| driver_task_ring_stable_command_snapshot(slot, ring_root_ptr))
+        .then(|| driver_task_ring_stable_command_snapshot(ring_root_ptr))
         .flatten();
     let root_command_sequence = root_command.map_or(0, |command| command.sequence);
     let root_generation = root_command.map_or(0, |command| command.aux1);
@@ -14518,7 +14436,7 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     let root_parent_deadline_expired = root_persistent_command
         && driver_task_persistent_transaction_lifetime_expired(slot) == Some(true);
     let child_terminal_observed = root_command_sequence != 0
-        && driver_task_ring_stable_completion_snapshot(slot, ring_root_ptr)
+        && driver_task_ring_stable_completion_snapshot(ring_root_ptr)
             .is_some_and(|completion| completion.sequence == root_command_sequence);
     let child_wait_receipt_observed = root_command.is_some_and(|command| {
         driver_task_ring_read_persistent_wait_receipt(ring_root_ptr).is_some_and(|receipt| {
@@ -15998,7 +15916,7 @@ where
         || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
         || slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
         || slot.retained_grant_id.load(Ordering::Acquire) != 0
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
     {
         return false;
     }
@@ -16133,7 +16051,7 @@ where
             && driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
             && slot.retained_priority_lease_phase.load(Ordering::Acquire)
                 == DriverTaskRetainedLeasePhase::Issued.as_usize()
-            && driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+            && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
     };
     if !identity_current() || !previous_idle() || !admit_period() {
         return false;
@@ -16199,7 +16117,7 @@ where
         || slot.request_seq.load(Ordering::Acquire) != request
         || slot.active_command_fingerprint.load(Ordering::Acquire) != fingerprint
         || !notification_guard.publication_still_live()
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
         || (mode == DriverTaskRingCommandMode::RetainedTurn
             && (!driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
                 || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
@@ -16240,7 +16158,7 @@ where
         driver_task_mcs_one_way_initial_wake(notification_guard.notification_tcb_bound);
     before_signal();
     if !notification_guard.publication_still_live()
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
     {
         return DriverTaskMcsOneWayPromptResult::Invalid;
     }
@@ -16288,7 +16206,6 @@ enum DriverTaskMcsOneWayContinuationResult {
 /// observe the exact `DROA` body before it may resume foreground work.
 #[cfg(feature = "kernel")]
 fn driver_task_ring_ack_one_way_wait_receipt(
-    slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
     expected: DriverRuntimeOneWayWaitReceipt,
 ) -> bool {
@@ -16307,8 +16224,8 @@ fn driver_task_ring_ack_one_way_wait_receipt(
     unsafe {
         core::ptr::write_volatile(magic_ptr, DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC);
     }
-    driver_task_ring_clean_root_range(magic_ptr as usize, core::mem::size_of::<u32>());
-    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>());
+    driver_task_shared_publish_range(magic_ptr as usize, core::mem::size_of::<u32>());
+
     driver_task_ring_publish_barrier(ring_root_ptr);
     true
 }
@@ -16366,7 +16283,7 @@ where
         || slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire)
             != notification_guard.cap_generation
         || !notification_guard.publication_still_live()
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
         || (mode == DriverTaskRingCommandMode::RetainedTurn
             && (!driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
                 || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0))
@@ -16414,7 +16331,7 @@ where
         return DriverTaskMcsOneWayContinuationResult::NotReady;
     }
     if !notification_guard.publication_still_live()
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
     {
         return DriverTaskMcsOneWayContinuationResult::Invalid;
     }
@@ -16423,7 +16340,7 @@ where
         return DriverTaskMcsOneWayContinuationResult::NotReady;
     }
     if !notification_guard.publication_still_live()
-        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
         || !acknowledge(receipt)
     {
         return DriverTaskMcsOneWayContinuationResult::Invalid;
@@ -16469,7 +16386,7 @@ fn arm_driver_task_retained_priority_lease_wake_retry(
                 slot.retained_priority_lease_phase.load(Ordering::Acquire),
             ) == Some(DriverTaskRetainedLeasePhase::Issued)
             && slot.retained_grant_id.load(Ordering::Acquire) == 0
-            && driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command);
+            && driver_task_ring_exact_command_is_stable(ring_root_ptr, command);
     }
     let next = if driver_task_retained_uses_root_grant(contract, command) {
         let grant_id = slot.retained_grant_id.load(Ordering::Acquire);
@@ -16948,12 +16865,7 @@ fn driver_task_ring_payload_matches(ring_root_ptr: usize, offset: usize, payload
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_copy_ring_payload(
-    slot: &DriverTaskCommandSlot,
-    ring_root_ptr: usize,
-    offset: usize,
-    payload: &[u8],
-) {
+fn driver_task_copy_ring_payload(ring_root_ptr: usize, offset: usize, payload: &[u8]) {
     let dst = (ring_root_ptr + offset) as *mut u8;
     // SAFETY: Callers validate that the destination lies in the HAL-owned ring
     // page after the fixed records. The submit path calls this only while it
@@ -16961,8 +16873,8 @@ fn driver_task_copy_ring_payload(
     unsafe {
         core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
     }
-    driver_task_ring_clean_root_range(dst as usize, payload.len());
-    driver_task_record_cache_clean(slot, payload.len());
+    driver_task_shared_publish_range(dst as usize, payload.len());
+
     driver_task_shared_store_barrier();
 }
 
@@ -16991,7 +16903,7 @@ pub fn stage_driver_task_ring_payload_at(
         }
         return Some(descriptor);
     }
-    driver_task_copy_ring_payload(slot, ring_root_ptr, offset, payload);
+    driver_task_copy_ring_payload(ring_root_ptr, offset, payload);
     Some(descriptor)
 }
 
@@ -17192,12 +17104,12 @@ fn driver_task_stage_segment(
             flags,
         } => {
             let _ = describe_driver_task_ring_payload_at(offset, payload, flags)?;
-            driver_task_copy_ring_payload(slot, ring_root_ptr, offset, payload);
+            driver_task_copy_ring_payload(ring_root_ptr, offset, payload);
             Some(())
         }
         DriverTaskStagingSegment::RuntimeInit { payload } => {
             let frame = driver_runtime_init_frame_descriptor(payload, 0)?;
-            driver_task_copy_ring_payload(slot, ring_root_ptr, frame.offset as usize, payload);
+            driver_task_copy_ring_payload(ring_root_ptr, frame.offset as usize, payload);
             Some(())
         }
         DriverTaskStagingSegment::Shared { payload, flags } => {
@@ -17243,7 +17155,7 @@ pub fn stage_driver_runtime_init_descriptor(
         }
         return Some(frame);
     }
-    driver_task_copy_ring_payload(slot, ring_root_ptr, frame.offset as usize, bytes);
+    driver_task_copy_ring_payload(ring_root_ptr, frame.offset as usize, bytes);
     Some(frame)
 }
 
@@ -18632,7 +18544,7 @@ pub fn driver_task_sdio_physical_lifetime_snapshot(
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let offset = usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET);
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         ring_root_ptr.checked_add(offset)?,
         usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES),
     );
@@ -18663,7 +18575,7 @@ pub fn driver_task_sdio_deadline_arm_snapshot() -> Option<DriverRuntimeSdioDeadl
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let offset = usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET);
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         ring_root_ptr.checked_add(offset)?,
         usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES),
     );
@@ -18774,7 +18686,7 @@ pub fn driver_task_sdio_clock_snapshot() -> Option<DriverRuntimeSdioClockSnapsho
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let offset = usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET);
-    driver_task_ring_invalidate_root_range(
+    driver_task_shared_acquire_range(
         ring_root_ptr.checked_add(offset)?,
         usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES),
     );
@@ -18866,7 +18778,7 @@ fn reset_cyw43_sdio_restart_ring(
     if !reset {
         return false;
     }
-    driver_task_ring_clean_root_range(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
+    driver_task_shared_publish_range(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
     slot.request_seq.store(0, Ordering::Release);
     slot.active.store(0, Ordering::Release);
     slot.active_command_fingerprint.store(0, Ordering::Release);
@@ -23931,7 +23843,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
     let completion_ptr =
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
-    let mut cache_counter_batch = DriverTaskCacheCounterBatch::new();
 
     if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
         && slot.semantic_terminal_request.load(Ordering::Acquire) != 0
@@ -24061,7 +23972,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         ) != Some(DriverTaskRetainedLeasePhase::Inactive)
         {
             driver_task_counter_add(&slot.counters.busy_conflicts, 1);
-            cache_counter_batch.flush(slot);
+
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -24071,14 +23982,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             return None;
         }
         let active_request = slot.request_seq.load(Ordering::Acquire);
-        cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+        driver_task_ring_invalidate_completion_record(ring_root_ptr);
         // Drain a late completion before declaring the ring busy so one delayed
         // driver turn cannot permanently block a hot path.
         let active_completion =
             DriverTaskRingView::new(ring_root_ptr)?.read_completion_snapshot()?;
         if active_request == 0 || active_completion.sequence != active_request as u32 {
             driver_task_counter_add(&slot.counters.busy_conflicts, 1);
-            cache_counter_batch.flush(slot);
+
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -24242,7 +24153,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // visible. Hand off exactly once in this producer activation using the
         // runtime's actual binding; later slices may only poll the same durable
         // request or answer an explicit DROW wait.
-        cache_counter_batch.flush(slot);
+
         match signal_driver_task_mcs_one_way_prompt_with(
             DriverTaskMcsOneWayPrompt {
                 slot,
@@ -24304,7 +24215,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // sequence-zero Stage cut inside the already-admitted producer call;
         // its sequence-last commit and sole notification below remain the
         // child-visible authority transfer.
-        cache_counter_batch.flush(slot);
+
         return None;
     }
 
@@ -24341,12 +24252,11 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             | DriverTaskRetainedLeaseTurn::PollRing
             | DriverTaskRetainedLeaseTurn::ReadyToComplete => {}
             DriverTaskRetainedLeaseTurn::Pending => {
-                cache_counter_batch.flush(slot);
                 return None;
             }
             DriverTaskRetainedLeaseTurn::Failed => {
                 fail_driver_task_retained_priority_lease(slot, contract);
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
         }
@@ -24381,7 +24291,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             staging_segments,
         ) {
             fail_driver_task_retained_priority_lease(slot, contract);
-            cache_counter_batch.flush(slot);
+
             return None;
         }
         #[cfg(test)]
@@ -24404,7 +24314,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // commit before the notification hint below.
             record_driver_task_persistent_transaction_start_time(slot);
         }
-        driver_task_ring_commit_command_sequence(slot, ring_root_ptr, command_ptr, request as u32);
+        driver_task_ring_commit_command_sequence(ring_root_ptr, command_ptr, request as u32);
         #[cfg(test)]
         if steady_tx_fast_lane {
             record_test_cyw43_steady_tx_lease_action(4);
@@ -24417,7 +24327,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // autonomous runtime. The issued latch already poisons this
             // generation so no later turn can recommit or re-prime it.
             fail_driver_task_retained_priority_lease(slot, contract);
-            cache_counter_batch.flush(slot);
+
             return None;
         }
         if steady_tx_fast_lane {
@@ -24438,7 +24348,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // MR0 carries only the immutable request identity; the child
             // notification itself carries no message registers.
             crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
-            cache_counter_batch.flush(slot);
+
             if !signal_cyw43_steady_tx_service_lease_with(
                 Cyw43SteadyTxServiceLeaseSignal {
                     slot,
@@ -24474,7 +24384,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // the sequence-last commit. Transfer its full durable authority
             // with one scheduling hint; all later root turns are PollRing-only.
             crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
-            cache_counter_batch.flush(slot);
+
             if !signal_cyw43_persistent_transaction_with(
                 Cyw43PersistentTransactionSignal {
                     slot,
@@ -24497,7 +24407,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             }
             return None;
         }
-        cache_counter_batch.flush(slot);
+
         return None;
     }
 
@@ -24510,12 +24420,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 command,
                 current,
                 || {
-                    let completion = read_driver_task_ring_completion(
-                        &mut cache_counter_batch,
-                        ring_root_ptr,
-                        completion_ptr,
-                        request,
-                    );
+                    let completion =
+                        read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request);
                     (completion.sequence == request as u32).then_some(completion)
                 },
                 || driver_task_ring_read_continuation_grant(ring_root_ptr),
@@ -24532,7 +24438,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             || slot.retained_grant_id.load(Ordering::Acquire) != current
         {
             fail_driver_task_retained_priority_lease(slot, contract);
-            cache_counter_batch.flush(slot);
+
             return None;
         }
         match publication {
@@ -24548,16 +24454,15 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     .is_err()
                 {
                     fail_driver_task_retained_priority_lease(slot, contract);
-                    cache_counter_batch.flush(slot);
+
                     return None;
                 }
                 retained_early_completion = Some(completion);
             }
             DriverTaskRetainedRootGrantPublication::Publish(next) => {
-                if !driver_task_ring_publish_continuation_grant(slot, ring_root_ptr, command, next)
-                {
+                if !driver_task_ring_publish_continuation_grant(ring_root_ptr, command, next) {
                     fail_driver_task_retained_priority_lease(slot, contract);
-                    cache_counter_batch.flush(slot);
+
                     return None;
                 }
                 #[cfg(test)]
@@ -24566,7 +24471,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 if !mark_driver_task_retained_priority_lease_granted(slot) {
                     fail_driver_task_retained_priority_lease(slot, contract);
                 }
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
             DriverTaskRetainedRootGrantPublication::AwaitActionCompletion => {
@@ -24586,12 +24491,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 {
                     fail_driver_task_retained_priority_lease(slot, contract);
                 }
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
             DriverTaskRetainedRootGrantPublication::Invalid => {
                 fail_driver_task_retained_priority_lease(slot, contract);
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
         }
@@ -24609,7 +24514,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // sequence-last producer transaction. Reaching a later notify turn
             // would create a second scheduling edge, so fail closed.
             fail_driver_task_retained_priority_lease(slot, contract);
-            cache_counter_batch.flush(slot);
+
             return None;
         }
         if !root_grant && !admit_driver_task_retained_foreground_wake(slot, contract) {
@@ -24617,7 +24522,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // EventPump turn rechecks the architectural counter; no endpoint,
             // grant, device state, retry counter, or MCS reservation changes
             // while this generated-period boundary is closed.
-            cache_counter_batch.flush(slot);
+
             return None;
         }
         // A root grant is different from an ordinary retained wake: its prior
@@ -24639,7 +24544,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 fail_driver_task_retained_priority_lease(slot, contract);
                 return None;
             }
-            cache_counter_batch.flush(slot);
+
             if signal_driver_task_retained_root_grant_with(
                 DriverTaskRetainedRootGrantContinuation {
                     slot,
@@ -24665,7 +24570,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 fail_driver_task_retained_priority_lease(slot, contract);
                 return None;
             };
-            cache_counter_batch.flush(slot);
+
             match signal_driver_task_mcs_one_way_prompt_with(
                 DriverTaskMcsOneWayPrompt {
                     slot,
@@ -24699,16 +24604,15 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         }
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         if !mcs_nonblocking_root_producer_allows_send(slot, endpoint) {
-            cache_counter_batch.flush(slot);
             return None;
         }
         if !mark_driver_task_retained_priority_lease_issued(slot, false) {
             fail_driver_task_retained_priority_lease(slot, contract);
-            cache_counter_batch.flush(slot);
+
             return None;
         }
         driver_task_counter_add(&slot.counters.send_attempts, 1);
-        cache_counter_batch.flush(slot);
+
         crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
         return None;
     }
@@ -24716,12 +24620,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     let mut completion = if let Some(completion) = retained_early_completion {
         completion
     } else {
-        read_driver_task_ring_completion(
-            &mut cache_counter_batch,
-            ring_root_ptr,
-            completion_ptr,
-            request,
-        )
+        read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request)
     };
     let mut start_ticks = None;
     let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode)
@@ -24779,14 +24678,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     crate::sel4::yield_now();
                 }
                 if attempt % DRIVER_TASK_RING_CACHE_POLL_INTERVAL == 0 {
-                    cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+                    driver_task_ring_invalidate_completion_record(ring_root_ptr);
                 }
                 // SAFETY: The completion pointer addresses the same validated ring
                 // page. A matching sequence means the isolated runtime observed the
                 // nonblocking send and published the primitive completion record.
                 completion = unsafe { core::ptr::read_volatile(completion_ptr) };
                 if completion.sequence == request as u32 {
-                    cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+                    driver_task_ring_invalidate_completion_record(ring_root_ptr);
                     // SAFETY: The matching sequence is re-read after the acquire
                     // barrier before root consumes completion fields or payload.
                     completion = unsafe { core::ptr::read_volatile(completion_ptr) };
@@ -24817,7 +24716,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             && slot.runtime_identity_token.load(Ordering::Acquire) != 0
         {
             let Some(notification_guard) = mcs_one_way_notification_guard else {
-                cache_counter_batch.flush(slot);
                 return None;
             };
             let continuation = signal_driver_task_mcs_one_way_continuation_with(
@@ -24832,17 +24730,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     mode,
                 },
                 || {
-                    read_driver_task_ring_completion(
-                        &mut cache_counter_batch,
-                        ring_root_ptr,
-                        completion_ptr,
-                        request,
-                    )
-                    .sequence
+                    read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request)
+                        .sequence
                         == request as u32
                 },
                 || driver_task_ring_read_one_way_wait_receipt(ring_root_ptr),
-                |receipt| driver_task_ring_ack_one_way_wait_receipt(slot, ring_root_ptr, receipt),
+                |receipt| driver_task_ring_ack_one_way_wait_receipt(ring_root_ptr, receipt),
                 || {},
                 |notification| {
                     crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
@@ -24853,7 +24746,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     // The child's DROW -> DROA transfer and its scheduling
                     // hint complete this causal root activation. Do not count
                     // a successful continuation as a transport timeout.
-                    cache_counter_batch.flush(slot);
+
                     return None;
                 }
                 DriverTaskMcsOneWayContinuationResult::NotReady
@@ -24862,12 +24755,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     // terminal or another root observer. Refresh the local
                     // snapshot before deciding whether timeout accounting is
                     // applicable.
-                    completion = read_driver_task_ring_completion(
-                        &mut cache_counter_batch,
-                        ring_root_ptr,
-                        completion_ptr,
-                        request,
-                    );
+                    completion =
+                        read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request);
                     if completion.sequence != request as u32 {
                         if continuation == DriverTaskMcsOneWayContinuationResult::NotReady
                             && physical_pi_driver_task_only_owner_state_active()
@@ -24890,7 +24779,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                                         driver_task_ring_read_progress_record(ring_root_ptr),
                                     ) && driver_task_ring_one_way_wait_commit_absent(ring_root_ptr)
                                         && read_driver_task_ring_completion(
-                                            &mut cache_counter_batch,
                                             ring_root_ptr,
                                             completion_ptr,
                                             request,
@@ -24915,7 +24803,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                         // This is an ordinary asynchronous causal frontier,
                         // not a timeout; finish the root turn so the child can
                         // run or publish its root-control fan-in.
-                        cache_counter_batch.flush(slot);
+
                         return None;
                     }
                 }
@@ -24925,7 +24813,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     // the slot for explicit generation recovery; never infer a
                     // retry from a malformed or gapped receipt.
                     poison_driver_task_retained_request(slot);
-                    cache_counter_batch.flush(slot);
+
                     return None;
                 }
             }
@@ -24942,14 +24830,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // so a root turn racing its exact completion must neither invent a
             // token-free continuation nor count an asynchronous scheduling
             // frontier as a transport timeout.
-            completion = read_driver_task_ring_completion(
-                &mut cache_counter_batch,
-                ring_root_ptr,
-                completion_ptr,
-                request,
-            );
+            completion = read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request);
             if completion.sequence != request as u32 {
-                cache_counter_batch.flush(slot);
                 return None;
             }
         }
@@ -24969,7 +24851,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 // CYW43 submission) enter the fenced pair restart.
                 record_driver_task_ring_progress(slot, progress);
                 request_cyw43_sdio_pair_restart();
-                cache_counter_batch.flush(slot);
+
                 drop(_priority_restore);
                 drop(_root_producer_guard);
                 return None;
@@ -25043,7 +24925,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             let call_completed_normally = true;
 
             if call_completed_normally {
-                cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+                driver_task_ring_invalidate_completion_record(ring_root_ptr);
                 // SAFETY: The completion pointer addresses the same validated
                 // ring page; the reply boundary guarantees the isolated
                 // runtime published the shared-frame result first.
@@ -25079,14 +24961,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             yield_count = yield_count.saturating_add(1);
             crate::sel4::yield_now();
             if attempt % DRIVER_TASK_RING_CACHE_POLL_INTERVAL == 0 {
-                cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+                driver_task_ring_invalidate_completion_record(ring_root_ptr);
             }
             // SAFETY: The completion pointer addresses the same validated ring
             // page; a matching sequence means the isolated trampoline observed the
             // command through the shared frame.
             completion = unsafe { core::ptr::read_volatile(completion_ptr) };
             if completion.sequence == request as u32 {
-                cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+                driver_task_ring_invalidate_completion_record(ring_root_ptr);
                 // SAFETY: The matching sequence is re-read after the acquire
                 // barrier before root consumes completion fields or payload.
                 completion = unsafe { core::ptr::read_volatile(completion_ptr) };
@@ -25114,17 +24996,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 persistent_transaction_waiting = true;
             }
             Cyw43PersistentTransactionParentCondition::TerminalVisible => {
-                completion = read_driver_task_ring_completion(
-                    &mut cache_counter_batch,
-                    ring_root_ptr,
-                    completion_ptr,
-                    request,
-                );
+                completion =
+                    read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request);
                 if completion.sequence != request as u32 {
                     // A sequence-last terminal is immutable. Losing it after a
                     // stable read is an issued-unknown transport violation.
                     fail_driver_task_retained_priority_lease(slot, contract);
-                    cache_counter_batch.flush(slot);
+
                     return None;
                 }
             }
@@ -25139,12 +25017,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     1,
                     timeout_progress,
                 );
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
             Cyw43PersistentTransactionParentCondition::NotExact => {
                 fail_driver_task_retained_priority_lease(slot, contract);
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
         }
@@ -25227,26 +25105,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 timeout_progress,
             );
         }
-        cache_counter_batch.flush(slot);
 
-        let mut final_terminal_cache_counter_batch = DriverTaskCacheCounterBatch::new();
-        let first = read_driver_task_ring_completion(
-            &mut final_terminal_cache_counter_batch,
-            ring_root_ptr,
-            completion_ptr,
-            request,
-        );
+        let first = read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request);
         let late = if first.sequence == request as u32 {
             first
         } else {
-            read_driver_task_ring_completion(
-                &mut final_terminal_cache_counter_batch,
-                ring_root_ptr,
-                completion_ptr,
-                request,
-            )
+            read_driver_task_ring_completion(ring_root_ptr, completion_ptr, request)
         };
-        final_terminal_cache_counter_batch.flush(slot);
+
         if late.sequence != request as u32 {
             if keep_active_on_timeout {
                 return None;
@@ -25289,13 +25155,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 command_fingerprint,
             ) {
                 fail_driver_task_retained_priority_lease(slot, contract);
-                cache_counter_batch.flush(slot);
+
                 return None;
             }
         } else {
             match latch_driver_task_retained_priority_lease_completion(slot) {
                 DriverTaskRetainedLeaseTurn::Pending => {
-                    cache_counter_batch.flush(slot);
                     return None;
                 }
                 DriverTaskRetainedLeaseTurn::ReadyToComplete => {
@@ -25307,7 +25172,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                         command_fingerprint,
                     ) {
                         fail_driver_task_retained_priority_lease(slot, contract);
-                        cache_counter_batch.flush(slot);
+
                         return None;
                     }
                 }
@@ -25317,14 +25182,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 | DriverTaskRetainedLeaseTurn::PollRing
                 | DriverTaskRetainedLeaseTurn::Failed => {
                     fail_driver_task_retained_priority_lease(slot, contract);
-                    cache_counter_batch.flush(slot);
+
                     return None;
                 }
             }
         }
     } else if retained_lease_ready_to_complete {
         fail_driver_task_retained_priority_lease(slot, contract);
-        cache_counter_batch.flush(slot);
+
         return None;
     }
 
@@ -25344,7 +25209,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // poison the pair generation; other retained services fail closed
         // instead of mistaking transport state for a normal Pending turn.
         fail_driver_task_retained_priority_lease(slot, contract);
-        cache_counter_batch.flush(slot);
+
         return None;
     }
     if keep_active_on_timeout {
@@ -25379,7 +25244,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // pair-recovery lane; never return a body without a lifetime receipt.
         request_cyw43_sdio_pair_restart();
         fail_driver_task_retained_priority_lease(slot, contract);
-        cache_counter_batch.flush(slot);
+
         return None;
     }
     if completion.sequence == request as u32 || !keep_active_on_timeout {
@@ -25411,7 +25276,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             );
         }
     }
-    cache_counter_batch.flush(slot);
+
     if completion.sequence == request as u32 {
         driver_task_record_completion_counters(slot, completion);
         if completion.code == DriverTaskCompletionCode::Fault.as_u16()
@@ -26693,7 +26558,7 @@ pub(crate) fn test_force_cyw43_retained_continuation_ready() -> bool {
         return false;
     };
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
-    driver_task_ring_clear_continuation_grant(slot, ring_root_ptr);
+    driver_task_ring_clear_continuation_grant(ring_root_ptr);
     slot.retained_grant_id.store(0, Ordering::Relaxed);
     slot.retained_priority_lease_phase.store(
         DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
@@ -29047,7 +28912,7 @@ pub fn emit_boot_contract_proof() {
         let mut line = String::<1024>::new();
         let _ = write!(
             line,
-            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=uncached-plus-root-maintenance cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
+            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=uncached-plus-root-barriers cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
             contract.name,
             hot_path.as_str(),
             dma_status,
@@ -33960,7 +33825,7 @@ mod tests {
             &staging,
         ));
         slot.retained_doorbell_issued.store(1, Ordering::Release);
-        driver_task_ring_commit_command_sequence(slot, ring_root_ptr, command_ptr, request as u32);
+        driver_task_ring_commit_command_sequence(ring_root_ptr, command_ptr, request as u32);
         assert!(mark_driver_task_retained_priority_lease_committed(
             slot, false,
         ));
@@ -34540,7 +34405,6 @@ mod tests {
         slot.retained_doorbell_issued.store(1, Ordering::Release);
         slot.retained_grant_id.store(grant_id, Ordering::Release);
         assert!(driver_task_ring_publish_continuation_grant(
-            slot,
             ring_root_ptr,
             command,
             grant_id,
@@ -34625,7 +34489,6 @@ mod tests {
             "the initial grant publication is exact root housekeeping",
         );
         assert!(driver_task_ring_publish_continuation_grant(
-            slot,
             ring_root_ptr,
             command,
             1,
@@ -36742,6 +36605,7 @@ mod tests {
         let slot = &DRIVER_TASK_SLOT_CYW43455;
         slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
         slot.root_ring_writers.store(0, Ordering::Release);
+        DRIVER_TASK_TEST_RX_QUEUE_SAMPLES.store(0, Ordering::Release);
         slot.counters
             .cache_invalidate_ops
             .store(0, Ordering::Release);
@@ -36751,7 +36615,7 @@ mod tests {
 
         assert!(!cyw43_sdio_pair_restart_required());
         assert_eq!(
-            slot.counters.cache_invalidate_ops.load(Ordering::Acquire),
+            DRIVER_TASK_TEST_RX_QUEUE_SAMPLES.load(Ordering::Acquire),
             0,
             "the ubiquitous progress probe must not sample the private RX queue",
         );
@@ -36760,9 +36624,14 @@ mod tests {
             Some(queue_state),
         );
         assert_eq!(
-            slot.counters.cache_invalidate_ops.load(Ordering::Acquire),
-            2,
+            DRIVER_TASK_TEST_RX_QUEUE_SAMPLES.load(Ordering::Acquire),
+            1,
             "the explicit scheduler intake owns one stable two-read sample",
+        );
+        assert_eq!(
+            slot.counters.cache_invalidate_ops.load(Ordering::Acquire),
+            0,
+            "CPU-sharing barriers are not cache-maintenance operations",
         );
 
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
@@ -37176,12 +37045,7 @@ mod tests {
             active_driver_task_retained_request_for_slot(&slot),
             Some(DriverTaskRetainedRequestState::Invalid { request: 73 })
         ));
-        driver_task_ring_commit_command_sequence(
-            &slot,
-            ring_root_ptr,
-            command_ptr,
-            command.sequence,
-        );
+        driver_task_ring_commit_command_sequence(ring_root_ptr, command_ptr, command.sequence);
         assert_eq!(runtime_poll(), Some(command));
         assert!(matches!(
             active_driver_task_retained_request_for_slot(&slot),
@@ -37413,12 +37277,7 @@ mod tests {
             &staging_segments,
         ));
         slot.retained_doorbell_issued.store(1, Ordering::Release);
-        driver_task_ring_commit_command_sequence(
-            slot,
-            ring_root_ptr,
-            command_ptr,
-            command.sequence,
-        );
+        driver_task_ring_commit_command_sequence(ring_root_ptr, command_ptr, command.sequence);
         assert!(mark_driver_task_retained_priority_lease_committed(
             slot, false,
         ));
@@ -37715,7 +37574,6 @@ mod tests {
         ));
         assert_eq!(sends.get(), 2);
         assert!(driver_task_ring_exact_command_is_stable(
-            &slot,
             ring_root_ptr,
             command
         ));
@@ -37939,7 +37797,7 @@ mod tests {
                 || driver_task_ring_read_one_way_wait_receipt(ring_root_ptr),
                 |receipt| {
                     ack_calls.set(ack_calls.get().saturating_add(1));
-                    driver_task_ring_ack_one_way_wait_receipt(&slot, ring_root_ptr, receipt)
+                    driver_task_ring_ack_one_way_wait_receipt(ring_root_ptr, receipt)
                 },
                 || {},
                 |_| signals.set(signals.get().saturating_add(1)),
@@ -38189,12 +38047,7 @@ mod tests {
         assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }.sequence, 0);
 
         slot.retained_doorbell_issued.store(1, Ordering::Release);
-        driver_task_ring_commit_command_sequence(
-            &slot,
-            ring_root_ptr,
-            command_ptr,
-            command.sequence,
-        );
+        driver_task_ring_commit_command_sequence(ring_root_ptr, command_ptr, command.sequence);
         // SAFETY: `command_ptr` addresses the fixed command record in the
         // test-owned ring page.
         assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }, command);
@@ -38524,7 +38377,6 @@ mod tests {
             ordinary,
         ));
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             ordinary,
             1,
@@ -38603,7 +38455,6 @@ mod tests {
         assert_eq!(signals.get(), 0, "commit must not publish or notify");
 
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             1,
@@ -38679,14 +38530,12 @@ mod tests {
         );
         assert_eq!(next_driver_task_retained_grant_id(u32::MAX), None);
         assert!(!driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | 1,
         ));
         assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             1,
@@ -38792,7 +38641,6 @@ mod tests {
 
         let next = next_driver_task_retained_grant_id(1).expect("monotonic replacement grant");
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             next,
@@ -38857,7 +38705,6 @@ mod tests {
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = 9;
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             1,
@@ -38980,7 +38827,6 @@ mod tests {
         );
         let next = next_driver_task_retained_grant_id(1).expect("monotonic replacement grant");
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             next,
@@ -39021,7 +38867,6 @@ mod tests {
     fn late_root_completion_between_poll_and_publish_suppresses_replacement() {
         use core::cell::Cell;
 
-        let slot = DriverTaskCommandSlot::new();
         let mut ring_page = Box::new(AlignedDriverTaskRing(
             [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
         ));
@@ -39040,7 +38885,6 @@ mod tests {
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = 11;
         assert!(driver_task_ring_publish_continuation_grant(
-            &slot,
             ring_root_ptr,
             command,
             5,
@@ -39916,7 +39760,7 @@ mod tests {
                 queue_state,
             );
         }
-        driver_task_ring_clean_root_range(
+        driver_task_shared_publish_range(
             queue_ptr,
             usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
         );
@@ -39992,7 +39836,7 @@ mod tests {
             .skip(DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE)
             .take(DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES)
         {
-            driver_task_ring_clean_root_range(
+            driver_task_shared_publish_range(
                 page.0.as_mut_ptr() as usize,
                 DRIVER_TASK_RING_PAGE_BYTES,
             );
@@ -40024,7 +39868,7 @@ mod tests {
         unsafe {
             core::ptr::write_volatile(stage_ptr as *mut u32, changed_stage_deltas);
         }
-        driver_task_ring_clean_root_range(stage_ptr, core::mem::size_of::<u32>());
+        driver_task_shared_publish_range(stage_ptr, core::mem::size_of::<u32>());
         let degraded_stage_deltas = pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(
             pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
             pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
@@ -40110,7 +39954,7 @@ mod tests {
                 later_queue_state,
             );
         }
-        driver_task_ring_clean_root_range(
+        driver_task_shared_publish_range(
             queue_ptr,
             usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
         );
@@ -40131,7 +39975,7 @@ mod tests {
         unsafe {
             core::ptr::write_volatile(queue_ptr as *mut DriverRuntimeCyw43RxQueueState, poisoned);
         }
-        driver_task_ring_clean_root_range(
+        driver_task_shared_publish_range(
             queue_ptr,
             usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
         );
@@ -40612,11 +40456,8 @@ mod tests {
         driver_task_counter_add(&slot.counters.staged_bytes, 128);
         driver_task_counter_add(&slot.counters.cache_clean_ops, 3);
         driver_task_counter_add(&slot.counters.cache_clean_bytes, 64);
-        DriverTaskCacheCounterBatch {
-            invalidate_ops: 2,
-            invalidate_bytes: 40,
-        }
-        .flush(&slot);
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+        driver_task_counter_add(&slot.counters.cache_invalidate_bytes, 40);
         driver_task_counter_add(&slot.counters.send_attempts, 5);
         driver_task_counter_add(&slot.counters.yield_count, 5);
         driver_task_counter_add(&slot.counters.busy_conflicts, 2);
