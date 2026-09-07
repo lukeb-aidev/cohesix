@@ -10493,6 +10493,21 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Exact final GENET Yield decision — the unchanged c45d79075 pair retains
+    p95 7.603/7.670 ms while complete receive traces total only 453/421 us.
+    Recorded explicit Yields overlap several slow PINGs, but 21/20 of 64 exceed
+    the latency gate; elapsed non-Yield poll gaps remain separately unresolved.
+    Preserve one packed word in each existing Yield context: this loop's
+    identity-matched cached idle mask, retained continuation class, hint state,
+    quantum/wait counts, rejection bits and tail/clock/profile state. It must
+    not resample hardware, call kernel accounting, change a scheduling decision
+    or add an output row. Cover field packing, unavailable/stale cuts and full
+    maximum-width rendering. Discovery: `m26e-console-network-service-isolation`.
+    The complete host-tool catalog/suite, Python SDK, passive trace consumers,
+    generated interfaces and raw/REST benchmark arithmetic require no changes;
+    existing key/value readers ignore the additive field. This diagnostic is
+    not a performance fix or target acceptance claim. Fresh same-image dual-mode
+    evidence remains required before selecting a further behavioral repair.
   - GENET consumed-control continuation — a successful StageOutput may accept
     the child's consumption watermark during its existing immediate observation.
     Preserve the new stage's exact generation/connection/control sequence from

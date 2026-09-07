@@ -568,6 +568,7 @@ where
                     &mut productive_window,
                     natural_postpone_profile,
                     crate::pi4_mcs_recorder::PiMcsYieldTrigger::PassiveAdmission,
+                    false,
                 );
             }
             #[cfg(not(all(
@@ -634,6 +635,7 @@ where
                 &mut productive_window,
                 natural_postpone_profile,
                 crate::pi4_mcs_recorder::PiMcsYieldTrigger::RecoveryFence,
+                false,
             );
             #[cfg(not(all(
                 feature = "net-console",
@@ -806,6 +808,7 @@ where
                     } else {
                         crate::pi4_mcs_recorder::PiMcsYieldTrigger::NoProductiveSuccessor
                     },
+                    !handoff_turn,
                 );
             }
             #[cfg(not(all(
@@ -889,6 +892,7 @@ where
                     &mut productive_window,
                     natural_postpone_profile,
                     crate::pi4_mcs_recorder::PiMcsYieldTrigger::NoProductiveSuccessor,
+                    false,
                 );
             }
             #[cfg(not(all(
@@ -1456,6 +1460,34 @@ impl PiRootControlProductiveWindow {
             DeferredCyw43ActivationClock::Invalid
         };
         matches!(self.clock, DeferredCyw43ActivationClock::Timed { .. })
+    }
+
+    /// Preserve the final software decision without a new timing/accounting read.
+    /// Low 19 bits are reserved for the separately identity-checked idle cut.
+    fn yield_route_bits(self, natural_postpone_profile: bool) -> u64 {
+        let token = self.continuation.map_or(0, |identity| {
+            if identity.awaits_child_publication() {
+                1u64
+            } else if identity.completed_current_response() {
+                2
+            } else {
+                3
+            }
+        });
+        (1 << 63)
+            | (token << 19)
+            | (u64::from(self.nonblocking_fanin_hint_eligible()) << 22)
+            | (u64::from(self.nonblocking_fanin_hint_consumed) << 23)
+            | (u64::from(self.completed_quanta) << 24)
+            | (u64::from(self.causal_waits) << 32)
+            | (u64::from(self.last_reject_reason & 0xff) << 40)
+            | (u64::from(self.active_hot_tail.is_some()) << 48)
+            | (u64::from(matches!(
+                self.clock,
+                DeferredCyw43ActivationClock::Timed { .. }
+            )) << 49)
+            | (u64::from(natural_postpone_profile) << 50)
+            | (u64::from(self.ready_publication_lane.is_some()) << 51)
     }
 
     fn resumable_quantum_admitted(&mut self, natural_postpone_profile: bool) -> bool {
@@ -2296,6 +2328,7 @@ fn pi_root_control_yield_and_restart<
     window: &mut PiRootControlProductiveWindow,
     natural_postpone_profile: bool,
     trigger: crate::pi4_mcs_recorder::PiMcsYieldTrigger,
+    idle_checked: bool,
 ) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
@@ -2303,8 +2336,12 @@ fn pi_root_control_yield_and_restart<
     V: CapabilityValidator,
 {
     pump.clear_deferred_cyw43_transient_publication_credit();
-    let pi_mcs_yield_cut =
-        pump.capture_pi_mcs_yield_cut(crate::pi4_mcs_recorder::PiMcsLane::Genet, trigger);
+    let pi_mcs_yield_cut = pump
+        .capture_pi_mcs_yield_cut(crate::pi4_mcs_recorder::PiMcsLane::Genet, trigger)
+        .with_route(
+            window.yield_route_bits(natural_postpone_profile),
+            idle_checked,
+        );
     let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
     let (yielded_at_ticks, resumed_at_ticks) = sel4::yield_now_timed();
     if passive_boundary_prepared {
@@ -8431,6 +8468,30 @@ mod tests {
             crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(8, 17);
         assert!(!window.record_completed_quantum_at(stale, 200));
         assert!(window.nonblocking_fanin_hint_consumed);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn yield_route_preserves_final_window_state_without_mutation() {
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert_eq!(window.yield_route_bits(true), 0x8004_0000_0000_0000);
+        window.continuation = Some(
+            crate::event::PiRootControlProductiveContinuation::for_test_completed_response(7, 11),
+        );
+        window.completed_quanta = 17;
+        window.causal_waits = 3;
+        window.last_reject_reason = 0x80;
+        window.nonblocking_fanin_hint_eligible = true;
+        assert_eq!(window.yield_route_bits(true), 0x8004_8003_1150_0000);
+        assert_eq!(window.completed_quanta, 17);
+        assert_eq!(window.causal_waits, 3);
+        assert!(window.nonblocking_fanin_hint_eligible());
+        window.consume_nonblocking_fanin_hint();
+        assert_eq!(window.yield_route_bits(false), 0x8000_8003_1190_0000);
     }
 
     #[cfg(all(

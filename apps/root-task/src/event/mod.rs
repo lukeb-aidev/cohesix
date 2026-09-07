@@ -5986,6 +5986,24 @@ pub(crate) struct PiMcsYieldCut {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+impl PiMcsYieldCut {
+    /// Join the existing window state with this loop's cached final idle cut.
+    /// This annotation neither resamples authority nor affects the selected Yield.
+    pub(crate) fn with_route(mut self, route: u64, idle_checked: bool) -> Self {
+        if let Some(context) = self.context.as_mut() {
+            context.route = route;
+            if idle_checked {
+                context.route |= crate::pi4_mcs_recorder::session_idle_route_bits(
+                    self.generation,
+                    self.connection_id,
+                );
+            }
+        }
+        self
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
 fn pi_mcs_progress_mask(before: PiMcsWorkSnapshot, after: PiMcsWorkSnapshot) -> u32 {
     let mut progress = 0u32;
     if after.console_lines != before.console_lines
@@ -14002,6 +14020,7 @@ where
             accepted_commands: snapshot.accepted_commands,
             stages: snapshot.stage_output_successes,
             drains: snapshot.response_drains,
+            route: 0,
             phase: match self.linked_runtime_service_phase {
                 LinkedRuntimeServicePhase::Serial => 0,
                 LinkedRuntimeServicePhase::Dispatch => 1,

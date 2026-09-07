@@ -60,6 +60,10 @@ Pi `smp poll-time` retains a bounded explicit-Yield trace alongside its poll
 intervals. It helps distinguish an observed Yield from other scheduler delay;
 its first-32 retention and omitted/invalid counts are part of the evidence.
 Use the same nonzero session identity and counter frequency for correlation.
+The optional final-Yield `route` word distinguishes the existing software token,
+idle fence, hint, cap and tail state; decode it only with its validity bits as
+specified in `USERLAND_AND_CLI.md`. It neither measures CPU nor proves why a
+kernel scheduling context was postponed.
 Neither an omitted trace suffix nor elapsed time alone proves CPU consumption,
 refill exhaustion, or a network bottleneck. Read the cached trace after the
 first raw session and before another connection replaces it.

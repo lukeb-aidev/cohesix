@@ -2445,7 +2445,12 @@ prove all of the following:
   header plus at most 32 complete records. Cover profile-gated typed refusal,
   generation reset, saturating elapsed totals, invalid-clock/gap rejection,
   first-record retention, explicit omissions and missing context, and complete
-  maximum-width rows. The following receive header and at most 16 brackets
+  maximum-width rows. The optional packed final-Yield route must preserve the
+  existing window fields exactly, reject stale/absent idle-session cuts, and
+  fit alongside maximum-width context/timestamps without adding a row. A route
+  without its validity bits cannot attribute a Yield to an idle mask. No new
+  clock/accounting operation is permitted in this diagnostic. The following
+  receive header and at most 16 brackets
   require slowest-first retention, stable ties, generation reset, invalid-clock
   rejection and saturating totals. Keep the full command within 58 body rows.
   A newly staged exact GENET response remains eligible after immediate control

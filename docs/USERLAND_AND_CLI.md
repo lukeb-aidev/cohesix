@@ -194,6 +194,19 @@ nonzero session. Header `generation`, `conn`, `kept`, `total`, `omitted` and
 `pending`, `cmd`, `stage`, `drain` and the entry/resume `ticks` pair are hex.
 `cause` names the existing Yield trigger. `ctx=0` omits unavailable context;
 with `ctx=1`, `pub` is 0 unknown, 1 observed empty, or 2 durable publication.
+The additive hex `route` word records the final root decision only when bit 63
+is set; zero means unavailable. Bits 0-15 retain the existing idle fence mask,
+16-17 its cut (0 before enable, 1 after enable, 2 timer rejection), and bit 18
+marks a same-session idle preparation from this loop. Without bit 18, those
+low fields are unavailable. Bits 19-21 classify the retained token (0 absent,
+1 awaiting child publication, 2 completed response, 3 command-only); bits 22/23
+mark an eligible/consumed nonblocking hint. Bytes at 24/32/40 retain completed
+quanta, causal waits and rejection mask. Bits 48-51 mark active tail, timed
+window, selected NaturalPostpone and pending fresh-publication lane. Other bits
+are reserved zero. The snapshot precedes passive-admission preparation and
+changes no decision, clock, queue, kernel accounting or producer operation.
+It identifies the final software guard, not the cause of kernel postponement.
+
 Invalid intervals are excluded and counted; a zero kept count or omitted tail
 cannot prove absence of all scheduler delay. Recording copies existing
 observations and adds no counter read or CPU-accounting operation.

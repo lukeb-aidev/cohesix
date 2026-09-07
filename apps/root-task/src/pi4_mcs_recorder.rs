@@ -139,6 +139,8 @@ pub(crate) struct PiMcsYieldContext {
     pub phase: u8,
     /// 0 unknown, 1 observed empty, 2 observed durable child publication.
     pub child_publication: u8,
+    /// Packed final root decision; zero means this Yield has no route annotation.
+    pub route: u64,
 }
 
 /// Exclusive reason the root-control path crossed one explicit MCS Yield.
@@ -956,6 +958,20 @@ impl PiMcsSessionSummary {
         lines
     }
 
+    /// The caller marks whether this loop actually evaluated idle preparation.
+    /// Identity matching prevents an earlier connection's final mask leaking in.
+    fn idle_route_bits(&self, generation: u64, connection: u64) -> u64 {
+        if generation == 0
+            || connection == 0
+            || self.generation != generation
+            || self.connection != connection
+            || self.idle.cuts.iter().all(|count| *count == 0)
+        {
+            return 0;
+        }
+        (1 << 18) | (u64::from(self.idle.last_cut) << 16) | u64::from(self.idle.last_mask & 0xffff)
+    }
+
     fn yield_trace_lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 33] {
         let mut lines = core::array::from_fn(|_| HeaplessString::new());
         let _ = write!(lines[0],
@@ -983,12 +999,13 @@ impl PiMcsSessionSummary {
             if let Some(context) = record.context {
                 let _ = write!(
                     line,
-                    " phase={} pub={} cmd={:x} stage={:x} drain={:x}",
+                    " phase={} pub={} cmd={:x} stage={:x} drain={:x} route={:x}",
                     context.phase,
                     context.child_publication,
                     context.accepted_commands,
                     context.stages,
-                    context.drains
+                    context.drains,
+                    context.route
                 );
             }
             let _ = write!(
@@ -1237,6 +1254,11 @@ pub(crate) fn record_session_idle(
     SESSION
         .lock()
         .record_idle(generation, connection, cut, mask, operator);
+}
+
+/// Read only an already-recorded idle decision; no new predicate, clock or IPC.
+pub(crate) fn session_idle_route_bits(generation: u64, connection: u64) -> u64 {
+    SESSION.lock().idle_route_bits(generation, connection)
 }
 
 pub(crate) fn session_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
@@ -1532,6 +1554,21 @@ mod tests {
     }
 
     #[test]
+    fn yield_idle_route_rejects_absent_and_stale_session_cuts() {
+        let mut summary = PiMcsSessionSummary::new();
+        assert_eq!(summary.idle_route_bits(7, 11), 0);
+        summary.record_idle(7, 11, PiMcsIdleCut::BeforeEnable, 0x4020, 0);
+        assert_eq!(summary.idle_route_bits(7, 11), 0x4_4020);
+        assert_eq!(summary.idle_route_bits(8, 11), 0);
+        assert_eq!(summary.idle_route_bits(7, 12), 0);
+        assert_eq!(summary.idle_route_bits(0, 11), 0);
+        summary.record_idle(7, 11, PiMcsIdleCut::AfterEnable, 0, 0);
+        assert_eq!(summary.idle_route_bits(7, 11), 0x5_0000);
+        summary.record_idle(7, 11, PiMcsIdleCut::TimerRejected, 0x8000, 0);
+        assert_eq!(summary.idle_route_bits(7, 11), 0x6_8000);
+    }
+
+    #[test]
     fn session_yield_trace_maximum_fields_fit_complete_console_lines() {
         let mut summary = PiMcsSessionSummary::new();
         summary.record_yield(PiMcsYieldRecord {
@@ -1549,6 +1586,7 @@ mod tests {
                 drains: u64::MAX,
                 phase: u8::MAX,
                 child_publication: u8::MAX,
+                route: u64::MAX,
             }),
         });
         summary.yields = u64::MAX;
@@ -1556,6 +1594,7 @@ mod tests {
         let lines = summary.yield_trace_lines();
         assert!(lines[0].ends_with("invalid=18446744073709551615"));
         assert!(lines[1].contains("ctx=1 phase=255 pub=255 cmd=ffffffffffffffff"));
+        assert!(lines[1].contains("route=ffffffffffffffff"));
         assert!(
             lines[1].ends_with("ticks=ffffffffffffffc9/ffffffffffffffff hz=18446744073709551615")
         );
@@ -1582,6 +1621,7 @@ mod tests {
                 drains: 54,
                 phase: 3,
                 child_publication: 2,
+                route: 0,
             }),
         };
         summary.record_yield(sample);
@@ -1922,6 +1962,7 @@ mod tests {
                 drains: u64::MAX,
                 phase: u8::MAX,
                 child_publication: u8::MAX,
+                route: u64::MAX,
             }),
         });
         let row = &session.lines()[7];
