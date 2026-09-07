@@ -5692,27 +5692,15 @@ impl<'a> KernelHal<'a> {
         Err(HalError::Unsupported("driver-runtime-mmio-not-covered"))
     }
 
-    fn runtime_ram_region_attr(
-        hot_path: driver_task::DriverTaskHotPath,
-        dma_owned: bool,
-    ) -> sel4_sys::seL4_ARM_VMAttributes {
-        // Serial and GENET shared pages are CPU-to-CPU SPSC memory whose
-        // cursors use AArch64 atomic acquire/release operations. The selected
-        // seL4 AArch64 kernel maps Page_Uncached as Device-nGnRnE, where Rust
-        // atomics/exclusive accesses are not an admissible synchronization
-        // primitive. Give exactly these CPU-only pages coherent Normal-memory
-        // aliases in every participant. GENET MMIO/DMA pages and every other
-        // shared driver payload retain the uncached device boundary.
-        if !dma_owned
-            && matches!(
-                hot_path,
-                driver_task::DriverTaskHotPath::SerialConsole
-                    | driver_task::DriverTaskHotPath::GenetNic
-            )
-        {
-            runtime_cacheable_xn_attributes()
-        } else {
+    fn runtime_ram_region_attr(dma_owned: bool) -> sel4_sys::seL4_ARM_VMAttributes {
+        // SHARED resources carry CPU messages, never physical DMA. The selected
+        // SMP kernel maps Page_Default as shareable Normal memory; every root,
+        // owner and reciprocal-link alias must use these same attributes.
+        // Physical DMA uses separate private pages and retains Device-nGnRnE.
+        if dma_owned {
             runtime_uncached_xn_attributes()
+        } else {
+            runtime_cacheable_xn_attributes()
         }
     }
 
@@ -5734,11 +5722,9 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Unsupported("driver-runtime-sdio-dma-page-budget"));
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
-        // DMA and device-facing payloads cross boundaries without runtime-side
-        // EL0 cache maintenance. The CPU-only serial SPSC and direct GENET
-        // regions use coherent Normal memory so their atomic cursor protocols
-        // are valid; neither exception grants device DMA authority.
-        let attr = Self::runtime_ram_region_attr(hot_path, dma_owned);
+        // Physical owners copy between CPU-shared payloads and their private
+        // device buffers. Device DMA never targets these SHARED frame aliases.
+        let attr = Self::runtime_ram_region_attr(dma_owned);
         let page_bytes = 1usize << sel4::PAGE_BITS;
         let first_page_index = init_descriptor
             .as_deref()
@@ -5980,7 +5966,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
                 sel4_sys::seL4_CapRights_ReadWrite,
-                runtime_uncached_xn_attributes(),
+                runtime_cacheable_xn_attributes(),
                 tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -5996,7 +5982,7 @@ impl<'a> KernelHal<'a> {
                     vspace,
                     vaddr,
                     sel4_sys::seL4_CapRights_ReadWrite,
-                    runtime_uncached_xn_attributes(),
+                    runtime_cacheable_xn_attributes(),
                     tracker,
                 )
                 .map_err(HalError::Sel4)?;
@@ -6068,7 +6054,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_PCIE_BUS_RING_VADDR,
                 sel4_sys::seL4_CapRights_ReadWrite,
-                runtime_uncached_xn_attributes(),
+                runtime_cacheable_xn_attributes(),
                 tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -6178,7 +6164,7 @@ impl<'a> KernelHal<'a> {
 
         let mut ring_frame = self
             .env
-            .alloc_dma_frame_attr(runtime_uncached_xn_attributes())
+            .alloc_dma_frame_attr(runtime_cacheable_xn_attributes())
             .map_err(HalError::Sel4)?;
         let mut ipc_frame = self
             .env
@@ -6355,7 +6341,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_RING_VADDR,
                 data_rights,
-                runtime_uncached_xn_attributes(),
+                runtime_cacheable_xn_attributes(),
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -7486,33 +7472,16 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn runtime_ram_region_attr_uses_normal_memory_only_for_cpu_spsc_links() {
-        use super::driver_task::DriverTaskHotPath::*;
-        // The seven admitted roles use only these two CPU-sharing classes.
-        // DMA remains uncached and private for every role, without exception.
-        for (role, cpu_cacheable) in [
-            (SerialConsole, true),
-            (UsbKeyboard, false),
-            (HdmiText, false),
-            (GenetNic, true),
-            (Cyw43Wifi, false),
-            (SdioHost, false),
-            (PcieRoot, false),
-        ] {
-            let expected = if cpu_cacheable {
-                super::runtime_cacheable_xn_attributes()
-            } else {
-                super::runtime_uncached_xn_attributes()
-            };
-            assert_eq!(
-                super::KernelHal::runtime_ram_region_attr(role, false),
-                expected
-            );
-            assert_eq!(
-                super::KernelHal::runtime_ram_region_attr(role, true),
-                super::runtime_uncached_xn_attributes(),
-            );
-        }
+    fn runtime_ram_region_attr_separates_cpu_sharing_from_device_dma() {
+        // The resource class owns cache policy independently of driver role.
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(false),
+            super::runtime_cacheable_xn_attributes(),
+        );
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(true),
+            super::runtime_uncached_xn_attributes(),
+        );
     }
 
     #[cfg(feature = "kernel")]

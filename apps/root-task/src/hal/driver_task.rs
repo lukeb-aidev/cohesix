@@ -2901,12 +2901,10 @@ fn driver_task_ring_publish_barrier(_ring_root_ptr: usize) {
 
 #[cfg(feature = "kernel")]
 fn driver_task_shared_publish_range(_vaddr: usize, _len: usize) {
-    // HAL maps control rings identically uncached in every participant. Shared
-    // payload pages are also uncached, except CPU-only serial/GENET SPSC pages
-    // with identical coherent Normal mappings. None is a device DMA buffer.
-    // Match the runtime's release protocol: kernel cache maintenance adds no
-    // visibility to either mapping class and needlessly enters the kernel on
-    // every cursor/grant publication. Callers retain complete range validation.
+    // HAL maps every CPU-only control/SHARED alias as coherent Normal memory.
+    // Match the runtime release protocol without redundant kernel cache work.
+    // Physical DMA buffers use separate mappings and maintenance paths.
+    // Callers retain complete range validation before publication.
     driver_task_shared_store_barrier();
 }
 
@@ -28912,7 +28910,7 @@ pub fn emit_boot_contract_proof() {
         let mut line = String::<1024>::new();
         let _ = write!(
             line,
-            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=uncached-plus-root-barriers cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
+            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=coherent-shared-plus-barriers cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
             contract.name,
             hot_path.as_str(),
             dma_status,

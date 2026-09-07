@@ -10493,6 +10493,22 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Pi coherent driver control memory — after the unchanged `1096630c9`
+    two-WiFi/two-GENET matrix, map CPU-only control and SHARED resources as
+    identical cacheable Normal/XN memory in root, owner and reciprocal driver
+    aliases. The selected SMP kernel supplies inner shareability. The device
+    address audit binds SDIO DMA4 control/bounce and firmware requests, GENET
+    buffers and USB rings to separate private DMA resources; retain their
+    Device attributes and all MMIO/framebuffer mappings. Preserve barriers,
+    publication and range contracts, owner boundaries, SC numerics and targets.
+    Emit `coherent-shared-plus-barriers` with zero cache-operation counters and
+    retain both historical trace policies. Test resource-class mapping and
+    receipt validation, inspect exact Pi aliases/stack and run pinned QEMU
+    root-MCS before fresh RAM reset/CRC dual-mode measurements. WiFi source-to-
+    queue means near 13.38 ms and long post-root-dequeue response tails identify
+    shared CPU service as a candidate, not proof of a cache-only bottleneck.
+    Host-tool suite/catalog, Python SDK, generated manifests/ABIs and raw/REST
+    workloads retain their contracts; only the trace-policy consumer changes.
   - Pi packet and poll correlation — the unchanged `e8929515a` two-WiFi,
     two-GENET comparison contains one passing Wi-Fi raw run, one retransmission
     tail failure, and unchanged GENET p95 around 5.55-5.71 ms. Preserve targets

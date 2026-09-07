@@ -19198,7 +19198,9 @@ def is_ready_driver_task_dma_proof(event: TraceEvent) -> bool:
     bus_policy = event.fields.get("bus_address_policy", "unknown").lower()
     dma_pages = parse_hex_int(event.fields.get("dma_pages")) or 0
     cache_policy = event.fields.get("cache_policy", "unknown").lower()
-    shared_barriers = cache_policy == "uncached-plus-root-barriers" and all(
+    shared_barriers = cache_policy in {
+        "uncached-plus-root-barriers", "coherent-shared-plus-barriers",
+    } and all(
         parse_hex_int(event.fields.get(field)) == 0
         for field in (
             "cache_clean_ops", "cache_clean_bytes",

@@ -57513,8 +57513,8 @@ fn read_runtime_payload_u64_physical(offset: usize) -> u64 {
     #[cfg(target_os = "none")]
     {
         // SAFETY: The SDIO bulk-copy admission proves this naturally aligned
-        // word lies wholly inside one compiler-declared uncached shared-payload
-        // range. The volatile load preserves the existing uncached boundary.
+        // word lies wholly inside one compiler-declared CPU-shared payload
+        // range. The volatile load preserves the shared observation boundary.
         return u64::from_le(unsafe { core::ptr::read_volatile(address as *const u64) });
     }
     #[cfg(not(target_os = "none"))]
@@ -57532,8 +57532,8 @@ fn write_runtime_payload_u64_physical(offset: usize, value: u64) {
     #[cfg(target_os = "none")]
     {
         // SAFETY: The SDIO bulk-copy admission proves this naturally aligned
-        // word lies wholly inside one compiler-declared uncached shared-payload
-        // range. The volatile store preserves the existing uncached boundary.
+        // word lies wholly inside one compiler-declared CPU-shared payload
+        // range. The volatile store precedes the shared publication barrier.
         unsafe {
             core::ptr::write_volatile(address as *mut u64, value.to_le());
         }
@@ -58335,20 +58335,16 @@ fn dma_invalidate_range(_addr: usize, len: usize) {
 }
 
 fn driver_task_shared_clean_range(_addr: usize, _len: usize) {
-    // Legacy command/bus-control pages remain Page_Uncached. The one direct
-    // GENET exception is CPU-only, identically cacheable Normal memory in both
-    // children and uses atomic body/commit access plus inner-shareable ordering;
-    // it is never device-visible. Neither class needs or permits EL0 cache-line
-    // maintenance here. Device DMA buffers still use `dma_clean_range`.
+    // CPU-only control and payload aliases are identically coherent Normal
+    // memory in every participant. Publish with inner-shareable ordering;
+    // private device DMA still uses its separate `dma_clean_range` contract.
     core::sync::atomic::compiler_fence(Ordering::Release);
     driver_task_shared_store_barrier();
     core::sync::atomic::compiler_fence(Ordering::Release);
 }
 
 fn driver_task_shared_invalidate_range(_addr: usize, _len: usize) {
-    // Legacy shared pages are uncached; direct GENET pages are coherent,
-    // CPU-only Normal memory sampled with atomic acquire/recheck. Explicit EL0
-    // invalidation is unnecessary for both and can trap on the legacy mapping.
+    // Coherent CPU-only sharing needs acquire/recheck, not cache eviction.
     // Device DMA buffers still use `dma_invalidate_range`.
     driver_task_shared_load_barrier();
     core::sync::atomic::compiler_fence(Ordering::Acquire);

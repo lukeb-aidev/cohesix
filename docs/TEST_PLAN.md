@@ -9899,13 +9899,16 @@ but ordinary Pi scheduling remains unchanged and fresh Pi evidence is pending.
 
 ### Milestone 26e linked-driver MCS and coexistence gate
 
-For root CPU-sharing synchronization changes, verify all seven HAL role mapping
-classes, including private uncached DMA and the two coherent CPU-only SPSC
-exceptions. Preserve sequence-last command/grant publication, stable completion
+For root CPU-sharing synchronization changes, verify the HAL resource-class
+boundary: every CPU-only control/SHARED page is cacheable Normal/XN in root,
+owner and reciprocal aliases; private DMA, MMIO and framebuffer retain Device
+attributes. Audit SDIO bounce, GENET and USB DMA-address derivation to ensure
+hardware never targets a SHARED resource. Preserve sequence-last command/grant publication, stable completion
 and RX-queue reads, bounds, poison handling and retained-request identity with
 the existing focused HAL contracts. Test both historical maintenance receipts
-and `uncached-plus-root-barriers` receipts; the latter must reject missing,
-malformed or nonzero cache-operation counters. Exact target disassembly must
+and both historical `uncached-plus-root-barriers` and current
+`coherent-shared-plus-barriers` receipts; both barrier policies must reject
+missing, malformed or nonzero cache-operation counters. Exact target disassembly must
 show barriers and accesses without shared-handoff cache syscalls, while DMA and
 image maintenance remain present. Inspect retained bootstrap/GENET stack frames
 against the 1 MiB root stack and run the pinned QEMU root-MCS canary.

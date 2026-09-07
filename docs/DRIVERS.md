@@ -700,28 +700,37 @@ reusable ownership pattern.
 | SDIO host | SDHCI, CMD52/CMD53, card interrupt, DMA channel, and physical bus service. | HAL admits MMIO/DMA/IRQs; CYW43 requests bounded service through the generated reciprocal link. |
 | PCIe root | Declared PCIe-controller service after HAL platform admission. | HAL retains root-complex, firmware/reset, topology, and resource-admission authority. |
 
-HAL-owned root/runtime control rings have identical uncached mappings in all
-participants. Shared payloads are also uncached except the CPU-only serial and
-GENET SPSC regions described below, which have identical coherent Normal
-aliases. These are CPU-sharing ranges; driver-private DMA frames are allocated
-without root aliases. Root and child therefore use release/acquire memory
-barriers at shared publication and observation boundaries. They retain all
-volatile/atomic accesses, sequence-last commits, stable rereads and complete
-range validation. Root must not issue kernel cache-clean/invalidate calls for
-these shared ranges. This removes redundant kernel entries and cache-log work,
-without changing mappings or device DMA/image cache maintenance. The selected
-seL4 AArch64 mapping code is authoritative; Device memory is non-cacheable as
-described in the [Armv8-A memory model](https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/Armv8-A%20memory%20model%20guide.pdf?revision=58b1dd0a-3800-4218-b21a-f95a0332034c).
+HAL-owned root/runtime control rings and all `SHARED` payload resources have
+identical cacheable, execute-never Normal mappings in every CPU participant,
+including the CYW43/SDIO and USB/PCIe reciprocal aliases. The selected SMP seL4
+AArch64 `makeUserPagePTE` maps `Page_Default` as inner-shareable Normal memory;
+`Page_Uncached` means Device-nGnRnE. CPU communication must not use device
+attributes merely because a driver consumes the message.
+
+Physical DMA uses separate private `DMA` resources with no root aliases and
+retains uncached attributes, as do MMIO and the device-facing framebuffer.
+SDIO copies shared payloads through its private DMA4 bounce arena; GENET and
+USB use their private DMA arenas. Firmware mailbox requests also use private
+DMA pages. Shared physical-address metadata does not authorize DMA to a shared
+page. Any future device-visible use requires an explicit mapping and cache
+ownership contract before admission.
+
+Root and child use release/acquire barriers at shared publication and
+observation boundaries. Preserve volatile/atomic accesses, sequence-last
+commits, stable rereads and complete range validation. Root must not issue
+kernel cache-clean/invalidate calls for coherent CPU-sharing ranges; physical
+DMA and executable-image cache maintenance remain unchanged.
 
 `DRIVER_TASK_DMA_PROOF` emits
-`cache_policy=uncached-plus-root-barriers`. Its four existing `cache_*` counters
-are explicitly zero because CPU-sharing barriers are not cache-maintenance
-operations. The canonical counter record and seven-row `smp activity` projection
-retain their layouts and zero cache-operation fields. These counts do not cover
-driver-private DMA maintenance or executable-image loading. The normalizer
-retains historical `uncached-plus-root-maintenance` receipts and requires four
-explicit zero cache counters for the new policy; the remaining DMA/owner proof
-requirements are unchanged.
+`cache_policy=coherent-shared-plus-barriers`. Its four existing `cache_*`
+counters are explicitly zero because CPU-sharing barriers are not
+cache-maintenance operations. The canonical counter record and seven-row
+`smp activity` projection retain their layouts and zero cache-operation
+fields. These counts do not cover driver-private DMA maintenance or executable
+loading. The normalizer retains historical `uncached-plus-root-maintenance`
+and `uncached-plus-root-barriers` receipts; both barrier policies require four
+explicit zero cache counters. Remaining DMA/owner proof requirements are
+unchanged.
 
 ### 7.1 Serial pattern
 
@@ -740,8 +749,8 @@ requirements are unchanged.
 - Map these CPU-only ring pages with identical cacheable, execute-never Normal
   memory attributes in root and child. The selected AArch64 seL4 kernel maps
   `Page_Uncached` as Device-nGnRnE, which is retained for DMA/MMIO but is not a
-  valid home for the ring's Rust atomic acquire/release cursors. Do not extend
-  the serial exception to a device-facing or DMA-addressable page.
+  valid home for the ring's Rust atomic acquire/release cursors. Device-facing
+  pages require their separate DMA or MMIO mapping contract.
 - Publish payload before the producer cursor and consume payload before the
   consumer cursor. Validate magic, version, direction, generation, capacity,
   cursor distance, and commit-paired cursors before access; poison and fail

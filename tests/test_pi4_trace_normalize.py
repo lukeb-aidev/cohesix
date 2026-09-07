@@ -2478,6 +2478,10 @@ def test_gate_summary_nettest_error_clears_stale_success_proof() -> None:
         ("uncached-plus-root-barriers", "1", False),
         ("uncached-plus-root-barriers", "invalid", False),
         ("uncached-plus-root-barriers", None, False),
+        ("coherent-shared-plus-barriers", "0", True),
+        ("coherent-shared-plus-barriers", "1", False),
+        ("coherent-shared-plus-barriers", "invalid", False),
+        ("coherent-shared-plus-barriers", None, False),
         ("unknown", "0", False),
     ],
 )
