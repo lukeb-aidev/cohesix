@@ -168,8 +168,12 @@ values use `true`/`false`; numeric metadata is fixed-width hexadecimal except
 sample/half indices. Queue `abi` is version/size and `depth` is level/capacity.
 Header `count` is count/remaining and `valid` is body-valid/committed. Entry
 slots are offset/length/flags/source-CNTVCT-low-word, in FIFO slot order. No
-payload is recorded. A transient zero queue commit is distinguishable from a
-missing sample. This passive record survives recovery scrub, clears at
+payload is recorded. Internally valid, same-generation queue publication
+(zero or changing commit) now defers before terminal retirement or sideband
+copy and does not populate this rejection record. Unavailable reads, malformed
+bodies, poison and identity failures remain distinct rejection evidence. A
+publication that does not finish remains bounded by its original ticket
+deadline. This passive record survives recovery scrub, clears at
 accepted Gate 8, and adds no read, retry, restart, scheduling or acceptance
 authority. The compact `wifi diag` and automatic recovery transaction keep
 their existing bounds.

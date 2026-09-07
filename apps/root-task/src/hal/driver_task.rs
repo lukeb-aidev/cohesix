@@ -12343,14 +12343,103 @@ pub(crate) fn cyw43_rx_batch_rejection() -> Option<Cyw43RxBatchRejection> {
     *CYW43_FIRST_RX_BATCH_REJECTION.lock()
 }
 
-/// Preserve each existing validation predicate and read order while retaining
-/// the exact first rejected samples. No extra device read, retry or clock is
-/// introduced; the caller retains sole authority to request its pair restart.
+/// A batch admitted by both stable queue cuts and the exact terminal envelope.
+/// The caller must keep its parent owned until payload copy (and sideband ACK).
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43ValidatedRxBatch(DriverRuntimeCyw43RxBatchRecord);
+
+#[cfg(feature = "kernel")]
+impl Cyw43ValidatedRxBatch {
+    pub(crate) const fn record(self) -> DriverRuntimeCyw43RxBatchRecord {
+        self.0
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43RxBatchSelection {
+    Ready(Cyw43ValidatedRxBatch),
+    PublicationPending,
+    Rejected,
+}
+
+/// One read result belonging to the existing retained terminal, never a queue
+/// or a second issue lane. Pending leaves the HAL request active; Ready bridges
+/// transport retirement to the immediate payload consumer without re-reading a
+/// concurrently advancing queue. Every payload still gets both header fences.
+#[cfg(feature = "kernel")]
+static CYW43_RX_BATCH_TERMINAL_READ: spin::Mutex<
+    Option<(DriverTaskCompletionRecord, Cyw43RxBatchSelection)>,
+> = spin::Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_rx_batch_publication_pending(request: u32) -> bool {
+    CYW43_RX_BATCH_TERMINAL_READ
+        .lock()
+        .is_some_and(|(terminal, selection)| {
+            terminal.sequence == request && selection == Cyw43RxBatchSelection::PublicationPending
+        })
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn take_cyw43_validated_rx_batch(
+    completion: DriverTaskCompletionRecord,
+    expected_generation: Option<u32>,
+) -> Option<Cyw43ValidatedRxBatch> {
+    let mut retained = CYW43_RX_BATCH_TERMINAL_READ.lock();
+    match *retained {
+        Some((terminal, Cyw43RxBatchSelection::Ready(batch)))
+            if terminal == completion && Some(batch.0.generation) == expected_generation =>
+        {
+            *retained = None;
+            Some(batch)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_rx_batch_queue_publication_pending(rejection: Cyw43RxBatchRejection) -> bool {
+    let samples = match rejection.stage {
+        Cyw43RxBatchValidationStage::QueueBefore => rejection.queue_before,
+        Cyw43RxBatchValidationStage::QueueAfter => rejection.queue_after,
+        _ => return false,
+    };
+    let [Some(first), Some(second)] = samples else {
+        return false;
+    };
+    // Only an internally valid same-generation publication can defer. A
+    // malformed body, poisoned queue or generation change remains a rejection.
+    [first, second].into_iter().all(|sample| {
+        sample.body_valid()
+            && sample.generation != 0
+            && Some(sample.generation) == rejection.expected_generation
+            && sample.flags == 0
+            && sample.recovery_source_line == 0
+    }) && (first.commit_sequence == 0 || second.commit_sequence == 0 || first != second)
+}
+
+/// Test adapter for callers that only need successful snapshot presence.
+#[cfg(all(test, feature = "kernel"))]
 pub(crate) fn driver_task_cyw43_rx_batch_completion_snapshot(
     completion: DriverTaskCompletionRecord,
     expected_generation: Option<u32>,
 ) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    match select_driver_task_cyw43_rx_batch_completion(completion, expected_generation) {
+        Cyw43RxBatchSelection::Ready(batch) => Some(batch.record()),
+        Cyw43RxBatchSelection::PublicationPending | Cyw43RxBatchSelection::Rejected => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+/// Preserve both queue cuts, the envelope and header checks. A same-generation
+/// queue publication defers without granting payload authority; malformed or
+/// stale records retain their first samples for coordinated recovery.
+pub(crate) fn select_driver_task_cyw43_rx_batch_completion(
+    completion: DriverTaskCompletionRecord,
+    expected_generation: Option<u32>,
+) -> Cyw43RxBatchSelection {
     use Cyw43RxBatchValidationStage as Stage;
     let mut rejection = Cyw43RxBatchRejection {
         stage: Stage::Envelope,
@@ -12384,13 +12473,49 @@ pub(crate) fn driver_task_cyw43_rx_batch_completion_snapshot(
         rejection.stage = Stage::Count;
         (u32::from(batch.count) == completion.result).then_some(batch)
     })();
-    if batch.is_none() {
-        let mut first = CYW43_FIRST_RX_BATCH_REJECTION.lock();
-        if first.is_none() {
-            *first = Some(rejection);
+    if let Some(batch) = batch {
+        return Cyw43RxBatchSelection::Ready(Cyw43ValidatedRxBatch(batch));
+    }
+    if cyw43_rx_batch_queue_publication_pending(rejection) {
+        return Cyw43RxBatchSelection::PublicationPending;
+    }
+    let mut first = CYW43_FIRST_RX_BATCH_REJECTION.lock();
+    if first.is_none() {
+        *first = Some(rejection);
+    }
+    Cyw43RxBatchSelection::Rejected
+}
+
+#[cfg(feature = "kernel")]
+fn admit_cyw43_rx_batch_terminal(completion: DriverTaskCompletionRecord) -> bool {
+    if CYW43_RX_BATCH_TERMINAL_READ
+        .lock()
+        .is_some_and(|(terminal, selection)| {
+            terminal == completion && matches!(selection, Cyw43RxBatchSelection::Ready(_))
+        })
+    {
+        // Priority restoration may take another root turn. The same immutable
+        // request still owns this admitted batch; do not reopen its queue cut.
+        return true;
+    }
+    let selection = select_driver_task_cyw43_rx_batch_completion(
+        completion,
+        crate::drivers::driver_task_net::cyw43_sdio_dpc_expected_generation(),
+    );
+    *CYW43_RX_BATCH_TERMINAL_READ.lock() = Some((completion, selection));
+    match selection {
+        Cyw43RxBatchSelection::Ready(_) => true,
+        Cyw43RxBatchSelection::PublicationPending => false,
+        Cyw43RxBatchSelection::Rejected => {
+            request_cyw43_sdio_pair_restart();
+            false
         }
     }
-    batch
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_admit_cyw43_rx_batch_terminal(completion: DriverTaskCompletionRecord) -> bool {
+    admit_cyw43_rx_batch_terminal(completion)
 }
 
 /// Return one passive, mutually valid queue/batch diagnostic snapshot.
@@ -12454,10 +12579,16 @@ pub(crate) fn driver_task_cyw43_rx_batch_acknowledged(
 /// Root writes the body, cleans/barriers it, commits the queue sequence last,
 /// then signals CYW43 only as a hint. The still-issued op11 identity and stable
 /// batch header remain authoritative throughout.
+/// The admission proof already checked both queue cuts. Subsequent independent
+/// enqueues cannot revoke a copied batch while its exact op11 parent remains
+/// issued; re-reading that changing queue here could fail after delivery and
+/// force duplicate delivery on retry. Parent and immutable header checks below
+/// instead protect the ACK against retirement, restart and batch replacement.
 #[cfg(feature = "kernel")]
 pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
-    batch: DriverRuntimeCyw43RxBatchRecord,
+    validated: Cyw43ValidatedRxBatch,
 ) -> bool {
+    let batch = validated.record();
     if !batch.valid() {
         return false;
     }
@@ -12483,8 +12614,6 @@ pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
         )
         || !driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)
             .is_some_and(|snapshot| snapshot.authority_identity_matches(batch))
-        || !driver_task_cyw43_rx_queue_state_snapshot()
-            .is_some_and(|queue| batch.valid_for_parent_and_queue_state(request, queue))
     {
         return false;
     }
@@ -13149,6 +13278,9 @@ pub fn handoff_sdio_command_ring_to_cyw43(
 /// Clear a partially published driver-task transport after bootstrap failure.
 #[cfg(feature = "kernel")]
 pub fn clear_driver_task_transport(contract: DriverTaskContract) {
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        *CYW43_RX_BATCH_TERMINAL_READ.lock() = None;
+    }
     let Some(task_key) = driver_task_contract_key(contract) else {
         return;
     };
@@ -18999,6 +19131,7 @@ fn reset_cyw43_sdio_restart_ring(
     if !reset {
         return false;
     }
+    *CYW43_RX_BATCH_TERMINAL_READ.lock() = None;
     driver_task_shared_publish_range(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
     slot.request_seq.store(0, Ordering::Release);
     slot.active.store(0, Ordering::Release);
@@ -25364,6 +25497,20 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         if driver_task_ring_completion_trace_enabled(trace_call, command, completion) {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
+    }
+
+    // Do not retire an op8 whose terminal is visible while the independent
+    // durable queue is being published. The immutable HAL command and child
+    // batch remain owned across the next outer turn. Recovery's exact terminal
+    // drain may discard the body under its already-proven containment fence.
+    if mode == DriverTaskRingCommandMode::RetainedTurn
+        && contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && completion.sequence == request as u32
+        && completion.detail == pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_BATCH_DETAIL
+        && !exact_terminal_drain
+        && !admit_cyw43_rx_batch_terminal(completion)
+    {
+        return None;
     }
 
     if mode == DriverTaskRingCommandMode::RetainedTurn && completion.sequence == request as u32 {
@@ -40002,6 +40149,77 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_rx_batch_queue_publication_classifies_original_commit_transition() {
+        let mut before = DriverRuntimeCyw43RxQueueState::empty();
+        before.generation = 0x4359_5301;
+        before.commit_sequence = 0x402;
+        let mut publishing = before;
+        publishing.queue_depth = 1;
+        publishing.commit_sequence = 0;
+        let mut published = publishing;
+        published.commit_sequence = 0x403;
+        let observation = Cyw43RxBatchRejection {
+            stage: Cyw43RxBatchValidationStage::QueueAfter,
+            completion: DriverTaskCompletionRecord::progress(0x559, 1),
+            expected_generation: Some(0x4359_5301),
+            queue_before: [Some(before); 2],
+            headers: [None; 2],
+            queue_after: [Some(publishing), Some(published)],
+        };
+        assert!(cyw43_rx_batch_queue_publication_pending(observation));
+        assert!(cyw43_rx_batch_queue_publication_pending(
+            Cyw43RxBatchRejection {
+                queue_after: [Some(publishing); 2],
+                ..observation
+            }
+        ));
+        assert!(!cyw43_rx_batch_queue_publication_pending(
+            Cyw43RxBatchRejection {
+                queue_after: [Some(published); 2],
+                ..observation
+            }
+        ));
+        for sample in [
+            DriverRuntimeCyw43RxQueueState {
+                generation: 9,
+                ..publishing
+            },
+            DriverRuntimeCyw43RxQueueState {
+                version: 1,
+                ..publishing
+            },
+            DriverRuntimeCyw43RxQueueState {
+                queue_depth: 51,
+                ..publishing
+            },
+            DriverRuntimeCyw43RxQueueState {
+                flags: 1,
+                recovery_source_line: 100,
+                ..publishing
+            },
+        ] {
+            assert!(!cyw43_rx_batch_queue_publication_pending(
+                Cyw43RxBatchRejection {
+                    queue_after: [Some(sample), Some(published)],
+                    ..observation
+                }
+            ));
+        }
+        for stage in [
+            Cyw43RxBatchValidationStage::Header,
+            Cyw43RxBatchValidationStage::Count,
+        ] {
+            assert!(!cyw43_rx_batch_queue_publication_pending(
+                Cyw43RxBatchRejection {
+                    stage,
+                    ..observation
+                }
+            ));
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_durable_queue_batch_copy_and_ack_survive_later_enqueue() {
         let _counter = DriverTaskTestCounterOverride::new();
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
@@ -40180,7 +40398,7 @@ mod tests {
                 .retained_priority_lease_phase
                 .store(phase.as_usize(), Ordering::Release);
             assert!(
-                !acknowledge_driver_task_cyw43_rx_sideband_batch(batch),
+                !acknowledge_driver_task_cyw43_rx_sideband_batch(Cyw43ValidatedRxBatch(batch)),
                 "terminal restore phase {phase:?} cannot admit a sideband ACK",
             );
             assert!(!driver_task_cyw43_rx_batch_acknowledged(batch));
@@ -40193,10 +40411,16 @@ mod tests {
                 "terminal restore phase {phase:?} cannot mint a notification",
             );
         }
-        // SAFETY: Clearing the sequence commit invalidates only this test-owned
-        // completion so the existing pre-terminal positive ACK path can run.
+        // SAFETY: Both aligned commit words belong to the test-owned ring.
+        // Clearing the completion restores the issued op11; clearing the queue
+        // commit models an independent enqueue after validated payload copy.
         unsafe {
             core::ptr::write_volatile(completion_ptr as *mut u32, 0);
+            core::ptr::write_volatile(
+                (queue_ptr + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, commit_sequence))
+                    as *mut u32,
+                0,
+            );
         }
         DRIVER_TASK_SLOT_CYW43455
             .retained_priority_lease_phase
@@ -40204,14 +40428,18 @@ mod tests {
                 DriverTaskRetainedLeasePhase::Issued.as_usize(),
                 Ordering::Release,
             );
-        assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(batch));
+        assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(
+            Cyw43ValidatedRxBatch(batch)
+        ));
         assert!(driver_task_cyw43_rx_batch_acknowledged(batch));
         let sends_after = DRIVER_TASK_SLOT_CYW43455
             .counters
             .send_attempts
             .load(Ordering::Acquire);
         assert_eq!(sends_after, sends_before.saturating_add(1));
-        assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(batch));
+        assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(
+            Cyw43ValidatedRxBatch(batch)
+        ));
         assert_eq!(
             DRIVER_TASK_SLOT_CYW43455
                 .counters

@@ -627,7 +627,10 @@ blocking-induced usage fragments; it does not increase admitted CPU time or
 change upstream scheduling algorithms. Clean QEMU/proof kernels retain their
 128-byte initial context and QEMU's two refills. The compiler binds each target
 to its exact initial object size, and image composition rejects stale profile
-stamps. Physical GENET latency and unchanged WiFi gates decide whether to retain
+stamps. The direct-GENET runtime continuation predicate must admit the same
+Pi bits-eight/refills-eight declaration. Its positive contract test reads the
+SC fields from the selected Pi manifest; old bits-seven/refills-two values
+must not silently disable the selected continuation. Physical GENET latency and unchanged WiFi gates decide whether to retain
 the Pi candidate; extra storage alone makes no performance guarantee.
 
 The AArch64 receive-only wrapper seeds MessageInfo register x1 to zero before

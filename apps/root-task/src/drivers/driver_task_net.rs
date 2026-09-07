@@ -6126,7 +6126,7 @@ pub(crate) fn cyw43_sdio_dpc_diagnostic() -> Option<Cyw43SdioDpcDiagnostic> {
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_sdio_dpc_expected_generation() -> Option<u32> {
+pub(crate) fn cyw43_sdio_dpc_expected_generation() -> Option<u32> {
     let policy = crate::generated::driver_runtime_image_policy();
     if !policy.required || policy.bus_links.len() != 1 {
         return None;
@@ -23754,6 +23754,17 @@ fn run_cyw43_owned_prompt_poll(
         }
     };
     let Some(completion) = turn.completion else {
+        if pending
+            .request
+            .is_some_and(crate::hal::driver_task::cyw43_rx_batch_publication_pending)
+            && !cyw43_poll_deadline_open(&mut pending.deadline)
+        {
+            // A visible op8 terminal does not excuse a queue publication that
+            // never completes. Reuse this ticket's original finite deadline;
+            // keep its physical ownership for the sole recovery drain.
+            latch_cyw43_prompt_poll_recovery(&pending, None);
+            return None;
+        }
         let Some((request, issued)) = cyw43_retained_descriptor_active_state(
             contract,
             pending.generation,
@@ -28050,13 +28061,36 @@ fn preserve_cyw43_rx_batch_completion(
     {
         return None;
     }
-    let Some(batch) = crate::hal::driver_task::driver_task_cyw43_rx_batch_completion_snapshot(
-        completion,
-        cyw43_sdio_dpc_expected_generation(),
-    ) else {
-        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
-        return Some(false);
-    };
+    let generation = cyw43_sdio_dpc_expected_generation();
+    let validated = crate::hal::driver_task::take_cyw43_validated_rx_batch(completion, generation)
+        .map(crate::hal::driver_task::Cyw43RxBatchSelection::Ready)
+        .unwrap_or_else(|| {
+            crate::hal::driver_task::select_driver_task_cyw43_rx_batch_completion(
+                completion, generation,
+            )
+        });
+    match validated {
+        crate::hal::driver_task::Cyw43RxBatchSelection::Ready(batch) => Some(
+            preserve_cyw43_validated_rx_batch(contract, completion, batch),
+        ),
+        crate::hal::driver_task::Cyw43RxBatchSelection::PublicationPending
+        | crate::hal::driver_task::Cyw43RxBatchSelection::Rejected => {
+            // Production op8 cannot reach this cut while publication is
+            // pending: HAL retains it before releasing the completion. A
+            // caller without that owner cannot safely defer an op8 body.
+            crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+            Some(false)
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn preserve_cyw43_validated_rx_batch(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+    validated: crate::hal::driver_task::Cyw43ValidatedRxBatch,
+) -> bool {
+    let batch = validated.record();
 
     let mut index = 0usize;
     let mut first_data_pending = true;
@@ -28070,7 +28104,7 @@ fn preserve_cyw43_rx_batch_completion(
             )
         else {
             crate::hal::driver_task::request_cyw43_sdio_pair_restart();
-            return Some(false);
+            return false;
         };
         let is_first_data = first_data_pending
             && entry.flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
@@ -28094,7 +28128,7 @@ fn preserve_cyw43_rx_batch_completion(
     // A stable, fully copied batch terminal has been consumed even when policy
     // intentionally drops one semantic frame. Only envelope/header/payload
     // corruption above is allowed to restart the physical runtime pair.
-    Some(true)
+    true
 }
 
 /// Consume one durable sideband RX batch without terminating its op11 parent.
@@ -28145,8 +28179,23 @@ pub(crate) fn consume_cyw43_persistent_sideband_rx_batch() -> bool {
             flags: 0,
         },
     };
-    if preserve_cyw43_rx_batch_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion) != Some(true)
-        || !crate::hal::driver_task::acknowledge_driver_task_cyw43_rx_sideband_batch(batch)
+    let validated = match crate::hal::driver_task::select_driver_task_cyw43_rx_batch_completion(
+        completion,
+        cyw43_sdio_dpc_expected_generation(),
+    ) {
+        crate::hal::driver_task::Cyw43RxBatchSelection::Ready(validated)
+            if validated.record().authority_identity_matches(batch) =>
+        {
+            validated
+        }
+        crate::hal::driver_task::Cyw43RxBatchSelection::PublicationPending => return false,
+        _ => {
+            crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+            return false;
+        }
+    };
+    if !preserve_cyw43_validated_rx_batch(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion, validated)
+        || !crate::hal::driver_task::acknowledge_driver_task_cyw43_rx_sideband_batch(validated)
     {
         crate::hal::driver_task::request_cyw43_sdio_pair_restart();
         return false;
@@ -58380,6 +58429,70 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_rx_batch_publication_defers_before_copy_and_consumes_exact_proof_once() {
+        use crate::hal::driver_task::{
+            clear_first_cyw43_recovery_scheduler_snapshot, cyw43_rx_batch_publication_pending,
+            cyw43_rx_batch_rejection, take_cyw43_validated_rx_batch,
+            test_admit_cyw43_rx_batch_terminal,
+        };
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        let generation = cyw43_sdio_dpc_expected_generation().expect("generated link");
+        let mut page = [0; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring = test_publish_cyw43_ring(&mut page);
+        let mut shared = TestCyw43RxBatchPages::new();
+        let frame = test_cyw43_tcp_frame();
+        let completion = shared.publish(
+            &mut ring,
+            41,
+            generation,
+            &[(&frame, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA)],
+        );
+        let commit = usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET)
+            + core::mem::offset_of!(
+                pi4_driver_abi::DriverRuntimeCyw43RxQueueState,
+                commit_sequence
+            );
+        let original: [u8; 4] = ring._page.0[commit..commit + 4]
+            .try_into()
+            .expect("u32 commit");
+        ring._page.0[commit..commit + 4].fill(0);
+        assert!(!test_admit_cyw43_rx_batch_terminal(completion));
+        assert!(cyw43_rx_batch_publication_pending(41));
+        assert!(!cyw43_rx_batch_publication_pending(42));
+        assert!(take_cyw43_validated_rx_batch(completion, Some(generation)).is_none());
+        assert!(!cyw43_pending_rx_token_occupied());
+        assert_eq!(cyw43_rx_batch_rejection(), None);
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        ring._page.0[commit..commit + 4].copy_from_slice(&original);
+        assert!(test_admit_cyw43_rx_batch_terminal(completion));
+        assert!(!cyw43_rx_batch_publication_pending(41));
+        let mut wrong_parent = completion;
+        wrong_parent.sequence = 42;
+        assert!(take_cyw43_validated_rx_batch(wrong_parent, Some(generation)).is_none());
+        assert!(take_cyw43_validated_rx_batch(completion, Some(generation + 1)).is_none());
+
+        // A later queue publication cannot invalidate the already-admitted,
+        // immutable batch. Copy uses the exact proof and retains payload fences.
+        ring._page.0[commit..commit + 4].fill(0);
+        assert_eq!(
+            preserve_cyw43_rx_batch_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion),
+            Some(true)
+        );
+        assert!(take_cyw43_validated_rx_batch(completion, Some(generation)).is_none());
+        let (_, token) = take_cyw43_pending_rx_token().expect("one copied frame");
+        assert_eq!(&token.buffer[..token.len], frame.as_slice());
+        assert!(take_cyw43_pending_rx_token().is_none());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_rx_batch_rejection_preserves_first_original_samples_until_gate8() {
         use crate::hal::driver_task::{
             clear_first_cyw43_recovery_scheduler_snapshot, cyw43_rx_batch_rejection,
@@ -58472,14 +58585,15 @@ mod tests {
         assert!(
             driver_task_cyw43_rx_batch_completion_snapshot(completion, Some(generation)).is_none()
         );
-        let interrupted = cyw43_rx_batch_rejection().expect("interrupted queue publication");
-        assert_eq!(interrupted.stage, Stage::QueueBefore);
-        assert_eq!(interrupted.queue_before[0], interrupted.queue_before[1]);
-        let queue = interrupted.queue_before[0].expect("zero commit is observed, not unavailable");
-        assert_eq!(queue.generation, generation);
-        assert_eq!(queue.commit_sequence, 0);
-        assert!(!queue.valid());
-        assert_eq!(interrupted.headers, [None; 2]);
+        assert_eq!(
+            crate::hal::driver_task::select_driver_task_cyw43_rx_batch_completion(
+                completion,
+                Some(generation),
+            ),
+            crate::hal::driver_task::Cyw43RxBatchSelection::PublicationPending,
+            "a same-generation body with commit zero is not a rejected batch",
+        );
+        assert_eq!(cyw43_rx_batch_rejection(), None);
 
         clear_first_cyw43_recovery_scheduler_snapshot();
         let completion = shared.publish(

@@ -1318,9 +1318,19 @@ unchanged.
 
 Pi CYW43 RX-batch rejection diagnostics retain only the first failed terminal
 selection's original double-read queue/header operands. The last pair from
-three existing queue attempts is retained, including an interrupted zero
-commit. Unavailable and invalid are distinct evidence states; neither is
-reclassified by this diagnostic. The owner retains all existing validation,
+three existing queue attempts is retained for a rejection. A same-generation,
+internally valid queue body with a zero or changing commit is publication in
+progress, not a rejected batch. HAL keeps the exact op8 request active until
+both queue cuts and the complete terminal envelope/header validate, using the
+ticket's existing finite deadline. One exact, consumable root receipt carries
+that validation through priority restoration and terminal retirement to the
+immediate payload consumer. Every frame retains both immutable header checks
+around its bounded copy; restart clears the receipt before sequence reuse.
+For op11 sideband batches, root defers before copying and leaves the ACK absent.
+After successful admission and copy, the still-issued parent and unchanged
+batch header protect the ACK; independent queue publication cannot retroactively
+invalidate delivery or cause a duplicate copy. Unavailable, malformed, poisoned
+and stale records still fail closed. The owner retains all validation,
 cache barriers, parent/generation fences and restart authority. The record
 survives recovery scrub and retires at accepted Gate 8. Explicit `wifi dump-state`
 exports eleven bounded metadata-only rows defined in

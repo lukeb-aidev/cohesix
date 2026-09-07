@@ -10493,6 +10493,41 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Initial-SC runtime admission repair — the unchanged `d16284b35`
+    GENET pair regressed to approximately 20 ms per PING because the runtime
+    continuation predicate still required root SC bits 7/refills 2. Kernel
+    allocation and compiler admission correctly selected bits 8/refills 8;
+    the stale runtime check disabled continuation and caused a Yield on almost
+    every turn. Preserve the selected storage experiment and bind this runtime
+    predicate to the same exact 8/8 policy. Its positive test reads those
+    fields from the actual Pi TOML manifest, with a host-test-only TOML parser,
+    and rejects the stale values independently. Other budgets, fields, fences,
+    queues and fault routes remain exact. The complete unchanged dual-mode
+    matrix precedes the repair; repeat the exact Pi and QEMU checks and a new
+    two-GENET/two-WiFi matrix to test storage with continuation actually enabled.
+    Host tools, Python SDK, public protocols, benchmarks and evidence formats
+    retain their existing contracts; only the root's development dependency
+    and its lockfile entry change for the manifest-binding regression test.
+  - CYW43 completed-batch publication repair — the same unchanged matrix's
+    W00 medium pressure run retained parent `0x559`, a valid one-frame batch
+    at queue commit `0x402`, and the queue-after pair `0` then `0x403`.
+    Treat only internally valid same-generation queue publication as pending
+    before HAL retires op8. Retain its immutable request and original deadline,
+    then carry one exact validation receipt to the immediate payload consumer.
+    Preserve malformed/stale/poison rejection, both payload header fences,
+    ordered pair recovery and receipt clearing before request-sequence reuse.
+    Sideband op11 defers before copy; its validated admission, still-issued
+    parent and immutable header protect the subsequent ACK from independent
+    queue publication. This restores `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`,
+    discovered through `m26e-console-network-service-isolation`. Deterministic
+    publication/identity/copy/ACK tests and exact Pi compilation qualify source;
+    a fresh exact-image dual-mode matrix must establish physical recovery and
+    performance. No SC numeric, retry, deadline, physical I/O, shared ABI,
+    command grammar or benchmark change is included. The complete host-tool
+    suite, `tools/cohesix-py`, generated contracts, `.coh`, raw framed TCP and
+    REST benchmarks retain their implementations and schemas. The existing
+    `wifi dump-state` rejection row now describes actual rejection, excluding
+    deferred publication; operator and driver documentation change together.
   - Pi initial scheduling-context storage candidate — discovered through
     `m26e-console-network-service-isolation`, restore the selected
     `m26e-mcs-abi-foundation` allocation/admission contract. After the unchanged

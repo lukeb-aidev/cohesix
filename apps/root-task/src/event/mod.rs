@@ -6207,14 +6207,14 @@ fn direct_genet_continuation_mode_for_contract(
         && service.admitted
         && root.core == 0
         && root.scheduling_context_slot == 1
-        && root.scheduling_context_bits == 7
+        && root.scheduling_context_bits == 8
         && root.sched_control_core == 0
         && root.budget_us == 5_500
         && root.period_us == 10_000
         && root.deadline_us == 10_000
         && root.blocking_us == 0
         && root.jitter_us == 0
-        && root.max_refills == 2
+        && root.max_refills == 8
         && root.priority == 200
         && root.mcp == 200
         && root.timeout_badge == 653_131_777
@@ -63899,6 +63899,33 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn direct_genet_continuation_mode_requires_exact_generated_topology() {
+        // The selected Pi manifest is the independent producer of the adopted
+        // initial SC. Reconstructing its old values here hid a runtime profile
+        // rejection when the compiler admitted the larger kernel object.
+        let manifest: toml::Value = toml::from_str(include_str!(
+            "../../../../configs/root_task_pi4_uboot_aarch64.toml"
+        ))
+        .expect("selected Pi manifest must parse");
+        let temporal = manifest["temporal_authority"]["tasks"]
+            .as_array()
+            .expect("Pi temporal tasks");
+        let declaration = |id: &str| {
+            temporal
+                .iter()
+                .find(|task| task["id"].as_str() == Some(id))
+                .expect("Pi temporal declaration")
+        };
+        macro_rules! numeric_fields {
+            ($target:ident, $source:expr, $($field:ident),+ $(,)?) => {
+                $(
+                    $target.$field = $source[stringify!($field)]
+                        .as_integer()
+                        .expect("declared profile field must be an integer")
+                        .try_into()
+                        .expect("declared profile field must fit its generated type");
+                )+
+            };
+        }
         let mut console = crate::generated::console_network_service_config();
         let mut root = *crate::generated::temporal_tasks()
             .iter()
@@ -63908,60 +63935,76 @@ mod tests {
             .iter()
             .find(|task| task.id == "console-network-service")
             .expect("generated console-network service task must exist");
-        root.core = 0;
-        root.scheduling_context_slot = 1;
-        root.scheduling_context_bits = 7;
-        root.sched_control_core = 0;
-        root.budget_us = 5_500;
-        root.period_us = 10_000;
-        root.deadline_us = 10_000;
-        root.blocking_us = 0;
-        root.jitter_us = 0;
-        root.max_refills = 2;
-        root.priority = 200;
-        root.mcp = 200;
-        root.timeout_badge = 653_131_777;
-        root.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
-        root.consumed_time_evidence = true;
-        root.wcet_us = 2_500;
-        root.response_time_us = 5_100;
-        service.core = 2;
-        service.scheduling_context_slot = 6;
-        service.scheduling_context_bits = 8;
-        service.sched_control_core = 2;
-        service.budget_us = 3_000;
-        service.period_us = 10_000;
-        service.deadline_us = 10_000;
-        service.blocking_us = 0;
-        service.jitter_us = 0;
-        service.max_refills = 8;
-        service.priority = 200;
-        service.mcp = 200;
-        service.timeout_badge = 653_131_785;
-        service.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
-        service.consumed_time_evidence = true;
-        service.wcet_us = 3_000;
-        service.response_time_us = 3_000;
-        console.abi_version = 6;
-        console.listener_port = 31_337;
-        console.single_listener = true;
+        for (task, id, kind) in [
+            (&mut root, "root-control", "root-control"),
+            (&mut service, "console-network-service", "service"),
+        ] {
+            let declared = declaration(id);
+            assert_eq!(declared["kind"].as_str(), Some(kind));
+            assert_eq!(declared["execution"].as_str(), Some("active"));
+            assert_eq!(
+                declared["timeout_policy"].as_str(),
+                Some("natural-postpone")
+            );
+            numeric_fields!(
+                task,
+                declared,
+                core,
+                scheduling_context_slot,
+                scheduling_context_bits,
+                sched_control_core,
+                budget_us,
+                period_us,
+                deadline_us,
+                blocking_us,
+                jitter_us,
+                max_refills,
+                priority,
+                mcp,
+                timeout_badge,
+                wcet_us,
+                response_time_us,
+            );
+            task.admitted = declared["admitted"].as_bool().expect("Pi admission");
+            task.consumed_time_evidence = declared["consumed_time_evidence"]
+                .as_bool()
+                .expect("Pi consumed-time policy");
+            task.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
+        }
+        let declared_console = &manifest["console_network_service"];
+        numeric_fields!(
+            console,
+            declared_console,
+            abi_version,
+            listener_port,
+            max_packets_per_wake,
+            max_commands_per_wake,
+            max_control_inflight,
+            timer_clock_hz,
+            auth_timeout_ms,
+            idle_timeout_ms,
+            core,
+            scheduling_context_slot,
+            scheduling_context_bits,
+            priority,
+            mcp,
+            budget_us,
+            period_us,
+            max_refills,
+            timeout_badge,
+        );
+        console.enabled = declared_console["enabled"].as_bool().expect("Pi console");
+        console.single_listener = declared_console["single_listener"]
+            .as_bool()
+            .expect("Pi listener policy");
+        // The compiler derives direct GENET from the exact selected backend;
+        // Pi has no direct VirtIO device admission.
+        assert_eq!(
+            manifest["profile"]["name"].as_str(),
+            Some("pi4-uboot-aarch64")
+        );
+        console.direct_genet = manifest["hw"]["network"]["backend"].as_str() == Some("bcmgenet-v5");
         console.direct_virtio = false;
-        console.direct_genet = true;
-        console.max_packets_per_wake = 8;
-        console.max_commands_per_wake = 8;
-        console.max_control_inflight = 1;
-        console.timer_clock_hz = 54_000_000;
-        console.auth_timeout_ms = 5_000;
-        console.idle_timeout_ms = 300_000;
-        console.core = service.core;
-        console.scheduling_context_slot = service.scheduling_context_slot;
-        console.scheduling_context_bits = service.scheduling_context_bits;
-        console.priority = service.priority;
-        console.mcp = service.mcp;
-        console.budget_us = service.budget_us;
-        console.period_us = service.period_us;
-        console.max_refills = service.max_refills;
-        console.timeout_badge = service.timeout_badge;
 
         assert_eq!(
             direct_genet_continuation_mode_for_contract(&console, &root, &service),
@@ -64014,6 +64057,14 @@ mod tests {
 
         for drifted_root in [
             crate::generated::TemporalTaskConfig { core: 1, ..root },
+            crate::generated::TemporalTaskConfig {
+                scheduling_context_bits: 7,
+                ..root
+            },
+            crate::generated::TemporalTaskConfig {
+                max_refills: 2,
+                ..root
+            },
             crate::generated::TemporalTaskConfig {
                 budget_us: 5_499,
                 ..root

@@ -3698,6 +3698,7 @@ dependencies = [
  "spin",
  "static_assertions",
  "tempfile",
+ "toml 1.1.4+spec-1.1.0",
  "trace-model",
  "worker-task-abi",
 ]
