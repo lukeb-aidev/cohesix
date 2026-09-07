@@ -1708,6 +1708,25 @@ transport:
   four intervals and bounded IPv4/TCP header identity, or `absent=yes`.
   Header validation makes no checksum/authentication claim; no payload is
   recorded. Existing paired-TX RX-split counters retain their separate meaning.
+- The same validated Wi-Fi dequeue hook retains up to 96 TCP header receipts
+  for the latest control flow, exposed through six passive `wifi rx-trace`
+  pages. It reuses the existing dequeue counter read and records the IPv4 ID,
+  TCP identity and available source/Q11/root-copy/dequeue observations, without
+  payload, device calls, scheduling authority or a shared ABI change. Pure ACKs
+  are excluded; repeated SYN/data receipts remain distinct. Generation/new SYN
+  identity resets the bounded journal. A packet absent from this journal is
+  absent at this root observation point; this alone cannot identify RF loss,
+  firmware delay, runtime admission or earlier software loss. Bind it to the
+  complete same-boot capture and existing driver queue/drop counters.
+- Pi ordinary root polls retain elapsed phase totals, maxima and full counter
+  pairs for the latest nonzero TCP generation/connection. `smp poll-time`
+  reads eight cached rows without kernel CPU-accounting calls. Two exported-counter
+  reads bracket each observed poll; the exclusive passive
+  admission path is excluded to preserve its first-operation invariant.
+  `between` includes unobserved outer work and waits. Wall time includes
+  descheduling, so neither long phase intervals nor session CPU totals prove
+  which scheduling context exhausted a refill. Command/clock identities and
+  separate CPU, packet and service receipts remain necessary for attribution.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
   begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the

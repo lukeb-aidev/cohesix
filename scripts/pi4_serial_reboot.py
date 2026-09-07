@@ -76,6 +76,8 @@ DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
     "usb diag": (b"OK USB", b"ERR USB"),
     "usb probe-kbd": (b"OK USB", b"ERR USB"),
     "smp activity": (b"OK SMP", b"ERR SMP"),
+    "smp poll-time": (b"OK SMP", b"ERR SMP"),
+    **{f"wifi rx-trace {page}": (b"OK WIFI", b"ERR WIFI") for page in range(6)},
 }
 DIAGNOSTIC_READY_MARKERS = (
     b"usb keyboard command-ready",

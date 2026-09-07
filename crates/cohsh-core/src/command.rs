@@ -53,7 +53,7 @@ impl CapsMode {
     }
 }
 
-/// Diagnostic mode selected for the `smp [activity|mcs|dump]` console command.
+/// Diagnostic mode selected for the `smp [activity|mcs|poll-time|dump]` console command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmpMode {
     /// Raw kernel debug scheduler snapshot, available only in safe debug contexts.
@@ -62,6 +62,8 @@ pub enum SmpMode {
     Activity,
     /// Generated temporal topology joined to a non-blocking live registry snapshot.
     Mcs,
+    /// Pi root poll elapsed-time observations for the latest TCP connection.
+    PollTime,
 }
 
 impl SmpMode {
@@ -72,6 +74,7 @@ impl SmpMode {
             Self::Snapshot => "snapshot",
             Self::Activity => "activity",
             Self::Mcs => "mcs",
+            Self::PollTime => "poll-time",
         }
     }
 }
@@ -501,6 +504,8 @@ fn parse_smp_mode(remainder: &str) -> Result<SmpMode, ConsoleError> {
         Ok(SmpMode::Activity)
     } else if mode.eq_ignore_ascii_case("mcs") {
         Ok(SmpMode::Mcs)
+    } else if mode.eq_ignore_ascii_case("poll-time") {
+        Ok(SmpMode::PollTime)
     } else if mode.eq_ignore_ascii_case("dump") {
         Ok(SmpMode::Snapshot)
     } else {
@@ -658,6 +663,23 @@ mod tests {
             parse("smp mcs\n").unwrap(),
             Command::Smp { mode: SmpMode::Mcs }
         );
+    }
+
+    #[test]
+    fn smp_poll_time_requires_one_exact_mode_token() {
+        for command in ["smp poll-time\n", "smp POLL-TIME\n"] {
+            assert_eq!(
+                parse(command).unwrap(),
+                Command::Smp {
+                    mode: SmpMode::PollTime
+                }
+            );
+        }
+        assert_eq!(
+            parse("smp poll-time extra\n").unwrap_err(),
+            ConsoleError::InvalidValue("smp")
+        );
+        assert_eq!(SmpMode::PollTime.label(), "poll-time");
     }
 
     #[test]

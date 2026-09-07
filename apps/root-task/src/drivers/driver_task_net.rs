@@ -19180,7 +19180,8 @@ fn record_cyw43_post_dhcp_rx_delivery(
     frame_flags: u16,
     token: &DriverTaskNetRxToken,
 ) {
-    let dequeue_ticks = cyw43_counter_ticks().map(|ticks| ticks as u32);
+    let dequeue_full_ticks = cyw43_counter_ticks();
+    let dequeue_ticks = dequeue_full_ticks.map(|ticks| ticks as u32);
     let frame = &token.buffer[..token.len];
     let assigned_ipv4 = cyw43_assigned_ipv4();
     record_cyw43_post_dhcp_rx_progress(
@@ -19197,6 +19198,19 @@ fn record_cyw43_post_dhcp_rx_delivery(
         if let Some(tuple) = Cyw43RxDequeueTcpTuple::from_frame(frame)
             .filter(|tuple| Some(tuple.destination_ipv4.to_be_bytes()) == assigned_ipv4)
         {
+            if let Some(ip_id) = cyw43_get_u16_be(frame, ETH_HEADER_LEN + 4) {
+                super::wifi_rx_journal::record(
+                    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+                    super::wifi_rx_journal::RxReceipt {
+                        tuple,
+                        ip_id,
+                        source: token.source_cntvct_lo,
+                        stages_q11: token.first_data_stage_deltas_q11,
+                        root_copy: token.root_copy_cntvct_lo,
+                        dequeue: dequeue_full_ticks,
+                    },
+                );
+            }
             let sample = cyw43_rx_dequeue_intervals(
                 token.source_cntvct_lo,
                 token.first_data_stage_deltas_q11,

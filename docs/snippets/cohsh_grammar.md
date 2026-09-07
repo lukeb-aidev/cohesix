@@ -6,7 +6,7 @@
 - `help`
 - `bi`
 - `caps [mcs]`
-- `smp [activity|mcs|dump]`
+- `smp [activity|mcs|poll-time|dump]`
 - `mem`
 - `ping`
 - `test`

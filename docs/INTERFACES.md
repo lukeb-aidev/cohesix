@@ -60,6 +60,18 @@ strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and
 `[smp:mcs/v1]`. Every record labels kernel, generated, or runtime authority.
 Early-console and registry contention are typed unavailable states; generated
 rows never fabricate live registration, binding, activation, or containment.
+
+The shared parser additionally recognizes strict `smp poll-time`. Pi event-pump
+profiles return eight cached root-poll elapsed-time rows and `OK SMP
+mode=poll-time`; other profiles return typed unsupported, and bootstrap returns
+`ERR SMP reason=policy detail=event-pump-required`. Pi physical-console Wi-Fi
+diagnostics add six explicit `wifi rx-trace <0..5>` pages of retained TCP headers
+and existing receive timestamps. These bounded diagnostic schemas, numeric
+bases and missing-evidence semantics are specified in
+[USERLAND_AND_CLI.md](USERLAND_AND_CLI.md). No payload is retained and the reader
+has no device authority. Host `cohsh` forwards the shared SMP command; Wi-Fi
+pages remain physical-console only. This console extension changes no manifest,
+shared ABI, namespace, authentication, framing, REST/SDK or benchmark schema.
 `[caps:mcs/v1]` emits one or more independently source-labelled records per
 runtime or generated scope. Each record is at most 77 bytes so the Pi linked
 HDMI fallback preserves every field; consumers join records by command,

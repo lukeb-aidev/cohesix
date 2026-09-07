@@ -10493,6 +10493,25 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Pi packet and poll correlation — the unchanged `e8929515a` two-WiFi,
+    two-GENET comparison contains one passing Wi-Fi raw run, one retransmission
+    tail failure, and unchanged GENET p95 around 5.55-5.71 ms. Preserve targets
+    and compare against the exact August 10 pre-26e software path. Add a bounded
+    latest-flow TCP-header journal at the existing Wi-Fi dequeue observation,
+    retaining available source/Q11/root-copy/full-counter metadata without a
+    new device call or payload. Six `wifi rx-trace` pages expose independent
+    packet receipts. Separate `smp poll-time` records root ordinary poll phases
+    and between-poll wall intervals by connection without resetting kernel CPU
+    accounting or modifying exclusive passive-admission ordering. Validate
+    parsing, missing evidence, eviction, clocks, output bounds, shared host
+    forwarding, exact Pi code/stack and pinned QEMU root-MCS. Existing SMP CPU
+    rows and report capacities remain intact. No budget, guard, scheduling,
+    device, retry, manifest or ABI changes are part of this diagnostic batch.
+    Host-tool catalog/suite, Python SDK, raw/REST workloads and arithmetic are
+    reviewed; only shared command/help forwarding and the physical diagnostic
+    command-marker inventory require consumer changes. Fresh packet/service
+    correlation must select the next performance correction; aggregate maxima
+    alone do not establish the responsible owner or a hardware limit.
   - Root CPU-sharing synchronization — after the unchanged `db420f1c1` two-WiFi,
     two-GENET matrix, remove kernel cache-maintenance calls from HAL-owned
     shared control and payload handoffs. Control pages and ordinary payloads

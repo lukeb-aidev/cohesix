@@ -300,6 +300,9 @@ impl CohesixConsole {
                 mode: SmpMode::Activity,
             } => self.print_smp_activity(),
             Command::Smp { mode: SmpMode::Mcs } => self.print_smp_mcs(),
+            Command::Smp {
+                mode: SmpMode::PollTime,
+            } => self.emit_refusal("SMP", "reason=policy detail=event-pump-required"),
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
             Command::Test => self.emit_line("test not supported on root console"),

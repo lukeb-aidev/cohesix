@@ -40,6 +40,18 @@ SPEC.loader.exec_module(pi4_serial_reboot)
 REAL_START_NETTEST_TCP_PEER = pi4_serial_reboot.start_nettest_tcp_peer
 
 
+def test_cached_packet_and_poll_diagnostic_commands_have_bounded_markers():
+    """Only the six documented packet pages join the diagnostic inventory."""
+    markers = pi4_serial_reboot.DIAGNOSTIC_RESULT_MARKERS
+    assert markers["smp poll-time"] == (b"OK SMP", b"ERR SMP")
+    assert {key for key in markers if key.startswith("wifi rx-trace")} == {
+        "wifi rx-trace 0", "wifi rx-trace 1", "wifi rx-trace 2",
+        "wifi rx-trace 3", "wifi rx-trace 4", "wifi rx-trace 5",
+    }
+    for page in range(6):
+        assert markers[f"wifi rx-trace {page}"] == (b"OK WIFI", b"ERR WIFI")
+
+
 ROOT_MENU_SAVED = b"""
 [cohesix] Cohesix boot menu
 [cohesix] Saved network settings loaded

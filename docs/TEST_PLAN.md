@@ -2423,6 +2423,19 @@ prove all of the following:
   `wifi_post_dhcp_rx` coverage must increment exactly once at each actual
   smoltcp delivery boundary and must prove that trace-only `rx-preserve` and
   `rx-deliver` observations do not double-count one frame.
+- Cached packet/poll diagnostic coverage must preserve repeated SYN/data
+  identities, exclude pure ACK/payload storage, expose 96-entry eviction and
+  generation/flow replacement, and distinguish missing timestamp metadata from
+  zero. Test all six strict page arguments and complete maximum-width rows;
+  `wifi rx-trace` must never call the device debug handle or admit a TCP request.
+  `smp poll-time` requires separate eight-row output, profile-gated typed
+  refusal, generation reset, saturating elapsed totals, and invalid-clock/gap
+  rejection. Keep existing SMP/CPU reports complete. Run recorder coverage
+  with `driver-tests-pi4`; QEMU does not compile the Pi recorder. Compile the
+  exact Pi observer and run the pinned QEMU root-MCS canary before hardware.
+  Read traces only after the first untouched raw TCP attempt and before later
+  connections replace the retained identity. Join complete same-boot packet
+  identities; poll wall time and gaps cannot be promoted to CPU or refill proof.
 - `wifi diag` coverage must enforce schema v2's maximum eight body lines and
   2,048 body bytes, an untruncated matching begin/frontier/transport/complete
   identity, terminal status and ACK/prompt liveness, and zero physical device

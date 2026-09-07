@@ -13,6 +13,7 @@ pub const ROOT_CONSOLE_HELP_LINES: &[&str] = &[
     "  caps mcs - Show bounded live MCS authority and object counts",
     "  smp [activity|dump] - Show activity or raw debug scheduler state",
     "  smp mcs - Show generated and live MCS admission state",
+    "  smp poll-time - Show Pi root poll elapsed-time observations",
     "  mem   - Show untyped summary",
     "  ping  - Respond with pong",
     "  cachelog [n] - Dump recent cache operations",

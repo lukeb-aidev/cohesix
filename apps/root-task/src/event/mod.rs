@@ -9979,6 +9979,36 @@ where
     /// Execute a single cooperative polling cycle.
     #[inline(never)]
     pub fn poll(&mut self) {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "net-console",
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        let _poll_time = if self.pi_root_control_passive_admission_pending() {
+            // The exclusive post-Yield passive admission keeps its first-operation contract.
+            None
+        } else {
+            self.net.as_deref().and_then(|net| {
+                let connection = net.active_console_conn_id()?;
+                let generation = net.isolated_console_diagnostics()?.generation;
+                let phase = match self.linked_runtime_service_phase {
+                    LinkedRuntimeServicePhase::Serial => 0,
+                    LinkedRuntimeServicePhase::Dispatch => 1,
+                    LinkedRuntimeServicePhase::ContainmentDiagnostic => 2,
+                    LinkedRuntimeServicePhase::Network => 3,
+                    LinkedRuntimeServicePhase::LocalSeat => 4,
+                    LinkedRuntimeServicePhase::Display => 5,
+                };
+                crate::pi4_mcs_recorder::PiMcsPollGuard::begin(
+                    generation,
+                    connection,
+                    phase,
+                    self.metrics.accepted_commands,
+                )
+            })
+        };
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         if self.isolated_virtio_compact_path_attached() {
             self.poll_split_ordinary_virtio_compact();
@@ -20674,7 +20704,7 @@ where
         {
             return;
         }
-        let line = "  wifi <help|dump-state|diag> - Passive WiFi diagnostics (serial/local only)";
+        let line = "  wifi <subcommand> - Passive WiFi diagnostics (serial/local; see wifi help)";
         if serial_only {
             self.emit_serial_line(line);
         } else {
@@ -20689,7 +20719,7 @@ where
             return;
         }
         self.emit_serial_line_atomic(
-            "  wifi <help|dump-state|diag> - Passive WiFi diagnostics (serial/local only)",
+            "  wifi <subcommand> - Passive WiFi diagnostics (serial/local; see wifi help)",
         );
     }
 
@@ -20852,6 +20882,19 @@ where
             SmpMode::Mcs => {
                 self.emit_smp_mcs();
                 Some("mode=mcs")
+            }
+            SmpMode::PollTime => {
+                #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+                {
+                    for line in crate::pi4_mcs_recorder::poll_snapshot_lines() {
+                        self.emit_console_line(line.as_str());
+                    }
+                    Some("mode=poll-time")
+                }
+                #[cfg(not(all(feature = "kernel", feature = "release-pi4")))]
+                {
+                    None
+                }
             }
         }
     }
@@ -22226,6 +22269,46 @@ where
             return false;
         }
 
+        #[cfg(feature = "net-console")]
+        if parts
+            .clone()
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("rx-trace"))
+        {
+            let _ = parts.next();
+            let page = parts
+                .next()
+                .and_then(crate::drivers::wifi_rx_journal::parse_page);
+            if parts.next().is_some() || page.is_none() {
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                self.emit_refusal(
+                    WIFI_DEBUG_ACK_LABEL,
+                    RefusalReason::Policy,
+                    Some("detail=rx-trace-page-required-0-through-5"),
+                );
+                return true;
+            }
+            let lines = page.and_then(crate::drivers::wifi_rx_journal::page);
+            if let Some(lines) = lines {
+                for line in lines.iter().filter(|line| !line.is_empty()) {
+                    self.emit_console_line(line.as_str());
+                }
+                self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+                self.emit_ack_ok(
+                    WIFI_DEBUG_ACK_LABEL,
+                    Some("detail=subcommand=rx-trace scope=serial-local"),
+                );
+            } else {
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                self.emit_refusal(
+                    WIFI_DEBUG_ACK_LABEL,
+                    RefusalReason::Policy,
+                    Some("detail=rx-trace-unavailable"),
+                );
+            }
+            return true;
+        }
+
         let command = match parts.next() {
             None => WifiDebugCommand::Help,
             Some(subcommand) if subcommand.eq_ignore_ascii_case("help") => WifiDebugCommand::Help,
@@ -22351,6 +22434,10 @@ where
                 "  wifi dump-state - Show verbose cached acceptance and runtime state",
             );
             self.emit_console_line("  wifi diag       - Show compact bounded causal triage");
+            #[cfg(feature = "net-console")]
+            self.emit_console_line(
+                "  wifi rx-trace <0..5> - Show one cached TCP header/timing page",
+            );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             self.emit_ack_ok(
                 WIFI_DEBUG_ACK_LABEL,
@@ -48296,6 +48383,49 @@ mod tests {
     }
 
     #[test]
+    fn smp_poll_time_is_a_separate_complete_profile_gated_batch() {
+        let serial =
+            SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<8192>::new());
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        pump.handle_command(Command::Smp {
+            mode: SmpMode::PollTime,
+        })
+        .unwrap();
+        let rendered = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        if cfg!(all(feature = "kernel", feature = "release-pi4")) {
+            assert_eq!(
+                rendered.matches("[smp] poll_time ").count(),
+                8,
+                "{rendered}"
+            );
+            assert!(rendered.contains("phase=between"), "{rendered}");
+            assert!(rendered.contains("OK SMP mode=poll-time"), "{rendered}");
+        } else {
+            assert!(
+                rendered.contains("ERR SMP reason=policy detail=unsupported"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("[smp] poll_time"), "{rendered}");
+        }
+        assert!(!rendered.contains("activity begin"), "{rendered}");
+        assert!(!rendered.contains("[smp:mcs/v1]"), "{rendered}");
+    }
+
+    #[test]
     fn smp_activity_attributes_usb_and_hdmi_rates_to_their_own_driver_cores() {
         let previous = SmpActivitySnapshot {
             now_ms: 1_000,
@@ -69459,6 +69589,65 @@ mod tests {
             !rendered.contains("OK USB detail=subcommand=diag"),
             "{rendered}"
         );
+        assert!(wifi.calls.is_empty());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn wifi_rx_trace_validates_page_and_never_calls_the_device_debug_handle() {
+        let serial =
+            SerialPort::<_, 512, 16384, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<16384>::new());
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        )
+        .with_wifi_debug(&mut wifi)
+        .with_test_pi4_debug_commands();
+        for command in [
+            "wifi rx-trace",
+            "wifi rx-trace 6",
+            "wifi rx-trace +0",
+            "wifi rx-trace 0 extra",
+        ] {
+            assert!(pump.maybe_handle_wifi_debug_line(command));
+        }
+        assert_eq!(pump.metrics.denied_commands, 4);
+        assert!(pump.maybe_handle_wifi_debug_line("wifi rx-trace 0"));
+        assert!(pump.maybe_handle_wifi_debug_line("wifi rx-trace 5"));
+        assert_eq!(pump.metrics.accepted_commands, 2);
+        pump.last_input_source = ConsoleInputSource::Net;
+        assert!(!pump.maybe_handle_wifi_debug_line("wifi rx-trace 0"));
+        assert_eq!(pump.metrics.accepted_commands, 2);
+        let rendered = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            rendered
+                .matches("detail=rx-trace-page-required-0-through-5")
+                .count(),
+            4,
+            "{rendered}"
+        );
+        assert_eq!(
+            rendered
+                .matches("OK WIFI detail=subcommand=rx-trace scope=serial-local")
+                .count(),
+            2,
+            "{rendered}"
+        );
+        assert!(rendered.contains("page=0/6"), "{rendered}");
+        assert!(rendered.contains("page=5/6"), "{rendered}");
+        drop(pump);
         assert!(wifi.calls.is_empty());
     }
 

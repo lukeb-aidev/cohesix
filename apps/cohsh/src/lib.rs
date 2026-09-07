@@ -3776,6 +3776,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  smp mcs                      - Show target generated/live MCS topology",
                 )?;
+                self.write_line(
+                    "  smp poll-time                - Show Pi root poll elapsed-time observations",
+                )?;
                 self.write_line("  login <role> [ticket]        - Alias for attach")?;
                 self.write_line("  detach                       - Close the current session")?;
                 self.write_line(console_lines[2])?;
@@ -5663,6 +5666,10 @@ mod tests {
             ("caps mcs", "stub console command=caps mcs ack=CAPS"),
             ("smp activity", "stub console command=smp activity ack=SMP"),
             ("smp mcs", "stub console command=smp mcs ack=SMP"),
+            (
+                "smp poll-time",
+                "stub console command=smp poll-time ack=SMP",
+            ),
         ] {
             let execution = shell.execute_test_command(command);
             assert!(

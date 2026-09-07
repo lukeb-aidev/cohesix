@@ -888,6 +888,184 @@ impl PiMcsSessionSummary {
 
 static SESSION: Mutex<PiMcsSessionSummary> = Mutex::new(PiMcsSessionSummary::new());
 
+/// One root poll interval. Elapsed time includes preemption; it is not CPU time.
+#[derive(Clone, Copy)]
+pub(crate) struct PiMcsPollRecord {
+    pub generation: u64,
+    pub connection: u64,
+    pub phase: u8,
+    pub command: u64,
+    pub begin: u64,
+    pub end: u64,
+    pub hz: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PollSpan {
+    count: u64,
+    total_us: u64,
+    maximum_us: u64,
+    command: u64,
+    begin: u64,
+    end: u64,
+}
+
+impl PollSpan {
+    const fn new() -> Self {
+        Self {
+            count: 0,
+            total_us: 0,
+            maximum_us: 0,
+            command: 0,
+            begin: 0,
+            end: 0,
+        }
+    }
+
+    fn add(&mut self, record: PiMcsPollRecord, us: u64) {
+        self.count = self.count.saturating_add(1);
+        self.total_us = self.total_us.saturating_add(us);
+        if self.count == 1 || us > self.maximum_us {
+            self.maximum_us = us;
+            self.command = record.command;
+            self.begin = record.begin;
+            self.end = record.end;
+        }
+    }
+}
+
+struct PollSummary {
+    generation: u64,
+    connection: u64,
+    hz: u64,
+    invalid: u64,
+    previous_end: Option<u64>,
+    spans: [PollSpan; 7],
+}
+
+impl PollSummary {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            connection: 0,
+            hz: 0,
+            invalid: 0,
+            previous_end: None,
+            spans: [PollSpan::new(); 7],
+        }
+    }
+
+    fn record(&mut self, record: PiMcsPollRecord) {
+        if record.generation == 0 || record.connection == 0 {
+            return;
+        }
+        if (record.generation, record.connection) != (self.generation, self.connection) {
+            *self = Self::new();
+            self.generation = record.generation;
+            self.connection = record.connection;
+            self.hz = record.hz;
+        }
+        let elapsed = record
+            .end
+            .checked_sub(record.begin)
+            .filter(|_| record.begin != 0 && record.hz == self.hz && record.phase < 6)
+            .and_then(|ticks| ticks_to_us(ticks, record.hz));
+        let Some(us) = elapsed else {
+            self.invalid = self.invalid.saturating_add(1);
+            self.previous_end = None;
+            return;
+        };
+        if let Some(previous) = self.previous_end {
+            if let Some(gap) = record
+                .begin
+                .checked_sub(previous)
+                .and_then(|ticks| ticks_to_us(ticks, record.hz))
+            {
+                self.spans[6].add(
+                    PiMcsPollRecord {
+                        begin: previous,
+                        end: record.begin,
+                        ..record
+                    },
+                    gap,
+                );
+            } else {
+                self.invalid = self.invalid.saturating_add(1);
+            }
+        }
+        self.spans[usize::from(record.phase)].add(record, us);
+        self.previous_end = Some(record.end);
+    }
+
+    fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
+        let mut lines = core::array::from_fn(|_| HeaplessString::new());
+        let _ = write!(lines[0], "[smp] poll_time schema=v1 gen={} conn={} hz={} bad={} units=us rows=hex clock=cntvct cpu=no",
+            self.generation, self.connection, self.hz, self.invalid);
+        for (index, label) in [
+            "serial",
+            "dispatch",
+            "containment",
+            "network",
+            "local-seat",
+            "display",
+            "between",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let span = self.spans[index];
+            let _ = write!(
+                lines[index + 1],
+                "[smp] poll_time phase={} n={:x} sum={:x} max={:x} cmd={:x} ticks={:x}/{:x}",
+                label,
+                span.count,
+                span.total_us,
+                span.maximum_us,
+                span.command,
+                span.begin,
+                span.end
+            );
+        }
+        lines
+    }
+}
+
+static POLLS: Mutex<PollSummary> = Mutex::new(PollSummary::new());
+
+pub(crate) fn poll_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
+    POLLS.lock().lines()
+}
+
+/// The guard has no device/IPC authority and retains no EventPump borrow.
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
+pub(crate) struct PiMcsPollGuard(PiMcsPollRecord);
+
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
+impl PiMcsPollGuard {
+    pub(crate) fn begin(generation: u64, connection: u64, phase: u8, command: u64) -> Option<Self> {
+        if generation == 0 || connection == 0 {
+            return None;
+        }
+        Some(Self(PiMcsPollRecord {
+            generation,
+            connection,
+            phase,
+            command,
+            begin: crate::arch::aarch64::timer::timer_counter_ticks(),
+            end: 0,
+            hz: crate::arch::aarch64::timer::timer_freq_hz(),
+        }))
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
+impl Drop for PiMcsPollGuard {
+    fn drop(&mut self) {
+        self.0.end = crate::arch::aarch64::timer::timer_counter_ticks();
+        POLLS.lock().record(self.0);
+    }
+}
+
 pub(crate) fn record_session_idle(
     generation: u64,
     connection: u64,
@@ -972,6 +1150,95 @@ pub(crate) fn snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 17] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poll_spans_separate_elapsed_work_from_between_poll_gaps() {
+        let mut summary = PollSummary::new();
+        let first = PiMcsPollRecord {
+            generation: 7,
+            connection: 11,
+            phase: 3,
+            command: 21,
+            begin: 100,
+            end: 150,
+            hz: 1_000_000,
+        };
+        summary.record(first);
+        summary.record(PiMcsPollRecord {
+            begin: 200,
+            end: 225,
+            command: 22,
+            phase: 0,
+            ..first
+        });
+        assert_eq!((summary.spans[3].count, summary.spans[3].total_us), (1, 50));
+        assert_eq!((summary.spans[0].count, summary.spans[0].total_us), (1, 25));
+        assert_eq!((summary.spans[6].count, summary.spans[6].total_us), (1, 50));
+        assert_eq!((summary.spans[6].begin, summary.spans[6].end), (150, 200));
+        summary.record(PiMcsPollRecord {
+            connection: 0,
+            ..first
+        });
+        assert_eq!(summary.connection, 11);
+        summary.record(PiMcsPollRecord {
+            connection: 12,
+            begin: 300,
+            end: 350,
+            ..first
+        });
+        assert_eq!(summary.spans[6].count, 0);
+        assert_eq!(summary.spans[3].count, 1);
+    }
+
+    #[test]
+    fn invalid_poll_clock_or_phase_cannot_form_a_gap() {
+        let mut summary = PollSummary::new();
+        let record = PiMcsPollRecord {
+            generation: 1,
+            connection: 1,
+            phase: 0,
+            command: 1,
+            begin: 10,
+            end: 20,
+            hz: 1_000_000,
+        };
+        for bad in [
+            PiMcsPollRecord { begin: 0, ..record },
+            PiMcsPollRecord { end: 9, ..record },
+            PiMcsPollRecord { phase: 6, ..record },
+            PiMcsPollRecord { hz: 0, ..record },
+        ] {
+            summary.record(bad);
+        }
+        assert_eq!(summary.invalid, 4);
+        assert_eq!(summary.spans[0].count, 0);
+        summary.record(record);
+        assert_eq!(summary.spans[0].total_us, 10);
+        assert_eq!(summary.spans[6].count, 0);
+    }
+
+    #[test]
+    fn poll_rows_preserve_maximum_width_context_and_clock() {
+        let mut summary = PollSummary::new();
+        summary.generation = u64::MAX;
+        summary.connection = u64::MAX;
+        summary.hz = u64::MAX;
+        summary.invalid = u64::MAX;
+        summary.spans = [PollSpan {
+            count: u64::MAX,
+            total_us: u64::MAX,
+            maximum_us: u64::MAX,
+            command: u64::MAX,
+            begin: u64::MAX,
+            end: u64::MAX,
+        }; 7];
+        let rows = summary.lines();
+        assert!(rows[0].ends_with("cpu=no"));
+        for row in &rows[1..] {
+            assert!(row.ends_with("ticks=ffffffffffffffff/ffffffffffffffff"));
+            assert!(row.len() < DEFAULT_LINE_CAPACITY);
+        }
+    }
 
     #[test]
     fn session_summary_retains_disconnect_and_resets_on_new_identity() {

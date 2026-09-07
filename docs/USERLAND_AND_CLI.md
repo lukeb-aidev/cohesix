@@ -65,6 +65,7 @@ the most precise description of that boot.
 | `smp` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. This is the preferred spelling. |
 | `smp activity` | Compatibility spelling for `smp`; it produces the same bounded userspace activity report. |
 | `smp mcs` | Print `[smp:mcs/v1]` generated per-core/per-task admission joined to one copied live registry snapshot; Pi release profiles append the bounded runtime composer/Yield diagnostic batch before the end marker. |
+| `smp poll-time` | On Pi release profiles, print eight cached root-poll elapsed-time rows for the latest TCP connection. Other profiles return typed unsupported; bootstrap requires the event pump. |
 | `smp dump` | Request the raw kernel scheduler snapshot. This debug-only path is unavailable after linked-UART cutover. |
 | `mem` | Print the RAM/device untyped summary. |
 | `ping` | Return the liveness response. |
@@ -121,8 +122,8 @@ must follow it in the capture and cannot be supplied by the retained block.
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
 and `wifi` diagnostic families. Their gate meanings are documented in
 [DRIVERS.md](DRIVERS.md).
-The advertised Wi-Fi inventory is passive: `wifi help`, `wifi dump-state`, and
-`wifi diag`. `wifi diag` is the bounded causal-triage surface: it emits at most
+The advertised Wi-Fi inventory is passive: `wifi help`, `wifi dump-state`,
+`wifi diag`, and `wifi rx-trace <0..5>`. `wifi diag` is the bounded causal-triage surface: it emits at most
 eight preflighted body lines plus its terminal/status/ACK tail, leads with the
 first known failing gate, and carries retained CYW43/SDIO progress, physical
 epoch/logical generation, parent/child identity, latest child timing receipts,
@@ -139,6 +140,41 @@ Legacy `wifi probe-ht`, `wifi
 load-fw`, and `wifi retry` spellings
 remain recognized only to return one typed linked-runtime ownership refusal;
 they do not invoke a debug callback, snapshot traversal, or physical operation.
+
+`wifi rx-trace <0..5>` is serial/local-seat only. Supply exactly one ASCII digit
+from 0 through 5; invalid input returns
+`ERR WIFI reason=policy detail=rx-trace-page-required-0-through-5`.
+Each page contains a `wifi: rx_trace schema=v1` header, a `rx_trace_flow` row,
+up to 16 `rx_trace_row` records, and
+`OK WIFI detail=subcommand=rx-trace scope=serial-local`. The fixed 96-record
+journal holds SYN/FIN/RST and data headers for the latest control TCP flow.
+It excludes pure ACKs and payload bytes. New generation or a new SYN identity
+resets the journal; retransmissions retain separate receipt ordinals and IPv4
+IDs. `first`/`next` are absolute decimal ordinals and expose eviction;
+`ignored` counts other flows. Read all six pages after the measured connection
+closes and before another connection replaces it. Concurrent pages are separate
+snapshots: reconcile generation, flow and ordinal headers before joining them.
+IPs, SYN/sequence/ACK/flags, IPv4 ID, and `s/q/r/d` are hexadecimal; ports,
+lengths, ordinals and header counters are decimal. `none` means unavailable,
+while zero remains a valid observation. `s` is the existing source counter low
+word, `q` is the existing packed Q11 stage metadata, `r` the root-copy counter
+low word, and `d` the full dequeue CNTVCT observation. Stage validity and
+wrap rules remain those in [DRIVERS.md](DRIVERS.md); source is not wire arrival.
+
+`smp poll-time` emits a `poll_time schema=v1` header with decimal generation,
+connection, counter frequency and invalid count, followed by seven phase rows:
+`serial`, `dispatch`, `containment`, `network`, `local-seat`, `display`, and
+`between`. Every numeric phase-row field is hexadecimal: `n` count, `sum` and
+`max` microseconds, `cmd` root accepted-command count at the maximum, and
+`ticks` its full beginning/end CNTVCT pair. These are wall intervals including
+preemption, not CPU consumption or proof of refill exhaustion. `between`
+includes all work and waits outside observed ordinary polls; the exclusive
+post-Yield passive-admission poll is deliberately uninstrumented. The most
+recent nonzero generation/connection is retained after disconnect and replaced
+by the next one. Invalid clocks cannot create timings or bridge a gap. Reading
+the eight-row batch never queries or resets kernel CPU accounting. Its separate
+command preserves the existing `smp activity` and `smp mcs` output capacities.
+
 The Pi USB inventory separates passive inspection from active operations:
 `usb status`, `usb dump-state`, and `usb diag` are passive, while
 `usb enable-kbd` and `usb probe-kbd` may change polling or advance one retained
