@@ -20913,6 +20913,11 @@ where
                     for line in crate::pi4_mcs_recorder::poll_snapshot_lines() {
                         self.emit_console_line(line.as_str());
                     }
+                    for line in crate::pi4_mcs_recorder::session_yield_trace_lines() {
+                        if !line.is_empty() {
+                            self.emit_console_line(line.as_str());
+                        }
+                    }
                     Some("mode=poll-time")
                 }
                 #[cfg(not(all(feature = "kernel", feature = "release-pi4")))]
@@ -48437,6 +48442,11 @@ mod tests {
                 "{rendered}"
             );
             assert!(rendered.contains("phase=between"), "{rendered}");
+            assert_eq!(
+                rendered.matches("[smp] yield_trace ").count(),
+                1,
+                "{rendered}"
+            );
             assert!(rendered.contains("OK SMP mode=poll-time"), "{rendered}");
         } else {
             assert!(

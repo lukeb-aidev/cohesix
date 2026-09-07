@@ -56,6 +56,14 @@ Exact measured findings belong in immutable benchmark artifacts and their
 qualified audit records. A result becomes a public claim only when its source,
 image, target, workload, comparator, and required Test Plan state are complete.
 
+Pi `smp poll-time` retains a bounded explicit-Yield trace alongside its poll
+intervals. It helps distinguish an observed Yield from other scheduler delay;
+its first-32 retention and omitted/invalid counts are part of the evidence.
+Use the same nonzero session identity and counter frequency for correlation.
+Neither an omitted trace suffix nor elapsed time alone proves CPU consumption,
+refill exhaustion, or a network bottleneck. Read the cached trace after the
+first raw session and before another connection replaces it.
+
 ## Qualification Rules
 
 Bind compiler-profile changes to a new exact image even when scheduling and

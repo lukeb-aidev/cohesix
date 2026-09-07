@@ -2433,9 +2433,13 @@ prove all of the following:
   generation/flow replacement, and distinguish missing timestamp metadata from
   zero. Test all six strict page arguments and complete maximum-width rows;
   `wifi rx-trace` must never call the device debug handle or admit a TCP request.
-  `smp poll-time` requires separate eight-row output, profile-gated typed
-  refusal, generation reset, saturating elapsed totals, and invalid-clock/gap
-  rejection. Keep existing SMP/CPU reports complete. Run recorder coverage
+  `smp poll-time` preserves its eight poll rows and adds one Yield-trace
+  header plus at most 32 complete records. Cover profile-gated typed refusal,
+  generation reset, saturating elapsed totals, invalid-clock/gap rejection,
+  first-record retention, explicit omissions and missing context, and complete
+  maximum-width rows. Productive GENET tokens may renew one wake recheck;
+  empty notifications/publications cannot renew it or reset the 64-quantum
+  work bound, clock or causal-wait count. Keep existing SMP/CPU reports complete. Run recorder coverage
   with `driver-tests-pi4`; QEMU does not compile the Pi recorder. Compile the
   exact Pi observer and run the pinned QEMU root-MCS canary before hardware.
   Read traces only after the first untouched raw TCP attempt and before later

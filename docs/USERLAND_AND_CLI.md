@@ -175,6 +175,18 @@ by the next one. Invalid clocks cannot create timings or bridge a gap. Reading
 the eight-row batch never queries or resets kernel CPU accounting. Its separate
 command preserves the existing `smp activity` and `smp mcs` output capacities.
 
+The same command then emits one `yield_trace schema=v1` header and up to 32
+`yield` rows, retaining the first valid explicit Yield intervals for that
+nonzero session. Header `generation`, `conn`, `kept`, `total`, `omitted` and
+`invalid` are decimal. Row `n`, `ctx`, `phase`, `pub` and `hz` are decimal;
+`pending`, `cmd`, `stage`, `drain` and the entry/resume `ticks` pair are hex.
+`cause` names the existing Yield trigger. `ctx=0` omits unavailable context;
+with `ctx=1`, `pub` is 0 unknown, 1 observed empty, or 2 durable publication.
+Invalid intervals are excluded and counted; a zero kept count or omitted tail
+cannot prove absence of all scheduler delay. Recording copies existing
+observations and adds no counter read or CPU-accounting operation. The complete
+command is bounded to 41 body rows before its terminal acknowledgement.
+
 The Pi USB inventory separates passive inspection from active operations:
 `usb status`, `usb dump-state`, and `usb diag` are passive, while
 `usb enable-kbd` and `usb probe-kbd` may change polling or advance one retained

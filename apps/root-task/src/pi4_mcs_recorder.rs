@@ -755,6 +755,8 @@ impl PiMcsIdleSummary {
 
 static IDLE: Mutex<PiMcsIdleSummary> = Mutex::new(PiMcsIdleSummary::new());
 
+const SESSION_YIELD_TRACE_CAPACITY: usize = 32;
+
 /// Retain the latest nonzero TCP identity across disconnect. Later UART
 /// diagnostic typing must not overwrite the session's idle/Yield evidence.
 struct PiMcsSessionSummary {
@@ -768,6 +770,8 @@ struct PiMcsSessionSummary {
     yield_invalid: u64,
     yield_causes: [u32; PiMcsYieldTrigger::COUNT],
     worst_yield: Option<PiMcsYieldRecord>,
+    yield_trace: [Option<PiMcsYieldRecord>; SESSION_YIELD_TRACE_CAPACITY],
+    yield_trace_len: usize,
 }
 
 impl PiMcsSessionSummary {
@@ -783,6 +787,8 @@ impl PiMcsSessionSummary {
             yield_invalid: 0,
             yield_causes: [0; PiMcsYieldTrigger::COUNT],
             worst_yield: None,
+            yield_trace: [None; SESSION_YIELD_TRACE_CAPACITY],
+            yield_trace_len: 0,
         }
     }
 
@@ -829,6 +835,10 @@ impl PiMcsSessionSummary {
             self.yield_invalid = self.yield_invalid.saturating_add(1);
             return;
         };
+        if self.yield_trace_len < SESSION_YIELD_TRACE_CAPACITY {
+            self.yield_trace[self.yield_trace_len] = Some(record);
+            self.yield_trace_len += 1;
+        }
         self.yields = self.yields.saturating_add(1);
         let cause = &mut self.yield_causes[record.trigger.index()];
         *cause = cause.saturating_add(1);
@@ -837,6 +847,50 @@ impl PiMcsSessionSummary {
             self.yield_max_us = us;
             self.worst_yield = Some(record);
         }
+    }
+
+    fn yield_trace_lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 33] {
+        let mut lines = core::array::from_fn(|_| HeaplessString::new());
+        let _ = write!(lines[0],
+            "[smp] yield_trace schema=v1 generation={} conn={} kept={} total={} omitted={} invalid={}",
+            self.generation, self.connection, self.yield_trace_len, self.yields,
+            self.yields.saturating_sub(self.yield_trace_len as u64), self.yield_invalid);
+        for (index, record) in self
+            .yield_trace
+            .iter()
+            .take(self.yield_trace_len)
+            .enumerate()
+        {
+            let Some(record) = record else {
+                continue;
+            };
+            let line = &mut lines[index + 1];
+            let _ = write!(
+                line,
+                "[smp] yield n={} cause={} pending={:x} ctx={}",
+                index,
+                record.trigger.label(),
+                record.pending_mask,
+                u8::from(record.context.is_some())
+            );
+            if let Some(context) = record.context {
+                let _ = write!(
+                    line,
+                    " phase={} pub={} cmd={:x} stage={:x} drain={:x}",
+                    context.phase,
+                    context.child_publication,
+                    context.accepted_commands,
+                    context.stages,
+                    context.drains
+                );
+            }
+            let _ = write!(
+                line,
+                " ticks={:x}/{:x} hz={}",
+                record.entered_ticks, record.resumed_ticks, record.counter_hz
+            );
+        }
+        lines
     }
 
     fn lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 8] {
@@ -1082,6 +1136,12 @@ pub(crate) fn session_snapshot_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>
     SESSION.lock().lines()
 }
 
+/// First 32 valid explicit Yield intervals for the retained nonzero session.
+/// Empty records are omitted; counts distinguish truncation from an empty trace.
+pub(crate) fn session_yield_trace_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 33] {
+    SESSION.lock().yield_trace_lines()
+}
+
 pub(crate) fn record_idle_fence(cut: PiMcsIdleCut, mask: u32) {
     IDLE.lock().record(cut, mask);
 }
@@ -1238,6 +1298,87 @@ mod tests {
             assert!(row.ends_with("ticks=ffffffffffffffff/ffffffffffffffff"));
             assert!(row.len() < DEFAULT_LINE_CAPACITY);
         }
+    }
+
+    #[test]
+    fn session_yield_trace_keeps_first_32_and_reports_every_omission() {
+        let mut summary = PiMcsSessionSummary::new();
+        let sample = PiMcsYieldRecord {
+            lane: PiMcsLane::Genet,
+            entered_ticks: 100,
+            resumed_ticks: 154,
+            counter_hz: 54_000_000,
+            generation: 7,
+            connection_id: 11,
+            pending_mask: 0,
+            trigger: PiMcsYieldTrigger::NoProductiveSuccessor,
+            context: None,
+        };
+        for index in 0..35 {
+            summary.record_yield(PiMcsYieldRecord {
+                entered_ticks: 100 + index * 54,
+                resumed_ticks: 154 + index * 54,
+                ..sample
+            });
+        }
+        summary.record_yield(PiMcsYieldRecord {
+            counter_hz: 0,
+            ..sample
+        });
+        summary.record_yield(PiMcsYieldRecord {
+            connection_id: 0,
+            ..sample
+        });
+        let lines = summary.yield_trace_lines();
+        assert_eq!(
+            lines[0],
+            "[smp] yield_trace schema=v1 generation=7 conn=11 kept=32 total=35 omitted=3 invalid=1"
+        );
+        assert_eq!(
+            lines[1],
+            "[smp] yield n=0 cause=NO_PRODUCTIVE_SUCCESSOR pending=0 ctx=0 ticks=64/9a hz=54000000"
+        );
+        assert!(lines[32].contains("n=31 "));
+        assert!(lines[32].ends_with("ticks=6ee/724 hz=54000000"));
+        assert!(!lines[1].contains("phase="));
+        summary.record_idle(7, 12, PiMcsIdleCut::BeforeEnable, 0, 0);
+        let lines = summary.yield_trace_lines();
+        assert_eq!(
+            lines[0],
+            "[smp] yield_trace schema=v1 generation=7 conn=12 kept=0 total=0 omitted=0 invalid=0"
+        );
+        assert!(lines[1..].iter().all(|line| line.is_empty()));
+    }
+
+    #[test]
+    fn session_yield_trace_maximum_fields_fit_complete_console_lines() {
+        let mut summary = PiMcsSessionSummary::new();
+        summary.record_yield(PiMcsYieldRecord {
+            lane: PiMcsLane::Genet,
+            entered_ticks: u64::MAX - 54,
+            resumed_ticks: u64::MAX,
+            counter_hz: u64::MAX,
+            generation: u64::MAX,
+            connection_id: u64::MAX,
+            pending_mask: u32::MAX,
+            trigger: PiMcsYieldTrigger::NoProductiveSuccessor,
+            context: Some(PiMcsYieldContext {
+                accepted_commands: u64::MAX,
+                stages: u64::MAX,
+                drains: u64::MAX,
+                phase: u8::MAX,
+                child_publication: u8::MAX,
+            }),
+        });
+        summary.yields = u64::MAX;
+        summary.yield_invalid = u64::MAX;
+        let lines = summary.yield_trace_lines();
+        assert!(lines[0].ends_with("invalid=18446744073709551615"));
+        assert!(lines[1].contains("ctx=1 phase=255 pub=255 cmd=ffffffffffffffff"));
+        assert!(
+            lines[1].ends_with("ticks=ffffffffffffffc9/ffffffffffffffff hz=18446744073709551615")
+        );
+        assert!(lines.iter().all(|line| line.len() < DEFAULT_LINE_CAPACITY));
     }
 
     #[test]

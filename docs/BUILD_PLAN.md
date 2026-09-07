@@ -10493,6 +10493,24 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET productive-progress wake recheck — after the unchanged `223133490`
+    dual-mode comparison, renew one nonblocking fan-in race allowance only
+    when a private exact productive continuation is successfully consumed.
+    Preserve the enclosing 64-quantum cap, clock, causal-wait count and every
+    identity/operator/recovery fence. Observing a publication or an empty
+    rotor does not renew this allowance. This repairs stale spent-hint state
+    crossing new work; it does not assume every slow PING contains a Yield.
+    Retain the first 32 valid explicit Yield records for the latest nonzero
+    session, with complete total/omitted/invalid counts and original counter
+    frequency/context, under existing `smp poll-time`. No extra clock reads,
+    accounting calls, output-queue growth or scheduler numbers are introduced.
+    Discovery: `m26e-console-network-service-isolation`. Cover productive
+    renewal, signal-only rejection, unchanged episode limits and trace bounds;
+    qualify exact Pi layout and pinned QEMU, then correlate fresh first-raw
+    hardware evidence. The complete host-tool suite/catalog, Python SDK,
+    generated grammar/ABI and raw/REST workload/report consumers were reviewed:
+    the additive diagnostic rows need owning CLI/evidence documentation, with
+    no parser, schema, workload, credential or namespace changes elsewhere.
   - Isolated peer-first close restoration — sealed `5e54f83d9` two-WiFi and
     two-GENET evidence proves improved WiFi raw throughput but also a W01
     sequential connection refusal. The sole isolated TCP socket starts a

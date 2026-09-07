@@ -1618,6 +1618,11 @@ impl PiRootControlProductiveWindow {
         };
         self.continuation = Some(continuation);
         self.completed_quanta = completed_quanta;
+        // A consumed productive token opens one new race observation. Empty
+        // rotors and notifications cannot renew it, and the enclosing work,
+        // clock and causal-wait bounds remain unchanged.
+        self.nonblocking_fanin_hint_consumed = false;
+        self.nonblocking_fanin_hint_eligible = false;
         if self.active_hot_tail.is_none() && continuation.opens_active_hot_tail() {
             if let DeferredCyw43ActivationClock::Timed { started_ticks, .. } = self.clock {
                 if completed_at_ticks != 0 && completed_at_ticks >= started_ticks {
@@ -8386,6 +8391,46 @@ mod tests {
         assert!(window.resumable_turn_admitted(false));
         window.record_attached_network_turn(false);
         assert!(!window.resumable_turn_admitted(false));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn productive_genet_progress_renews_one_hint_without_renewing_work_or_time() {
+        let token =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(7, 17);
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        window.causal_waits = 3;
+        let clock = window.clock;
+        for count in 1..=64 {
+            assert!(window.resumable_quantum_admitted(true));
+            window.admit_nonblocking_fanin_hint();
+            assert!(window.nonblocking_fanin_hint_eligible());
+            window.consume_nonblocking_fanin_hint();
+            for _ in 0..3 {
+                window.admit_nonblocking_fanin_hint();
+                assert!(!window.nonblocking_fanin_hint_eligible());
+            }
+            assert!(window.record_completed_quantum_at(token, 100 + count as u64));
+            assert!(!window.nonblocking_fanin_hint_consumed);
+            assert!(!window.nonblocking_fanin_hint_eligible());
+            assert_eq!(window.completed_quanta, count);
+            assert_eq!(window.causal_waits, 3);
+            assert_eq!(window.clock, clock);
+        }
+        assert!(!window.resumable_quantum_admitted(true));
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        assert!(window.record_completed_quantum_at(token, 101));
+        window.admit_nonblocking_fanin_hint();
+        window.consume_nonblocking_fanin_hint();
+        let stale =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(8, 17);
+        assert!(!window.record_completed_quantum_at(stale, 200));
+        assert!(window.nonblocking_fanin_hint_consumed);
     }
 
     #[cfg(all(
