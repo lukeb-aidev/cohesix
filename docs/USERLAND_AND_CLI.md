@@ -196,8 +196,20 @@ nonzero session. Header `generation`, `conn`, `kept`, `total`, `omitted` and
 with `ctx=1`, `pub` is 0 unknown, 1 observed empty, or 2 durable publication.
 Invalid intervals are excluded and counted; a zero kept count or omitted tail
 cannot prove absence of all scheduler delay. Recording copies existing
-observations and adds no counter read or CPU-accounting operation. The complete
-command is bounded to 41 body rows before its terminal acknowledgement.
+observations and adds no counter read or CPU-accounting operation.
+
+A `receive_trace schema=v1` header and at most 16 `receive` rows follow. These
+are the slowest root receive/endpoint-handler brackets, in descending whole
+microseconds with earlier samples first on ties. Header `generation`, `conn`,
+`kept`, `total`, `omitted`, `invalid` and `sum_us` are decimal; row `n`, `us` and
+`hz` are decimal while `cmd` and the two `ticks` values are hex. `outcome` is
+`empty`, `endpoint`, `fanin` or `unavailable`, preserving the returned receive
+classification. Two CNTVCT reads bracket the existing receive only while a
+nonzero Pi TCP identity is live; no receive or accounting operation is added.
+These intervals include existing endpoint handling and preemption, and do not
+measure CPU or prove that root slept throughout. Invalid clocks are counted;
+`omitted` counts valid brackets excluded by the bounded retention. The complete
+command is bounded to 58 body rows before its terminal acknowledgement.
 
 The Pi USB inventory separates passive inspection from active operations:
 `usb status`, `usb dump-state`, and `usb diag` are passive, while

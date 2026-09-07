@@ -114,11 +114,12 @@ const fn console_service_local_containment_state_pending(
 /// Whether one successful response StageOutput may immediately consume its
 /// exact direct-GENET child publication and causal ACK.
 ///
-/// The StageOutput signal has already transferred execution to the same-core
-/// child. A stable completion published before that child blocks is therefore
-/// the only eligible successor: this adds no root device operation and no new
-/// control record. QEMU, copied WiFi, a failed stage, and a child without the
-/// exact GENET transport retain their established later ObserveChild turn.
+/// After the StageOutput signal, one stable child publication may already be
+/// visible on either core placement. Observing it adds no root device operation
+/// or new control record. A consumed control can still leave its exact response
+/// batch owed. Only the same-core oracle may issue the existing second YieldTo
+/// after an exact drain. QEMU, copied WiFi, a failed stage, and a child without
+/// the exact GENET transport retain their later ObserveChild turn.
 const fn direct_genet_stage_completion_observation_due(
     exact_genet_contract: bool,
     runtime_direct_genet: bool,

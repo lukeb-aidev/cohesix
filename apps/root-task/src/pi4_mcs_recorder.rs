@@ -98,6 +98,38 @@ pub(crate) struct PiMcsYieldRecord {
     pub context: Option<PiMcsYieldContext>,
 }
 
+/// Result of the existing root endpoint receive/dispatch operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PiMcsReceiveOutcome {
+    Empty,
+    Endpoint,
+    Fanin,
+    Unavailable,
+}
+
+impl PiMcsReceiveOutcome {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Endpoint => "endpoint",
+            Self::Fanin => "fanin",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Elapsed receive plus existing endpoint handling, not a CPU or sleep sample.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PiMcsReceiveRecord {
+    pub generation: u64,
+    pub connection: u64,
+    pub accepted_commands: u64,
+    pub begin: u64,
+    pub end: u64,
+    pub hz: u64,
+    pub outcome: PiMcsReceiveOutcome,
+}
+
 /// Existing durable levels at the pre-Yield cut, without additional clocks or IPC.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PiMcsYieldContext {
@@ -756,6 +788,7 @@ impl PiMcsIdleSummary {
 static IDLE: Mutex<PiMcsIdleSummary> = Mutex::new(PiMcsIdleSummary::new());
 
 const SESSION_YIELD_TRACE_CAPACITY: usize = 32;
+const SESSION_RECEIVE_TRACE_CAPACITY: usize = 16;
 
 /// Retain the latest nonzero TCP identity across disconnect. Later UART
 /// diagnostic typing must not overwrite the session's idle/Yield evidence.
@@ -772,6 +805,11 @@ struct PiMcsSessionSummary {
     worst_yield: Option<PiMcsYieldRecord>,
     yield_trace: [Option<PiMcsYieldRecord>; SESSION_YIELD_TRACE_CAPACITY],
     yield_trace_len: usize,
+    receives: u64,
+    receive_us: u64,
+    receive_invalid: u64,
+    receive_trace: [Option<(u64, PiMcsReceiveRecord)>; SESSION_RECEIVE_TRACE_CAPACITY],
+    receive_trace_len: usize,
 }
 
 impl PiMcsSessionSummary {
@@ -789,6 +827,11 @@ impl PiMcsSessionSummary {
             worst_yield: None,
             yield_trace: [None; SESSION_YIELD_TRACE_CAPACITY],
             yield_trace_len: 0,
+            receives: 0,
+            receive_us: 0,
+            receive_invalid: 0,
+            receive_trace: [None; SESSION_RECEIVE_TRACE_CAPACITY],
+            receive_trace_len: 0,
         }
     }
 
@@ -847,6 +890,70 @@ impl PiMcsSessionSummary {
             self.yield_max_us = us;
             self.worst_yield = Some(record);
         }
+    }
+
+    fn record_receive(&mut self, record: PiMcsReceiveRecord) {
+        if !self.select(record.generation, record.connection) {
+            return;
+        }
+        let Some(us) = (record.begin != 0)
+            .then_some(record.end)
+            .and_then(|end| end.checked_sub(record.begin))
+            .and_then(|ticks| ticks_to_us(ticks, record.hz))
+        else {
+            self.receive_invalid = self.receive_invalid.saturating_add(1);
+            return;
+        };
+        self.receives = self.receives.saturating_add(1);
+        self.receive_us = self.receive_us.saturating_add(us);
+        // Stable descending order retains earlier samples on equal durations.
+        // This fixed sixteen-slot insertion does no allocation or clock read.
+        let insertion = self
+            .receive_trace
+            .iter()
+            .take(self.receive_trace_len)
+            .position(|entry| entry.is_some_and(|(prior_us, _)| us > prior_us))
+            .unwrap_or(self.receive_trace_len);
+        if insertion >= SESSION_RECEIVE_TRACE_CAPACITY {
+            return;
+        }
+        let retained = (self.receive_trace_len + 1).min(SESSION_RECEIVE_TRACE_CAPACITY);
+        for index in ((insertion + 1)..retained).rev() {
+            self.receive_trace[index] = self.receive_trace[index - 1];
+        }
+        self.receive_trace[insertion] = Some((us, record));
+        self.receive_trace_len = retained;
+    }
+
+    fn receive_trace_lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 17] {
+        let mut lines = core::array::from_fn(|_| HeaplessString::new());
+        let _ = write!(lines[0],
+            "[smp] receive_trace schema=v1 generation={} conn={} kept={} total={} omitted={} invalid={} sum_us={}",
+            self.generation, self.connection, self.receive_trace_len, self.receives,
+            self.receives.saturating_sub(self.receive_trace_len as u64),
+            self.receive_invalid, self.receive_us);
+        for (index, entry) in self
+            .receive_trace
+            .iter()
+            .take(self.receive_trace_len)
+            .enumerate()
+        {
+            let Some((us, record)) = entry else {
+                continue;
+            };
+            let _ = write!(
+                lines[index + 1],
+                "[smp] receive n={} outcome={} cmd={:x} us={} ticks={:x}/{:x} hz={}",
+                index,
+                record.outcome.label(),
+                record.accepted_commands,
+                us,
+                record.begin,
+                record.end,
+                record.hz
+            );
+        }
+        lines
     }
 
     fn yield_trace_lines(&self) -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 33] {
@@ -1142,6 +1249,15 @@ pub(crate) fn session_yield_trace_lines() -> [HeaplessString<DEFAULT_LINE_CAPACI
     SESSION.lock().yield_trace_lines()
 }
 
+/// Slowest sixteen receive/endpoint-handler brackets for the retained session.
+pub(crate) fn session_receive_trace_lines() -> [HeaplessString<DEFAULT_LINE_CAPACITY>; 17] {
+    SESSION.lock().receive_trace_lines()
+}
+
+pub(crate) fn record_receive(record: PiMcsReceiveRecord) {
+    SESSION.lock().record_receive(record);
+}
+
 pub(crate) fn record_idle_fence(cut: PiMcsIdleCut, mask: u32) {
     IDLE.lock().record(cut, mask);
 }
@@ -1298,6 +1414,71 @@ mod tests {
             assert!(row.ends_with("ticks=ffffffffffffffff/ffffffffffffffff"));
             assert!(row.len() < DEFAULT_LINE_CAPACITY);
         }
+    }
+
+    #[test]
+    fn receive_trace_keeps_slowest_sixteen_with_stable_ties_and_exact_reset() {
+        let mut summary = PiMcsSessionSummary::new();
+        let sample = PiMcsReceiveRecord {
+            generation: 7,
+            connection: 11,
+            accepted_commands: 2,
+            begin: 100,
+            end: 120,
+            hz: 1_000_000,
+            outcome: PiMcsReceiveOutcome::Fanin,
+        };
+        for duration in 1..=20 {
+            summary.record_receive(PiMcsReceiveRecord {
+                end: 100 + duration,
+                ..sample
+            });
+        }
+        summary.record_receive(PiMcsReceiveRecord {
+            accepted_commands: 99,
+            ..sample
+        });
+        // The later 20us tie must follow the original 20us sample.
+        summary.record_receive(PiMcsReceiveRecord { hz: 0, ..sample });
+        summary.record_receive(PiMcsReceiveRecord { begin: 0, ..sample });
+        summary.record_receive(PiMcsReceiveRecord { end: 99, ..sample });
+        summary.record_receive(PiMcsReceiveRecord {
+            connection: 0,
+            ..sample
+        });
+        let rows = summary.receive_trace_lines();
+        assert_eq!(rows[0], "[smp] receive_trace schema=v1 generation=7 conn=11 kept=16 total=21 omitted=5 invalid=3 sum_us=230");
+        assert!(rows[1].contains("n=0 outcome=fanin cmd=2 us=20 ticks=64/78 hz=1000000"));
+        assert!(rows[2].contains("cmd=63 us=20 "));
+        assert!(rows[16].contains("us=6 "));
+        summary.record_receive(PiMcsReceiveRecord {
+            connection: 12,
+            ..sample
+        });
+        let rows = summary.receive_trace_lines();
+        assert_eq!(rows[0], "[smp] receive_trace schema=v1 generation=7 conn=12 kept=1 total=1 omitted=0 invalid=0 sum_us=20");
+        assert!(rows[2..].iter().all(|row| row.is_empty()));
+    }
+
+    #[test]
+    fn receive_trace_preserves_maximum_fields_and_saturating_totals() {
+        let mut summary = PiMcsSessionSummary::new();
+        let sample = PiMcsReceiveRecord {
+            generation: u64::MAX,
+            connection: u64::MAX,
+            accepted_commands: u64::MAX,
+            begin: 1,
+            end: u64::MAX,
+            hz: 1_000_000,
+            outcome: PiMcsReceiveOutcome::Unavailable,
+        };
+        summary.record_receive(sample);
+        summary.record_receive(sample);
+        summary.receive_invalid = u64::MAX;
+        let rows = summary.receive_trace_lines();
+        assert!(rows[0].ends_with("invalid=18446744073709551615 sum_us=18446744073709551615"));
+        assert!(rows[1].ends_with("ticks=1/ffffffffffffffff hz=1000000"));
+        assert!(rows.iter().all(|row| row.len() < DEFAULT_LINE_CAPACITY));
     }
 
     #[test]

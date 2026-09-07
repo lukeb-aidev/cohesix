@@ -2445,7 +2445,12 @@ prove all of the following:
   header plus at most 32 complete records. Cover profile-gated typed refusal,
   generation reset, saturating elapsed totals, invalid-clock/gap rejection,
   first-record retention, explicit omissions and missing context, and complete
-  maximum-width rows. Productive GENET tokens may renew one wake recheck;
+  maximum-width rows. The following receive header and at most 16 brackets
+  require slowest-first retention, stable ties, generation reset, invalid-clock
+  rejection and saturating totals. Keep the full command within 58 body rows.
+  A newly staged exact GENET response remains eligible after immediate control
+  consumption until its drain; reject stale, missing, zero-sequence or completed
+  debt and never override an invalid extant control with fallback debt. Productive GENET tokens may renew one wake recheck;
   empty notifications/publications cannot renew it or reset the 64-quantum
   work bound, clock or causal-wait count. Keep existing SMP/CPU reports complete. Run recorder coverage
   with `driver-tests-pi4`; QEMU does not compile the Pi recorder. Compile the

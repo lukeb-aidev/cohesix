@@ -64,6 +64,12 @@ Neither an omitted trace suffix nor elapsed time alone proves CPU consumption,
 refill exhaustion, or a network bottleneck. Read the cached trace after the
 first raw session and before another connection replaces it.
 
+The same command retains the sixteen slowest receive/endpoint-handler brackets.
+Use same-identity/frequency interval overlap to route a long `between` gap into
+an observed receive or another root path. These brackets include kernel and
+existing endpoint handling, and cannot establish exact sleep or consumed CPU.
+Keep all omission and invalid counts; an unretained bracket is not a zero.
+
 ## Qualification Rules
 
 Bind compiler-profile changes to a new exact image even when scheduling and

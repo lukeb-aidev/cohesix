@@ -10493,6 +10493,29 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET consumed-control continuation — a successful StageOutput may accept
+    the child's consumption watermark during its existing immediate observation.
+    Preserve the new stage's exact generation/connection/control sequence from
+    its root-owned consumed-but-undrained batch when no control remains inflight.
+    An invalid extant control never falls back to another batch; missing, stale,
+    zero-sequence or already-drained debt grants no continuation. Existing final
+    condition-before-block, durable-publication arbitration, operator/fault
+    fences and episode limits remain authoritative. This closes the constructor
+    gap before the already-supported response-drain wait. Discovery:
+    `m26e-console-network-service-isolation`; unchanged `9992131b5` evidence still
+    has pending-response Yields and non-Yield root gaps.
+    Add two CNTVCT reads around an existing root receive/endpoint-handler call
+    only for a live nonzero Pi TCP identity. Retain its slowest sixteen brackets
+    with stable ties and explicit totals/omissions/invalid counts under existing
+    `smp poll-time`; the full command remains within 58 body rows and existing
+    queue bounds. A bracket includes endpoint handling and preemption, so it
+    cannot prove sleep duration, CPU consumption or refill exhaustion. No new
+    accounting syscall, device action, wake, timer or scheduling parameter.
+    Cover exact continuation debt, stale/final rejection, bounded sorted trace,
+    arithmetic and complete maximum fields; qualify Pi/QEMU before fresh boots.
+    Host-tool catalog/suite, Python SDK, generated grammar/ABI and raw/REST
+    workloads/report consumers reviewed: additive diagnostic documentation is
+    required, with no protocol/parser/schema/workload changes elsewhere.
   - Exact-6f26 first WiFi recovery provenance — four unchanged boots retain
     WiFi raw passes at 26.984/29.039 requests/s and GENET latency failures at
     8.134/5.995 ms p95. W01 then loses QUIT after successful AUTH/HELP/TAIL;

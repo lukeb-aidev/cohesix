@@ -4939,6 +4939,86 @@ fn cyw43_causal_wait_requires_a_guaranteed_fanin_producer() {
 
 #[cfg(all(test, feature = "kernel", feature = "net-console"))]
 #[test]
+fn direct_genet_new_stage_keeps_consumed_control_response_debt() {
+    let stage = PiRootControlProductiveContinuation {
+        progress: DirectGenetProductiveProgress::StagePublished,
+        ..PiRootControlProductiveContinuation::for_test_cross_core_command(7, 41)
+    };
+    let debt = crate::net::ConsoleResponseBatchDebt {
+        generation: 7,
+        connection_id: 41,
+        sequence: 19,
+        control_completed: true,
+        output_drained: false,
+    };
+    let retained = stage
+        .with_child_publication_debt(None, Some(debt))
+        .expect("the exact new stage remains owed until its output drains");
+    assert_eq!(retained.child_control_sequence, 19);
+    assert_eq!(
+        retained.progress,
+        DirectGenetProductiveProgress::StagePublished
+    );
+    assert_eq!(
+        retained.mode,
+        DirectGenetContinuationMode::CrossCoreSignalOnly
+    );
+    assert_eq!(
+        direct_genet_causal_fanin_state(retained, None, Some(debt), Some(false), true),
+        DirectGenetCausalFaninState::Wait
+    );
+    assert_eq!(
+        direct_genet_causal_fanin_state(retained, None, Some(debt), Some(true), true),
+        DirectGenetCausalFaninState::Arbitrate
+    );
+    for stale in [
+        crate::net::ConsoleResponseBatchDebt {
+            generation: 8,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            connection_id: 42,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            sequence: 0,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            control_completed: false,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            output_drained: true,
+            ..debt
+        },
+    ] {
+        assert!(stage
+            .with_child_publication_debt(None, Some(stale))
+            .is_none());
+    }
+    assert!(stage.with_child_publication_debt(None, None).is_none());
+    let invalid_control = crate::console_network_service::ConsoleNetworkControlPublication {
+        generation: 8,
+        connection_id: 41,
+        sequence: 19,
+    };
+    assert!(stage
+        .with_child_publication_debt(Some(invalid_control), Some(debt))
+        .is_none());
+    let command = PiRootControlProductiveContinuation::for_test_cross_core_command(7, 41);
+    let completed =
+        PiRootControlProductiveContinuation::for_test_cross_core_completed_response(7, 41);
+    assert!(command
+        .with_child_publication_debt(None, Some(debt))
+        .is_none());
+    assert!(completed
+        .with_child_publication_debt(None, Some(debt))
+        .is_none());
+}
+
+#[cfg(all(test, feature = "kernel", feature = "net-console"))]
+#[test]
 fn direct_genet_causal_wait_matches_only_the_current_control_identity() {
     let expected = PiRootControlProductiveContinuation::for_test(7, 41);
     let exact = crate::console_network_service::ConsoleNetworkControlPublication {
@@ -6358,6 +6438,24 @@ impl PiRootControlProductiveContinuation {
         }
         self.child_control_sequence = publication.sequence;
         Some(self)
+    }
+
+    /// Retain the exact response debt when an immediate child observation has
+    /// already accepted the newly staged control's consumption watermark.
+    /// An extant control remains authoritative; invalid control identity cannot
+    /// fall back to another batch. With no inflight control, only this lane's
+    /// nonzero, consumed-but-undrained batch can bind the fresh stage token.
+    fn with_child_publication_debt(
+        mut self,
+        publication: Option<crate::console_network_service::ConsoleNetworkControlPublication>,
+        debt: Option<crate::net::ConsoleResponseBatchDebt>,
+    ) -> Option<Self> {
+        if let Some(publication) = publication {
+            return self.with_child_control_publication(publication);
+        }
+        let debt = debt?;
+        self.child_control_sequence = debt.sequence;
+        self.matches_response_batch_debt(debt).then_some(self)
     }
 
     /// Whether this continuation completed the response it describes.
@@ -14064,11 +14162,11 @@ where
             DirectGenetContinuationMode::CrossCoreSignalOnly
         ) && continuation.awaits_child_publication()
         {
-            let publication = self
-                .net
-                .as_deref()
-                .and_then(crate::net::NetPoller::console_child_control_publication_owed)?;
-            continuation.with_child_control_publication(publication)
+            let net = self.net.as_deref()?;
+            continuation.with_child_publication_debt(
+                net.console_child_control_publication_owed(),
+                net.console_response_batch_debt(),
+            )
         } else {
             Some(continuation)
         }
@@ -14113,10 +14211,10 @@ where
     /// Revalidate one exact outstanding direct-GENET child publication at the
     /// final condition-before-block cut.
     ///
-    /// The retained continuation proves how the stage was created; the live
-    /// exact one-slot control level proves it still owes the child's
-    /// consumption watermark. Both are required so a stale successful quantum
-    /// cannot put root-control to sleep after the child already completed.
+    /// The retained continuation proves how the stage was created. Its exact
+    /// inflight control or consumed-but-undrained response batch proves the
+    /// child still owes a publication. A completed batch cannot put root to
+    /// sleep while a durable publication returns through outer arbitration.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn pi_root_control_productive_child_wait_eligible(
         &self,
@@ -14212,7 +14310,50 @@ where
     /// syscall. Durable levels, never the returned hint, decide the next turn.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn wait_pi_root_control_receive(&mut self) -> RootControlReceiveOutcome {
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        let receive_cut = self.net.as_deref().and_then(|net| {
+            let connection = net.active_console_conn_id().filter(|id| *id != 0)?;
+            let generation = net.isolated_console_diagnostics()?.generation;
+            (generation != 0).then(|| crate::pi4_mcs_recorder::PiMcsReceiveRecord {
+                generation,
+                connection,
+                accepted_commands: self.metrics.accepted_commands,
+                end: 0,
+                hz: crate::arch::aarch64::timer::timer_freq_hz(),
+                outcome: crate::pi4_mcs_recorder::PiMcsReceiveOutcome::Unavailable,
+                begin: crate::arch::aarch64::timer::timer_counter_ticks(),
+            })
+        });
         let outcome = self.ipc.wait_root_control_receive(self.now_ms);
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        if let Some(mut record) = receive_cut {
+            record.end = crate::arch::aarch64::timer::timer_counter_ticks();
+            record.outcome = match outcome {
+                RootControlReceiveOutcome::Empty => {
+                    crate::pi4_mcs_recorder::PiMcsReceiveOutcome::Empty
+                }
+                RootControlReceiveOutcome::Endpoint => {
+                    crate::pi4_mcs_recorder::PiMcsReceiveOutcome::Endpoint
+                }
+                RootControlReceiveOutcome::Fanin => {
+                    crate::pi4_mcs_recorder::PiMcsReceiveOutcome::Fanin
+                }
+                RootControlReceiveOutcome::Unavailable => {
+                    crate::pi4_mcs_recorder::PiMcsReceiveOutcome::Unavailable
+                }
+            };
+            crate::pi4_mcs_recorder::record_receive(record);
+        }
         core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         outcome
     }
@@ -20915,6 +21056,11 @@ where
                         self.emit_console_line(line.as_str());
                     }
                     for line in crate::pi4_mcs_recorder::session_yield_trace_lines() {
+                        if !line.is_empty() {
+                            self.emit_console_line(line.as_str());
+                        }
+                    }
+                    for line in crate::pi4_mcs_recorder::session_receive_trace_lines() {
                         if !line.is_empty() {
                             self.emit_console_line(line.as_str());
                         }
@@ -48467,6 +48613,11 @@ mod tests {
             assert!(rendered.contains("phase=between"), "{rendered}");
             assert_eq!(
                 rendered.matches("[smp] yield_trace ").count(),
+                1,
+                "{rendered}"
+            );
+            assert_eq!(
+                rendered.matches("[smp] receive_trace ").count(),
                 1,
                 "{rendered}"
             );
