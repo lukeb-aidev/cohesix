@@ -120,6 +120,53 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
 }
 
 #[test]
+fn copied_child_publication_remains_runnable_until_its_ack() {
+    let mut boundary = ConsoleNetworkBoundary::new(27).expect("valid generation");
+    let mut event = [0; SHARED_PAGE_BYTES];
+    let mut egress = [0; SHARED_PAGE_BYTES];
+    ExchangePage::initialize_into(&mut event, 27).expect("event page");
+    PacketPage::initialize_into(&mut egress, PacketDirection::Egress, 27).expect("egress page");
+    assert_eq!(
+        boundary.child_publication_service_pending(&event, &egress, false),
+        Ok(false)
+    );
+    let mut ready = ExchangePage::empty(27);
+    ready
+        .publish_related(ExchangeKind::Ready, 1, 0, 1, 0, READY_IDENTITY.as_bytes())
+        .expect("READY ABI");
+    ready.encode(&mut event).expect("READY page");
+    assert_eq!(
+        boundary.child_publication_service_pending(&event, &egress, false),
+        Ok(true)
+    );
+    boundary
+        .accept_event(&event)
+        .expect("copy real READY publication");
+    assert_eq!(
+        boundary.child_publication_pending(&event, &egress),
+        Ok(false)
+    );
+    assert_eq!(
+        boundary.child_publication_service_pending(&event, &egress, true),
+        Ok(true),
+        "accepted publication still needs its one-shot root ACK"
+    );
+    assert_eq!(
+        boundary.child_publication_service_pending(&event, &egress, false),
+        Ok(false)
+    );
+    egress[0] ^= 1;
+    assert!(boundary
+        .child_publication_service_pending(&event, &egress, true)
+        .is_err());
+    PacketPage::initialize_into(&mut egress, PacketDirection::Egress, 28)
+        .expect("stale-generation page");
+    assert!(boundary
+        .child_publication_service_pending(&event, &egress, true)
+        .is_err());
+}
+
+#[test]
 fn initialized_child_pages_are_idle_before_ready_without_weakening_identity() {
     let mut boundary = ConsoleNetworkBoundary::new(27).expect("generated contract");
     let mut event = [0xa5; SHARED_PAGE_BYTES];

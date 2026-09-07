@@ -369,7 +369,7 @@ fn wifi_causal_wait_requires_a_live_timer_for_root_polled_deadline_parents() {
         .find("active_driver_task_one_way_completion_condition(")
         .unwrap();
     let child_recheck = after_enable
-        .find("console_child_publication_pending")
+        .find("console_child_publication_service_pending")
         .unwrap();
     let final_fence = after_enable
         .rfind("pi_root_control_cyw43_causal_wait_fence_clear()")
@@ -386,7 +386,7 @@ fn wifi_causal_wait_requires_a_live_timer_for_root_polled_deadline_parents() {
         .expect("direct-GENET causal-wait guard must have a bounded source region");
     let genet_guard = &event[genet_start..genet_end];
     assert!(genet_guard.contains("console_child_control_publication_owed"));
-    assert!(genet_guard.contains("console_child_publication_pending"));
+    assert!(genet_guard.contains("console_child_publication_service_pending"));
     assert!(!genet_guard.contains("child_awaiting_batch_drain"));
 }
 
@@ -1012,7 +1012,7 @@ fn pi_root_idle_receive_multiplexes_endpoint_and_fanin_after_the_final_fence() {
         .expect("bounded durable evidence helper");
     let evidence = &event[prepare_end..evidence_end];
     let _child = evidence
-        .find("net.console_child_publication_pending()")
+        .find("net.console_child_publication_service_pending()")
         .expect("isolated child level must participate in the idle cut");
     for required in [
         "ipc.has_staged_bootstrap()",

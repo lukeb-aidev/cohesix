@@ -5,6 +5,15 @@
 
 # Roles, Authority, and Scheduling
 
+For the isolated console/network boundary, a child publication remains root
+work until its copied record receives the existing one-shot publication ACK.
+The shared frontier becoming empty does not retire that local credit debt.
+Causal and global root waits validate every shared frontier and return through
+ordinary arbitration while an ACK is owed; the peek cannot grant credit or
+hide a stale identity. This preserves child progress without a timer or retry
+substitute for the missing consumer action.
+
+
 This document owns Cohesix role semantics, ticket authority, target-worker
 lifecycle, and scheduling layers. It does not redefine namespace schemas,
 Secure9P framing, or physical-driver scheduling. See

@@ -1043,6 +1043,21 @@ impl ConsoleNetworkBoundary {
             || control_completion_pending)
     }
 
+    /// Whether copied child output still requires root service. An accepted
+    /// shared frontier can be empty while root owes its one-shot publication
+    /// ACK and the child cannot publish a successor. Validate every shared
+    /// level first: local credit debt cannot hide stale or malformed pages.
+    /// This peek never consumes a record, grants credit or sends a wake.
+    pub fn child_publication_service_pending(
+        &self,
+        event_page: &[u8],
+        egress_page: &[u8],
+        publication_ack_owed: bool,
+    ) -> Result<bool, BoundaryError> {
+        let published = self.child_publication_pending(event_page, egress_page)?;
+        Ok(published || publication_ack_owed)
+    }
+
     fn input_completion_pending(
         observed: u64,
         accepted: u64,

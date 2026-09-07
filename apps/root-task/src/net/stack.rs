@@ -9580,6 +9580,11 @@ impl NetPoller for GenetNetStack {
             .and_then(NetPoller::console_child_publication_pending)
     }
 
+    fn console_child_publication_service_pending(&self) -> Option<bool> {
+        self.inner()
+            .and_then(NetPoller::console_child_publication_service_pending)
+    }
+
     fn console_child_control_publication_owed(
         &self,
     ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
@@ -9965,6 +9970,11 @@ impl NetPoller for Cyw43NetStack {
     fn console_child_publication_pending(&self) -> Option<bool> {
         self.inner()
             .and_then(NetPoller::console_child_publication_pending)
+    }
+
+    fn console_child_publication_service_pending(&self) -> Option<bool> {
+        self.inner()
+            .and_then(NetPoller::console_child_publication_service_pending)
     }
 
     fn console_child_control_publication_owed(
@@ -11416,6 +11426,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.console_child_publication_pending(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_child_publication_pending(),
+        }
+    }
+
+    fn console_child_publication_service_pending(&self) -> Option<bool> {
+        match self {
+            Self::Rtl8139(stack) => stack.console_child_publication_service_pending(),
+            Self::GenetDriverTask(stack) => stack.console_child_publication_service_pending(),
+            Self::Cyw43DriverTask(stack) => stack.console_child_publication_service_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_child_publication_service_pending(),
         }
     }
 

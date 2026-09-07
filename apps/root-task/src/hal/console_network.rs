@@ -1032,6 +1032,24 @@ impl ConsoleNetworkRuntime {
         )
     }
 
+    /// Peek whether a child publication still requires root service: an
+    /// unconsumed shared record or its copied-but-unacknowledged credit.
+    ///
+    /// A child can park until root returns that credit, so the final
+    /// condition-before-block cut must preserve both debts. This validates all
+    /// shared levels without consuming a notification, accepting a record or
+    /// sending an ACK; the ordinary isolated-console rotor retains ownership.
+    pub fn child_publication_service_pending(&self) -> Result<bool, BoundaryError> {
+        if !self.activated || self.contained {
+            return Err(BoundaryError::InvalidState);
+        }
+        self.boundary.child_publication_service_pending(
+            self.shared_frames[3].as_slice(),
+            self.shared_frames[1].as_slice(),
+            self.publication_ack_owed,
+        )
+    }
+
     /// Return the exact root control record whose child watermark is still
     /// causally owed. This does not accept or advance either shared page.
     #[must_use]

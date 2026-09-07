@@ -1605,8 +1605,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             return Some(ready);
         }
         ready.disconnect = self.disconnect_stage_ready();
-        ready.child_publication_or_ack = match self.runtime.child_publication_pending() {
-            Ok(pending) => pending || self.runtime.publication_ack_pending(),
+        ready.child_publication_or_ack = match self.runtime.child_publication_service_pending() {
+            Ok(pending) => pending,
             Err(_) => {
                 self.fail_closed("child-publication-level");
                 return None;
@@ -1840,7 +1840,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             let exact_genet_contract =
                 D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
             let child_publication_pending = if exact_genet_contract {
-                match self.runtime.child_publication_pending() {
+                match self.runtime.child_publication_service_pending() {
                     Ok(pending) => pending,
                     Err(_) => {
                         self.fail_closed("child-publication-level");
@@ -1947,7 +1947,7 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             let exact_genet_contract =
                 D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
             let child_publication_pending = if exact_genet_contract {
-                match self.runtime.child_publication_pending() {
+                match self.runtime.child_publication_service_pending() {
                     Ok(pending) => pending,
                     Err(_) => {
                         self.fail_closed("child-publication-level");
@@ -2218,6 +2218,10 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
 
     fn console_child_publication_pending(&self) -> Option<bool> {
         self.runtime.child_publication_pending().ok()
+    }
+
+    fn console_child_publication_service_pending(&self) -> Option<bool> {
+        self.runtime.child_publication_service_pending().ok()
     }
 
     fn console_child_control_publication_owed(

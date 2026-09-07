@@ -14232,7 +14232,7 @@ where
         let child_publication_pending = self
             .net
             .as_deref()
-            .and_then(crate::net::NetPoller::console_child_publication_pending);
+            .and_then(crate::net::NetPoller::console_child_publication_service_pending);
         direct_genet_causal_fanin_state(
             expected,
             control_publication_owed,
@@ -14267,7 +14267,7 @@ where
         let child_publication_pending = self
             .net
             .as_deref()
-            .and_then(crate::net::NetPoller::console_child_publication_pending);
+            .and_then(crate::net::NetPoller::console_child_publication_service_pending);
         direct_genet_causal_fanin_state(
             expected,
             control_publication_owed,
@@ -14291,7 +14291,7 @@ where
             && self
                 .net
                 .as_deref()
-                .and_then(crate::net::NetPoller::console_child_publication_pending)
+                .and_then(crate::net::NetPoller::console_child_publication_service_pending)
                 == Some(true)
     }
 
@@ -14503,7 +14503,7 @@ where
                         || net.buffered_console_lines_pending()
                         || diagnostic_work
                         || response_work,
-                    net.console_child_publication_pending(),
+                    net.console_child_publication_service_pending(),
                 )
             });
         let recovery_or_containment_pending = self.pi_isolated_service_recovery_pending()
@@ -14601,10 +14601,10 @@ where
         if self
             .net
             .as_deref()
-            .and_then(crate::net::NetPoller::console_child_publication_pending)
+            .and_then(crate::net::NetPoller::console_child_publication_service_pending)
             != Some(false)
         {
-            // A published child record is runnable now, while an unavailable
+            // A child record or its owed ACK is runnable now; an unavailable
             // level cannot prove that the sole coalesced fan-in signal is still
             // owed. In either case ordinary Network arbitration must run.
             return false;
@@ -14644,7 +14644,7 @@ where
             if self
                 .net
                 .as_deref()
-                .and_then(crate::net::NetPoller::console_child_publication_pending)
+                .and_then(crate::net::NetPoller::console_child_publication_service_pending)
                 != Some(false)
             {
                 return false;
@@ -14720,7 +14720,7 @@ where
         let pending = self
             .net
             .as_deref()
-            .and_then(crate::net::NetPoller::console_child_publication_pending);
+            .and_then(crate::net::NetPoller::console_child_publication_service_pending);
         let condition = crate::hal::driver_task::active_driver_task_one_way_completion_condition(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );

@@ -1705,6 +1705,13 @@ pub trait NetPoller {
         None
     }
 
+    /// Peek whether an isolated child publication needs root service, including
+    /// a copied record whose one-shot ACK is still owed. `None` means this
+    /// transport cannot prove the level; the peek never grants credit.
+    fn console_child_publication_service_pending(&self) -> Option<bool> {
+        self.console_child_publication_pending()
+    }
+
     /// Return the exact staged root control whose child-consumption watermark
     /// is still owed. `None` grants no blocking authority.
     fn console_child_control_publication_owed(

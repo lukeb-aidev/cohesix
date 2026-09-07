@@ -10501,7 +10501,16 @@ Changes:
     zero-sequence or already-drained debt grants no continuation. Existing final
     condition-before-block, durable-publication arbitration, operator/fault
     fences and episode limits remain authoritative. This closes the constructor
-    gap before the already-supported response-drain wait. Discovery:
+    gap before the already-supported response-drain wait. The final shared
+    publication-service level also retains root's copied-but-unacknowledged
+    credit. A parked child cannot publish its successor until the ordinary
+    root rotor returns that ACK; neither causal nor global idle may strand it.
+    Validate all shared frontiers before considering local ACK debt, so malformed
+    or stale pages still fail. Keep raw publication peeks and `pub` trace
+    fields distinct from this service-readiness predicate; their meaning stays
+    unchanged. Propagate service readiness through both driver adapters and
+    the selected network wrapper. Cover real READY publication acceptance, owed
+    credit, completed credit and stale-page rejection. Discovery:
     `m26e-console-network-service-isolation`; unchanged `9992131b5` evidence still
     has pending-response Yields and non-Yield root gaps.
     Add two CNTVCT reads around an existing root receive/endpoint-handler call

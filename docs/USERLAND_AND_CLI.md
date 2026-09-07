@@ -438,8 +438,8 @@ count every set fence bit, saturating independently; co-occurring fences
 are not mutually exclusive. Bits 0..15 are inexact topology, unavailable child
 level, staged IPC, physical input, serial output, display, reboot,
 recovery/containment, handoff, passive admission, local fault, physical response,
-retained output, network work, ready child publication, and timer-enable
-rejection. These sample the existing predicates without changing them. A clear
+retained output, network work, child publication service (including an owed ACK),
+and timer-enable rejection. These sample the existing predicates without changing them. A clear
 after-enable sample permits the existing wait but does not prove the syscall
 blocked, and timer rejection alone does not identify an inner HAL failure.
 

@@ -2450,7 +2450,10 @@ prove all of the following:
   rejection and saturating totals. Keep the full command within 58 body rows.
   A newly staged exact GENET response remains eligible after immediate control
   consumption until its drain; reject stale, missing, zero-sequence or completed
-  debt and never override an invalid extant control with fallback debt. Productive GENET tokens may renew one wake recheck;
+  debt and never override an invalid extant control with fallback debt.
+  The publication-service level must remain runnable after a real child record
+  is copied while its one-shot root ACK is owed. Verify idle only after credit
+  retirement, with malformed/stale page rejection even while credit is owed. Productive GENET tokens may renew one wake recheck;
   empty notifications/publications cannot renew it or reset the 64-quantum
   work bound, clock or causal-wait count. Keep existing SMP/CPU reports complete. Run recorder coverage
   with `driver-tests-pi4`; QEMU does not compile the Pi recorder. Compile the
