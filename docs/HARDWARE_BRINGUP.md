@@ -78,10 +78,14 @@ flowchart TB
 ## Profiles and Toolchain
 
 The Cargo `release` profile keeps its existing artifact paths, fat LTO,
-single codegen unit and size-oriented `z` optimization for Pi, isolated children,
-dependencies and QEMU. The Pi root-only level `3` experiment is retired without
-a repeatable performance gain. The selected manifest's ELF/page admission,
-stack and rootfs size bounds remain mandatory. A compiler-profile experiment must qualify exact target stack use
+single codegen unit and size-oriented `z` optimization. The Pi builder selects
+level `3` for the root-task package alone; isolated children, dependencies and
+QEMU retain `z`. Earlier speed-profile boots failed at independently repaired
+stack and PCIe defects and supplied no valid performance comparison. The
+post-repair candidate must retain the nonzero PCIe mapping, correct IRQ bank,
+disjoint TLS and admitted stack, then pass exact emitted-code checks before
+RAM testing. The selected manifest's ELF/page admission, stack and rootfs size
+bounds remain mandatory. A compiler-profile experiment must qualify exact target stack use
 as well as artifact size; compilation alone does not qualify boot or performance.
 The root image reserves a 1-MiB initial stack, separate from its unchanged
 2-MiB bootstrap heap. Exact size-optimized Pi code exceeds 512 KiB along the

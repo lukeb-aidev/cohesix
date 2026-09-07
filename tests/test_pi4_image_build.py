@@ -84,14 +84,20 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
     assert "(default: release-pi4,bootstrap-trace)" in source
 
 
-def test_pi4_build_preserves_workspace_size_profile() -> None:
-    """The recovery build inherits the same admitted size profile as QEMU."""
+def test_pi4_build_scopes_speed_profile_to_root_package() -> None:
+    """Only the Pi root invocation may override the workspace size profile."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     invocations = source.replace("\\\n", " ").split("cargo build")[1:]
     overrides = [call for call in invocations if "--config" in call.split("\n")[0]]
 
-    assert not overrides
+    assert len(overrides) == 1
+    root_call = overrides[0].split("\n")[0]
+    assert "--config 'profile.release.package.root-task.opt-level=3'" in root_call
+    assert "-p root-task" in root_call
+    assert '--target aarch64-unknown-none' in root_call
+    assert '--features "$ROOT_TASK_FEATURES"' in root_call
+    assert source.count("profile.release.package.root-task.opt-level=3") == 1
     cargo = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
     assert 'opt-level = "z"' in cargo.split("[profile.release]", 1)[1]
     assert "[profile.release.package.root-task]" not in cargo

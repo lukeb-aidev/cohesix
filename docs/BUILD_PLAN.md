@@ -10493,6 +10493,22 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Pi root execution cost after memory repairs — the sealed `31cf29b35`
+    two-WiFi/two-GENET matrix leaves GENET root CPU at 69.2/71.0 ms per
+    64-request session and p95 at 5.75/5.57 ms. Maintenance consolidation has
+    no demonstrated improvement; WiFi passes throughput only once. Select
+    execution-speed optimization for the Pi root package alone and preserve
+    all child/dependency/QEMU policies and scheduling values. Earlier compiler
+    trials stopped at stack, null PCIe mapping and interrupt-bank defects;
+    those now have independent repairs and dual-mode boot proof. Require
+    retained baseline artifacts, exact emitted stack/TLS/text and archive
+    admission, focused builder tests and pinned QEMU before RAM reset/CRC
+    tests. Compare first raw CPU/wire and later functional/pressure evidence
+    twice per backend. No performance result is inferred from compilation.
+    The complete host-tool suite/catalog, Python SDK, generated interfaces,
+    evidence consumers and raw/REST workloads retain their contracts and
+    need no consumer changes. Never transplant the old defective image or
+    enlarge object, memory or temporal bounds to admit this candidate.
   - GENET operator maintenance rotation — the exact `33227d8da` four-boot
     comparison meets both WiFi gates twice, while GENET p95 remains 5.43/5.62 ms.
     Retain the coherent-memory correction. During exact authenticated direct

@@ -63,13 +63,15 @@ protocol source are unchanged. Such an experiment does not change the raw
 request workload, throughput interval, p95 arithmetic or target thresholds.
 Compare fresh target receipts and retain stack/image/page admission plus
 the QEMU canary as separate qualification evidence.
-The Pi image builder again inherits the workspace `z` profile. The root-only
-level `3` experiment has no repeatable performance result across both backends.
-Retain the sealed `8d0d5e7fe` two-WiFi, two-GENET matrix as the last complete
-working comparator with the same 1-MiB stack. Later TLS and PCIe safety repairs
-remain required; restoring the compiler setting alone does not prove recovery.
-Earlier candidates with the insufficient 256-KiB stack cannot establish a
-compiler regression or gain. Child budgets and wire workloads remain unchanged.
+The Pi builder selects root-task level `3` after the stack, TLS, PCIe mapping
+and interrupt-bank repairs. Compare against the sealed `31cf29b35` unchanged
+two-WiFi/two-GENET matrix, including owner CPU totals and raw wire distributions.
+GENET root CPU remains about 70 ms per 64-request session and p95 exceeds
+5.5 ms; one WiFi throughput result also misses its gate. Earlier speed-profile
+boot failures do not establish a performance result. The candidate must keep
+the repaired invariants and qualify exact emitted frames and image admission
+before fresh dual-mode measurement. Child budgets, compilation and wire
+workloads remain unchanged. Build success alone is not recovery or speedup.
 
 The subsequent WiFi idle-Retry and GENET root-overhead candidate uses the
 existing raw workload and gates. Compare WiFi session actual Yield count/time
