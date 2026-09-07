@@ -11629,6 +11629,13 @@ static DRIVER_TASK_TEST_RX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 #[must_use]
 pub(crate) fn driver_task_cyw43_rx_queue_state_snapshot() -> Option<DriverRuntimeCyw43RxQueueState>
 {
+    driver_task_cyw43_rx_queue_state_observed(None)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_queue_state_observed(
+    mut samples: Option<&mut [Option<DriverRuntimeCyw43RxQueueState>; 2]>,
+) -> Option<DriverRuntimeCyw43RxQueueState> {
     const SNAPSHOT_ATTEMPTS: usize = 3;
 
     #[cfg(test)]
@@ -11654,6 +11661,9 @@ pub(crate) fn driver_task_cyw43_rx_queue_state_snapshot() -> Option<DriverRuntim
         driver_task_shared_load_barrier();
         driver_task_shared_acquire_range(record_ptr, record_bytes);
         let second = ring.read_cyw43_rx_queue_state()?;
+        if let Some(samples) = samples.as_deref_mut() {
+            *samples = [Some(first), Some(second)];
+        }
 
         if let Some(snapshot) = DriverRuntimeCyw43RxQueueState::stable_snapshot(first, second) {
             return Some(snapshot);
@@ -12192,6 +12202,14 @@ pub(crate) fn driver_task_cyw43_dpc_child_timing_snapshot(
 fn driver_task_cyw43_rx_batch_record_snapshot_for_slot(
     slot: &DriverTaskCommandSlot,
 ) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    driver_task_cyw43_rx_batch_record_observed(slot, None)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_batch_record_observed(
+    slot: &DriverTaskCommandSlot,
+    samples: Option<&mut [Option<DriverRuntimeCyw43RxBatchRecord>; 2]>,
+) -> Option<DriverRuntimeCyw43RxBatchRecord> {
     let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES);
     let record_ptr = driver_task_cyw43_rx_batch_contiguous_root_span(
         slot,
@@ -12207,6 +12225,9 @@ fn driver_task_cyw43_rx_batch_record_snapshot_for_slot(
     driver_task_shared_load_barrier();
     driver_task_shared_acquire_range(record_ptr, record_bytes);
     let second = driver_task_read_cyw43_rx_batch_record(record_ptr)?;
+    if let Some(samples) = samples {
+        *samples = [Some(first), Some(second)];
+    }
 
     DriverRuntimeCyw43RxBatchRecord::stable_snapshot(first, second)
 }
@@ -12222,18 +12243,154 @@ pub(crate) fn driver_task_cyw43_rx_batch_snapshot(
     expected_parent_sequence: u32,
     queue_state: DriverRuntimeCyw43RxQueueState,
 ) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    driver_task_cyw43_rx_batch_snapshot_observed(expected_parent_sequence, queue_state, None)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_batch_snapshot_observed(
+    expected_parent_sequence: u32,
+    queue_state: DriverRuntimeCyw43RxQueueState,
+    mut observation: Option<&mut Cyw43RxBatchRejection>,
+) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    use Cyw43RxBatchValidationStage as Stage;
+    if let Some(observation) = observation.as_deref_mut() {
+        observation.stage = Stage::InitialIdentity;
+    }
     if expected_parent_sequence == 0 || !queue_state.committed() {
         return None;
     }
+    if let Some(observation) = observation.as_deref_mut() {
+        observation.stage = Stage::Header;
+    }
     let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
-    let batch = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
+    let batch = driver_task_cyw43_rx_batch_record_observed(
+        slot,
+        observation.as_deref_mut().map(|sample| &mut sample.headers),
+    )?;
+    if let Some(observation) = observation.as_deref_mut() {
+        observation.stage = Stage::InitialIdentity;
+    }
     if !batch.valid_for_parent_and_queue_state(expected_parent_sequence, queue_state) {
         return None;
     }
-    let current_queue_state = driver_task_cyw43_rx_queue_state_snapshot()?;
+    if let Some(observation) = observation.as_deref_mut() {
+        observation.stage = Stage::QueueAfter;
+    }
+    let current_queue_state = driver_task_cyw43_rx_queue_state_observed(
+        observation
+            .as_deref_mut()
+            .map(|sample| &mut sample.queue_after),
+    )?;
+    if let Some(observation) = observation {
+        observation.stage = Stage::FinalIdentity;
+    }
     batch
         .valid_for_parent_and_queue_state(expected_parent_sequence, current_queue_state)
         .then_some(batch)
+}
+
+/// First failed batch selection, retained before the existing pair restart.
+///
+/// Samples are the original reads used by validation, including the last of
+/// the existing three queue attempts. Missing samples mean no complete pair
+/// was read, not zero-valued device state. This record never grants authority.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RxBatchRejection {
+    pub stage: Cyw43RxBatchValidationStage,
+    pub completion: DriverTaskCompletionRecord,
+    pub expected_generation: Option<u32>,
+    pub queue_before: [Option<DriverRuntimeCyw43RxQueueState>; 2],
+    pub headers: [Option<DriverRuntimeCyw43RxBatchRecord>; 2],
+    pub queue_after: [Option<DriverRuntimeCyw43RxQueueState>; 2],
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43RxBatchValidationStage {
+    Envelope,
+    QueueBefore,
+    Generation,
+    Header,
+    InitialIdentity,
+    QueueAfter,
+    FinalIdentity,
+    Count,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43RxBatchValidationStage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Envelope => "envelope",
+            Self::QueueBefore => "queue-before",
+            Self::Generation => "generation",
+            Self::Header => "header",
+            Self::InitialIdentity => "initial-identity",
+            Self::QueueAfter => "queue-after",
+            Self::FinalIdentity => "final-identity",
+            Self::Count => "count",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_FIRST_RX_BATCH_REJECTION: spin::Mutex<Option<Cyw43RxBatchRejection>> =
+    spin::Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_rx_batch_rejection() -> Option<Cyw43RxBatchRejection> {
+    *CYW43_FIRST_RX_BATCH_REJECTION.lock()
+}
+
+/// Preserve each existing validation predicate and read order while retaining
+/// the exact first rejected samples. No extra device read, retry or clock is
+/// introduced; the caller retains sole authority to request its pair restart.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_cyw43_rx_batch_completion_snapshot(
+    completion: DriverTaskCompletionRecord,
+    expected_generation: Option<u32>,
+) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    use Cyw43RxBatchValidationStage as Stage;
+    let mut rejection = Cyw43RxBatchRejection {
+        stage: Stage::Envelope,
+        completion,
+        expected_generation,
+        queue_before: [None; 2],
+        headers: [None; 2],
+        queue_after: [None; 2],
+    };
+    let batch = (|| {
+        if completion.code != DriverTaskCompletionCode::FrameReady.as_u16()
+            || completion.frame.offset != u32::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET)
+            || completion.frame.len != DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES
+            || completion.frame.flags != 0
+            || completion.result == 0
+            || completion.result > DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP as u32
+        {
+            return None;
+        }
+        rejection.stage = Stage::QueueBefore;
+        let queue = driver_task_cyw43_rx_queue_state_observed(Some(&mut rejection.queue_before))?;
+        rejection.stage = Stage::Generation;
+        if Some(queue.generation) != expected_generation {
+            return None;
+        }
+        let batch = driver_task_cyw43_rx_batch_snapshot_observed(
+            completion.sequence,
+            queue,
+            Some(&mut rejection),
+        )?;
+        rejection.stage = Stage::Count;
+        (u32::from(batch.count) == completion.result).then_some(batch)
+    })();
+    if batch.is_none() {
+        let mut first = CYW43_FIRST_RX_BATCH_REJECTION.lock();
+        if first.is_none() {
+            *first = Some(rejection);
+        }
+    }
+    batch
 }
 
 /// Return one passive, mutually valid queue/batch diagnostic snapshot.
@@ -14832,6 +14989,7 @@ pub(crate) fn clear_first_cyw43_recovery_scheduler_snapshot() {
         );
     }
     CYW43_FIRST_ROOT_RECOVERY_CALLSITE.store(0, Ordering::Release);
+    *CYW43_FIRST_RX_BATCH_REJECTION.lock() = None;
     CYW43_SDIO_PAIR_RESTART_FIRST_CAUSE.store(0, Ordering::Release);
 }
 

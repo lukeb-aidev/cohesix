@@ -1316,6 +1316,16 @@ unchanged.
 
 ### 7.5 Linked SDIO/CYW43 pattern
 
+Pi CYW43 RX-batch rejection diagnostics retain only the first failed terminal
+selection's original double-read queue/header operands. The last pair from
+three existing queue attempts is retained, including an interrupted zero
+commit. Unavailable and invalid are distinct evidence states; neither is
+reclassified by this diagnostic. The owner retains all existing validation,
+cache barriers, parent/generation fences and restart authority. The record
+survives recovery scrub and retires at accepted Gate 8. Explicit `wifi dump-state`
+exports eleven bounded metadata-only rows defined in
+[USERLAND_AND_CLI.md](USERLAND_AND_CLI.md); no frame payload is captured.
+
 This is the reference pattern for two logical runtimes sharing one physical
 transport:
 

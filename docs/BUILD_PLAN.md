@@ -10493,6 +10493,27 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - WiFi first RX-batch rejection operands — under
+    `m26e-qemu-shared-control-path-performance`, discovered through
+    `m26e-console-network-service-isolation`, the sealed unchanged `02dd1a964`
+    two-GENET/two-WiFi matrix retains W00's first root restart at
+    `driver_task_net.rs:28073`, parent 692/op8, FrameReady/detail 0x5803/result 1.
+    Selection failed before payload copy; its merged Option does not distinguish
+    an unavailable queue publication from invalid metadata or stale identity.
+    Retain the exact original validation samples and failed stage before the
+    unchanged restart. Preserve first evidence until accepted Gate 8 and expose
+    eleven bounded metadata-only rows through explicit `wifi dump-state`.
+    No new read, clock, poll attempt, retry, queue, recovery decision, runtime
+    ABI, compiler manifest, SC setting or compact diagnostic row is introduced.
+    The complete host-tool suite, `tools/cohesix-py`, compiler/generated
+    consumers, `.coh` scripts, raw/REST benchmark workloads, arithmetic and report
+    schemas were reviewed. The trace normalizer retains the four new row
+    prefixes as passive metadata and excludes even malformed or unknown versions
+    from gate classifiers, with a focused regression. Other host consumers need
+    no implementation or workload change.
+    Exact sample-retention, invalid identity/commit/header and output-bound
+    regressions plus exact Pi compilation/layout are required. This Pi-only
+    diagnostic cannot establish a fix or replace fresh dual-mode hardware.
   - GENET ready-publication charge equivalence — the unchanged `40b7ff26f`
     pair reduces console CPU about 30% but retains p95 7.112/6.082 ms and
     in-flight causal-limit Yields. Preserve the final typed Wait/Arbitrate/Closed

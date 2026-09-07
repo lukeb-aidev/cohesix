@@ -28050,26 +28050,10 @@ fn preserve_cyw43_rx_batch_completion(
     {
         return None;
     }
-    let valid_envelope = completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
-        && completion.frame.offset == u32::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET)
-        && completion.frame.len == DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES
-        && completion.frame.flags == 0
-        && completion.result != 0
-        && completion.result <= DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP as u32;
-    let queue_state = valid_envelope
-        .then(crate::hal::driver_task::driver_task_cyw43_rx_queue_state_snapshot)
-        .flatten();
-    let expected_generation = cyw43_sdio_dpc_expected_generation();
-    let batch = queue_state.and_then(|queue_state| {
-        (Some(queue_state.generation) == expected_generation).then_some(queue_state)
-    });
-    let batch = batch.and_then(|queue_state| {
-        crate::hal::driver_task::driver_task_cyw43_rx_batch_snapshot(
-            completion.sequence,
-            queue_state,
-        )
-    });
-    let Some(batch) = batch.filter(|batch| u32::from(batch.count) == completion.result) else {
+    let Some(batch) = crate::hal::driver_task::driver_task_cyw43_rx_batch_completion_snapshot(
+        completion,
+        cyw43_sdio_dpc_expected_generation(),
+    ) else {
         crate::hal::driver_task::request_cyw43_sdio_pair_restart();
         return Some(false);
     };
@@ -58391,6 +58375,143 @@ mod tests {
             .as_ref()
             .is_some_and(|session| session.pending_tx_submit.is_some()));
 
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_batch_rejection_preserves_first_original_samples_until_gate8() {
+        use crate::hal::driver_task::{
+            clear_first_cyw43_recovery_scheduler_snapshot, cyw43_rx_batch_rejection,
+            driver_task_cyw43_rx_batch_completion_snapshot, Cyw43RxBatchValidationStage as Stage,
+        };
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        let generation = cyw43_sdio_dpc_expected_generation().expect("generated link");
+        let mut page = [0; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring = test_publish_cyw43_ring(&mut page);
+        let mut shared = TestCyw43RxBatchPages::new();
+        let frame = test_cyw43_tcp_frame();
+        let completion = shared.publish(
+            &mut ring,
+            41,
+            generation,
+            &[(&frame, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA)],
+        );
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(completion, Some(generation)).is_some()
+        );
+        assert_eq!(
+            cyw43_rx_batch_rejection(),
+            None,
+            "success cannot become failure evidence"
+        );
+
+        let mut wrong_parent = completion;
+        wrong_parent.sequence = 42;
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(wrong_parent, Some(generation))
+                .is_none()
+        );
+        let first = cyw43_rx_batch_rejection().expect("exact first rejected sample");
+        assert_eq!(first.stage, Stage::InitialIdentity);
+        assert_eq!(first.completion.sequence, 42);
+        assert_eq!(first.headers[0].expect("first header").parent_sequence, 41);
+        assert_eq!(first.headers[0], first.headers[1]);
+        assert_eq!(
+            first.queue_before[0].expect("queue sample").generation,
+            generation
+        );
+        assert_eq!(
+            first.queue_after, [None; 2],
+            "later reads must not manufacture evidence"
+        );
+
+        let mut wrong_count = completion;
+        wrong_count.result = 2;
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(wrong_count, Some(generation)).is_none()
+        );
+        assert_eq!(
+            cyw43_rx_batch_rejection(),
+            Some(first),
+            "later failure cannot overwrite first"
+        );
+        assert!(
+            !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
+            "observation itself has no recovery authority"
+        );
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(wrong_count, Some(generation)).is_none()
+        );
+        let count = cyw43_rx_batch_rejection().expect("new Gate8 lifetime");
+        assert_eq!(count.stage, Stage::Count);
+        assert_eq!(count.queue_before, count.queue_after);
+        assert_eq!(count.headers[0].expect("retained header").count, 1);
+
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(completion, Some(generation + 1))
+                .is_none()
+        );
+        let mismatch = cyw43_rx_batch_rejection().expect("generation mismatch");
+        assert_eq!(mismatch.stage, Stage::Generation);
+        assert_eq!(mismatch.headers, [None; 2]);
+
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        let commit = usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET)
+            + core::mem::offset_of!(
+                pi4_driver_abi::DriverRuntimeCyw43RxQueueState,
+                commit_sequence
+            );
+        ring._page.0[commit..commit + 4].fill(0);
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(completion, Some(generation)).is_none()
+        );
+        let interrupted = cyw43_rx_batch_rejection().expect("interrupted queue publication");
+        assert_eq!(interrupted.stage, Stage::QueueBefore);
+        assert_eq!(interrupted.queue_before[0], interrupted.queue_before[1]);
+        let queue = interrupted.queue_before[0].expect("zero commit is observed, not unavailable");
+        assert_eq!(queue.generation, generation);
+        assert_eq!(queue.commit_sequence, 0);
+        assert!(!queue.valid());
+        assert_eq!(interrupted.headers, [None; 2]);
+
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        let completion = shared.publish(
+            &mut ring,
+            51,
+            generation,
+            &[(&frame, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA)],
+        );
+        let batch_page = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE;
+        let version =
+            core::mem::offset_of!(pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord, version);
+        shared.pages[batch_page].0[version..version + 2].fill(0);
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(completion, Some(generation)).is_none()
+        );
+        let header = cyw43_rx_batch_rejection().expect("invalid original header");
+        assert_eq!(header.stage, Stage::Header);
+        assert_eq!(header.headers[0].expect("original metadata").version, 0);
+        assert_eq!(header.headers[0], header.headers[1]);
+        assert_eq!(header.queue_after, [None; 2]);
+
+        clear_first_cyw43_recovery_scheduler_snapshot();
+        let mut envelope = completion;
+        envelope.frame.offset += 1;
+        assert!(
+            driver_task_cyw43_rx_batch_completion_snapshot(envelope, Some(generation)).is_none()
+        );
+        let rejected = cyw43_rx_batch_rejection().expect("envelope mismatch");
+        assert_eq!(rejected.stage, Stage::Envelope);
+        assert_eq!(rejected.queue_before, [None; 2]);
+        assert_eq!(rejected.headers, [None; 2]);
+        clear_first_cyw43_recovery_scheduler_snapshot();
         reset_cyw43_status_flags();
     }
 

@@ -27746,6 +27746,102 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_rx_rejection_identity_line(
+        rejection: crate::hal::driver_task::Cyw43RxBatchRejection,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let c = rejection.completion;
+        format_message(format_args!(
+            "wifi: rx_reject schema=v1 stage={} parent={:08x} expected_gen={}/{:08x} completion={:04x}/{:04x}/{:08x} frame={:08x}/{:04x}/{:04x}",
+            rejection.stage.as_str(), c.sequence, rejection.expected_generation.is_some(),
+            rejection.expected_generation.unwrap_or(0), c.code, c.detail, c.result,
+            c.frame.offset, c.frame.len, c.frame.flags,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_rx_rejection_queue_line(
+        part: &str,
+        index: usize,
+        sample: Option<pi4_driver_abi::DriverRuntimeCyw43RxQueueState>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let q = sample.unwrap_or_else(pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty);
+        format_message(format_args!(
+            "wifi: rx_reject_queue part={} sample={} observed={} magic={:08x} abi={:04x}/{:04x} gen={:08x} depth={:04x}/{:04x} flags={:08x} rsl={:08x} commit={:08x} valid={}",
+            part, index, sample.is_some(), q.magic, q.version, q.len, q.generation,
+            q.queue_depth, q.queue_capacity, q.flags, q.recovery_source_line,
+            q.commit_sequence, q.valid(),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_rx_rejection_header_line(
+        index: usize,
+        sample: Option<pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let b = sample.unwrap_or_else(pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord::empty);
+        format_message(format_args!(
+            "wifi: rx_reject_header sample={} observed={} magic={:08x} abi={:04x}/{:04x} parent={:08x} gen={:08x} qcommit={:08x} count={:04x}/{:04x} commit={:08x} valid={}/{} timing={:08x}",
+            index, sample.is_some(), b.magic, b.version, b.len, b.parent_sequence,
+            b.generation, b.queue_commit_sequence, b.count, b.remaining,
+            b.committed_parent_sequence, b.body_valid(), b.committed(),
+            b.first_data_stage_deltas_q11,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_rx_rejection_entries_line(
+        index: usize,
+        half: usize,
+        sample: Option<pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let b = sample.unwrap_or_else(pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord::empty);
+        let mut line = format_message(format_args!(
+            "wifi: rx_reject_entries sample={} half={} observed={} slots=",
+            index,
+            half,
+            sample.is_some(),
+        ));
+        for i in (half * 4)..((half + 1) * 4).min(b.entries.len()) {
+            let e = b.entries[i];
+            // Four fixed metadata slots fit the checked line bound. No frame
+            // payload or credentials are included in this passive receipt.
+            let _ = write!(
+                line,
+                "{:08x}/{:04x}/{:04x}/{:08x},",
+                e.offset, e.len, e.flags, b.source_cntvct_lo[i]
+            );
+        }
+        line
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_rx_batch_rejection(&mut self) {
+        let Some(rejection) = crate::hal::driver_task::cyw43_rx_batch_rejection() else {
+            self.emit_console_line("wifi: rx_reject schema=v1 retained=no");
+            return;
+        };
+        let line = Self::wifi_rx_rejection_identity_line(rejection);
+        self.emit_console_line(line.as_str());
+        for (part, samples) in [
+            ("before", rejection.queue_before),
+            ("after", rejection.queue_after),
+        ] {
+            for (index, sample) in samples.into_iter().enumerate() {
+                let line = Self::wifi_rx_rejection_queue_line(part, index, sample);
+                self.emit_console_line(line.as_str());
+            }
+        }
+        for (index, sample) in rejection.headers.into_iter().enumerate() {
+            let line = Self::wifi_rx_rejection_header_line(index, sample);
+            self.emit_console_line(line.as_str());
+            for half in 0..2 {
+                let line = Self::wifi_rx_rejection_entries_line(index, half, sample);
+                self.emit_console_line(line.as_str());
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_data_handoff_rx_hint_line(
         sdio_deadline_hints: u32,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -29244,6 +29340,7 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
+        self.emit_wifi_rx_batch_rejection();
         let (
             tx_phase_counts,
             tx_phase_timing,
@@ -73594,5 +73691,101 @@ mod tests {
         assert!(!bridge.attached());
         assert_eq!(refusal.matches("ERR ATTACH").count(), 1, "{refusal}");
         assert!(!refusal.contains("OK ATTACH"), "{refusal}");
+    }
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_rx_batch_rejection_rows_preserve_full_metadata_at_maximum_width() {
+        use crate::hal::driver_task::{
+            Cyw43RxBatchRejection, Cyw43RxBatchValidationStage, DriverFrameDescriptor,
+            DriverTaskCompletionRecord,
+        };
+        use pi4_driver_abi::{
+            DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
+            DriverRuntimeCyw43RxQueueState,
+        };
+        let queue = DriverRuntimeCyw43RxQueueState {
+            magic: u32::MAX,
+            version: u16::MAX,
+            len: u16::MAX,
+            generation: u32::MAX,
+            queue_depth: u16::MAX,
+            queue_capacity: u16::MAX,
+            flags: u32::MAX,
+            recovery_source_line: u32::MAX,
+            commit_sequence: u32::MAX,
+        };
+        let mut batch = DriverRuntimeCyw43RxBatchRecord::empty();
+        batch.magic = u32::MAX;
+        batch.version = u16::MAX;
+        batch.len = u16::MAX;
+        batch.parent_sequence = u32::MAX;
+        batch.generation = u32::MAX;
+        batch.queue_commit_sequence = u32::MAX;
+        batch.count = u16::MAX;
+        batch.remaining = u16::MAX;
+        batch.committed_parent_sequence = u32::MAX;
+        batch.first_data_stage_deltas_q11 = u32::MAX;
+        batch.entries.fill(DriverRuntimeCyw43RxBatchEntry {
+            offset: u32::MAX,
+            len: u16::MAX,
+            flags: u16::MAX,
+        });
+        batch.source_cntvct_lo.fill(u32::MAX);
+        let rejection = Cyw43RxBatchRejection {
+            stage: Cyw43RxBatchValidationStage::InitialIdentity,
+            completion: DriverTaskCompletionRecord {
+                sequence: u32::MAX,
+                code: u16::MAX,
+                detail: u16::MAX,
+                result: u32::MAX,
+                frame: DriverFrameDescriptor {
+                    offset: u32::MAX,
+                    len: u16::MAX,
+                    flags: u16::MAX,
+                },
+            },
+            expected_generation: Some(u32::MAX),
+            queue_before: [Some(queue); 2],
+            headers: [Some(batch); 2],
+            queue_after: [Some(queue); 2],
+        };
+        let mut lines = vec![KernelConsoleTestPump::wifi_rx_rejection_identity_line(
+            rejection,
+        )];
+        for part in ["before", "after"] {
+            for index in 0..2 {
+                lines.push(KernelConsoleTestPump::wifi_rx_rejection_queue_line(
+                    part,
+                    index,
+                    Some(queue),
+                ));
+            }
+        }
+        for index in 0..2 {
+            lines.push(KernelConsoleTestPump::wifi_rx_rejection_header_line(
+                index,
+                Some(batch),
+            ));
+            for half in 0..2 {
+                let row =
+                    KernelConsoleTestPump::wifi_rx_rejection_entries_line(index, half, Some(batch));
+                assert_eq!(row.matches("ffffffff/ffff/ffff/ffffffff,").count(), 4);
+                assert!(row.ends_with("ffffffff/ffff/ffff/ffffffff,"));
+                lines.push(row);
+            }
+        }
+        assert_eq!(lines.len(), 11);
+        for line in lines {
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+            assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+        }
+        assert!(
+            KernelConsoleTestPump::wifi_rx_rejection_queue_line("before", 0, None)
+                .contains("observed=false")
+        );
+        assert!(
+            KernelConsoleTestPump::wifi_rx_rejection_header_line(0, None)
+                .contains("observed=false")
+        );
     }
 }

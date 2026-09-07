@@ -153,6 +153,27 @@ exact root command sequence in the same retained scheduler tuple. With
 not new fault, liveness or performance authority. The atomic recovery batch
 contains at most 13 rows; the compact eight-body-line `wifi diag` bound remains.
 
+`wifi dump-state` additionally emits `wifi: rx_reject schema=v1`. Without a
+retained rejection it is one `retained=no` row. Otherwise eleven bounded rows
+preserve the first failed batch selection since accepted Gate 8: one identity
+row, four `rx_reject_queue` rows (`before`/`after`, samples 0/1), two
+`rx_reject_header` rows, and four `rx_reject_entries` rows (two halves of four
+slots for each header sample). The eight `stage` values are `envelope`,
+`queue-before`, `generation`, `header`, `initial-identity`, `queue-after`,
+`final-identity`, and `count`. They name the failed check, not a root cause.
+Queue samples retain the last pair from the existing three-attempt stable
+read; header samples are the original two reads. Unreached reads have
+`observed=false`; their placeholder values are unavailable evidence. Boolean
+values use `true`/`false`; numeric metadata is fixed-width hexadecimal except
+sample/half indices. Queue `abi` is version/size and `depth` is level/capacity.
+Header `count` is count/remaining and `valid` is body-valid/committed. Entry
+slots are offset/length/flags/source-CNTVCT-low-word, in FIFO slot order. No
+payload is recorded. A transient zero queue commit is distinguishable from a
+missing sample. This passive record survives recovery scrub, clears at
+accepted Gate 8, and adds no read, retry, restart, scheduling or acceptance
+authority. The compact `wifi diag` and automatic recovery transaction keep
+their existing bounds.
+
 `wifi rx-trace <0..5>` is serial/local-seat only. Supply exactly one ASCII digit
 from 0 through 5; invalid input returns
 `ERR WIFI reason=policy detail=rx-trace-page-required-0-through-5`.

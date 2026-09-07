@@ -2428,6 +2428,20 @@ prove all of the following:
   `wifi_post_dhcp_rx` coverage must increment exactly once at each actual
   smoltcp delivery boundary and must prove that trace-only `rx-preserve` and
   `rx-deliver` observations do not double-count one frame.
+- Pi RX-batch first rejection: `cyw43_rx_batch_rejection_preserves_first_original_samples_until_gate8`
+  checks exact parent mismatch, interrupted queue commit, invalid header,
+  envelope/generation/count rejection, absence of unreached reads, first-only
+  retention, and Gate-8 clearing using existing shared-page fixtures.
+  `wifi_rx_batch_rejection_rows_preserve_full_metadata_at_maximum_width`
+  checks all eleven verbose rows and all eight metadata slots per sample,
+  including unavailable samples and the unchanged line bound. Validate the
+  unchanged compact eight-row diagnostic and automatic recovery transaction.
+  These passive samples cannot make a restart decision or prove physical
+  corruption. Fresh exact-image Pi failures must bind the retained stage and
+  operands to the command, boot-paired wire and first recovery receipt before
+  changing validation or recovery behavior. Preserve first raw TCP and the
+  unchanged two-WiFi/two-GENET evidence requirement.
+
 - First root pair-recovery provenance must retain the exact call-site word
   through later faults and transport scrub, clear it only with the existing
   accepted-Gate-8 first-fault reset, and bind completion code/detail/result to

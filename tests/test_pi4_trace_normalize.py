@@ -997,6 +997,26 @@ def test_root_recovery_callsite_is_passive_evidence() -> None:
     )
 
 
+def test_rx_batch_rejection_samples_are_passive_evidence() -> None:
+    """Rejected metadata cannot manufacture a gate failure or success."""
+    rows = [
+        "wifi: rx_reject schema=v1 stage=queue-before parent=000002b4",
+        "wifi: rx_reject_queue part=before sample=0 observed=true commit=00000000",
+        "wifi: rx_reject_header sample=0 observed=false",
+        "wifi: rx_reject_entries sample=0 half=0 observed=false slots=",
+        "wifi: rx_reject schema=v99 stage=fault status=ready gate=10",
+        "wifi: rx_reject_queue detail=reset-all-failed gate=4",
+        "wifi: rx_reject_header",
+        "wifi: rx_reject_entries status=ready gate=10",
+    ]
+    events = normalizer.parse_events(rows)
+    assert [event.raw for event in events] == rows
+    assert all(event.fields["diagnostic"] == "passive-rx-batch-rejection" for event in events)
+    assert normalizer.summarize_gates(events).to_record() == (
+        normalizer.summarize_gates([]).to_record()
+    )
+
+
 def test_pair_handoff_rows_are_payload_not_boot_acceptance() -> None:
     """A complete-looking first-child trace cannot manufacture boot gates."""
     rows = [

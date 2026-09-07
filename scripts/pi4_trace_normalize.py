@@ -2575,6 +2575,9 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
     ):
         stage = "deferred-recovery-scheduler-root"
         fields = {**fields, "diagnostic": "passive-root-recovery"}
+    elif is_rx_batch_rejection_record(line):
+        stage = "rx-batch-rejection"
+        fields = {**fields, "diagnostic": "passive-rx-batch-rejection"}
     elif has_reserved_record_prefix(line, "wifi: pair_handoff"):
         stage = "pair-handoff"
         fields = {**fields, "diagnostic": "passive-first-child"}
@@ -3292,6 +3295,14 @@ def parse_hex_int(value: str | None) -> int | None:
         return int(value, 0)
     except ValueError:
         return None
+
+
+def is_rx_batch_rejection_record(raw: str) -> bool:
+    """Recognize all reserved metadata rows, including unknown versions."""
+    return any(has_reserved_record_prefix(raw, prefix) for prefix in (
+        "wifi: rx_reject", "wifi: rx_reject_queue",
+        "wifi: rx_reject_header", "wifi: rx_reject_entries",
+    ))
 
 
 def has_reserved_record_prefix(raw: str, token: str) -> bool:
@@ -17608,6 +17619,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     source_event_list = [
         event for event in events
         if not has_reserved_record_prefix(event.raw, "wifi: pair_handoff")
+        and not is_rx_batch_rejection_record(event.raw)
         and not has_reserved_record_prefix(
             event.raw, "wifi: deferred_recovery scheduler_root"
         )
