@@ -1288,6 +1288,16 @@ bridge release precedes hard-debug access, and link status follows PERST
 release and settling. No pre-reset status sample is valid. Host tests prove
 these pure state/readback predicates; fresh dual-mode Pi boots must establish
 the physical reset order and live networking before raw performance tests.
+For the subsequent VL805 reload, completed phase admission covers endpoint
+configuration and mailbox completion as well as link setup. A reused proof
+must not issue firmware reload; any failed full proof rearms reset. Inspect
+the Pi call order and require one `post-vl805-bar-command` mailbox completion
+per actual PERST on fresh boots. USB must reach controller readiness with no
+keyboard attached; physical keyboard input remains a separate proof. Preserve
+typed USB init faults as failures: deterministic tests cover same-command
+phase retention across idle publication, rejection of mismatched marker
+identity, the fault discriminant, and one bounded physical notice under output
+backpressure. Host tests do not simulate VL805 firmware or prove hot-plug.
 For BCM2711 interrupt quiescence, independent register-layout tests bind the
 dedicated MSI command and status offsets, reject invalid page bases, and require
 all 32 mask bits set with no pending source. All-zero or all-one bus readbacks

@@ -10511,6 +10511,26 @@ Changes:
     target; fresh repeatable dual-mode raw TCP remains required. Complete host
     tools, `tools/cohesix-py`, generated contracts, raw/REST benchmarks, `.coh`
     workloads and trace consumers require no changes to code or schemas.
+  - Exact-d35fc94f0 USB controller recovery — the cold PCIe sequence now
+    passes in both modes with stable root text and live serial; GENET reaches
+    DHCP. USB EngineInit completes with device-unavailable while networking
+    remains gated, so neither boot measures the retained performance changes.
+    Seal serial, diagnostics and boot-paired capture prefixes in
+    `out/bench/d35fc94f0-startup-stall/` before edits. Complete the initial
+    PERST sequence with one firmware reload after full endpoint configuration;
+    extend phase admission through mailbox completion and rearm failed proofs.
+    Preserve same-command USB failure phase in the existing terminal result,
+    prioritize that fault over later idle progress and queue one bounded
+    physical fault notice. Keyboard absence must not block controller or
+    network admission; keyboard enumeration remains downstream. Preserve all
+    earlier address, stack, TLS, ownership and unmeasured performance fixes.
+    Complete host tools, `tools/cohesix-py`, generated interfaces, raw/REST
+    workloads, report schemas and trace normalization consumers were reviewed:
+    existing key/value diagnostics retain the additional phase without layout
+    or parser changes. DRIVERS owns the additive diagnostic semantics. Exact
+    Pi and narrow QEMU qualification cannot replace physical recovery or raw
+    performance evidence. Discovery remains console/network isolation and
+    driver-runtime MCS/CYW43 coexistence; both performance targets stay fixed.
   - Exact-6ffce5702 cold PCIe handoff recovery — one WiFi and one GENET
     boot halt with SError before either network driver starts. Preserve both
     serial slices and their shared capture window in

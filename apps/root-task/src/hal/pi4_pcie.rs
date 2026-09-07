@@ -548,10 +548,6 @@ impl Pi4PcieProofPhase {
         matches!(self, Self::Initial)
     }
 
-    const fn reloads_vl805_firmware_after_perst(self) -> bool {
-        matches!(self, Self::PostMailboxReset)
-    }
-
     fn root_init_latch(self) -> &'static AtomicUsize {
         match self {
             Self::Initial => &PCIE_ROOT_INIT_ATTEMPTED,
@@ -560,7 +556,8 @@ impl Pi4PcieProofPhase {
     }
 }
 
-// A completed attempt may be reused; an in-progress attempt never admits MMIO.
+// READY covers the complete bridge/endpoint proof and the firmware reload owed
+// by PERST. A failed proof must reset the endpoint before trying firmware again.
 const PCIE_ROOT_INIT_IDLE: usize = 0;
 const PCIE_ROOT_INIT_ACTIVE: usize = 1;
 const PCIE_ROOT_INIT_READY: usize = 2;
@@ -600,14 +597,9 @@ const fn pcie_serdes_released(observed: u32) -> bool {
 
 fn notify_vl805_reset_after_pcie_ready(
     hal: &mut KernelHal<'_>,
-    phase: Pi4PcieProofPhase,
     stage: &'static str,
     reason: &'static str,
 ) -> Result<(), HalError> {
-    if !phase.reloads_vl805_firmware_after_perst() {
-        return Ok(());
-    }
-
     let mut begin = heapless::String::<256>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut begin,
@@ -1123,6 +1115,17 @@ fn prove_pi4_vl805_pcie_ownership(
     hal: &mut KernelHal<'_>,
     phase: Pi4PcieProofPhase,
 ) -> Result<Pi4Vl805PcieProof, HalError> {
+    let fresh = begin_pi4_pcie_root_init_attempt(phase.root_init_latch())?;
+    let result = prove_pi4_vl805_pcie_ownership_attempt(hal, phase, fresh);
+    finish_pi4_pcie_root_init_attempt(phase.root_init_latch(), result.is_ok());
+    result
+}
+
+fn prove_pi4_vl805_pcie_ownership_attempt(
+    hal: &mut KernelHal<'_>,
+    phase: Pi4PcieProofPhase,
+    fresh: bool,
+) -> Result<Pi4Vl805PcieProof, HalError> {
     if phase.powers_vl805_usb_hcd() {
         pi4_wifi::power_on_vl805_usb_hcd(hal)?;
     } else {
@@ -1152,7 +1155,7 @@ fn prove_pi4_vl805_pcie_ownership(
     let config_virt = same_page_reg_virt(config_page, BCM2711_PCIE_EXT_CFG_DATA)?;
     let index_reg = same_page_reg_virt(index_page, BCM2711_PCIE_EXT_CFG_INDEX)?;
 
-    let status = ensure_pi4_pcie_root_ready(hal, status_page, status_reg, phase)?;
+    let status = prepare_pi4_pcie_root(hal, status_page, status_reg, phase, fresh)?;
     let status_ready = pcie_status_link_up_and_rc(status);
     if !status_ready {
         let mut line = heapless::String::<192>::new();
@@ -1275,8 +1278,6 @@ fn prove_pi4_vl805_pcie_ownership(
     let command_before = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS)?;
     let mut bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0)?;
     let mut bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1)?;
-    let bar0_before = bar0;
-    let bar1_before = bar1;
     if status_ready && vl805_bar_assignment_needed(bar0, bar1) {
         let assigned_bar0 = vl805_pi4_assigned_bar0_value();
         vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR1, 0)?;
@@ -1388,21 +1389,14 @@ fn prove_pi4_vl805_pcie_ownership(
         return Err(HalError::Unsupported("vl805-command"));
     }
 
-    if vl805_post_command_reset_notify_needed(
-        phase,
-        bar0_before,
-        bar1_before,
-        bar0,
-        bar1,
-        command_before,
-        command_after,
-        devctl_proof,
-    ) {
+    // Every actual PERST, including initial takeover from U-Boot, loses VL805
+    // firmware. Reload exactly once, with the bridge window, BAR and command
+    // already ready. Reusing a completed proof must not reload a running device.
+    if fresh {
         notify_vl805_reset_after_pcie_ready(
             hal,
-            phase,
             "post-vl805-bar-command",
-            "vl805-bar-command-devctl-after-firmware-notify",
+            "pcie-perst-requires-firmware-reload",
         )?;
     }
 
@@ -1424,45 +1418,6 @@ fn prove_pi4_vl805_pcie_ownership(
         pcie_devctl_before: devctl_proof.control_before,
         pcie_devctl_after: devctl_proof.control_after,
     })
-}
-
-fn vl805_post_command_reset_notify_needed(
-    phase: Pi4PcieProofPhase,
-    bar0_before: u32,
-    bar1_before: u32,
-    bar0_after: u32,
-    bar1_after: u32,
-    command_before: u16,
-    command_after: u16,
-    devctl_proof: Vl805PcieDeviceControlProof,
-) -> bool {
-    if !phase.reloads_vl805_firmware_after_perst() {
-        return false;
-    }
-    let bar_changed = bar0_before != bar0_after || bar1_before != bar1_after;
-    let command_changed = command_before != command_after;
-    let devctl_changed = match (devctl_proof.control_before, devctl_proof.control_after) {
-        (Some(before), Some(after)) => before != after,
-        _ => false,
-    };
-    bar_changed || command_changed || devctl_changed
-}
-
-fn ensure_pi4_pcie_root_ready(
-    hal: &mut KernelHal<'_>,
-    status_page: usize,
-    status_reg: usize,
-    phase: Pi4PcieProofPhase,
-) -> Result<u32, HalError> {
-    let fresh = begin_pi4_pcie_root_init_attempt(phase.root_init_latch())?;
-    let result = prepare_pi4_pcie_root(hal, status_page, status_reg, phase, fresh);
-    finish_pi4_pcie_root_init_attempt(
-        phase.root_init_latch(),
-        result
-            .as_ref()
-            .is_ok_and(|status| pcie_status_link_up_and_rc(*status)),
-    );
-    result
 }
 
 fn prepare_pi4_pcie_root(
@@ -1558,12 +1513,6 @@ fn prepare_pi4_pcie_root(
     let ready = remember_pi4_pcie_link_and_rc_ready(status_after);
     if ready {
         configure_pi4_pcie_outbound_window(status_page)?;
-        notify_vl805_reset_after_pcie_ready(
-            hal,
-            phase,
-            "post-pcie-perst",
-            "pcie-perst-after-firmware-notify",
-        )?;
     }
 
     let mut done = heapless::String::<320>::new();
@@ -2690,11 +2639,9 @@ mod tests {
     }
 
     #[test]
-    fn post_mailbox_pcie_perst_reloads_vl805_firmware() {
+    fn only_initial_pcie_proof_powers_usb_hcd() {
         assert!(Pi4PcieProofPhase::Initial.powers_vl805_usb_hcd());
         assert!(!Pi4PcieProofPhase::PostMailboxReset.powers_vl805_usb_hcd());
-        assert!(!Pi4PcieProofPhase::Initial.reloads_vl805_firmware_after_perst());
-        assert!(Pi4PcieProofPhase::PostMailboxReset.reloads_vl805_firmware_after_perst());
     }
 
     #[test]
@@ -2818,69 +2765,6 @@ mod tests {
         assert!(!vl805_bar_assignment_needed(0x0000_0000, 0));
         assert!(!vl805_bar_assignment_needed(0x0000_0005, 0));
         assert!(!vl805_bar_assignment_needed(0x0000_0004, 1));
-    }
-
-    #[test]
-    fn vl805_post_command_reset_notify_follows_bar_command_or_devctl_changes() {
-        let unchanged_devctl = Vl805PcieDeviceControlProof {
-            control_before: Some(VL805_PCIE_DEVCTL_COMMAND_PROOF),
-            control_after: Some(VL805_PCIE_DEVCTL_COMMAND_PROOF),
-        };
-        let changed_devctl = Vl805PcieDeviceControlProof {
-            control_before: Some(0),
-            control_after: Some(VL805_PCIE_DEVCTL_COMMAND_PROOF),
-        };
-
-        assert!(!vl805_post_command_reset_notify_needed(
-            Pi4PcieProofPhase::Initial,
-            0x0000_0004,
-            0,
-            0xc000_0004,
-            0,
-            0,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            changed_devctl,
-        ));
-        assert!(vl805_post_command_reset_notify_needed(
-            Pi4PcieProofPhase::PostMailboxReset,
-            0x0000_0004,
-            0,
-            0xc000_0004,
-            0,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            unchanged_devctl,
-        ));
-        assert!(vl805_post_command_reset_notify_needed(
-            Pi4PcieProofPhase::PostMailboxReset,
-            0xc000_0004,
-            0,
-            0xc000_0004,
-            0,
-            0,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            unchanged_devctl,
-        ));
-        assert!(vl805_post_command_reset_notify_needed(
-            Pi4PcieProofPhase::PostMailboxReset,
-            0xc000_0004,
-            0,
-            0xc000_0004,
-            0,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            changed_devctl,
-        ));
-        assert!(!vl805_post_command_reset_notify_needed(
-            Pi4PcieProofPhase::PostMailboxReset,
-            0xc000_0004,
-            0,
-            0xc000_0004,
-            0,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            VL805_POLL_ONLY_COMMAND_REQUIRED,
-            unchanged_devctl,
-        ));
     }
 
     #[test]

@@ -18207,18 +18207,46 @@ fn finish_usb_controller_init(
     }
 }
 
+/// Only this retained init command may supply its terminal failure phase.
+fn usb_init_failure_phase(sequence: u32, progress: [u32; 4]) -> u32 {
+    if progress[0] == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && progress[1] == sequence
+        && progress[3] == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+    {
+        progress[2]
+    } else {
+        0
+    }
+}
+
 fn fail_usb_controller_init(
     command: DriverTaskCommandRecord,
     cursor: UsbControllerInitCursor,
 ) -> DriverTaskCompletionRecord {
     USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
     if cursor.purpose == UsbControllerInitPurpose::EngineInit {
+        // Read our own publication before generic failure/idle markers replace
+        // it. The completion keeps this bounded diagnostic after the turn ends.
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        let failed_phase = usb_init_failure_phase(
+            command.sequence,
+            [
+                read_ring_u32(offset),
+                read_ring_u32(offset + 4),
+                read_ring_u32(offset + 8),
+                read_ring_u32(offset + 12),
+            ],
+        );
         publish_runtime_progress(
             command.sequence,
             DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
             command.aux0,
         );
-        DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
+        DriverTaskCompletionRecord::fault_with_result(
+            command.sequence,
+            FAULT_DEVICE_UNAVAILABLE,
+            failed_phase,
+        )
     } else {
         USB_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
@@ -131666,6 +131694,50 @@ mod tests {
         assert_eq!(
             read_ring_u32(offset + 12),
             DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+        );
+    }
+
+    #[test]
+    fn usb_init_failure_phase_requires_the_exact_init_publication() {
+        // Existing ABI values: magic, parent sequence, reset-wait phase, init aux.
+        let progress = [
+            DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            42,
+            169,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+        ];
+        assert_eq!(usb_init_failure_phase(42, progress), 169);
+        assert_eq!(usb_init_failure_phase(43, progress), 0);
+        assert_eq!(usb_init_failure_phase(42, [0, 42, 169, progress[3]]), 0);
+        assert_eq!(usb_init_failure_phase(42, [progress[0], 42, 169, 0]), 0);
+    }
+
+    #[test]
+    fn usb_init_fault_retains_failure_phase_after_idle_publication() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let command = DriverTaskCommandRecord {
+            sequence: 42,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        publish_runtime_progress(42, 170, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX);
+        let completion =
+            fail_usb_controller_init(command, UsbControllerInitCursor::engine_init(command));
+        publish_runtime_progress(
+            42,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            ROLE_USB,
+        );
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::fault_with_result(42, 3, 170)
         );
     }
 

@@ -8308,6 +8308,39 @@ pub(crate) const fn linked_local_seat_usb_runtime_result() -> u32 {
     0
 }
 
+/// A terminal init fault outranks later idle progress in operator diagnostics.
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn local_seat_usb_init_failure_phase(code: u16, detail: u16, result: u32) -> Option<u32> {
+    (code == crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        && detail == crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable as u16)
+        .then_some(result)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+pub(crate) fn linked_local_seat_usb_init_failure_phase() -> Option<u32> {
+    // Root-control is the sole writer and reader of these retained fields.
+    local_seat_usb_init_failure_phase(
+        LINKED_LOCAL_SEAT_USB_LAST_CODE.load(Ordering::Acquire) as u16,
+        linked_local_seat_usb_runtime_detail(),
+        linked_local_seat_usb_runtime_result(),
+    )
+}
+
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
+pub(crate) const fn linked_local_seat_usb_init_failure_phase() -> Option<u32> {
+    None
+}
+
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -13308,6 +13341,38 @@ mod tests {
         let mismatched_len =
             crate::hal::driver_task::DriverTaskCompletionRecord { result: 4, ..valid };
         assert!(!linked_usb_keyboard_input_frame_valid(mismatched_len));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_init_fault_phase_requires_fault_discriminant_and_device_unavailable() {
+        use crate::hal::driver_task::DriverTaskCompletionCode;
+        for phase in [0, 169, 170] {
+            assert_eq!(
+                local_seat_usb_init_failure_phase(
+                    DriverTaskCompletionCode::Fault.as_u16(),
+                    3,
+                    phase
+                ),
+                Some(phase)
+            );
+            assert_eq!(
+                local_seat_usb_init_failure_phase(
+                    DriverTaskCompletionCode::Progress.as_u16(),
+                    3,
+                    phase
+                ),
+                None
+            );
+            assert_eq!(
+                local_seat_usb_init_failure_phase(
+                    DriverTaskCompletionCode::Fault.as_u16(),
+                    1,
+                    phase
+                ),
+                None
+            );
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

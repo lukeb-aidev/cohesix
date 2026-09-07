@@ -8432,6 +8432,8 @@ where
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_ready_deferred: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    local_seat_usb_reported_failure: Option<&'static str>,
     #[cfg(feature = "kernel")]
     local_seat_usb_healthy_poll_started_ms: Option<u64>,
     #[cfg(feature = "kernel")]
@@ -9165,6 +9167,8 @@ where
             local_seat: None,
             #[cfg(feature = "kernel")]
             local_seat_usb_healthy_poll_started_ms: None,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            local_seat_usb_reported_failure: None,
             #[cfg(feature = "kernel")]
             local_seat_usb_healthy_poll_started_ticks: 0,
             #[cfg(test)]
@@ -23407,7 +23411,10 @@ where
             );
             let progress_next = linked_progress
                 .map(|progress| Self::usb_runtime_next_action_for_progress_phase(progress.phase));
-            let next_step = if command_ready {
+            let init_failure = crate::local_seat::linked_local_seat_usb_init_failure_phase();
+            let next_step = if init_failure.is_some() {
+                "inspect-usb-init-failure"
+            } else if command_ready {
                 "command-input-ready"
             } else if first_report {
                 "enable-command-input"
@@ -23424,7 +23431,9 @@ where
             };
             let progress_blocker = linked_progress
                 .map(|progress| Self::usb_runtime_blocker_for_progress_phase(progress.phase));
-            let blocker = if command_ready {
+            let blocker = if init_failure.is_some() {
+                "usb-engine-init-fault"
+            } else if command_ready {
                 "none"
             } else if first_report {
                 "command-input-ready"
@@ -23458,6 +23467,15 @@ where
                 linked_progress.map_or("none", |progress| progress.phase_name),
             ));
             self.emit_console_line(runtime_detail_line.as_str());
+            if let Some(phase) = init_failure {
+                let line = format_message(format_args!(
+                    "usb: init_failure detail=0x{:04x} phase={} phase_name={}",
+                    linked_detail,
+                    phase,
+                    crate::hal::driver_task::driver_task_ring_progress_phase_label(phase),
+                ));
+                self.emit_console_line(line.as_str());
+            }
             let acceptance_line = format_message(format_args!(
                 "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} command_ready={} usable={} physical_input_proven={} prompt_polling={} input_observation={}",
                 Self::yes_no(proof_gate >= 3),
@@ -26332,7 +26350,10 @@ where
                 first_report,
                 command_ready,
             );
-            let active_blocker = if proof_gate >= 10 {
+            let init_failure = crate::local_seat::linked_local_seat_usb_init_failure_phase();
+            let active_blocker = if init_failure.is_some() {
+                "usb-engine-init-fault"
+            } else if proof_gate >= 10 {
                 "none"
             } else if keyboard_ready && !first_report {
                 "hid-first-report"
@@ -26362,7 +26383,9 @@ where
                 transfer_events,
                 report_status,
             ) = Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
-            let next_action = if proof_gate >= 10 {
+            let next_action = if init_failure.is_some() {
+                "inspect-usb-init-failure"
+            } else if proof_gate >= 10 {
                 "acceptance-complete"
             } else if keyboard_ready && !first_report {
                 "inspect-xhci-event-ring-interrupt-delivery"
@@ -34319,6 +34342,28 @@ where
             LocalSeatServiceTurn::Complete | LocalSeatServiceTurn::Failed(_)
         ) {
             self.reset_local_seat_usb_healthy_poll_clock();
+        }
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        if let LocalSeatServiceTurn::Failed(reason) = outcome {
+            if self.local_seat_usb_reported_failure != Some(reason) {
+                let phase =
+                    crate::local_seat::linked_local_seat_usb_init_failure_phase().unwrap_or(0);
+                let line = format_message(format_args!(
+                    "[local-seat] USB fault reason={} phase={} phase_name={} action=inspect-usb-status",
+                    reason, phase,
+                    crate::hal::driver_task::driver_task_ring_progress_phase_label(phase),
+                ));
+                if self.queue_physical_console_output(
+                    PendingConsoleOutputKind::HighImpactLine,
+                    line.as_str(),
+                ) {
+                    crate::log_buffer::append_log_line(line.as_str());
+                    if let Some(runtime) = self.local_seat.as_mut() {
+                        let _ = runtime.mirror_high_impact_line(line.as_str());
+                    }
+                    self.local_seat_usb_reported_failure = Some(reason);
+                }
+            }
         }
         Some(outcome)
     }
@@ -52459,6 +52504,46 @@ mod tests {
                 "a physical response barrier must continue to override HID service"
             );
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_terminal_failure_queues_one_physical_notice_and_retries_backpressure() {
+        let serial =
+            SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<512>::new());
+        let timer = TestTimer::repeated(1, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 16,
+        });
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_local_seat(&mut local_seat);
+        pump.local_seat_usb_immediate_service_test_override = Some(true);
+        pump.local_seat_usb_service_turn_test_override =
+            Some(LocalSeatServiceTurn::Failed("usb-engine-init-fault"));
+        while pump.queue_physical_console_output(PendingConsoleOutputKind::Line, "body") {}
+        pump.poll_local_seat_backend_for_ingress();
+        assert_eq!(pump.local_seat_usb_reported_failure, None);
+        pump.pending_console_output.clear();
+        for _ in 0..3 {
+            pump.poll_local_seat_backend_for_ingress();
+        }
+        assert_eq!(
+            pump.local_seat_usb_reported_failure,
+            Some("usb-engine-init-fault")
+        );
+        let notices: Vec<&str> = pump
+            .pending_console_output
+            .iter()
+            .map(|output| output.text.as_str())
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("USB fault reason=usb-engine-init-fault"));
+        assert!(notices[0].contains("action=inspect-usb-status"));
     }
 
     #[cfg(feature = "kernel")]

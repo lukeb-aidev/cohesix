@@ -865,6 +865,9 @@ reusable ownership pattern.
   then returns to serial alternation; the debt stops at command readiness.
   Keyboard command readiness and first-byte proof
   remain independent downstream USB gates and are not prerequisites for Wi-Fi.
+  A keyboard may be unplugged at boot: controller admission precedes device
+  enumeration, and later keyboard discovery uses the existing bounded service
+  turns. Neither NIC startup nor TCP admission may require a physical keypress.
   `LocalSeat` does not add a second proof-scheduling phase after endpoint
   completion and does not
   cache a completion or HID bytes while waiting for another descriptor/owner
@@ -2003,6 +2006,30 @@ Per-phase admission distinguishes idle, in-progress and completed setup.
 Only completed setup permits reuse, and even reuse checks reset/SerDes release
 before reading status. Every failed attempt rearms the phase; status bits alone
 never skip initial root setup. Exact endpoint configuration remains mandatory.
+The complete proof also owes one VL805 firmware reload after each actual
+PERST, including initial U-Boot takeover. Issue the existing
+`NOTIFY_XHCI_RESET` mailbox tag for device `0x100000` only after root windows,
+endpoint BAR, interrupt suppression, device control and command readbacks are
+ready, then retain the existing bounded settle. Reuse without reset sends no
+notification. A failure anywhere in the proof rearms a fresh reset before a
+retry; neither partial link readiness nor an uncertain mailbox completion
+permits firmware to be loaded twice into an unreset controller. This follows
+the selected U-Boot `bcm2711_notify_vl805_reset` contract and
+[Linux v6.12 Raspberry Pi reset driver](https://github.com/torvalds/linux/blob/v6.12/drivers/reset/reset-raspberrypi.c).
+
+USB `EngineInit` hardware failure returns the existing `Fault` code and
+`DeviceUnavailable` detail (`3`), with its last same-command progress phase in
+`result` (`0` when unavailable). The runtime validates marker magic, sequence
+and init auxiliary identity before retaining that phase. Generic failure and
+subsequent idle publications cannot overwrite the terminal completion. Passive
+`usb status`/`usb dump-state` add `usb: init_failure detail=... phase=...
+phase_name=...` on this fault and select `usb-engine-init-fault` with next action
+`inspect-usb-init-failure` ahead of idle progress. The raw current progress row
+remains available separately. A distinct failed local-seat service reason
+queues one bounded `[local-seat] USB fault` notice through the physical console
+and HDMI queues; queue backpressure delays it without repeated log writes.
+This does not bypass controller admission or change the ring layout, manifest,
+retry counts, timeout bounds, command grammar or completion framing.
 
 BCM2711 HAL interrupt quiescence uses only the dedicated MSI bank at offset
 `0x4500`, matching the selected U-Boot controller setup. The older STB interrupt
