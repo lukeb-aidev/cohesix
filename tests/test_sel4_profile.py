@@ -440,6 +440,9 @@ def _overlay_source_fixture(
     )
     baseline = "/dts-v1/;\n/ {};\n"
     overlay.write_text(baseline, encoding="utf-8")
+    boot = kernel / "src" / "kernel" / "boot.c"
+    boot.parent.mkdir(parents=True)
+    boot.write_text("#define INITIAL_SC_BITS 7\n", encoding="utf-8")
     subprocess.run(("git", "-C", str(kernel), "add", "."), check=True)
     subprocess.run(
         ("git", "-C", str(kernel), "commit", "-q", "-m", "baseline"),
@@ -452,6 +455,7 @@ def _overlay_source_fixture(
         stdout=subprocess.PIPE,
     ).stdout.strip()
     overlay.write_text("/dts-v1/;\n/ { proof-node {}; };\n", encoding="utf-8")
+    boot.write_text("#define INITIAL_SC_BITS 8\n", encoding="utf-8")
     diff = subprocess.run(
         (
             "git",
@@ -466,12 +470,14 @@ def _overlay_source_fixture(
             "--src-prefix=a/",
             "--dst-prefix=b/",
             "--",
+            "src/kernel/boot.c",
             "src/plat/bcm2711/overlay-rpi4.dts",
         ),
         check=True,
         stdout=subprocess.PIPE,
     ).stdout
     overlay.write_text(baseline, encoding="utf-8")
+    boot.write_text("#define INITIAL_SC_BITS 7\n", encoding="utf-8")
 
     fake_root = tmp_path / "cohesix"
     patch = fake_root / "configs" / "sel4" / "patches" / "test-overlay.patch"
@@ -3041,11 +3047,23 @@ def test_real_overlay_patch_bytes_match_recorded_digest() -> None:
         / "configs"
         / "sel4"
         / "patches"
-        / "bcm2711-vl805-device-untyped.patch"
+        / "bcm2711-operational.patch"
     ).resolve()
     assert sel4_profile.sha256_bytes(patch_bytes) == overlay["diff_sha256"]
     assert patch_bytes.startswith(b"diff --git ")
-    assert patch_bytes.count(b"\ndiff --git ") == 0
+    assert patch_bytes.count(b"\ndiff --git ") == 1
+    assert overlay["paths"] == [
+        "kernel/src/kernel/boot.c",
+        "kernel/src/plat/bcm2711/overlay-rpi4.dts",
+    ]
+    assert b"+#define COHESIX_INIT_THREAD_SC_BITS 8\n" in patch_bytes
+    # Independently enumerate each allocation contract, including cap metadata.
+    for expected in (
+        b"+    size += BIT(COHESIX_INIT_THREAD_SC_BITS);",
+        b"+    rootserver.sc = alloc_rootserver_obj(COHESIX_INIT_THREAD_SC_BITS, 1);",
+        b"+    cap = cap_sched_context_cap_new(SC_REF(tcb->tcbSchedContext), COHESIX_INIT_THREAD_SC_BITS);",
+    ):
+        assert expected in patch_bytes
     assert b"+ * Author: Lukas Bower" in patch_bytes
     assert b"+ * Purpose:" in patch_bytes
     assert b"+ * Copyright 2026 Lukas Bower" in patch_bytes
@@ -3257,3 +3275,35 @@ def test_build_run_regenerates_complete_compiler_owned_surface() -> None:
     assert 'ROOT_TASK_FEATURES="cohesix-dev"' not in source
     assert 'has_root_task_feature "release-qemu"' in source
     assert 'NET_BACKEND="virtio"' in source
+
+
+@pytest.mark.parametrize("paths", [
+    [], ["kernel/../foreign"], ["kernel//bad"], ["/kernel/absolute"],
+    ["kernel/a", "kernel/a"], ["kernel/b", "kernel/a"],
+    ["kernel/src/kernel/boot.c"],
+    ["kernel/extra", "kernel/src/kernel/boot.c", "kernel/src/plat/bcm2711/overlay-rpi4.dts"],
+])
+def test_pi_overlay_rejects_invalid_or_incomplete_path_set(paths: list[str]) -> None:
+    contract = sel4_profile.load_contract()
+    contract["source"]["pi4_overlay"]["paths"] = paths
+    with pytest.raises(sel4_profile.ProfileError, match="Pi overlay"):
+        sel4_profile.pi4_overlay_patch(contract)
+
+
+def test_pi_overlay_rejects_second_file_tampering(
+    tmp_path: Path, contract: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local, source, _overlay, fake_root = _overlay_source_fixture(tmp_path, contract)
+    monkeypatch.setattr(sel4_profile, "ROOT", fake_root)
+    result = sel4_profile.prepare_source(local, "pi4-diagnostic", source, dry_run=False)
+    assert result["targets"] == [
+        str(source / "kernel/src/kernel/boot.c"),
+        str(source / "kernel/src/plat/bcm2711/overlay-rpi4.dts"),
+    ]
+    boot = source / "kernel/src/kernel/boot.c"
+    boot.write_text("#define INITIAL_SC_BITS 9\n", encoding="utf-8")
+    evidence = sel4_profile.validate_source(local, local["profiles"]["pi4_diagnostic"], source)
+    assert any("digest mismatch" in error for error in evidence["errors"])
+    with pytest.raises(sel4_profile.ProfileError, match="pristine pinned checkout"):
+        sel4_profile.prepare_source(local, "pi4-diagnostic", source, dry_run=False)
+    assert boot.read_text(encoding="utf-8") == "#define INITIAL_SC_BITS 9\n"

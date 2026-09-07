@@ -289,7 +289,7 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> dict[str, Any]:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ProfileError(f"cannot load profile contract {path}: {exc}") from exc
 
-    if contract.get("schema_version") != 2:
+    if contract.get("schema_version") != 3:
         raise ProfileError(
             f"unsupported seL4 profile schema in {path}: "
             f"{contract.get('schema_version')!r}"
@@ -744,15 +744,22 @@ def pi4_overlay_patch(
     overlay = source.get("pi4_overlay")
     if not isinstance(overlay, dict):
         raise ProfileError("profile contract has no Pi overlay table")
-    overlay_rel = overlay.get("path")
+    overlay_paths = overlay.get("paths")
     if (
-        not isinstance(overlay_rel, str)
-        or not overlay_rel.startswith("kernel/")
-        or Path(overlay_rel).is_absolute()
-        or ".." in Path(overlay_rel).parts
+        "path" in overlay
+        or not isinstance(overlay_paths, list)
+        or not overlay_paths
+        or any(
+            not isinstance(path, str)
+            or not path.startswith("kernel/")
+            or re.fullmatch(r"[A-Za-z0-9_./-]+", path) is None
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            for path in overlay_paths
+        )
+        or overlay_paths != sorted(set(overlay_paths))
     ):
         raise ProfileError(
-            "Pi overlay path must be a kernel-relative repository path"
+            "Pi overlay paths must be distinct sorted kernel-relative repository paths"
         )
     if overlay.get("diff_format") != "git-diff-binary-full-index-v1":
         raise ProfileError(
@@ -790,15 +797,18 @@ def pi4_overlay_patch(
             "Pi overlay patch digest mismatch: "
             f"expected {expected_sha256}, got {actual_sha256}"
         )
-    path_in_kernel = overlay_rel.removeprefix("kernel/")
-    expected_header = (
-        f"diff --git a/{path_in_kernel} b/{path_in_kernel}\n".encode("utf-8")
-    )
-    if not patch_bytes.startswith(expected_header) or patch_bytes.count(
-        b"\ndiff --git "
+    expected_headers = [
+        f"diff --git a/{path.removeprefix('kernel/')} "
+        f"b/{path.removeprefix('kernel/')}".encode("utf-8")
+        for path in overlay_paths
+    ]
+    observed_headers = re.findall(rb"^diff --git [^\n]*", patch_bytes, re.MULTILINE)
+    if (
+        observed_headers != expected_headers
+        or not patch_bytes.startswith(expected_headers[0] + b"\n")
     ):
         raise ProfileError(
-            "Pi overlay patch must contain exactly the declared kernel file diff"
+            "Pi overlay patch must contain exactly the declared kernel file diffs"
         )
     return overlay, resolved, patch_bytes
 
@@ -1919,10 +1929,10 @@ def validate_source(
         overlay, overlay_patch_path, overlay_patch_bytes = pi4_overlay_patch(contract)
     except ProfileError as exc:
         errors.append(str(exc))
-    overlay_rel = str(overlay.get("path", ""))
+    overlay_paths = overlay.get("paths", [])
     overlay_diff_format = str(overlay.get("diff_format", ""))
     overlay_repo_rel = "kernel"
-    overlay_path_in_repo = overlay_rel.removeprefix("kernel/")
+    overlay_paths_in_repo = [path.removeprefix("kernel/") for path in overlay_paths]
 
     for relative, expected_commit in repositories.items():
         repo = source_root / str(relative)
@@ -1954,11 +1964,11 @@ def validate_source(
                 errors.append(f"source repository must be clean: {repo}")
             continue
 
-        expected_status = f" M {overlay_path_in_repo}"
+        expected_status = [f" M {path}" for path in overlay_paths_in_repo]
         status_lines = [line for line in status.splitlines() if line]
-        if status_lines != [expected_status]:
+        if status_lines != expected_status:
             errors.append(
-                "Pi source dirt must be exactly the recorded VL805 overlay; "
+                "Pi source dirt must be exactly the recorded operational overlay; "
                 f"observed {status_lines!r}"
             )
             continue
@@ -1976,7 +1986,7 @@ def validate_source(
                 "--src-prefix=a/",
                 "--dst-prefix=b/",
                 "--",
-                overlay_path_in_repo,
+                *overlay_paths_in_repo,
             )
         ).stdout.encode("utf-8")
         actual_diff_hash = sha256_bytes(diff)
@@ -1990,12 +2000,12 @@ def validate_source(
         )
         if actual_diff_hash != expected_diff_hash:
             errors.append(
-                "Pi VL805 overlay digest mismatch: "
+                "Pi operational overlay digest mismatch: "
                 f"expected {expected_diff_hash}, got {actual_diff_hash}"
             )
         if overlay_patch_bytes is not None and diff != overlay_patch_bytes:
             errors.append(
-                "Pi VL805 overlay diff does not match the source-controlled "
+                "Pi operational overlay diff does not match the source-controlled "
                 "patch bytes"
             )
 
@@ -2069,7 +2079,7 @@ def prepare_source(
             )
 
     overlay, patch_path, _patch_bytes = pi4_overlay_patch(contract)
-    overlay_relative = str(overlay["path"]).removeprefix("kernel/")
+    overlay_relatives = [path.removeprefix("kernel/") for path in overlay["paths"]]
     kernel_repository = source_root / "kernel"
     apply_arguments = (
         "git",
@@ -2086,7 +2096,7 @@ def prepare_source(
             "source": str(source_root),
             "action": "would-apply",
             "patch": str(patch_path),
-            "target": str(kernel_repository / overlay_relative),
+            "targets": [str(kernel_repository / path) for path in overlay_relatives],
             "dry_run": True,
         }
 
@@ -2102,7 +2112,7 @@ def prepare_source(
         "source": str(source_root),
         "action": "applied",
         "patch": str(patch_path),
-        "target": str(kernel_repository / overlay_relative),
+        "targets": [str(kernel_repository / path) for path in overlay_relatives],
         "dry_run": False,
     }
 

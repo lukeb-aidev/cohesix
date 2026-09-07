@@ -2,56 +2,56 @@
   "artifacts": {
     "elfloader": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/elfloader/elfloader",
-      "sha256": "db042fd78a09db0db963e9ff009b77431c89562c165f4044c8fb4685e87d5f73",
-      "size": 3651328
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/elfloader/elfloader",
+      "sha256": "5b66ee18bafc78e06fa9773aec14a0b6f20aa8c7d2fb3a0bda2df72bf4f0bc89",
+      "size": 3650256
     },
     "kernel": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel.elf",
-      "sha256": "2cbc58ed4befb647c2c3505e319df5d2f3fecd496644b5d26012029de6544396",
-      "size": 1319616
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel.elf",
+      "sha256": "77b8b0a92441528f879a7ad7b9e7137af14e361445adaf26d80cd2ab79f4ffbf",
+      "size": 1319520
     },
     "kernel_dtb": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel.dtb",
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel.dtb",
       "sha256": "b46ea949e8b837aa218a50d6b6482ac13e1c8bc9c269d04b1a90dfe1d1e95897",
       "size": 26023
     },
     "rootserver": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4test-driver",
-      "sha256": "df42f2964b20aedf928360e496a7e38af76fcebc71895d99dc02619d972b3826",
-      "size": 4153664
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/apps/sel4test-driver/sel4test-driver",
+      "sha256": "5a236077e60061632a14a68f792354f2b944837e1b49f487ac6d5690433a87b9",
+      "size": 4152544
     },
     "system_image": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/images/sel4test-driver-image-arm-bcm2711",
-      "sha256": "1593f1f190e2cfef6f74fc51114596b015b8c47f3dcf91c946866a15c1532997",
-      "size": 3474504
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/images/sel4test-driver-image-arm-bcm2711",
+      "sha256": "7a9dfd826277c9e8445e9ee2b97f6444e78d374e8d83891057876979b51cc6dc",
+      "size": 3473480
     }
   },
-  "build_dir": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh",
+  "build_dir": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2",
   "build_mode": "wrapper",
   "causal_freshness": {
     "build_start": {
       "outputs": {
         "elfloader": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/elfloader/elfloader"
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/elfloader/elfloader"
           ],
           "existing": []
         },
         "kernel": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel.elf",
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel.elf"
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel.elf",
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel.elf"
           ],
           "existing": []
         },
         "rootserver": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4test-driver"
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/apps/sel4test-driver/sel4test-driver"
           ],
           "existing": []
         }
@@ -59,27 +59,27 @@
       "schema": "cohesix-sel4-build-start/v1",
       "stamp": {
         "exists": false,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/cohesix-profile-build-inputs.json"
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/cohesix-profile-build-inputs.json"
       }
     },
     "post_build_outputs": {
       "elfloader": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/elfloader/elfloader",
-        "sha256": "db042fd78a09db0db963e9ff009b77431c89562c165f4044c8fb4685e87d5f73",
-        "size": 3651328
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/elfloader/elfloader",
+        "sha256": "5b66ee18bafc78e06fa9773aec14a0b6f20aa8c7d2fb3a0bda2df72bf4f0bc89",
+        "size": 3650256
       },
       "kernel": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel.elf",
-        "sha256": "2cbc58ed4befb647c2c3505e319df5d2f3fecd496644b5d26012029de6544396",
-        "size": 1319616
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel.elf",
+        "sha256": "77b8b0a92441528f879a7ad7b9e7137af14e361445adaf26d80cd2ab79f4ffbf",
+        "size": 1319520
       },
       "rootserver": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4test-driver",
-        "sha256": "df42f2964b20aedf928360e496a7e38af76fcebc71895d99dc02619d972b3826",
-        "size": 4153664
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/apps/sel4test-driver/sel4test-driver",
+        "sha256": "5a236077e60061632a14a68f792354f2b944837e1b49f487ac6d5690433a87b9",
+        "size": 4152544
       }
     },
     "schema": "cohesix-sel4-causal-freshness/v1"
@@ -88,11 +88,11 @@
     "build": [
       "cmake",
       "--build",
-      "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh",
+      "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2",
       "--target",
       "rootserver_image",
       "--parallel",
-      "10"
+      "8"
     ],
     "configure": [
       "cmake",
@@ -101,7 +101,7 @@
       "-S",
       "/Users/lukasbower/GitHub/cohesix/tools/sel4-profile-project",
       "-B",
-      "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh",
+      "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2",
       "-DCMAKE_TOOLCHAIN_FILE=/Users/lukasbower/seL4_16/kernel/gcc.cmake",
       "-DCOHESIX_SEL4_PROJECT_ROOT=/Users/lukasbower/seL4_16",
       "-DSEL4_CACHE_DIR=",
@@ -148,47 +148,47 @@
       "-DSel4testAllowSettingsOverride=ON",
       "-DVERIFICATION=OFF"
     ],
-    "jobs": 10
+    "jobs": 8
   },
   "configuration": {
     "build_graph": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/build.ninja",
-      "sha256": "be14b03fb84486b143ba87263a0b9e4d9fddd41b7cd8743bacaa0d2654bfd98b",
-      "size": 1693765
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/build.ninja",
+      "sha256": "90878236f6ee9946fed346f6091ca7c793abb01c675fcc42effa8e1cbaf2c4ed",
+      "size": 1645269
     },
     "cmake_cache": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/CMakeCache.txt",
-      "sha256": "fb0188ed2ad8e6440d4fcd99feb9045d678e8d1d64ea177afde67f8b4b60b35f",
-      "size": 88926
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/CMakeCache.txt",
+      "sha256": "3922c072182dbd3abbe4b229df35876f2c6c2617c866f6497a6e014e8ac4173a",
+      "size": 88282
     },
     "dts_0": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel.dts",
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel.dts",
       "sha256": "33a2a64eb20b1f03f29dbe46bfb14afdc9b8bb34137538a27101c07543cea73a",
       "size": 36461
     },
     "elfloader_platform_info": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/elfloader/gen_headers/platform_info.h",
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/elfloader/gen_headers/platform_info.h",
       "sha256": "b2180eb6086badf21e569f0381b6be639deb8330286196a7c5ed913bfac28823",
       "size": 389
     },
     "generated_config": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_config/kernel/gen_config.json",
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_config/kernel/gen_config.json",
       "sha256": "9446caf1a792a410b6a91ef0d9ad0d816fdefe6afae73aafb7148b12b2844d2b",
       "size": 5121
     },
     "timer_header": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h",
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/platform_gen.h",
       "sha256": "c9dec305771840b97606471227cb72f391db82f56c93993b07b4a5f7aa0c7bc0",
       "size": 848
     }
   },
-  "contract_values_sha256": "782d622c368285e95b1f0d574e02a1c67f487c48357ae8c965181e9b4ffdf5d2",
+  "contract_values_sha256": "cc9139cd6b8bc331167aff5f0784f8c2261301553fa1739facc4e569cff28026",
   "environment": {
     "PATH_prepend": [
       "/opt/homebrew/Cellar/cpio/2.15/bin",
@@ -309,7 +309,7 @@
             "target": "aarch64-none-elf",
             "version": "15.2.1"
           },
-          "profile_contract_sha256": "996cf77b0051979fd8d2051b4b01a80e2cc2276bd664102592b69ad982f1fd45",
+          "profile_contract_sha256": "f4881695e9ec6fa570e807c2511450fe783f67be9c4a9893bf30e7921cb4beef",
           "schema": "cohesix-compiler-provenance/v1",
           "setup_script_sha256": "c350659f99473417578b1ed459cfa23f89ad757b614e6dc929a03789ba133ac9",
           "source": {
@@ -321,7 +321,7 @@
             "url": "https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
           }
         },
-        "sha256": "298b79ed4cb753e2635d3e5cfa8a0d96590e2435ad0312833fedc52b6aab86d4",
+        "sha256": "4b65efdee7b07aa84a36ade6dc2c5b1f18af45e148ec5d4764cfb7599b0dbbde",
         "size": 1656
       },
       "schema": "cohesix-compiler-supply-chain/v1",
@@ -399,7 +399,7 @@
             "sha256": "b40094c4a5f7174afa3439fe48a3e14d2e80a6e5e6169bcafc8ce79dd583f3e1",
             "version": "mkimage version 2026.01"
           },
-          "profile_contract_sha256": "996cf77b0051979fd8d2051b4b01a80e2cc2276bd664102592b69ad982f1fd45",
+          "profile_contract_sha256": "f4881695e9ec6fa570e807c2511450fe783f67be9c4a9893bf30e7921cb4beef",
           "schema": "cohesix-mkimage-provenance/v1",
           "setup_script_sha256": "c350659f99473417578b1ed459cfa23f89ad757b614e6dc929a03789ba133ac9",
           "source": {
@@ -413,7 +413,7 @@
           },
           "source_date_epoch": 1704067200
         },
-        "sha256": "536ea546027b2a8826cb352edba72335cb1bfd74a83ee9bc06b56e627f64f727",
+        "sha256": "76b93d69a0efd52445549d9cb3f1edfa266fde75d32358de11ede8a52b4cdae2",
         "size": 944
       },
       "schema": "cohesix-mkimage-supply-chain/v1",
@@ -964,12 +964,12 @@
         "dirty": true,
         "expected_commit": "6e7c3b733d296cfd88d5fbf635c96e447a882374",
         "overlay_diff_format": "git-diff-binary-full-index-v1",
-        "overlay_diff_sha256": "3c82bf606f76823398f91070c9787d13aa137e7e7c2665a01db11df9797f69a6",
+        "overlay_diff_sha256": "288b657ad5e425843951fa8dc81fae81c94f9afd15b7ed4dd494f721c936a4a2",
         "overlay_patch": {
           "exists": true,
-          "path": "/Users/lukasbower/GitHub/cohesix/configs/sel4/patches/bcm2711-vl805-device-untyped.patch",
-          "sha256": "3c82bf606f76823398f91070c9787d13aa137e7e7c2665a01db11df9797f69a6",
-          "size": 1097
+          "path": "/Users/lukasbower/GitHub/cohesix/configs/sel4/patches/bcm2711-operational.patch",
+          "sha256": "288b657ad5e425843951fa8dc81fae81c94f9afd15b7ed4dd494f721c936a4a2",
+          "size": 3575
         },
         "path": "/Users/lukasbower/seL4_16/kernel"
       },
@@ -1031,5 +1031,5 @@
     "root": "/Users/lukasbower/seL4_16"
   },
   "status": "complete",
-  "validator_sha256": "f30b175d38892334ad7ae6d8d37ec9ce2ec30ac2e3c45b4ed51ff23f9415437a"
+  "validator_sha256": "ac5b87d10f6fab5397054120473b00bb5e5537ffae181494ae8503b9ff54f96e"
 }

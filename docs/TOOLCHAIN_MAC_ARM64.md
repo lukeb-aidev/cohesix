@@ -151,8 +151,9 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py configure \
 ```
 
 Production and proof-eligibility profiles require a clean manifest checkout.
-Pi 4 operational profiles permit exactly the recorded VL805 high-BAR overlay
-diff and reject any other tracked or untracked source change. Prepare a
+Pi 4 operational profiles permit exactly the recorded VL805 high-BAR and
+initial scheduling-context storage overlay. The schema-3 source contract lists
+both kernel paths explicitly and rejects any other tracked or untracked change. Prepare a
 separate pristine manifest checkout explicitly; never add the operational
 overlay to the clean QEMU/proof source:
 
@@ -173,7 +174,7 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py prepare-sourc
 
 `prepare-source` first requires every manifest repository to be at its exact
 pinned commit and pristine. It then authenticates and applies only
-`configs/sel4/patches/bcm2711-vl805-device-untyped.patch`. Repeating the
+`configs/sel4/patches/bcm2711-operational.patch`. Repeating the
 command is an idempotent no-op only when the checkout contains that exact diff;
 wrong revisions, untracked files, staged changes, a changed patch, or any other
 source dirt fail before application. `validate` never mutates source. The
@@ -185,8 +186,16 @@ apply another revision or patch set. The overlay digest is canonicalized with
 patch, so local
 `core.abbrev`, color, rename, or external-diff settings cannot change the same
 patch's identity.
+The authenticated diff gives the Pi initial scheduling context 256 bytes at
+all three boundaries: reservation, allocation, and capability size. Its eight
+selected refills retain the root's 5,500/10,000 us CPU reservation. Generic
+minimum SC objects, scheduler algorithms, and clean QEMU/proof sources remain
+upstream. The compiler rejects a Pi root SC size other than eight bits; clean
+targets require seven bits. Profile validation authenticates the complete diff
+and build stamp before image composition. `prepare-source` schema-3 output uses
+`targets`, an ordered list of paths, in place of the former single `target`.
 The authenticated diff adds the Cohesix author, purpose, and 2026 copyright
-metadata directly to the patched DTS file's native comment header. It therefore
+metadata directly to both patched files' native comment headers. It therefore
 satisfies the repository header contract without adding unauthenticated text
 outside the raw diff.
 
@@ -237,7 +246,7 @@ The source-controlled profile classes have different evidentiary meanings:
 | --- | --- | --- |
 | `qemu-smp-production` | Four-core QEMU `aarch64/virt`, GICv3, kernel debug/printing disabled | Profile-configuration eligible for release integration; the upstream seL4Test wrapper artifacts remain explicitly non-shipping |
 | `qemu-smp-diagnostic` | GICv3 QEMU bring-up and diagnostics | Runtime eligible; never release evidence |
-| `pi4-production` | SMP Pi 4 with the recorded VL805 overlay and VCNT-only timing | Release/runtime eligible only after fresh exact-image Pi acceptance |
+| `pi4-production` | SMP Pi 4 with the recorded operational overlay and VCNT-only timing | Release/runtime eligible only after fresh exact-image Pi acceptance |
 | `pi4-diagnostic` | Reopened Pi/CYW43 bring-up with kernel diagnostics | Runtime diagnostic only; never release evidence |
 | `bcm2711-proof-eligibility` | Pristine upstream AArch64 BCM2711 verified-configuration compatibility | Neither release nor runtime eligible; not a Cohesix proof or boot claim |
 

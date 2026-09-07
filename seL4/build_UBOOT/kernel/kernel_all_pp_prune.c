@@ -1,8 +1,8 @@
-# 0 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel_all_pp_prune_wrapper_temp.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh//"
+# 0 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel_all_pp_prune_wrapper_temp.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2//"
 # 0 "<built-in>"
 # 0 "<command-line>"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel_all_pp_prune_wrapper_temp.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/kernel_all_pp_prune_wrapper_temp.c"
 # 1 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -30,11 +30,11 @@
 
 /* Compile-time configuration parameters. Might be set by the build system. */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/autoconf/autoconf.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/autoconf/autoconf.h" 1
 
        
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_config/kernel/gen_config.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_config/kernel/gen_config.h" 1
        
 
 /* disabled: CONFIG_ARCH_AARCH32 */
@@ -144,7 +144,7 @@
 
 
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
-# 119 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_config/kernel/gen_config.h"
+# 119 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_config/kernel/gen_config.h"
 /* disabled: CONFIG_EXCEPTION_FASTPATH */
 
 
@@ -195,7 +195,7 @@
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
 /* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */
-# 5 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/autoconf/autoconf.h" 2
+# 5 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/autoconf/autoconf.h" 2
 # 12 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/config.h" 2
 # 10 "/Users/lukasbower/seL4_16/kernel/include/config.h" 2
 
@@ -684,7 +684,7 @@ typedef dom_t seL4_Domain;
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated_prune/sel4/shared_types_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/generated_prune/sel4/shared_types_gen.h" 1
 # 13 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/api/types.h" 1
 /*
@@ -1137,7 +1137,7 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated_prune/arch/object/structures_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/generated_prune/arch/object/structures_gen.h" 1
 # 13 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
 
 
@@ -1524,7 +1524,7 @@ typedef word_t tcb_cnode_index_t;
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated_prune/arch/object/structures_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/generated_prune/arch/object/structures_gen.h" 1
 # 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/hardware.h" 1
 /*
@@ -2307,7 +2307,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/machine/devices_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -2617,7 +2617,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
    asserts check that the kernel config won't lead to UTs being created that aren't
    representable. */
 _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
-# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/machine/devices_gen.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/linker.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
@@ -2659,7 +2659,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
 
 /* bss data that is permitted to be used in the restricted SKIM address space */
-# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/machine/devices_gen.h" 2
 
 
 /* Wrap raw physBase location constant to give it a symbolic name in C that's
@@ -2714,7 +2714,7 @@ static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_
         .armExecuteNever = true,
         .userAvailable = false
     },
-# 83 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h"
+# 83 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/machine/devices_gen.h"
     /* /soc/local_intc@40000000 */
     {
         .paddr = 0xff800000,
@@ -2747,7 +2747,7 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
     },
 };
 # 8 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/platform_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -2755,7 +2755,7 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
  */
 
        
-# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h"
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/platform_gen.h"
 enum IRQConstants {
     maxIRQ = 216
 };
@@ -3652,7 +3652,7 @@ static inline void ackInterrupt(irq_t irq)
     active_irq[getCurrentCPUIndex()] = 1023u;
 
 }
-# 24 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h" 2
+# 24 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/platform_gen.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -4180,7 +4180,7 @@ static inline void ackDeadlineIRQ(void)
 }
 # 53 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h"
 __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
-# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h" 2
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/platform_gen.h" 2
 
 /* #undef CONFIGURE_SMMU */
 
@@ -4188,7 +4188,7 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
 
 
 /* #undef CONFIGURE_SMMU */
-# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h"
+# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/plat/platform_gen.h"
 static inline __attribute__((__const__)) time_t getKernelWcetUs(void)
 {
     return 10u;
@@ -4411,7 +4411,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
 void Arch_userStackTrace(tcb_t *tptr);
 # 10 "/Users/lukasbower/seL4_16/kernel/include/kernel/vspace.h" 2
 # 14 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/syscall.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/syscall.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4425,7 +4425,7 @@ void Arch_userStackTrace(tcb_t *tptr);
  *
  */
        
-# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/syscall.h"
+# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/syscall.h"
 enum syscall {
     SysCall = -1,
     SysReplyRecv = -2,
@@ -4451,7 +4451,7 @@ enum syscall {
 
     SysDebugSendIPI = -18,
     SysDebugGetThreadAffinity = -19,
-# 91 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/syscall.h"
+# 91 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/syscall.h"
 };
 typedef word_t syscall_t;
 
@@ -8170,7 +8170,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
    can take considerable time */
 # 13 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
 # 21 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -8183,7 +8183,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/sel4_invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/sel4_invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -8196,7 +8196,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/api/invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -8244,7 +8244,7 @@ enum invocation_label {
     TCBResume,
     TCBBindNotification,
     TCBUnbindNotification,
-# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/api/invocation.h"
+# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/api/invocation.h"
     TCBSetTLSBase,
     TCBSetFlags,
     CNodeRevoke,
@@ -8285,7 +8285,7 @@ enum invocation_label {
 
     nInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/sel4_invocation.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/sel4_invocation.h" 2
 
 enum sel4_arch_invocation_label {
     ARMVSpaceClean_Data = nInvocationLabels,
@@ -8295,7 +8295,7 @@ enum sel4_arch_invocation_label {
     ARMSMCCall,
     nSeL4ArchInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/invocation.h" 2
 
 enum arch_invocation_label {
     ARMPageTableMap = nSeL4ArchInvocationLabels,
@@ -8318,11 +8318,11 @@ enum arch_invocation_label {
     ARMPageGetAddress,
     ARMASIDControlMakePool,
     ARMASIDPoolAssign,
-# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h"
+# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/invocation.h"
     ARMIRQIssueIRQHandlerTrigger,
 
     ARMIRQIssueIRQHandlerTriggerCore,
-# 94 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h"
+# 94 "/Users/lukasbower/GitHub/cohesix/out/sel4/root-sc-storage-pi4-attempt2/kernel/gen_headers/arch/api/invocation.h"
     nArchInvocationLabels
 };
 # 22 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
@@ -13801,6 +13801,9 @@ syscall_error_t current_syscall_error;
 # 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
+ * Author: Lukas Bower
+ * Purpose: Allocate the Pi operational initial SC with bounded refill storage.
+ * Copyright 2026 Lukas Bower
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -13854,11 +13857,12 @@ static inline bool_t dschedule_is_end_marker(word_t index)
 }
 
 exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffer);
-# 14 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c" 2
-
-
-
-
+# 17 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c" 2
+# 25 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
+/* The Pi operational source profile admits eight root-control refills. Keep
+ * reservation, allocation and capability size identical. This changes only
+ * the initial SC storage; generic minimum objects and scheduler rules remain
+ * upstream, and userspace still configures the admitted budget and period. */
 
 
 
@@ -13911,7 +13915,7 @@ __attribute__((__section__(".boot.text"))) static void merge_regions(void)
 __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
 {
     word_t i;
-    do { if (!(reg.start <= reg.end)) { _assert_fail("reg.start <= reg.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 70, __func__); } } while(0);
+    do { if (!(reg.start <= reg.end)) { _assert_fail("reg.start <= reg.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 81, __func__); } } while(0);
     if (reg.start == reg.end) {
         return true;
     }
@@ -13963,7 +13967,7 @@ __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
 
 __attribute__((__section__(".boot.text"))) static bool_t insert_region(region_t reg)
 {
-    do { if (!(reg.start <= reg.end)) { _assert_fail("reg.start <= reg.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 122, __func__); } } while(0);
+    do { if (!(reg.start <= reg.end)) { _assert_fail("reg.start <= reg.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 133, __func__); } } while(0);
     if (is_reg_empty(reg)) {
         return true;
     }
@@ -13992,7 +13996,7 @@ __attribute__((__section__(".boot.text"))) static bool_t insert_region(region_t 
     /* For debug builds we consider this a fatal error. Rationale is, that the
      * caller does not check the error code at the moment, but just ignores any
      * failures silently. */
-    do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 151, __func__); } } while(0);
+    do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 162, __func__); } } while(0);
 
     return false;
 }
@@ -14001,10 +14005,10 @@ __attribute__((__section__(".boot.text"))) static pptr_t alloc_rootserver_obj(wo
 {
     pptr_t allocated = rootserver_mem.start;
     /* allocated memory must be aligned */
-    do { if (!(allocated % (1ul << (size_bits)) == 0)) { _assert_fail("allocated % BIT(size_bits) == 0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 160, __func__); } } while(0);
+    do { if (!(allocated % (1ul << (size_bits)) == 0)) { _assert_fail("allocated % BIT(size_bits) == 0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 171, __func__); } } while(0);
     rootserver_mem.start += (n * (1ul << (size_bits)));
     /* we must not have run out of memory */
-    do { if (!(rootserver_mem.start <= rootserver_mem.end)) { _assert_fail("rootserver_mem.start <= rootserver_mem.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 163, __func__); } } while(0);
+    do { if (!(rootserver_mem.start <= rootserver_mem.end)) { _assert_fail("rootserver_mem.start <= rootserver_mem.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 174, __func__); } } while(0);
     memzero((void *) allocated, n * (1ul << (size_bits)));
     return allocated;
 }
@@ -14027,7 +14031,7 @@ __attribute__((__section__(".boot.text"))) static word_t calculate_rootserver_si
     size += extra_bi_size_bits > 0 ? (1ul << (extra_bi_size_bits)) : 0;
     size += (1ul << (12)); // root vspace
 
-    size += (1ul << (7)); // root sched context
+    size += (1ul << (8)); // root sched context
 
     /* for all archs, seL4_PageTable Bits is the size of all non top-level paging structures */
     return size + arch_get_n_paging(it_v_reg) * (1ul << (12));
@@ -14096,10 +14100,10 @@ __attribute__((__section__(".boot.text"))) static void create_rootserver_objects
 
 
 
-    rootserver.sc = alloc_rootserver_obj(7, 1);
+    rootserver.sc = alloc_rootserver_obj(8, 1);
 
     /* we should have allocated all our memory */
-    do { if (!(rootserver_mem.start == rootserver_mem.end)) { _assert_fail("rootserver_mem.start == rootserver_mem.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 258, __func__); } } while(0);
+    do { if (!(rootserver_mem.start == rootserver_mem.end)) { _assert_fail("rootserver_mem.start == rootserver_mem.end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 269, __func__); } } while(0);
 }
 
 __attribute__((__section__(".boot.text"))) void write_slot(slot_ptr_t slot_ptr, cap_t cap)
@@ -14397,7 +14401,7 @@ __attribute__((__section__(".boot.text"))) tcb_t *create_initial_thread(cap_t ro
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (seL4_CapInitThreadTCB)), cap);
 
 
-    cap = cap_sched_context_cap_new(((word_t) (tcb->tcbSchedContext)), 7);
+    cap = cap_sched_context_cap_new(((word_t) (tcb->tcbSchedContext)), 8);
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (seL4_CapInitThreadSC)), cap);
 
 
@@ -14410,7 +14414,7 @@ __attribute__((__section__(".boot.text"))) tcb_t *create_initial_thread(cap_t ro
 
 __attribute__((__section__(".boot.text"))) static bool_t hypervisor_present(void)
 {
-# 579 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
+# 590 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
     return false;
 }
 
@@ -14419,7 +14423,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void)
     ticks_t t, t0;
     ticks_t margin = usToTicks(1) + getTimerPrecision();
 
-    do { if (!(getCurrentCPUIndex() != 0)) { _assert_fail("getCurrentCPUIndex() != 0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 587, __func__); } } while(0);
+    do { if (!(getCurrentCPUIndex() != 0)) { _assert_fail("getCurrentCPUIndex() != 0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 598, __func__); } } while(0);
     t = ksSMP[(0)].system.ksCurTime;
     do {
         /* perform a memory acquire to get new values of ksCurTime */
@@ -14437,7 +14441,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void)
     if (hypervisor_present()) {
         printf("clock_sync_test[%d]: disabled, detected running as VM\n", (int)getCurrentCPUIndex());
     } else {
-        do { if (!(t0 <= margin + t && t <= t0 + margin)) { _assert_fail("t0 <= margin + t && t <= t0 + margin", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 605, __func__); } } while(0);
+        do { if (!(t0 <= margin + t && t <= t0 + margin)) { _assert_fail("t0 <= margin + t && t <= t0 + margin", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 616, __func__); } } while(0);
     }
 }
 
@@ -14783,7 +14787,7 @@ __attribute__((__section__(".boot.text"))) static word_t init_avail_reg(word_t n
                  */
                 printf("  WARNING: cannot use region [%""lx""..%""lx""),"
                        " avail_reg[] is full\n", r->start, r->end);
-                do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 951, __func__); } } while(0);
+                do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 962, __func__); } } while(0);
             } else {
                 avail_reg[cnt] = paddr_to_pptr_reg(usable_reg);
                 cnt++;
@@ -14874,7 +14878,7 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
                 avail_reg[a].start = (((avail_reg[a].end)<(reserved[r].end))?(avail_reg[a].end):(reserved[r].end));
                 /* do not increment reserved index here - there could be more overlapping regions */
             } else {
-                do { if (!(reserved[r].start < avail_reg[a].end)) { _assert_fail("reserved[r].start < avail_reg[a].end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 1042, __func__); } } while(0);
+                do { if (!(reserved[r].start < avail_reg[a].end)) { _assert_fail("reserved[r].start < avail_reg[a].end", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 1053, __func__); } } while(0);
                 /* take the first chunk of the available region and move
                  * the start to the end of the reserved region */
                 region_t m = avail_reg[a];
@@ -14920,11 +14924,11 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
     word_t max = rootserver_max_size_bits(extra_bi_size_bits);
     for (; i >= 0; i--) {
         /* Invariant: both i and (i + 1) are valid indices in ndks_boot.freemem. */
-        do { if (!(i < (sizeof(ndks_boot.freemem) / sizeof((ndks_boot.freemem)[0])) - 1)) { _assert_fail("i < ARRAY_SIZE(ndks_boot.freemem) - 1", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 1088, __func__); } } while(0);
+        do { if (!(i < (sizeof(ndks_boot.freemem) / sizeof((ndks_boot.freemem)[0])) - 1)) { _assert_fail("i < ARRAY_SIZE(ndks_boot.freemem) - 1", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 1099, __func__); } } while(0);
         /* Invariant; the region at index i is the current candidate.
          * Invariant: regions 0 up to (i - 1), if any, are additional candidates.
          * Invariant: region (i + 1) is empty. */
-        do { if (!(is_reg_empty(ndks_boot.freemem[i + 1]))) { _assert_fail("is_reg_empty(ndks_boot.freemem[i + 1])", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 1092, __func__); } } while(0);
+        do { if (!(is_reg_empty(ndks_boot.freemem[i + 1]))) { _assert_fail("is_reg_empty(ndks_boot.freemem[i + 1])", "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c", 1103, __func__); } } while(0);
         /* Invariant: regions above (i + 1), if any, are empty or too small to use.
          * Invariant: all non-empty regions are ordered, disjoint and unallocated. */
 

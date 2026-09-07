@@ -2,7 +2,7 @@
 # Purpose: Define fail-closed seL4 16 source and generated-build profile contracts for Cohesix.
 # Copyright 2026 Lukas Bower
 
-schema_version = 2
+schema_version = 3
 
 [toolchain]
 family = "Arm GNU Toolchain AArch64 bare-metal"
@@ -88,10 +88,10 @@ manifest_commit = "b81fd440977a8ad89ed8478a9a5a027f062551f6"
 "tools/seL4" = "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7"
 
 [source.pi4_overlay]
-path = "kernel/src/plat/bcm2711/overlay-rpi4.dts"
+paths = ["kernel/src/kernel/boot.c", "kernel/src/plat/bcm2711/overlay-rpi4.dts"]
 diff_format = "git-diff-binary-full-index-v1"
-diff_sha256 = "3c82bf606f76823398f91070c9787d13aa137e7e7c2665a01db11df9797f69a6"
-patch_file = "configs/sel4/patches/bcm2711-vl805-device-untyped.patch"
+diff_sha256 = "288b657ad5e425843951fa8dc81fae81c94f9afd15b7ed4dd494f721c936a4a2"
+patch_file = "configs/sel4/patches/bcm2711-operational.patch"
 
 [profiles.qemu_smp_production]
 description = "Release-eligible four-core QEMU aarch64/virt SMP+MCS profile with GICv3 and production kernel diagnostics disabled."

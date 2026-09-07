@@ -618,6 +618,18 @@ operator/output/network fences and lifetime-bound timer proof are identical.
 An in-flight WiFi operation uses its separate causal wait, with the same exact
 timer enable proof when its parent also requires root deadline observation.
 
+The Pi operational initial scheduling context has 256 bytes and eight selected
+refills. The authenticated kernel source overlay keeps reservation, allocation
+and capability size identical; the root continues to adopt `CapInitThreadSC`
+without replacing or unbinding its running context. Root budget remains
+5,500 us per 10,000 us, with WCET 2,500 us. This candidate increases storage for
+blocking-induced usage fragments; it does not increase admitted CPU time or
+change upstream scheduling algorithms. Clean QEMU/proof kernels retain their
+128-byte initial context and QEMU's two refills. The compiler binds each target
+to its exact initial object size, and image composition rejects stale profile
+stamps. Physical GENET latency and unchanged WiFi gates decide whether to retain
+the Pi candidate; extra storage alone makes no performance guarantee.
+
 The AArch64 receive-only wrapper seeds MessageInfo register x1 to zero before
 its trap. The selected seL4 16 empty NBRecv/NBWait path clears only badge x0
 and preserves x1; zero initialization of a Rust output variable alone does

@@ -10400,6 +10400,9 @@ debug_syscall_error_t current_debug_error;
 #line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
+ * Author: Lukas Bower
+ * Purpose: Allocate the Pi operational initial SC with bounded refill storage.
+ * Copyright 2026 Lukas Bower
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -10417,6 +10420,14 @@ debug_syscall_error_t current_debug_error;
 #include <linker.h>
 #include <hardware.h>
 #include <util.h>
+
+#ifdef CONFIG_KERNEL_MCS
+/* The Pi operational source profile admits eight root-control refills. Keep
+ * reservation, allocation and capability size identical. This changes only
+ * the initial SC storage; generic minimum objects and scheduler rules remain
+ * upstream, and userspace still configures the admitted budget and period. */
+#define COHESIX_INIT_THREAD_SC_BITS 8
+#endif
 
 /* (node-local) state accessed only during bootstrapping */
 BOOT_BSS ndks_boot_t ndks_boot;
@@ -10583,7 +10594,7 @@ BOOT_CODE static word_t calculate_rootserver_size(v_region_t it_v_reg, word_t ex
     size += extra_bi_size_bits > 0 ? BIT(extra_bi_size_bits) : 0;
     size += BIT(seL4_VSpaceBits); // root vspace
 #ifdef CONFIG_KERNEL_MCS
-    size += BIT(seL4_MinSchedContextBits); // root sched context
+    size += BIT(COHESIX_INIT_THREAD_SC_BITS); // root sched context
 #endif
     /* for all archs, seL4_PageTable Bits is the size of all non top-level paging structures */
     return size + arch_get_n_paging(it_v_reg) * BIT(seL4_PageTableBits);
@@ -10652,7 +10663,7 @@ BOOT_CODE static void create_rootserver_objects(pptr_t start, v_region_t it_v_re
 #endif
 
 #ifdef CONFIG_KERNEL_MCS
-    rootserver.sc = alloc_rootserver_obj(seL4_MinSchedContextBits, 1);
+    rootserver.sc = alloc_rootserver_obj(COHESIX_INIT_THREAD_SC_BITS, 1);
 #endif
     /* we should have allocated all our memory */
     assert(rootserver_mem.start == rootserver_mem.end);
@@ -10953,7 +10964,7 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadTCB), cap);
 
 #ifdef CONFIG_KERNEL_MCS
-    cap = cap_sched_context_cap_new(SC_REF(tcb->tcbSchedContext), seL4_MinSchedContextBits);
+    cap = cap_sched_context_cap_new(SC_REF(tcb->tcbSchedContext), COHESIX_INIT_THREAD_SC_BITS);
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadSC), cap);
 #endif
 #ifdef CONFIG_DEBUG_BUILD

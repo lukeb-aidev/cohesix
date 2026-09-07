@@ -262,7 +262,10 @@ impl Manifest {
         self.validate_lifecycle()?;
         self.validate_worker_runtime()?;
         self.validate_pi4_direct_genet_temporal_contract()?;
-        self.temporal_authority.validate()?;
+        // The authenticated Pi operational kernel overlay allocates a 256-byte
+        // initial SC. Clean upstream targets retain the 128-byte initial SC.
+        self.temporal_authority
+            .validate_with_initial_sc_bits(if self.profile_is_pi4_family() { 8 } else { 7 })?;
         self.validate_virtio_operator_serial_io_bound()?;
         let ninedoor_bootstrap_scheduling_contexts = if self.ninedoor_service.enabled {
             self.ninedoor_service.objects.scheduling_contexts
@@ -1814,7 +1817,7 @@ impl Manifest {
                 })?;
             if root_control.budget_us != 5_500
                 || root_control.period_us != 10_000
-                || root_control.max_refills != 2
+                || root_control.max_refills != 8
                 || root_control.wcet_us != 2_500
                 || root_control.wcet_provenance
                     != "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27"
@@ -1826,7 +1829,7 @@ impl Manifest {
                     != "m26e-pi4-console-cross-core-causal-publication-candidate-v21"
             {
                 bail!(
-                    "Pi console-network cross-core causal continuation requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
+                    "Pi console-network cross-core causal continuation requires exact root budget/period/refills/WCET 5500/10000/8/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
                 );
             }
             if root_control.response_time_us != 5_100 || task.response_time_us != 3_000 {
@@ -4763,7 +4766,7 @@ mod tests {
                     .validate_console_network_service()
                     .expect_err("Pi cross-core causal budget drift must fail closed")
                     .to_string(),
-                "Pi console-network cross-core causal continuation requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
+                "Pi console-network cross-core causal continuation requires exact root budget/period/refills/WCET 5500/10000/8/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
             );
         }
 

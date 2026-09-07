@@ -315,7 +315,7 @@ mod tests {
             assert_eq!(root_control.sched_control_core, 0);
             assert_eq!(root_control.budget_us, expected_root_budget);
             assert_eq!(root_control.period_us, 10_000);
-            assert_eq!(root_control.max_refills, 2);
+            assert_eq!(root_control.max_refills, if qemu { 2 } else { 8 });
             assert_eq!(
                 root_control.timeout_policy,
                 crate::temporal::TimeoutPolicy::NaturalPostpone

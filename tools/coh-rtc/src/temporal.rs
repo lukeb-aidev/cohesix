@@ -447,6 +447,11 @@ impl TemporalAuthorityConfig {
 
     /// Validate the complete topology and offline admission arithmetic.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_initial_sc_bits(MIN_SCHED_CONTEXT_BITS)
+    }
+
+    /// Bind the adopted initial SC to the selected target's kernel allocation.
+    pub(crate) fn validate_with_initial_sc_bits(&self, initial_sc_bits: u8) -> Result<()> {
         if !self.enabled {
             if self.architecture != SchedulerArchitecture::Classic
                 || self.admission_window_us != 0
@@ -564,7 +569,7 @@ impl TemporalAuthorityConfig {
                 _ => bail!("unsupported critical temporal task {required}"),
             };
             let expected_sc_bits = if required == "root-control" {
-                MIN_SCHED_CONTEXT_BITS
+                initial_sc_bits
             } else {
                 8
             };

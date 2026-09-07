@@ -104,6 +104,12 @@ fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_16_build_identity() {
         KERNEL_COMMIT
     );
 
+    assert_eq!(
+        build_stamp["source"]["repositories"]["kernel"]["overlay_diff_sha256"].as_str(),
+        profiles["source"]["pi4_overlay"]["diff_sha256"].as_str(),
+        "initial SC admission requires the matching authenticated kernel build"
+    );
+
     let cyw43 = manifest
         .temporal_authority
         .tasks
@@ -305,6 +311,8 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(root["core"], 0);
     assert_eq!(root["priority"], 200);
     assert_eq!(root["mcp"], 200);
+    assert_eq!(root["scheduling_context_bits"], 8);
+    assert_eq!(root["max_refills"], 8);
     assert_eq!(root["budget_us"], 5_500);
     assert_eq!(root["period_us"], 10_000);
     assert_eq!(root["wcet_us"], 2_500);
@@ -631,4 +639,35 @@ fn device_required(devices: &[Value], kind: &str, id: &str) -> bool {
         .find(|device| device["kind"] == kind && device["id"] == id)
         .and_then(|device| device["required"].as_bool())
         .unwrap_or(false)
+}
+
+#[test]
+fn initial_sc_storage_is_exact_for_each_target() {
+    for (file, bits) in [
+        ("configs/root_task.toml", 7),
+        ("configs/root_task_pi4_uboot_aarch64.toml", 8),
+    ] {
+        let path = repo_path(file);
+        let mut manifest = coh_rtc::ir::load_manifest(&path).expect("load target");
+        manifest
+            .validate_with_base(path.parent())
+            .expect("valid target");
+        let root = manifest
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "root-control")
+            .expect("root temporal task");
+        assert_eq!(root.scheduling_context_bits, bits);
+        // Keep the refill count within both objects so the exact storage
+        // mismatch, rather than generic capacity arithmetic, rejects the input.
+        root.max_refills = 2;
+        root.scheduling_context_bits = if bits == 7 { 8 } else { 7 };
+        let error = manifest
+            .validate_with_base(path.parent())
+            .expect_err("wrong initial SC");
+        assert!(error.to_string().contains(&format!(
+            "root-control requires its exact kind, SC size {bits}"
+        )));
+    }
 }

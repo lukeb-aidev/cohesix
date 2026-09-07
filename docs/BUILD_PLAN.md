@@ -10493,6 +10493,32 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Pi initial scheduling-context storage candidate — discovered through
+    `m26e-console-network-service-isolation`, restore the selected
+    `m26e-mcs-abi-foundation` allocation/admission contract. After the unchanged
+    `9e99701e1` two-WiFi/two-GENET matrix, both WiFi gates pass and GENET p95
+    remains 5.5–6.2 ms. A separate, benchmark-ineligible 0/12/0/12 ms load
+    discriminator gives burst p95 5.05/5.30 ms and paced p95 0.71/0.75 ms.
+    Actual root CPU and blocking receipts distinguish this from the already
+    repaired empty-receive and completed-response Yield defects; they motivate
+    testing refill fragmentation, without claiming per-packet exhaustion proof.
+    The prior manifest-only eight-refill attempt was invalid because upstream
+    allocates a 128-byte initial SC. Extend the exact authenticated Pi source
+    overlay to reserve, allocate and describe that same initial SC as 256 bytes,
+    then select eight refills. Preserve root budget 5,500 us, period 10,000 us,
+    WCET 2,500 us, priority, admission, every other task and upstream scheduler
+    algorithm. Clean QEMU/proof sources retain their upstream initial SC.
+    Source-profile schema 3 declares the complete sorted patch path set;
+    preparation, tamper rejection, source/build stamps, compiler target checks,
+    generated artifacts, the Python Pi target descriptor's manifest hash and
+    exact Pi profile outputs change atomically.
+    Review the complete host-tool suite, `tools/cohesix-py`, `.coh` scripts,
+    trace and evidence consumers, raw/REST harnesses, workload arithmetic and
+    report schemas. Only the source-profile preparation interface changes from
+    singular `target` to `targets`; its tests/docs change together. Other public
+    interfaces and benchmark gates require no change. Exact kernel/Pi builds,
+    QEMU root-MCS and fresh two-WiFi/two-GENET evidence can falsify this candidate;
+    no static or paced result is performance acceptance.
   - Empty receive register restoration — discovered through
     `m26e-console-network-service-isolation`, restore the
     `m26e-mcs-abi-foundation` receive contract after the unchanged `425b75684`
