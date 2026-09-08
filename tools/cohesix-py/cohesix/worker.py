@@ -79,7 +79,7 @@ _TARGET_ROLE_SLOTS = {
         "worker-lora": 128,
     },
 }
-_TARGET_SHARD_BITS = {"qemu": 6, "pi4": 8}
+_TARGET_SHARD_BITS = {"qemu": 8, "pi4": 8}
 _PROHIBITED_KEYS = {
     "auth_token",
     "authorization",

@@ -89,7 +89,7 @@ def test_mapping_is_validation_input_not_target_identity() -> None:
 def test_canonical_shard_vector_and_legacy_gate() -> None:
     contract = load_profile_contract(QEMU_CONTRACT)
     assert contract.telemetry_path("worker-7") == (
-        "/shard/22/worker/worker-7/telemetry"
+        "/shard/8a/worker/worker-7/telemetry"
     )
     assert contract.legacy_telemetry_path("worker-7") == (
         "/worker/worker-7/telemetry"
