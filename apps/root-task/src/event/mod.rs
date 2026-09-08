@@ -14316,8 +14316,9 @@ where
 
     /// Recheck a newer durable publication after the preceding response drained.
     /// The completed token supplies only its authenticated lane and existing
-    /// operator/recovery fences. The shared publication frontier supplies fresh
-    /// work; neither a notification nor the old response authorizes another turn.
+    /// operator/recovery fences. Either the shared frontier or an authenticated
+    /// command already transferred into root's bounded queue supplies work;
+    /// neither a notification nor the old response authorizes another turn.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn pi_root_control_completed_response_publication_ready(
         &self,
@@ -14325,11 +14326,12 @@ where
     ) -> bool {
         completed.completed_current_response()
             && self.pi_root_control_productive_continuation_fence_clear(completed)
-            && self
-                .net
-                .as_deref()
-                .and_then(crate::net::NetPoller::console_child_publication_service_pending)
-                == Some(true)
+            && (self.linked_runtime_direct_genet_command_ready()
+                || self
+                    .net
+                    .as_deref()
+                    .and_then(crate::net::NetPoller::console_child_publication_service_pending)
+                    == Some(true))
     }
 
     /// Consume at most one endpoint message or bound fan-in hint without
@@ -64985,6 +64987,8 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut genet = FakeNet::new();
+        let later_command = std::rc::Rc::new(core::cell::RefCell::new(None));
+        genet.late_line = Some(later_command.clone());
         genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
         genet.active_conn_id = Some(17);
         genet.authenticated_conn_id = Some(17);
@@ -65069,6 +65073,32 @@ mod tests {
                 pump.metrics.accepted_commands, 1,
                 "the completed response cannot admit or speculate about a second command",
             );
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+
+            // A command already transferred into root's bounded queue is
+            // durable work even after its shared publication was consumed.
+            let mut line = HeaplessString::new();
+            assert!(line.push_str("ping").is_ok());
+            *later_command.borrow_mut() = Some(ConsoleLine::for_connection(line, 1, 17));
+            assert!(pump.pi_root_control_completed_response_publication_ready(continuation));
+            assert!(later_command.borrow().is_some());
+            assert_eq!(pump.metrics.accepted_commands, 1);
+
+            pump.local_seat_chunk_input_pending = true;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.local_seat_chunk_input_pending = false;
+            pump.reboot_pending = true;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.reboot_pending = false;
+            for stale in [
+                PiRootControlProductiveContinuation::for_test_cross_core_completed_response(2, 17),
+                PiRootControlProductiveContinuation::for_test_cross_core_completed_response(1, 18),
+                PiRootControlProductiveContinuation::for_test_cross_core_command(1, 17),
+            ] {
+                assert!(!pump.pi_root_control_completed_response_publication_ready(stale));
+            }
+            *later_command.borrow_mut() = None;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
         }
 
         assert_eq!(
