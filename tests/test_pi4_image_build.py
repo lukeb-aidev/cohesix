@@ -84,7 +84,7 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
     assert "(default: release-pi4,bootstrap-trace)" in source
 
 
-def test_pi4_build_scopes_speed_profile_to_root_and_tcp_packages() -> None:
+def test_pi4_build_scopes_speed_profile_to_root_tcp_and_genet_image() -> None:
     """Pi speed flags cannot spread to unrelated children or QEMU builds."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
@@ -107,10 +107,27 @@ def test_pi4_build_scopes_speed_profile_to_root_and_tcp_packages() -> None:
         assert f"--config '{flag}'" in runtime_args
         assert flag not in root_call
         assert source.count(flag) == 1
+    genet_args = source.split("local -a genet_runtime_build_args=(", 1)[1].split(
+        "\n    )", 1
+    )[0]
+    genet_flag = "profile.release.package.pi4-driver-runtime.opt-level=3"
+    assert f"--config '{genet_flag}'" in genet_args
+    assert '-p pi4-driver-runtime --bin pi4-driver-genet' in genet_args
+    assert '--target "$sel4_target" --release' in genet_args
+    assert '--bins' not in genet_args
+    assert genet_flag not in runtime_args
+    assert genet_flag not in root_call
+    assert source.count(genet_flag) == 1
+    assert source.index('cargo "${sel4_runtime_build_args[@]}"') < source.index(
+        'cargo "${genet_runtime_build_args[@]}"'
+    ) < source.index('package_driver_runtime_raw_cpio "$embedded_runtime_cpio"')
+    assert 'fail "GENET-only build changed another Pi runtime image"' in source
     assert "profile.release.opt-level" not in source
     cargo = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
     assert 'opt-level = "z"' in cargo.split("[profile.release]", 1)[1]
-    for package in ("root-task", "console-network-runtime", "smoltcp"):
+    for package in (
+        "root-task", "console-network-runtime", "smoltcp", "pi4-driver-runtime"
+    ):
         assert f"[profile.release.package.{package}]" not in cargo
 
 

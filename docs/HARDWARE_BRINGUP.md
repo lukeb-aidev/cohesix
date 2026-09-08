@@ -80,8 +80,12 @@ flowchart TB
 The Cargo `release` profile keeps its existing artifact paths, fat LTO,
 single codegen unit and size-oriented `z` optimization. The Pi builder selects
 level `3` for root-task and, in a separate child build, console-network-runtime
-and its smoltcp dependency. Other children, root dependencies and QEMU retain
-`z`. The Pi console speed profile requires exactly 69 image pages; the
+and its smoltcp dependency. A final GENET-only binary build applies level `3`
+to pi4-driver-runtime while preserving the other six linked driver binaries
+from the size-oriented build. GENET's measured 407-page load span is admitted
+inside its 416-page aperture; the other drivers retain 320 pages. The complete
+driver archive must still remain below 4 MiB. Other children, root dependencies
+and QEMU retain `z`. The Pi console speed profile requires exactly 69 image pages; the
 manifest, compiler and constructor account for all three additional pages
 relative to the 66-page size build. Earlier speed-profile boots failed at
 independently repaired stack and PCIe defects and supplied no valid performance comparison. The
