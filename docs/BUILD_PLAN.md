@@ -10496,21 +10496,6 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
-  - Pi passive-command response epilogue — release `3830c512e` GENET
-    pressure retains approximately 9.9-ms post-dispatch Yields with root
-    response work pending and prior stages already drained. Restore the
-    complete bounded response path under `m26e-console-network-service-isolation`:
-    after the unchanged passive admission/dispatch, permit one exact sealed
-    terminal response to use the existing direct-GENET control-only stage
-    before the mandatory epilogue Yield. Preserve the pre-dispatch identity,
-    operator/recovery fences, prior-batch exclusion, final ACK/drain and
-    declared WCET; no additional command, device poll, wait, retry, output
-    window, ABI or SC numeric is authorized. QEMU and WiFi retain their paths.
-    Focused publication/fence and admission regressions, exact target builds,
-    QEMU canary and fresh same-harness Pi measurements must establish the
-    result. Raw PING bypasses passive admission and remains a separate open
-    p95 gate. Complete host tools, Python SDK, generated contracts, `.coh`,
-    REST/raw workloads and report schemas retain their existing interfaces.
   - Initial-SC runtime admission repair — the unchanged `d16284b35`
     GENET pair regressed to approximately 20 ms per PING because the runtime
     continuation predicate still required root SC bits 7/refills 2. Kernel
