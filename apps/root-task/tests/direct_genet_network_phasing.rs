@@ -406,20 +406,53 @@ fn diagnostic_probe_is_one_replay_with_pre_and_post_sequence_last_evidence() {
     let reader = CONSOLE_HAL_SOURCE
         .find("fn sample_direct_genet_runtime_diagnostic")
         .expect("root stable reader exists");
-    let reader = &CONSOLE_HAL_SOURCE[reader..];
+    let (wrapper, reader) = CONSOLE_HAL_SOURCE[reader..]
+        .split_once("fn sample_direct_genet_observation")
+        .expect("runtime diagnostics use the bounded shared observation reader");
+    let call = wrapper
+        .find("let encoded = sample_direct_genet_observation::<")
+        .expect("runtime diagnostics acquire a stable observation first");
+    for required in [
+        "DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES,",
+        "{ DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES / 8 },",
+        ">(control_root_ptr, DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET)?;",
+    ] {
+        assert!(
+            wrapper.contains(required),
+            "fixed diagnostic region: {required}"
+        );
+    }
+    let decode = wrapper
+        .find("DirectGenetRuntimeDiagnostic::decode(&encoded, generation)")
+        .expect("stable observation is followed by generation/layout validation");
+    assert!(call < decode);
+    let reader = reader
+        .split_once("const DIRECT_VIRTIO_MMIO_PADDR")
+        .map(|(body, _)| body)
+        .expect("shared reader has a bounded source extent");
+    assert!(reader.contains("BYTES != WORDS * 8"));
+    assert!(reader.contains("let commit_offset = BYTES - 8;"));
     let first = reader
         .find("first_commit")
         .expect("reader acquires the first commit");
     let prefix = reader
-        .find("while offset < DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET")
+        .find("while offset < commit_offset")
         .expect("reader copies only the atomic prefix");
     let second = reader
         .find("second_commit")
         .expect("reader rechecks the commit");
-    let decode = reader
-        .find("DirectGenetRuntimeDiagnostic::decode")
-        .expect("reader validates generation and layout");
-    assert!(first < prefix && prefix < second && second < decode);
+    let fence = reader
+        .find("fence(Ordering::Acquire)")
+        .expect("prefix loads complete before commit recheck");
+    let stable = reader
+        .find("if second_commit != first_commit")
+        .expect("raced diagnostic commit is rejected");
+    let returned = reader
+        .find("Some(encoded)")
+        .expect("stable bytes are returned");
+    assert!(
+        first < prefix && prefix < fence && fence < second && second < stable && stable < returned
+    );
 }
 
 #[test]
