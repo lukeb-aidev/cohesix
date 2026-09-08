@@ -1081,13 +1081,23 @@ fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
     assert!(post_wait < command_publication);
     assert!(command_publication < exact_control);
     assert!(CONSOLE_KERNEL_SOURCE.contains(
-        "let direct_service_allowed = !direct_genet_command_quiesced || command_timer_service_due"
+        "let direct_service_allowed = direct_genet_command_service_allowed(\n            direct_genet_command_quiesced,\n            command_timer_service_due,\n            pending_output_control.is_some(),\n        )"
     ));
     assert!(CONSOLE_KERNEL_SOURCE.contains(
         "direct_genet_command_quiesced\n                && service.timer_service_due(now_ms(descriptor.timer_clock_hz))"
     ));
     assert!(CONSOLE_KERNEL_SOURCE.contains(
-        "let quantum_unit_limit = if command_timer_service_due {\n                3\n            } else {\n                DIRECT_SERVICE_QUANTUM_UNITS\n            }"
+        "let quantum_unit_limit = if direct_genet_command_quiesced {\n                3\n            } else {\n                DIRECT_SERVICE_QUANTUM_UNITS\n            }"
     ));
     assert!(CONSOLE_KERNEL_SOURCE.contains("while quantum_units < quantum_unit_limit"));
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "direct_service_pending &= pending_output_control.is_some();\n                    awaiting_root_command_control = true;"
+    ));
+    assert!(!CONSOLE_KERNEL_SOURCE.contains("direct_service_pending |= pending_output_control"));
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "quiescent_command_cycle = direct_genet_command_quiesced;\n                        break;"
+    ));
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "direct_service_repoll_required(\n                quantum_units == quantum_unit_limit,\n                quiescent_command_cycle,"
+    ));
 }
