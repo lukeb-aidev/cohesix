@@ -6965,7 +6965,17 @@ fn direct_genet_response_stage_evidence_matches(
     let Some(identity) = evidence.identity.response_identity else {
         return false;
     };
-    let Some(lane) = evidence.response_lane else {
+    direct_genet_response_lane_stage_ready(identity, evidence.response_lane)
+}
+
+/// Root-retained output remains stageable after an older batch drains, even
+/// when the command and its child publication have already been consumed.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_response_lane_stage_ready(
+    identity: ConsoleResponseIdentity,
+    lane: Option<ConsoleResponseLane>,
+) -> bool {
+    let Some(lane) = lane else {
         return false;
     };
     lane.generation == identity.generation
@@ -14316,9 +14326,9 @@ where
 
     /// Recheck a newer durable publication after the preceding response drained.
     /// The completed token supplies only its authenticated lane and existing
-    /// operator/recovery fences. Either the shared frontier or an authenticated
-    /// command already transferred into root's bounded queue supplies work;
-    /// neither a notification nor the old response authorizes another turn.
+    /// operator/recovery fences. The shared frontier or an authenticated
+    /// command or response already transferred into root's bounded queues
+    /// supplies work; neither a notification nor the old response authorizes a turn.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn pi_root_control_completed_response_publication_ready(
         &self,
@@ -14327,6 +14337,16 @@ where
         completed.completed_current_response()
             && self.pi_root_control_productive_continuation_fence_clear(completed)
             && (self.linked_runtime_direct_genet_command_ready()
+                || (!self.pending_net_flush.active()
+                    && direct_genet_response_lane_stage_ready(
+                        ConsoleResponseIdentity {
+                            generation: completed.generation,
+                            connection_id: completed.connection_id,
+                        },
+                        self.net
+                            .as_deref()
+                            .and_then(|net| net.console_response_lane()),
+                    ))
                 || self
                     .net
                     .as_deref()
@@ -65099,6 +65119,18 @@ mod tests {
             }
             *later_command.borrow_mut() = None;
             assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+
+            // An overlapping command may already have been dispatched while
+            // the preceding batch awaited its ACK. Its queued response must
+            // remain work after that preceding batch's exact drain.
+            let net = pump.net.as_deref_mut().expect("bound GENET adapter");
+            assert!(net.send_console_line("PONG"));
+            assert!(net.send_console_terminal_line("OK PING reply=pong"));
+            assert!(!net.buffered_console_lines_pending());
+            assert!(pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.local_seat_chunk_input_pending = true;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.local_seat_chunk_input_pending = false;
         }
 
         assert_eq!(
