@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Benchmark and load-test the REST gateway for Cohesix.
+# Purpose: Benchmark Cohesix REST workloads and raw framed console TCP.
 # Copyright 2026 Lukas Bower
 
 """REST performance and load harness for Cohesix hive-gateway.
 
 Modes:
+  - raw: Measure one authenticated framed TCP PING session without retries.
   - perf: Measure sequential vs parallel latency for status/telemetry reads.
   - simulate: Launch QEMU + hive-gateway (optional) and drive REST traffic that
     mimics a live hive with varying worker counts and intensity.
@@ -5621,9 +5622,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("perf", "simulate"),
+        choices=("perf", "simulate", "raw"),
         default="perf",
         help="Harness mode (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--raw-requests", type=int, default=64,
+        help="PING count for raw mode (1-4096); credentials use COH_AUTH_TOKEN and COH_TICKET.",
     )
     parser.add_argument(
         "--rest-url",
@@ -6118,6 +6123,23 @@ def parse_args() -> argparse.Namespace:
         )
     ):
         raise SystemExit("Pi benchmark target cannot consume QEMU run/log inputs")
+    if args.mode == "raw":
+        if not 1 <= args.raw_requests <= 4096:
+            parser.error("raw-requests must be within 1-4096")
+        if not math.isfinite(args.timeout) or not 0 < args.timeout <= 60:
+            parser.error("raw timeout must be within (0, 60] seconds")
+        if not 1 <= args.tcp_port <= 65535:
+            parser.error("raw TCP port must be within 1-65535")
+        if args.population_mode != POPULATION_HOST_MODEL:
+            parser.error("raw mode does not qualify Worker population evidence")
+        args.raw_ticket = os.environ.get("COH_TICKET", "")
+        for credential in (args.auth_token, args.raw_ticket):
+            if (not credential or len(credential.encode("utf-8")) > 4096
+                    or any(character.isspace() for character in credential)):
+                parser.error("raw mode requires bounded single-token COH_AUTH_TOKEN and COH_TICKET")
+        if args.role != "queen":
+            parser.error("raw mode requires the Queen control role")
+        return args
     if args.mode == "perf" and args.population_mode == POPULATION_EXECUTABLE:
         raise SystemExit(
             "qualified executable evidence requires --mode simulate; "
@@ -9914,11 +9936,129 @@ def run_perf(args: argparse.Namespace) -> int:
     return 0
 
 
+def raw_send_frame(stream: socket.socket, command: str) -> None:
+    """Send one complete u32-LE total-length frame within the console msize."""
+    payload = command.encode("utf-8")
+    if not payload or len(payload) + 4 > 8192:
+        raise ValueError("raw command outside console frame bounds")
+    stream.sendall((len(payload) + 4).to_bytes(4, "little") + payload)
+
+
+def raw_receive_frame(stream: socket.socket, timeout: float) -> str:
+    """Read one bounded frame with a deadline spanning all partial receives."""
+    deadline = time.monotonic() + timeout
+
+    def receive_exact(length: int) -> bytes:
+        result = bytearray()
+        while len(result) < length:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("raw frame deadline exceeded")
+            stream.settimeout(remaining)
+            chunk = stream.recv(length - len(result))
+            if not chunk:
+                raise EOFError("peer closed before a complete raw frame")
+            result.extend(chunk)
+        return bytes(result)
+
+    size = int.from_bytes(receive_exact(4), "little")
+    if not 4 <= size <= 8192:
+        raise ValueError("raw response outside console frame bounds")
+    return receive_exact(size - 4).decode("utf-8").strip()
+
+
+def raw_latency_summary(samples: Sequence[float]) -> dict:
+    """Report nearest-rank p95 without discarding startup or tail samples."""
+    ordered = sorted(samples)
+    if not ordered:
+        return {}
+    count = len(ordered)
+    return {
+        "min": ordered[0],
+        "median": (ordered[(count - 1) // 2] + ordered[count // 2]) / 2,
+        "p95": ordered[math.ceil(0.95 * count) - 1],
+        "max": ordered[-1],
+    }
+
+
+def run_raw(args: argparse.Namespace) -> int:
+    """Measure raw console transport; emit no target acceptance or Worker proof."""
+    report = {
+        "schema": "cohesix-raw-tcp-benchmark/v1", "claiming": False,
+        "proof_class": "none", "target": args.benchmark_target,
+        "transport": args.benchmark_transport, "host": args.tcp_host,
+        "port": args.tcp_port, "requests_expected": args.raw_requests,
+        "requests_completed": 0, "connection_attempts": 1,
+        "application_retries": 0, "reconnects": 0, "tcp_nodelay": True,
+        "throughput_interval": "connect-through-QUIT-EOF",
+        "latency_interval": "PING-send-to-terminal-OK-PING",
+        "p95_method": "nearest-rank ceil(0.95*n)-1",
+        "harness_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+        "started_utc": datetime.now(timezone.utc).isoformat(),
+        "samples_ms": [], "phase": "connect", "result": "fail",
+    }
+    started = time.perf_counter_ns()
+    try:
+        with socket.create_connection((args.tcp_host, args.tcp_port), args.timeout) as stream:
+            stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            stream.settimeout(args.timeout)
+            report["local_endpoint"] = list(stream.getsockname())
+
+            def expect(expected: str) -> None:
+                if raw_receive_frame(stream, args.timeout) != expected:
+                    raise ValueError("unexpected raw protocol response in " + report["phase"])
+
+            report["phase"] = "AUTH"
+            raw_send_frame(stream, "AUTH " + args.auth_token)
+            response = raw_receive_frame(stream, args.timeout)
+            if response == "OK AUTH detail=present-token":
+                expect("OK AUTH")
+            elif response != "OK AUTH":
+                raise ValueError("raw authentication rejected")
+            report["phase"] = "ATTACH"
+            raw_send_frame(stream, "ATTACH queen " + args.raw_ticket)
+            expect("OK ATTACH role=queen")
+            report["phase"] = "PING"
+            for _ in range(args.raw_requests):
+                request_started = time.perf_counter_ns()
+                raw_send_frame(stream, "PING")
+                expect("PONG")
+                expect("OK PING reply=pong")
+                report["samples_ms"].append((time.perf_counter_ns() - request_started) / 1e6)
+                report["requests_completed"] += 1
+            report["phase"] = "QUIT"
+            raw_send_frame(stream, "QUIT")
+            expect("OK QUIT")
+            stream.shutdown(socket.SHUT_WR)
+            stream.settimeout(args.timeout)
+            if stream.recv(1):
+                raise ValueError("unexpected bytes after raw QUIT")
+            report.update(result="pass", phase="complete")
+    except (OSError, EOFError, ValueError) as exc:
+        report["error_type"] = type(exc).__name__
+        report["error"] = str(exc).replace(args.auth_token, "<redacted>").replace(
+            args.raw_ticket, "<redacted>")
+    elapsed = (time.perf_counter_ns() - started) / 1e9
+    report.update(
+        ended_utc=datetime.now(timezone.utc).isoformat(), elapsed_s=elapsed,
+        requests_per_s=report["requests_completed"] / elapsed if elapsed > 0 else 0,
+        latency_ms=raw_latency_summary(report["samples_ms"]),
+    )
+    destination = pathlib.Path(args.logger.path).with_suffix(".raw-summary.json")
+    with destination.open("x", encoding="utf-8") as output:
+        json.dump(report, output, indent=2)
+        output.write("\n")
+    args.logger.log(json.dumps({key: value for key, value in report.items() if key != "samples_ms"}))
+    return 0 if report["result"] == "pass" else 1
+
+
 def main() -> int:
     """Entry point."""
     args = parse_args()
     args.logger = init_logger(args)
     try:
+        if args.mode == "raw":
+            return run_raw(args)
         if args.mode == "simulate":
             return run_simulation(args)
         return run_perf(args)

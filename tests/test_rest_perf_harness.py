@@ -41,6 +41,103 @@ sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
 
 
+class RawTranscriptSocket:
+    """Supply fixed protocol bytes, including partial-frame reads."""
+
+    def __init__(self, payload: bytes):
+        self.payload = payload
+        self.sent = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def recv(self, length):
+        chunk, self.payload = self.payload[:min(length, 3)], self.payload[min(length, 3):]
+        return chunk
+
+    def sendall(self, payload):
+        self.sent.append(payload)
+
+    def settimeout(self, _timeout):
+        pass
+
+    def setsockopt(self, *_args):
+        pass
+
+    def shutdown(self, _how):
+        pass
+
+    def getsockname(self):
+        return ("127.0.0.1", 50000)
+
+
+@pytest.mark.parametrize("payload,error", [
+    (b"\x03\x00\x00\x00", ValueError),
+    (b"\x01\x20\x00\x00", ValueError),
+    (b"\x08\x00\x00\x00PO", EOFError),
+])
+def test_raw_rejects_invalid_or_partial_frame(payload, error):
+    with pytest.raises(error):
+        rest_perf.raw_receive_frame(RawTranscriptSocket(payload), 1)
+
+
+def test_raw_frame_has_total_length_and_partial_receive_support():
+    stream = RawTranscriptSocket(b"\x08\x00\x00\x00PONG")
+    rest_perf.raw_send_frame(stream, "PING")
+    assert stream.sent == [b"\x08\x00\x00\x00PING"]
+    assert rest_perf.raw_receive_frame(stream, 1) == "PONG"
+    with pytest.raises(ValueError):
+        rest_perf.raw_send_frame(stream, "x" * 8189)
+
+
+def test_raw_p95_uses_nearest_rank_and_keeps_tail():
+    assert rest_perf.raw_latency_summary(range(1, 21)) == {
+        "min": 1, "median": 10.5, "p95": 19, "max": 20,
+    }
+    assert rest_perf.raw_latency_summary([]) == {}
+
+
+@pytest.mark.parametrize("terminal,success", [(b"OK PING reply=pong", True), (b"ERR PING", False)])
+def test_raw_session_requires_terminal_and_includes_session_overhead(monkeypatch, tmp_path, terminal, success):
+    lines = [b"OK AUTH", b"OK ATTACH role=queen", b"PONG", terminal, b"OK QUIT"]
+    transcript = b"".join((len(line) + 4).to_bytes(4, "little") + line for line in lines)
+    stream = RawTranscriptSocket(transcript)
+    monkeypatch.setattr(rest_perf.socket, "create_connection", lambda *_args: stream)
+    ticks = iter([0, 1_000_000, 3_000_000, 10_000_000])
+    monkeypatch.setattr(rest_perf.time, "perf_counter_ns", lambda: next(ticks))
+    args = SimpleNamespace(
+        benchmark_target="pi4", benchmark_transport="genet", tcp_host="127.0.0.1",
+        tcp_port=31337, raw_requests=1, timeout=1, auth_token="private-token",
+        raw_ticket="private-ticket", logger=SimpleNamespace(path=str(tmp_path / "raw.log"), log=lambda _: None),
+    )
+    assert rest_perf.run_raw(args) == (0 if success else 1)
+    data = (tmp_path / "raw.raw-summary.json").read_text()
+    assert "private-token" not in data and "private-ticket" not in data
+    report = json.loads(data)
+    assert report["requests_completed"] == int(success)
+    assert report["claiming"] is False
+    if success:
+        assert report["elapsed_s"] == 0.01
+        assert report["requests_per_s"] == 100
+        assert report["samples_ms"] == [2.0]
+        assert stream.sent[-1] == b"\x08\x00\x00\x00QUIT"
+    else:
+        assert report["phase"] == "PING"
+        assert report["samples_ms"] == []
+
+
+@pytest.mark.parametrize("extra", [["--raw-requests", "0"], ["--timeout", "nan"], ["--role", "worker"]])
+def test_raw_cli_rejects_invalid_bounds(monkeypatch, extra):
+    monkeypatch.setenv("COH_AUTH_TOKEN", "private-token")
+    monkeypatch.setenv("COH_TICKET", "private-ticket")
+    monkeypatch.setattr(sys, "argv", ["rest_perf_harness.py", "--mode", "raw", *extra])
+    with pytest.raises(SystemExit):
+        rest_perf.parse_args()
+
+
 def _start_tcp_auth_server(
     responses: list[str],
 ) -> tuple[int, threading.Thread, list[bytes], list[BaseException]]:

@@ -11,6 +11,19 @@ Retained Pi diagnostic-kernel results are a distinct baseline. Use
 submission does not imply concurrent target commands. Report full-batch means
 separately from per-request latency and retain each selected manifest identity.
 
+Use `--mode raw --raw-requests 64` for the raw framed console TCP baseline,
+with `--tcp-host`, `--benchmark-target`, `--benchmark-transport`, and `--timeout 10`.
+Supply authentication privately through `COH_AUTH_TOKEN` and `COH_TICKET`.
+This mode opens one connection, authenticates and attaches Queen, completes
+each PING through both `PONG` and its exact terminal, then requires QUIT and EOF.
+It uses TCP_NODELAY, no warmup, no retries, and no gateway. Throughput includes
+connect through QUIT/EOF; per-request p95 uses nearest rank over every PING.
+The separate `cohesix-raw-tcp-benchmark/v1` JSON preserves failed attempts and
+partial counts, and always has `claiming=false` and `proof_class=none`.
+Bind its timestamp and local endpoint to the selected boot and packet capture;
+it cannot replace exact-image target evidence or qualify Worker pressure.
+Existing REST modes, host clients, SDK, and target runtime contracts are unchanged.
+
 Cohesix benchmarks measure a bounded control plane, not an unconstrained
 throughput service. A valid result preserves the same tickets, namespace
 semantics, audit behavior, backpressure, console grammar, and target ownership
