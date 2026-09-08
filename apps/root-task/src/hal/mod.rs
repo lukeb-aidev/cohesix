@@ -3844,6 +3844,24 @@ fn driver_affinity_target(contract: DriverTaskContract) -> Option<DriverAffinity
     }
 }
 
+/// Route only the admitted MCS GENET interrupt to its active SC's core. Other
+/// drivers and classic profiles retain their existing interrupt routing.
+#[cfg(feature = "kernel")]
+fn runtime_irq_owner_target(
+    kernel_mcs: bool,
+    contract: DriverTaskContract,
+    owner_cores: Option<(u8, u8)>,
+) -> Result<Option<u8>, HalError> {
+    if !kernel_mcs || contract != GENET_DRIVER_TASK_CONTRACT {
+        return Ok(None);
+    }
+    match owner_cores {
+        Some((core, sched_control_core)) if core == sched_control_core => Ok(Some(core)),
+        Some(_) => Err(HalError::Unsupported("genet-irq-owner-core-mismatch")),
+        None => Err(HalError::Unsupported("genet-irq-owner-core-missing")),
+    }
+}
+
 #[cfg(feature = "kernel")]
 fn apply_driver_tcb_affinity_for_boot(
     contract: DriverTaskContract,
@@ -6840,12 +6858,18 @@ impl<'a> KernelHal<'a> {
         };
         let mut guard = RuntimeIrqInstallGuard::empty();
         for irq in irqs.into_iter().flatten() {
+            let owner_cores =
+                driver_task::driver_task_temporal_config(driver_task::DriverTaskHotPath::GenetNic)
+                    .map(|owner| (owner.core, owner.sched_control_core));
+            let target_core =
+                runtime_irq_owner_target(cfg!(sel4_config_kernel_mcs), contract, owner_cores)?;
             let kernel = match self.bind_irq_to_notification_with_badge(
                 Irq(irq.irq),
                 generated_irq_trigger(irq.trigger),
                 seL4_Word::from(irq.badge),
                 notification,
                 false,
+                target_core,
             ) {
                 Ok(binding) => binding,
                 Err(err) => {
@@ -6929,6 +6953,17 @@ impl<'a> KernelHal<'a> {
                 ),
             );
             crate::bootstrap::log::force_uart_line(line.as_str());
+            if let Some(core) = target_core {
+                line.clear();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "DRIVER_TASK_IRQ_TARGET contract={} irq={} core={} source=mcs-owner status=installed",
+                        contract.name, irq.irq, core,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+            }
         }
         Ok(guard)
     }
@@ -6949,6 +6984,7 @@ impl<'a> KernelHal<'a> {
             irq_notification_badge(irq),
             notification_slot,
             true,
+            None,
         ) {
             Ok(binding) => Ok(binding),
             Err(err) => {
@@ -6969,6 +7005,7 @@ impl<'a> KernelHal<'a> {
         badge: seL4_Word,
         notification_slot: seL4_CPtr,
         owns_notification: bool,
+        target_core: Option<u8>,
     ) -> Result<KernelIrqBinding, HalError> {
         if badge == 0 {
             return Err(HalError::Unsupported("irq-notification-badge"));
@@ -6978,17 +7015,18 @@ impl<'a> KernelHal<'a> {
         let handler_slot = self.env.allocate_slot();
 
         #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-        let get_err = sel4::irq_control_get_trigger_handler(
+        let get_err = sel4::irq_control_get_trigger_handler_on_core(
             irq.0 as seL4_Word,
             trigger.arm_trigger_word(),
             root_cnode,
             handler_slot,
             depth,
+            target_core,
         );
 
         #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
         let get_err = {
-            let _ = trigger;
+            let _ = (trigger, target_core);
             sel4::irq_control_get_level_handler(irq.0 as seL4_Word, root_cnode, handler_slot, depth)
         };
 
@@ -8750,6 +8788,55 @@ mod tests {
     fn irq_trigger_words_match_arm_sel4_contract() {
         assert_eq!(IrqTrigger::Level.arm_trigger_word(), 0);
         assert_eq!(IrqTrigger::Edge.arm_trigger_word(), 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_irq_owner_target_uses_the_active_sc_core() {
+        for core in [0, 1, 3] {
+            assert_eq!(
+                super::runtime_irq_owner_target(
+                    true,
+                    super::GENET_DRIVER_TASK_CONTRACT,
+                    Some((core, core)),
+                ),
+                Ok(Some(core)),
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_irq_owner_target_rejects_missing_or_conflicting_authority() {
+        assert_eq!(
+            super::runtime_irq_owner_target(true, super::GENET_DRIVER_TASK_CONTRACT, None),
+            Err(super::HalError::Unsupported("genet-irq-owner-core-missing")),
+        );
+        assert_eq!(
+            super::runtime_irq_owner_target(true, super::GENET_DRIVER_TASK_CONTRACT, Some((1, 2)),),
+            Err(super::HalError::Unsupported(
+                "genet-irq-owner-core-mismatch"
+            )),
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_irq_owner_target_preserves_classic_and_other_driver_routes() {
+        assert_eq!(
+            super::runtime_irq_owner_target(false, super::GENET_DRIVER_TASK_CONTRACT, None),
+            Ok(None),
+        );
+        for contract in [
+            super::SERIAL_DRIVER_TASK_CONTRACT,
+            super::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            super::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ] {
+            assert_eq!(
+                super::runtime_irq_owner_target(true, contract, None),
+                Ok(None)
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

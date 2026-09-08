@@ -10496,6 +10496,20 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET IRQ delivery to its generated owner core — under
+    `m26e-qemu-shared-control-path-performance`, restoring
+    `m26e-console-network-service-isolation`, align only the MCS GENET SPI's
+    physical delivery with the active driver scheduling-context core. The
+    selected GICv2 kernel initializes SPIs to the boot CPU; the existing
+    four-word ARM GetTrigger call does not retarget them, despite GENET's
+    generated core-1 execution. HAL must use the selected upstream
+    five-word GetTriggerCore contract, with target in MR4, and reject absent
+    or conflicting owner authority rather than silently retaining CPU0.
+    Preserve the same IRQ189 capability, trigger, notification, badge, sole
+    device owner, SC budget/period/refills, guards and packet bounds. Keep
+    other IRQ routes unchanged. Pure message-layout/selection checks and
+    exact-profile builds precede paired GENET RAM raw/coh/REST evidence;
+    reduced cross-core scheduling overhead is a hypothesis until measured.
   - GENET exact-packet wake/receive discriminator — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, reuse the bounded queue timing

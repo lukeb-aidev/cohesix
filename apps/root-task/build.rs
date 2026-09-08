@@ -136,6 +136,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_config_enable_smp_support)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_export_vcnt_user)");
 
     if let Err(error) = enforce_guarded_ipc() {
@@ -1578,6 +1579,9 @@ fn emit_config_flags(root: &Path, debug_syscalls_enabled: bool) {
 
     if let Some(true) = probe_config_flag(root, "CONFIG_KERNEL_MCS") {
         println!("cargo:rustc-cfg=sel4_config_kernel_mcs");
+    }
+    if let Some(true) = probe_config_flag(root, "CONFIG_ENABLE_SMP_SUPPORT") {
+        println!("cargo:rustc-cfg=sel4_config_enable_smp_support");
     }
 }
 
