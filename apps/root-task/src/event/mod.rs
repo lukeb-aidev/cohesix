@@ -275,32 +275,6 @@ struct DirectGenetNetstatsLines {
     ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     peer: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     slice: Option<[HeaplessString<DEFAULT_LINE_CAPACITY>; 6]>,
-    queue: [[Option<HeaplessString<DEFAULT_LINE_CAPACITY>>; 2]; 2],
-}
-
-#[cfg(feature = "net-console")]
-fn format_genet_queue_timing(
-    direction: &str,
-    timing: Option<console_network_abi::GenetQueueTiming>,
-) -> [Option<HeaplessString<DEFAULT_LINE_CAPACITY>>; 2] {
-    let Some(t) = timing else {
-        return [
-            Some(format_message(format_args!(
-                "netstats: genet_queue schema=v1 dir={direction} present=no"
-            ))),
-            None,
-        ];
-    };
-    [Some(format_message(format_args!(
-        "netstats: genet_queue schema=v1 dir={direction} gen={:x} pub={:x} n={:x} sum={:x} prod={:x} copy={:x} ring={:x}",
-        t.generation, t.publication, t.samples, t.total_ticks,
-        t.produced_ticks, t.copied_ticks, t.ring_sequence,
-    ))), Some(format_message(format_args!(
-        "netstats: genet_queue_peak schema=v1 dir={direction} gen={:x} pub={:x} src={:08x}:{:04x} dst={:08x}:{:04x} seq={:08x} ack={:08x} flags={:03x} len={}",
-        t.generation, t.publication, t.source_ipv4, t.source_port,
-        t.destination_ipv4, t.destination_port, t.tcp_sequence, t.tcp_ack,
-        t.tcp_flags, t.frame_len,
-    ))) ]
 }
 
 #[cfg(feature = "net-console")]
@@ -368,10 +342,6 @@ fn format_direct_genet_slice_netstats(
 fn format_direct_genet_netstats(
     diagnostic: crate::net::DirectGenetDiagnostics,
 ) -> DirectGenetNetstatsLines {
-    let queue = [
-        format_genet_queue_timing("rx", diagnostic.queue_timing[0]),
-        format_genet_queue_timing("tx", diagnostic.queue_timing[1]),
-    ];
     let (summary, flags) = diagnostic.snapshot.map_or_else(
         || {
             (
@@ -452,11 +422,9 @@ fn format_direct_genet_netstats(
             ring: None,
             peer: None,
             slice: None,
-            queue,
         };
     };
     DirectGenetNetstatsLines {
-        queue,
         summary,
         flags,
         before_irq,
@@ -36060,9 +36028,6 @@ where
                                 if let Some(line) = lines.peer {
                                     self.emit_console_line(line.as_str());
                                 }
-                                for line in lines.queue.into_iter().flatten().flatten() {
-                                    self.emit_console_line(line.as_str());
-                                }
                                 if let Some(slice) = lines.slice {
                                     for line in slice {
                                         self.emit_console_line(line.as_str());
@@ -38656,41 +38621,6 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn genet_queue_rows_preserve_maximum_width_and_unavailable_state() {
-        let timing = console_network_abi::GenetQueueTiming {
-            generation: u64::MAX,
-            publication: u64::MAX,
-            samples: u64::MAX,
-            total_ticks: u64::MAX,
-            produced_ticks: u64::MAX,
-            copied_ticks: u64::MAX,
-            ring_sequence: u64::MAX,
-            source_ipv4: u32::MAX,
-            destination_ipv4: u32::MAX,
-            source_port: u16::MAX,
-            destination_port: u16::MAX,
-            tcp_sequence: u32::MAX,
-            tcp_ack: u32::MAX,
-            tcp_flags: 0x1ff,
-            frame_len: 1536,
-        };
-        for direction in ["rx", "tx"] {
-            let rows = format_genet_queue_timing(direction, Some(timing));
-            for row in rows.into_iter().flatten() {
-                assert!(!row.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{row}");
-                assert!(row.len() < DEFAULT_LINE_CAPACITY - DIAGNOSTIC_TRUNCATION_MARKER.len());
-                assert!(row.contains("gen=ffffffffffffffff pub=ffffffffffffffff"));
-            }
-            let absent = format_genet_queue_timing(direction, None);
-            assert!(absent[0]
-                .as_ref()
-                .expect("absence row")
-                .ends_with("present=no"));
-            assert!(absent[1].is_none());
-        }
-    }
-
-    #[test]
     fn direct_genet_slice_netstats_are_exact_at_legal_maxima() {
         let receipt = console_network_abi::DirectGenetRuntimeSliceReceipt {
             dpc_turn: u64::MAX,
@@ -38802,7 +38732,6 @@ mod tests {
 
         assert!(snapshot.valid_for(u64::MAX));
         let lines = format_direct_genet_netstats(crate::net::DirectGenetDiagnostics {
-            queue_timing: [None; 2],
             refresh: "ready-stale",
             previous: Some(snapshot),
             snapshot: Some(snapshot),
@@ -38864,7 +38793,6 @@ mod tests {
         poisoned.tx_consumer_poison = console_network_abi::DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED;
         assert!(poisoned.valid_for(u64::MAX));
         let poison_lines = format_direct_genet_netstats(crate::net::DirectGenetDiagnostics {
-            queue_timing: [None; 2],
             refresh: "ready-stale",
             previous: None,
             snapshot: Some(poisoned),
@@ -38878,7 +38806,6 @@ mod tests {
         assert!(!poison_peer.contains(DIAGNOSTIC_TRUNCATION_MARKER));
 
         let missing = format_direct_genet_netstats(crate::net::DirectGenetDiagnostics {
-            queue_timing: [None; 2],
             refresh: "ready-missing",
             previous: None,
             snapshot: None,

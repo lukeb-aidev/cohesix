@@ -1191,22 +1191,17 @@ fn publish_exchange(
 }
 
 fn now_ms(timer_clock_hz: u64) -> u64 {
-    let counter = counter_ticks();
-    let seconds = counter / timer_clock_hz;
-    let remainder = counter % timer_clock_hz;
-    seconds
-        .saturating_mul(1000)
-        .saturating_add(remainder.saturating_mul(1000) / timer_clock_hz)
-}
-
-pub(super) fn counter_ticks() -> u64 {
     let counter: u64;
     // SAFETY: The selected seL4 profile exports CNTVCT_EL0 to userspace and
     // the sealed descriptor carries that generated profile's TIMER_CLOCK_HZ.
     unsafe {
         core::arch::asm!("mrs {value}, cntvct_el0", value = out(reg) counter, options(nostack, nomem));
     }
-    counter
+    let seconds = counter / timer_clock_hz;
+    let remainder = counter % timer_clock_hz;
+    seconds
+        .saturating_mul(1000)
+        .saturating_add(remainder.saturating_mul(1000) / timer_clock_hz)
 }
 
 fn next_sequence(sequence: u64) -> u64 {

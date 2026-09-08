@@ -1281,15 +1281,8 @@ unchanged.
   stale, wrong-generation, or
   malformed data is unavailable diagnostic evidence, not a reason to change
   packet, IRQ, retry, recovery, or containment behavior. Ordinary packet turns
-  do not scan this record. Optional queue-timing v1 uses `[640,768)` for the
-  console-owned RX record and `[768,896)` for the GENET-owned TX record;
-  `[896,4096)` remains reserved, zeroed at construction and scrubbed at containment.
-  Producer stamps occupy packet-page `[2048,2080)` outside the bounded frame.
-  The INTERFACES layout binds every observation to generation and packet sequence;
-  missing timing never alters packet acceptance. The two intervals measure
-  stamp-before-publication to consumer stable copy, including orchestration,
-  scheduling and copy, without identifying CPU time or physical arrival.
-  No counter publication creates a notification, wait or device operation.
+  do not scan the record, and page bytes `[640,4096)` remain reserved, zeroed at
+  construction, and scrubbed at containment.
 - Diagnostic v6 includes one 128-byte maximum-slice receipt at record offset
   184. Its ordered counter samples separate source/reclaim, packet work,
   IRQ work and final durable checking; a confirmed RX publication precedes

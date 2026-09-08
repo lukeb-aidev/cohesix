@@ -2148,8 +2148,6 @@ pub struct DirectGenetDiagnostics {
     /// Stable pre-idle-service record published by an exact successful replay,
     /// or the most recent exact record when the replay did not complete.
     pub snapshot: Option<console_network_abi::DirectGenetRuntimeDiagnostic>,
-    /// Independent RX and TX consumer observations, absent if uncommitted or stale.
-    pub queue_timing: [Option<console_network_abi::GenetQueueTiming>; 2],
 }
 
 #[cfg(any(

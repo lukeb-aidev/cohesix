@@ -16,10 +16,10 @@
 use core::sync::atomic::{fence, AtomicU64, AtomicU8, Ordering};
 
 use console_network_runtime::abi::{
-    genet_queue_stamp, DirectGenetConsumerCommit, DirectGenetControlState, DirectGenetCursorRole,
+    DirectGenetConsumerCommit, DirectGenetControlState, DirectGenetCursorRole,
     DirectGenetCursorState, DirectGenetDirection, DirectGenetError, DirectGenetLayout,
     DirectGenetProducerCommit, DirectGenetRingSnapshot, DirectGenetSlotPage, DirectGenetSlotRecord,
-    GenetQueueTiming, DIRECT_GENET_CONTROL_HEADER_BYTES, DIRECT_GENET_CONTROL_STATE_BYTES,
+    DIRECT_GENET_CONTROL_HEADER_BYTES, DIRECT_GENET_CONTROL_STATE_BYTES,
     DIRECT_GENET_CURSOR_STATE_BYTES, DIRECT_GENET_POISON_INVALID_CONTROL,
     DIRECT_GENET_POISON_INVALID_CURSOR, DIRECT_GENET_POISON_INVALID_SLOT,
     DIRECT_GENET_POISON_STALE_GENERATION, DIRECT_GENET_RX_CONSUMER_STATE_OFFSET,
@@ -27,7 +27,6 @@ use console_network_runtime::abi::{
     DIRECT_GENET_SLOT_COMMIT_OFFSET, DIRECT_GENET_SLOT_HEADER_BYTES,
     DIRECT_GENET_SLOT_PAYLOAD_OFFSET, DIRECT_GENET_TX_CONSUMER_STATE_OFFSET,
     DIRECT_GENET_TX_PRODUCER_STATE_OFFSET, DIRECT_GENET_TX_SLOT_COUNT, ETHERNET_FRAME_BYTES,
-    GENET_QUEUE_STAMP_OFFSET, GENET_QUEUE_TIMING_BYTES, GENET_QUEUE_TIMING_COMMIT_OFFSET,
     SHARED_PAGE_BYTES,
 };
 
@@ -49,7 +48,6 @@ struct PendingReceive {
 
 /// One bounded CPU-only SPSC endpoint owned by the console-network child.
 pub struct DirectGenetLink {
-    queue_timing: GenetQueueTiming,
     generation: u64,
     control_vaddr: usize,
     rx_vaddrs: [usize; DIRECT_GENET_RX_SLOT_COUNT],
@@ -85,7 +83,6 @@ impl DirectGenetLink {
             index += 1;
         }
         Ok(Self {
-            queue_timing: GenetQueueTiming::EMPTY,
             generation: layout.generation,
             control_vaddr,
             rx_vaddrs,
@@ -161,29 +158,6 @@ impl DirectGenetLink {
                 DirectGenetDirection::Rx,
                 sequence,
             )?;
-            // The packet remains consumer-owned until cursor retirement.
-            // Timing cannot accept, reject, retry or retain that packet.
-            let mut stamp = [0u8; 32];
-            self.copy_from_shared(
-                self.rx_vaddrs[slot_index],
-                GENET_QUEUE_STAMP_OFFSET,
-                &mut stamp,
-            );
-            if self.queue_timing.observe(
-                &stamp,
-                self.generation,
-                sequence,
-                queue_counter_ticks(),
-                record.frame(),
-            ) {
-                self.publish_sequence_last_region(
-                    self.control_vaddr,
-                    GenetQueueTiming::offset(DirectGenetDirection::Rx),
-                    &self.queue_timing.encode(),
-                    GENET_QUEUE_TIMING_COMMIT_OFFSET,
-                    GENET_QUEUE_TIMING_BYTES,
-                );
-            }
             self.pending_receive = Some(PendingReceive { initial, record });
             self.work_pending = true;
             self.finish_pending_receive()?;
@@ -636,23 +610,13 @@ impl DirectGenetLink {
         frame: &[u8],
     ) -> Result<(), DirectGenetError> {
         let mut page = [0u8; SHARED_PAGE_BYTES];
-        let sequence = DirectGenetSlotPage::publish_next_into(
+        DirectGenetSlotPage::publish_next_into(
             &mut page,
             direction,
             self.generation,
             after_cursor,
             frame,
         )?;
-        // Sidecar words precede the existing packet commit and are never
-        // packet authority. The producer already owns this free slot.
-        let stamp = genet_queue_stamp(self.generation, sequence, queue_counter_ticks());
-        for (index, word) in stamp.chunks_exact(8).enumerate() {
-            self.write_shared_atomic_u64(
-                address + GENET_QUEUE_STAMP_OFFSET + index * 8,
-                u64::from_le_bytes(core::array::from_fn(|i| word[i])),
-                Ordering::Relaxed,
-            );
-        }
         self.publish_sequence_last_region(
             address,
             0,
@@ -780,17 +744,6 @@ impl DirectGenetLink {
     }
 }
 
-fn queue_counter_ticks() -> u64 {
-    #[cfg(target_os = "none")]
-    {
-        crate::kernel::counter_ticks()
-    }
-    #[cfg(not(target_os = "none"))]
-    {
-        0
-    }
-}
-
 fn checked_page_address(address: u64) -> Result<usize, DirectGenetError> {
     let address = usize::try_from(address).map_err(|_| DirectGenetError::InvalidLayout)?;
     address
@@ -852,7 +805,6 @@ mod tests {
         .expect("first sequence publishes");
         let address = slot.0.as_mut_ptr() as usize;
         let link = DirectGenetLink {
-            queue_timing: GenetQueueTiming::EMPTY,
             generation: GENERATION,
             control_vaddr: address,
             rx_vaddrs: [address; DIRECT_GENET_RX_SLOT_COUNT],
@@ -892,7 +844,6 @@ mod tests {
         let mut slot = Box::new(SharedPage([0; SHARED_PAGE_BYTES]));
         let address = slot.0.as_mut_ptr() as usize;
         let mut link = DirectGenetLink {
-            queue_timing: GenetQueueTiming::EMPTY,
             generation: GENERATION,
             control_vaddr: address,
             rx_vaddrs: [address; DIRECT_GENET_RX_SLOT_COUNT],

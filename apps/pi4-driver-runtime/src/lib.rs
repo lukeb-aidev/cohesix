@@ -2669,7 +2669,6 @@ impl GenetDirectMcsWindow {
 
 #[derive(Debug, Eq, PartialEq)]
 struct GenetRuntimeState {
-    queue_timing: console_network_abi::GenetQueueTiming,
     initialized: bool,
     irq_badge: u32,
     irq_handler_slot: u32,
@@ -2764,7 +2763,6 @@ impl GenetRuntimeState {
             direct_genet_mcs_window: GenetDirectMcsWindow::empty(),
             direct_genet_slice: GenetSliceReceipt::empty(),
             direct_genet_max_slice: GenetSliceReceipt::empty(),
-            queue_timing: console_network_abi::GenetQueueTiming::EMPTY,
             direct_genet_pending_rx: None,
             direct_genet_pending_tx: None,
             direct_genet_cutover_phase: GenetDirectCutoverPhase::Legacy,
@@ -2830,7 +2828,6 @@ impl GenetRuntimeState {
         self.direct_genet_mcs_window = GenetDirectMcsWindow::empty();
         self.direct_genet_slice = GenetSliceReceipt::empty();
         self.direct_genet_max_slice = GenetSliceReceipt::empty();
-        self.queue_timing = console_network_abi::GenetQueueTiming::EMPTY;
         self.direct_genet_pending_rx = None;
         self.direct_genet_pending_tx = None;
         self.direct_genet_cutover_phase = GenetDirectCutoverPhase::Legacy;
@@ -50666,15 +50663,6 @@ fn genet_direct_publish_rx_slot(
         DIRECT_GENET_SLOT_PAYLOAD_OFFSET,
         &staged[DIRECT_GENET_SLOT_PAYLOAD_OFFSET..DIRECT_GENET_SLOT_PAYLOAD_OFFSET + frame_len],
     )?;
-    // Optional producer-owned timing bytes precede the existing slot commit.
-    // Observational failure never changes the accepted packet operation.
-    let stamp =
-        console_network_abi::genet_queue_stamp(generation, sequence, runtime_timer_counter_ticks());
-    let _ = genet_direct_copy_to_shared(
-        page_index,
-        console_network_abi::GENET_QUEUE_STAMP_OFFSET,
-        &stamp,
-    );
     driver_task_shared_store_barrier();
     genet_direct_write_shared_u64(page_index, DIRECT_GENET_SLOT_COMMIT_OFFSET, sequence)
 }
@@ -50909,16 +50897,6 @@ fn genet_direct_service_tx(
                 return (false, service_units, progressed);
             }
         };
-        let mut queue_stamp = [0u8; 32];
-        let timing_page = DIRECT_GENET_TX_FIRST_PAGE_INDEX
-            + ((record.sequence() - 1) % initial.capacity) as usize;
-        let queue_stamp_valid = genet_direct_copy_from_shared(
-            timing_page,
-            console_network_abi::GENET_QUEUE_STAMP_OFFSET,
-            &mut queue_stamp,
-        )
-        .is_ok();
-        let copied_ticks = runtime_timer_counter_ticks();
         match genet_runtime_submit_tx_from(state, record.frame().len(), |index| {
             record.frame()[index]
         }) {
@@ -50928,17 +50906,6 @@ fn genet_direct_service_tx(
                 return (false, service_units, progressed);
             }
             GenetTxSubmitResult::Submitted(_) => {
-                if queue_stamp_valid
-                    && state.queue_timing.observe(
-                        &queue_stamp,
-                        state.direct_genet_generation,
-                        record.sequence(),
-                        copied_ticks,
-                        record.frame(),
-                    )
-                {
-                    let _ = genet_publish_queue_timing(state.queue_timing);
-                }
                 service_units = service_units.saturating_add(1);
                 progressed = true;
                 state.direct_genet_slice.tx_cursor = record.sequence();
@@ -50985,19 +50952,6 @@ fn genet_direct_service_tx(
         }
     }
     (serviced, service_units, progressed)
-}
-
-fn genet_publish_queue_timing(
-    timing: console_network_abi::GenetQueueTiming,
-) -> Result<(), DirectGenetError> {
-    let offset = console_network_abi::GENET_TX_QUEUE_TIMING_OFFSET;
-    let commit = console_network_abi::GENET_QUEUE_TIMING_COMMIT_OFFSET;
-    let encoded = timing.encode();
-    genet_direct_write_shared_u64(0, offset + commit, 0)?;
-    driver_task_shared_store_barrier();
-    genet_direct_copy_to_shared(0, offset, &encoded[..commit])?;
-    driver_task_shared_store_barrier();
-    genet_direct_write_shared_u64(0, offset + commit, timing.publication)
 }
 
 fn genet_direct_finish_rx_commit(

@@ -10496,21 +10496,6 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
-  - GENET queue-timing observation — restoring
-    `m26e-console-network-service-isolation` after physical GENET pressure
-    exposed millisecond tails without long owner service slices. Add optional
-    generation/sequence-bound producer stamps and sole-consumer RX/TX timing
-    summaries in existing unused shared-page regions. No waits, SC numbers,
-    kernel changes, packet authority, manifest resources or payload retention.
-    Fixed wire fixtures, malformed/unavailable observations, bounded diagnostic
-    formatting and stable-reader tests precede exact release QEMU/Pi builds.
-    A fresh GENET raw-first boot and medium/high canonical REST workloads must
-    locate the queue boundary; timings alone cannot identify CPU or SC exhaustion.
-    Compatibility review: cohsh and its .coh grammar, the complete host-tool
-    suite, tools/cohesix-py, Hive Gateway and rest_perf_harness.py retain their
-    protocols, implementations and report schemas; netstats gains additive
-    bounded observational rows documented in INTERFACES. Generated manifests
-    and existing ABI versions remain exact, with a separate optional v1 record.
   - Initial-SC runtime admission repair — the unchanged `d16284b35`
     GENET pair regressed to approximately 20 ms per PING because the runtime
     continuation predicate still required root SC bits 7/refills 2. Kernel
