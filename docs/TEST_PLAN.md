@@ -7098,6 +7098,18 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       wake. A stable publication visible before that cut must return directly
       to the rotor.
 
+      Optional GENET queue-timing v1 must prove exact independent wire fixtures,
+      stale/malformed/fragment/pure-ACK rejection without state mutation,
+      directional-flow reset with monotonic publication, saturation/exhaustion,
+      stable generation-bound reads and maximum-width untruncated netstats rows.
+      Existing direct-link tests retain exact-once packet/cursor behavior with
+      unavailable stamps. Retain shared-page layout and bounded console backlog.
+      Run the narrow root-MCS release QEMU canary for the shared reader/clock
+      refactor, then exact release Pi first-raw TCP and medium/high REST through
+      rest_perf_harness.py, with boot-paired captures and immutable source/image
+      provenance. Queue intervals include scheduling and publication; no claim
+      of pure CPU, hardware arrival or SC exhaustion follows from them alone.
+
       Cross-core productive progress requires exact generation, connection,
       stage, and publication identity. A stage-bearing continuation must bind
       the exact nonzero one-slot child-control sequence; a later sequential
@@ -7208,7 +7220,8 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       Direct-GENET diagnostic coverage must prove the exact page-0 layout:
       control header `[0,64)`, four cursor records `[64,320)`, optional aligned
       320-byte diagnostic-v6 record `[320,640)`, record-relative sequence-last
-      commit at offset 312, and still-reserved tail `[640,4096)`. ABI tests must
+      commit at offset 312, optional RX/TX queue-timing v1 records
+      `[640,768)`/`[768,896)`, and still-reserved tail `[896,4096)`. ABI tests must
       prove record offset 12 round-trips the direct MCS packet-slice high-water,
       record offset 108 round-trips cumulative `dpc_level_adoptions`, and
       offsets 160, 168, and 176 round-trip nonzero raw notification receipts,
@@ -7219,7 +7232,8 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       torn, stale, malformed, or wrong-generation record is unavailable rather
       than accepted. Root must stable-read the complete record around its commit
       and require the exact live nonzero direct generation. Ordinary packet turns
-      must neither scan nor mutate the diagnostic or reserved tail.
+      must not scan the root diagnostic or mutate still-reserved bytes.
+      Queue observations use only their explicitly assigned regions.
       The 128-byte v6 extension at record offset 184 must preserve the first
       longest valid slice, reject invalid or backwards stage clocks and
       inconsistent direction/cursor/tuple fields. The three formerly reserved words

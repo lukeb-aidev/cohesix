@@ -9772,6 +9772,7 @@ impl NetPoller for GenetNetStack {
                 refresh,
                 previous,
                 snapshot,
+                queue_timing: console.direct_genet_queue_timing(),
             });
         }
         #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]

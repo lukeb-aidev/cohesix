@@ -129,29 +129,44 @@ fn sample_direct_genet_runtime_diagnostic(
     control_root_ptr: usize,
     generation: u64,
 ) -> Option<DirectGenetRuntimeDiagnostic> {
+    let encoded = sample_direct_genet_observation::<
+        DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES,
+        { DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES / 8 },
+    >(control_root_ptr, DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET)?;
+    DirectGenetRuntimeDiagnostic::decode(&encoded, generation).ok()
+}
+
+fn sample_direct_genet_observation<const BYTES: usize, const WORDS: usize>(
+    control_root_ptr: usize,
+    offset: usize,
+) -> Option<[u8; BYTES]> {
     if control_root_ptr == 0
         || !control_root_ptr.is_multiple_of(SHARED_PAGE_BYTES)
-        || generation == 0
+        || BYTES != WORDS * 8
+        || BYTES < 8
+        || offset % 8 != 0
+        || offset
+            .checked_add(BYTES)
+            .is_none_or(|end| end > SHARED_PAGE_BYTES)
     {
         return None;
     }
-    let diagnostic_ptr = control_root_ptr.checked_add(DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET)?;
-    const DIAGNOSTIC_WORD_COUNT: usize = DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES / 8;
-    const COMMIT_WORD_INDEX: usize = DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET / 8;
+    let diagnostic_ptr = control_root_ptr.checked_add(offset)?;
+    let commit_offset = BYTES - 8;
+    let commit_word_index = WORDS - 1;
     // SAFETY: Construction retains a page-aligned root mapping for the exact
     // CPU-only control frame. This page-local diagnostic region is 64-bit
-    // aligned, has exactly `DIAGNOSTIC_WORD_COUNT` initialized words, and both
+    // aligned, has exactly `WORDS` initialized words, and both
     // participants access every overlapping word through `AtomicU64`. The
     // child is the sole writer and root retains only this observational view.
-    let diagnostic_words =
-        unsafe { &*(diagnostic_ptr as *const [AtomicU64; DIAGNOSTIC_WORD_COUNT]) };
-    let first_commit = diagnostic_words[COMMIT_WORD_INDEX].load(Ordering::Acquire);
+    let diagnostic_words = unsafe { &*(diagnostic_ptr as *const [AtomicU64; WORDS]) };
+    let first_commit = diagnostic_words[commit_word_index].load(Ordering::Acquire);
     if first_commit == 0 {
         return None;
     }
-    let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
+    let mut encoded = [0u8; BYTES];
     let mut offset = 0usize;
-    while offset < DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET {
+    while offset < commit_offset {
         let word = diagnostic_words[offset / 8].load(Ordering::Relaxed);
         encoded[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
         offset += 8;
@@ -161,14 +176,12 @@ fn sample_direct_genet_runtime_diagnostic(
     // fence prevents accepting a mixed body under two old commit samples.
     // An acquire load alone would order only the reads that follow it.
     fence(Ordering::Acquire);
-    let second_commit = diagnostic_words[COMMIT_WORD_INDEX].load(Ordering::Acquire);
+    let second_commit = diagnostic_words[commit_word_index].load(Ordering::Acquire);
     if second_commit != first_commit {
         return None;
     }
-    encoded[DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
-        ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET + 8]
-        .copy_from_slice(&second_commit.to_le_bytes());
-    DirectGenetRuntimeDiagnostic::decode(&encoded, generation).ok()
+    encoded[commit_offset..commit_offset + 8].copy_from_slice(&second_commit.to_le_bytes());
+    Some(encoded)
 }
 
 const DIRECT_VIRTIO_MMIO_PADDR: usize = 0x0a00_0000;
@@ -477,6 +490,23 @@ impl ConsoleNetworkRuntime {
             return None;
         }
         sample_direct_genet_runtime_diagnostic(self.direct_genet_root_ptrs[0], self.generation())
+    }
+
+    /// Read independent consumer-owned queue timing without touching packet credit.
+    pub(crate) fn direct_genet_queue_timing(
+        &self,
+    ) -> [Option<console_network_abi::GenetQueueTiming>; 2] {
+        use console_network_abi::{
+            GenetQueueTiming, GENET_RX_QUEUE_TIMING_OFFSET, GENET_TX_QUEUE_TIMING_OFFSET,
+        };
+        if !self.direct_genet() || !self.direct_genet_armed || !self.activated || self.contained {
+            return [None; 2];
+        }
+        [GENET_RX_QUEUE_TIMING_OFFSET, GENET_TX_QUEUE_TIMING_OFFSET].map(|offset| {
+            let bytes =
+                sample_direct_genet_observation::<128, 16>(self.direct_genet_root_ptrs[0], offset)?;
+            GenetQueueTiming::decode(&bytes, self.generation())
+        })
     }
 
     /// Whether the immutable ABI-v6 descriptor and initial registers are ready.
@@ -2800,6 +2830,43 @@ mod tests {
             DurableChildPublication::AuthenticatedControl.committed_for_badge(WAKE_PUBLICATION_ACK),
             Err(BoundaryError::HandoffFailed),
         );
+    }
+
+    #[test]
+    fn direct_genet_queue_reader_requires_stable_commit_and_live_generation() {
+        let timing = console_network_abi::GenetQueueTiming {
+            generation: 7,
+            publication: 1,
+            samples: 1,
+            total_ticks: 40,
+            produced_ticks: 100,
+            copied_ticks: 140,
+            ring_sequence: 9,
+            frame_len: 55,
+            ..console_network_abi::GenetQueueTiming::EMPTY
+        };
+        let mut page = AlignedControlPage([0; SHARED_PAGE_BYTES]);
+        let ptr = page.0.as_ptr() as usize;
+        for offset in [640, 768] {
+            page.0[offset..offset + 128].copy_from_slice(&timing.encode());
+            let bytes = sample_direct_genet_observation::<128, 16>(ptr, offset)
+                .expect("committed queue record");
+            assert_eq!(
+                console_network_abi::GenetQueueTiming::decode(&bytes, 7),
+                Some(timing)
+            );
+            assert_eq!(
+                console_network_abi::GenetQueueTiming::decode(&bytes, 8),
+                None
+            );
+            page.0[offset + 120..offset + 128].fill(0);
+            assert_eq!(
+                sample_direct_genet_observation::<128, 16>(ptr, offset),
+                None
+            );
+        }
+        assert_eq!(sample_direct_genet_observation::<128, 16>(ptr, 4096), None);
+        assert_eq!(sample_direct_genet_observation::<128, 16>(ptr, 641), None);
     }
 
     #[test]

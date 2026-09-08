@@ -373,7 +373,39 @@ magic, version, length, flags, counter relations, 32-bit badge width,
 IRQ-mask relation, cursor-validity rules, and sequence/commit must all
 validate. Older or missing publications remain compatible unavailable
 evidence rather than authorizing an alternate path.
-Bytes `[640,4096)` remain reserved and non-authoritative.
+Optional GENET queue-timing v1 assigns RX `[640,768)` to the console child
+and TX `[768,896)` to the GENET child; `[896,4096)` remains reserved.
+Each packet page also assigns `[2048,2080)` outside its header/payload to a
+producer-owned stamp. Its four little-endian u64 words are identity
+`0x00010000434e4751`, generation, packet-ring sequence and exported CNTVCT.
+The stamp precedes the existing packet commit. It grants no packet credit.
+
+Each timing record is sixteen little-endian u64 words: identity
+`0x00800001434e4754`, generation, publication, samples, total ticks, peak
+producer ticks, peak stable-copy ticks, peak ring sequence, source IPv4 in
+the low/destination IPv4 in the high 32 bits, TCP sequence in the low/ACK in
+the high 32 bits, source port/destination port/TCP flags/frame length in
+successive 16-bit lanes, four zero words, then publication again as the
+sequence-last commit. IP and TCP numeric fields retain network-order values.
+Root uses the existing atomic stable-copy/recheck protocol and rejects missing,
+raced, malformed or stale-generation records as unavailable. Packet acceptance,
+poisoning, cursor credit, wakes and scheduling do not depend on these records.
+Console-network ABI v6 and driver ABI v13 remain unchanged; this optional
+observation has its own v1 identity and adds no pages or capabilities.
+
+Only valid, nonfragmented IPv4 TCP frames containing data count. A changed
+IP/port directional flow resets samples and peak while publication remains
+monotonic. Totals saturate; publication exhaustion stops observation. RX is
+counted on the first private copy, TX only on successful DMA submission, so
+backpressure retries do not double count. No payload is retained. The interval
+is stamp-before-publication to stable frame copy, including publication,
+reconciliation, scheduling, notification service and copy. It is neither CPU
+time nor physical IRQ/packet-arrival time, and cannot alone prove SC exhaustion.
+`netstats` emits at most two `genet_queue`/`genet_queue_peak schema=v1` rows
+per direction, bound by `gen` and `pub`; absent data emits `present=no`.
+All numeric fields are hexadecimal except decimal Ethernet `len`. `prod`,
+`copy` and `sum` use generated timer-clock ticks; `n` counts observations.
+The peak tuple permits correlation with the exact boot-paired capture.
 
 Diagnostic v6 retains the 128-byte maximum-slice receipt at record offset 184.
 It retains the first longest valid slice, its counter timestamps after source
