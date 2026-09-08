@@ -288,7 +288,7 @@ mod tests {
                     64,
                     "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
                     2,
-                    180,
+                    200,
                     200,
                     3_000,
                     9_000,
@@ -411,17 +411,17 @@ mod tests {
                 .expect("core-0 temporal admission");
             assert_eq!(
                 core_zero_admission.capacity_us,
-                if qemu { 20_000 } else { 10_000 }
+                10_000
             );
             assert_eq!(
                 core_zero_admission.reserve_us,
-                if qemu { 2_000 } else { 1_000 }
+                1_000
             );
             let core_zero_usable = core_zero_admission.capacity_us - core_zero_admission.reserve_us;
             assert!(core_zero_demand <= core_zero_usable);
             assert_eq!(
                 core_zero_usable - core_zero_demand,
-                if qemu { 9_000 } else { 250 }
+                if qemu { 0 } else { 250 }
             );
 
             let core_two_demand = manifest
@@ -442,11 +442,11 @@ mod tests {
                 .expect("core-2 temporal admission");
             assert_eq!(
                 core_two_admission.capacity_us,
-                if qemu { 20_000 } else { 10_000 }
+                10_000
             );
             assert_eq!(
                 core_two_admission.reserve_us,
-                if qemu { 2_000 } else { 1_000 }
+                1_000
             );
             assert!(
                 core_two_demand <= core_two_admission.capacity_us - core_two_admission.reserve_us
