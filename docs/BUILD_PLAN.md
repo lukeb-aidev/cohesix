@@ -10532,8 +10532,22 @@ Changes:
     returned; this motivates the v3 explicit-Yield discriminator. Its three
     additional words fit the unchanged optional 256-byte record, with no new
     syscall, guard change or scheduling authority. Missing observations remain
-    unavailable. Packet/wake/Yield chronology and maximum-width rows require
-    focused tests; exact Pi build and RAM hardware comparison remain pending.
+    unavailable. Exact `006c883f8638` passed focused chronology/row tests,
+    release QEMU root-MCS convergence and the release Pi build. Two
+    CRC-verified GENET RAM boots completed raw TCP, focused scripts and
+    medium/high REST, with concurrent 32-read batches averaging
+    47.080/46.441 ms. First-64 p95 remains 5.405/4.884 ms; subsequent
+    1,024-request runs measure 648.703/680.796 requests/s and
+    4.666/4.225-ms p95, still failing the original 1.845-ms gate.
+    Exact sustained TX peaks contain guard-triggered Yield intervals of
+    3.374/1.005 ms, but substantial delay precedes each Yield. A separate
+    repeat-boot TX peak instead spends 2.650 ms before Signal entry and
+    only 22 us from completed Signal to consumer copy, with no overlapping
+    driver Yield. These observations distinguish boundaries, not CPU use or
+    refill eligibility, and do not justify guard removal as a complete fix.
+    Preserve the successful passive-read repair and unchanged scheduling
+    authority. Evidence: `out/bench/pi4-genet-yield-binding-20260909/REPORT.md`;
+    RAM delivery is not SD/cold-boot or complete runtime BUILD attestation.
   - GENET bounded hardware RX interrupt grouping experiment retired — exact
     release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
     packets or thirteen hardware timer ticks (106.496 us) on two RAM boots,
