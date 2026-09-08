@@ -358,7 +358,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(genet["sched_control_core"], 1);
     assert_eq!(genet["budget_us"], 3_000);
     assert_eq!(genet["period_us"], 10_000);
-    assert_eq!(genet["max_refills"], 10);
+    assert_eq!(genet["max_refills"], 8);
     assert_eq!(genet["consumed_time_evidence"], true);
     assert_eq!(genet["timeout_policy"], "natural-postpone");
     assert_eq!(genet["priority"], 160);

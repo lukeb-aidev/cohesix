@@ -868,10 +868,8 @@ at-boundary, late, drifted, backwards, or overflowed evidence. The pre-resume
 lower bound deliberately includes a child that publishes after resume but
 before root returns.
 
-Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, ten
-refill records, priority 160, and natural-postpone timeout policy. Ten is the
-selected seL4-16 AArch64 capacity of its existing 256-byte SC; it increases
-neither CPU reservation nor the direct path's 16-slice bound. This isolates
+Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, eight
+refill records, priority 160, and natural-postpone timeout policy. This isolates
 the production wired path from the CYW43/SDIO pair on core 3 without changing
 either Wi-Fi SC.
 The selected Pi topology admits exact active demand
@@ -913,7 +911,7 @@ kernel SC. Any endpoint command forces a later `seL4_Yield` freshness boundary,
 and quiescent closure cannot clear it; continuous durable work retains the
 existing guard, cap, and stalled decisions. The compiler and generated profile
 require exact
-`wcet_us=800`; the handoff and runtime validate exact max-ten-refill
+`wcet_us=800`; the handoff and runtime validate exact max-eight-refill
 `3,000/10,000 us` truth. Sustained legal work that consumes that reservation is
 postponed by the kernel until replenishment rather than classified as a device
 fault. Counter failure, cursor drift, or contract drift

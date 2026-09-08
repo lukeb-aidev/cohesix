@@ -76,7 +76,7 @@ def test_pi4_genet_uses_bold_bounded_core_one_mcs_admission() -> None:
     assert genet["sched_control_core"] == 1
     assert genet["budget_us"] == 3_000
     assert genet["period_us"] == 10_000
-    assert genet["max_refills"] == 10
+    assert genet["max_refills"] == 8
     assert genet["priority"] == 160
     assert genet["timeout_policy"] == "natural-postpone"
     assert genet["wcet_us"] == 800

@@ -65,11 +65,6 @@ utilization. Spare capacity protects bounded interference; it is not evidence
 that arbitrary budget increases are safe. Both console services receive
 3000/10000 us, priority 200 and eight refills. Both use the same bounded
 NineDoor timeout policy and Worker bootstrap envelope (400/10000 us).
-The Pi-only GENET owner selects ten refill records, the selected kernel's
-maximum in its existing 256-byte SC. Its 3000/10000 us reservation, priority,
-affinity, WCET and packet bound remain unchanged; QEMU has no corresponding
-physical owner. Fresh hardware measurements determine whether this capacity
-selection affects latency.
 
 ## Validation and comparison
 

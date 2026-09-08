@@ -1220,7 +1220,7 @@ unchanged.
   peer rearm notification unless an independent retained cursor transition is
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
   occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-1 SC,
-  priority 160, ten refill records in its existing 8-bit SC, exact 800 us
+  priority 160, eight refill records in its existing 8-bit SC, exact 800 us
   WCET, natural-postpone policy, and a 3,400 us computed response bound. Legal
   sustained packet work remains hard
   capped by that reservation and is postponed until replenishment rather than
@@ -1248,7 +1248,7 @@ unchanged.
   forces a fresh-refill boundary before more packet work, and quiescent episode
   closure cannot clear that independent requirement. The compiler and
   generated profile require exact `wcet_us=800`; the handoff and runtime
-  validate the exact `3,000/10,000 us`, max-ten-refill contract. A
+  validate the exact `3,000/10,000 us`, max-eight-refill contract. A
   missing/backwards counter, repeated non-advancing slice, contract drift, or
   invalid cursor fails closed. The kernel SC remains the sole CPU authority;
   continuously durable work never resets its guard, cap, or stalled boundary.
@@ -1632,8 +1632,7 @@ transport:
   child's SC on link/stack/session work while preserving every protocol timer;
   direct VirtIO/QEMU and mediated WiFi retain their selected behavior.
 - The Pi console-network child retains eight refill records in its existing
-  8-bit SC, while the direct-GENET owner selects the same object's ten-record
-  capacity. The console child
+  8-bit SC, matching the Pi direct-GENET fragment-preserving selection, and
   runs independently on core 2 while root-control remains on core 0 at equal
   priority under the exact cross-core signal-only contract. Its budget,
   period, MCP, WCET, queue, packet authority, and operation bound are
