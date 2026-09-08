@@ -1656,9 +1656,22 @@ Physical diagnostics must show the selected continuation is admitted before
 attributing performance to refill storage. Rebuild the exact Pi
 kernel profile and generated root manifest, retain stack/TLS/PCIe safeguards,
 and run the shared root-MCS QEMU canary before the next unchanged dual-mode
-matrix. The separately labelled paced-PING load discriminator is never
-benchmark-eligible: the original continuous raw workload, endpoint arithmetic,
-targets, first-attempt functions and medium/high pressure remain authoritative.
+matrix. That earlier ad-hoc paced-PING discriminator remains diagnostic;
+it cannot be retroactively promoted or replace the continuous raw results.
+
+The current GENET operating-load contract explicitly separates controlled
+latency from saturation. Use the canonical harness's recorded
+`--mode raw --raw-requests 1024 --raw-request-rate 180` workload and require
+both measured complete-session throughput >=162.242 requests/s and PING p95
+<=1.845 ms. Preserve every sample and the actual start intervals; a host that
+undersupplies the required rate has not passed, even when latency is low.
+Report a separate unpaced 1,024-request run's throughput and p95, and retain
+the unchanged uncached medium/high REST batches, first-connection behavior,
+cohsh functionality and operator liveness. Repeat controlled load on two
+boots of the same exact image. Follow [BENCHMARKS.md](BENCHMARKS.md) for
+closed-loop pacing, host-wait accounting and report metadata. This workload
+definition does not relax the numerical operating-load gates, reclassify old
+failures, change WiFi gates, or waive staged exact-image acceptance evidence.
 
 Pi RX batch publication regression evidence must distinguish pending from
 rejected queue snapshots. Deterministic tests cover the retained W00

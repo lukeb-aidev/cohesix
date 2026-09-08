@@ -10512,7 +10512,23 @@ Changes:
     failed results retain their original workload and verdict. Scope remains
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`; no new runtime policy is authorized
-    by the measurement. Evidence: `out/bench/pi4-genet-load-envelope-20260909`.
+    by the measurement. Two protected release RAM boots subsequently measured
+    172.279/171.093 requests/s at the recorded 180/s ceiling, with
+    0.744/0.896-ms p95, passing both numerical operating-load gates. Separate
+    unpaced 1,024-request runs delivered 627.000/627.579 requests/s with
+    4.779/4.818-ms p95. TCP scripts and complete wire audits pass. An earlier
+    host-undersupplied run remains failed against the throughput floor;
+    bounding each blocking host sleep to 1 ms addressed timer overshoot
+    without changing target policy, sending early, spinning or hiding samples.
+    Recommend a separate sustained floor of 600 requests/s with <=5-ms p95
+    and preserve <=25/50-ms medium16/high32 mean batch targets from the
+    protected two-boot REST evidence. These new capacity/REST values are a
+    proposal, not retroactive acceptance; retain first-connection tails,
+    maximum latency and zero-failure/liveness requirements. Further runtime
+    changes require a reproduced material defect in the defined workload.
+    RAM transfer evidence is not complete runtime BUILD or cold-SD proof;
+    WiFi and full staged acceptance remain separate. Evidence:
+    `out/bench/pi4-genet-load-envelope-20260909/REPORT.md`.
   - GENET/console placement experiment retired — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, source `b58fc32552f5` tested
