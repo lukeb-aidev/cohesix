@@ -1227,18 +1227,7 @@ unchanged.
   quarantined as a device failure. Standard faults, explicit device deadlines,
   direct-ring/cursor faults, and pair containment remain terminal. These static
   bounds require fresh Pi consumed-time, latency, and throughput evidence.
-- The direct cutover programs RX default ring16 to
-  interrupt after two packets or thirteen hardware timeout ticks, whichever
-  completes first. The BCM2711 GENET 125 MHz clock divided by1024 makes this
-  106.496 us; it is device interrupt grouping, not a software elapsed-time
-  clock or wait. Both MAC RX and RDMA remain stopped and IRQ sources masked
-  during configuration. Preserve unrelated bits and require register readback
-  before READY. Legacy ring initialization uses one packet and a disabled
-  grouping timer. TX threshold, IRQ identity, final unmask/recheck, reciprocal
-  ring ownership and every per-packet MCS guard remain unchanged. The
-  [Linux v6.6 GENET implementation](https://github.com/torvalds/linux/blob/v6.6/drivers/net/ethernet/broadcom/genet/bcmgenet.c)
-  defines the register/clock contract; only fresh Pi evidence establishes a
-  performance benefit. In direct mode the owner retains one dense software episode only while exact
+- In direct mode the owner retains one dense software episode only while exact
   durable work remains. A `Reenter` successor stays
   inside the same notification or final-prewait handler, so generic command
   arbitration cannot consume unguarded time between packet slices. The owner

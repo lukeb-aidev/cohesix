@@ -1443,20 +1443,20 @@ The QEMU live canary passed before an obsolete Pi fixture failed; a separate
 corrected canonical 37-guard run passed. Do not relabel the failed convergence
 record as a pass. No same-image WiFi claim is made for the retired candidate.
 
-The subsequent GENET hardware RX interrupt grouping candidate changes no MCS
-numerics. Exact28d3 complete raw flows prove a standalone ACK before each PING
-and ACK-to-PING p95 of 51/82/61 us for64/1024/64 request runs. Validate the
-GENET v5 ring16 register offsets and two-packet/13-tick setting against the
-pinned Linux v6.6 contract, preservation of unrelated bits, stopped/masked
-configuration preconditions, readback-before-READY and immediate legacy IRQ
-restoration. Host register tests cannot prove hardware timer delivery. Fresh
-Pi raw-first TCP must prove single-packet progress and compare p95, actual SC
-consumption, IRQ/DPC counts and complete packet flows; then run unchanged
-cohsh and medium/high `rest_perf_harness.py` workloads. Preserve the original
-thresholds, the 16-slice fairness bound, IRQ/cursor containment and all failed
-evidence. The Pi-only register path supplies no new QEMU behavior or acceptance
-claim; exact target compilation and prior common-MCS qualification remain
-distinct from fresh physical performance.
+The subsequent GENET RX interrupt grouping experiment is also retired.
+Exact release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
+packets or 13 hardware timeout ticks without changing MCS numerics. Its two
+raw-first boots measured 605.707/483.210 requests/s and 5.239/5.995 ms p95;
+both passed framing/throughput and failed the original latency gate. All
+cohsh, Worker32 and medium/high `rest_perf_harness.py` workloads passed.
+Concurrent 16/32 batch means improved 12.50%/4.63% versus the retained paired
+baseline, while sequential means slowed 2.92%/4.47%. Preserve these mixed
+results and the 38 focused register/cutover tests as experiment evidence;
+neither lower IRQ counts nor small batch gains close raw p95. Restore the
+previous immediate RX configuration and keep the root read-dispatch fix.
+The Pi-only MMIO trial changed no QEMU execution; its exact Pi build and
+prior common-MCS qualification do not replace physical performance proof.
+Evidence remains under `out/bench/pi4-genet-irq-batch-20260909`.
 
 The exact-2be follow-up input binds source
 `2be53e2270562be0a2b9d6435b831c826a9dde37`, image ID
