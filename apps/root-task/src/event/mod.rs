@@ -11389,6 +11389,14 @@ where
         let prior_output_budget = self.console_input_turn_output_budget;
         self.console_input_turn_active = source.is_physical_console();
         self.console_input_turn_output_budget = CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES;
+        #[cfg(feature = "net-console")]
+        let response_identity = (source == ConsoleInputSource::Net)
+            .then(|| {
+                self.net
+                    .as_deref()
+                    .and_then(crate::net::NetPoller::bounded_console_response_identity)
+            })
+            .flatten();
 
         match self
             .pi_root_control_consumed_window
@@ -11406,6 +11414,8 @@ where
                     source,
                     source == ConsoleInputSource::Net,
                 );
+                #[cfg(feature = "net-console")]
+                self.publish_completed_pi_passive_genet_response(response_identity);
                 self.console_input_turn_active = prior_input_turn_active;
                 self.console_input_turn_output_budget = prior_output_budget;
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
@@ -15030,6 +15040,44 @@ where
                 })
                 && net.bounded_console_response_identity() == Some(expected)
         })
+    }
+
+    /// Publish one already-completed response before the passive-command
+    /// epilogue relinquishes root's refill. The pre-call admission lease and
+    /// mandatory post-call Yield remain unchanged. This cannot dispatch a
+    /// second command, advance a device, or wait for the child's completion.
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+    fn publish_completed_pi_passive_genet_response(
+        &mut self,
+        expected: Option<ConsoleResponseIdentity>,
+    ) {
+        let Some(expected) = expected else {
+            return;
+        };
+        if !self.linked_runtime_direct_genet_command_control_fence_clear(expected)
+            || !self.linked_runtime_direct_genet_no_pending_terminal_stage_ready()
+        {
+            return;
+        }
+        let Some(net) = self.net.as_mut() else {
+            return;
+        };
+        let Ok(mut budget) = DriverServiceBudget::new(net.driver_task_contract()) else {
+            self.fence_console_network_authority_quiet();
+            return;
+        };
+        let outcome = net.service_direct_genet_command_control_with_budget(
+            expected,
+            self.now_ms,
+            &mut budget,
+        );
+        if !matches!(
+            outcome,
+            Ok(crate::net::DirectGenetCommandControlOutcome::StagePublished
+                | crate::net::DirectGenetCommandControlOutcome::Deferred(_))
+        ) {
+            self.fence_console_network_authority_quiet();
+        }
     }
 
     /// Fuse one exact authenticated direct-GENET command into its first
@@ -44517,6 +44565,12 @@ mod tests {
         last_poll_now_ms: Option<u64>,
         poll_activity: bool,
         response_polls: usize,
+        #[cfg(feature = "release-pi4")]
+        direct_genet_control_calls: usize,
+        #[cfg(feature = "release-pi4")]
+        direct_genet_control_identity: Option<ConsoleResponseIdentity>,
+        #[cfg(feature = "release-pi4")]
+        direct_genet_control_outcome: crate::net::DirectGenetCommandControlOutcome,
         tcp_flushes: usize,
         tcp_flush_send_counts: heapless::Vec<usize, 32>,
         tcp_flush_activity_remaining: usize,
@@ -44585,6 +44639,13 @@ mod tests {
                 last_poll_now_ms: None,
                 poll_activity: true,
                 response_polls: 0,
+                #[cfg(feature = "release-pi4")]
+                direct_genet_control_calls: 0,
+                #[cfg(feature = "release-pi4")]
+                direct_genet_control_identity: None,
+                #[cfg(feature = "release-pi4")]
+                direct_genet_control_outcome:
+                    crate::net::DirectGenetCommandControlOutcome::Unsupported,
                 tcp_flushes: 0,
                 tcp_flush_send_counts: heapless::Vec::new(),
                 tcp_flush_activity_remaining: 0,
@@ -44818,6 +44879,21 @@ mod tests {
                 }
             }
             Ok(true)
+        }
+
+        #[cfg(feature = "release-pi4")]
+        fn service_direct_genet_command_control_with_budget(
+            &mut self,
+            expected: ConsoleResponseIdentity,
+            _now_ms: u64,
+            _budget: &mut DriverServiceBudget,
+        ) -> Result<
+            crate::net::DirectGenetCommandControlOutcome,
+            crate::hal::driver_task::DriverServiceBudgetError,
+        > {
+            self.direct_genet_control_calls += 1;
+            self.direct_genet_control_identity = Some(expected);
+            Ok(self.direct_genet_control_outcome)
         }
 
         fn flush_tcp_with_budget(
@@ -65292,6 +65368,97 @@ mod tests {
                 .collect::<std::vec::Vec<_>>(),
             ["OK QUIT"],
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+    #[test]
+    fn pi_passive_genet_epilogue_publishes_only_exact_completed_output_once() {
+        use crate::net::{DirectGenetCommandControlDeferReason, DirectGenetCommandControlOutcome};
+
+        for case in [
+            "ready",
+            "backpressure",
+            "fault",
+            "unsupported",
+            "missing",
+            "stale",
+            "wifi",
+            "virtio",
+            "open",
+            "draining",
+            "operator",
+        ] {
+            let serial =
+                SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+            let mut audit = AuditLog::new();
+            let mut net = FakeNet::new();
+            net.driver_contract = match case {
+                "wifi" => crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                "virtio" => crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+                _ => crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            };
+            net.active_conn_id = Some(7);
+            net.authenticated_conn_id = Some(7);
+            net.response_identity_generation = 7;
+            net.response_lane_generation = 7;
+            net.response_batch_capacity = Some(8);
+            net.isolated_diagnostics = Some(cyw43_transient_test_diagnostics());
+            assert!(net.queue_console_response_line("OK TAIL", false));
+            assert!(net.queue_console_response_line("END", true));
+            if let Some(lane) = net.response_lane.as_mut() {
+                lane.producer_open = case == "open";
+                lane.awaiting_batch_drain = case == "draining";
+            }
+            net.direct_genet_control_outcome = match case {
+                "backpressure" => DirectGenetCommandControlOutcome::Deferred(
+                    DirectGenetCommandControlDeferReason::ControlBusy,
+                ),
+                "fault" => DirectGenetCommandControlOutcome::Fault,
+                "unsupported" => DirectGenetCommandControlOutcome::Unsupported,
+                _ => DirectGenetCommandControlOutcome::StagePublished,
+            };
+            let expected = (case != "missing").then_some(ConsoleResponseIdentity {
+                generation: if case == "stale" { 8 } else { 7 },
+                connection_id: 7,
+            });
+            {
+                let mut pump = EventPump::new(
+                    serial,
+                    TestTimer::repeated(1, 1),
+                    NullIpc,
+                    TicketTable::<4>::new(),
+                    &mut audit,
+                )
+                .with_network(&mut net);
+                pump.direct_genet_continuation_mode =
+                    Some(DirectGenetContinuationMode::CrossCoreSignalOnly);
+                pump.local_seat_chunk_input_pending = case == "operator";
+                pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+                pump.publish_completed_pi_passive_genet_response(expected);
+                assert_eq!(
+                    pump.network_service_quarantined,
+                    matches!(case, "fault" | "unsupported"),
+                    "{case}",
+                );
+                assert_eq!(
+                    pump.linked_runtime_service_phase,
+                    LinkedRuntimeServicePhase::Dispatch
+                );
+            }
+            let admitted = matches!(case, "ready" | "backpressure" | "fault" | "unsupported");
+            assert_eq!(
+                net.direct_genet_control_calls,
+                usize::from(admitted),
+                "{case}"
+            );
+            assert_eq!(
+                net.direct_genet_control_identity,
+                if admitted { expected } else { None }
+            );
+            assert_eq!(net.polls, 0, "the epilogue cannot poll the device: {case}");
+            assert_eq!(net.response_polls, 0, "no generic response cycle: {case}");
+            assert_eq!(net.tcp_flushes, 0, "no private flush loop: {case}");
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

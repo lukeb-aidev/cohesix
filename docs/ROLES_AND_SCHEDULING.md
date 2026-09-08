@@ -1117,6 +1117,15 @@ accounting samples latches admission closed and emits one bounded operator
 marker. Exact cross multiplication preserves the strict microsecond boundary
 without a rounded-down admission; preemption only makes the wall lease more
 conservative.
+For an exact cross-core direct-GENET network command, the bounded response
+epilogue may publish one already-completed terminal response through the
+existing control-only adapter before the mandatory post-dispatch Yield. It
+rechecks the pre-dispatch generation/connection identity, ordinary operator
+and recovery fences, sealed producer, and absence of an undrained batch.
+It neither dispatches another command nor polls a device or waits for child
+completion. Backpressure retains the ordinary later stage; invalid control
+authority follows containment. The pre-call admission lease, declared WCET,
+post-call Yield, final TCP-ACK drain, and QEMU/WiFi paths remain unchanged.
 The Pi schema-1.17 `resume-once-return-error` policy covers this donation
 boundary. Root-fault may send one zero-label, zero-length kernel Timeout Reply
 for each monotonically numbered, currently armed NineDoor Call. It requires
