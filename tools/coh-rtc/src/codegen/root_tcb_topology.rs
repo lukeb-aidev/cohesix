@@ -377,7 +377,7 @@ mod tests {
                 ]
             } else {
                 [
-                    ("root-worker-executor-gpu", 1, 7_600),
+                    ("root-worker-executor-gpu", 2, 8_300),
                     ("root-worker-executor-lora", 3, 7_400),
                 ]
             };

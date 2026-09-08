@@ -40,12 +40,12 @@ def test_pi4_manifest_enables_local_seat_and_separates_net_driver_cores() -> Non
     assert local_seat["required"] is True
     assert local_seat["keyboard_device"] == "usb-kbd0"
     assert local_seat["display_device"] == "hdmi0"
-    assert driver_affinity["bcmgenet-v5"] == 2
+    assert driver_affinity["bcmgenet-v5"] == 1
     assert driver_affinity["cyw43455"] == 3
 
 
-def test_pi4_genet_shares_console_core_without_changing_reservations() -> None:
-    """GENET shares the console core with an independent bounded reservation."""
+def test_pi4_genet_uses_bold_bounded_core_one_mcs_admission() -> None:
+    """GENET gets a larger core-one budget without consuming its reserve."""
 
     manifest = load_pi4_manifest()
     temporal = manifest["temporal_authority"]
@@ -72,17 +72,15 @@ def test_pi4_genet_shares_console_core_without_changing_reservations() -> None:
         if task["core"] == 3 and task["execution"] == "active"
     )
 
-    assert manifest["console_network_service"]["core"] == 2
-    assert manifest["root_task"]["affinity"]["worker_cores"] == [1, 3]
-    assert genet["core"] == 2
-    assert genet["sched_control_core"] == 2
+    assert genet["core"] == 1
+    assert genet["sched_control_core"] == 1
     assert genet["budget_us"] == 3_000
     assert genet["period_us"] == 10_000
     assert genet["max_refills"] == 8
     assert genet["priority"] == 160
     assert genet["timeout_policy"] == "natural-postpone"
     assert genet["wcet_us"] == 800
-    assert genet["response_time_us"] == 3_800
+    assert genet["response_time_us"] == 3_400
     assert core_one_demand == 8_250
     assert core_three_demand == 8_000
     assert core_one["capacity_us"] - core_one["reserve_us"] == 9_000
@@ -234,22 +232,21 @@ def test_pi4_hdmi_and_cross_core_console_preserve_per_core_reserve() -> None:
         task["budget_us"] for task in tasks if task["core"] == 1
     )
 
-    assert hdmi["core"] == 2
-    assert hdmi["sched_control_core"] == 2
+    assert hdmi["core"] == 1
+    assert hdmi["sched_control_core"] == 1
     assert hdmi["budget_us"] == 2_000
     assert hdmi["period_us"] == 10_000
     assert hdmi["wcet_us"] == 1_800
-    assert hdmi["response_time_us"] == 5_900
+    assert hdmi["response_time_us"] == 5_200
     assert (
         hdmi["wcet_provenance"]
         == "m26e-pi4-hdmi-write-only-candidate-v1"
     )
-    assert gpu["core"] == gpu["sched_control_core"] == 1
     assert gpu["budget_us"] == 5_000
-    assert gpu["response_time_us"] == 7_600
+    assert gpu["response_time_us"] == 8_300
     pcie = next(task for task in tasks if task["id"] == "driver-pcie")
     assert pcie["core"] == 2
-    assert pcie["response_time_us"] == 4_100
+    assert pcie["response_time_us"] == 3_300
     assert core_one_demand == 8_250
     assert core_one["capacity_us"] - core_one["reserve_us"] == 9_000
     assert core_two_demand == 8_400

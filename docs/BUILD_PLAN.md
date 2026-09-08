@@ -10496,22 +10496,28 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
-  - GENET/console placement discriminator — under
+  - GENET/console placement experiment retired — under
     `m26e-qemu-shared-control-path-performance`, restoring
-    `m26e-console-network-service-isolation`, test the independent GENET and
-    console-network owners on core 2 while root remains on core 0. Move HDMI
-    to core 2 and the GPU executor with its passive Workers to core 1;
-    preserve all four per-core reservation sums and every budget, period,
-    refill, priority, WCET, guard, memory and capability boundary. Recompute
-    the exact static response-time fixtures: GENET 3,800 us, HDMI 5,900 us,
-    PCIe 4,100 us and GPU executor 7,600 us. Generated descriptor validation
-    already admits matching affinity/SC cores; no runtime guard is bypassed.
-    Preserve the successful root passive-read repair and its root/console
-    cross-core signal-only contract. Compiler admission and exact release
-    builds precede raw-first Pi/coh/medium/high REST comparison and repeat.
-    Retain only demonstrated end-to-end benefit; the earlier root/console
-    co-location plus YieldTo experiment and IRQ-owner routing remain retired.
-    Evidence: `out/bench/pi4-genet-colocated-20260909`.
+    `m26e-console-network-service-isolation`, source `b58fc32552f5` tested
+    independent GENET and console-network owners together on core 2, with
+    root on core 0. HDMI moved to core 2 and the GPU executor/passive Workers
+    to core 1, preserving every per-core reservation sum and all budgets,
+    refills, priorities, guards, memory and capability bounds. Two release
+    RAM boots completed all raw/coh/Worker32/medium16/high32 workloads.
+    First-64 p95 worsened to 8.489/9.023 ms; exercised 1,024-request runs
+    delivered 641.802/659.941 requests/s with 4.276/3.477-ms p95.
+    Concurrent 16/32-read batches averaged 28.792/52.827 and 27.866/49.753 ms,
+    versus protected 22.134/47.080 and 21.024/46.441 ms. The mixed tail
+    improvement did not establish a repeatable overall benefit. Retire the
+    placement portfolio; preserve the successful root passive-read repair
+    and baseline fixture corrections. Exact packet traces still show
+    millisecond delays before Signal and after Signal on the same core:
+    cross-core transport is not necessary for this delay, but the experiment
+    does not identify scheduling-context eligibility or rule out every
+    alternative placement. Exact Pi build and focused checks passed. Release
+    QEMU live convergence passed; its original aggregate stale-fixture FAIL
+    remains preserved alongside the corrected canonical 37-guard PASS.
+    Evidence: `out/bench/pi4-genet-colocated-20260909/REPORT.md`.
   - GENET IRQ owner-core routing experiment retired — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, exact release RAM source

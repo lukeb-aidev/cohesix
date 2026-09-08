@@ -289,9 +289,9 @@ its core, budget, period, refill bound, priority, maximum controlled priority,
 blocking, release jitter, WCET provenance, response time, and admission result.
 NineDoor and every executable Worker are passive. NineDoor runs only on the
 root-control donation chain after one bootstrap activation. Workers run only
-on two generated active executors: GPU on core 2 for QEMU and core 1 for Pi,
-LoRA plus Heartbeat on core 3. Each executor selects from a fixed bounded fair
-queue and donates its SC to one exact instance at a time.
+on two generated active executors: GPU on core 2, LoRA plus Heartbeat on core
+3. Each executor selects from a fixed bounded fair queue and donates its SC to
+one exact instance at a time.
 
 `SchedControl` remains root-only. Active scheduling contexts bind to TCBs, not
 notifications. IRQ/locality-bound drivers, autonomous drains, the
@@ -868,14 +868,14 @@ at-boundary, late, drifted, backwards, or overflowed evidence. The pre-resume
 lower bound deliberately includes a child that publishes after resume but
 before root returns.
 
-Pi GENET uses core 2 with a selected `3,000 us / 10,000 us` active SC, eight
+Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, eight
 refill records, priority 160, and natural-postpone timeout policy. This isolates
 the production wired path from the CYW43/SDIO pair on core 3 without changing
 either Wi-Fi SC.
 The selected Pi topology admits exact active demand
 `8,750/8,250/8,400/8,000 us` on cores 0--3 against each 9,000-us usable
 capacity, leaving `250/750/600/1,000 us` beyond the mandatory reserve. GENET's
-existing exact 800 us WCET yields a 3,800 us computed response bound; that is
+existing exact 800 us WCET yields a 3,400 us computed response bound; that is
 static admission truth, not measured packet latency. Before direct handoff, the
 Pi-only IRQ 189/badge 1024 legacy/default-queue DPC may drain at most 16 frames
 and 24,576 bytes into its private queue per quantum;
@@ -883,15 +883,10 @@ remaining exact IRQ work retains a masked, unacknowledged continuation. QEMU
 keeps its existing three-entry driver-runtime IRQ topology with no GENET IRQ
 and identical scheduling. After DHCP and exact old-path quiescence, Pi GENET
 performs one fail-closed handoff to the console child over the compiler-declared
-32-page CPU-only direct link. GENET keeps its independent core-2 SC and sole
+32-page CPU-only direct link. GENET keeps its independent core-1 SC and sole
 MMIO/DMA/IRQ ownership; the console child keeps its independent core-2 SC and
-sole TCP/auth ownership. The Pi placement candidate puts both owners on core 2
-while root remains on core 0. HDMI moves to core 2 and the GPU executor plus
-its passive Workers move to core 1, preserving every per-core reservation sum.
-Priorities, budgets, guards and notification-only handoff remain unchanged;
-this is placement, not SC donation or a merged device owner. Its latency
-benefit requires fresh hardware comparison. Their fixed notifications are wake
-hints, not scheduling donation or packet authority. A peer fault couples containment only: suspend
+sole TCP/auth ownership. Their fixed notifications are wake hints, not
+scheduling donation or packet authority. A peer fault couples containment only: suspend
 the GENET owner and remove both cross-child signal caps before unmapping the
 console copies, with no root packet fallback.
 
@@ -951,7 +946,7 @@ separate explicit activation handoff and accounting-cap contract.
 
 For both Pi network modes, root-control selects core 0 and console-network
 selects core 2 at priority/MCP 200/200. Root retains
-`5,500 us / 10,000 us`, eight-refill scheduling, and exact 2,500-us WCET;
+`5,500 us / 10,000 us`, max-two-refill scheduling, and exact 2,500-us WCET;
 console retains its unchanged `3,000 us / 10,000 us` budget/period, 3,000-us
 WCET, and eight refill records in its existing 8-bit SC. Root-fault returns to
 core 0 without any budget, period, priority, fault, Reply, or ownership change.
@@ -960,12 +955,12 @@ handoff; only the exact Pi causal wait described above may bridge a finite
 post-commit publication boundary.
 
 The compiler records exact root/console response bounds `5,100/3,000 us`,
-HDMI/PCIe/GPU-executor bounds `5,900/4,100/7,600 us`, root-fault at 2,600 us,
+HDMI/PCIe/GPU-executor bounds `5,200/3,300/8,300 us`, root-fault at 2,600 us,
 the unchanged complete per-core demand `8,750/8,250/8,400/8,000 us`, and
 mirrored service/task affinity. Adjacent drift in budget, WCET, response, core,
 sched-control core, priority, refill count, or mirrored configuration fails
-closed. QEMU retains its selected core-0 9,000-us root and core-2 console
-child at equal priority, two root and eight child refill records, affinities, and non-YieldTo
+closed. QEMU retains its selected core-0 9,000-us root, core-2 lower-priority
+console child, max-two-refill contracts, affinities, and non-YieldTo
 direct-VirtIO behavior. These are static admission bounds, not measured packet
 latency. Fresh same-image Pi load evidence must still prove authenticated
 response cadence.

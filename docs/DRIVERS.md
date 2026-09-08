@@ -1219,9 +1219,9 @@ unchanged.
   A full TX ring waits for a
   peer rearm notification unless an independent retained cursor transition is
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
-  occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-2 SC,
+  occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-1 SC,
   priority 160, eight refill records in its existing 8-bit SC, exact 800 us
-  WCET, natural-postpone policy, and a 3,800 us computed response bound. Legal
+  WCET, natural-postpone policy, and a 3,400 us computed response bound. Legal
   sustained packet work remains hard
   capped by that reservation and is postponed until replenishment rather than
   quarantined as a device failure. Standard faults, explicit device deadlines,
