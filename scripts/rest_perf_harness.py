@@ -5631,6 +5631,10 @@ def parse_args() -> argparse.Namespace:
         help="PING count for raw mode (1-4096); credentials use COH_AUTH_TOKEN and COH_TICKET.",
     )
     parser.add_argument(
+        "--raw-request-rate", type=float,
+        help="Optional raw PING start-rate ceiling in requests/s (1-1000000); default is unpaced.",
+    )
+    parser.add_argument(
         "--rest-url",
         default=DEFAULT_REST_URL,
         help="Hive gateway base URL (default: %(default)s).",
@@ -6123,6 +6127,11 @@ def parse_args() -> argparse.Namespace:
         )
     ):
         raise SystemExit("Pi benchmark target cannot consume QEMU run/log inputs")
+    if args.raw_request_rate is not None:
+        if args.mode != "raw":
+            parser.error("raw-request-rate requires --mode raw")
+        if not math.isfinite(args.raw_request_rate) or not 1 <= args.raw_request_rate <= 1_000_000:
+            parser.error("raw-request-rate must be finite and within 1-1000000 requests/s")
     if args.mode == "raw":
         if not 1 <= args.raw_requests <= 4096:
             parser.error("raw-requests must be within 1-4096")
@@ -9981,8 +9990,26 @@ def raw_latency_summary(samples: Sequence[float]) -> dict:
     }
 
 
+def raw_wait_for_start(
+    previous_start_ns: Optional[int],
+    interval_ns: int,
+    clock_ns: Callable[[], int],
+    sleep: Callable[[float], None],
+) -> int:
+    """Space actual starts without catch-up bursts after a slow response or sleep."""
+    now = clock_ns()
+    if previous_start_ns is not None:
+        deadline = previous_start_ns + interval_ns
+        while now < deadline:
+            sleep((deadline - now) / 1e9)
+            now = clock_ns()
+    return now
+
+
 def run_raw(args: argparse.Namespace) -> int:
     """Measure raw console transport; emit no target acceptance or Worker proof."""
+    request_rate = getattr(args, "raw_request_rate", None)
+    interval_ns = math.ceil(1e9 / request_rate) if request_rate is not None else None
     report = {
         "schema": "cohesix-raw-tcp-benchmark/v1", "claiming": False,
         "proof_class": "none", "target": args.benchmark_target,
@@ -9992,6 +10019,14 @@ def run_raw(args: argparse.Namespace) -> int:
         "application_retries": 0, "reconnects": 0, "tcp_nodelay": True,
         "throughput_interval": "connect-through-QUIT-EOF",
         "latency_interval": "PING-send-to-terminal-OK-PING",
+        "offered_load": {
+            "mode": "controlled" if interval_ns is not None else "unpaced",
+            "requested_rate_per_s": request_rate,
+            "minimum_start_interval_ns": interval_ns,
+            "pacing_policy": "actual-start-spacing-no-catch-up" if interval_ns is not None else "none",
+            "maximum_in_flight": 1,
+        },
+        "request_start_offsets_ns": [],
         "p95_method": "nearest-rank ceil(0.95*n)-1",
         "harness_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
         "started_utc": datetime.now(timezone.utc).isoformat(),
@@ -10019,8 +10054,14 @@ def run_raw(args: argparse.Namespace) -> int:
             raw_send_frame(stream, "ATTACH queen " + args.raw_ticket)
             expect("OK ATTACH role=queen")
             report["phase"] = "PING"
+            previous_start_ns = None
             for _ in range(args.raw_requests):
-                request_started = time.perf_counter_ns()
+                request_started = (
+                    time.perf_counter_ns() if interval_ns is None else
+                    raw_wait_for_start(previous_start_ns, interval_ns, time.perf_counter_ns, time.sleep)
+                )
+                previous_start_ns = request_started
+                report["request_start_offsets_ns"].append(request_started - started)
                 raw_send_frame(stream, "PING")
                 expect("PONG")
                 expect("OK PING reply=pong")
@@ -10048,7 +10089,7 @@ def run_raw(args: argparse.Namespace) -> int:
     with destination.open("x", encoding="utf-8") as output:
         json.dump(report, output, indent=2)
         output.write("\n")
-    args.logger.log(json.dumps({key: value for key, value in report.items() if key != "samples_ms"}))
+    args.logger.log(json.dumps({key: value for key, value in report.items() if key not in ("samples_ms", "request_start_offsets_ns")}))
     return 0 if report["result"] == "pass" else 1
 
 

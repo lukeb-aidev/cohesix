@@ -24,6 +24,28 @@ Bind its timestamp and local endpoint to the selected boot and packet capture;
 it cannot replace exact-image target evidence or qualify Worker pressure.
 Existing REST modes, host clients, SDK, and target runtime contracts are unchanged.
 
+Raw mode defaults to unpaced, sequential PINGs with one outstanding request.
+Use `--raw-requests 1024 --raw-request-rate 180` to measure controlled load
+with a ceiling of 180 request starts/s. The optional rate is finite and within
+1–1,000,000 requests/s. Each start is spaced from the previous actual start;
+a slow response or host sleep does not create catch-up bursts. This is a
+closed-loop rate ceiling, not an open-loop arrival generator: require the
+measured throughput to meet the operating-load floor as well as the latency
+limit. PING latency excludes deliberate host waiting; throughput includes it
+and all connection overhead. Every sample, including slow responses, remains.
+
+The additive `offered_load` report object records mode, requested rate,
+minimum start interval, pacing policy and maximum outstanding count.
+`request_start_offsets_ns` records each attempted PING start relative to the
+session timer. Missing load metadata in older v1 reports means legacy unpaced
+operation. Compare controlled-load results only at the same recorded rate,
+request count, image and boot state; retain independent unpaced 1,024-request
+capacity and tail measurements. Neither mode measures concurrent command
+admission latency. The existing uncached medium/high REST workloads measure
+concurrent host submission and full-batch completion separately. A controlled
+latency pass cannot excuse a capacity regression, missing terminal, retry,
+reconnect, stale/cached read or loss of bounded operator liveness.
+
 Cohesix benchmarks measure a bounded control plane, not an unconstrained
 throughput service. A valid result preserves the same tickets, namespace
 semantics, audit behavior, backpressure, console grammar, and target ownership

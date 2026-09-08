@@ -10496,6 +10496,23 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - Explicit controlled-load GENET measurement — preserve the protected
+    release image and successful passive-read repair while evaluating the
+    user-selected latency contract at controlled target load and reporting
+    saturation separately. Add optional `--raw-request-rate` to the canonical
+    harness, preserving unpaced defaults, every latency sample, one outstanding
+    PING, complete-session throughput and exact terminal/EOF checks. Record
+    actual starts and rate policy; use actual-start spacing without catch-up
+    bursts, never hidden pacing. Deterministic tests cover rate validation,
+    early/late host wakeups, slow responses, arithmetic and unchanged unpaced
+    behavior. The additive report fields do not change target ABI, manifests,
+    kernels, cohsh, REST modes or the Python SDK. Compare 1,024 PINGs at a
+    recorded 180/s ceiling with separately measured unpaced capacity on two
+    protected GENET boots before refining performance targets. Historical
+    failed results retain their original workload and verdict. Scope remains
+    `m26e-qemu-shared-control-path-performance`, restoring
+    `m26e-console-network-service-isolation`; no new runtime policy is authorized
+    by the measurement. Evidence: `out/bench/pi4-genet-load-envelope-20260909`.
   - GENET/console placement experiment retired — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, source `b58fc32552f5` tested

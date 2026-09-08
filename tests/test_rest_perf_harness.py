@@ -119,6 +119,10 @@ def test_raw_session_requires_terminal_and_includes_session_overhead(monkeypatch
     report = json.loads(data)
     assert report["requests_completed"] == int(success)
     assert report["claiming"] is False
+    assert report["offered_load"] == {
+        "mode": "unpaced", "requested_rate_per_s": None,
+        "minimum_start_interval_ns": None, "pacing_policy": "none", "maximum_in_flight": 1,
+    }
     if success:
         assert report["elapsed_s"] == 0.01
         assert report["requests_per_s"] == 100
@@ -136,6 +140,91 @@ def test_raw_cli_rejects_invalid_bounds(monkeypatch, extra):
     monkeypatch.setattr(sys, "argv", ["rest_perf_harness.py", "--mode", "raw", *extra])
     with pytest.raises(SystemExit):
         rest_perf.parse_args()
+
+
+
+@pytest.mark.parametrize("rate", ["0", "-1", "nan", "inf", "0.5", "1000001"])
+def test_raw_cli_rejects_invalid_request_rate(monkeypatch, rate):
+    monkeypatch.setenv("COH_AUTH_TOKEN", "private-token")
+    monkeypatch.setenv("COH_TICKET", "private-ticket")
+    monkeypatch.setattr(sys, "argv", ["rest_perf_harness.py", "--mode", "raw",
+                                      "--raw-request-rate=" + rate])
+    with pytest.raises(SystemExit):
+        rest_perf.parse_args()
+
+
+def test_raw_cli_records_rate_and_rejects_other_modes(monkeypatch):
+    monkeypatch.setenv("COH_AUTH_TOKEN", "private-token")
+    monkeypatch.setenv("COH_TICKET", "private-ticket")
+    monkeypatch.setattr(sys, "argv", ["rest_perf_harness.py", "--mode", "raw",
+                                      "--raw-request-rate", "180"])
+    assert rest_perf.parse_args().raw_request_rate == 180
+    monkeypatch.setattr(sys, "argv", ["rest_perf_harness.py", "--mode", "perf",
+                                      "--raw-request-rate", "180"])
+    with pytest.raises(SystemExit):
+        rest_perf.parse_args()
+
+
+def test_raw_pacing_rechecks_short_sleep_and_retains_oversleep():
+    ticks = iter([20, 25, 45])
+    sleeps = []
+    assert rest_perf.raw_wait_for_start(10, 30, lambda: next(ticks), sleeps.append) == 45
+    assert sleeps == [20 / 1e9, 15 / 1e9]
+    # The actual start becomes the next anchor; no earlier deadline is repaid.
+    assert rest_perf.raw_wait_for_start(45, 30, lambda: 90, sleeps.append) == 90
+    assert len(sleeps) == 2
+
+
+def test_raw_controlled_session_keeps_slow_samples_and_has_no_catch_up(monkeypatch, tmp_path):
+    now = [0]
+    sleeps = []
+    durations = iter([2_000_000, 25_000_000, 2_000_000])
+    starts = []
+    lines = [b"OK AUTH", b"OK ATTACH role=queen"]
+    for _ in range(3):
+        lines.extend([b"PONG", b"OK PING reply=pong"])
+    lines.append(b"OK QUIT")
+    transcript = b"".join((len(line) + 4).to_bytes(4, "little") + line for line in lines)
+
+    class TimedSocket(RawTranscriptSocket):
+        def sendall(self, payload):
+            super().sendall(payload)
+            if payload[4:] == b"PING":
+                starts.append(now[0])
+                now[0] += next(durations)
+
+    stream = TimedSocket(transcript)
+
+    def connect(*_args):
+        now[0] += 2_000_000
+        return stream
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += round(seconds * 1e9)
+
+    monkeypatch.setattr(rest_perf.socket, "create_connection", connect)
+    monkeypatch.setattr(rest_perf.time, "perf_counter_ns", lambda: now[0])
+    monkeypatch.setattr(rest_perf.time, "sleep", sleep)
+    args = SimpleNamespace(
+        benchmark_target="pi4", benchmark_transport="genet", tcp_host="127.0.0.1",
+        tcp_port=31337, raw_requests=3, raw_request_rate=100, timeout=1,
+        auth_token="private-token", raw_ticket="private-ticket",
+        logger=SimpleNamespace(path=str(tmp_path / "raw.log"), log=lambda _: None),
+    )
+    assert rest_perf.run_raw(args) == 0
+    report = json.loads((tmp_path / "raw.raw-summary.json").read_text())
+    assert starts == report["request_start_offsets_ns"] == [2_000_000, 12_000_000, 37_000_000]
+    assert sleeps == [0.008]
+    assert report["samples_ms"] == [2, 25, 2]
+    assert report["latency_ms"]["p95"] == 25
+    assert report["elapsed_s"] == 0.039
+    assert report["requests_per_s"] == 3 / 0.039
+    assert report["offered_load"] == {
+        "mode": "controlled", "requested_rate_per_s": 100,
+        "minimum_start_interval_ns": 10_000_000,
+        "pacing_policy": "actual-start-spacing-no-catch-up", "maximum_in_flight": 1,
+    }
 
 
 def _start_tcp_auth_server(
