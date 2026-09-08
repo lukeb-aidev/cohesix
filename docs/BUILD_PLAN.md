@@ -10496,20 +10496,29 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
-  - GENET IRQ delivery to its generated owner core — under
+  - GENET IRQ owner-core routing experiment retired — under
     `m26e-qemu-shared-control-path-performance`, restoring
-    `m26e-console-network-service-isolation`, align only the MCS GENET SPI's
-    physical delivery with the active driver scheduling-context core. The
+    `m26e-console-network-service-isolation`, exact release RAM source
+    `bd539e48ff5f` tested aligning the MCS GENET SPI's physical delivery with
+    its active scheduling-context core. The
     selected GICv2 kernel initializes SPIs to the boot CPU; the existing
     four-word ARM GetTrigger call does not retarget them, despite GENET's
-    generated core-1 execution. HAL must use the selected upstream
-    five-word GetTriggerCore contract, with target in MR4, and reject absent
-    or conflicting owner authority rather than silently retaining CPU0.
-    Preserve the same IRQ189 capability, trigger, notification, badge, sole
-    device owner, SC budget/period/refills, guards and packet bounds. Keep
-    other IRQ routes unchanged. Pure message-layout/selection checks and
-    exact-profile builds precede paired GENET RAM raw/coh/REST evidence;
-    reduced cross-core scheduling overhead is a hypothesis until measured.
+    generated core-1 execution. The candidate used the selected upstream
+    five-word GetTriggerCore contract, with target in MR4 and validated owner
+    authority. All IRQ189 capabilities, triggers, notifications, badges,
+    driver images, budgets/refills, guards and packet bounds stayed unchanged.
+    Two boots completed all raw/coh/REST workloads and strict wire audits.
+    First-64 p95 was 4.532/4.465 ms; subsequent 1,024-request runs measured
+    665.091/703.872 requests/s with 4.558/4.561-ms p95, versus the protected
+    baseline's 648.703/680.796 and 4.666/4.225 ms. Concurrent 32-read batches
+    averaged 45.653/45.565 ms, only a small change from 47.080/46.441 ms;
+    the second medium run retained a 77.171-ms sample. Neither original p95
+    closure nor a material repeatable tail improvement was shown. Retire the
+    routing change and its private marshaller/selector, preserving the
+    successful passive-read repair and optional v3 timing evidence. Focused
+    IRQ23 checks, release QEMU root-MCS convergence and exact Pi build passed;
+    the experiment is not acceptance. Evidence:
+    `out/bench/pi4-genet-irq-owner-20260909/REPORT.md`.
   - GENET exact-packet wake/receive discriminator — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, reuse the bounded queue timing

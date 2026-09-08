@@ -1098,16 +1098,6 @@ unchanged.
   code must consume the generated identity and badge 1024 and must not infer a
   GIC offset. Non-Pi/QEMU profiles retain their existing three-IRQ declaration;
   the Pi-only interrupt must not leak into them.
-- Under the selected Pi MCS profile, HAL installs GENET's IRQ with the
-  upstream ARM `IRQControl.GetTriggerCore` operation, targeting the generated
-  active `driver-genet` scheduling-context core. Its core and SchedControl
-  core must agree; absent authority or an unavailable SMP operation fails
-  installation without falling back to the boot CPU. The kernel owns GIC
-  routing, and GENET retains the same sole handler, notification, badge and
-  device acknowledgement path. Other driver IRQs and classic profiles retain
-  their existing routing. The bounded `DRIVER_TASK_IRQ_TARGET` bootstrap
-  receipt reports successful installation, not an independent GIC readback
-  or a performance result.
 - GENET packet completion is child-owned and IRQ-driven. One DPC turn drains at
   most 16 frames and 24,576 bytes into a fixed 16-frame private queue, then
   completes the device-store/unmask readback before its final source and ring

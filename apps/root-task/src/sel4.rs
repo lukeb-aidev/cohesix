@@ -2738,73 +2738,21 @@ pub fn irq_control_get_trigger_handler(
     dest_index: seL4_CPtr,
     dest_depth: u8,
 ) -> seL4_Error {
-    irq_control_get_trigger_handler_on_core(irq, trigger, dest_root, dest_index, dest_depth, None)
-}
-
-/// Marshal the ARM IRQControl contract. A core-directed request must not fall
-/// back to boot-core routing when the selected kernel lacks the SMP method.
-#[cfg(feature = "kernel")]
-fn irq_trigger_request_words(
-    irq: seL4_Word,
-    trigger: seL4_Word,
-    index: seL4_CPtr,
-    depth: u8,
-    target_core: Option<u8>,
-    smp: bool,
-) -> Result<([seL4_Word; 5], seL4_Word), seL4_Error> {
-    if target_core.is_some() && !smp {
-        return Err(sel4_sys::seL4_IllegalOperation);
-    }
-    let target = target_core.map_or(0, seL4_Word::from);
-    Ok((
-        [irq, trigger, index, seL4_Word::from(depth), target],
-        if target_core.is_some() { 5 } else { 4 },
-    ))
-}
-
-/// Create a handler using the selected kernel's explicit SMP target method
-/// when HAL supplies the compiler-declared owner core.
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
-#[inline(always)]
-pub(crate) fn irq_control_get_trigger_handler_on_core(
-    irq: seL4_Word,
-    trigger: seL4_Word,
-    dest_root: seL4_CNode,
-    dest_index: seL4_CPtr,
-    dest_depth: u8,
-    target_core: Option<u8>,
-) -> seL4_Error {
-    let (words, length) = match irq_trigger_request_words(
-        irq,
-        trigger,
-        dest_index,
-        dest_depth,
-        target_core,
-        cfg!(sel4_config_enable_smp_support),
-    ) {
-        Ok(request) => request,
-        Err(error) => return error,
-    };
-    let [mut mr0, mut mr1, mut mr2, mut mr3, target] = words;
-    #[cfg(sel4_config_enable_smp_support)]
-    let label = if target_core.is_some() {
-        sel4_sys::arch_invocation_label_ARMIRQIssueIRQHandlerTriggerCore
-    } else {
-        sel4_sys::arch_invocation_label_ARMIRQIssueIRQHandlerTrigger
-    };
-    #[cfg(not(sel4_config_enable_smp_support))]
-    let label = sel4_sys::arch_invocation_label_ARMIRQIssueIRQHandlerTrigger;
+    let mut mr0 = irq;
+    let mut mr1 = trigger;
+    let mut mr2 = dest_index;
+    let mut mr3 = seL4_Word::from(dest_depth);
 
     // SAFETY: The message register layout and capability slot match libsel4's
-    // selected GetTrigger (four words) or GetTriggerCore (five words) wrapper.
-    // This bootstrap TCB has its admitted IPC buffer; MR4 is the target core
-    // only for the SMP method. seL4 validates the IRQ, core and destination.
+    // generated seL4_IRQControl_GetTrigger wrapper for ARM.
     unsafe {
         sel4_sys::seL4_SetCap(0, dest_root);
-        if target_core.is_some() {
-            sel4_sys::seL4_SetMR(4, target);
-        }
-        let tag = sel4_sys::seL4_MessageInfo::new(label as seL4_Word, 0, 1, length);
+        let tag = sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::arch_invocation_label_ARMIRQIssueIRQHandlerTrigger as seL4_Word,
+            0,
+            1,
+            4,
+        );
         let output = sel4_sys::seL4_CallWithMRs(
             sel4_sys::seL4_CapIRQControl,
             tag,
@@ -7973,38 +7921,6 @@ impl Default for VSpaceTableTracker {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn irq_trigger_request_matches_arm_libsel4_word_layout() {
-        // Independent ARM object-api-arch.xml contract: IRQ, trigger, index,
-        // depth are the four register words; GetTriggerCore adds target at MR4.
-        assert_eq!(
-            super::irq_trigger_request_words(189, 0, 0x5a08, 64, Some(1), true),
-            Ok(([189, 0, 0x5a08, 64, 1], 5)),
-        );
-        assert_eq!(
-            super::irq_trigger_request_words(33, 1, 0x700, 32, Some(0), true),
-            Ok(([33, 1, 0x700, 32, 0], 5)),
-        );
-        for smp in [false, true] {
-            assert_eq!(
-                super::irq_trigger_request_words(189, 0, 0x5a08, 64, None, smp),
-                Ok(([189, 0, 0x5a08, 64, 0], 4)),
-            );
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn irq_trigger_request_never_silently_discards_an_smp_target() {
-        for core in [0, 1, 255] {
-            assert_eq!(
-                super::irq_trigger_request_words(189, 0, 0x5a08, 64, Some(core), false),
-                Err(sel4_sys::seL4_IllegalOperation),
-            );
-        }
-    }
-
     use super::*;
 
     #[test]
