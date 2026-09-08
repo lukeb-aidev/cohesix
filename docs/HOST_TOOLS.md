@@ -424,6 +424,13 @@ Image capacity derives from the payload. Any card at least `minimum_target_bytes
 can hold it; additional capacity stays unallocated. Assembly verifies the raw
 image's embedded files but remains packaging evidence.
 
+All three archives ship the same maintained [QUICKSTART.md](QUICKSTART.md) at
+their root. It covers native host setup, QEMU, Pi whole-card write/readback,
+first-boot network configuration and authenticated access from a host bundle.
+The factory relocates documentation links for that root location; it does not
+replace the Pi guide with separate embedded instructions. HARDWARE_BRINGUP.md
+is included for the referenced offline network-policy and diagnostic procedures.
+
 Run [TEST_PLAN Conditional G](TEST_PLAN.md#conditional-g--release-bundle-validation-macos-linux-and-pi4)
 after assembly. It boots the packaged QEMU launcher on each native host and
 requires readback and a fresh configured Pi boot from the distributed image.

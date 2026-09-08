@@ -740,70 +740,40 @@ for forbidden in release["forbidden_paths"]:
 PY
 }
 
-rewrite_pi4_quickstart() {
+prepare_bundle_quickstart() {
   local bundle_dir="$1"
-  BUNDLE_DIR="$bundle_dir" python3 - <<'PY'
+  BUNDLE_DIR="$bundle_dir" python3 - <<'PY_QUICKSTART'
 import os
 from pathlib import Path
+import re
 
 bundle = Path(os.environ["BUNDLE_DIR"])
+quickstart = bundle / "QUICKSTART.md"
+text = quickstart.read_text(encoding="utf-8")
+
+# The compiler relocates this document from docs/ to the bundle root. Keep
+# its shared operator instructions intact and relocate only local links.
+def relocate(match):
+    label, target = match.groups()
+    if target.startswith(("#", "https://", "http://", "mailto:")):
+        return match.group(0)
+    if target.startswith("../"):
+        target = target[3:]
+    else:
+        target = "docs/" + target
+    return f"[{label}]({target})"
+
+text = re.sub(r"\[([^]\n]+)\]\(([^)\s]+)\)", relocate, text)
+quickstart.write_text(text, encoding="utf-8")
 readme = bundle / "README.md"
 text = readme.read_text(encoding="utf-8")
 text = text.replace("docs/QUICKSTART.md", "QUICKSTART.md")
 readme.write_text(text, encoding="utf-8")
-
-quickstart = bundle / "QUICKSTART.md"
-quickstart.write_text(
-    """<!-- Copyright 2026 Lukas Bower -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Explain how to verify and flash the portable Cohesix Pi 4 release image. -->
-<!-- Author: Lukas Bower -->
-
-# Cohesix Pi 4 release quickstart
-
-The `image/cohesix-pi4-sd.img` file is a complete raw MBR/FAT32 boot image.
-Its compact size is derived from the release payload, not from the SD card used
-while building it. Read `image/cohesix-pi4-sd.json` and use only a card whose
-byte capacity is at least `minimum_target_bytes`. Any larger SD card works; the
-remaining capacity is intentionally left unallocated and no expansion is
-required for Cohesix to boot.
-
-Verify the release manifest and image digest before writing media:
-
-```bash
-shasum -a 256 --check MANIFEST.sha256
-(cd image && shasum -a 256 --check cohesix-pi4-sd.img.sha256)
-```
-
-Writing the image destroys the selected card. Resolve the exact removable
-whole-disk device first and substitute it for `/dev/diskN` or `/dev/sdX`.
-Never copy these commands with an unresolved placeholder.
-
-On macOS:
-
-```bash
-diskutil list external physical
-diskutil unmountDisk /dev/diskN
-sudo dd if=image/cohesix-pi4-sd.img of=/dev/rdiskN bs=4m
-sync
-diskutil eject /dev/diskN
-```
-
-On Linux:
-
-```bash
-lsblk --bytes --output NAME,SIZE,TYPE,TRAN,MODEL
-sudo umount /dev/sdX?*
-sudo dd if=image/cohesix-pi4-sd.img of=/dev/sdX bs=4M conv=fsync status=progress
-sudo eject /dev/sdX
-```
-
-This release image is packaging evidence. Flash/readback, a fresh boot, serial
-capture, networking, and performance remain separate Pi 4 acceptance evidence.
-""",
-    encoding="utf-8",
-)
-PY
+for document in (bundle / "docs").glob("*.md"):
+    text = document.read_text(encoding="utf-8")
+    text = text.replace("](QUICKSTART.md", "](../QUICKSTART.md")
+    document.write_text(text, encoding="utf-8")
+PY_QUICKSTART
 }
 
 bundle_release() {
@@ -1305,6 +1275,7 @@ if gpu_nodes.exists():
     gpu_nodes.write_text(text, encoding="utf-8")
 PY
 
+  prepare_bundle_quickstart "$bundle_dir"
   write_bundle_manifest "$bundle_dir" expected_bundle_files
 
   case "$archive_mode" in
@@ -1379,7 +1350,7 @@ bundle_pi4_release() {
     --output-metadata "${bundle_dir}/image/cohesix-pi4-sd.json" \
     --output-sha256 "${bundle_dir}/image/cohesix-pi4-sd.img.sha256"
   printf '%s\n' "$RELEASE_VERSION" >"${bundle_dir}/VERSION.txt"
-  rewrite_pi4_quickstart "$bundle_dir"
+  prepare_bundle_quickstart "$bundle_dir"
   write_bundle_manifest "$bundle_dir" expected_pi4_bundle_files
 
   COPYFILE_DISABLE=1 tar --no-xattrs \

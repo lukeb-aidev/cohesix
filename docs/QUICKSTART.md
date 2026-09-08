@@ -1,346 +1,377 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Help a newcomer use Cohesix to make and preserve a trustworthy edge-operation decision. -->
+<!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Quickstart — Make a Trustworthy Edge Decision
+# Cohesix quickstart
 
-Suppose a camera, robot, factory line, or private AI node is due for a model or
-service change. Before touching it, you need better answers than “the process
-is running”:
+Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
+shell, gateway, Python client and desktop UI run on your Mac or Linux host.
+This guide gets you from a release archive to an authenticated console, then
+shows how several clients can share one target through the gateway.
 
-- Which exact control-plane image and policy are active?
-- Is the node responsive, schedulable, and free of an unexpected lease?
-- Can several people or tools inspect it without competing for its console?
-- Can you preserve what you saw for a review, incident, or rollback decision?
+## Choose your download
 
-Cohesix answers those questions through a small seL4 control plane and a
-bounded host-tool interface. This quickstart first rehearses the decision flow
-without hardware, then repeats it against a live four-core SMP+MCS QEMU Queen.
-If you have a Jetson or another compatible Linux AArch64 NVIDIA CUDA host, an
-optional final step adds its real accelerator inventory without moving CUDA or
-model weights into the VM.
+Use all files from the same release. For **1.0.0-beta**:
 
-You do not need a Raspberry Pi or NVIDIA GPU to begin. Mock results are always
-labelled and never count as target or hardware proof.
+| You want to… | Download | What it contains |
+| --- | --- | --- |
+| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.0.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
+| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.0.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
+| Boot a physical Raspberry Pi 4 | `Cohesix-1.0.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
 
-This page exercises the current checkout. A versioned release bundle is an
-immutable snapshot with its own `QUICKSTART.md`; use the instructions and
-binaries inside that bundle instead of mixing them with current-tree
-configuration.
+Each archive contains `QUICKSTART.md`, `README.md`, `RELEASE_NOTES.md`,
+`VERSION.txt` and `MANIFEST.sha256`. The Pi archive has no `bin/`, Python
+runtime or `qemu/run.sh`; run the host tools from the Mac or Linux archive.
+You do not need Rust, seL4 build tools, or a GPU to use the prebuilt host tools.
+For a source checkout, use [Build from source](#build-from-source) below.
 
-Cohesix is a pre-production research OS. Check [Cohesix Status](STATUS.md) for
-the current evidence boundary and the [Glossary](GLOSSARY.md) whenever a term
-is unfamiliar.
+## 1. Extract and verify
 
-## Choose your first useful situation
-
-| Situation | Time | Start here | Useful outcome |
-| --- | --- | --- | --- |
-| Rehearse an operational review without hardware | About 5 minutes | [Offline rehearsal](#1-rehearse-a-gono-go-check-without-a-target) | A reviewable mock evidence case and familiarity with the bounded workflow |
-| Decide whether a live target is ready for change | About 30 minutes after toolchain setup | [Live before-state](#2-capture-a-live-before-change-baseline) | Identity, reachability, scheduling, lease, and log observations for one exact QEMU image |
-| Let a team inspect one target safely | After QEMU is healthy | [Shared gateway](#3-let-several-tools-inspect-one-target-safely) | Shell, REST, Python, and UI access through one console owner |
-| Include the real AI host in the review | Hardware-dependent | [CUDA host](#4-add-a-real-cuda-host-to-the-review) | Local GPU discovery and an optional bounded inventory publication—not inference proof |
-| Qualify a physical Pi control plane | Hardware-dependent | [Hardware bring-up](HARDWARE_BRINGUP.md) | Only the exact flashed image and fresh Pi evidence collected |
-
-## Prerequisites
-
-Run the installer for your host from the repository root. Each installer pins
-Rust 1.97.1 and creates the repository `.venv`.
-
-macOS 26 or later on Apple Silicon is the primary, fully pinned seL4 build
-host:
+Use a new directory for each archive. The examples use **Bash**; on a Mac,
+enter `bash` in Terminal first. In each additional terminal, use Bash and
+change into the same extracted host bundle. Replace archive names with the
+one you downloaded; do not paste angle-bracket placeholders literally.
 
 ```bash
-./toolchain/setup_macos_arm64.sh
+mkdir -p "$HOME/cohesix-releases"
+cd "$HOME/cohesix-releases"
+tar -xzf "$HOME/Downloads/Cohesix-1.0.0-beta-MacOS.tar.gz"
+cd Cohesix-1.0.0-beta-MacOS
 ```
 
-Ubuntu 22.04, 24.04, or 26.04 on ARM64 supports Cohesix host-tool builds and
-diagnostic QEMU/TCG runs. The host tools are intended to remain portable across
-Linux AArch64 NVIDIA CUDA systems—including Jetson Orin, AWS G5g, NVIDIA DGX
-Spark, and compatible future systems—when the selected OS, driver, CUDA/NVML,
-and package prerequisites are present:
+Before running anything, verify **all** manifest entries:
 
 ```bash
-./toolchain/setup_linux_arm64.sh
+# macOS
+shasum -a 256 --check MANIFEST.sha256
 ```
 
-Then activate the installed tools:
+```bash
+# Linux
+sha256sum --check MANIFEST.sha256
+```
+
+Every entry must report `OK`. Check `VERSION.txt` and `RELEASE_NOTES.md` for
+the intended release and its limitations. Obtain archives from the trusted
+release publisher; the internal hashes detect changed files, not publisher
+identity. Keep the archive so you can make another clean extraction.
+
+## 2. Set up the Mac or Linux host
+
+Run these commands from the **host bundle root**, including when your target
+is a Pi. Installation may download host packages and ask for administrator
+access; run the script as your normal user:
+
+```bash
+./scripts/setup_environment.sh
+./scripts/setup_environment.sh --check
+source .venv/bin/activate
+```
+
+The script installs runtime dependencies and the bundled Python wheel into
+this bundle's `.venv`. It does not build Cohesix or install CUDA drivers.
+`--check` verifies an already prepared installation without installing packages.
+
+| Host | Requirements and behavior |
+| --- | --- |
+| Mac | macOS 26 or later, Apple Silicon, and Homebrew available if packages need installing. QEMU must advertise HVF. Use a native ARM64 terminal, not Rosetta. |
+| Linux | Ubuntu 22.04, 24.04 or 26.04 on ARM64. Setup uses apt and enables Universe for required runtime packages, including WebKitGTK 4.1. Other distributions and x86-64 are not supported by this installer. |
+| Linux QEMU | For the native release profile, `/dev/kvm` must be readable/writable by your user and the host counter must be 31.25 MHz. The Linux guest is built for that counter; the Mac guest is built for 24 MHz. A successful package install alone does not check KVM eligibility. |
+| NVIDIA host | Jetson is one reference Linux ARM64 host. Optional GPU discovery needs the host's compatible CUDA/NVML stack. Keep Jetson's board-managed driver packages; the runtime installer does not replace them. |
+
+Verify the tools without a target:
+
+```bash
+./bin/coh doctor --mock
+./bin/cohsh --transport mock --role queen
+```
+
+At the `coh>` prompt, try `help`, `ls /`, `cat /proc/boot`, then `quit`.
+Mock output is simulated. You can also create a sample evidence pack and run a
+packaged Python example:
+
+```bash
+./bin/coh evidence pack --mock --out out/evidence/quickstart-mock
+./bin/coh evidence timeline --input out/evidence/quickstart-mock
+python python/cohesix-py/examples/lease_run.py --mock
+```
+
+For a physical Pi, continue with [Install the Pi image](#4-install-the-pi-4-sd-image).
+
+## 3. Boot the QEMU guest
+
+In terminal 1, from the host bundle root:
+
+```bash
+./qemu/run.sh
+```
+
+Leave it running. The launcher uses four cores and GICv3, with HVF on Mac and
+KVM on eligible Linux hosts. Wait for `[mark] root-console.start.ok` and the
+`cohesix>` prompt. The serial console supports `ping`, `bi`, `caps mcs`,
+`smp mcs`, `mem` and `netstats` for boot and network inspection.
+
+The default forwarded endpoints are `127.0.0.1:31337` (TCP console), UDP
+31338 and TCP 31339. If occupied, stop the prior instance or select free host
+ports, for example:
+
+```bash
+TCP_PORT=32337 UDP_PORT=32338 SMOKE_PORT=32339 ./qemu/run.sh
+```
+
+Use the chosen TCP port when connecting below. Do not change CPU, timer, core
+count or machine options to get around a failed native boot. A Linux fallback
+to TCG is a slower diagnostic run and does not establish native release
+acceptance. A different Linux counter frequency needs a compatible guest build.
+
+Continue with [Connect to your target](#5-connect-to-your-target), using
+`127.0.0.1` and port `31337` unless you changed the host port.
+
+## 4. Install the Pi 4 SD image
+
+Use a Pi 4, a suitable power supply, an SD card and reader, an HDMI display and
+a USB keyboard. Connect Ethernet to your local network, or use the boot menu
+to configure Wi-Fi. The host computer must be able to reach the selected Pi
+address. Cohesix boots directly on the Pi; you do not first install Raspberry
+Pi OS or run the Linux host bundle on the bare Cohesix target.
+
+Extract the `-Pi4` archive and verify its `MANIFEST.sha256` as in step 1.
+The following commands run from that **Pi bundle root**. Verify the image
+sidecar too:
+
+```bash
+# macOS
+(cd image && shasum -a 256 --check cohesix-pi4-sd.img.sha256)
+# Linux: use sha256sum --check in the same image directory instead.
+```
+
+`image/cohesix-pi4-sd.img` is the complete raw MBR/FAT32 image. Read
+`image/cohesix-pi4-sd.json`: the card's byte capacity must be at least
+`minimum_target_bytes`. Extra capacity on larger cards remains unallocated;
+no expansion is needed. Flashing replaces **the whole card**, including any
+saved network settings. Back up anything you need before proceeding.
+
+### Write and read back on Mac
+
+Discover the removable card again after insertion. Replace `diskN` below with
+that exact whole disk; check its model, removable status and byte size using
+`diskutil info`. The commands erase the selected disk:
+
+```bash
+diskutil list external physical
+diskutil info /dev/diskN
+diskutil unmountDisk /dev/diskN
+sudo dd if=image/cohesix-pi4-sd.img of=/dev/rdiskN bs=4m
+sync
+IMAGE_BYTES=$(stat -f %z image/cohesix-pi4-sd.img)
+sudo cmp -n "$IMAGE_BYTES" image/cohesix-pi4-sd.img /dev/rdiskN
+```
+
+Readback succeeds only if `cmp` exits zero without output. Do not boot on a
+write or comparison error. Before ejecting, mount the new boot partition with
+`diskutil mountDisk /dev/diskN` if you need the console credential described
+below. Then unmount and eject:
+
+```bash
+diskutil eject /dev/diskN
+```
+
+### Write and read back on Linux
+
+Identify the removable whole disk by model, transport and byte size. It may
+be `/dev/sdX` or `/dev/mmcblkN`. Unmount **each mounted partition shown by
+lsblk**; for example, use `sudo umount /dev/sdX1` for that listed partition.
+Substitute the verified whole disk in the write and readback commands:
+
+```bash
+lsblk --bytes --output NAME,SIZE,TYPE,TRAN,MODEL,MOUNTPOINTS
+sudo dd if=image/cohesix-pi4-sd.img of=/dev/sdX bs=4M conv=fsync status=progress
+IMAGE_BYTES=$(stat -c %s image/cohesix-pi4-sd.img)
+sudo cmp -n "$IMAGE_BYTES" image/cohesix-pi4-sd.img /dev/sdX
+```
+
+Require a successful write and a zero-exit, silent comparison. If you need the
+console credential below, reinsert the reader so the new partition table is
+recognised, then mount the FAT partition using your desktop disk utility.
+Unmount it after reading and eject or safely remove the card. Do not use a
+partition such as `/dev/sdX1` as the destination for the raw image.
+
+### First boot and network configuration
+
+Before removing the card from the workstation, obtain the target's console
+credential from the mounted FAT volume: in `cohesix-root-task-resolved.json`,
+find the `tickets` entry with `role` equal to `queen` and retain its `secret`
+securely for step 5. This is distinct from the Wi-Fi password. The Pi image's
+credential can differ from the QEMU bundle's; use the Pi's own manifest.
+
+Insert the ejected card into the Pi, attach HDMI and the USB keyboard, then
+power it on. The image stops at **Cohesix boot menu**; it does not automatically
+skip network setup. For a first installation:
+
+1. Select **2 — Change network settings**.
+2. Select **Automatic (DHCP)**, or **Manual (static IPv4)** with a valid address,
+   subnet prefix and optional gateway for your network.
+3. Select **Ethernet (wired)** or **Wi-Fi (wireless)**. For Wi-Fi, enter the SSID
+   and password on the attached USB keyboard. They are visible on the local
+   display and hidden from serial output; do not enter passwords over serial.
+4. On **Review network settings**, select **2 — Save settings and restart**.
+5. After restart, verify **Saved network settings loaded**, then select
+   **1 — Boot with saved settings**.
+
+The **Boot once without saving** option is temporary. Saving creates
+`cohesix.env` on the card; treat that file and the card as credentials. Changing
+networks later uses the same menu, without reflashing. If keyboard setup is
+unavailable, the bounded offline `cohesix.env` procedure is in
+[First-boot network policy](HARDWARE_BRINGUP.md#4-set-first-boot-network-policy).
+
+Wait for the `cohesix>` console and inspect `netstats`. For DHCP, find the
+assigned address in the boot/network output or your router's lease table;
+for static mode, use the address you configured. Confirm the active interface
+and address before connecting. A blank display or missing USB input is a
+boot/input problem, not a reason to guess network settings. A correctly wired
+serial console at 115200 baud can retain boot output; use one serial owner
+and follow [Hardware Bring-up](HARDWARE_BRINGUP.md) for capture and diagnostics.
+
+## 5. Connect to your target
+
+In terminal 2, change into the **Mac or Linux host bundle**. For QEMU, the
+compiled Queen console credential is the `secret` in the `tickets` entry with
+`role` equal to `queen` in `configs/generated/root_task_resolved.json`. For Pi, use
+the credential from its card as described above. Open the manifest in a local
+editor; do not print secrets into shared logs. Credentials distributed in a
+public evaluation image are shared, not private deployment credentials.
+Changing a host environment variable or editing the copied manifest does not
+change the secret already compiled into the target.
+
+Enter the target credential without putting it in shell history (Bash):
+
+```bash
+read -r -s -p 'Target console token: ' COHSH_AUTH_TOKEN
+printf '\n'
+export COHSH_AUTH_TOKEN
+export COH_AUTH_TOKEN="$COHSH_AUTH_TOKEN"
+TARGET_HOST=127.0.0.1
+TARGET_PORT=31337
+```
+
+For Pi, replace `127.0.0.1` with its actual IP address. For an alternate QEMU
+forward, use the selected host TCP port. Connect:
+
+```bash
+./bin/cohsh --transport tcp --tcp-host "$TARGET_HOST" \
+  --tcp-port "$TARGET_PORT" --role queen
+```
+
+At `coh>`, try these read-only observations:
+
+```text
+ping
+ls /
+cat /proc/boot
+cat /proc/root/reachable
+cat /proc/schedule/summary
+cat /proc/lease/summary
+ls /shard
+quit
+```
+
+Success means the authenticated session attached, the reads returned bounded
+responses, and `/proc/boot` identifies the intended target. `quit` closes the
+session; it does not power off the Pi. The canonical Worker namespace is
+`/shard`. Runtime observations and mock output are different proof sources;
+this quickstart is not a complete hardware or performance qualification.
+
+TCP authentication provides no encryption. Keep QEMU forwards on loopback.
+Use a private controlled network for Pi, or terminate an encrypted tunnel/VPN
+on a host gateway. Only one direct TCP client may own the target at a time.
+
+## 6. Share the target through the gateway
+
+Close the direct `cohsh` session first. In terminal 2, retaining the target
+address and credential above, choose a separate strong request token for gateway
+writes and start the gateway:
+
+```bash
+read -r -s -p 'New gateway request token: ' HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+printf '\n'
+export HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+export COH_REST_URL=http://127.0.0.1:8080
+./bin/hive-gateway --bind 127.0.0.1:8080 \
+  --tcp-host "$TARGET_HOST" --tcp-port "$TARGET_PORT"
+```
+
+In terminal 3, from the host bundle root:
+
+```bash
+export COH_REST_URL=http://127.0.0.1:8080
+curl --fail --silent --show-error "$COH_REST_URL/v1/meta/status"
+./bin/cohsh --transport rest --rest-url "$COH_REST_URL" --role queen
+```
+
+Require `connected: true` before using the REST-backed shell. These clients
+share the gateway's upstream role and ticket. For writes, securely set the
+same `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` in the client terminal; a new terminal
+does not inherit variables exported in terminal 2.
+
+After quitting the shell, launch the desktop UI through that same gateway:
+
+```bash
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL="$COH_REST_URL" ./bin/swarmui
+```
+
+SwarmUI needs a graphical desktop. On a headless Jetson, use the CLI/REST
+clients or an existing remote desktop; `xvfb-run` provides an off-screen test
+display, not a visible desktop. Python users can activate `.venv` in this
+terminal and follow [Python support](PYTHON_SUPPORT.md) for `RestBackend`.
+For optional real NVIDIA inventory, run `./bin/gpu-bridge-host --list` on the
+Linux GPU host; [Host tools](HOST_TOOLS.md) covers publishing it through the
+gateway. GPU discovery does not establish model execution.
+
+When finished, quit clients, stop the gateway with `Ctrl-C`, then exit QEMU
+with `Ctrl-A`, followed by `X`. Avoid cutting Pi power while its boot menu is
+saving settings. Clear credentials from each terminal that used them:
+
+```bash
+unset COHSH_AUTH_TOKEN COH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+```
+
+## If something fails
+
+| Symptom | Next check |
+| --- | --- |
+| Manifest or image readback mismatch | Stop. Re-extract a trusted archive, or rediscover and rewrite the intended card; do not boot mismatched media. |
+| Wrong executable format or GLIBC error | Use the matching native ARM64 bundle and a compatible Ubuntu runtime. Do not copy individual binaries between releases. |
+| Missing Python, QEMU or WebKit library | Run the host setup script, then `--check`. Activate this extraction's `.venv` for Python. |
+| HVF/KVM unavailable, or TCG fallback | Check native architecture, QEMU accelerator support and Linux `/dev/kvm` permissions. Keep the guest's declared timer profile. |
+| Pi remains in the menu | Select the displayed boot action after saving/restarting. Check whether the menu reports saved or default settings. |
+| TCP refused or timeout | Keep QEMU running, check its forwarded port, or verify the Pi's selected interface/IP and host route. Check for a previous direct client. |
+| Missing credential or `ERR AUTH` | Use the Queen secret from the exact target manifest. Placeholder credentials are rejected; gateway request tokens and Wi-Fi passwords are different credentials. |
+| Busy console or gateway disconnected | Quit direct clients, leave one gateway as TCP owner, and connect additional clients through REST. |
+
+See [Userland and CLI](USERLAND_AND_CLI.md) for commands,
+[Hardware Bring-up](HARDWARE_BRINGUP.md) for Pi diagnostics, and
+[Host tools](HOST_TOOLS.md) for mounts, GPU bridges, tickets and evidence packs.
+
+## Build from source
+
+This section requires a source checkout; the runtime bundles intentionally omit
+the build toolchain. Follow the [source README](../README.md#build-the-current-source-tree)
+for the Mac or Linux installer. The Mac installer creates the canonical seL4
+profile. For a Mac source build, activate the tools from the repository root:
 
 ```bash
 source "$HOME/.cargo/env"
 source .venv/bin/activate
-```
-
-The Linux path does not create the pinned macOS seL4 compiler/profile inputs.
-It can consume an explicitly supplied compatible seL4 output tree for a
-diagnostic QEMU run, but that run is not release or physical-target acceptance.
-
-## 1. Rehearse a go/no-go check without a target
-
-Start with the deterministic preflight. Think of this as rehearsing the checks
-you will use before a deployment or after an incident. It validates policy,
-ticket, and runtime contracts without probing unavailable target hardware:
-
-```bash
-cargo run -p coh -- doctor --mock
-```
-
-Every line should begin with `OK DOCTOR`. A skipped mount, GPU, or QEMU check is
-expected in mock mode and is reported explicitly.
-
-Open the shell and ask the same first questions you would ask of a remote edge
-node:
-
-```bash
-cargo run -p cohsh -- --transport mock --role queen
-```
-
-At the `coh>` prompt, inspect the same file-shaped surfaces used by live
-targets:
-
-```text
-help
-ls /
-cat /proc/boot
-cat /proc/schedule/summary
-cat /proc/lease/summary
-cat /proc/root/reachable
-quit
-```
-
-Now create an offline-reviewable evidence sample:
-
-```bash
-cargo run -p coh -- evidence pack \
-  --mock \
-  --out out/evidence/quickstart-mock
-
-cargo run -p coh -- evidence timeline \
-  --input out/evidence/quickstart-mock
-```
-
-Open `out/evidence/quickstart-mock/timeline.md` and
-`out/evidence/quickstart-mock/summary.json`. The correct decision from this run
-is “workflow rehearsed; no live node assessed.” The content is simulated, but
-the bounded namespace, pack layout, redaction path, and offline timeline are
-the same host-tool contracts used for a live review.
-
-## 2. Capture a live before-change baseline
-
-The selected seL4 16.0.0 output directory must already contain the kernel,
-elfloader, generated headers, and configuration for the profile. The canonical
-operational input is `out/sel4/profile-v2/qemu-smp-production`; preserved
-`seL4/*` trees are archived diagnostic inputs only. See
-[Toolchain setup](TOOLCHAIN_MAC_ARM64.md) if the profile does not exist.
-
-In terminal 1, select that input explicitly and launch the authenticated TCP
-console profile. This is the control plane you will assess, not merely a
-process to get running:
-
-```bash
 export SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production"
-test -f "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"
-
 ./scripts/cohesix-build-run.sh \
-  --sel4-build "$SEL4_BUILD_DIR" \
-  --out-dir out/cohesix \
-  --profile release \
-  --root-task-features release-qemu,bootstrap-trace \
-  --cargo-target aarch64-unknown-none \
-  --transport tcp
+  --sel4-build "$SEL4_BUILD_DIR" --out-dir out/cohesix \
+  --profile release --root-task-features release-qemu,bootstrap-trace \
+  --cargo-target aarch64-unknown-none --transport tcp
 ```
 
-Leave QEMU running. At the serial `cohesix>` prompt, establish the independent
-boot and isolation facts you would retain before approving an edge change:
-
-```text
-ping
-bi
-caps mcs
-smp mcs
-mem
-netstats
-```
-
-`caps mcs` and `smp mcs` keep generated admission, kernel configuration, and
-live runtime observations source-labelled. They are inspection records, not a
-performance or Pi acceptance claim.
-
-In terminal 2, read the Queen console secret from the selected deployment
-without putting it in shell history:
-
-```bash
-read -r -s COHSH_AUTH_TOKEN
-export COHSH_AUTH_TOKEN
-
-out/cohesix/host-tools/cohsh \
-  --transport tcp \
-  --tcp-host 127.0.0.1 \
-  --tcp-port 31337 \
-  --script scripts/cohsh/smp_parity.coh
-```
-
-The checked-in script attaches, pings the target, reads boot, scheduling, and
-lease state, lists `/proc`, and exits non-zero if an assertion fails. Validate
-any `.coh` file locally before using it:
-
-```bash
-out/cohesix/host-tools/cohsh --check scripts/cohsh/smp_parity.coh
-```
-
-For an interactive session, omit `--script` and add `--role queen`. These reads
-answer the minimum go/no-go questions:
-
-```text
-ls /
-ls /shard
-cat /proc/boot
-cat /proc/root/reachable
-cat /proc/schedule/summary
-cat /proc/lease/summary
-test --mode quick --no-mutate
-quit
-```
-
-| Decision question | Evidence surface |
-| --- | --- |
-| Am I connected to the intended image and profile? | `/proc/boot` plus the independent serial `bi` output |
-| Is the bounded control plane reachable? | `/proc/root/reachable` and the successful checked script |
-| Is scheduling making progress? | `/proc/schedule/summary` and source-labelled `smp mcs` output |
-| Is an unexpected lease still active? | `/proc/lease/summary` |
-| Which Worker roles and instances are exposed? | `/shard`, interpreted with the selected manifest |
-
-The canonical Worker namespace is `/shard`; do not require the legacy
-`/worker` alias. An admitted request, a configured Worker, and a READY Worker
-are different states. Use the exact target evidence rules in
-[Test Plan](TEST_PLAN.md) before making a Worker-execution claim.
-
-The direct TCP console is authenticated but not encrypted. Keep it on loopback
-or carry it through an authenticated encrypted tunnel. Only one direct console
-owner may attach at a time.
-
-## 3. Let several tools inspect one target safely
-
-During a rollout review or incident, an operator, an automation check, and a UI
-may all need the same state. Use `hive-gateway` so `cohsh`, `coh`, Python,
-SwarmUI, and `curl` share one target session instead of racing to own its
-console. Make sure the direct shell has exited first.
-
-In terminal 2, create a separate request-auth secret for REST writes and start
-the gateway:
-
-```bash
-read -r -s COH_AUTH_TOKEN
-export COH_AUTH_TOKEN
-read -r -s HIVE_GATEWAY_REQUEST_AUTH_TOKEN
-export HIVE_GATEWAY_REQUEST_AUTH_TOKEN
-export COH_REST_URL="http://127.0.0.1:8080"
-
-out/cohesix/host-tools/hive-gateway \
-  --bind 127.0.0.1:8080 \
-  --tcp-host 127.0.0.1 \
-  --tcp-port 31337
-```
-
-In terminal 3, confirm that the gateway and target agree on the session you
-intend to operate:
-
-```bash
-export COH_REST_URL="http://127.0.0.1:8080"
-
-curl --fail-with-body --silent --show-error \
-  "$COH_REST_URL/v1/meta/status"
-
-curl --fail-with-body --silent --show-error --get \
-  --data-urlencode 'path=/proc/boot' \
-  --data-urlencode 'max_bytes=1024' \
-  "$COH_REST_URL/v1/fs/cat"
-```
-
-Continue only when status reports `connected: true` and `/proc/boot` identifies
-the expected target profile. Then open a REST-backed shell:
-
-```bash
-out/cohesix/host-tools/cohsh \
-  --transport rest \
-  --rest-url "$COH_REST_URL" \
-  --role queen
-```
-
-The gateway is now the only TCP owner. REST clients inherit its upstream role
-and optional ticket; a client-side `--role queen` does not create additional
-target authority. Keep the gateway on loopback unless an authenticated TLS
-reverse proxy and deployment policy provide the external boundary.
-
-## 4. Add a real CUDA host to the review
-
-If the proposed change uses an NVIDIA edge host, inspect that host separately.
-On a compatible Linux AArch64 NVIDIA CUDA system such as Jetson Orin, AWS G5g,
-or NVIDIA DGX Spark:
-
-```bash
-cargo run -p coh -- doctor
-cargo run -p gpu-bridge-host -- --list
-```
-
-This can tell you that the expected accelerator, memory, driver/runtime, and
-discovery path are present. It cannot tell you that a model loaded, inference
-completed, or a lease isolated a CUDA context.
-
-To add one bounded inventory snapshot to the running Queen review:
-
-```bash
-: "${COH_REST_URL:?set the gateway URL}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
-
-cargo run -p gpu-bridge-host -- \
-  --publish \
-  --rest-url "$COH_REST_URL"
-```
-
-Then confirm `/gpu/bridge/status` through the REST-backed shell. Add
-`--registry "$COH_GPU_REGISTRY"` only when that variable names a real,
-validated model registry. Empty model state is more useful than a fabricated
-demo catalogue.
-
-## What you can use this result for
-
-You now have the beginnings of a real operational case, not just a tour of
-components:
-
-- **Before a model or service rollout:** retain exact target identity,
-  reachability, scheduler state, leases, and—when relevant—real GPU inventory.
-- **After a failure:** compare the before-state with a new pack without relying
-  on screenshots or memory.
-- **During a shared investigation:** give tools and people one bounded gateway
-  instead of sharing an unrestricted shell.
-- **Across QEMU, Pi, and AI hosts:** keep each proof source separate while
-  using the same operator grammar and evidence workflow.
-
-The workflow deliberately stops short of claiming CUDA execution, inference,
-PEFT training, or physical Pi acceptance. Cohesix is useful because it makes
-those missing proofs visible instead of allowing a green command to stand in
-for them.
-
-## Choose the next guide
-
-- Follow the [Operator Walkthrough](OPERATOR_WALKTHROUGH.md) to make a complete
-  go/no-go decision for an edge-AI change using target, gateway, automation,
-  GPU-host, UI, and evidence views.
-- Use [Operator Recipes](OPERATOR_RECIPES.md) for incidents, deployment
-  rehearsals, private adapter rollout, bounded action requests, fleet reads,
-  AArch64 NVIDIA GPU checks, Pi comparison, and maintenance.
-- Read [Failure Modes](FAILURE_MODES.md) when a gate fails; do not hide a
-  typed error with retries.
-- Use [Hardware Bring-up](HARDWARE_BRINGUP.md) for a Pi 4. Build, flash,
-  readback, boot, network, and authenticated command proof are separate gates.
-- Use [Userland and CLI](USERLAND_AND_CLI.md) for the complete console and
-  `.coh` grammar.
-
-When finished, stop clients before the gateway, stop the gateway before QEMU,
-and unset the secrets used by the session:
-
-```bash
-unset COH_AUTH_TOKEN COHSH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
-```
+Use `out/cohesix/host-tools/` in place of the release's `bin/` for host commands.
+The Linux installer supplies host tools and diagnostic QEMU; the native Linux
+release lane additionally requires its own built 31.25 MHz KVM seL4 profile.
+See the [release factory](HOST_TOOLS.md#release-factory) for native builds and
+release qualification. Do not mix checkout artifacts with an extracted release.

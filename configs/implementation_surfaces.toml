@@ -1549,6 +1549,7 @@ public_documents = [
   "README.md",
   "docs/ARCHITECTURE.md",
   "docs/GPU_NODES.md",
+  "docs/HARDWARE_BRINGUP.md",
   "docs/HOST_TOOLS.md",
   "docs/INTERFACES.md",
   "docs/NETWORK_CONFIG.md",

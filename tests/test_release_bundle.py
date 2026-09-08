@@ -8,8 +8,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import tomllib
 
 import pytest
@@ -24,6 +27,65 @@ assert SPEC is not None and SPEC.loader is not None
 worker_support = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = worker_support
 SPEC.loader.exec_module(worker_support)
+
+
+@pytest.mark.parametrize("suffix", ["MacOS", "linux", "Pi4"])
+def test_each_archive_preserves_quickstart_and_resolves_its_links(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    """Exercise the actual packaging function against selected release documents."""
+    release = tomllib.loads(
+        (ROOT / "configs/implementation_surfaces.toml").read_text()
+    )["release"]
+    bundle = tmp_path / f"Cohesix-{release['version']}-{suffix}"
+    for source in release["public_documents"]:
+        destination = "QUICKSTART.md" if source == "docs/QUICKSTART.md" else source
+        path = bundle / destination
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / source, path)
+
+    source = SCRIPT.read_text()
+    function = source.split("prepare_bundle_quickstart() {", 1)[1].split(
+        "\nbundle_release() {", 1
+    )[0]
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "prepare_bundle_quickstart() {"
+            + function
+            + '\nprepare_bundle_quickstart "$1"',
+            "quickstart-test",
+            str(bundle),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    packaged = (bundle / "QUICKSTART.md").read_text()
+    original = (ROOT / "docs/QUICKSTART.md").read_text()
+    # Only link destinations may differ: no platform loses its actual steps.
+    links = r"\[([^]\n]+)\]\(([^)\s]+)\)"
+    assert re.sub(links, r"\1", packaged) == re.sub(links, r"\1", original)
+    for _, target in re.findall(links, packaged):
+        if target.startswith(("#", "http:", "https:", "mailto:")):
+            continue
+        assert (bundle / target.split("#", 1)[0]).is_file(), target
+    assert "(QUICKSTART.md)" in (bundle / "README.md").read_text()
+    assert "docs/QUICKSTART.md" not in (bundle / "README.md").read_text()
+    for document in ("HOST_TOOLS.md", "HARDWARE_BRINGUP.md"):
+        assert "](../QUICKSTART.md)" in (bundle / "docs" / document).read_text()
+
+    archive = tmp_path / f"{bundle.name}.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name)
+    with tarfile.open(archive, "r:gz") as handle:
+        quickstart = handle.extractfile(f"{bundle.name}/QUICKSTART.md")
+        assert quickstart is not None
+        assert quickstart.read().decode() == packaged
+    assert source.count('prepare_bundle_quickstart "$bundle_dir"') == 2
 
 
 def _command(qemu: tuple[Path, Path, Path], pi4: tuple[Path, Path, Path]) -> list[str]:
