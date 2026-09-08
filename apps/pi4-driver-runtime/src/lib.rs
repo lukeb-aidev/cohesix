@@ -2481,9 +2481,10 @@ enum GenetDirectMcsQuantumRoute {
 const GENET_DIRECT_MCS_BUDGET_US: u32 = 3_000;
 const GENET_DIRECT_MCS_PERIOD_US: u32 = 10_000;
 // Direct GENET can alternate IRQ, RX, peer, and TX edges inside one admitted
-// period. Eight refills preserve those bounded sporadic edges without changing
-// the 3 ms/10 ms execution authority; any other generated depth fails closed.
-const GENET_DIRECT_MCS_MAX_REFILLS: u8 = 8;
+// period. Ten total refills use the selected seL4-16 AArch64 256-byte SC's
+// capacity without changing its 3 ms/10 ms execution authority. Admission and
+// the runtime must agree on that exact depth; this is not a latency guarantee.
+const GENET_DIRECT_MCS_MAX_REFILLS: u8 = 10;
 const GENET_DIRECT_MCS_GUARD_US: u32 = GENET_DIRECT_MCS_BUDGET_US / 2;
 const GENET_DIRECT_MCS_SLICE_WCET_US: u32 = 800;
 const GENET_DIRECT_MCS_QUANTUM_CAP: u8 = 16;
@@ -85306,15 +85307,17 @@ mod tests {
     fn direct_genet_dense_mcs_contract_is_exact() {
         let descriptor = direct_genet_descriptor_for_test();
         assert!(genet_direct_mcs_descriptor_valid(descriptor));
-        assert_eq!(descriptor.max_refills, 8);
-        assert_eq!(GENET_DIRECT_MCS_MAX_REFILLS, 8);
+        // The selected kernel's 256-byte SC contains a 96-byte header and
+        // ten 16-byte refill records; retain this independent layout oracle.
+        assert_eq!(descriptor.max_refills, 10);
+        assert_eq!(GENET_DIRECT_MCS_MAX_REFILLS, 10);
         let mut wrong_budget = descriptor;
         wrong_budget.budget_us -= 1;
         assert!(!genet_direct_mcs_descriptor_valid(wrong_budget));
         let mut wrong_period = descriptor;
         wrong_period.period_us += 1;
         assert!(!genet_direct_mcs_descriptor_valid(wrong_period));
-        for stale_or_drifted_refills in [2, 7, 9] {
+        for stale_or_drifted_refills in [2, 8, 9, 11] {
             let mut wrong_refills = descriptor;
             wrong_refills.max_refills = stale_or_drifted_refills;
             assert!(

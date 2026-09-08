@@ -10496,6 +10496,22 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET owner refill-capacity experiment — under
+    `m26e-qemu-shared-control-path-performance`, restoring
+    `m26e-console-network-service-isolation`, preserve the successful bounded
+    passive-read dispatch repair and test only GENET's eight-to-ten total
+    refill selection. The selected seL4-16 AArch64 256-byte SC already admits
+    ten records. Bind source manifest, generated profile and runtime predicate
+    to that capacity, with focused capacity/stale-descriptor tests. Preserve
+    root/console refills, CPU budgets, periods, priorities, affinity, WCET,
+    packet bounds, ABI and recovery. The exact 28d3 sustained raw run's
+    4.760 ms p95 and below-reservation CPU aggregates motivate an experiment,
+    not a proven refill defect. Compile exact Pi, protect QEMU, compare two
+    fresh GENET boots with the canonical raw and medium/high REST harness,
+    and use same-image WiFi as a control before retaining a benefit. Review
+    the complete host-tool suite, Python SDK, .coh and benchmark consumers:
+    only the generated Pi profile hash changes; their public protocols,
+    implementations, workloads and report schemas require no changes.
   - GENET bounded passive-read dispatch candidate — restores
     `m26e-console-network-service-isolation`. Two exact release-Pi queue-timing
     boots show sub-0.16 ms packet handoffs under high TAIL pressure but roughly

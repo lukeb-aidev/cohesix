@@ -1674,10 +1674,10 @@ mod tests {
             .find(|task| task.id == "root-fault")
             .expect("root-fault task");
         root_fault.scheduling_context_bits = 8;
-        root_fault.max_refills = 8;
+        root_fault.max_refills = 10;
         config
             .validate(&temporal)
-            .expect("an eight-bit selected-kernel SC safely holds eight total refills");
+            .expect("an eight-bit selected-kernel SC safely holds ten total refills");
 
         let root_fault = temporal
             .tasks

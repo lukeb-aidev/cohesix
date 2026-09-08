@@ -721,9 +721,9 @@ impl Manifest {
         if task.kind != TemporalTaskKind::Driver || task.execution != TemporalExecution::Active {
             bail!("Pi direct GENET requires driver-genet to be an active driver temporal task");
         }
-        if task.budget_us != 3_000 || task.period_us != 10_000 || task.max_refills != 8 {
+        if task.budget_us != 3_000 || task.period_us != 10_000 || task.max_refills != 10 {
             bail!(
-                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=8"
+                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=10"
             );
         }
         if !task.consumed_time_evidence || task.timeout_policy != TimeoutPolicy::NaturalPostpone {
@@ -4553,9 +4553,11 @@ mod tests {
         );
 
         let timing_drifts = [
-            ("budget", 3_001, 10_000, 8),
-            ("period", 3_000, 9_999, 8),
-            ("refills", 3_000, 10_000, 7),
+            ("budget", 3_001, 10_000, 10),
+            ("period", 3_000, 9_999, 10),
+            ("stale refills", 3_000, 10_000, 8),
+            ("lower refill drift", 3_000, 10_000, 9),
+            ("excess refills", 3_000, 10_000, 11),
         ];
         for (label, budget_us, period_us, max_refills) in timing_drifts {
             let mut drift = manifest.clone();
@@ -4568,7 +4570,7 @@ mod tests {
                     .validate_pi4_direct_genet_temporal_contract()
                     .expect_err(label)
                     .to_string(),
-                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=8"
+                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=10"
             );
         }
 
@@ -4623,13 +4625,13 @@ mod tests {
             .expect("direct-GENET temporal invariant requires selected child resources");
 
         let mut full_validation = manifest;
-        pi4_driver_genet_task(&mut full_validation).max_refills = 7;
+        pi4_driver_genet_task(&mut full_validation).max_refills = 8;
         let error = full_validation
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("full manifest validation must invoke direct-GENET invariant");
         assert_eq!(
             error.to_string(),
-            "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=8"
+            "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=10"
         );
     }
 

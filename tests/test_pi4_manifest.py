@@ -76,7 +76,7 @@ def test_pi4_genet_uses_bold_bounded_core_one_mcs_admission() -> None:
     assert genet["sched_control_core"] == 1
     assert genet["budget_us"] == 3_000
     assert genet["period_us"] == 10_000
-    assert genet["max_refills"] == 8
+    assert genet["max_refills"] == 10
     assert genet["priority"] == 160
     assert genet["timeout_policy"] == "natural-postpone"
     assert genet["wcet_us"] == 800
@@ -121,7 +121,8 @@ def test_pi4_root_and_console_use_exact_cross_core_causal_bounds() -> None:
     assert root["timeout_policy"] == "natural-postpone"
     assert root["budget_us"] == 5_500
     assert root["period_us"] == 10_000
-    assert root["max_refills"] == 2
+    assert root["scheduling_context_bits"] == 8
+    assert root["max_refills"] == 8
     assert root["wcet_us"] == 2_500
     assert root["response_time_us"] == 5_100
     assert root["priority"] == 200
