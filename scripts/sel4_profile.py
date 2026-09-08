@@ -28,7 +28,7 @@ ELFLOADER_PSCI_HVC = WRAPPER_PROJECT / "elfloader-psci-hvc.c"
 ELFLOADER_PSCI_HVC_ASM = WRAPPER_PROJECT / "elfloader-psci-hvc.S"
 TRACKED_SEL4_ROOT = ROOT / "seL4"
 REPO_MANAGED_PROFILE_BUILDS = {
-    "pi4_diagnostic": TRACKED_SEL4_ROOT / "build_UBOOT",
+    "pi4_production": TRACKED_SEL4_ROOT / "build_UBOOT",
 }
 GIC_DETECTOR = ROOT / "scripts" / "lib" / "detect_gic_version.py"
 VALIDATOR = Path(__file__).resolve()

@@ -94,7 +94,7 @@ fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_16_build_identity() {
         .expect("read selected Pi build stamp"),
     )
     .expect("parse selected Pi build stamp");
-    assert_eq!(build_stamp["profile"], "pi4_diagnostic");
+    assert_eq!(build_stamp["profile"], "pi4_production");
     assert_eq!(
         build_stamp["source"]["repositories"]["kernel"]["expected_commit"],
         KERNEL_COMMIT

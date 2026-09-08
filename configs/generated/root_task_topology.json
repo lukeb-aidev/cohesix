@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a",
-  "topology_sha256": "e0dc52a0372d64a94396939eebfd90133d879d25014798b6bb6aecdb42bdb135",
+  "manifest_sha256": "ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8",
+  "topology_sha256": "28167e323e469156c2f0b2c4ebd9eca8cf4804a5c92ed6b5232900e2960357ab",
   "topology": {
     "console_network_service": {
       "abi_version": 6,
@@ -29,7 +29,7 @@
       "max_commands_per_wake": 8,
       "max_control_inflight": 1,
       "max_packets_per_wake": 8,
-      "max_refills": 2,
+      "max_refills": 8,
       "mcp": 200,
       "objects": {
         "asids": 1,
@@ -54,7 +54,7 @@
       "packet_tx_vaddr": 1912737792,
       "packet_tx_wake_notification_slot": 3,
       "period_us": 10000,
-      "priority": 180,
+      "priority": 200,
       "publication_ack_badge": 64,
       "revoke_anchor_bits": 20,
       "revoke_anchor_slot": 16136,
@@ -131,9 +131,9 @@
       "affinity": {
         "authority_core": 0,
         "drivers": {
-          "bcmgenet-v5": 3,
+          "bcmgenet-v5": 1,
           "cyw43455": 3,
-          "hdmi-text": 2,
+          "hdmi-text": 1,
           "pcie-root": 2,
           "rtl8139": 2,
           "sdio-host": 3,
@@ -292,7 +292,7 @@
             "hot-path": "pcie-root",
             "id": "pi4-pcie-runtime",
             "ipc-pages": 1,
-            "mmio-pages": 10,
+            "mmio-pages": 11,
             "ring-pages": 1,
             "root-context-required": false,
             "root-wake-notification-badge": 0,
@@ -332,28 +332,28 @@
       "schema": "1.17"
     },
     "temporal_authority": {
-      "admission_window_us": 20000,
+      "admission_window_us": 10000,
       "architecture": "smp-mcs",
       "core_admission": [
         {
-          "capacity_us": 20000,
+          "capacity_us": 10000,
           "core": 0,
-          "reserve_us": 2000
+          "reserve_us": 1000
         },
         {
-          "capacity_us": 20000,
+          "capacity_us": 10000,
           "core": 1,
-          "reserve_us": 2000
+          "reserve_us": 1000
         },
         {
-          "capacity_us": 20000,
+          "capacity_us": 10000,
           "core": 2,
-          "reserve_us": 2000
+          "reserve_us": 1000
         },
         {
-          "capacity_us": 20000,
+          "capacity_us": 10000,
           "core": 3,
-          "reserve_us": 2000
+          "reserve_us": 1000
         }
       ],
       "cores": 4,
@@ -605,7 +605,7 @@
           "scheduling_context_bits": 0,
           "scheduling_context_slot": 0,
           "timeout_badge": 653131784,
-          "timeout_policy": "return-error",
+          "timeout_policy": "resume-once-return-error",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-candidate-v1",
           "wcet_us": 0
@@ -626,10 +626,10 @@
           "kind": "service",
           "locality_bound": false,
           "max_donation_depth": 0,
-          "max_refills": 2,
+          "max_refills": 8,
           "mcp": 200,
           "period_us": 10000,
-          "priority": 180,
+          "priority": 200,
           "reply_objects": 0,
           "response_time_us": 3000,
           "sched_control_core": 2,
@@ -9510,9 +9510,9 @@
         }
       ],
       "scheduling": {
-        "bootstrap_budget_us": 800,
+        "bootstrap_budget_us": 400,
         "bootstrap_max_refills": 2,
-        "bootstrap_period_us": 20000,
+        "bootstrap_period_us": 10000,
         "bootstrap_scheduling_context_bits": 8,
         "consumed_budget_evidence": true,
         "domain": 0,

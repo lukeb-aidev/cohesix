@@ -85,7 +85,7 @@ target canary merely because it is part of final acceptance.
 <!-- test-plan-convergence:start -->
 | Focus | Target | First authoritative evidence | Exact profile |
 | --- | --- | --- | --- |
-| `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml` |
+| `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_production / configs/root_task_pi4_uboot_aarch64.toml` |
 | `worker` | qemu | canonical QEMU boot, real Worker READY, and one bounded startup/teardown/restart recovery operation | `qemu_smp_production / configs/root_task.toml` |
 | `ninedoor` | qemu | canonical QEMU boot, isolated NineDoor READY, and one real 9P operation | `qemu_smp_production / configs/root_task.toml` |
 | `console-network` | qemu | canonical QEMU boot, isolated console READY v6, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix | `qemu_smp_production / configs/root_task.toml` |
@@ -738,7 +738,7 @@ validated QEMU/Pi component, root, and full-system records, so QEMU-first work
 cannot produce Pi or Worker-runtime release acceptance.
 
 The controlled Milestone 26e refresh of tracked `seL4/build_UBOOT` is complete:
-it is a source-bound `pi4_diagnostic` SMP+MCS artifact set, and validation
+it is a source-bound `pi4_production` SMP+MCS artifact set, and validation
 requires its exact contract hash, generated configuration, 4-node/16-bit-root-
 CNode profile, 54 MHz timer provenance, required artifacts, and complete
 tracked tree. Static profile validation, deterministic host composition, and a
@@ -900,8 +900,8 @@ from that catalog.
 | `host.rust-risk-ratchet` | 1 | `common-hermetic` | common / qemu, pi4 | `env -u CARGO_HOME scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml` |
 | `target.qemu-profile` | 2 | `qemu-integration` | provisioned-target / qemu | `"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python" scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir "${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" --require-source --require-artifacts --for-runtime` |
 | `target.root-task-qemu-release` | 2 | `qemu-integration` | provisioned-target / qemu | `scripts/ci/test_plan_target_root_check.sh --target qemu --sel4-build "${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" --profile qemu_smp_production --features release-qemu --timer-clock-hz 24000000` |
-| `target.pi4-profile` | 2 | `pi4-transport` | provisioned-target / pi4 | `"${TEST_PLAN_ROOT}/.venv/bin/python" scripts/sel4_profile.py validate --repo-managed --profile pi4_diagnostic --build-dir "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --require-artifacts --for-runtime` |
-| `target.root-task-pi4-release` | 2 | `pi4-transport` | provisioned-target / pi4 | `scripts/ci/test_plan_target_root_check.sh --target pi4 --sel4-build "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --profile pi4_diagnostic --features release-pi4 --timer-clock-hz 54000000` |
+| `target.pi4-profile` | 2 | `pi4-transport` | provisioned-target / pi4 | `"${TEST_PLAN_ROOT}/.venv/bin/python" scripts/sel4_profile.py validate --repo-managed --profile pi4_production --build-dir "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --require-artifacts --for-runtime` |
+| `target.root-task-pi4-release` | 2 | `pi4-transport` | provisioned-target / pi4 | `scripts/ci/test_plan_target_root_check.sh --target pi4 --sel4-build "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --profile pi4_production --features release-pi4 --timer-clock-hz 54000000` |
 | `qemu.tcp-regression` | 3 | `qemu-integration` | target / qemu | `scripts/cohsh/run_regression_batch.sh` |
 | `pi4.tcp-regression` | 3 | `pi4-transport` | target / pi4 | `scripts/cohsh/run_regression_batch.sh` |
 | `qemu.rest-regression` | 4 | `qemu-integration` | target / qemu | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
@@ -1098,7 +1098,7 @@ or imported Stage 01 common-hermetic attestation:
   NineDoor, console-network, and driver-runtime identities inside the Stage 02
   attempt and binds them to the root check under the selected 24 MHz profile.
 - Pi 4 profile validation against
-  the immutable `seL4/build_UBOOT` `pi4_diagnostic` artifacts, followed by the
+  the immutable `seL4/build_UBOOT` `pi4_production` artifacts, followed by the
   `release-pi4`
   AArch64 root-task check. Its independently built component bindings use the
   selected 54 MHz header; this remains compile evidence, not Pi boot or
@@ -4627,7 +4627,7 @@ These checks prove repository artifact identity, deterministic packaging, and
 stage construction only; they are not Pi boot, hardware, network, performance,
 or acceptance evidence.
 
-The repo-managed `pi4_diagnostic` input validates independently as a seL4
+The repo-managed `pi4_production` input validates independently as a seL4
 16.0.0 `bcm2711` SMP+MCS artifact set with its completed build-input stamp,
 `KernelRootCNodeSizeBits=16`, `KernelArmExportVCNTUser=ON`, physical
 counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained
@@ -4635,7 +4635,7 @@ one-domain `KernelDomainSchedule` cache entry. The 16-bit root CNode admits the
 complete compiler-bounded 256-Worker population, linked-runtime images,
 isolated framebuffer mapping, and post-construction reserve; a 13- or 14-bit
 external Pi tree is stale and cannot satisfy image or hardware proof. Static
-`seL4/build_UBOOT` PASS proves only this diagnostic artifact contract and cannot
+`seL4/build_UBOOT` PASS proves only this production kernel artifact contract and cannot
 substitute for release proof, staged/read-back image identity, boot, Wi-Fi,
 TCP/`cohsh`, or benchmark lanes. The image wrapper validates one complete
 relink tool family against the tracked baseline oracle and never invokes CMake
@@ -10399,9 +10399,9 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/root_task.toml` — `sha256:9d69dda24b993151c6db1eb2996826ea679d5fa4d747676751cd9a934800ea53`
-- `configs/generated/root_task_resolved.json` — `sha256:f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:73cade75f7b44d0a3aeb02e57f54696062820c403f82ea0a0830a8b048c8fb59`
+- `configs/root_task.toml` — `sha256:06c1e3e5496f7c04554ceff9fab423e7f48738ef177e094dac391d0bf60ff369`
+- `configs/generated/root_task_resolved.json` — `sha256:ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:822d6a9809dacfa0603c655994795f8a89d89b40b01cb488bbb8ee5b2afc1fd4`
 - Pi `pi4_production` transient resolved binding — `sha256:74741d4d6b33471852f6fb2e5d98cde5eab32f55ee49d75dea567769f57ecfba`
 
 ## Transcript fixture hashes

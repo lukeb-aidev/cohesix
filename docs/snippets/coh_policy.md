@@ -3,15 +3,15 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`
-- `policy.sha256`: `9e9ca469f19d49e9397501e40b5c8fc3f47401277d2451d40f0331438a8086a1`
+- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
+- `policy.sha256`: `04450bfefeaa8bb82de1515a27efc3e58fcbf02b0a3181469f026e311ab17156`
 - `coh.worker.task_abi_schema`: `worker-task-abi/v2`
 - `coh.worker.task_abi_version`: `2`
 - `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
 - `coh.worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
 - `coh.worker.maximum_live_tasks`: `256`
 - `coh.worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
-- `coh.worker.shard_bits`: `6`
+- `coh.worker.shard_bits`: `8`
 - `coh.worker.legacy_worker_alias`: `true`
 - `coh.worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`
 - `coh.worker.receipt`: `none, pending, confirmed, rejected, stale`

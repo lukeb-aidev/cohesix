@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`
-- `swarmui.defaults.sha256`: `47a355d0d72da1f51c3ed0b2e5cbfdabcb2728dcf3b9835ed27dfedf2ff332e9`
+- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
+- `swarmui.defaults.sha256`: `28da60241bc55a2a4be65819698c21cc6cd6d30db4bf57a7a6f37e7e39bcb03e`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -30,7 +30,7 @@
 - `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu`
 - `swarmui.worker_runtime.maximum_live_tasks`: `256`
 - `swarmui.worker_runtime.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
-- `swarmui.worker_runtime.shard_bits`: `6`
+- `swarmui.worker_runtime.shard_bits`: `8`
 - `swarmui.worker_runtime.legacy_worker_alias`: `true`
 - `swarmui.worker_runtime.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
 - `swarmui.worker_runtime.role.worker-gpu`: declaration=`executable`, executable_slots=`127`
@@ -38,4 +38,4 @@
 - `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`128`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`)._
+_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._

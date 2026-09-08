@@ -289,7 +289,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                     "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
                     9_000,
                     8_500,
-                    180,
+                    200,
                     200,
                     3_000,
                     24_000_000,
@@ -315,7 +315,15 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             assert_eq!(root["timeout_policy"], "natural-postpone", "{profile}");
             assert_eq!(root["budget_us"], expected_budget, "{profile}");
             assert_eq!(root["period_us"], 10_000, "{profile}");
-            assert_eq!(root["max_refills"], 2, "{profile}");
+            assert_eq!(
+                root["max_refills"],
+                if *profile == "configs/root_task.toml" {
+                    2
+                } else {
+                    8
+                },
+                "{profile}"
+            );
             assert_eq!(
                 root["response_time_us"], expected_root_response,
                 "{profile}"

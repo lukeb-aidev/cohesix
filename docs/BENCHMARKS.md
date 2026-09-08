@@ -4,6 +4,13 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
+QEMU/Pi comparisons use the paired release kernels and common production
+manifest contract in [PRODUCTION_PROFILES.md](PRODUCTION_PROFILES.md).
+Retained Pi diagnostic-kernel results are a distinct baseline. Use
+`scripts/rest_perf_harness.py` for every benchmark; concurrent HTTP TAIL
+submission does not imply concurrent target commands. Report full-batch means
+separately from per-request latency and retain each selected manifest identity.
+
 Cohesix benchmarks measure a bounded control plane, not an unconstrained
 throughput service. A valid result preserves the same tickets, namespace
 semantics, audit behavior, backpressure, console grammar, and target ownership

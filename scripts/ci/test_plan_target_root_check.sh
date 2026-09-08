@@ -45,7 +45,7 @@ case "${target}:${profile}:${features}:${timer_clock_hz}" in
     selected_manifest="${repo_root}/configs/root_task.toml"
     projection_profile="qemu_smp_production"
     ;;
-  pi4:pi4_diagnostic:release-pi4:54000000)
+  pi4:pi4_production:release-pi4:54000000)
     expected_sel4="${repo_root}/seL4/build_UBOOT"
     selected_manifest="${repo_root}/configs/root_task_pi4_uboot_aarch64.toml"
     projection_profile="pi4_production"

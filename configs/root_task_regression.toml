@@ -19,8 +19,8 @@ worker_cores = [2, 3]
 [root_task.affinity.drivers]
 serial = 1
 usb-local-seat = 1
-hdmi-text = 2
-bcmgenet-v5 = 3
+hdmi-text = 1
+bcmgenet-v5 = 1
 cyw43455 = 3
 rtl8139 = 2
 virtio-net = 3
@@ -138,7 +138,7 @@ code-pages = 320
 stack-pages = 16
 ipc-pages = 1
 ring-pages = 1
-mmio-pages = 10
+mmio-pages = 11
 dma-pages = 0
 shared-buffer-pages = 16
 root-context-required = false
@@ -222,6 +222,7 @@ unify_instructions = false
 protection_profile = "none"
 
 [worker_runtime]
+# Full admitted execution population; see docs/PRODUCTION_PROFILES.md.
 implementation_epoch = 26
 max_workers = 256
 ticket_subject_required = true
@@ -306,8 +307,8 @@ priority = 96
 domain = 0
 service_turn_budget = 64
 bootstrap_scheduling_context_bits = 8
-bootstrap_budget_us = 800
-bootstrap_period_us = 20000
+bootstrap_budget_us = 400
+bootstrap_period_us = 10000
 bootstrap_max_refills = 2
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
@@ -317,27 +318,27 @@ enabled = true
 architecture = "smp-mcs"
 cores = 4
 domains = 1
-admission_window_us = 20000
+admission_window_us = 10000
 
 [[temporal_authority.core_admission]]
 core = 0
-capacity_us = 20000
-reserve_us = 2000
+capacity_us = 10000
+reserve_us = 1000
 
 [[temporal_authority.core_admission]]
 core = 1
-capacity_us = 20000
-reserve_us = 2000
+capacity_us = 10000
+reserve_us = 1000
 
 [[temporal_authority.core_admission]]
 core = 2
-capacity_us = 20000
-reserve_us = 2000
+capacity_us = 10000
+reserve_us = 1000
 
 [[temporal_authority.core_admission]]
 core = 3
-capacity_us = 20000
-reserve_us = 2000
+capacity_us = 10000
+reserve_us = 1000
 
 [[temporal_authority.tasks]]
 id = "root-control"
@@ -530,7 +531,7 @@ core = 0
 priority = 128
 mcp = 200
 timeout_badge = 653131784
-timeout_policy = "return-error"
+timeout_policy = "resume-once-return-error"
 wcet_provenance = "m26e-qemu-candidate-v1"
 allowed_donors = ["root-control"]
 reply_objects = 1
@@ -607,8 +608,8 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 3000
 admitted = true
-max_refills = 2
-priority = 180
+max_refills = 8
+priority = 200
 mcp = 200
 timeout_badge = 653131785
 timeout_policy = "natural-postpone"
@@ -657,11 +658,11 @@ fault_badge = 652476417
 core = 2
 scheduling_context_slot = 6
 scheduling_context_bits = 8
-priority = 180
+priority = 200
 mcp = 200
 budget_us = 3000
 period_us = 10000
-max_refills = 2
+max_refills = 8
 timeout_badge = 653131785
 timer_clock_hz = 24000000
 auth_timeout_ms = 5000

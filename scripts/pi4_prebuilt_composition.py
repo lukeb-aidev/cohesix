@@ -44,7 +44,7 @@ from sel4_profile import (  # noqa: E402
     validate_repo_managed_build,
 )
 
-PROFILE_NAME = "pi4_diagnostic"
+PROFILE_NAME = "pi4_production"
 CANONICAL_BUILD_DIR = REPO_ROOT / "seL4" / "build_UBOOT"
 DEFAULT_BINUTILS_PREFIX = "/opt/homebrew/bin/aarch64-linux-gnu-"
 BINUTILS_ENV = "COHESIX_AARCH64_BINUTILS_PREFIX"

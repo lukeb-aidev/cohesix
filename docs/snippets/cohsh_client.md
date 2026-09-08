@@ -3,14 +3,14 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`
+- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
 - `worker.task_abi_schema`: `worker-task-abi/v2`
 - `worker.task_abi_version`: `2`
 - `worker.observation_schema`: `cohesix-worker-observation/v1`
 - `worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
 - `worker.maximum_live_tasks`: `256`
 - `worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
-- `worker.shard_bits`: `6`
+- `worker.shard_bits`: `8`
 - `worker.legacy_worker_alias`: `true`
 - `worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`
 - `worker.receipt`: `none, pending, confirmed, rejected, stale`
@@ -38,4 +38,4 @@
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`)._
+_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._

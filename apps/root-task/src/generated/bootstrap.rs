@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "24f2b4029ed6fed4cd918a93e23177e200a9f66c86845a1941d5a4dea446a8ab";
+    "e8babe233c64bdbb366e19e5564a72590952f8b1be7032ff25d82cf3d0cbcf01";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -192,8 +192,8 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
         domain: 0,
         service_turn_budget: 64,
         bootstrap_scheduling_context_bits: 8,
-        bootstrap_budget_us: 800,
-        bootstrap_period_us: 20000,
+        bootstrap_budget_us: 400,
+        bootstrap_period_us: 10000,
         bootstrap_max_refills: 2,
         timeout_endpoint_badge: 653132288,
         consumed_budget_evidence: true,
@@ -203,23 +203,23 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
 pub const TEMPORAL_CORE_ADMISSION: [TemporalCoreAdmission; 4] = [
     TemporalCoreAdmission {
         core: 0,
-        capacity_us: 20000,
-        reserve_us: 2000,
+        capacity_us: 10000,
+        reserve_us: 1000,
     },
     TemporalCoreAdmission {
         core: 1,
-        capacity_us: 20000,
-        reserve_us: 2000,
+        capacity_us: 10000,
+        reserve_us: 1000,
     },
     TemporalCoreAdmission {
         core: 2,
-        capacity_us: 20000,
-        reserve_us: 2000,
+        capacity_us: 10000,
+        reserve_us: 1000,
     },
     TemporalCoreAdmission {
         core: 3,
-        capacity_us: 20000,
-        reserve_us: 2000,
+        capacity_us: 10000,
+        reserve_us: 1000,
     },
 ];
 
@@ -458,7 +458,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 128,
         mcp: 200,
         timeout_badge: 653131784,
-        timeout_policy: TimeoutPolicy::ReturnError,
+        timeout_policy: TimeoutPolicy::ResumeOnceReturnError,
         consumed_time_evidence: false,
         wcet_us: 0,
         response_time_us: 0,
@@ -485,8 +485,8 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         deadline_us: 10000,
         blocking_us: 0,
         jitter_us: 0,
-        max_refills: 2,
-        priority: 180,
+        max_refills: 8,
+        priority: 200,
         mcp: 200,
         timeout_badge: 653131785,
         timeout_policy: TimeoutPolicy::NaturalPostpone,
@@ -8446,7 +8446,7 @@ pub const TEMPORAL_AUTHORITY_CONFIG: TemporalAuthorityConfig = TemporalAuthority
     architecture: SchedulerArchitecture::SmpMcs,
     cores: 4,
     domains: 1,
-    admission_window_us: 20000,
+    admission_window_us: 10000,
     core_admission: &TEMPORAL_CORE_ADMISSION,
     tasks: &TEMPORAL_TASKS,
 };
@@ -8563,11 +8563,11 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
         core: 2,
         scheduling_context_slot: 6,
         scheduling_context_bits: 8,
-        priority: 180,
+        priority: 200,
         mcp: 200,
         budget_us: 3000,
         period_us: 10000,
-        max_refills: 2,
+        max_refills: 8,
         timeout_badge: 653131785,
         timer_clock_hz: 24000000,
         auth_timeout_ms: 5000,
@@ -8902,7 +8902,7 @@ pub const TICKET_LIMITS: TicketLimits = TicketLimits {
 
 pub const SHARDING_CONFIG: ShardingConfig = ShardingConfig {
     enabled: true,
-    shard_bits: 6,
+    shard_bits: 8,
     legacy_worker_alias: true,
 };
 
@@ -8915,8 +8915,8 @@ pub const AFFINITY_WORKER_CORES: [u8; 2] = [2, 3];
 pub const DRIVER_AFFINITY_POLICY: DriverAffinityPolicy = DriverAffinityPolicy {
     serial: Some(1),
     usb_local_seat: Some(1),
-    hdmi_text: Some(2),
-    bcmgenet_v5: Some(3),
+    hdmi_text: Some(1),
+    bcmgenet_v5: Some(1),
     cyw43455: Some(3),
     rtl8139: Some(2),
     virtio_net: Some(3),
@@ -9053,7 +9053,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
-        mmio_pages: 10,
+        mmio_pages: 11,
         dma_pages: 0,
         shared_buffer_pages: 16,
         root_wake_notification_slot: 0,
@@ -9113,11 +9113,23 @@ pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy = DriverRuntimeI
     bus_links: &DRIVER_RUNTIME_BUS_LINKS,
 };
 
-pub const SHARD_LABELS: [&str; 64] = [
+pub const SHARD_LABELS: [&str; 256] = [
     "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d", "0e", "0f",
     "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "1a", "1b", "1c", "1d", "1e", "1f",
     "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "2a", "2b", "2c", "2d", "2e", "2f",
     "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "3a", "3b", "3c", "3d", "3e", "3f",
+    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "4a", "4b", "4c", "4d", "4e", "4f",
+    "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "5a", "5b", "5c", "5d", "5e", "5f",
+    "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "6a", "6b", "6c", "6d", "6e", "6f",
+    "70", "71", "72", "73", "74", "75", "76", "77", "78", "79", "7a", "7b", "7c", "7d", "7e", "7f",
+    "80", "81", "82", "83", "84", "85", "86", "87", "88", "89", "8a", "8b", "8c", "8d", "8e", "8f",
+    "90", "91", "92", "93", "94", "95", "96", "97", "98", "99", "9a", "9b", "9c", "9d", "9e", "9f",
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "aa", "ab", "ac", "ad", "ae", "af",
+    "b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "ba", "bb", "bc", "bd", "be", "bf",
+    "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "ca", "cb", "cc", "cd", "ce", "cf",
+    "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "da", "db", "dc", "dd", "de", "df",
+    "e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "ea", "eb", "ec", "ed", "ee", "ef",
+    "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "fa", "fb", "fc", "fd", "fe", "ff",
 ];
 
 pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig {
@@ -9176,7 +9188,7 @@ pub const CAS_CONFIG: CasConfig = CasConfig {
         0xeb, 0x03, 0x75, 0xa7, 0x4e, 0xc0, 0xaf, 0x38, 0x73, 0x37, 0xdd, 0x93, 0x23, 0xd3, 0xef,
         0xed, 0xe8,
     ]),
-    models_enabled: false,
+    models_enabled: true,
 };
 
 pub const HARDWARE_DEVICES: [HardwareDevice; 0] = [];
@@ -9448,13 +9460,23 @@ pub const HOST_CONFIG: HostConfig = HostConfig {
     },
 };
 
-pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 0] = [];
+pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 1] = [SidecarBusAdapter {
+    id: "modbus-main",
+    mount: "modbus-main",
+    scope: "modbus-main",
+    link: SidecarLink::Serial,
+    baud: 19200,
+    spool: SpoolConfig {
+        max_entries: 8,
+        max_bytes: 512,
+    },
+}];
 
 pub const DNP3_ADAPTERS: [SidecarBusAdapter; 0] = [];
 
 pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {
     modbus: SidecarBusConfig {
-        enable: false,
+        enable: true,
         mount_at: "/bus",
         adapters: &MODBUS_ADAPTERS,
     },
@@ -9490,10 +9512,10 @@ pub const POLICY_CONFIG: PolicyConfig = PolicyConfig {
 pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 256,\n    \"queue_max_bytes\": 8192,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
 
 pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
-    enable: false,
+    enable: true,
     journal_max_bytes: 8192,
     decisions_max_bytes: 4096,
-    replay_enable: false,
+    replay_enable: true,
     replay_max_entries: 64,
     replay_ctl_max_bytes: 1024,
     replay_status_max_bytes: 1024,
@@ -9504,7 +9526,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.17",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a",
+    "manifest.sha256=ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9513,9 +9535,9 @@ pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.secure9p.batch_frames=1",
     "manifest.secure9p.short_write.policy=reject",
     "manifest.sharding.enabled=true",
-    "manifest.sharding.shard_bits=6",
+    "manifest.sharding.shard_bits=8",
     "manifest.sharding.legacy_worker_alias=true",
-    "manifest.sharding.shard_count=64",
+    "manifest.sharding.shard_count=256",
     "telemetry.ring_bytes_per_worker=1024",
     "telemetry.frame_schema=legacy-plaintext",
     "telemetry.cursor.retain_on_boot=false",

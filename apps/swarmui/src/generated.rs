@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 pub const MANIFEST_SHA256: &str =
-    "f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a";
+    "ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8";
 pub const SECURE9P_MSIZE: u32 = 8192;
 pub const SECURE9P_WALK_DEPTH: u8 = 8;
 pub const SWARMUI_TICKET_SCOPE: &str = "per-ticket";
@@ -37,7 +37,7 @@ pub const SWARMUI_NAMESPACE_ROOTS: &[&str] =
 pub const SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 256;
 pub const SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str =
     "/shard/<label>/worker/<id>/telemetry";
-pub const SWARMUI_WORKER_SHARD_BITS: u8 = 6;
+pub const SWARMUI_WORKER_SHARD_BITS: u8 = 8;
 pub const SWARMUI_WORKER_LEGACY_ALIAS: bool = true;
 pub const SWARMUI_WORKER_ROLE_BOUNDS: &[(&str, &str, u16)] = &[
     ("worker-heartbeat", "executable", 1),

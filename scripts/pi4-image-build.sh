@@ -13,7 +13,7 @@ CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
 DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"
 SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"
 SEL4_VENV_DIR="${ROOT_DIR}/.venv"
-PI4_SEL4_PROFILE="pi4_diagnostic"
+PI4_SEL4_PROFILE="pi4_production"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
 GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
 FIRMWARE_DIR="${ROOT_DIR}/third_party/raspberry-pi-firmware/v1.50"
@@ -139,7 +139,7 @@ Environment:
   USB is always staged as Cohesix-owned cold boot. U-Boot xHCI handoff export is disabled.
   COHESIX_AARCH64_BINUTILS_PREFIX may select one absolute complete binutils
   family prefix (default: /opt/homebrew/bin/aarch64-linux-gnu-).
-  seL4/build_UBOOT is the sole immutable pi4_diagnostic kernel/elfloader input.
+  seL4/build_UBOOT is the sole immutable pi4_production kernel/elfloader input.
   Cohesix rootserver composition publishes only replaceable outputs under out/.
 USAGE
 }
@@ -1208,13 +1208,13 @@ validate_pi4_sel4_build() {
     local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
     require_file "$cache_file"
     grep -q "^KernelPlatform:STRING=bcm2711$" "$cache_file" || fail "KernelPlatform not set to bcm2711"
-    grep -q "^RELEASE:BOOL=OFF$" "$cache_file" || fail "RELEASE mode unexpectedly enabled"
+    grep -q "^RELEASE:BOOL=ON$" "$cache_file" || fail "RELEASE mode must be enabled"
     grep -q "^SMP:BOOL=ON$" "$cache_file" || fail "SMP not enabled"
     grep -q "^NUM_NODES:STRING=4$" "$cache_file" || fail "NUM_NODES not set to 4"
     grep -Eq "^RPI4_MEMORY:[A-Z]+=${PI4_TOTAL_MEM_MB}$" "$cache_file" || fail "RPI4_MEMORY not set to ${PI4_TOTAL_MEM_MB}"
     grep -q "^Sel4testAllowSettingsOverride:BOOL=ON$" "$cache_file" || fail "Sel4testAllowSettingsOverride not ON"
-    grep -q "^KernelDebugBuild:BOOL=ON$" "$cache_file" || fail "KernelDebugBuild not ON"
-    grep -q "^KernelPrinting:BOOL=ON$" "$cache_file" || fail "KernelPrinting not ON"
+    grep -q "^KernelDebugBuild:BOOL=OFF$" "$cache_file" || fail "KernelDebugBuild must be OFF"
+    grep -q "^KernelPrinting:BOOL=OFF$" "$cache_file" || fail "KernelPrinting must be OFF"
     verify_pi4_sel4_counter_config
     grep -q "^HardwareDebugAPI:BOOL=OFF$" "$cache_file" || fail "HardwareDebugAPI must be OFF for current sel4-sys bindings"
     grep -q "^KernelMaxNumNodes:STRING=4$" "$cache_file" || fail "KernelMaxNumNodes not 4"

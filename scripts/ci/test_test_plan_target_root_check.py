@@ -20,7 +20,7 @@ def test_target_root_check_preserves_exact_profile_and_binding_contract() -> Non
 
     for required in (
         "qemu:qemu_smp_production:release-qemu:24000000",
-        "pi4:pi4_diagnostic:release-pi4:54000000",
+        "pi4:pi4_production:release-pi4:54000000",
         'selected_manifest="${repo_root}/configs/root_task.toml"',
         'selected_manifest="${repo_root}/configs/root_task_pi4_uboot_aarch64.toml"',
         "coh-rtc-python-profile",
@@ -213,7 +213,7 @@ def _run_target_root_fixture(
         timer_clock_hz = "24000000"
     else:
         sel4_build = repo_root / "seL4/build_UBOOT"
-        profile = "pi4_diagnostic"
+        profile = "pi4_production"
         features = "release-pi4"
         timer_clock_hz = "54000000"
 

@@ -199,7 +199,7 @@ for the first command:
 ```bash
 .venv/bin/python scripts/sel4_profile.py validate \
   --repo-managed \
-  --profile pi4_diagnostic \
+  --profile pi4_production \
   --build-dir "$PWD/seL4/build_UBOOT" \
   --require-artifacts \
   --for-runtime
@@ -208,8 +208,11 @@ for the first command:
   --venv .venv
 ```
 
+Production features, capacity and required QEMU/Pi differences are specified in
+[PRODUCTION_PROFILES.md](PRODUCTION_PROFILES.md).
+
 The default stage directory is `out/pi4-sd`. The script validates the Pi U-Boot
-shape, the canonical tracked `pi4_diagnostic` seL4 artifacts and relocated
+shape, the canonical tracked `pi4_production` seL4 artifacts and relocated
 build-input stamp, the virtual-counter contract, generated artifacts, runtime
 payloads, and rootfs bounds before staging. Both Pi production and diagnostic
 profiles require `KernelRootCNodeSizeBits=16`. The resulting 65,536-slot root
@@ -239,8 +242,8 @@ writes `out/pi4-sd/pi4-image-identity.json`. A successful stage is build proof
 only. It also retains the selected Pi resolved manifest as
 `out/pi4-sd/cohesix-root-task-resolved.json`; the runtime/DMA build proof names
 and hashes that immutable copy so later restoration of canonical QEMU generated
-outputs cannot relabel the Pi build. The repository-managed diagnostic tree is
-not release proof, and neither it nor the staged image substitutes for
+outputs cannot relabel the Pi build. The repository-managed production kernel tree is
+not complete-system release proof, and neither it nor the staged image substitutes for
 read-back media, boot, Wi-Fi, TCP, or benchmark evidence.
 
 Record hashes for the image, U-Boot, DTB, boot script, firmware, and

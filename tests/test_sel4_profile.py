@@ -1314,7 +1314,7 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
 
     evidence = sel4_profile.validate_repo_managed_build(
         canonical_contract,
-        "pi4_diagnostic",
+        "pi4_production",
         build_dir,
         for_runtime=True,
     )
@@ -1336,18 +1336,20 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
         ).read_text(encoding="utf-8")
     )
     assert (
-        canonical_contract["profiles"]["pi4_diagnostic"]["generated"]
+        canonical_contract["profiles"]["pi4_production"]["generated"]
         ["ARM_GIC_V3_SUPPORT"]
         is False
     )
     assert generated_config["ARM_GIC_V3_SUPPORT"] is False
+    assert generated_config["DEBUG_BUILD"] is False
+    assert generated_config["PRINTING"] is False
 
     stamp = json.loads(
         (build_dir / "cohesix-profile-build-inputs.json").read_text(
             encoding="utf-8"
         )
     )
-    assert stamp["profile"] == "pi4_diagnostic"
+    assert stamp["profile"] == "pi4_production"
     assert stamp["contract_values_sha256"] == (
         "cc9139cd6b8bc331167aff5f0784f8c2261301553fa1739facc4e569cff28026"
     )
@@ -1390,7 +1392,7 @@ def test_repo_managed_pi_profile_rejects_noncanonical_path(
 
     evidence = sel4_profile.validate_repo_managed_build(
         canonical_contract,
-        "pi4_diagnostic",
+        "pi4_production",
         tmp_path,
         for_runtime=True,
     )
@@ -1409,7 +1411,7 @@ def test_repo_managed_cli_rejects_source_and_release_claims(
             "validate",
             "--repo-managed",
             "--profile",
-            "pi4_diagnostic",
+            "pi4_production",
             "--build-dir",
             str(build_dir),
             "--source",
@@ -1422,7 +1424,7 @@ def test_repo_managed_cli_rejects_source_and_release_claims(
             "validate",
             "--repo-managed",
             "--profile",
-            "pi4_diagnostic",
+            "pi4_production",
             "--build-dir",
             str(build_dir),
             "--for-release",

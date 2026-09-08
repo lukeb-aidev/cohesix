@@ -4722,15 +4722,15 @@ mod tests {
 
         let qemu = load_manifest(&qemu_path).expect("load QEMU manifest");
         qemu.validate_console_network_service()
-            .expect("QEMU retains its lower-priority non-YieldTo service");
+            .expect("QEMU admits the common production console scheduling envelope");
         let qemu_console_task = qemu
             .temporal_authority
             .tasks
             .iter()
             .find(|task| task.id == "console-network-service")
             .expect("QEMU console-network temporal task");
-        assert_eq!(qemu_console_task.max_refills, 2);
-        assert_eq!(qemu.console_network_service.max_refills, 2);
+        assert_eq!(qemu_console_task.max_refills, 8);
+        assert_eq!(qemu.console_network_service.max_refills, 8);
 
         let mut refill_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
         refill_drift.console_network_service.max_refills = 7;

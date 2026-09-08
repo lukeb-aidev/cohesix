@@ -15,8 +15,8 @@
 - `root_task.affinity.worker_cores`: `[2, 3]`
 - `root_task.affinity.drivers.serial`: `1`
 - `root_task.affinity.drivers.usb-local-seat`: `1`
-- `root_task.affinity.drivers.hdmi-text`: `2`
-- `root_task.affinity.drivers.bcmgenet-v5`: `3`
+- `root_task.affinity.drivers.hdmi-text`: `1`
+- `root_task.affinity.drivers.bcmgenet-v5`: `1`
 - `root_task.affinity.drivers.cyw43455`: `3`
 - `root_task.affinity.drivers.rtl8139`: `2`
 - `root_task.affinity.drivers.virtio-net`: `3`
@@ -229,26 +229,26 @@
 - `hw.devices[]`: `(none)`
 - `namespaces.role_isolation`: `true`
 - `sharding.enabled`: `true`
-- `sharding.shard_bits`: `6`
+- `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`
+- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
 
 ### Sharded worker namespace (generated)
 - `sharding.enabled`: `true`
-- `sharding.shard_bits`: `6`
+- `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
-- shard labels: `00..3f` (count: 64)
+- shard labels: `00..ff` (count: 256)
 - canonical worker path: `/shard/<label>/worker/<id>/telemetry`
 - legacy alias: `/worker/<id>/telemetry`
 
 ### Sidecars section (generated)
-- `sidecars.modbus.enable`: `false`
+- `sidecars.modbus.enable`: `true`
 - `sidecars.modbus.mount_at`: `/bus`
-- `sidecars.modbus.adapters`: `(none)`
+- `sidecars.modbus.adapters`: id=`modbus-main` mount=`modbus-main` scope=`modbus-main` link=`serial` baud=`19200` spool.max_entries=`8` spool.max_bytes=`512`
 - `sidecars.dnp3.enable`: `false`
 - `sidecars.dnp3.mount_at`: `/bus`
 - `sidecars.dnp3.adapters`: `(none)`
@@ -274,10 +274,10 @@
 - `ecosystem.host.federation.peers`: `hive-c` -> `http://127.0.0.1:8082` (`auth_ref=COHESIX_RELAY_HIVE_C_TOKEN`)
 - `ecosystem.host.federation.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
 - `/host` namespace mounted at `/host` when enabled.
-- `ecosystem.audit.enable`: `false`
+- `ecosystem.audit.enable`: `true`
 - `ecosystem.audit.journal_max_bytes`: `8192`
 - `ecosystem.audit.decisions_max_bytes`: `4096`
-- `ecosystem.audit.replay_enable`: `false`
+- `ecosystem.audit.replay_enable`: `true`
 - `ecosystem.audit.replay_max_entries`: `64`
 - `ecosystem.audit.replay_ctl_max_bytes`: `1024`
 - `ecosystem.audit.replay_status_max_bytes`: `1024`
@@ -288,7 +288,7 @@
 - `ecosystem.policy.status_max_bytes`: `512`
 - `ecosystem.policy.rules`: `queen-ctl` → `/queen/ctl`
 - `ecosystem.policy.rules`: `systemd-restart` → `/host/systemd/*/restart`
-- `ecosystem.models.enable`: `false`
+- `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `f7ea3dc3ec50be86389bb91c218d5030eb1b1af4da493df7db6fb3df5384845a`)._
+_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._

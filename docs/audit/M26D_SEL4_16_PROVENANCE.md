@@ -213,9 +213,12 @@ smoke, or offline PASS may fill those evidence classes.
 
 ## Current Pi artifact consumption
 
-The historical refresh record above remains the source-build provenance for the
-tracked bytes. The current Pi exact-image lane consumes
-`seL4/build_UBOOT` as the immutable canonical `pi4_diagnostic` artifact input.
+The historical refresh record above describes the superseded diagnostic input.
+The 2026-09-08 refresh uses the pinned external `~/seL4_16` source and its
+`.venv_aarch64` driver environment to build `pi4_production` in an isolated
+output tree; the wrapper retains its locked code-generation Python. Only the
+canonical Pi prebuilt is replaced. The current Pi exact-image lane consumes
+`seL4/build_UBOOT` as the immutable canonical `pi4_production` artifact input.
 `scripts/sel4_profile.py validate --repo-managed` requires that exact tracked
 path, a clean subtree, the completed v2 build-input stamp, the current contract
 hash, and matching relocated configuration and artifact identities. It does not
@@ -226,6 +229,6 @@ or re-stamp it, or select a seL4 source/build input from `out/`. Instead, the
 image wrapper verifies its relink tool family by reproducing the tracked
 baseline elfloader byte-for-byte, then creates the new rootserver archive,
 elfloader wrapper, staged image, and provenance only in disposable output
-directories. This consumption proves diagnostic artifact identity and linked
-image inputs only. It remains ineligible for seL4 release, fresh source-build,
+directories. This consumption proves production kernel artifact identity and linked
+image inputs only. It remains insufficient for complete-system release, fresh source-build,
 media read-back, boot, Wi-Fi, TCP, or benchmark claims.

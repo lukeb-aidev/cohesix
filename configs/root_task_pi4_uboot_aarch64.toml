@@ -238,6 +238,7 @@ unify_instructions = false
 protection_profile = "bounded-no-iommu"
 
 [worker_runtime]
+# Full admitted execution population; see docs/PRODUCTION_PROFILES.md.
 implementation_epoch = 26
 max_workers = 256
 ticket_subject_required = true

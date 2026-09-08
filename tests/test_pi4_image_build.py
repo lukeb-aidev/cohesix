@@ -247,7 +247,10 @@ def test_pi4_image_build_requires_canonical_runtime_profile_and_mkimage() -> Non
         )
     ]
 
-    assert 'PI4_SEL4_PROFILE="pi4_diagnostic"' in source
+    assert 'PI4_SEL4_PROFILE="pi4_production"' in source
+    assert "^RELEASE:BOOL=ON$" in validator
+    assert "^KernelDebugBuild:BOOL=OFF$" in validator
+    assert "^KernelPrinting:BOOL=OFF$" in validator
     assert 'COHESIX_SEL4_PROJECT_ROOT:PATH=' not in source
     assert '--repo-managed' in validator
     assert '--profile "$PI4_SEL4_PROFILE"' in validator

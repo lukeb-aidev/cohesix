@@ -396,7 +396,7 @@ PY
 }
 
 pi4_canary() {
-  profile="pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml"
+  profile="pi4_production / configs/root_task_pi4_uboot_aarch64.toml"
   local target_evidence=${TEST_PLAN_PI4_TARGET_EVIDENCE:-}
   local readback_image=${TEST_PLAN_PI4_READBACK_IMAGE:-}
   local identity_metadata=${TEST_PLAN_PI4_IDENTITY_METADATA:-}

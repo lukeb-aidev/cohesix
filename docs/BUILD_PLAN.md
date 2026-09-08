@@ -12526,6 +12526,16 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Prove the ordered service/Worker split reduces root authority and preserves deterministic QEMU/Pi behavior under normal, pressure, and injected-fault conditions.
 Inputs: `m26e-worker-target-evidence-promotion`, selected generated profiles and images, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
 Changes:
+  - Production manifest and paired-kernel capacity parity (2026-09-08): refresh
+    only `seL4/build_UBOOT` from the pinned external seL4 16 production profile,
+    retaining its default immutable Pi image input. Align QEMU/Pi enabled
+    production features and common scheduling policies at the existing safe
+    256-Worker execution capacity and maximum 8-bit sharding. Preserve selected
+    kernel SC object sizes, hardware driver topology, measured WCET envelopes,
+    memory accounting and fault/operator reserves. Document every remaining
+    target difference and guard common feature/resource parity. This authorizes
+    the manifest/kernel compatibility repair; it does not expand execution
+    counts beyond admitted inventories or substitute static/QEMU proof for Pi.
   - root-task/service/Worker tests — add critical-TCB reserve, cap-inventory, W^X, IPC-bound, wrong-badge, notification-coalescence, stale-frame, fault-injection, complete teardown, fresh-generation recreation, shutdown, replay, cancellation, and pressure coverage for every split child.
   - scripts/ci/test_plan_run.sh + docs/TEST_PLAN.md — add separate host/model, QEMU execution, fresh Pi execution, operator-liveness, and fault-containment gates; emit separate `cohesix-root-tcb-acceptance/v1` QEMU/Pi records with `record_kind=root-tcb`, exactly one target, and bindings to the exact kernel, root, MCS driver archive/manifest, CYW43 coexistence record, Worker archive/image manifest/images, generated topology, raw evidence hashes, and observed critical-TCB/cap/SC/Reply inventories.
   - docs/BENCHMARKS.md + evidence packs — archive before/after TCB inventory, authority matrices, latency, pressure, and same-harness QEMU/Pi results with atomic change-set and pre-change baseline identity.
