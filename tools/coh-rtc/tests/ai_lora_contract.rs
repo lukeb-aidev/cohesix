@@ -308,7 +308,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                     54_000_000,
                     false,
                     true,
-                    164,
+                    165,
                 )
             };
             assert_eq!(root["wcet_provenance"], expected_root, "{profile}");

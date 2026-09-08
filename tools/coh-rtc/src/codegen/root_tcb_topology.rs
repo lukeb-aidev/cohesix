@@ -188,17 +188,17 @@ mod tests {
             admitted_slots,
         ) in [
             (qemu_manifest(), 2_024, 4_380, 5_096, 12_572, 5_608, 14_620),
-            (pi4_manifest(), 4_082, 9_276, 7_154, 17_468, 7_666, 19_516),
+            (pi4_manifest(), 4_083, 9_277, 7_155, 17_469, 7_667, 19_517),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);
             assert_eq!(
                 manifest.console_network_service.objects.frames,
-                if qemu { 134 } else { 107 }
+                if qemu { 134 } else { 108 }
             );
             assert_eq!(
                 manifest.console_network_service.objects.cspace_slots,
-                if qemu { 162 } else { 164 }
+                if qemu { 162 } else { 165 }
             );
             assert_eq!(manifest.console_network_service.objects.fault_caps, 1);
             assert_eq!(

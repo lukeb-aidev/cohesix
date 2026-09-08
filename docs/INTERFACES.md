@@ -438,11 +438,12 @@ suspends GENET, removes both reciprocal notification caps, and unmaps and
 deletes all 32 external console mapping caps before anchor revoke. No fault path
 may revive root packet mediation or transfer either peer's authority.
 
-The exact Pi direct-GENET console image spans 69 PT_LOAD pages. Its generated
-service inventory is 107 frames (69 image, 32 stack, one IPC buffer, one init
-frame, and four ordinary ABI pages) and 164 retained root CSpace slots. The
-speed-profile increase from 66 pages is three executable image frames and their
-retained mapping caps; it does not enlarge a data-plane or scheduling budget. The 32
+The exact Pi direct-GENET console image spans 70 PT_LOAD pages. Its generated
+service inventory is 108 frames (70 image, 32 stack, one IPC buffer, one init
+frame, and four ordinary ABI pages) and 165 retained root CSpace slots. The
+speed profile uses three additional executable pages above the former 66-page
+image; the temporary wake observer adds one further page and its retained mapping
+cap. Neither change enlarges a data-plane or scheduling budget. The 32
 direct pages are reused external GENET frames and therefore add console mapping
 caps rather than data-plane frame objects or a larger child untyped. These
 private ABI and resource facts do not change the public TCP framing, console

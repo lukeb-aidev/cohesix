@@ -234,14 +234,14 @@ fn pi4_uboot_profile_emits_network_policy() {
         ("vspaces", 280, 512, 232),
         ("page_tables", 2_640, 4_096, 1_456),
         ("asids", 280, 512, 232),
-        ("frames", 7_666, 8_192, 526),
+        ("frames", 7_667, 8_192, 525),
         ("endpoints", 303, 512, 209),
         ("notifications", 50, 128, 78),
         ("fault_caps", 280, 512, 232),
         ("timeout_fault_caps", 280, 512, 232),
         ("reply_objects", 279, 512, 233),
         ("scheduling_contexts", 280, 512, 232),
-        ("cspace_slots", 19_516, 65_536, 46_020),
+        ("cspace_slots", 19_517, 65_536, 46_019),
         ("untyped_bytes", 167_772_160, 268_435_456, 100_663_296),
     ] {
         assert_eq!(admitted(resource), used, "admitted {resource}");
@@ -347,10 +347,10 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(manifest["console_network_service"]["mcp"], 200);
     assert_eq!(manifest["console_network_service"]["max_refills"], 8);
     assert_eq!(manifest["console_network_service"]["core"], 2);
-    assert_eq!(console_objects["frames"], 107);
-    assert_eq!(console_objects["cspace_slots"], 164);
-    assert_eq!(admission["fixed_objects"]["frames"], 4_082);
-    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_276);
+    assert_eq!(console_objects["frames"], 108);
+    assert_eq!(console_objects["cspace_slots"], 165);
+    assert_eq!(admission["fixed_objects"]["frames"], 4_083);
+    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_277);
     let genet = temporal_task("driver-genet");
     assert_eq!(genet["kind"], "driver");
     assert_eq!(genet["execution"], "active");

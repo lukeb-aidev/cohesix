@@ -10513,6 +10513,12 @@ Changes:
     and performance/evidence consumers: only documented optional diagnostics
     change; transport, workloads and report schemas remain unchanged. This is
     a non-claiming discriminator, not a latency fix or acceptance evidence.
+    The temporary observer requires a 70-page console image: admit exactly
+    108 service frames and 165 retained slots, one page and cap above the
+    qualified 69-page image. The fixed/maximum/reserve inventory uses 7,667
+    of 8,192 frames and 19,517 of 65,536 root slots. Retire this temporary
+    admission with the observer. Stack, queues, untyped and QEMU stay fixed;
+    regenerate the Pi SDK profile digest without changing its public fields.
   - GENET bounded hardware RX interrupt grouping experiment retired — exact
     release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
     packets or thirteen hardware timer ticks (106.496 us) on two RAM boots,
