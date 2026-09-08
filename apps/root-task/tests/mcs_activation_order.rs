@@ -1732,11 +1732,11 @@ fn pi_console_network_uses_exact_cross_core_causal_signal_topology() {
         ),
         (
             "driver-hdmi",
-            ["core = 1", "budget_us = 2000", "response_time_us = 5200"],
+            ["core = 2", "budget_us = 2000", "response_time_us = 5900"],
         ),
         (
             "driver-pcie",
-            ["core = 2", "budget_us = 400", "response_time_us = 3300"],
+            ["core = 2", "budget_us = 400", "response_time_us = 4100"],
         ),
     ] {
         let task = task_section(manifest, task_id);
@@ -1748,7 +1748,7 @@ fn pi_console_network_uses_exact_cross_core_causal_signal_topology() {
             );
         }
     }
-    assert!(manifest.contains("hdmi-text = 1"));
+    assert!(manifest.contains("hdmi-text = 2"));
     assert!(manifest.contains("pcie-root = 2"));
 
     let hal = include_str!("../src/hal/console_network.rs");
