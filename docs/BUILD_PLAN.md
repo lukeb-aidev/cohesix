@@ -10496,25 +10496,6 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
-  - GENET execution-cost compiler discriminator — release3830/G02-admission
-    completes raw64 at 596.058 requests/s but p95 5.179 ms, with no root Yield
-    during PING and retained child waits overlapping 11 of 12 slow requests.
-    This does not identify an exhausted SC. Pi root and console-network already
-    use speed optimization, while its physical GENET binary retains level z.
-    QEMU also retains level z; this is an execution-cost experiment rather than
-    a proven Virtio compiler-policy transfer. Build
-    only pi4-driver-genet at package level 3 after the ordinary Pi child build;
-    preserve the other six driver binaries and the QEMU build policy. Admit
-    GENET's measured 407-page span in 416 code pages, retaining the other
-    resource and scheduling bounds. The earlier all-driver level-3 experiment
-    exceeded every 320-page aperture; it did not test this per-binary artifact.
-    Require exact ELF/stack/CPIO and generated-resource qualification, unchanged
-    other-driver hashes, canonical raw/cohsh/medium-high Pi measurements and a
-    same-image repeat before retaining a claimed improvement. No SC budget,
-    period, refill, priority, IRQ/DMA protocol, owner, runtime ABI, queue or
-    benchmark target changes. The complete host-tool suite, tools/cohesix-py,
-    raw/REST harness and report consumers retain their contracts; generated
-    Pi manifest/resource projections change with the explicit image aperture.
   - Initial-SC runtime admission repair — the unchanged `d16284b35`
     GENET pair regressed to approximately 20 ms per PING because the runtime
     continuation predicate still required root SC bits 7/refills 2. Kernel

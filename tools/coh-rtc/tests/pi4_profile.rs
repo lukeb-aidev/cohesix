@@ -453,14 +453,9 @@ fn pi4_uboot_profile_emits_network_policy() {
         .expect("driver runtime images");
     assert_eq!(images.len(), 7);
     for image in images {
-        let expected_code_pages = if image["id"] == "pi4-genet-runtime" {
-            416
-        } else {
-            320
-        };
         assert_eq!(
             image["code-pages"].as_u64().expect("code pages"),
-            expected_code_pages,
+            320,
             "runtime image {} must cover the measured multi-segment linked ELF",
             image["id"]
         );

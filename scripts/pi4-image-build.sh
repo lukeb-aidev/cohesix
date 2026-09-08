@@ -1942,30 +1942,6 @@ build_pi4_image() {
     done
     cargo "${sel4_runtime_build_args[@]}"
 
-    # Only the physical GENET image uses this package override. Rebuilding
-    # every linked driver at level 3 exceeds their independent image bounds.
-    # Keep the other six binaries from the preceding size-oriented build.
-    local -a preserved_runtime_paths=(
-        "${required_sel4_runtime_paths[@]}"
-        "${sel4_artifact_dir}/pi4-driver-serial"
-        "${sel4_artifact_dir}/pi4-driver-usb"
-        "${sel4_artifact_dir}/pi4-driver-hdmi"
-        "${sel4_artifact_dir}/pi4-driver-cyw43"
-        "${sel4_artifact_dir}/pi4-driver-sdio"
-        "${sel4_artifact_dir}/pi4-driver-pcie"
-    )
-    local preserved_runtime_hashes
-    preserved_runtime_hashes="$(shasum -a 256 "${preserved_runtime_paths[@]}")"
-    log "Building Pi4 GENET runtime (GENET binary only, opt-level=3)"
-    local -a genet_runtime_build_args=(
-        build --locked --target "$sel4_target" --release
-        --config 'profile.release.package.pi4-driver-runtime.opt-level=3'
-        -p pi4-driver-runtime --bin pi4-driver-genet
-    )
-    cargo "${genet_runtime_build_args[@]}"
-    [[ "$preserved_runtime_hashes" == "$(shasum -a 256 "${preserved_runtime_paths[@]}")" ]] || \
-      fail "GENET-only build changed another Pi runtime image"
-
     for sel4_target_package in "${required_sel4_runtime_paths[@]}"; do
         require_file "$sel4_target_package"
     done
