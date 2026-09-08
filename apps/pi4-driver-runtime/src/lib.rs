@@ -1178,6 +1178,15 @@ const GENET_DMA_RING_BUF_SIZE: usize = 0x10;
 const GENET_DMA_START_ADDR: usize = 0x14;
 const GENET_DMA_END_ADDR: usize = 0x1c;
 const GENET_DMA_MBUF_DONE_THRESH: usize = 0x24;
+const GENET_DMA_INTR_THRESHOLD_MASK: u32 = 0x01ff;
+const GENET_RDMA_RING16_TIMEOUT: usize = GENET_RDMA_REG_BASE + 0x6c;
+const GENET_DMA_TIMEOUT_MASK: u32 = 0xffff;
+// BCM2711 GENET uses a 125 MHz device clock divided by 1024 for this
+// hardware-only RX timer: 13 ticks bound a lone packet to 106.496 us. This
+// groups the measured standalone ACK/next-PING pair without a software wait,
+// adaptive policy, or change to the owner's per-packet MCS service bound.
+const GENET_DIRECT_RX_IRQ_PACKETS: u32 = 2;
+const GENET_DIRECT_RX_IRQ_TIMEOUT_TICKS: u32 = 13;
 const GENET_TDMA_FLOW_PERIOD: usize = GENET_TDMA_RING_REG_BASE + 0x28;
 const GENET_TDMA_READ_PTR: usize = GENET_TDMA_RING_REG_BASE;
 const GENET_TDMA_CONS_INDEX: usize = GENET_TDMA_RING_REG_BASE + 0x08;
@@ -51249,6 +51258,31 @@ fn genet_direct_cutover_fault(state: &mut GenetRuntimeState) -> GenetDirectCutov
     GenetDirectCutoverFence::Fault
 }
 
+/// Configure the sole owner's bounded RX interrupt grouping while ingress is
+/// stopped and masked. Readback must succeed before direct READY is exposed.
+fn genet_direct_configure_rx_interrupts() -> bool {
+    if genet_read32(GENET_UMAC_CMD) & GENET_CMD_RX_EN != 0
+        || genet_read32(GENET_RDMA_REG_BASE + GENET_DMA_CTRL) & GENET_DMA_EN != 0
+        || genet_read32(GENET_RDMA_REG_BASE + GENET_DMA_STATUS) & GENET_DMA_DISABLED == 0
+        || genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK != GENET_NAPI_IRQ_MASK
+    {
+        return false;
+    }
+    let threshold_register = GENET_RDMA_RING_REG_BASE + GENET_DMA_MBUF_DONE_THRESH;
+    let threshold = genet_read32(threshold_register) & !GENET_DMA_INTR_THRESHOLD_MASK;
+    let timeout = genet_read32(GENET_RDMA_RING16_TIMEOUT) & !GENET_DMA_TIMEOUT_MASK;
+    // Install the finite timeout before raising the packet threshold. Preserve
+    // every unrelated register bit; no arrival depends on a second packet.
+    genet_write32(
+        GENET_RDMA_RING16_TIMEOUT,
+        timeout | GENET_DIRECT_RX_IRQ_TIMEOUT_TICKS,
+    );
+    genet_write32(threshold_register, threshold | GENET_DIRECT_RX_IRQ_PACKETS);
+    device_store_completion_barrier();
+    genet_read32(GENET_RDMA_RING16_TIMEOUT) == timeout | GENET_DIRECT_RX_IRQ_TIMEOUT_TICKS
+        && genet_read32(threshold_register) == threshold | GENET_DIRECT_RX_IRQ_PACKETS
+}
+
 /// Advance the finite legacy-to-direct hardware ownership transfer.
 ///
 /// A quiet wire is not an admissible synchronization primitive. The owner
@@ -51384,6 +51418,9 @@ fn genet_direct_advance_cutover(
             genet_irq_clear_sources(genet_irq_raw_sources());
             device_store_completion_barrier();
             if genet_irq_raw_sources() != 0 || genet_rx_hardware_pending(state) {
+                return genet_direct_cutover_fault(state);
+            }
+            if !genet_direct_configure_rx_interrupts() {
                 return genet_direct_cutover_fault(state);
             }
 
@@ -52346,6 +52383,12 @@ fn genet_init_rx_ring() {
     genet_write32(
         GENET_RDMA_RING_REG_BASE + GENET_DMA_RING_BUF_SIZE,
         genet_ring_buffer_size(GENET_ACTIVE_RING_DESCS),
+    );
+    // Legacy DHCP retains immediate packet interrupts, including after an
+    // earlier direct generation programmed the hardware coalescing timer.
+    genet_write32(
+        GENET_RDMA_RING16_TIMEOUT,
+        genet_read32(GENET_RDMA_RING16_TIMEOUT) & !GENET_DMA_TIMEOUT_MASK,
     );
     genet_write32(GENET_RDMA_RING_REG_BASE + GENET_DMA_MBUF_DONE_THRESH, 1);
     genet_write32(
@@ -85326,6 +85369,52 @@ mod tests {
         assert!(
             GENET_DIRECT_MCS_GUARD_US + GENET_DIRECT_MCS_SLICE_WCET_US < GENET_DIRECT_MCS_BUDGET_US
         );
+    }
+
+    #[test]
+    fn direct_genet_rx_interrupt_grouping_is_finite_and_requires_quiescence() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        // Linux v6.6 GENET v5: RDMA starts at 0x2000, 256 twelve-byte
+        // descriptors, seventeen 0x40-byte rings, ring16 timeout offset 0x6c.
+        assert_eq!(GENET_RDMA_RING16_TIMEOUT, 0x30ac);
+        assert_eq!(
+            GENET_RDMA_RING_REG_BASE + GENET_DMA_MBUF_DONE_THRESH,
+            0x3024
+        );
+        genet_write32(0x30ac, 0xa5a5_0000);
+        genet_write32(0x3024, 0x0000_a000);
+        genet_write32(GENET_INTRL2_0_CPU_MASK_STATUS, GENET_NAPI_IRQ_MASK);
+        genet_write32(GENET_UMAC_CMD, GENET_CMD_RX_EN);
+        assert!(!genet_direct_configure_rx_interrupts());
+        assert_eq!(genet_read32(0x30ac), 0xa5a5_0000);
+        assert_eq!(genet_read32(0x3024), 0x0000_a000);
+        genet_write32(GENET_UMAC_CMD, 0);
+        genet_write32(GENET_RDMA_REG_BASE + GENET_DMA_CTRL, GENET_DMA_EN);
+        assert!(!genet_direct_configure_rx_interrupts());
+        genet_write32(GENET_RDMA_REG_BASE + GENET_DMA_CTRL, 0);
+        genet_write32(GENET_INTRL2_0_CPU_MASK_STATUS, 0);
+        assert!(!genet_direct_configure_rx_interrupts());
+        genet_write32(GENET_INTRL2_0_CPU_MASK_STATUS, GENET_NAPI_IRQ_MASK);
+        genet_write32(GENET_RDMA_REG_BASE + GENET_DMA_STATUS, 0);
+        assert!(!genet_direct_configure_rx_interrupts());
+        genet_write32(GENET_RDMA_REG_BASE + GENET_DMA_STATUS, GENET_DMA_DISABLED);
+        assert!(genet_direct_configure_rx_interrupts());
+        // ceil(100,000 ns / 8,192 ns) = 13, with unrelated bits preserved.
+        assert_eq!(genet_read32(0x30ac), 0xa5a5_000d);
+        assert_eq!(genet_read32(0x3024), 0x0000_a002);
+        assert_eq!(GENET_DIRECT_RX_IRQ_TIMEOUT_TICKS * 8192, 106_496);
+    }
+
+    #[test]
+    fn direct_genet_rx_ring_reinitialization_restores_immediate_legacy_irq() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        genet_write32(0x30ac, 0xa5a5_000d);
+        genet_write32(0x3024, 2);
+        genet_init_rx_ring();
+        assert_eq!(genet_read32(0x30ac), 0xa5a5_0000);
+        assert_eq!(genet_read32(0x3024), 1);
     }
 
     #[test]

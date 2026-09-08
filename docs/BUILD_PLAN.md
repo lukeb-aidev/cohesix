@@ -10496,6 +10496,25 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET bounded hardware RX interrupt grouping candidate — under
+    `m26e-qemu-shared-control-path-performance`, restoring
+    `m26e-console-network-service-isolation`, test the remaining separate
+    physical-owner wake cost without changing MCS numerics. Exact28d3 raw
+    captures contain one standalone host ACK before every PING; measured
+    ACK-to-PING p95 is 51/82/61 us across two64 and one1024 request sessions.
+    At the stopped/masked direct cutover, select two received packets or
+    thirteen hardware timer ticks (106.496 us), using the Linux v6.6 GENET v5
+    register contract and preserving unrelated bits. Require readback before
+    READY; legacy initialization restores immediate one-packet interrupts.
+    Keep the sole owner, IRQ identity, DMA/cursor ordering, final rearm,
+    WCET-per-packet/16-slice bound, all budgets/refills and root read-dispatch
+    repair unchanged. No software wait, adaptive policy or new runtime ABI is
+    introduced. Focused register/cutover tests and exact Pi compilation precede
+    raw-first hardware comparison and canonical medium/high REST workloads.
+    This Pi-only register change does not alter QEMU execution. Review the
+    complete host-tool suite, Python SDK, .coh, generated profiles and harness:
+    existing protocols, workloads, report schemas and implementations remain
+    unchanged. Physical latency benefit and original targets remain unproven.
   - GENET owner refill-capacity experiment retired — exact release RAM image
     `a142b05b347c9a92dcf882b3540e370bc147f3c4` tested ten total refills in the
     existing 256-byte GENET SC with unchanged budget, period, priority, core,
