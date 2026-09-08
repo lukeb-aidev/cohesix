@@ -465,7 +465,7 @@ pub(crate) const fn expected_runtime_image_pages(
 ) -> Option<u16> {
     match (direct_virtio, direct_genet) {
         (true, false) => Some(62),
-        (false, true) => Some(69),
+        (false, true) => Some(70),
         (false, false) => Some(60),
         (true, true) => None,
     }
@@ -1568,12 +1568,32 @@ mod tests {
     fn exact_backend_selects_qemu_pi_and_mediated_object_inventories() {
         assert_eq!(expected_runtime_image_pages(true, false), Some(62));
         assert_eq!(expected_object_inventory(true, false), Ok((134, 162)));
-        assert_eq!(expected_runtime_image_pages(false, true), Some(69));
-        assert_eq!(expected_object_inventory(false, true), Ok((107, 164)));
+        assert_eq!(expected_runtime_image_pages(false, true), Some(70));
+        assert_eq!(expected_object_inventory(false, true), Ok((108, 165)));
         assert_eq!(expected_runtime_image_pages(false, false), Some(60));
         assert_eq!(expected_object_inventory(false, false), Ok((98, 123)));
         assert_eq!(expected_runtime_image_pages(true, true), None);
         assert!(expected_object_inventory(true, true).is_err());
+    }
+
+    #[test]
+    fn root_constructor_inventory_matches_both_selected_source_manifests() {
+        for (source, direct_virtio, direct_genet) in [
+            (include_str!("../../../configs/root_task.toml"), true, false),
+            (
+                include_str!("../../../configs/root_task_pi4_uboot_aarch64.toml"),
+                false,
+                true,
+            ),
+        ] {
+            let manifest: toml::Value =
+                toml::from_str(source).expect("selected source manifest parses");
+            let objects = &manifest["console_network_service"]["objects"];
+            let (frames, slots) = expected_object_inventory(direct_virtio, direct_genet)
+                .expect("selected backend has one exact root constructor");
+            assert_eq!(objects["frames"].as_integer(), Some(i64::from(frames)));
+            assert_eq!(objects["cspace_slots"].as_integer(), Some(i64::from(slots)));
+        }
     }
 
     #[test]

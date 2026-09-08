@@ -10519,6 +10519,11 @@ Changes:
     of 8,192 frames and 19,517 of 65,536 root slots. Retire this temporary
     admission with the observer. Stack, queues, untyped and QEMU stay fixed;
     regenerate the Pi SDK profile digest without changing its public fields.
+    Keep the root constructor at the same 70-page/108-frame/165-slot
+    inventory. The first diagnostic boot retained the former root inventory
+    and failed before console readiness despite verified RAM delivery; bind
+    both source manifests to the root inventory in a deterministic regression.
+    This is candidate construction repair, with no new performance result.
   - GENET bounded hardware RX interrupt grouping experiment retired — exact
     release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
     packets or thirteen hardware timer ticks (106.496 us) on two RAM boots,
