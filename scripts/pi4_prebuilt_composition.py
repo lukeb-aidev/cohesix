@@ -40,13 +40,19 @@ from strip_elfloader_modules import (  # noqa: E402
 )
 from sel4_profile import (  # noqa: E402
     DEFAULT_CONTRACT,
+    contract_repo_path,
     load_contract,
     validate_repo_managed_build,
 )
 
 PROFILE_NAME = "pi4_production"
 CANONICAL_BUILD_DIR = REPO_ROOT / "seL4" / "build_UBOOT"
-DEFAULT_BINUTILS_PREFIX = "/opt/homebrew/bin/aarch64-linux-gnu-"
+DEFAULT_BINUTILS_PREFIX = str(
+    contract_repo_path(
+        load_contract(DEFAULT_CONTRACT)["toolchain"]["compiler"]["bin_path"],
+        "toolchain.compiler.bin_path",
+    ) / "aarch64-none-elf-"
+)
 BINUTILS_ENV = "COHESIX_AARCH64_BINUTILS_PREFIX"
 REQUIRED_BINUTILS = ("as", "ld", "objcopy", "readelf", "strip")
 
@@ -146,7 +152,9 @@ def run_checked(
 def _binutils_version(version_line: str, tool_name: str) -> str:
     """Extract one GNU binutils version from a tool's first version line."""
 
-    if "GNU Binutils" not in version_line:
+    if not version_line.startswith("GNU ") or not any(
+        brand in version_line for brand in ("GNU Binutils", "Arm GNU Toolchain")
+    ):
         raise CompositionError(
             f"{tool_name} is not a GNU binutils tool: {version_line!r}"
         )
@@ -259,13 +267,15 @@ def _safe_ninja_relative_path(token: str, label: str) -> Path:
 def parse_elfloader_object_order(build_graph: Path) -> list[Path]:
     """Return the exact tracked object order for the elfloader link edge."""
 
-    prefix = (
+    prefixes = tuple(
         "build elfloader/elfloader: "
-        "C_EXECUTABLE_LINKER__elfloader_Debug "
+        f"C_EXECUTABLE_LINKER__elfloader_{build_type} "
+        for build_type in ("Release", "Debug")
     )
     matches = [
         line[len(prefix) :]
         for line in _ninja_logical_lines(build_graph.read_text(encoding="utf-8"))
+        for prefix in prefixes
         if line.startswith(prefix)
     ]
     if len(matches) != 1:

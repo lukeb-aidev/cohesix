@@ -228,7 +228,11 @@ fingerprints `seL4/build_UBOOT`, reconstructs the exact tracked baseline
 elfloader from its archived objects as a toolchain oracle, and injects and
 relinks the Cohesix rootserver only in a disposable composition directory. It
 does not configure, build, repair, re-stamp, or otherwise mutate the tracked
-tree. The durable `out/pi4-image-assembly` provenance binds the immutable
+tree. Relinking defaults to the complete GNU binutils family declared by the
+seL4 profile toolchain, including the Arm GNU distribution. Explicit tool
+overrides must still reproduce the baseline image byte-for-byte; mixed tool
+versions or directories fail closed. The durable `out/pi4-image-assembly`
+provenance binds the immutable
 profile stamp and artifact identities, relink tool identities and baseline
 oracle, and the derived rootserver, exact newc archive, and wrapper. A failed
 or interrupted composition therefore cannot turn derived output into canonical

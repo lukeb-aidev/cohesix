@@ -65,16 +65,39 @@ def _sample_archive(rootserver: bytes) -> bytes:
     return archive + b"\x00" * (-len(archive) % composition.CPIO_BLOCK_SIZE)
 
 
-def _valid_link_edge(objects: str) -> str:
+def _valid_link_edge(objects: str, build_type: str = "Debug") -> str:
     """Build a supported synthetic elfloader Ninja link edge."""
 
     return (
         "build elfloader/elfloader: "
-        "C_EXECUTABLE_LINKER__elfloader_Debug "
+        f"C_EXECUTABLE_LINKER__elfloader_{build_type} "
         f"elfloader/archive.o {objects} | "
         "apps/sel4test-driver/util_libs/libcpio/libcpio.a "
         "elfloader/linker.lds_pp || elfloader/elfloader_linker\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("version_line", "expected"),
+    [
+        ("GNU assembler (GNU Binutils) 2.44", "2.44"),
+        (
+            "GNU assembler (Arm GNU Toolchain 15.2.Rel1 (Build arm-15.86)) "
+            "2.45.1.20251203",
+            "2.45.1.20251203",
+        ),
+    ],
+)
+def test_binutils_version_accepts_upstream_and_pinned_arm_distribution(
+    version_line: str, expected: str,
+) -> None:
+    assert composition._binutils_version(version_line, "as") == expected
+
+
+@pytest.mark.parametrize("version_line", ["LLVM assembler 20.1", "GNU assembler unknown"])
+def test_binutils_version_rejects_unidentified_families(version_line: str) -> None:
+    with pytest.raises(composition.CompositionError, match="not a GNU binutils tool"):
+        composition._binutils_version(version_line, "as")
 
 
 def test_rootserver_archive_can_grow_and_preserves_exact_payload() -> None:
@@ -101,8 +124,9 @@ def test_rootserver_archive_can_grow_and_preserves_exact_payload() -> None:
     assert len(rebuilt) % composition.CPIO_BLOCK_SIZE == 0
 
 
+@pytest.mark.parametrize("build_type", ["Release", "Debug"])
 def test_parse_elfloader_object_order_preserves_exact_order(
-    tmp_path: Path,
+    tmp_path: Path, build_type: str,
 ) -> None:
     """The relink must follow the canonical Ninja object order exactly."""
 
@@ -110,7 +134,8 @@ def test_parse_elfloader_object_order_preserves_exact_order(
     graph.write_text(
         _valid_link_edge(
             "elfloader/CMakeFiles/elfloader.dir/a.c.obj "
-            "elfloader/CMakeFiles/elfloader.dir/b.S.obj"
+            "elfloader/CMakeFiles/elfloader.dir/b.S.obj",
+            build_type,
         ),
         encoding="utf-8",
     )

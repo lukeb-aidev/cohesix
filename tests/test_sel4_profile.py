@@ -21,29 +21,29 @@ import pytest
 from scripts import sel4_profile
 
 
-def _selected_kernel_dwarf_info(
-    contract: dict[str, Any], kernel_elf: Path
-) -> str:
+def _assert_selected_kernel_mcs_layout(
+    contract: dict[str, Any], build_dir: Path, tmp_path: Path
+) -> None:
+    """Compile ABI assertions against the exact release preprocessed kernel."""
     compiler_bin = sel4_profile.contract_repo_path(
         contract["toolchain"]["compiler"]["bin_path"],
         "toolchain.compiler.bin_path",
     )
-    cross_readelf = compiler_bin / "aarch64-none-elf-readelf"
-    if cross_readelf.is_file():
-        command = (str(cross_readelf), "--debug-dump=info", str(kernel_elf))
-    elif readelf := shutil.which("readelf"):
-        command = (readelf, "--debug-dump=info", str(kernel_elf))
-    elif dwarfdump := shutil.which("dwarfdump"):
-        command = (dwarfdump, str(kernel_elf))
-    else:
-        pytest.fail("selected seL4 ABI validation requires readelf or dwarfdump")
-    return subprocess.run(
-        command,
+    source = build_dir / "kernel" / "kernel_all.i"
+    probe = tmp_path / "selected_kernel_mcs_layout.c"
+    probe.write_text(
+        source.read_text(encoding="utf-8")
+        + '\n_Static_assert(sizeof(struct sched_context) == 96, "SC ABI");\n'
+        + '_Static_assert(sizeof(refill_t) == 16, "refill ABI");\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(compiler_bin / "aarch64-none-elf-gcc"), "-std=gnu11",
+         "-ffreestanding", "-fsyntax-only", str(probe)],
         check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
-    ).stdout
+    )
 
 
 def _cache_type(value: Any) -> str:
@@ -1306,7 +1306,9 @@ def test_configure_refuses_tracked_generated_tree() -> None:
         )
 
 
-def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
+def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree(
+    tmp_path: Path,
+) -> None:
     canonical_contract = sel4_profile.load_contract(
         sel4_profile.DEFAULT_CONTRACT
     )
@@ -1368,19 +1370,7 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
         "-DKernelArmGicV3=OFF",
     } <= configure
 
-    dwarf_info = _selected_kernel_dwarf_info(
-        canonical_contract, build_dir / "kernel" / "kernel.elf"
-    )
-    for type_name, size_pattern in (
-        ("sched_context", r"(?:96|0x60)"),
-        ("refill", r"(?:16|0x10)"),
-    ):
-        assert re.search(
-            rf"DW_TAG_structure_type.*?DW_AT_name[^\n]*{type_name}"
-            rf".*?DW_AT_byte_size[^\n]*{size_pattern}",
-            dwarf_info,
-            re.DOTALL,
-        ), f"selected Pi kernel DWARF does not prove the {type_name} ABI size"
+    _assert_selected_kernel_mcs_layout(canonical_contract, build_dir, tmp_path)
 
 
 def test_repo_managed_pi_profile_rejects_noncanonical_path(
@@ -3104,7 +3094,6 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     canonical = "out/sel4/profile-v2/qemu-smp-production"
     entrypoints = (
         "scripts/cohesix-build-run.sh",
-        "scripts/release_bundle.sh",
         "scripts/qemu-run.sh",
         "scripts/m26e_qemu_pressure.sh",
         "scripts/ci/test_plan_target_canary.sh",
@@ -3126,12 +3115,16 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     assert "must not override the profile-owned virt,gic-version=3 machine" in build_run
     assert 'virt,gic-version=${GIC_VER}' in build_run
 
-    release = (sel4_profile.ROOT / entrypoints[1]).read_text(encoding="utf-8")
-    assert "validate_release_sel4_profile" in release
-    assert "--profile qemu_smp_production" in release
-    assert "--for-release" in release
+    # Packaging consumes retained, qualified artifacts; it does not select a
+    # live kernel build directory. The release-input tests own that contract.
+    release = (sel4_profile.ROOT / "scripts/release_bundle.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "validate_tested_inputs" in release
+    assert 'scripts/release_inputs.py' in release
+    assert '--artifact "$artifact" --result "$result"' in release
 
-    for relative in entrypoints[3:]:
+    for relative in entrypoints[2:]:
         source = (sel4_profile.ROOT / relative).read_text(encoding="utf-8")
         assert "qemu_smp_production" in source, relative
 
