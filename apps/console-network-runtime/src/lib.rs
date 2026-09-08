@@ -124,17 +124,19 @@ impl RootClosePhase {
 /// Decide whether a direct NIC service loop may poll locally without a new
 /// notification. A retained egress frame alone cannot justify polling after
 /// the NIC reported ring backpressure; only peer rearm or independently
-/// durable local work may resume it.
+/// durable local work may resume it. A quiescent bounded command-wait cycle
+/// cannot manufacture more work merely by ending at its exact unit limit.
 #[must_use]
 pub const fn direct_service_repoll_required(
     quantum_exhausted: bool,
+    quiescent_command_cycle: bool,
     completion_pending: bool,
     event_pending: bool,
     egress_pending: bool,
     tx_waiting_for_peer: bool,
     link_work_pending: bool,
 ) -> bool {
-    quantum_exhausted
+    (quantum_exhausted && !quiescent_command_cycle)
         || completion_pending
         || event_pending
         || link_work_pending
@@ -183,7 +185,9 @@ fn close_transition_service_due(
 /// suppresses an ACK-only idle quantum after a command publication.
 /// Publication ACKs, link wakes, and empty control hints do not release the
 /// command fence. Due protocol timers retain one bounded service cycle without
-/// granting unrelated background work or releasing the command latch.
+/// granting unrelated background work or releasing the command latch. An
+/// earlier root response also retains bounded transport service until its ACK
+/// is consumed: root cannot supply the next response before that drain.
 #[must_use]
 pub const fn direct_genet_command_publication_quiesces(
     exact_direct_genet: bool,
@@ -202,6 +206,19 @@ pub const fn direct_genet_command_timer_service_due(
     tx_waiting_for_peer: bool,
 ) -> bool {
     command_quiesced && (timer_due || (egress_pending && !tx_waiting_for_peer))
+}
+
+/// Permit transport progress through a command fence while root still owns a
+/// prior undrained response. This is permission, not a service-work source: the
+/// caller must retain an existing work level, receive a peer wake, or admit a
+/// due protocol timer. The pending response cannot mint polling work by itself.
+#[must_use]
+pub const fn direct_genet_command_service_allowed(
+    command_quiesced: bool,
+    timer_service_due: bool,
+    response_drain_pending: bool,
+) -> bool {
+    !command_quiesced || timer_service_due || response_drain_pending
 }
 
 /// Return whether one exact root control record releases a quiesced command.
@@ -1917,16 +1934,39 @@ mod tests {
     #[test]
     fn direct_tx_backpressure_blocks_until_peer_or_independent_work() {
         assert!(!direct_service_repoll_required(
-            false, false, false, true, true, false,
+            false, false, false, false, true, true, false,
         ));
         assert!(direct_service_repoll_required(
-            false, false, false, true, false, false,
+            false, false, false, false, true, false, false,
         ));
         assert!(direct_service_repoll_required(
-            false, false, false, true, true, true,
+            false, false, false, false, true, true, true,
         ));
         assert!(direct_service_repoll_required(
-            false, true, false, true, true, false,
+            false, false, true, false, true, true, false,
+        ));
+    }
+
+    #[test]
+    fn direct_quiescent_command_cycle_requires_independent_work_to_repoll() {
+        assert!(!direct_service_repoll_required(
+            true, true, false, false, false, false, false,
+        ));
+        assert!(!direct_service_repoll_required(
+            true, true, false, false, true, true, false,
+        ));
+        for (completion, event, egress, link) in [
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
+        ] {
+            assert!(direct_service_repoll_required(
+                true, true, completion, event, egress, false, link,
+            ));
+        }
+        assert!(direct_service_repoll_required(
+            true, false, false, false, false, false, false,
         ));
     }
 
@@ -2066,6 +2106,23 @@ mod tests {
         assert!(direct_genet_command_timer_service_due(
             true, true, true, true
         ));
+    }
+
+    #[test]
+    fn direct_genet_later_command_cannot_fence_the_prior_responses_ack() {
+        assert!(direct_genet_command_service_allowed(true, false, true));
+        assert!(direct_genet_command_service_allowed(true, true, true));
+        assert!(direct_genet_command_service_allowed(true, true, false));
+        assert!(!direct_genet_command_service_allowed(true, false, false));
+        for timer_due in [false, true] {
+            for response_pending in [false, true] {
+                assert!(direct_genet_command_service_allowed(
+                    false,
+                    timer_due,
+                    response_pending,
+                ));
+            }
+        }
     }
 
     #[test]

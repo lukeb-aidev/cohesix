@@ -1846,8 +1846,12 @@ not current-candidate performance or acceptance proof.
   stage-ready, terminal-queued, producer-closed, and contains exactly one
   completed response; otherwise it defers as `OutputMissing`. Identity drift
   retains fail-closed containment. A stale/empty control, peer wake,
-  publication ACK, fault, or containment cannot release the quiesce or
-  authorize NIC work.
+  publication ACK, fault, or containment cannot release the quiesce. Due
+  protocol obligations retain the existing three-unit service bound. When an
+  earlier exact root output control still awaits TCP drain, retained transport
+  work and peer wakes may also enter that bounded cycle so its ACK can arrive
+  before root stages the next response. Pending output grants service
+  permission only; it cannot mint a poll or replace the pending control.
   QEMU direct VirtIO and non-GENET backends remain on their existing paths.
   Before any console-network child is activated, HAL initializes all four
   shared protocol pages with their exact generation and empty ABI identity.

@@ -28,8 +28,9 @@ use console_network_runtime::abi::{
 use console_network_runtime::abi::{DIRECT_VIRTIO_IRQ_HANDLER_SLOT, WAKE_DIRECT_VIRTIO_IRQ};
 use console_network_runtime::{
     copied_command_egress_pair_allowed, direct_control_wake_service_due,
-    direct_service_repoll_required, ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit,
-    ConsoleNetworkService, ControlApplyOutcome, RuntimeError, ServicePollOutcome,
+    direct_genet_command_service_allowed, direct_service_repoll_required, ChildTurnReadiness,
+    ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService, ControlApplyOutcome, RuntimeError,
+    ServicePollOutcome,
 };
 #[cfg(feature = "direct-genet")]
 use console_network_runtime::{
@@ -282,7 +283,11 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         #[cfg(all(not(feature = "direct-genet"), feature = "direct-virtio"))]
         let command_timer_service_due = false;
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
-        let direct_service_allowed = !direct_genet_command_quiesced || command_timer_service_due;
+        let direct_service_allowed = direct_genet_command_service_allowed(
+            direct_genet_command_quiesced,
+            command_timer_service_due,
+            pending_output_control.is_some(),
+        );
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
         if command_timer_service_due {
             direct_service_pending = true;
@@ -416,11 +421,14 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             direct_service_pending = false;
             let mut quantum_units = 0usize;
             let mut cycle_progress = false;
-            // A due timer while awaiting root may finish one three-unit
-            // stack/session cycle, never the background 64-unit quantum.
+            let mut quiescent_command_cycle = false;
+            // A due timer or prior response drain while awaiting root may
+            // finish one three-unit stack/session cycle, never the background
+            // 64-unit quantum. A response alone did not mint this work: the
+            // retained level or peer wake above made service pending.
             // The command latch stays closed; a blocked TX frame remains
             // retained until the peer makes it actionable.
-            let quantum_unit_limit = if command_timer_service_due {
+            let quantum_unit_limit = if direct_genet_command_quiesced {
                 3
             } else {
                 DIRECT_SERVICE_QUANTUM_UNITS
@@ -538,6 +546,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         }
                     }
                     if !cycle_progress && !service.egress_pending() {
+                        quiescent_command_cycle = direct_genet_command_quiesced;
                         break;
                     }
                     cycle_progress = false;
@@ -561,6 +570,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             let direct_link_work_pending = false;
             direct_service_pending |= direct_service_repoll_required(
                 quantum_units == quantum_unit_limit,
+                quiescent_command_cycle,
                 !completions.is_empty(),
                 service.service_event_pending(),
                 service.egress_pending(),
@@ -667,13 +677,13 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     direct_genet_link.is_some(),
                     runtime_event_kind,
                 ) {
-                    // Root must publish the command's bounded response control
-                    // before an ACK or link wake may spend this child's SC on
-                    // the 64-unit idle NIC loop. Only a newly sequenced control
-                    // record clears the latch; an empty or stale control wake
-                    // does not. Due timers use the separate bounded cycle
-                    // above. QEMU direct VirtIO never enters this latch.
-                    direct_service_pending = false;
+                    // Root cannot publish this command's response while an
+                    // earlier output control awaits its TCP ACK. Preserve
+                    // already-retained transport work for that drain; future
+                    // peer wakes may also enter the bounded cycle above.
+                    // Only a newly sequenced applied control clears the latch.
+                    // QEMU direct VirtIO never enters this latch.
+                    direct_service_pending &= pending_output_control.is_some();
                     awaiting_root_command_control = true;
                 }
             }

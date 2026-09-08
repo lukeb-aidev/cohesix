@@ -762,8 +762,14 @@ suppresses background service. A due child-owned protocol timer, or its queued
 egress once the peer can accept it, admits at most three existing service
 units. Both pre-wait and post-wait gates use that same decision; the command
 latch remains closed until a newly sequenced applied root control arrives.
-This preserves ACK/retransmit/close obligations without reopening the ordinary
-64-unit quantum. A blocked TX frame remains retained for a peer wake.
+An earlier root output control awaiting TCP drain also permits that bounded
+cycle when retained transport work or a peer wake makes it runnable. Publishing
+a later command preserves that existing work while the earlier response is
+pending; pending output alone never requests a poll. Root cannot stage the
+next response before the earlier response's ACK is consumed. Retiring the
+earlier drain removes this permission without clearing the command latch.
+This preserves response ACK/retransmit/close obligations without reopening the
+ordinary 64-unit quantum. A blocked TX frame remains retained for a peer wake.
 
 QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an
