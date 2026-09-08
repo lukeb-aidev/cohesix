@@ -2031,8 +2031,6 @@ where
             }
             return true;
         };
-        let identity = pump
-            .retain_pi_root_control_response_predecessor(window.continuation_identity(), identity);
         let completed_at_ticks = monotonic_ticks();
         let active_hot_tail_before_record = window.active_hot_tail_identity().is_some();
         let active_hot_tail_wall_before_record =
