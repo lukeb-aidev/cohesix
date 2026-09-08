@@ -5015,6 +5015,100 @@ fn direct_genet_new_stage_keeps_consumed_control_response_debt() {
     assert!(completed
         .with_child_publication_debt(None, Some(debt))
         .is_none());
+
+    // A later accepted command must preserve the original stage's exact
+    // dependency until that response drains. It cannot acquire another
+    // response's sequence or turn a completed transaction into a wait.
+    assert!(direct_genet_response_predecessor_owed(
+        retained,
+        command,
+        None,
+        Some(debt),
+        true,
+    ));
+    assert!(direct_genet_response_predecessor_owed(
+        retained,
+        command,
+        Some(
+            crate::console_network_service::ConsoleNetworkControlPublication {
+                generation: 7,
+                connection_id: 41,
+                sequence: 19,
+            }
+        ),
+        None,
+        true,
+    ));
+    assert!(!direct_genet_response_predecessor_owed(
+        retained,
+        command,
+        None,
+        Some(debt),
+        false,
+    ));
+    assert!(!direct_genet_response_predecessor_owed(
+        retained,
+        command,
+        Some(invalid_control),
+        Some(debt),
+        true,
+    ));
+    for successor in [
+        stage,
+        completed,
+        PiRootControlProductiveContinuation::for_test_cross_core_command(8, 41),
+        PiRootControlProductiveContinuation::for_test_cross_core_command(7, 42),
+    ] {
+        assert!(!direct_genet_response_predecessor_owed(
+            retained,
+            successor,
+            None,
+            Some(debt),
+            true,
+        ));
+    }
+    for predecessor in [
+        command,
+        completed,
+        PiRootControlProductiveContinuation::for_test(7, 41),
+    ] {
+        assert!(!direct_genet_response_predecessor_owed(
+            predecessor,
+            command,
+            None,
+            Some(debt),
+            true,
+        ));
+    }
+    for stale_debt in [
+        crate::net::ConsoleResponseBatchDebt {
+            sequence: 18,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            sequence: 20,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            output_drained: true,
+            ..debt
+        },
+        crate::net::ConsoleResponseBatchDebt {
+            control_completed: false,
+            ..debt
+        },
+    ] {
+        assert!(!direct_genet_response_predecessor_owed(
+            retained,
+            command,
+            None,
+            Some(stale_debt),
+            true,
+        ));
+    }
+    assert!(!direct_genet_response_predecessor_owed(
+        retained, command, None, None, true,
+    ));
 }
 
 #[cfg(all(test, feature = "kernel", feature = "net-console"))]
@@ -6557,6 +6651,35 @@ fn direct_genet_causal_fanin_state(
     }
 }
 
+/// Accepting a later command cannot replace the exact earlier response debt
+/// that still prevents its output from advancing. Preserve the original token
+/// only while its nonzero control sequence remains owed; no lane-only adoption
+/// or completed-response resurrection is permitted.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_response_predecessor_owed(
+    retained: PiRootControlProductiveContinuation,
+    successor: PiRootControlProductiveContinuation,
+    control_publication_owed: Option<
+        crate::console_network_service::ConsoleNetworkControlPublication,
+    >,
+    response_batch_debt: Option<crate::net::ConsoleResponseBatchDebt>,
+    fence_clear: bool,
+) -> bool {
+    fence_clear
+        && retained.mode == DirectGenetContinuationMode::CrossCoreSignalOnly
+        && retained.same_lane(successor)
+        && matches!(
+            successor.progress,
+            DirectGenetProductiveProgress::CommandAccepted
+        )
+        && match control_publication_owed {
+            Some(publication) => retained.matches_child_control_publication(publication),
+            None => {
+                response_batch_debt.is_some_and(|debt| retained.matches_response_batch_debt(debt))
+            }
+        }
+}
+
 /// Fail-closed evidence for retaining the current root-control refill after a
 /// productive direct-GENET quantum.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -6965,7 +7088,17 @@ fn direct_genet_response_stage_evidence_matches(
     let Some(identity) = evidence.identity.response_identity else {
         return false;
     };
-    let Some(lane) = evidence.response_lane else {
+    direct_genet_response_lane_stage_ready(identity, evidence.response_lane)
+}
+
+/// Root-retained output remains stageable after an older batch drains, even
+/// when the command and its child publication have already been consumed.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_response_lane_stage_ready(
+    identity: ConsoleResponseIdentity,
+    lane: Option<ConsoleResponseLane>,
+) -> bool {
+    let Some(lane) = lane else {
         return false;
     };
     lane.generation == identity.generation
@@ -14314,10 +14447,45 @@ where
             == DirectGenetCausalFaninState::Arbitrate
     }
 
+    /// Preserve the existing one-slot response dependency when the ordinary
+    /// rotor accepts another command before that response drains. The caller
+    /// still charges the productive quantum once under its unchanged work cap.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn retain_pi_root_control_response_predecessor(
+        &self,
+        retained: Option<PiRootControlProductiveContinuation>,
+        successor: PiRootControlProductiveContinuation,
+    ) -> PiRootControlProductiveContinuation {
+        let Some(retained) = retained.filter(|retained| {
+            retained.awaits_child_publication()
+                && matches!(
+                    successor.progress,
+                    DirectGenetProductiveProgress::CommandAccepted
+                )
+        }) else {
+            return successor;
+        };
+        let Some(net) = self.net.as_deref() else {
+            return successor;
+        };
+        if direct_genet_response_predecessor_owed(
+            retained,
+            successor,
+            net.console_child_control_publication_owed(),
+            net.console_response_batch_debt(),
+            self.pi_root_control_productive_continuation_fence_clear(retained),
+        ) {
+            retained
+        } else {
+            successor
+        }
+    }
+
     /// Recheck a newer durable publication after the preceding response drained.
     /// The completed token supplies only its authenticated lane and existing
-    /// operator/recovery fences. The shared publication frontier supplies fresh
-    /// work; neither a notification nor the old response authorizes another turn.
+    /// operator/recovery fences. The shared frontier or an authenticated
+    /// command or response already transferred into root's bounded queues
+    /// supplies work; neither a notification nor the old response authorizes a turn.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn pi_root_control_completed_response_publication_ready(
         &self,
@@ -14325,11 +14493,22 @@ where
     ) -> bool {
         completed.completed_current_response()
             && self.pi_root_control_productive_continuation_fence_clear(completed)
-            && self
-                .net
-                .as_deref()
-                .and_then(crate::net::NetPoller::console_child_publication_service_pending)
-                == Some(true)
+            && (self.linked_runtime_direct_genet_command_ready()
+                || (!self.pending_net_flush.active()
+                    && direct_genet_response_lane_stage_ready(
+                        ConsoleResponseIdentity {
+                            generation: completed.generation,
+                            connection_id: completed.connection_id,
+                        },
+                        self.net
+                            .as_deref()
+                            .and_then(|net| net.console_response_lane()),
+                    ))
+                || self
+                    .net
+                    .as_deref()
+                    .and_then(crate::net::NetPoller::console_child_publication_service_pending)
+                    == Some(true))
     }
 
     /// Consume at most one endpoint message or bound fan-in hint without
@@ -64985,6 +65164,8 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut genet = FakeNet::new();
+        let later_command = std::rc::Rc::new(core::cell::RefCell::new(None));
+        genet.late_line = Some(later_command.clone());
         genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
         genet.active_conn_id = Some(17);
         genet.authenticated_conn_id = Some(17);
@@ -65069,6 +65250,44 @@ mod tests {
                 pump.metrics.accepted_commands, 1,
                 "the completed response cannot admit or speculate about a second command",
             );
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+
+            // A command already transferred into root's bounded queue is
+            // durable work even after its shared publication was consumed.
+            let mut line = HeaplessString::new();
+            assert!(line.push_str("ping").is_ok());
+            *later_command.borrow_mut() = Some(ConsoleLine::for_connection(line, 1, 17));
+            assert!(pump.pi_root_control_completed_response_publication_ready(continuation));
+            assert!(later_command.borrow().is_some());
+            assert_eq!(pump.metrics.accepted_commands, 1);
+
+            pump.local_seat_chunk_input_pending = true;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.local_seat_chunk_input_pending = false;
+            pump.reboot_pending = true;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.reboot_pending = false;
+            for stale in [
+                PiRootControlProductiveContinuation::for_test_cross_core_completed_response(2, 17),
+                PiRootControlProductiveContinuation::for_test_cross_core_completed_response(1, 18),
+                PiRootControlProductiveContinuation::for_test_cross_core_command(1, 17),
+            ] {
+                assert!(!pump.pi_root_control_completed_response_publication_ready(stale));
+            }
+            *later_command.borrow_mut() = None;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+
+            // An overlapping command may already have been dispatched while
+            // the preceding batch awaited its ACK. Its queued response must
+            // remain work after that preceding batch's exact drain.
+            let net = pump.net.as_deref_mut().expect("bound GENET adapter");
+            assert!(net.send_console_line("PONG"));
+            assert!(net.send_console_terminal_line("OK PING reply=pong"));
+            assert!(!net.buffered_console_lines_pending());
+            assert!(pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.local_seat_chunk_input_pending = true;
+            assert!(!pump.pi_root_control_completed_response_publication_ready(continuation));
+            pump.local_seat_chunk_input_pending = false;
         }
 
         assert_eq!(

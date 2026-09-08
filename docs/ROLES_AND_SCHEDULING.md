@@ -809,12 +809,23 @@ arbitration without Yield. Every quantum rechecks passive admission, physical op
 response, display debt, recovery, fault, containment, quarantine, reboot,
 handoff, identity, final Serial phase, and the shared cap; the root SC remains
 the hard CPU bound. Fused stage-and-drain or `OutputDrained` retires the current
-request. A fresh unconsumed child publication may admit one Serial-first
-recheck after the same lane and operator/recovery fences pass. The old token
-is removed while clock, causal-wait count and 64-quantum cap remain intact;
+request. If the rotor accepts a later command while the retained response
+still owes its exact child control or output drain, preserve the original
+cross-core response token. Revalidate its nonzero control sequence and all
+operator/recovery fences; a command-only successor cannot replace that debt.
+The productive command quantum is still charged once without resetting the
+clock, causal-wait count or 64-quantum cap. A completed, stale or different
+response cannot be adopted. An unconsumed child publication, an authenticated buffered command,
+or a stageable response already retained in root's bounded queue may admit one
+Serial-first recheck after the same lane and operator/recovery fences pass.
+A buffered command must also pass the existing command-readiness fences,
+including response ownership. A retained response must match the exact lane,
+contain queued output, and have no prior batch-drain or legacy flush debt;
+use the same stageability predicate as ordinary response service.
+The old token is removed while clock, causal-wait count and 64-quantum cap remain intact;
 an executed empty recheck consumes one quantum and stops. Only fresh
-productive progress creates another continuation. An absent publication
-retains the ordinary idle/Yield route and cannot mint a post-response Network
+productive progress creates another continuation. Absent any such work,
+root retains the ordinary idle/Yield route and cannot mint a post-response Network
 baton, empty hot tail, broad wait or future-request authority. A queued next
 command remains behind the ordinary operator rotor. CYW43 keeps its distinct
 NaturalPostpone/64-unit contract and cannot acquire direct-GENET continuation
@@ -975,7 +986,8 @@ quantum rechecks generation, connection, final Serial phase, passive admission,
 physical operator/response priority, display debt, local fault, recovery,
 containment, quarantine, reboot, handoff, and the shared cap. The current fused
 stage-and-drain or `OutputDrained` terminal retires its request. A fresh durable
-child frontier may justify one separately charged ordinary recheck with the
+child frontier, including an authenticated command or stageable response already
+retained in root's bounded queues, may justify one separately charged ordinary recheck with the
 old token removed and shared cap retained, as specified above. No
 post-response baton, cross-core empty tail, broad wait, second packet
 operation, retry, refill, or owner authority survives for a future request.
