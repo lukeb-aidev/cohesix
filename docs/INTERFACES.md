@@ -373,7 +373,7 @@ magic, version, length, flags, counter relations, 32-bit badge width,
 IRQ-mask relation, cursor-validity rules, and sequence/commit must all
 validate. Older or missing publications remain compatible unavailable
 evidence rather than authorizing an alternate path.
-Optional GENET queue timing v2 uses `[640,896)` for the console-owned RX
+Optional GENET queue timing v3 uses `[640,896)` for the console-owned RX
 observation and `[896,1152)` for the GENET-owned TX observation. Each 256-byte
 record commits its independent publication sequence last at offset 248. The
 remaining control-page tail stays reserved. Packet pages use `[2048,2080)`
@@ -381,7 +381,7 @@ for a producer stamp before the ordinary packet commit, and `[2112,2160)` for
 an optional completed Signal observation. These are diagnostic sidecars;
 runtime ABI v13, console ABI v6, packet and cursor authority remain unchanged.
 
-Queue v2 records generation, flow identity, sample count/sum and the first
+Queue v3 records generation, flow identity, sample count/sum and the first
 longest producer-stamp-to-stable-copy interval. The peak additionally retains
 the consumer's last completed blocking receive: entry/return CNTVCT, returned
 badge and kind (1=Recv, 2=Wait, 3=ReplyRecv). Poll does not replace that record.
@@ -395,10 +395,21 @@ this packet's wake. A packet/Signal interval lying inside that receive can
 locate a delay at the receive boundary, but cannot alone identify SC refill
 eligibility versus another kernel scheduling cause.
 
+V3 additionally retains the consumer's last completed explicit Yield at words
+17--19 (entry, return, reason), independently of the last receive; words 20--30
+remain zero. GENET records its existing route flag: `0x200` command freshness,
+`0x400` elapsed guard, `0x800` counter fault, `0x1000` attempted-slice cap,
+`0x2000` stalled successor; zero denotes another explicit Yield caller. An
+all-zero observation is unavailable. A valid interval must end by the packet
+copy and have zero or one known reason bit. Invalid timing cannot affect packet
+admission. The console RX record has no explicit Yield observation. A matched
+interval can attribute wall time to explicit Yield, but does not prove remaining
+CPU budget or absence of involuntary postponement outside that interval.
+
 The optional rows are `genet_queue`, `genet_queue_peak`, `genet_queue_wait`
-and `genet_queue_signal`, each with `schema=v2`, direction and the same
+`genet_queue_signal` and `genet_queue_yield`, each with `schema=v3`, direction and the same
 generation/publication pair. Absent directions emit only
-`genet_queue schema=v2 dir=<rx|tx> present=no`. Timestamps and identifiers are
+`genet_queue schema=v3 dir=<rx|tx> present=no`. Timestamps and identifiers are
 hexadecimal CNTVCT values; packet length is decimal. Host tools, SDK and
 benchmark workloads retain their existing protocol and report contracts.
 

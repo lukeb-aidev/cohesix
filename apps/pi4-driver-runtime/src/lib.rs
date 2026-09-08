@@ -2671,6 +2671,8 @@ impl GenetDirectMcsWindow {
 struct GenetRuntimeState {
     queue_timing: console_network_abi::GenetQueueTiming,
     last_wait: console_network_abi::GenetWaitObservation,
+    last_yield: console_network_abi::GenetYieldObservation,
+    pending_yield_reason: u32,
     initialized: bool,
     irq_badge: u32,
     irq_handler_slot: u32,
@@ -2767,6 +2769,8 @@ impl GenetRuntimeState {
             direct_genet_max_slice: GenetSliceReceipt::empty(),
             queue_timing: console_network_abi::GenetQueueTiming::EMPTY,
             last_wait: console_network_abi::GenetWaitObservation::EMPTY,
+            last_yield: console_network_abi::GenetYieldObservation::EMPTY,
+            pending_yield_reason: 0,
             direct_genet_pending_rx: None,
             direct_genet_pending_tx: None,
             direct_genet_cutover_phase: GenetDirectCutoverPhase::Legacy,
@@ -2834,6 +2838,8 @@ impl GenetRuntimeState {
         self.direct_genet_max_slice = GenetSliceReceipt::empty();
         self.queue_timing = console_network_abi::GenetQueueTiming::EMPTY;
         self.last_wait = console_network_abi::GenetWaitObservation::EMPTY;
+        self.last_yield = console_network_abi::GenetYieldObservation::EMPTY;
+        self.pending_yield_reason = 0;
         self.direct_genet_pending_rx = None;
         self.direct_genet_pending_tx = None;
         self.direct_genet_cutover_phase = GenetDirectCutoverPhase::Legacy;
@@ -18771,13 +18777,17 @@ fn genet_runtime_finish_dpc_quantum(
 }
 
 fn genet_runtime_record_mcs_yield(reason: u32) {
-    GENET_RUNTIME_STATE.with_mut(|state| state.direct_genet_mcs_window.record_yield(reason));
+    GENET_RUNTIME_STATE.with_mut(|state| {
+        state.direct_genet_mcs_window.record_yield(reason);
+        state.pending_yield_reason = reason;
+    });
 }
 
 fn genet_runtime_complete_mcs_yield() {
     GENET_RUNTIME_STATE.with_mut(|state| {
         if state.direct_genet_active {
             state.direct_genet_mcs_window.clear_accounting();
+            state.pending_yield_reason = 0;
         }
     });
 }
@@ -50977,7 +50987,8 @@ fn genet_direct_service_tx(
             state.direct_genet_generation,
             record.sequence(),
             copied_ticks,
-        );
+        )
+        .with_yield_observation(state.last_yield, copied_ticks);
         match genet_runtime_submit_tx_from(state, record.frame().len(), |index| {
             record.frame()[index]
         }) {
@@ -58320,12 +58331,28 @@ fn runtime_poll_pause() {
 
 #[cfg(target_os = "none")]
 fn runtime_yield_current_tcb() {
+    let observation = GENET_RUNTIME_STATE.with_ref(|state| {
+        state
+            .direct_genet_active
+            .then_some(state.pending_yield_reason)
+    });
+    let entered = observation.map(|_| genet_slice_boundary_ticks());
     // SAFETY: Yield carries no pointer or capability payload. Every caller is
     // already executing as the admitted linked-runtime TCB. On the selected
     // MCS kernel this charges the complete remaining head refill; classic
     // kernels retain their ordinary cooperative-yield semantics.
     unsafe {
         sel4_sys::seL4_Yield();
+    }
+    if let Some((entered, reason)) = entered.zip(observation) {
+        let returned = genet_slice_boundary_ticks();
+        GENET_RUNTIME_STATE.with_mut(|state| {
+            state.last_yield = console_network_abi::GenetYieldObservation {
+                entered,
+                returned,
+                reason: u64::from(reason),
+            };
+        });
     }
     // Yield charges the complete selected head refill. Reset GENET's software
     // window only after the syscall returns on the replenished activation;

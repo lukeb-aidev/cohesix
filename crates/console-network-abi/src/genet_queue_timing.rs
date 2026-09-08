@@ -28,7 +28,7 @@ pub const GENET_QUEUE_TIMING_BYTES: usize = 256;
 pub const GENET_QUEUE_TIMING_COMMIT_OFFSET: usize = 248;
 const STAMP_ID: u64 = 0x0001_0000_434e_4751;
 const SIGNAL_ID: u64 = 0x0030_0001_434e_4753;
-const RECORD_ID: u64 = 0x0100_0002_434e_4754;
+const RECORD_ID: u64 = 0x0100_0003_434e_4754;
 
 const _: () = assert!(
     crate::DIRECT_GENET_SLOT_PAYLOAD_OFFSET + ETHERNET_FRAME_BYTES <= GENET_QUEUE_STAMP_OFFSET
@@ -113,11 +113,45 @@ pub fn genet_queue_signal(
     bytes
 }
 
-/// Optional receive and completed-Signal evidence for one accepted packet.
+/// Last completed explicit Yield in the consumer; no refill or CPU claim.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GenetYieldObservation {
+    /// CNTVCT before the existing Yield boundary.
+    pub entered: u64,
+    /// CNTVCT after that boundary returns.
+    pub returned: u64,
+    /// Existing MCS route flag; zero denotes another explicit Yield caller.
+    pub reason: u64,
+}
+
+impl GenetYieldObservation {
+    /// No completed explicit Yield in this lifetime.
+    pub const EMPTY: Self = Self {
+        entered: 0,
+        returned: 0,
+        reason: 0,
+    };
+
+    fn valid_at(self, copied: u64) -> bool {
+        self == Self::EMPTY
+            || (self.entered != 0
+                && self.entered <= self.returned
+                && self.returned <= copied
+                && (self.reason == 0
+                    || (self.reason.is_power_of_two()
+                        && self.reason
+                            & !u64::from(crate::DIRECT_GENET_RUNTIME_DIAGNOSTIC_MCS_FLAGS)
+                            == 0)))
+    }
+}
+
+/// Optional receive, Yield and completed-Signal evidence for one accepted packet.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GenetWakeContext {
     /// Last completed blocking receive; not necessarily this packet's wake.
     pub wait: GenetWaitObservation,
+    /// Last completed explicit consumer Yield, independently of its last receive.
+    pub yielded: GenetYieldObservation,
     /// Exact producer Signal entry; zero if unavailable or raced.
     pub signal_entered: u64,
     /// Exact producer Signal return; zero if unavailable or raced.
@@ -128,6 +162,7 @@ impl GenetWakeContext {
     /// Missing observations cannot affect accepted packet work.
     pub const EMPTY: Self = Self {
         wait: GenetWaitObservation::EMPTY,
+        yielded: GenetYieldObservation::EMPTY,
         signal_entered: 0,
         signal_returned: 0,
     };
@@ -161,8 +196,18 @@ impl GenetWakeContext {
         context
     }
 
+    /// Attach a chronological observation without changing packet authority.
+    #[must_use]
+    pub fn with_yield_observation(mut self, yielded: GenetYieldObservation, copied: u64) -> Self {
+        if yielded.valid_at(copied) {
+            self.yielded = yielded;
+        }
+        self
+    }
+
     fn valid_at(self, copied: u64) -> bool {
         self.wait.valid_at(copied)
+            && self.yielded.valid_at(copied)
             && ((self.signal_entered == 0 && self.signal_returned == 0)
                 || (self.signal_entered != 0
                     && self.signal_entered <= self.signal_returned
@@ -352,9 +397,9 @@ impl GenetQueueTiming {
             self.wake.wait.kind,
             self.wake.signal_entered,
             self.wake.signal_returned,
-            0,
-            0,
-            0,
+            self.wake.yielded.entered,
+            self.wake.yielded.returned,
+            self.wake.yielded.reason,
             0,
             0,
             0,
@@ -388,7 +433,7 @@ impl GenetQueueTiming {
             || word(bytes, 5) == 0
             || word(bytes, 6) < word(bytes, 5)
             || word(bytes, 7) == 0
-            || (17..31).any(|i| word(bytes, i) != 0)
+            || (20..31).any(|i| word(bytes, i) != 0)
             || word(bytes, 4) < word(bytes, 6) - word(bytes, 5)
         {
             return None;
@@ -409,6 +454,11 @@ impl GenetQueueTiming {
             },
             signal_entered: word(bytes, 15),
             signal_returned: word(bytes, 16),
+            yielded: GenetYieldObservation {
+                entered: word(bytes, 17),
+                returned: word(bytes, 18),
+                reason: word(bytes, 19),
+            },
         };
         if !wake.valid_at(word(bytes, 6))
             || (wake.signal_entered != 0 && wake.signal_entered < word(bytes, 5))
@@ -492,7 +542,8 @@ mod tests {
             GenetWakeContext {
                 wait,
                 signal_entered: 110,
-                signal_returned: 115
+                signal_returned: 115,
+                yielded: GenetYieldObservation::EMPTY,
             }
         );
         let mut timing = GenetQueueTiming::EMPTY;
@@ -549,6 +600,65 @@ mod tests {
     }
 
     #[test]
+    fn explicit_yield_is_independent_chronological_peak_evidence() {
+        let yielded = GenetYieldObservation {
+            entered: 90,
+            returned: 130,
+            reason: 0x400,
+        };
+        let context = GenetWakeContext::EMPTY.with_yield_observation(yielded, 140);
+        let mut timing = GenetQueueTiming::EMPTY;
+        assert!(timing.observe(&stamp(), 7, 9, 140, &frame(), context));
+        let encoded = timing.encode();
+        // Independently specified v3 words: identity and last explicit Yield.
+        assert_eq!(&encoded[..8], &0x0100_0003_434e_4754u64.to_le_bytes());
+        assert_eq!(&encoded[136..144], &90u64.to_le_bytes());
+        assert_eq!(&encoded[144..152], &130u64.to_le_bytes());
+        assert_eq!(&encoded[152..160], &0x400u64.to_le_bytes());
+        assert!(encoded[160..248].iter().all(|byte| *byte == 0));
+        assert_eq!(GenetQueueTiming::decode(&encoded, 7), Some(timing));
+        for (entered, returned, reason) in [
+            (0, 130, 0x400),
+            (131, 130, 0x400),
+            (90, 141, 0x400),
+            (90, 130, 1),
+            (90, 130, 0x600),
+        ] {
+            let invalid = GenetYieldObservation {
+                entered,
+                returned,
+                reason,
+            };
+            let context = GenetWakeContext::EMPTY.with_yield_observation(invalid, 140);
+            assert_eq!(context.yielded, GenetYieldObservation::EMPTY);
+            let mut accepted = GenetQueueTiming::EMPTY;
+            assert!(accepted.observe(&stamp(), 7, 9, 140, &frame(), context));
+            assert_eq!(accepted.samples, 1);
+        }
+        for reason in [0, 0x200, 0x400, 0x800, 0x1000, 0x2000] {
+            assert_eq!(
+                GenetWakeContext::EMPTY
+                    .with_yield_observation(GenetYieldObservation { reason, ..yielded }, 140)
+                    .yielded
+                    .reason,
+                reason
+            );
+        }
+        assert!(timing.observe(
+            &genet_queue_stamp(7, 10, 200),
+            7,
+            10,
+            220,
+            &frame(),
+            GenetWakeContext::EMPTY
+        ));
+        assert_eq!(
+            timing.wake.yielded, yielded,
+            "faster packets preserve the peak"
+        );
+    }
+
+    #[test]
     fn queue_timing_wire_fixture_and_reserved_regions() {
         assert_eq!(genet_queue_stamp(7, 9, 100), stamp());
         assert_eq!(
@@ -562,7 +672,7 @@ mod tests {
         let mut timing = GenetQueueTiming::EMPTY;
         assert!(timing.observe(&stamp(), 7, 9, 140, &frame(), GenetWakeContext::EMPTY));
         let expected = [
-            0x0100_0002_434e_4754,
+            0x0100_0003_434e_4754,
             7,
             1,
             1,

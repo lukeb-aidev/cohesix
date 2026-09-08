@@ -275,40 +275,45 @@ struct DirectGenetNetstatsLines {
     ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     peer: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     slice: Option<[HeaplessString<DEFAULT_LINE_CAPACITY>; 6]>,
-    queue: [[Option<HeaplessString<DEFAULT_LINE_CAPACITY>>; 4]; 2],
+    queue: [[Option<HeaplessString<DEFAULT_LINE_CAPACITY>>; 5]; 2],
 }
 
 #[cfg(feature = "net-console")]
 fn format_genet_queue_timing(
     direction: &str,
     timing: Option<console_network_abi::GenetQueueTiming>,
-) -> [Option<HeaplessString<DEFAULT_LINE_CAPACITY>>; 4] {
+) -> [Option<HeaplessString<DEFAULT_LINE_CAPACITY>>; 5] {
     let Some(t) = timing else {
         return [
             Some(format_message(format_args!(
-                "netstats: genet_queue schema=v2 dir={direction} present=no"
+                "netstats: genet_queue schema=v3 dir={direction} present=no"
             ))),
+            None,
             None,
             None,
             None,
         ];
     };
     [Some(format_message(format_args!(
-        "netstats: genet_queue schema=v2 dir={direction} gen={:x} pub={:x} n={:x} sum={:x} prod={:x} copy={:x} ring={:x}",
+        "netstats: genet_queue schema=v3 dir={direction} gen={:x} pub={:x} n={:x} sum={:x} prod={:x} copy={:x} ring={:x}",
         t.generation, t.publication, t.samples, t.total_ticks,
         t.produced_ticks, t.copied_ticks, t.ring_sequence,
     ))), Some(format_message(format_args!(
-        "netstats: genet_queue_peak schema=v2 dir={direction} gen={:x} pub={:x} src={:08x}:{:04x} dst={:08x}:{:04x} seq={:08x} ack={:08x} flags={:03x} len={}",
+        "netstats: genet_queue_peak schema=v3 dir={direction} gen={:x} pub={:x} src={:08x}:{:04x} dst={:08x}:{:04x} seq={:08x} ack={:08x} flags={:03x} len={}",
         t.generation, t.publication, t.source_ipv4, t.source_port,
         t.destination_ipv4, t.destination_port, t.tcp_sequence, t.tcp_ack,
         t.tcp_flags, t.frame_len,
     ))), Some(format_message(format_args!(
-        "netstats: genet_queue_wait schema=v2 dir={direction} gen={:x} pub={:x} enter={:x} return={:x} badge={:x} kind={:x}",
+        "netstats: genet_queue_wait schema=v3 dir={direction} gen={:x} pub={:x} enter={:x} return={:x} badge={:x} kind={:x}",
         t.generation, t.publication, t.wake.wait.entered, t.wake.wait.returned,
         t.wake.wait.badge, t.wake.wait.kind,
     ))), Some(format_message(format_args!(
-        "netstats: genet_queue_signal schema=v2 dir={direction} gen={:x} pub={:x} enter={:x} return={:x}",
+        "netstats: genet_queue_signal schema=v3 dir={direction} gen={:x} pub={:x} enter={:x} return={:x}",
         t.generation, t.publication, t.wake.signal_entered, t.wake.signal_returned,
+    ))), Some(format_message(format_args!(
+        "netstats: genet_queue_yield schema=v3 dir={direction} gen={:x} pub={:x} enter={:x} return={:x} reason={:x}",
+        t.generation, t.publication, t.wake.yielded.entered, t.wake.yielded.returned,
+        t.wake.yielded.reason,
     ))) ]
 }
 
@@ -38775,6 +38780,11 @@ mod tests {
                 },
                 signal_entered: u64::MAX,
                 signal_returned: u64::MAX,
+                yielded: console_network_abi::GenetYieldObservation {
+                    entered: u64::MAX,
+                    returned: u64::MAX,
+                    reason: 0x400,
+                },
             },
             generation: u64::MAX,
             publication: u64::MAX,

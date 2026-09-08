@@ -10499,8 +10499,9 @@ Changes:
   - GENET exact-packet wake/receive discriminator — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, reuse the bounded queue timing
-    probe and extend its optional v2 peak with the exact producer's completed
-    Signal and consumer's last blocking receive entry/return/badge/kind.
+    probe and extend its optional v3 peak with the exact producer's completed
+    Signal, consumer's last blocking receive entry/return/badge/kind, and
+    GENET's last explicit Yield entry/return and existing route reason.
     Prior queue traces place millisecond gaps across both reciprocal rings;
     refill10 and RX grouping do not close raw p95. Distinguish pre-notification,
     receive-boundary and post-return delay without copying VirtIO ownership,
@@ -10524,6 +10525,15 @@ Changes:
     and failed before console readiness despite verified RAM delivery; bind
     both source manifests to the root inventory in a deterministic regression.
     This is candidate construction repair, with no new performance result.
+    Fresh SD0880 two-boot proof restores readiness and all raw/coh/REST
+    function; raw p95 remains 4.003/5.369 ms. A 1,024-request control has
+    217 slow wire requests but only nine overlap root Yield. Exact TX peaks
+    place 6.940--7.616 ms after completed Signal with the last Recv already
+    returned; this motivates the v3 explicit-Yield discriminator. Its three
+    additional words fit the unchanged optional 256-byte record, with no new
+    syscall, guard change or scheduling authority. Missing observations remain
+    unavailable. Packet/wake/Yield chronology and maximum-width rows require
+    focused tests; exact Pi build and RAM hardware comparison remain pending.
   - GENET bounded hardware RX interrupt grouping experiment retired — exact
     release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
     packets or thirteen hardware timer ticks (106.496 us) on two RAM boots,
