@@ -377,7 +377,7 @@ mod tests {
                 ]
             } else {
                 [
-                    ("root-worker-executor-gpu", 2, 8_300),
+                    ("root-worker-executor-gpu", 1, 7_600),
                     ("root-worker-executor-lora", 3, 7_400),
                 ]
             };
@@ -409,14 +409,8 @@ mod tests {
                 .iter()
                 .find(|admission| admission.core == 0)
                 .expect("core-0 temporal admission");
-            assert_eq!(
-                core_zero_admission.capacity_us,
-                10_000
-            );
-            assert_eq!(
-                core_zero_admission.reserve_us,
-                1_000
-            );
+            assert_eq!(core_zero_admission.capacity_us, 10_000);
+            assert_eq!(core_zero_admission.reserve_us, 1_000);
             let core_zero_usable = core_zero_admission.capacity_us - core_zero_admission.reserve_us;
             assert!(core_zero_demand <= core_zero_usable);
             assert_eq!(
@@ -440,14 +434,8 @@ mod tests {
                 .iter()
                 .find(|admission| admission.core == 2)
                 .expect("core-2 temporal admission");
-            assert_eq!(
-                core_two_admission.capacity_us,
-                10_000
-            );
-            assert_eq!(
-                core_two_admission.reserve_us,
-                1_000
-            );
+            assert_eq!(core_two_admission.capacity_us, 10_000);
+            assert_eq!(core_two_admission.reserve_us, 1_000);
             assert!(
                 core_two_demand <= core_two_admission.capacity_us - core_two_admission.reserve_us
             );

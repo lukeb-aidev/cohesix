@@ -4432,7 +4432,7 @@ mod tests {
             .expect("Pi 4 manifest path");
         let manifest = load_manifest(&manifest_path).expect("load Pi 4 manifest");
         assert_eq!(manifest.root_task.affinity.max_cores, 4);
-        assert_eq!(manifest.root_task.affinity.drivers.bcmgenet_v5, Some(1));
+        assert_eq!(manifest.root_task.affinity.drivers.bcmgenet_v5, Some(2));
         assert_eq!(manifest.root_task.affinity.drivers.cyw43455, Some(3));
         manifest
             .validate_with_base(Some(repo_root().as_path()))
@@ -4446,13 +4446,13 @@ mod tests {
             .canonicalize()
             .expect("Pi 4 manifest path");
         let mut manifest = load_manifest(&manifest_path).expect("load Pi 4 manifest");
-        manifest.root_task.affinity.drivers.bcmgenet_v5 = Some(2);
+        manifest.root_task.affinity.drivers.bcmgenet_v5 = Some(1);
         let error = manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("Pi driver affinity and temporal core drift must fail closed");
         assert!(
             error.to_string().contains(
-                "Pi driver bcmgenet-v5 affinity core 2 disagrees with temporal task driver-genet core 1/sched-control core 1"
+                "Pi driver bcmgenet-v5 affinity core 1 disagrees with temporal task driver-genet core 2/sched-control core 2"
             ),
             "unexpected error: {error}",
         );

@@ -167,7 +167,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(local_seat["buffer_lines"], 128);
     assert_eq!(
         manifest["root_task"]["affinity"]["drivers"]["bcmgenet-v5"],
-        1
+        2
     );
     assert_eq!(manifest["root_task"]["affinity"]["drivers"]["cyw43455"], 3);
 
@@ -354,8 +354,8 @@ fn pi4_uboot_profile_emits_network_policy() {
     let genet = temporal_task("driver-genet");
     assert_eq!(genet["kind"], "driver");
     assert_eq!(genet["execution"], "active");
-    assert_eq!(genet["core"], 1);
-    assert_eq!(genet["sched_control_core"], 1);
+    assert_eq!(genet["core"], 2);
+    assert_eq!(genet["sched_control_core"], 2);
     assert_eq!(genet["budget_us"], 3_000);
     assert_eq!(genet["period_us"], 10_000);
     assert_eq!(genet["max_refills"], 8);
@@ -363,7 +363,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(genet["timeout_policy"], "natural-postpone");
     assert_eq!(genet["priority"], 160);
     assert_eq!(genet["wcet_us"], 800);
-    assert_eq!(genet["response_time_us"], 3_400);
+    assert_eq!(genet["response_time_us"], 3_800);
     let core_one_demand: u64 = temporal_tasks
         .iter()
         .filter(|task| task["core"] == 1)
@@ -402,15 +402,17 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(hdmi["budget_us"], 2_000);
     assert_eq!(hdmi["period_us"], 10_000);
     assert_eq!(hdmi["wcet_us"], 1_800);
-    assert_eq!(hdmi["core"], 1);
-    assert_eq!(hdmi["sched_control_core"], 1);
-    assert_eq!(hdmi["response_time_us"], 5_200);
+    assert_eq!(hdmi["core"], 2);
+    assert_eq!(hdmi["sched_control_core"], 2);
+    assert_eq!(hdmi["response_time_us"], 5_900);
     assert_eq!(
         hdmi["wcet_provenance"],
         "m26e-pi4-hdmi-write-only-candidate-v1"
     );
+    assert_eq!(gpu_executor["core"], 1);
+    assert_eq!(gpu_executor["sched_control_core"], 1);
     assert_eq!(gpu_executor["budget_us"], 5_000);
-    assert_eq!(gpu_executor["response_time_us"], 8_300);
+    assert_eq!(gpu_executor["response_time_us"], 7_600);
     let pcie = temporal_task("driver-pcie");
     assert_eq!(pcie["budget_us"], 400);
     assert_eq!(pcie["period_us"], 10_000);
@@ -418,7 +420,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(pcie["priority"], 112);
     assert_eq!(pcie["core"], 2);
     assert_eq!(pcie["sched_control_core"], 2);
-    assert_eq!(pcie["response_time_us"], 3_300);
+    assert_eq!(pcie["response_time_us"], 4_100);
     let core_two_demand: u64 = temporal_tasks
         .iter()
         .filter(|task| task["core"] == 2)

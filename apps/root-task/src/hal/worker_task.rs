@@ -78,7 +78,7 @@ const TARGET_WORKER_EXECUTOR_QUEUE_STORAGE: usize = MAX_EXECUTABLE_WORKER_SLOTS 
 /// One of the two compiler-declared passive-Worker execution lanes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TargetWorkerExecutorLane {
-    /// GPU Worker instances pinned to core 2.
+    /// GPU Worker instances pinned to the compiler-selected executor core.
     Gpu,
     /// Heartbeat and LoRA Worker instances pinned to core 3.
     Lora,

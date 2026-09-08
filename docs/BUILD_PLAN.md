@@ -10496,6 +10496,22 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET/console placement discriminator — under
+    `m26e-qemu-shared-control-path-performance`, restoring
+    `m26e-console-network-service-isolation`, test the independent GENET and
+    console-network owners on core 2 while root remains on core 0. Move HDMI
+    to core 2 and the GPU executor with its passive Workers to core 1;
+    preserve all four per-core reservation sums and every budget, period,
+    refill, priority, WCET, guard, memory and capability boundary. Recompute
+    the exact static response-time fixtures: GENET 3,800 us, HDMI 5,900 us,
+    PCIe 4,100 us and GPU executor 7,600 us. Generated descriptor validation
+    already admits matching affinity/SC cores; no runtime guard is bypassed.
+    Preserve the successful root passive-read repair and its root/console
+    cross-core signal-only contract. Compiler admission and exact release
+    builds precede raw-first Pi/coh/medium/high REST comparison and repeat.
+    Retain only demonstrated end-to-end benefit; the earlier root/console
+    co-location plus YieldTo experiment and IRQ-owner routing remain retired.
+    Evidence: `out/bench/pi4-genet-colocated-20260909`.
   - GENET IRQ owner-core routing experiment retired — under
     `m26e-qemu-shared-control-path-performance`, restoring
     `m26e-console-network-service-isolation`, exact release RAM source

@@ -1803,7 +1803,7 @@ fn pi_console_network_uses_exact_cross_core_causal_signal_topology() {
 }
 
 #[test]
-fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
+fn pi_genet_uses_the_bounded_console_core_placement() {
     fn task_section<'a>(manifest: &'a str, task_id: &str) -> &'a str {
         let marker = format!("[[temporal_authority.tasks]]\nid = \"{task_id}\"");
         let start = manifest.find(&marker).expect("temporal task record");
@@ -1817,11 +1817,11 @@ fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
     let manifest = include_str!("../../../configs/root_task_pi4_uboot_aarch64.toml");
     let genet = task_section(manifest, "driver-genet");
     for exact in [
-        "core = 1",
-        "sched_control_core = 1",
+        "core = 2",
+        "sched_control_core = 2",
         "budget_us = 3000",
         "period_us = 10000",
-        "response_time_us = 3400",
+        "response_time_us = 3800",
         "max_refills = 8",
         "priority = 160",
         "wcet_us = 800",
@@ -1832,7 +1832,7 @@ fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
             "GENET must retain exact MCS line: {exact}",
         );
     }
-    assert!(manifest.contains("bcmgenet-v5 = 1"));
+    assert!(manifest.contains("bcmgenet-v5 = 2"));
     assert!(manifest.contains("cyw43455 = 3"));
 }
 
