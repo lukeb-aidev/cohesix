@@ -5594,6 +5594,42 @@ const fn command_may_donate_passive_ninedoor(command: &Command) -> bool {
     )
 }
 
+/// Only bounded namespace reads share direct VirtIO's ordinary passive-call
+/// dispatch. Attachment, mutation and physical operator commands keep the Pi
+/// reserve path; the kernel and per-Call recovery still bound every donation.
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+const fn command_is_passive_namespace_read(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Tail { .. } | Command::Cat { .. } | Command::Ls { .. }
+    )
+}
+
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+fn direct_genet_passive_read_profile_admitted(
+    root: &crate::generated::TemporalTaskConfig,
+    service: &crate::generated::TemporalTaskConfig,
+) -> bool {
+    use crate::generated::{TemporalExecution, TemporalTaskKind, TimeoutPolicy};
+    root.id == "root-control"
+        && service.id == "ninedoor-service"
+        && root.kind == TemporalTaskKind::RootControl
+        && root.execution == TemporalExecution::Active
+        && root.admitted
+        && root.timeout_policy == TimeoutPolicy::NaturalPostpone
+        && service.kind == TemporalTaskKind::Service
+        && service.execution == TemporalExecution::Passive
+        && service.core == root.core
+        && service.locality_bound
+        && service.allowed_donors == ["root-control"]
+        && service.scheduling_context_slot == 0
+        && service.scheduling_context_bits == 0
+        && service.reply_objects == 1
+        && service.max_donation_depth == 1
+        && service.fault_handler == "root-fault"
+        && service.timeout_policy == TimeoutPolicy::ResumeOnceReturnError
+}
+
 /// Exact parsed command and authority identity held across the Pi MCS reserve
 /// observation window.
 ///
@@ -10831,6 +10867,68 @@ where
         }
         #[cfg(not(feature = "release-pi4"))]
         {
+            false
+        }
+    }
+
+    /// Route one authenticated, bounded GENET namespace read through the
+    /// ordinary dispatch/response path under the selected kernel reservation.
+    /// No response token or lease survives this decision. CallArm and the
+    /// existing one-resume-per-Call timeout policy retain the final fault bound.
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    fn direct_genet_passive_read_uses_natural_postpone(&mut self, command: &Command) -> bool {
+        if !self.direct_genet_passive_read_ready(command) {
+            return false;
+        }
+        let tasks = crate::generated::temporal_tasks();
+        let Some(root) = tasks.iter().find(|task| task.id == "root-control") else {
+            return false;
+        };
+        let Some(service) = tasks.iter().find(|task| task.id == "ninedoor-service") else {
+            return false;
+        };
+        direct_genet_passive_read_profile_admitted(root, service)
+    }
+
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    fn direct_genet_passive_read_ready(&mut self, command: &Command) -> bool {
+        #[cfg(feature = "net-console")]
+        {
+            if !command_is_passive_namespace_read(command)
+                || self.last_input_source != ConsoleInputSource::Net
+                || self.pi_root_control_pending_passive_command.is_some()
+                || self.ninedoor.is_none()
+                || self.reboot_pending
+                || self.network_service_quarantined
+                || self.console_network_quarantine_cleanup_pending
+                || self.physical_console_response_pending()
+                || self.pending_net_flush.active()
+                || self.network_response_owner_active()
+                || self.stream_end_pending
+                || self.pending_stream_active()
+                || !direct_genet_compact_operator_fence_clear(Some(
+                    self.linked_physical_operator_work(),
+                ))
+                || !self.isolated_direct_genet_response_lane_attached()
+                || self.selected_direct_genet_continuation_mode()
+                    != Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
+                || self.session.is_none()
+                || self.session_origin != Some(ConsoleInputSource::Net)
+                || self.session_id.is_none()
+                || self.net_conn_id.is_none()
+                || self.session_net_conn_id != self.net_conn_id
+                || self.isolated_service_recovery_pending()
+                || self.deferred_containment_work_pending()
+            {
+                return false;
+            }
+            self.net
+                .as_deref()
+                .is_some_and(|net| net.active_console_conn_id() == self.net_conn_id)
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            let _ = command;
             false
         }
     }
@@ -35291,6 +35389,7 @@ where
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         let command = if self.pi_root_control_passive_dispatch_boundary_active()
             && command_may_donate_passive_ninedoor(&command)
+            && !self.direct_genet_passive_read_uses_natural_postpone(&command)
             && !self.console_network_quarantine_cleanup_pending
         {
             let Some(command) = self.maybe_begin_pi_root_control_pending(command) else {
@@ -63894,6 +63993,222 @@ mod tests {
             .sent
             .iter()
             .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    #[test]
+    fn direct_genet_passive_read_scope_and_profile_are_exact() {
+        use crate::generated::{TemporalExecution, TemporalTaskConfig, TimeoutPolicy};
+        for (line, expected) in [
+            ("tail /log/queen.log", true),
+            ("cat /proc/smp", true),
+            ("ls /", true),
+            ("ping", false),
+            ("help", false),
+            ("attach queen", false),
+            ("echo /log/queen.log test", false),
+            ("log", false),
+        ] {
+            let command = cohsh_core::command::CommandParser::parse_line_str(line)
+                .expect("independent console fixture must parse");
+            assert_eq!(
+                command_is_passive_namespace_read(&command),
+                expected,
+                "{line}"
+            );
+        }
+        let tasks = crate::generated::temporal_tasks();
+        let root = *tasks.iter().find(|task| task.id == "root-control").unwrap();
+        let mut service = *tasks
+            .iter()
+            .find(|task| task.id == "ninedoor-service")
+            .unwrap();
+        let manifest: toml::Value = toml::from_str(include_str!(
+            "../../../../configs/root_task_pi4_uboot_aarch64.toml"
+        ))
+        .unwrap();
+        let declaration = manifest["temporal_authority"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"].as_str() == Some("ninedoor-service"))
+            .unwrap();
+        assert_eq!(
+            declaration["timeout_policy"].as_str(),
+            Some("resume-once-return-error")
+        );
+        assert_eq!(
+            declaration["allowed_donors"].as_array().unwrap(),
+            &[toml::Value::String("root-control".into())]
+        );
+        assert_eq!(declaration["reply_objects"].as_integer(), Some(1));
+        assert_eq!(declaration["max_donation_depth"].as_integer(), Some(1));
+        service.timeout_policy = TimeoutPolicy::ResumeOnceReturnError;
+        assert!(direct_genet_passive_read_profile_admitted(&root, &service));
+        for invalid in [
+            TemporalTaskConfig {
+                timeout_policy: TimeoutPolicy::ReturnError,
+                ..service
+            },
+            TemporalTaskConfig {
+                execution: TemporalExecution::Active,
+                ..service
+            },
+            TemporalTaskConfig {
+                core: root.core + 1,
+                ..service
+            },
+            TemporalTaskConfig {
+                allowed_donors: &["root-control", "worker-0"],
+                ..service
+            },
+            TemporalTaskConfig {
+                reply_objects: 2,
+                ..service
+            },
+            TemporalTaskConfig {
+                max_donation_depth: 2,
+                ..service
+            },
+            TemporalTaskConfig {
+                scheduling_context_slot: 1,
+                ..service
+            },
+            TemporalTaskConfig {
+                locality_bound: false,
+                ..service
+            },
+            TemporalTaskConfig {
+                fault_handler: "",
+                ..service
+            },
+        ] {
+            assert!(!direct_genet_passive_read_profile_admitted(&root, &invalid));
+        }
+        for invalid in [
+            TemporalTaskConfig {
+                admitted: false,
+                ..root
+            },
+            TemporalTaskConfig {
+                timeout_policy: TimeoutPolicy::ReplenishOnce,
+                ..root
+            },
+        ] {
+            assert!(!direct_genet_passive_read_profile_admitted(
+                &invalid, &service
+            ));
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+    #[test]
+    fn direct_genet_passive_read_requires_current_network_authority_and_idle_response() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+        let _guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = Reset;
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(8, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(17);
+        genet.authenticated_conn_id = Some(17);
+        genet.response_batch_capacity = Some(8);
+        genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+            generation: 1,
+            last_poll_ms: 1,
+            last_progress_ms: 1,
+            last_unit: "observe-child",
+            turns: 1,
+            progress_turns: 1,
+            observe_child_turns: 1,
+            stage_output_turns: 0,
+            stage_output_successes: 0,
+            disconnect_turns: 0,
+            ingress_turns: 0,
+            service_tick_turns: 0,
+            transmit_egress_turns: 0,
+            deferred_diagnostic_turns: 0,
+            command_queue: 0,
+            output_queue: 0,
+            pending_egress: false,
+            awaiting_batch_drain: false,
+            producer_open: false,
+            response_drains: 0,
+            ingress_backpressure: 0,
+            ingress_dropped: 0,
+            direct_genet_yield_calls: 0,
+            direct_genet_yield_counter_hz: 0,
+            direct_genet_yield_call_wall_scaled: 0,
+            direct_genet_yield_child_credit_scaled: 0,
+            direct_genet_yield_invalid_reasons: 0,
+        });
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_network(&mut genet)
+            .with_ninedoor(&mut bridge);
+        pump.last_input_source = ConsoleInputSource::Net;
+        pump.session = Some(SessionRole::Queen);
+        pump.session_id = Some(1);
+        pump.session_origin = Some(ConsoleInputSource::Net);
+        pump.net_conn_id = Some(17);
+        pump.session_net_conn_id = Some(17);
+        pump.direct_genet_continuation_mode_test_override =
+            Some(DirectGenetContinuationMode::CrossCoreSignalOnly);
+        let command = Command::Cat {
+            path: command_path("/proc/smp"),
+        };
+        assert!(pump.direct_genet_passive_read_ready(&command));
+        macro_rules! reject {
+            ($field:ident, $value:expr) => {{
+                let saved = pump.$field;
+                pump.$field = $value;
+                assert!(
+                    !pump.direct_genet_passive_read_ready(&command),
+                    stringify!($field)
+                );
+                pump.$field = saved;
+            }};
+        }
+        reject!(last_input_source, ConsoleInputSource::Serial);
+        reject!(session_origin, Some(ConsoleInputSource::Serial));
+        reject!(session, None);
+        reject!(session_id, None);
+        reject!(session_net_conn_id, Some(18));
+        reject!(net_conn_id, Some(18));
+        reject!(reboot_pending, true);
+        reject!(network_service_quarantined, true);
+        reject!(console_network_quarantine_cleanup_pending, true);
+        reject!(local_seat_chunk_input_pending, true);
+        reject!(
+            physical_response_barrier,
+            PhysicalResponseBarrier::AwaitingTail
+        );
+        reject!(stream_end_pending, true);
+        pump.pi_root_control_recovery_pending_test_countdown.set(0);
+        assert!(!pump.direct_genet_passive_read_ready(&command));
+        pump.pi_root_control_recovery_pending_test_countdown
+            .set(u8::MAX);
+        assert!(pump.begin_sync_response_capture("HELP"));
+        assert!(!pump.direct_genet_passive_read_ready(&command));
+        drop(pump);
+        genet.authenticated_conn_id = Some(18);
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(8, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let pump =
+            EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut genet);
+        assert!(!pump.isolated_direct_genet_response_lane_attached());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

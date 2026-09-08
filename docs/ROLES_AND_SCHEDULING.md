@@ -1079,10 +1079,29 @@ exhaustion. Consumed clears evidence, not budget, and the kernel's current
 per-core accounting can enter a later receipt. QEMU and retired YieldTo
 comparison topologies do not start these samples.
 
+Authenticated direct-GENET `TAIL`, `CAT`, and `LS` use ordinary bounded
+passive dispatch under the generated root-control `natural-postpone` policy.
+The selected cross-core GENET topology, exact live connection/session and
+response generation, attached NineDoor, idle response ownership, physical
+operator priority, and recovery/containment fences must all hold. The passive
+service remains local to root, has no scheduling context, permits only the
+root donor, and retains one Reply object and depth-one donation with
+`resume-once-return-error`. Each command rechecks these facts; no response
+token, time lease, refill credit, or authority is carried to a future command.
+The existing command bounds, policy checks, one-Call-at-a-time service protocol,
+output staging and TCP-ACK completion remain unchanged. This avoids a mandatory
+pre/post-Yield cycle for each admitted namespace read; kernel postponement
+still enforces the configured reservation. It does not prove service WCET or
+make the passive service parallel. Attachment, writes/lifecycle operations,
+physical operator commands, WiFi, and any ineligible GENET read retain the
+Pi admission path described below. QEMU keeps its existing direct-VirtIO path
+and `return-error` policy.
+
 Physical-Pi serial, local-seat, and TCP ingress always admits bounded raw input,
-echo, parsing, and root-owned diagnostics while NineDoor is attached. Only a
-parsed command that can enter passive NineDoor validates the generated active
-root-control budget, WCET, period, admission, and consumed-time-evidence
+echo, parsing, and root-owned diagnostics while NineDoor is attached. A
+parsed command that can enter passive NineDoor, except an eligible GENET
+namespace read, validates the generated active root-control budget, WCET,
+period, admission, and consumed-time-evidence
 contract. `seL4_SchedContext_Consumed` resets evidence but does not replenish
 the SC. More precisely, the selected syscall clears the scheduling context's
 stored `scConsumed` evidence but cannot clear the live per-core `ksConsumed`

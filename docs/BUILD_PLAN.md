@@ -10496,6 +10496,24 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET bounded passive-read dispatch candidate — restores
+    `m26e-console-network-service-isolation`. Two exact release-Pi queue-timing
+    boots show sub-0.16 ms packet handoffs under high TAIL pressure but roughly
+    10 ms per command at root admission/dispatch. Permit authenticated direct
+    GENET TAIL/CAT/LS to use ordinary bounded dispatch with existing generated
+    NaturalPostpone and per-Call ResumeOnceReturnError enforcement. Keep exact
+    topology, connection/generation, physical-operator, response-owner and
+    recovery fences; retain the Pi reserve path for all other commands and
+    WiFi. No retained response token, concurrent passive Calls, SC numeric,
+    manifest, kernel, ABI or timeout-policy change is included. The existing
+    Yield/Consumed preparation guard cannot prove remaining CPU refill credit;
+    this change explicitly uses kernel postponement, not invented WCET credit.
+    Focused admission tests, release QEMU root-MCS, exact Pi compilation and
+    fresh same-image GENET/WiFi harness evidence qualify the candidate. Review
+    the complete host-tool suite, Python SDK, .coh, raw/REST workloads and
+    report schemas: their public contracts and implementations remain
+    unchanged because only target read admission changes. Physical performance
+    and original raw p95 remain unclaimed until measured.
   - Initial-SC runtime admission repair — the unchanged `d16284b35`
     GENET pair regressed to approximately 20 ms per PING because the runtime
     continuation predicate still required root SC bits 7/refills 2. Kernel

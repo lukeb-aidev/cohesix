@@ -1652,8 +1652,9 @@ device work despite stale nonzero `MessageInfo`, rejects zero, zero-length
 command, wrong-task, and foreign high-domain observations, and leaves classic
 length-first behavior unchanged. Physical-Pi serial, local-seat, and TCP tests
 must prove raw input, echo, parsing, and root-owned diagnostics remain live
-even when passive dispatch admission is denied. Only a parsed command that may
-enter passive NineDoor samples `SchedContext_Consumed`: retain the exact parsed
+even when passive dispatch admission is denied. A parsed command that may
+enter passive NineDoor, other than an eligible authenticated direct-GENET
+namespace read, samples `SchedContext_Consumed`: retain the exact parsed
 command and authority identity after one baseline sample that validates the
 selected interface, then perform exactly one selected periodic MCS Yield per
 bounded reserve attempt. The
@@ -1667,9 +1668,10 @@ precedes ordinary material containment probes and completes bounded policy,
 authority, environment, and recovery preparation before the final admission
 sample. The strict wall interval ends at that final admission/WCET cut, not at
 an earlier policy sample. Only an interval strictly below
-`budget_us - wcet_us`, currently 3,000 us, admits the command and leaves the
-complete 2,500 us root WCET for the comparison, direct dispatch, and bounded
-response/epilogue. Equality or excess terminates that lease without dispatch;
+`budget_us - wcet_us`, currently 3,000 us, admits the command within the
+configured preparation envelope. It cannot establish available CPU in the
+current head refill; the declared 2,500 us WCET is not fresh budget credit.
+Equality or excess terminates that lease without dispatch;
 the first expired lease retains the exact command for one completely new
 Yield/refill attempt, while a second expiry emits the existing single typed
 refusal. Newly published
@@ -1687,6 +1689,21 @@ frequency drift, backwards/missing evidence, exact cross-multiplication without
 rounded-down admission, fresh policy time, fault-before-dispatch cancellation
 before and after the decision, authority cancellation, and continued raw
 serial/local-seat/TCP diagnostic liveness before retention.
+Authenticated direct-GENET namespace-read validation must separately cover
+`TAIL`, `CAT`, and `LS` ordinary dispatch under NaturalPostpone, without the
+pending passive command slot or its mandatory Yield cycle. Deterministic
+checks bind the selected passive timeout policy and reject mutation/attachment,
+wrong donor/locality/Reply topology, stale connection/session authority,
+physical input, response debt, quarantine, and recovery. Existing CallArm and
+per-Call one-resume/terminal-fault checks remain authoritative. Host predicates
+prove admission contracts only; exact Pi scripts and uncached medium/high
+`rest_perf_harness.py` workloads must establish liveness, bounded END, actual
+performance and fault-free completion. Compare existing dispatch/stage and
+MCS counters with the baseline; no pacing or numeric gate change is allowed.
+The same candidate needs a separate WiFi control and a repeated GENET boot;
+raw PING latency remains an independent acceptance measure. QEMU root-MCS
+validation protects the shared rejection and recovery path.
+
 The exact release-Pi root-task ELF must also be disassembled after the clean
 image build and prove that the selected combined Yield/capture assembly block
 executes its `svc` immediately before the `CNTVCT_EL0` read, with no intervening
