@@ -122,6 +122,7 @@ def test_raw_session_requires_terminal_and_includes_session_overhead(monkeypatch
     assert report["offered_load"] == {
         "mode": "unpaced", "requested_rate_per_s": None,
         "minimum_start_interval_ns": None, "pacing_policy": "none", "maximum_in_flight": 1,
+        "maximum_host_sleep_ns": None,
     }
     if success:
         assert report["elapsed_s"] == 0.01
@@ -175,6 +176,19 @@ def test_raw_pacing_rechecks_short_sleep_and_retains_oversleep():
     assert len(sleeps) == 2
 
 
+def test_raw_pacing_bounds_each_sleep_under_host_timer_coalescing():
+    now = [0]
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += round(seconds * 1.5e9)
+
+    actual = rest_perf.raw_wait_for_start(0, 5_000_000, lambda: now[0], sleep)
+    assert sleeps == [0.001, 0.001, 0.001, 0.0005]
+    assert actual == 5_250_000
+
+
 def test_raw_controlled_session_keeps_slow_samples_and_has_no_catch_up(monkeypatch, tmp_path):
     now = [0]
     sleeps = []
@@ -215,7 +229,7 @@ def test_raw_controlled_session_keeps_slow_samples_and_has_no_catch_up(monkeypat
     assert rest_perf.run_raw(args) == 0
     report = json.loads((tmp_path / "raw.raw-summary.json").read_text())
     assert starts == report["request_start_offsets_ns"] == [2_000_000, 12_000_000, 37_000_000]
-    assert sleeps == [0.008]
+    assert sleeps == [0.001] * 8
     assert report["samples_ms"] == [2, 25, 2]
     assert report["latency_ms"]["p95"] == 25
     assert report["elapsed_s"] == 0.039
@@ -223,6 +237,7 @@ def test_raw_controlled_session_keeps_slow_samples_and_has_no_catch_up(monkeypat
     assert report["offered_load"] == {
         "mode": "controlled", "requested_rate_per_s": 100,
         "minimum_start_interval_ns": 10_000_000,
+        "maximum_host_sleep_ns": 1_000_000,
         "pacing_policy": "actual-start-spacing-no-catch-up", "maximum_in_flight": 1,
     }
 

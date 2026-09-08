@@ -10001,7 +10001,9 @@ def raw_wait_for_start(
     if previous_start_ns is not None:
         deadline = previous_start_ns + interval_ns
         while now < deadline:
-            sleep((deadline - now) / 1e9)
+            # Bound each blocking wait so host timer coalescing cannot stretch
+            # one long sleep across most of the requested interarrival period.
+            sleep(min((deadline - now) / 1e9, 0.001))
             now = clock_ns()
     return now
 
@@ -10023,6 +10025,7 @@ def run_raw(args: argparse.Namespace) -> int:
             "mode": "controlled" if interval_ns is not None else "unpaced",
             "requested_rate_per_s": request_rate,
             "minimum_start_interval_ns": interval_ns,
+            "maximum_host_sleep_ns": 1_000_000 if interval_ns is not None else None,
             "pacing_policy": "actual-start-spacing-no-catch-up" if interval_ns is not None else "none",
             "maximum_in_flight": 1,
         },

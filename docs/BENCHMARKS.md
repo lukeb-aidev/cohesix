@@ -33,9 +33,13 @@ closed-loop rate ceiling, not an open-loop arrival generator: require the
 measured throughput to meet the operating-load floor as well as the latency
 limit. PING latency excludes deliberate host waiting; throughput includes it
 and all connection overhead. Every sample, including slow responses, remains.
+Each blocking host sleep is at most 1 ms before the deadline is rechecked,
+limiting the effect of timer coalescing without spinning or issuing early
+requests. Host delays can still reduce the achieved rate and must be reported.
 
 The additive `offered_load` report object records mode, requested rate,
-minimum start interval, pacing policy and maximum outstanding count.
+minimum start interval, maximum host sleep, pacing policy and maximum
+outstanding count.
 `request_start_offsets_ns` records each attempted PING start relative to the
 session timer. Missing load metadata in older v1 reports means legacy unpaced
 operation. Compare controlled-load results only at the same recorded rate,
