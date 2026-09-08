@@ -2669,6 +2669,8 @@ impl GenetDirectMcsWindow {
 
 #[derive(Debug, Eq, PartialEq)]
 struct GenetRuntimeState {
+    queue_timing: console_network_abi::GenetQueueTiming,
+    last_wait: console_network_abi::GenetWaitObservation,
     initialized: bool,
     irq_badge: u32,
     irq_handler_slot: u32,
@@ -2763,6 +2765,8 @@ impl GenetRuntimeState {
             direct_genet_mcs_window: GenetDirectMcsWindow::empty(),
             direct_genet_slice: GenetSliceReceipt::empty(),
             direct_genet_max_slice: GenetSliceReceipt::empty(),
+            queue_timing: console_network_abi::GenetQueueTiming::EMPTY,
+            last_wait: console_network_abi::GenetWaitObservation::EMPTY,
             direct_genet_pending_rx: None,
             direct_genet_pending_tx: None,
             direct_genet_cutover_phase: GenetDirectCutoverPhase::Legacy,
@@ -2828,6 +2832,8 @@ impl GenetRuntimeState {
         self.direct_genet_mcs_window = GenetDirectMcsWindow::empty();
         self.direct_genet_slice = GenetSliceReceipt::empty();
         self.direct_genet_max_slice = GenetSliceReceipt::empty();
+        self.queue_timing = console_network_abi::GenetQueueTiming::EMPTY;
+        self.last_wait = console_network_abi::GenetWaitObservation::EMPTY;
         self.direct_genet_pending_rx = None;
         self.direct_genet_pending_tx = None;
         self.direct_genet_cutover_phase = GenetDirectCutoverPhase::Legacy;
@@ -13689,13 +13695,14 @@ fn runtime_blocking_wait(
         RuntimeBlockingWaitTarget::CommandOrNotification => 1,
         RuntimeBlockingWaitTarget::LocalNotification => 2,
     });
+    let entered = genet_observe_wait_enter();
     // SAFETY: Root installs the command endpoint in fixed child slot 2 and
     // HAL installs the generated local notification in fixed child slot 3,
     // binding that same notification to this TCB. The typed target admits
     // only those two capabilities: Recv preserves the combined endpoint plus
     // bound-notification intake, while Wait observes only slot 3 and cannot
     // consume or replace a retained endpoint reply capability.
-    unsafe {
+    let tag = unsafe {
         match target {
             RuntimeBlockingWaitTarget::CommandOrNotification => {
                 #[cfg(not(sel4_config_kernel_mcs))]
@@ -13715,7 +13722,45 @@ fn runtime_blocking_wait(
                 sel4_sys::seL4_Wait(DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, badge)
             }
         }
+    };
+    genet_observe_wait_return(
+        entered,
+        *badge,
+        match target {
+            RuntimeBlockingWaitTarget::CommandOrNotification => 1,
+            RuntimeBlockingWaitTarget::LocalNotification => 2,
+        },
+    );
+    tag
+}
+
+#[cfg(target_os = "none")]
+fn genet_observe_wait_enter() -> u64 {
+    GENET_RUNTIME_STATE.with_ref(|state| {
+        if state.direct_genet_active {
+            genet_slice_boundary_ticks()
+        } else {
+            0
+        }
+    })
+}
+
+#[cfg(target_os = "none")]
+fn genet_observe_wait_return(entered: u64, badge: u64, kind: u64) {
+    if entered == 0 {
+        return;
     }
+    let returned = genet_slice_boundary_ticks();
+    GENET_RUNTIME_STATE.with_mut(|state| {
+        if state.direct_genet_active {
+            state.last_wait = console_network_abi::GenetWaitObservation {
+                entered,
+                returned,
+                badge,
+                kind,
+            };
+        }
+    });
 }
 
 #[cfg(target_os = "none")]
@@ -13779,6 +13824,7 @@ fn runtime_atomic_terminal_receive(
     let mut mr1 = 0;
     let mut mr2 = 0;
     let mut mr3 = 0;
+    let entered = genet_observe_wait_enter();
     // SAFETY: The compiler-generated child CSpace fixes the read-only command
     // endpoint at slot 2, the TCB-bound local notification at slot 3, the sole
     // Reply object at slot 6, and the send-only CYW43 peer notification at slot
@@ -13804,6 +13850,14 @@ fn runtime_atomic_terminal_receive(
             ),
         }
     };
+    genet_observe_wait_return(
+        entered,
+        badge,
+        match operation {
+            RuntimeAtomicTerminalReceive::ReplyRecv { .. } => 3,
+            RuntimeAtomicTerminalReceive::Cyw43PromptAndWait => 2,
+        },
+    );
     RuntimeAtomicTerminalReceiveResult {
         tag,
         badge,
@@ -50663,6 +50717,15 @@ fn genet_direct_publish_rx_slot(
         DIRECT_GENET_SLOT_PAYLOAD_OFFSET,
         &staged[DIRECT_GENET_SLOT_PAYLOAD_OFFSET..DIRECT_GENET_SLOT_PAYLOAD_OFFSET + frame_len],
     )?;
+    // Optional producer-owned timing bytes precede the existing slot commit.
+    // Observational failure never changes the accepted packet operation.
+    let stamp =
+        console_network_abi::genet_queue_stamp(generation, sequence, runtime_timer_counter_ticks());
+    let _ = genet_direct_copy_to_shared(
+        page_index,
+        console_network_abi::GENET_QUEUE_STAMP_OFFSET,
+        &stamp,
+    );
     driver_task_shared_store_barrier();
     genet_direct_write_shared_u64(page_index, DIRECT_GENET_SLOT_COMMIT_OFFSET, sequence)
 }
@@ -50897,6 +50960,24 @@ fn genet_direct_service_tx(
                 return (false, service_units, progressed);
             }
         };
+        let mut queue_stamp = [0u8; 32];
+        let timing_page = DIRECT_GENET_TX_FIRST_PAGE_INDEX
+            + ((record.sequence() - 1) % initial.capacity) as usize;
+        let queue_stamp_valid = genet_direct_copy_from_shared(
+            timing_page,
+            console_network_abi::GENET_QUEUE_STAMP_OFFSET,
+            &mut queue_stamp,
+        )
+        .is_ok();
+        let copied_ticks = runtime_timer_counter_ticks();
+        let signal = genet_read_signal_observation(timing_page);
+        let wake = console_network_abi::GenetWakeContext::from_observation(
+            state.last_wait,
+            &signal,
+            state.direct_genet_generation,
+            record.sequence(),
+            copied_ticks,
+        );
         match genet_runtime_submit_tx_from(state, record.frame().len(), |index| {
             record.frame()[index]
         }) {
@@ -50906,6 +50987,18 @@ fn genet_direct_service_tx(
                 return (false, service_units, progressed);
             }
             GenetTxSubmitResult::Submitted(_) => {
+                if queue_stamp_valid
+                    && state.queue_timing.observe(
+                        &queue_stamp,
+                        state.direct_genet_generation,
+                        record.sequence(),
+                        copied_ticks,
+                        record.frame(),
+                        wake,
+                    )
+                {
+                    let _ = genet_publish_queue_timing(state.queue_timing);
+                }
                 service_units = service_units.saturating_add(1);
                 progressed = true;
                 state.direct_genet_slice.tx_cursor = record.sequence();
@@ -50952,6 +51045,53 @@ fn genet_direct_service_tx(
         }
     }
     (serviced, service_units, progressed)
+}
+
+fn genet_publish_queue_timing(
+    timing: console_network_abi::GenetQueueTiming,
+) -> Result<(), DirectGenetError> {
+    let offset = console_network_abi::GENET_TX_QUEUE_TIMING_OFFSET;
+    let commit = console_network_abi::GENET_QUEUE_TIMING_COMMIT_OFFSET;
+    let encoded = timing.encode();
+    genet_direct_write_shared_u64(0, offset + commit, 0)?;
+    driver_task_shared_store_barrier();
+    genet_direct_copy_to_shared(0, offset, &encoded[..commit])?;
+    driver_task_shared_store_barrier();
+    genet_direct_write_shared_u64(0, offset + commit, timing.publication)
+}
+
+fn genet_read_signal_observation(
+    page: usize,
+) -> [u8; console_network_abi::GENET_QUEUE_SIGNAL_BYTES] {
+    let offset = console_network_abi::GENET_QUEUE_SIGNAL_OFFSET;
+    let commit = offset + console_network_abi::GENET_QUEUE_SIGNAL_COMMIT_OFFSET;
+    let first = genet_direct_read_shared_u64(page, commit);
+    let mut bytes = [0; console_network_abi::GENET_QUEUE_SIGNAL_BYTES];
+    if !first.is_ok_and(|sequence| sequence != 0)
+        || genet_direct_copy_from_shared(page, offset, &mut bytes).is_err()
+        || genet_direct_read_shared_u64(page, commit) != first
+    {
+        bytes.fill(0);
+    }
+    bytes
+}
+
+fn genet_publish_signal_observation(
+    generation: u64,
+    sequence: u64,
+    slot: usize,
+    entered: u64,
+    returned: u64,
+) -> Result<(), DirectGenetError> {
+    let page = DIRECT_GENET_RX_FIRST_PAGE_INDEX + slot;
+    let offset = console_network_abi::GENET_QUEUE_SIGNAL_OFFSET;
+    let commit = console_network_abi::GENET_QUEUE_SIGNAL_COMMIT_OFFSET;
+    let bytes = console_network_abi::genet_queue_signal(generation, sequence, entered, returned);
+    genet_direct_write_shared_u64(page, offset + commit, 0)?;
+    driver_task_shared_store_barrier();
+    genet_direct_copy_to_shared(page, offset, &bytes[..commit])?;
+    driver_task_shared_store_barrier();
+    genet_direct_write_shared_u64(page, offset + commit, sequence)
 }
 
 fn genet_direct_finish_rx_commit(
@@ -51010,6 +51150,13 @@ fn genet_direct_finish_rx_commit(
         if state.direct_genet_slice.began_ticks != 0 {
             state.direct_genet_slice.rx_signal_return_ticks = genet_slice_boundary_ticks();
             state.direct_genet_slice.stages |= DIRECT_GENET_SLICE_STAGE_RX_SIGNAL_RETURN;
+            let _ = genet_publish_signal_observation(
+                state.direct_genet_generation,
+                receipt.sequence,
+                receipt.slot_index,
+                state.direct_genet_slice.rx_signal_enter_ticks,
+                state.direct_genet_slice.rx_signal_return_ticks,
+            );
         }
     }
     let slot = ring_slot(state.rx_cons_index, GENET_ACTIVE_RING_DESCS);

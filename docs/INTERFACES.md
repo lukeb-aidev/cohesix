@@ -373,7 +373,34 @@ magic, version, length, flags, counter relations, 32-bit badge width,
 IRQ-mask relation, cursor-validity rules, and sequence/commit must all
 validate. Older or missing publications remain compatible unavailable
 evidence rather than authorizing an alternate path.
-Bytes `[640,4096)` remain reserved and non-authoritative.
+Optional GENET queue timing v2 uses `[640,896)` for the console-owned RX
+observation and `[896,1152)` for the GENET-owned TX observation. Each 256-byte
+record commits its independent publication sequence last at offset 248. The
+remaining control-page tail stays reserved. Packet pages use `[2048,2080)`
+for a producer stamp before the ordinary packet commit, and `[2112,2160)` for
+an optional completed Signal observation. These are diagnostic sidecars;
+runtime ABI v13, console ABI v6, packet and cursor authority remain unchanged.
+
+Queue v2 records generation, flow identity, sample count/sum and the first
+longest producer-stamp-to-stable-copy interval. The peak additionally retains
+the consumer's last completed blocking receive: entry/return CNTVCT, returned
+badge and kind (1=Recv, 2=Wait, 3=ReplyRecv). Poll does not replace that record.
+A separately committed producer Signal receipt must match the exact live
+generation and packet sequence and have returned before the copy timestamp.
+Missing, raced or invalid observations are unavailable, never zero-duration
+CPU evidence and never a reason to accept, reject, retry or retain a packet.
+Root reads each record between stable commit observations. Receive intervals
+include kernel and descheduling time; the last receive need not have carried
+this packet's wake. A packet/Signal interval lying inside that receive can
+locate a delay at the receive boundary, but cannot alone identify SC refill
+eligibility versus another kernel scheduling cause.
+
+The optional rows are `genet_queue`, `genet_queue_peak`, `genet_queue_wait`
+and `genet_queue_signal`, each with `schema=v2`, direction and the same
+generation/publication pair. Absent directions emit only
+`genet_queue schema=v2 dir=<rx|tx> present=no`. Timestamps and identifiers are
+hexadecimal CNTVCT values; packet length is decimal. Host tools, SDK and
+benchmark workloads retain their existing protocol and report contracts.
 
 Diagnostic v6 retains the 128-byte maximum-slice receipt at record offset 184.
 It retains the first longest valid slice, its counter timestamps after source

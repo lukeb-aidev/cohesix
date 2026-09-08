@@ -23,6 +23,9 @@
 use core::mem::{align_of, size_of};
 use core::sync::atomic::{fence, Ordering};
 
+mod genet_queue_timing;
+pub use genet_queue_timing::*;
+
 /// Runtime-init magic (`CNI1`).
 pub const RUNTIME_INIT_MAGIC: u32 = 0x434e_4931;
 /// Ethernet page magic (`CNP1`).

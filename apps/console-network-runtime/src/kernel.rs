@@ -317,7 +317,20 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         } else {
             turn_scheduler.local_poll_eligible(publication_credit_available, readiness)
         };
+        #[cfg(feature = "direct-genet")]
+        let wait_entered = if direct_genet_link.is_some() && !local_poll_eligible {
+            counter_ticks()
+        } else {
+            0
+        };
         let badge = wait_for_work(descriptor, local_poll_eligible);
+        #[cfg(feature = "direct-genet")]
+        if wait_entered != 0 {
+            let returned = counter_ticks();
+            if let Some(link) = direct_genet_link.as_mut() {
+                link.record_wait(wait_entered, returned, badge);
+            }
+        }
         if badge & !descriptor.root_wake_mask != 0 {
             enter_standard_fault();
         }
@@ -849,7 +862,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
 #[cfg(feature = "direct-genet")]
 fn signal_direct_genet_peer_if_due(link: &mut DirectGenetLink) {
     if let Some(slot) = link.take_peer_wake() {
+        let entered = counter_ticks();
         signal_slot(slot);
+        let returned = counter_ticks();
+        link.record_peer_signal(entered, returned);
     }
 }
 
@@ -1191,17 +1207,22 @@ fn publish_exchange(
 }
 
 fn now_ms(timer_clock_hz: u64) -> u64 {
+    let counter = counter_ticks();
+    let seconds = counter / timer_clock_hz;
+    let remainder = counter % timer_clock_hz;
+    seconds
+        .saturating_mul(1000)
+        .saturating_add(remainder.saturating_mul(1000) / timer_clock_hz)
+}
+
+pub(super) fn counter_ticks() -> u64 {
     let counter: u64;
     // SAFETY: The selected seL4 profile exports CNTVCT_EL0 to userspace and
     // the sealed descriptor carries that generated profile's TIMER_CLOCK_HZ.
     unsafe {
         core::arch::asm!("mrs {value}, cntvct_el0", value = out(reg) counter, options(nostack, nomem));
     }
-    let seconds = counter / timer_clock_hz;
-    let remainder = counter % timer_clock_hz;
-    seconds
-        .saturating_mul(1000)
-        .saturating_add(remainder.saturating_mul(1000) / timer_clock_hz)
+    counter
 }
 
 fn next_sequence(sequence: u64) -> u64 {

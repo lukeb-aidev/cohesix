@@ -110,6 +110,20 @@ fn console_consumes_rx_and_publishes_tx_without_root_packet_pages() {
         Some(DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT),
         "empty-to-nonempty TX causally wakes GENET",
     );
+    link.record_wait(50, 100, 0x100);
+    link.record_peer_signal(110, 115);
+    let words: [u64; 6] = [0x0030_0001_434e_4753, GENERATION, 1, 110, 115, 1];
+    for (index, word) in words.into_iter().enumerate() {
+        assert_eq!(
+            &fixture.tx[0].0[2112 + index * 8..2120 + index * 8],
+            &word.to_le_bytes(),
+        );
+    }
+    assert_eq!(
+        link.take_peer_wake(),
+        None,
+        "timing cannot create another wake"
+    );
     let tx =
         DirectGenetControlPage::snapshot(&fixture.control.0, GENERATION, DirectGenetDirection::Tx)
             .expect("TX cursor remains live");

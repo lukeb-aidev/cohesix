@@ -10496,6 +10496,23 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET exact-packet wake/receive discriminator — under
+    `m26e-qemu-shared-control-path-performance`, restoring
+    `m26e-console-network-service-isolation`, reuse the bounded queue timing
+    probe and extend its optional v2 peak with the exact producer's completed
+    Signal and consumer's last blocking receive entry/return/badge/kind.
+    Prior queue traces place millisecond gaps across both reciprocal rings;
+    refill10 and RX grouping do not close raw p95. Distinguish pre-notification,
+    receive-boundary and post-return delay without copying VirtIO ownership,
+    changing the release kernel, any MCS number, packet authority, deadline,
+    retry or the successful 28d3 root dispatch repair. Missing/raced timing is
+    unavailable and cannot change transport. Fixed wire/bounds and existing
+    ring/driver/format contracts, exact target builds and narrow QEMU proof
+    precede raw-first Pi observation and the unchanged medium/high harness.
+    Review complete host tools, Python SDK, cohsh/scripts, generated manifests
+    and performance/evidence consumers: only documented optional diagnostics
+    change; transport, workloads and report schemas remain unchanged. This is
+    a non-claiming discriminator, not a latency fix or acceptance evidence.
   - GENET bounded hardware RX interrupt grouping experiment retired — exact
     release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
     packets or thirteen hardware timer ticks (106.496 us) on two RAM boots,

@@ -1443,7 +1443,20 @@ The QEMU live canary passed before an obsolete Pi fixture failed; a separate
 corrected canonical 37-guard run passed. Do not relabel the failed convergence
 record as a pass. No same-image WiFi claim is made for the retired candidate.
 
-The subsequent GENET RX interrupt grouping experiment is also retired.
+The next diagnostic-only GENET queue v2 probe pairs each peak packet with its
+exact producer Signal completion and the consumer's last blocking receive.
+Validate fixed record layout, stable sequence/generation, timestamp ordering,
+unavailable observations, peak retention and unchanged packet/wake authority.
+Preserve raw-first canonical harness output and packet tuples before requested
+diagnostics. A producer Signal completed inside a receive interval can locate
+delay at that boundary; it cannot prove which kernel eligibility rule applied.
+Signals that race the consumer or a receive unrelated to the packet remain
+explicitly unavailable/unmatched. No CPU observer syscall or timing-policy
+change is permitted by this probe. Compile exact Pi and protect the shared
+root diagnostic surface with the narrow QEMU canary; compare first raw and
+medium/high workloads against restored 28d3 without changing original gates.
+
+The earlier GENET RX interrupt grouping experiment is also retired.
 Exact release source `f24f2b9a648519fcb3605368c0d4c1f8fad71e71` tested two
 packets or 13 hardware timeout ticks without changing MCS numerics. Its two
 raw-first boots measured 605.707/483.210 requests/s and 5.239/5.995 ms p95;

@@ -883,6 +883,11 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         self.runtime.direct_genet_runtime_diagnostic()
     }
 
+    /// Optional, independently committed RX/TX queue observations.
+    pub fn direct_genet_queue_timing(&self) -> [Option<console_network_abi::GenetQueueTiming>; 2] {
+        self.runtime.direct_genet_queue_timing()
+    }
+
     /// Ethernet address owned by the admitted virtual NIC.
     #[must_use]
     pub const fn hardware_address(&self) -> EthernetAddress {

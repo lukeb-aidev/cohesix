@@ -1227,6 +1227,15 @@ unchanged.
   quarantined as a device failure. Standard faults, explicit device deadlines,
   direct-ring/cursor faults, and pair containment remain terminal. These static
   bounds require fresh Pi consumed-time, latency, and throughput evidence.
+- A diagnostic-only queue/receive observation binds the longest data-bearing
+  TCP packet handoff to its producer's completed Signal and consumer's last
+  completed Recv/Wait/ReplyRecv. It uses optional sequence-last page tails and
+  generated CNTVCT timing; no new syscall, sleep, poll, queue, driver owner,
+  scheduling context or retry is introduced. Missing or raced observations
+  cannot affect packet acceptance. Root reads the consumer-owned peak only
+  during requested diagnostics. `INTERFACES.md` defines the v2 record and
+  unavailable semantics; fresh Pi evidence must distinguish publication,
+  notification, receive return and post-return work before any policy change.
 - In direct mode the owner retains one dense software episode only while exact
   durable work remains. A `Reenter` successor stays
   inside the same notification or final-prewait handler, so generic command
