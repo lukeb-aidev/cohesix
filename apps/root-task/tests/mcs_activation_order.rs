@@ -1822,7 +1822,7 @@ fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
         "budget_us = 3000",
         "period_us = 10000",
         "response_time_us = 3400",
-        "max_refills = 8",
+        "max_refills = 10",
         "priority = 160",
         "wcet_us = 800",
     ] {
