@@ -29,9 +29,9 @@ Use `--raw-requests 1024 --raw-request-rate 180` to measure controlled load
 with a ceiling of 180 request starts/s. The optional rate is finite and within
 1–1,000,000 requests/s. Each start is spaced from the previous actual start;
 a slow response or host sleep does not create catch-up bursts. This is a
-closed-loop rate ceiling, not an open-loop arrival generator: require the
-measured throughput to meet the operating-load floor as well as the latency
-limit. PING latency excludes deliberate host waiting; throughput includes it
+closed-loop rate ceiling, not an open-loop arrival generator: report the
+achieved throughput alongside latency so host undersupply is visible.
+PING latency excludes deliberate host waiting; throughput includes it
 and all connection overhead. Every sample, including slow responses, remains.
 Each blocking host sleep is at most 1 ms before the deadline is rechecked,
 limiting the effect of timer coalescing without spinning or issuing early
@@ -49,6 +49,15 @@ admission latency. The existing uncached medium/high REST workloads measure
 concurrent host submission and full-batch completion separately. A controlled
 latency pass cannot excuse a capacity regression, missing terminal, retry,
 reconnect, stale/cached read or loss of bounded operator liveness.
+
+The current Pi 4 GENET acceptance profile uses unpaced 1,024-request raw runs:
+at least 600 complete-session requests/s and at most 5 ms PING p95 on each of
+two boots of the same release image. Controlled 180/s latency is diagnostic;
+the former 1.845-ms limit is superseded. Run raw measurements before active
+diagnostics and retain all samples, including first-connection and maximum
+latency observations. This is a bounded control-plane performance target,
+not a general network-stack ranking. The full acceptance contract and
+unchanged WiFi requirements are owned by [TEST_PLAN.md](TEST_PLAN.md).
 
 Cohesix benchmarks measure a bounded control plane, not an unconstrained
 throughput service. A valid result preserves the same tickets, namespace

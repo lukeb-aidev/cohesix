@@ -1659,19 +1659,32 @@ and run the shared root-MCS QEMU canary before the next unchanged dual-mode
 matrix. That earlier ad-hoc paced-PING discriminator remains diagnostic;
 it cannot be retroactively promoted or replace the continuous raw results.
 
-The current GENET operating-load contract explicitly separates controlled
-latency from saturation. Use the canonical harness's recorded
-`--mode raw --raw-requests 1024 --raw-request-rate 180` workload and require
-both measured complete-session throughput >=162.242 requests/s and PING p95
-<=1.845 ms. Preserve every sample and the actual start intervals; a host that
-undersupplies the required rate has not passed, even when latency is low.
-Report a separate unpaced 1,024-request run's throughput and p95, and retain
-the unchanged uncached medium/high REST batches, first-connection behavior,
-cohsh functionality and operator liveness. Repeat controlled load on two
-boots of the same exact image. Follow [BENCHMARKS.md](BENCHMARKS.md) for
-closed-loop pacing, host-wait accounting and report metadata. This workload
-definition does not relax the numerical operating-load gates, reclassify old
-failures, change WiFi gates, or waive staged exact-image acceptance evidence.
+The current GENET performance contract, revised with operator authorization
+on 2026-09-09, requires both complete-session throughput >=600 requests/s and
+PING p95 <=5 ms over the canonical harness's unpaced
+`--mode raw --raw-requests 1024` workload. Omit `--raw-request-rate` for this
+gate. The workload retains one outstanding PING and measures sustained
+request capacity; it does not claim concurrent target command execution or
+Ethernet line rate. Retain every sample, maximum latency, first-connection
+behavior, exact terminals and QUIT/EOF. Collect raw performance before active
+diagnostics, and repeat on two boots of the same exact release image.
+
+Controlled load at `--raw-request-rate 180` remains a separately reported
+diagnostic, including achieved throughput and actual request starts. The
+former 1.845-ms controlled-load limit is no longer an acceptance requirement.
+Historical attempts retain their original workload and verdict; evaluating
+retained measurements against this revised contract requires a separate,
+dated assessment and cannot upgrade their target proof class. Preserve the
+unchanged uncached medium/high REST workloads, cohsh scripts, zero failed
+requests, no measured retry/reconnect/cache substitution, and bounded operator
+liveness. A reproduced material defect still requires repair; meeting the
+aggregate rate and p95 does not excuse protocol failure or unbounded stalls.
+
+WiFi retains >=25.863 requests/s, p95 <=67.581 ms, and complete wall boot to
+`status=ready` <=42 seconds, with its independent repeatability requirement.
+Neither revised GENET targets nor RAM-transfer timing waives full boot-time,
+exact-image, QEMU, or staged acceptance evidence. Follow
+[BENCHMARKS.md](BENCHMARKS.md) for sample accounting and report metadata.
 
 Pi RX batch publication regression evidence must distinguish pending from
 rejected queue snapshots. Deterministic tests cover the retained W00

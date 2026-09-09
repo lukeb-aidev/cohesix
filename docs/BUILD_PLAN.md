@@ -10496,6 +10496,33 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
 Changes:
+  - GENET acceptance and release-preparation decision, 2026-09-09 — the
+    operator explicitly authorizes replacing the 1.845-ms latency requirement
+    with the measured sustained performance envelope: unpaced 1,024-request
+    canonical raw TCP runs must achieve >=600 requests/s and <=5-ms p95 on
+    two exact-image release boots. Controlled 180/s latency is diagnostic.
+    Preserve the successful passive-read repair, complete runtime ABI v13,
+    causal continuation, existing MCS reservations, ownership and liveness.
+    Protected release runs measured 627.000/627.579 requests/s with
+    4.779/4.818-ms p95; main `11f61938c` GENET G00/G01 measured
+    620.448/673.663 requests/s with 4.748/4.085-ms p95. These support the
+    revised numerical target without another speculative runtime change.
+    Preserve G00's earlier controlled-load failure (4.015-ms p95) and later
+    0.732-ms repeat; active diagnostics preceded that original measurement.
+    Packet/queue evidence identifies bounded initial root/display interference
+    without proving every delay is necessary or all defects are eliminated.
+    No samples or historical verdicts are removed. Further optimization
+    requires a reproduced material defect, not failure of the retired limit.
+    Medium/high REST, cohsh, zero-failure and bounded-liveness checks remain
+    required; the earlier 25/50-ms batch proposal remains a reference rather
+    than a newly imposed gate. WiFi throughput/latency and full <=42-second
+    boot requirements remain unchanged. Freeze a clean-main release build
+    using the default release `seL4/build_UBOOT` kernel. Review the complete
+    host-tool suite, Python SDK and benchmark consumers: this acceptance-only
+    change requires no CLI, schema, generated output or runtime modification.
+    Existing exact-image RAM results and retained release-QEMU evidence remain
+    distinct from the final staged image's normal SD boot qualification.
+    Scope remains this task restoring `m26e-console-network-service-isolation`.
   - Explicit controlled-load GENET measurement — preserve the protected
     release image and successful passive-read repair while evaluating the
     user-selected latency contract at controlled target load and reporting
@@ -10520,10 +10547,11 @@ Changes:
     host-undersupplied run remains failed against the throughput floor;
     bounding each blocking host sleep to 1 ms addressed timer overshoot
     without changing target policy, sending early, spinning or hiding samples.
-    Recommend a separate sustained floor of 600 requests/s with <=5-ms p95
-    and preserve <=25/50-ms medium16/high32 mean batch targets from the
-    protected two-boot REST evidence. These new capacity/REST values are a
-    proposal, not retroactive acceptance; retain first-connection tails,
+    At that stage, recommend a separate sustained floor of 600 requests/s
+    with <=5-ms p95 and <=25/50-ms medium16/high32 mean batch references from
+    the protected two-boot REST evidence. The subsequent acceptance decision
+    above adopts the capacity target and supersedes the controlled-load gate;
+    it does not retroactively rewrite these results. Retain first-connection tails,
     maximum latency and zero-failure/liveness requirements. Further runtime
     changes require a reproduced material defect in the defined workload.
     RAM transfer evidence is not complete runtime BUILD or cold-SD proof;
