@@ -13205,13 +13205,12 @@ mod tests {
         assert!(snapshot
             .windows(b"WiFi stabilizing; readiness retracted".len())
             .any(|window| window == b"WiFi stabilizing; readiness retracted"));
-        for stale in [b"WiFi Gate 8 stable".as_slice()] {
-            assert!(
-                !snapshot.windows(stale.len()).any(|window| window == stale),
-                "stale readiness bytes survived redraw: {:?}",
-                core::str::from_utf8(stale).unwrap_or("non-utf8"),
-            );
-        }
+        let stale = b"WiFi Gate 8 stable";
+        assert!(
+            !snapshot.windows(stale.len()).any(|window| window == stale),
+            "stale readiness bytes survived redraw: {:?}",
+            core::str::from_utf8(stale).unwrap_or("non-utf8"),
+        );
         assert!(snapshot
             .windows(b"Cohesix console ready".len())
             .any(|window| window == b"Cohesix console ready"));

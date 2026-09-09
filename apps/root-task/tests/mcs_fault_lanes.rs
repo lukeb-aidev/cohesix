@@ -321,7 +321,7 @@ fn generated_console_and_ninedoor_faults_select_exact_service_units() {
     assert_eq!(ninedoor.execution, generated::TemporalExecution::Passive);
     assert_eq!(
         ninedoor.timeout_policy,
-        generated::TimeoutPolicy::ReturnError
+        generated::TimeoutPolicy::ResumeOnceReturnError
     );
     assert_eq!(console.kind, generated::TemporalTaskKind::Service);
     assert_eq!(console.execution, generated::TemporalExecution::Active);

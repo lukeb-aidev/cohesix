@@ -137,11 +137,15 @@ def test_release_setup_is_fail_closed_and_uses_runtime_package_names() -> None:
     assert 'require_file "${ROOT_DIR}/scripts/setup_environment.sh"' in release_bundle
 
 
-def test_quickstart_projects_one_command_for_each_supported_host() -> None:
-    for path in (REPO_ROOT / "README.md", REPO_ROOT / "docs" / "QUICKSTART.md"):
-        document = _read(path)
-        assert "./toolchain/setup_macos_arm64.sh" in document
-        assert "./toolchain/setup_linux_arm64.sh" in document
+def test_readme_projects_source_setup_and_quickstart_projects_release_setup() -> None:
+    readme = _read(REPO_ROOT / "README.md")
+    assert "./toolchain/setup_macos_arm64.sh" in readme
+    assert "./toolchain/setup_linux_arm64.sh" in readme
+    quickstart = _read(REPO_ROOT / "docs" / "QUICKSTART.md")
+    assert "./scripts/setup_environment.sh" in quickstart
+    assert "./scripts/setup_environment.sh --check" in quickstart
+    assert "../README.md#build-the-current-source-tree" in quickstart
+    for document in (readme, quickstart):
         assert "source .venv/bin/activate" in document
         assert "host-tool" in document
         assert "diagnostic QEMU" in document

@@ -8547,6 +8547,9 @@ where
     retired_console_cache_snapshot: Option<crate::hal::cache::CacheLogSnapshot>,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
+    // Retain the attachment class so containment never inspects a failed adapter.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    network_virtio_attached: bool,
     #[cfg(feature = "net-console")]
     net_unavailable_detail: Option<HeaplessString<192>>,
     #[cfg(feature = "net-console")]
@@ -9283,6 +9286,8 @@ where
             retired_console_cache_snapshot: None,
             #[cfg(feature = "net-console")]
             net: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            network_virtio_attached: false,
             #[cfg(feature = "net-console")]
             net_unavailable_detail: None,
             #[cfg(feature = "net-console")]
@@ -9554,6 +9559,11 @@ where
     #[cfg(feature = "net-console")]
     pub fn attach_initial_network(&mut self, net: &'a mut dyn NetPoller) {
         self.audit.info("event-pump: init network");
+        #[cfg(feature = "kernel")]
+        {
+            self.network_virtio_attached = net.driver_task_contract()
+                == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT;
+        }
         self.net = Some(net);
         #[cfg(feature = "kernel")]
         {
@@ -9576,6 +9586,11 @@ where
             return false;
         }
         self.audit.info("event-pump: attach deferred network");
+        #[cfg(feature = "kernel")]
+        {
+            self.network_virtio_attached = net.driver_task_contract()
+                == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT;
+        }
         self.net = Some(net);
         self.net_unavailable_detail = None;
         self.network_service_quarantined = false;
@@ -11922,10 +11937,7 @@ where
     fn isolated_virtio_compact_path_attached(&self) -> bool {
         !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && !crate::serial::serial_linked_runtime_transport_active()
-            && self.net.as_ref().is_some_and(|net| {
-                net.driver_task_contract()
-                    == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
-            })
+            && self.network_virtio_attached
     }
 
     /// Snapshot only retained work visible without issuing an IPC or NIC
@@ -12173,9 +12185,10 @@ where
             return;
         }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        let cyw43_outer_turn_required = !self.net.as_ref().is_some_and(|net| {
-            net.driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
-        });
+        let cyw43_outer_turn_required = self.network_service_quarantined
+            || !self.net.as_ref().is_some_and(|net| {
+                net.driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+            });
         #[cfg(all(feature = "kernel", not(feature = "net-console")))]
         let cyw43_outer_turn_required = true;
         #[cfg(feature = "kernel")]
@@ -12196,9 +12209,7 @@ where
             return;
         }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        let ordinary_virtio_contract_attached = self.net.as_ref().is_some_and(|net| {
-            net.driver_task_contract() == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
-        });
+        let ordinary_virtio_contract_attached = self.network_virtio_attached;
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         let split_ordinary_virtio_turn = ordinary_virtio_contract_attached;
         #[cfg(not(all(feature = "kernel", feature = "net-console")))]
@@ -13926,7 +13937,8 @@ where
     /// separately qualified direct-VirtIO selector.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn isolated_direct_genet_response_lane_attached(&self) -> bool {
-        crate::serial::serial_linked_runtime_transport_active()
+        !self.network_service_quarantined
+            && crate::serial::serial_linked_runtime_transport_active()
             && self.net.as_ref().is_some_and(|net| {
                 direct_genet_response_identity_matches(DirectGenetResponseIdentityEvidence {
                     active_connection_id: net.active_console_conn_id(),
@@ -38818,6 +38830,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "net-console")]
     #[test]
     fn direct_genet_slice_netstats_are_exact_at_legal_maxima() {
         let receipt = console_network_abi::DirectGenetRuntimeSliceReceipt {
@@ -44753,7 +44766,7 @@ mod tests {
         containment_diagnostic_pending_reads: core::cell::Cell<usize>,
         containment_diagnostic_line_reads: core::cell::Cell<usize>,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
-        driver_contract_reads: core::cell::Cell<usize>,
+        driver_contract_reads: std::rc::Rc<core::cell::Cell<usize>>,
         response_identity_reads: core::cell::Cell<usize>,
         response_lane_reads: core::cell::Cell<usize>,
         poll_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
@@ -44821,7 +44834,7 @@ mod tests {
                 containment_diagnostic_pending_reads: core::cell::Cell::new(0),
                 containment_diagnostic_line_reads: core::cell::Cell::new(0),
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
-                driver_contract_reads: core::cell::Cell::new(0),
+                driver_contract_reads: std::rc::Rc::new(core::cell::Cell::new(0)),
                 response_identity_reads: core::cell::Cell::new(0),
                 response_lane_reads: core::cell::Cell::new(0),
                 poll_observer: None,
@@ -45532,7 +45545,15 @@ mod tests {
         }
 
         let (netstats, netstats_terminal) = run(Command::NetStats);
-        assert_eq!(netstats.len(), 16);
+        // Pi includes fourteen additional bounded session/idle diagnostics.
+        assert_eq!(
+            netstats.len(),
+            if cfg!(feature = "release-pi4") {
+                30
+            } else {
+                16
+            }
+        );
         assert_eq!(netstats_terminal, ["OK NETSTATS"]);
         assert_eq!(netstats.last().map(String::as_str), Some("OK NETSTATS"));
         assert!(!netstats.iter().any(|line| line == "END"));
@@ -46453,6 +46474,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn quarantined_empty_virtio_operator_returns_before_runtime_tail() {
         let serial =
@@ -46543,6 +46566,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_rotates_outer_phases_with_one_refill_sized_unit() {
         assert_eq!(
@@ -46729,6 +46754,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_tail_drain_backpressure_admits_only_operator_until_clear() {
         let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
@@ -46807,6 +46834,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_prompt_tail_queue_owns_one_predispatch_turn() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -46875,6 +46904,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_prompt_tail_backpressure_frees_one_record_before_retry() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47005,6 +47036,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_runtime_compact_prelude_ticks_and_reconciles_without_network_poll() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47213,6 +47246,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_operator_serial_backlog_uses_one_shared_bounded_cursor() {
         const EXPECTED_ROOT_CONTROL_SERIAL_BYTES: usize = 64;
@@ -47303,6 +47338,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_operator_retains_rx_for_later_serial_dispatch() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47376,6 +47413,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_output_record_admission_preserves_fifo_and_response_barrier() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47466,6 +47505,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_output_record_admission_retains_long_serial_tail() {
         const EXPECTED_ROOT_CONTROL_SERIAL_BYTES: usize = 64;
@@ -47795,6 +47836,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn quarantined_virtio_still_suppresses_pi_only_raw_idle_trace() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -50810,7 +50853,7 @@ mod tests {
             assert_eq!(
                 pump.metrics()
                     .net_direct_genet_cross_core_signal_only_admissions,
-                1
+                0
             );
             assert_eq!(pump.metrics().net_direct_genet_active_tail_admitted, 2);
             assert_eq!(pump.metrics().net_direct_genet_active_tail_closed, 1);
@@ -50862,7 +50905,7 @@ mod tests {
         #[cfg(feature = "kernel")]
         assert!(
             rendered.contains(
-                "netstats: isolated_hot_tail opened=1 signal_only_admit=1 admitted=2 closed=1 max_wall_us=8"
+                "netstats: isolated_hot_tail opened=1 signal_only_admit=0 admitted=2 closed=1 max_wall_us=8"
             ),
             "{rendered}"
         );
@@ -58310,6 +58353,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn pi_root_control_idle_fence_rejects_every_runnable_level() {
         let idle = PiRootControlIdleFenceEvidence {
@@ -63628,6 +63672,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn direct_genet_fused_drain_fails_closed_without_exact_generated_pi_topology() {
         struct LinkedRuntimeTestReset;
@@ -63970,6 +64016,8 @@ mod tests {
                 .with_network(&mut genet)
                 .with_local_seat(&mut local_seat);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            // Exercise the ordinary response lane without a fused continuation.
+            pump.direct_genet_continuation_mode = None;
 
             assert!(
                 pump.poll_root_control_quantum_for_state(true, true),
@@ -65476,7 +65524,14 @@ mod tests {
                 !explicit_yield,
                 "the selected cross-core topology must retain the exact completed rotor",
             );
-            assert_eq!(direct_genet_continuation_mode_from_generated(), None);
+            assert_eq!(
+                direct_genet_continuation_mode_from_generated(),
+                if cfg!(feature = "driver-tests-pi4") {
+                    Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
+                } else {
+                    None
+                },
+            );
             let continuation = pump
                 .take_pi_root_control_productive_continuation_identity()
                 .expect("the exact selected-profile drain must publish one retained identity");
@@ -69385,6 +69440,7 @@ mod tests {
         });
         local_seat.mark_root_console_ready();
         let mut transcript = Vec::new();
+        let contract_reads = net.driver_contract_reads.clone();
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut net)
@@ -69404,6 +69460,7 @@ mod tests {
             pump.pending_stream = Some(pending);
             assert_eq!(pump.stream_output_source, None);
             assert_eq!(pump.stream_net_conn_id, None);
+            contract_reads.set(0); // Attachment was healthy; the poison boundary starts here.
             pump.quarantine_network_service_after_cyw43_terminal_failure();
             assert!(
                 pump.pending_stream.is_none(),
@@ -69513,6 +69570,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.profile_backend = "bcmgenet-v5";
         net.status.backend = "bcmgenet-v5";
         net.status.active_driver = "cyw43";
@@ -70422,6 +70480,8 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn qemu_manifest_hides_usb_wifi_debug_surface() {
         let driver = LoopbackSerial::<4096>::new();
@@ -71363,6 +71423,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.address_source = "wifi-host-eapol-pending";
@@ -71584,6 +71645,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.interface_policy = "wifi";
@@ -71646,6 +71708,7 @@ mod tests {
         let mut wifi = FakeWifiDebug::new();
         wifi.runtime_required = true;
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.interface_policy = "wifi";

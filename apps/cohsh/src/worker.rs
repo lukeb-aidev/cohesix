@@ -240,7 +240,7 @@ mod tests {
     fn canonical_path_uses_generated_shard_and_gates_alias() {
         assert_eq!(
             canonical_telemetry_path("worker-1").expect("canonical path"),
-            "/shard/04/worker/worker-1/telemetry"
+            "/shard/13/worker/worker-1/telemetry"
         );
         assert_eq!(
             legacy_telemetry_path("worker-1").expect("enabled compatibility alias"),

@@ -453,6 +453,13 @@ source patch are equivalent; they are not a substitute for the macOS lane's
 seL4 profile validation or complete staged release acceptance. A launch record
 must match the selected host profile before load.
 
+To preserve development outputs, run from a fresh disposable Git checkout with
+`--clean-root "$PWD"`. Provision its own `out/sel4` source and `out/toolchain`
+inputs first; do not symlink `out/` or `target/` to the development checkout.
+The explicit root must equal the script's Git checkout root and contain an
+exact clean commit; a detached candidate is supported. The same ownership, no-writer, profile and provenance checks apply. `--check-only` can
+validate the prepared checkout before the clean build.
+
 The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
 SMP+MCS seL4 profile, and performs one canonical
 `scripts/cohesix-build-run.sh --no-run` artifact build. It hash-binds immutable

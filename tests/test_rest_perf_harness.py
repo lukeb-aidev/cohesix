@@ -15,6 +15,7 @@ import pathlib
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -4599,18 +4600,24 @@ def test_m26e_qemu_pressure_rejects_hostile_path_overrides() -> None:
         "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
     ):
         clean_env.pop(name, None)
-    for arguments, expected in cases:
-        completed = subprocess.run(
-            [str(PRESSURE_RUNNER_PATH), "--check-only", *arguments],
-            cwd=REPO_ROOT,
-            env=clean_env,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        assert completed.returncode != 0
-        assert expected in completed.stderr
+    source_parent = REPO_ROOT / "out" / "sel4"
+    source_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="path-admission-", dir=source_parent) as source:
+        for arguments, expected in cases:
+            # These cases must reject before tool execution or seL4 validation;
+            # supply controlled existing paths instead of a provisioned build.
+            completed = subprocess.run(
+                [str(PRESSURE_RUNNER_PATH), "--check-only",
+                 "--qemu", sys.executable, "--sel4-source", source, *arguments],
+                cwd=REPO_ROOT,
+                env=clean_env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            assert completed.returncode != 0
+            assert expected in completed.stderr
 
 
 def test_m26e_qemu_pressure_has_explicit_implementation_surface() -> None:

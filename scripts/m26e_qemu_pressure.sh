@@ -20,6 +20,9 @@ and out/ contents after moving the explicit seL4/toolchain inputs to a temporary
 directory. The Linux replay lane never deletes or rebuilds guest artifacts.
 
 Options:
+  --clean-root DIR       Explicitly authorize cleaning out/ and target/ in this
+                         exact disposable Git checkout instead of the default
+                         development checkout. All ownership checks still apply.
   --run-dir DIR          Fresh evidence directory under out/
                          (default: out/m26e-qemu-pressure)
   --sel4-source DIR      Clean upstream seL4 source input
@@ -245,9 +248,11 @@ RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 JOBS=10
 CHECK_ONLY=0
 REUSE_ARTIFACTS=0
+CLEAN_ROOT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --clean-root) [[ $# -ge 2 ]] || die "--clean-root requires a value"; CLEAN_ROOT=$2; shift 2 ;;
         --run-dir) [[ $# -ge 2 ]] || die "--run-dir requires a value"; RUN_DIR=$2; shift 2 ;;
         --sel4-source) [[ $# -ge 2 ]] || die "--sel4-source requires a value"; SEL4_SOURCE=$2; shift 2 ;;
         --sel4-build) [[ $# -ge 2 ]] || die "--sel4-build requires a value"; SEL4_BUILD=$2; SEL4_BUILD_EXPLICIT=1; shift 2 ;;
@@ -275,9 +280,18 @@ if (( REUSE_ARTIFACTS == 1 )); then
         SEL4_BUILD="out/sel4/profile-v2/qemu-smp-kvm-production"
     fi
 fi
-if (( REUSE_ARTIFACTS == 0 )); then
+if [[ -n "$CLEAN_ROOT" ]]; then
+    (( REUSE_ARTIFACTS == 0 )) || die "--clean-root cannot be used with --reuse-artifacts"
+    [[ "$CLEAN_ROOT" == "$REPO_ROOT" && "$CLEAN_ROOT" != / && "$CLEAN_ROOT" != "$HOME" ]] || \
+        die "--clean-root must equal this exact checkout root: $REPO_ROOT"
+    [[ "$(git rev-parse --show-toplevel)" == "$REPO_ROOT" ]] || \
+        die "--clean-root must be the Git checkout root"
+    git rev-parse --verify 'HEAD^{commit}' >/dev/null || die "--clean-root requires a committed candidate"
+    [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || \
+        die "--clean-root requires an exact clean candidate checkout"
+elif (( REUSE_ARTIFACTS == 0 )); then
     [[ "$REPO_ROOT" == "/Users/lukasbower/GitHub/cohesix" ]] || \
-        die "refusing to clean an unexpected repository root: $REPO_ROOT"
+        die "refusing to clean an unexpected repository root: $REPO_ROOT; select a disposable checkout with --clean-root"
 fi
 OUT_DIR="$(canonical_existing_dir "$REPO_ROOT/out" "$REPO_ROOT")"
 TARGET_DIR="$(canonical_existing_dir "$REPO_ROOT/target" "$REPO_ROOT")"
@@ -320,7 +334,9 @@ else
         die "--gdb must select the compiler contract GDB"
 fi
 [[ ! -e "$RUN_DIR" && ! -L "$RUN_DIR" ]] || die "fresh --run-dir already exists: $RUN_DIR"
-[[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
+if [[ -z "$CLEAN_ROOT" ]]; then
+    [[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
+fi
 if (( REUSE_ARTIFACTS == 1 )); then
     HARNESS_PYTHON="$(canonical_existing_file "$(command -v python3)" "" yes)"
 else

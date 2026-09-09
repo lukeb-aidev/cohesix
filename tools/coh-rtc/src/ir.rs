@@ -5029,19 +5029,14 @@ mod tests {
             .find(|task| task.id == "ninedoor-service")
             .expect("NineDoor temporal task")
             .allowed_donors = vec!["root-fault".to_owned()];
-        manifest
-            .temporal_authority
-            .tasks
-            .iter_mut()
-            .find(|task| task.id == "ninedoor-service")
-            .expect("NineDoor temporal task")
-            .core = 1;
-        manifest.ninedoor_service.core = 1;
+        // Keep the canonical same-core topology so this isolates donor
+        // rejection from cross-core donation and admission checks. The
+        // bounded-resume policy rejects the wrong donor before inventory validation.
         assert!(manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("unapproved donor must fail")
             .to_string()
-            .contains("donation inventory"));
+            .contains("bounded timeout resume requires the sole local NineDoor donation chain"));
 
         let mut manifest = load_manifest(&manifest_path).expect("reload fixture manifest");
         manifest

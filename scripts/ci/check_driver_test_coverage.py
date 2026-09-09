@@ -420,7 +420,7 @@ def main() -> int:
             "runtime_hdmi_usb_readiness_retracts_and_rereleases_ready_banner",
             "runtime_hdmi_usb_readiness_invalidation_retracts_and_rereleases_prompt",
             "runtime_hdmi_backspace_stops_at_prompt_floor",
-            "runtime_hdmi_rapid_arrows_chase_completed_viewport_one_row_per_frame",
+            "runtime_hdmi_rapid_arrows_coalesce_to_symmetric_bounded_scroll_spans",
             "physical_pi_hdmi_prompt_visibility_requires_usb_command_readiness",
             "linked_usb_pending_enumeration_defers_retry_until_prompt",
         ],

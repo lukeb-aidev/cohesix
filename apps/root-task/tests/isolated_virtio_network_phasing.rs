@@ -191,8 +191,8 @@ fn split_runtime_commits_then_uses_only_the_compact_timer_reconcile_prelude() {
     let source = include_str!("../src/event/mod.rs");
     let timer = section(
         source,
+        "fn poll_runtime_timer_prelude_checked(&mut self)",
         "fn poll_runtime_timer_prelude(&mut self)",
-        "fn poll_split_ordinary_virtio_runtime_prelude(&mut self)",
     );
     let snapshot = marker(
         timer,
@@ -209,6 +209,17 @@ fn split_runtime_commits_then_uses_only_the_compact_timer_reconcile_prelude() {
             && update_now < update_metrics
             && update_metrics < publish_timebase
             && publish_timebase < trace_condition
+    );
+    let timer_wrapper = section(
+        source,
+        "fn poll_runtime_timer_prelude(&mut self)",
+        "fn poll_split_ordinary_virtio_runtime_prelude(&mut self)",
+    );
+    assert_eq!(
+        timer_wrapper
+            .matches("self.poll_runtime_timer_prelude_checked();")
+            .count(),
+        1,
     );
 
     let prelude = section(
@@ -597,7 +608,8 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
         "fn driver_task_contract",
     );
 
-    let selector = marker(poll, "select_isolated_network_turn(");
+    let direct_selector = marker(poll, "select_isolated_direct_network_turn_for_contract(");
+    let selector = marker(poll, "select_isolated_copied_network_turn_for_contract(");
     let successor_commit = marker(poll, "self.lower_cursor = selection.successor();");
     let dispatch = marker(poll, "let outcome = match selection.unit() {");
     let deferred_guard = marker(poll, "IsolatedNetworkTurnUnit::DeferredDiagnostic =>");
@@ -616,7 +628,8 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
     let cursor_commit = marker(poll, "self.lower_cursor = lower_cursor;");
 
     assert!(
-        selector < successor_commit
+        direct_selector < selector
+            && selector < successor_commit
             && successor_commit < dispatch
             && dispatch < deferred_guard
             && deferred_guard < deferred
@@ -632,7 +645,16 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
         "isolated Network unit priority drifted",
     );
     let selected_visit = &poll[selector..cursor_commit];
-    assert_eq!(poll.matches("select_isolated_network_turn(").count(), 1);
+    assert_eq!(
+        poll.matches("select_isolated_direct_network_turn_for_contract(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        poll.matches("select_isolated_copied_network_turn_for_contract(")
+            .count(),
+        1
+    );
     assert!(!selected_visit.contains("|unit|"));
     assert!(!selected_visit.contains("execute_isolated_network_turn"));
 
@@ -1607,7 +1629,7 @@ fn successful_publish_defers_one_record_and_never_scrubs_after_notify() {
 }
 
 #[test]
-fn isolated_tx_visit_neither_selects_nor_drains_routine_diagnostic_inline() {
+fn isolated_tx_visit_excludes_inline_diagnostics_and_scopes_response_drain_to_wifi() {
     let source = include_str!("../src/net/isolated_console.rs");
     let transmit = section(source, "fn transmit_pending_egress", "fn stage_one_ingress");
     assert!(transmit.contains(".transmit_isolated_frame(timestamp, frame.as_slice())"));
@@ -1620,7 +1642,28 @@ fn isolated_tx_visit_neither_selects_nor_drains_routine_diagnostic_inline() {
         "impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D>",
     );
     assert!(!response.contains("deferred_tx_diagnostic_pending()"));
-    assert!(!response.contains("poll_deferred_diagnostic_unit"));
+    // The scheduling contract permits one selected deferred diagnostic for
+    // copied CYW43; other response lanes must reject that unit.
+    let diagnostic = section(
+        response,
+        "IsolatedNetworkTurnUnit::DeferredDiagnostic\n                if",
+        "IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect)\n            |",
+    );
+    assert!(diagnostic.contains("D::driver_task_contract()"));
+    assert!(diagnostic.contains("== crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT"));
+    assert_eq!(
+        diagnostic
+            .matches("self.poll_deferred_diagnostic_unit()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        response
+            .matches("self.poll_deferred_diagnostic_unit()")
+            .count(),
+        1
+    );
+    assert!(response.contains("self.fail_closed(\"invalid-response-turn-unit\")"));
 }
 
 #[test]

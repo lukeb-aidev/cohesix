@@ -66,7 +66,10 @@ fn recovery_authority_is_ninedoor_only_and_matches_passive_donation() {
         .expect("NineDoor temporal task");
     assert_eq!(temporal.kind, TemporalTaskKind::Service);
     assert_eq!(temporal.execution, TemporalExecution::Passive);
-    assert_eq!(temporal.timeout_policy, TimeoutPolicy::ReturnError);
+    assert_eq!(
+        temporal.timeout_policy,
+        TimeoutPolicy::ResumeOnceReturnError
+    );
     assert_eq!(temporal.allowed_donors, ["root-control"]);
     assert_eq!(temporal.reply_objects, 1);
     assert_eq!(temporal.max_donation_depth, 1);

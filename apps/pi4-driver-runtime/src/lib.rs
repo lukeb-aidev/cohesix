@@ -13805,6 +13805,52 @@ enum RuntimeAtomicTerminalReceive {
     Cyw43PromptAndWait,
 }
 
+/// Fixed send-only peers admitted by the linked runtime descriptor. No raw
+/// capability slot can be supplied to the atomic notification handoff.
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePromptPeer {
+    RootControl,
+    SdioOwner,
+    Cyw43Client,
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+impl RuntimePromptPeer {
+    const fn slot(self) -> sel4_sys::seL4_CPtr {
+        match self {
+            Self::RootControl => {
+                pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
+                    as sel4_sys::seL4_CPtr
+            }
+            Self::SdioOwner => DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT,
+            Self::Cyw43Client => {
+                DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+fn runtime_prompt_and_wait(
+    peer: RuntimePromptPeer,
+    badge: &mut sel4_sys::seL4_Word,
+) -> sel4_sys::seL4_MessageInfo {
+    // SAFETY: HAL seals the chosen send-only peer at slot 12 (root control),
+    // 8 (SDIO) or 10 (CYW43), and binds the receiving notification in slot 3
+    // to this TCB. Callers publish the exact sequence-last receipt/command
+    // before entering here. NBSendWait transfers no SC, Reply or device
+    // authority; the returned badge remains only a scheduling hint.
+    unsafe {
+        sel4_sys::seL4_NBSendWait(
+            peer.slot(),
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
+            DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
+            badge,
+        )
+    }
+}
+
 #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
 struct RuntimeAtomicTerminalReceiveResult {
     tag: sel4_sys::seL4_MessageInfo,
@@ -13848,12 +13894,9 @@ fn runtime_atomic_terminal_receive(
                 &mut mr3,
                 pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
             ),
-            RuntimeAtomicTerminalReceive::Cyw43PromptAndWait => sel4_sys::seL4_NBSendWait(
-                DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr,
-                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
-                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
-                &mut badge,
-            ),
+            RuntimeAtomicTerminalReceive::Cyw43PromptAndWait => {
+                runtime_prompt_and_wait(RuntimePromptPeer::Cyw43Client, &mut badge)
+            }
         }
     };
     genet_observe_wait_return(
@@ -21716,20 +21759,7 @@ fn wait_runtime_local_notification_after_root_control_handoff() -> Option<u32> {
     #[cfg(sel4_config_kernel_mcs)]
     {
         let mut badge: sel4_sys::seL4_Word = 0;
-        // SAFETY: The admitted MCS init descriptor fixes slot 12 as a send-only
-        // root-control notification and slot 3 as this TCB's bound read-only local
-        // notification. `seL4_NBSendWait` atomically publishes the former and
-        // waits on the latter without transferring an SC, Reply object, or device
-        // authority.
-        let _tag = unsafe {
-            sel4_sys::seL4_NBSendWait(
-                pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
-                    as sel4_sys::seL4_CPtr,
-                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
-                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
-                &mut badge,
-            )
-        };
+        let _tag = runtime_prompt_and_wait(RuntimePromptPeer::RootControl, &mut badge);
         Some(badge as u32)
     }
     #[cfg(not(sel4_config_kernel_mcs))]
@@ -21754,19 +21784,7 @@ fn wait_runtime_local_notification_after_sdio_handoff(
     #[cfg(sel4_config_kernel_mcs)]
     {
         let mut badge: sel4_sys::seL4_Word = 0;
-        // SAFETY: HAL installs slot 8 as a send-only badged cap to the SDIO
-        // owner's notification and binds the read-only local notification in
-        // slot 3 to this CYW43 TCB. NBSendWait invokes the former and waits on
-        // the latter atomically. The durable command and exact causal observer,
-        // not either notification badge, authorize all subsequent work.
-        let _tag = unsafe {
-            sel4_sys::seL4_NBSendWait(
-                doorbell.slot,
-                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
-                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
-                &mut badge,
-            )
-        };
+        let _tag = runtime_prompt_and_wait(RuntimePromptPeer::SdioOwner, &mut badge);
         pair_handoff::producer_returned(doorbell.sequence, Some(badge as u32));
         Some(badge as u32)
     }
@@ -58686,14 +58704,9 @@ fn write_sdio_dma_u64(_addr: usize, _value: u64) {}
 
 #[cfg(target_os = "none")]
 fn write_dma_zero_word(addr: usize) {
-    debug_assert_eq!(addr & (DMA_ZERO_WORD_BYTES - 1), 0);
-    // SAFETY: `zero_dma_range` admits this primitive only for a naturally
-    // aligned eight-byte subrange of descriptor-validated DMA RAM. This is
-    // ordinary HAL-mapped uncached RAM, not MMIO, and volatile stores preserve
-    // the existing explicit-zero-before-publication contract.
-    unsafe {
-        core::ptr::write_volatile(addr as *mut u64, 0);
-    }
+    // zero_dma_range admits exactly the aligned uncached DMA word used by
+    // the shared copy primitive; zero retains the same volatile store width.
+    write_uncached_dma_u64(addr, 0);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -89307,6 +89320,13 @@ mod tests {
     }
 
     #[test]
+    fn atomic_notification_handoff_admits_only_the_three_fixed_peer_slots() {
+        assert_eq!(RuntimePromptPeer::RootControl.slot(), 12);
+        assert_eq!(RuntimePromptPeer::SdioOwner.slot(), 8);
+        assert_eq!(RuntimePromptPeer::Cyw43Client.slot(), 10);
+    }
+
+    #[test]
     fn mcs_terminal_syscall_wiring_preserves_source_order_and_exact_caps() {
         let source = include_str!("lib.rs");
         let atomic_start = source
@@ -89319,11 +89339,23 @@ mod tests {
         let atomic = &source[atomic_start..atomic_end];
         assert_eq!(atomic.matches("unsafe {").count(), 1);
         assert_eq!(atomic.matches("seL4_ReplyRecvWithMRs(").count(), 1);
-        assert_eq!(atomic.matches("seL4_NBSendWait(").count(), 1);
+        assert_eq!(
+            atomic
+                .matches("runtime_prompt_and_wait(RuntimePromptPeer::Cyw43Client")
+                .count(),
+            1
+        );
         assert!(atomic.contains("DRIVER_TASK_CHILD_COMMAND_SLOT"));
         assert!(atomic.contains("DRIVER_RUNTIME_COMMAND_REPLY_SLOT"));
-        assert!(atomic.contains("DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT"));
-        assert!(atomic.contains("DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT"));
+        let prompt_start = source.find("fn runtime_prompt_and_wait(").unwrap();
+        let prompt_end = source[prompt_start..]
+            .find("struct RuntimeAtomicTerminalReceiveResult")
+            .unwrap()
+            + prompt_start;
+        let prompt = &source[prompt_start..prompt_end];
+        assert_eq!(prompt.matches("seL4_NBSendWait(").count(), 1);
+        assert!(prompt.contains("peer.slot()"));
+        assert!(prompt.contains("DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT"));
 
         let retire_start = source
             .find("fn runtime_retire_and_complete_terminal_handoff_with<")
@@ -96384,12 +96416,18 @@ mod tests {
             );
             let parent_descriptor = DriverRuntimeCyw43CommandDescriptor {
                 op,
-                target_addr: carries_payload.then_some(CYW43_RAM_BASE_4345).unwrap_or(0),
-                payload_offset: carries_payload
-                    .then_some(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)
-                    .unwrap_or(0),
-                payload_len: carries_payload.then_some(4).unwrap_or(0),
-                total_len: carries_payload.then_some(4).unwrap_or(0),
+                target_addr: if carries_payload {
+                    CYW43_RAM_BASE_4345
+                } else {
+                    0
+                },
+                payload_offset: if carries_payload {
+                    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+                } else {
+                    0
+                },
+                payload_len: if carries_payload { 4 } else { 0 },
+                total_len: if carries_payload { 4 } else { 0 },
                 ..DriverRuntimeCyw43CommandDescriptor::empty()
             };
             assert!(parent_descriptor.valid(), "cold op {op}");

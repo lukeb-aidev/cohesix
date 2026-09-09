@@ -4451,8 +4451,8 @@ mod tests {
             (
                 vec!["hive-gateway"],
                 WorkerRuntimeProfile::QemuSmpProduction,
-                6,
-                "03",
+                8,
+                "0f",
             ),
             (
                 vec!["hive-gateway", "--worker-runtime-profile", "pi4-production"],

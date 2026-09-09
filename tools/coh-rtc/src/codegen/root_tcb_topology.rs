@@ -603,13 +603,13 @@ mod tests {
             .iter()
             .find(|admission| admission.core == 1)
             .expect("QEMU core-1 temporal admission");
-        assert_eq!(qemu_core_one_admission.capacity_us, 20_000);
-        assert_eq!(qemu_core_one_admission.reserve_us, 2_000);
+        assert_eq!(qemu_core_one_admission.capacity_us, 10_000);
+        assert_eq!(qemu_core_one_admission.reserve_us, 1_000);
         assert_eq!(
             qemu_core_one_admission.capacity_us
                 - qemu_core_one_admission.reserve_us
                 - qemu_supervisor_demand,
-            12_000
+            3_000
         );
 
         let pi4 = pi4_manifest();

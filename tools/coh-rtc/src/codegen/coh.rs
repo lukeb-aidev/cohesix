@@ -967,7 +967,7 @@ mod tests {
             "role: \"worker-lora\", declaration: \"executable\", executable_slots: 128",
             "pub const COH_WORKER_MAXIMUM_LIVE_TASKS: u16 = 256;",
             "pub const COH_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = \"/shard/<label>/worker/<id>/telemetry\";",
-            "pub const COH_WORKER_SHARD_BITS: u8 = 6;",
+            "pub const COH_WORKER_SHARD_BITS: u8 = 8;",
             "pub const COH_WORKER_LEGACY_ALIAS: bool = true;",
             "cohesix-worker-observation/v1",
             "cohesix-worker-integration-evidence/v1",

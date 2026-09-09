@@ -41509,7 +41509,16 @@ mod tests {
             DriverTaskHotPath::SdioHost => {
                 descriptor.flags |= pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
                 descriptor.irq_count = 2;
-                for (index, generated_irq) in policy.irqs[1..=2].iter().copied().enumerate() {
+                // Select the owner lane by identity: Pi also declares GENET
+                // before SDIO, so global IRQ-list positions are not stable.
+                let sdio_irqs: std::vec::Vec<_> = policy
+                    .irqs
+                    .iter()
+                    .copied()
+                    .filter(|irq| irq.hot_path == DriverTaskHotPath::SdioHost.as_str())
+                    .collect();
+                assert_eq!(sdio_irqs.len(), 2);
+                for (index, generated_irq) in sdio_irqs.into_iter().enumerate() {
                     descriptor.irqs[index] = pi4_driver_abi::DriverRuntimeIrqDescriptor {
                         irq: generated_irq.irq,
                         badge: generated_irq.badge,

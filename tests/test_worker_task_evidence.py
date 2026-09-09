@@ -2728,15 +2728,17 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
         ("ninedoor-service", "between-calls-revoke"),
         ("console-network", "during-call-standard"),
     )
-    for relative, root_budget, root_provenance in (
+    for relative, root_budget, root_refills, root_provenance in (
         (
             "configs/root_task.toml",
             9_000,
+            2,
             "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             "configs/root_task_pi4_uboot_aarch64.toml",
             5_500,
+            8,
             "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
         ),
     ):
@@ -2757,7 +2759,7 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
         assert root_matches[0]["admitted"] is True
         assert root_matches[0]["budget_us"] == root_budget
         assert root_matches[0]["period_us"] == 10_000
-        assert root_matches[0]["max_refills"] == 2
+        assert root_matches[0]["max_refills"] == root_refills
         assert root_matches[0]["wcet_provenance"] == root_provenance
         assert len(matches) == 1
         assert matches[0]["execution"] == "active"

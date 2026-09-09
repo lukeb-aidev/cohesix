@@ -1153,7 +1153,7 @@ _Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff
 - `help`
 - `bi`
 - `caps [mcs]`
-- `smp [activity|mcs|dump]`
+- `smp [activity|mcs|poll-time|dump]`
 - `mem`
 - `ping`
 - `test`
