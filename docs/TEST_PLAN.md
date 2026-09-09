@@ -1881,6 +1881,9 @@ For each summary:
   result identity, ordered target teardown/READY, session hash and retained
   Worker-log prefix. Without that input the collector still requires the complete
   legacy marker matrix. Root fencing never claims a child `Stale` completion.
+  After sealing the retirement evidence, the final GPU and LoRA replacements
+  must each complete a fresh confirmed receipt before preflight acceptance;
+  a retired generation's completion cannot qualify its replacement.
   Fault and lifecycle injections independently invalidate old-generation authority.
   Activation/rollback must publish the committed host registry and read the
   matching active-model snapshot through the ordinary bridge channel;

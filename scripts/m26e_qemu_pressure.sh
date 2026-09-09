@@ -2434,6 +2434,15 @@ worker_raw = (boot / "worker.live.log").read_bytes()
     "worker_log_prefix": {"sha256": hashlib.sha256(worker_raw).hexdigest(), "bytes": len(worker_raw)},
     "records": retirements,
 }, indent=2, sort_keys=True) + "\n")
+
+# The retirement proof ends with untouched replacements. After sealing that
+# evidence, exercise those current generations so preflight can prove their
+# own completion instead of borrowing a retired Worker's successful receipt.
+republish()
+submit("gpu.lease.grant", "worker-gpu", {"ttl_s": 60, "priority": 1},
+       gpu_id, "succeeded", "replacement-gpu-confirmed")
+submit("peft.export", "worker-lora", {}, export_job,
+       "succeeded", "replacement-lora-confirmed")
 PY
 }
 
