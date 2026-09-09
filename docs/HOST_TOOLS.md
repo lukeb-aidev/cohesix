@@ -719,6 +719,11 @@ no public interface,
 workload, schema, or threshold changes; exact image and page admission remain
 required.
 
+The operational shard and telemetry TCP fixtures use the current 8-bit shard
+addresses for both QEMU and Pi. Their path checks derive from the selected
+manifests and SHA-256 namespace contract. This fixture correction changes no
+host-tool, SDK, target, or benchmark interface.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic
