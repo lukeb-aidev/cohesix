@@ -84,6 +84,8 @@ Env overrides:
   COHESIX_QEMU_CROSS_HOST_REPLAY (0|1; default: 0)
                         Allow Linux to replay immutable Mac-built guest inputs;
                         valid only with --launch-existing and a rebound record
+  COHESIX_QEMU_CAPTURE_DIR (private capture root; optional for TCP launches)
+  COHESIX_QEMU_TCPDUMP (tcpdump executable supporting -r -; required with capture)
   COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_kvm_production|
                         qemu_smp_diagnostic; validates an explicitly selected
                         build tree against that contract)
@@ -554,6 +556,17 @@ print_tcp_summary() {
     log "TCP smoke: printf \"hi\" | nc -v 127.0.0.1 ${smoke_port}"
 }
 
+run_qemu_executable() {
+    if [[ -n "${COHESIX_QEMU_CAPTURE_DIR:-}" && "$TRANSPORT" == "tcp" ]]; then
+        [[ -n "${COHESIX_QEMU_TCPDUMP:-}" ]] || \
+            fail "COHESIX_QEMU_CAPTURE_DIR requires COHESIX_QEMU_TCPDUMP"
+        exec python3 "$SCRIPT_DIR/lib/qemu_launch_artifacts.py" capture \
+            --root "$COHESIX_QEMU_CAPTURE_DIR" --tcpdump "$COHESIX_QEMU_TCPDUMP" \
+            -- "$QEMU_BIN" "$@"
+    fi
+    exec "$QEMU_BIN" "$@"
+}
+
 run_qemu_attempt() {
     local smoke_port="$1"
     local log_file="$2"
@@ -584,7 +597,7 @@ run_qemu_attempt() {
     mkfifo "$fifo_path"
     tee "$log_file" < "$fifo_path" &
     tee_pid=$!
-    "$QEMU_BIN" "${QEMU_ARGS[@]}" > "$fifo_path" 2>&1 &
+    run_qemu_executable "${QEMU_ARGS[@]}" > "$fifo_path" 2>&1 &
     QEMU_PID=$!
     trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
 
@@ -751,7 +764,7 @@ launch_qemu_artifacts() {
         if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
             QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
         fi
-        exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+        run_qemu_executable "${QEMU_ARGS[@]}"
     fi
 
     if [[ "$TRANSPORT" == "tcp" ]]; then

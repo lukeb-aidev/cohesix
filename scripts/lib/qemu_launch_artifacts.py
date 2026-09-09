@@ -14,10 +14,14 @@ import os
 from pathlib import Path
 import platform
 import re
+import select
+import signal
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
+import time
 from typing import Any
 
 
@@ -597,6 +601,149 @@ def verify_artifact_identity(out_dir: Path) -> Path:
     return record
 
 
+def capture_qemu(command: list[str], root: Path, tcpdump: str) -> int:
+    """Start a private NIC capture before QEMU and retain every byte through exit.
+
+    The caller has already validated the image and launch envelope. This adds
+    only QEMU's observation filter; the same executable and guest inputs run.
+    No host BPF access or TCP probe is needed to start the capture.
+    """
+    if not command or command[0].startswith("-"):
+        raise LaunchArtifactError("capture requires an explicit QEMU command")
+    if any("filter-dump" in argument for argument in command):
+        raise LaunchArtifactError("capture command already contains a packet filter")
+    netdevs = [
+        command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-netdev"
+    ]
+    if sum("id=net0" in value.split(",") for value in netdevs) != 1:
+        raise LaunchArtifactError("capture requires exactly one net0 device")
+    root = root.expanduser().absolute()
+    if any(ord(char) < 0x20 for char in str(root)):
+        raise LaunchArtifactError("capture path contains control characters")
+    root.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix="qemu-", dir=root)).resolve()
+    fifo = directory / "packets.fifo"
+    pcap = directory / "qemu.pcap"
+    decoded = directory / "tcpdump.log"
+    os.mkfifo(fifo, mode=0o600)
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    # Keep the FIFO open until QEMU exits, including its startup before the
+    # guest opens the writer. This also allows complete final-byte drainage.
+    guard_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    guest = None
+    decoder = None
+    interrupted = 0
+    stopping_at: float | None = None
+    previous_handlers = {}
+    errors: list[str] = []
+    total = 0
+
+    def request_stop(signum: int, _frame: Any) -> None:
+        nonlocal interrupted
+        interrupted = signum
+
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        previous_handlers[signum] = signal.signal(signum, request_stop)
+    fifo_argument = str(fifo).replace(",", ",,")
+    captured_command = command + [
+        "-object", f"filter-dump,id=cohesix_capture,netdev=net0,file={fifo_argument}"
+    ]
+    print(
+        f"qemu-capture: tcpdump log={decoded} pcap={pcap}",
+        file=sys.stderr, flush=True,
+    )
+    try:
+        with pcap.open("xb") as wire, decoded.open("xb") as log:
+            decoder = subprocess.Popen(
+                [tcpdump, "-l", "-nn", "-tttt", "-r", "-"],
+                stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
+            )
+            assert decoder.stdin is not None
+            guest = subprocess.Popen(captured_command)
+            while True:
+                if interrupted and guest.poll() is None:
+                    guest.send_signal(interrupted)
+                    interrupted = 0
+                    stopping_at = time.monotonic()
+                if (
+                    decoder.poll() is not None
+                    and guest.poll() is None
+                    and stopping_at is None
+                ):
+                    errors.append("tcpdump exited before QEMU")
+                    guest.terminate()
+                    stopping_at = time.monotonic()
+                if stopping_at is not None and time.monotonic() - stopping_at >= 10:
+                    if guest.poll() is None:
+                        guest.kill()
+                if guest.poll() is not None and guard_fd >= 0:
+                    os.close(guard_fd)
+                    guard_fd = -1
+                readable, _, _ = select.select([read_fd], [], [], 0.1)
+                if not readable:
+                    continue
+                chunk = os.read(read_fd, 65536)
+                if not chunk:
+                    break
+                wire.write(chunk)
+                total += len(chunk)
+                try:
+                    decoder.stdin.write(chunk)
+                    decoder.stdin.flush()
+                except BrokenPipeError:
+                    if stopping_at is None:
+                        errors.append("tcpdump stopped consuming the packet stream")
+                    if guest.poll() is None and stopping_at is None:
+                        guest.terminate()
+                        stopping_at = time.monotonic()
+            try:
+                decoder.stdin.close()
+            except BrokenPipeError:
+                errors.append("tcpdump closed before the final packet bytes")
+            decoder.wait(timeout=10)
+            if decoder.returncode != 0 or total < 24:
+                errors.append("packet stream is missing its header or tcpdump rejected it")
+    finally:
+        if guest is not None and guest.poll() is None:
+            guest.terminate()
+            try:
+                guest.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                guest.kill()
+                guest.wait(timeout=5)
+        if decoder is not None and decoder.poll() is None:
+            decoder.terminate()
+            decoder.wait(timeout=5)
+        if decoder is not None and decoder.stdin is not None and not decoder.stdin.closed:
+            try:
+                decoder.stdin.close()
+            except BrokenPipeError:
+                pass
+        os.close(read_fd)
+        if guard_fd >= 0:
+            os.close(guard_fd)
+        fifo.unlink()
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        result = {
+            "schema": "cohesix-qemu-packet-capture/v1",
+            "surface": "guest-net0", "tcpdump_started_before_qemu": decoder is not None,
+            "command": captured_command, "bytes": total,
+            "pcap_sha256": _sha256(pcap) if pcap.exists() else None,
+            "tcpdump_log_sha256": _sha256(decoded) if decoded.exists() else None,
+            "qemu_exit": guest.returncode if guest is not None else None,
+            "tcpdump_exit": decoder.returncode if decoder is not None else None,
+            "complete": guest is not None and decoder is not None
+                and decoder.returncode == 0 and total >= 24 and not errors,
+            "errors": errors,
+        }
+        (directory / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    if errors:
+        raise LaunchArtifactError("; ".join(dict.fromkeys(errors)))
+    assert guest is not None
+    return guest.returncode if guest.returncode >= 0 else 128 - guest.returncode
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -622,6 +769,10 @@ def _parser() -> argparse.ArgumentParser:
         context.add_argument(
             "--net-backend", choices=("virtio", "rtl8139"), required=True
         )
+    capture = subparsers.add_parser("capture")
+    capture.add_argument("--root", type=Path, required=True)
+    capture.add_argument("--tcpdump", required=True)
+    capture.add_argument("qemu_command", nargs=argparse.REMAINDER)
     identity = subparsers.add_parser("verify-artifacts")
     identity.add_argument("--out-dir", type=Path, required=True)
     return parser
@@ -632,6 +783,11 @@ def main() -> int:
 
     args = _parser().parse_args()
     try:
+        if args.command == "capture":
+            command = args.qemu_command
+            if command[:1] == ["--"]:
+                command = command[1:]
+            return capture_qemu(command, args.root, args.tcpdump)
         if args.command == "verify-artifacts":
             record = verify_artifact_identity(args.out_dir)
         else:

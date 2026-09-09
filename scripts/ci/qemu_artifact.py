@@ -1315,6 +1315,14 @@ def command_launch(args: argparse.Namespace) -> int:
         f"artifact_id={document['artifact_id']}",
         file=sys.stderr,
     )
+    capture_root = os.environ.get("COHESIX_QEMU_CAPTURE_DIR")
+    if capture_root:
+        tcpdump = os.environ.get("COHESIX_QEMU_TCPDUMP")
+        if not tcpdump:
+            raise EvidenceError("COHESIX_QEMU_CAPTURE_DIR requires COHESIX_QEMU_TCPDUMP")
+        helper = Path(__file__).resolve().parents[1] / "lib/qemu_launch_artifacts.py"
+        command = [sys.executable, str(helper), "capture", "--root", capture_root,
+                   "--tcpdump", tcpdump, "--", *command]
     os.execvp(command[0], command)
     raise AssertionError("os.execvp unexpectedly returned")
 

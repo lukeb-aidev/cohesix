@@ -340,3 +340,87 @@ def test_launch_record_rejects_qemu_binary_and_timer_drift(tmp_path: Path) -> No
     document = json.loads(record.read_text(encoding="utf-8"))
     assert document["claim"]["eligible"] is False
     assert "timer differs from the host production envelope" in document["claim"]["reason"]
+
+
+def _capture_program(path: Path, body: str) -> Path:
+    """Create a controlled subprocess fixture with the current Python runtime."""
+    path.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+    path.chmod(0o700)
+    return path
+
+
+def test_capture_preserves_final_bytes_and_starts_decoder_first(tmp_path, monkeypatch):
+    """Capture order and byte preservation are independent of guest scheduling."""
+    import struct
+
+    payload = struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+    payload += struct.pack("<IIII", 1, 2, 4, 4) + b"wire"
+    qemu = _capture_program(tmp_path / "guest", f'''import sys
+from pathlib import Path
+arg = sys.argv[sys.argv.index("-object") + 1]
+fifo = Path(arg.split("file=", 1)[1])
+with fifo.open("wb", buffering=0) as wire:
+    wire.write({payload[:24]!r})
+    wire.write({payload[24:]!r})
+''')
+    decoder = _capture_program(tmp_path / "decoder", f'''import sys
+raw = sys.stdin.buffer.read()
+raise SystemExit(0 if raw == {payload!r} else 4)
+''')
+    calls = []
+    original = launch_artifacts.subprocess.Popen
+
+    def record_launch(command, *args, **kwargs):
+        calls.append(command[0])
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(launch_artifacts.subprocess, "Popen", record_launch)
+    root = tmp_path / "captures"
+    assert launch_artifacts.capture_qemu(
+        [str(qemu), "-netdev", "user,id=net0"], root, str(decoder)
+    ) == 0
+    assert calls == [str(decoder), str(qemu)]
+    directory, = root.iterdir()
+    assert (directory / "qemu.pcap").read_bytes() == payload
+    result = json.loads((directory / "result.json").read_text())
+    assert result["complete"] is True
+    assert result["bytes"] == len(payload)
+    assert not (directory / "packets.fifo").exists()
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+
+def test_capture_decoder_failure_stops_owned_guest(tmp_path):
+    """A failed observer cannot leave a running guest or a passing receipt."""
+    import subprocess
+
+    qemu = _capture_program(tmp_path / "guest", '''import signal, sys
+from pathlib import Path
+fifo = Path(sys.argv[sys.argv.index("-object") + 1].split("file=", 1)[1])
+with fifo.open("wb", buffering=0) as wire:
+    wire.write(b"invalid pcap bytes for decoder")
+    signal.pause()
+''')
+    decoder = _capture_program(tmp_path / "decoder", "raise SystemExit(7)\n")
+    root = tmp_path / "captures"
+    result = subprocess.run(
+        [sys.executable, str(MODULE_PATH), "capture", "--root", str(root),
+         "--tcpdump", str(decoder), "--", str(qemu), "-netdev", "user,id=net0"],
+        capture_output=True, timeout=10,
+    )
+    assert result.returncode != 0
+    directory, = root.iterdir()
+    receipt = json.loads((directory / "result.json").read_text())
+    assert receipt["complete"] is False
+    assert receipt["qemu_exit"] is not None
+    assert receipt["tcpdump_exit"] == 7
+    assert not (directory / "packets.fifo").exists()
+
+
+@pytest.mark.parametrize("arguments", [
+    [], ["qemu"], ["qemu", "-netdev", "user,id=wrong"],
+    ["qemu", "-netdev", "user,id=net0", "-object", "filter-dump,id=old"],
+])
+def test_capture_rejects_ambiguous_observation_surface(tmp_path, arguments):
+    with pytest.raises(launch_artifacts.LaunchArtifactError):
+        launch_artifacts.capture_qemu(arguments, tmp_path / "unused", "tcpdump")
+    assert not (tmp_path / "unused").exists()

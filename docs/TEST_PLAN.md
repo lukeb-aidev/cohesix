@@ -1065,6 +1065,15 @@ the stable required check `ci` directly; there is no aggregate fan-in job.
   configuration. The launcher must agree with the generated GICv3 and
   31,250,000 Hz timer truth of `qemu_smp_kvm_production`.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
+  For automated runs without host BPF privileges, set `COHESIX_QEMU_CAPTURE_DIR`
+  to a private evidence directory and `COHESIX_QEMU_TCPDUMP` to a tcpdump executable
+  that supports pcap input through `-r -`. Both canonical QEMU launchers start
+  tcpdump before QEMU and retain the complete guest `net0` stream, decoded log,
+  launch command and completion record in a fresh directory for each boot.
+  Check every `result.json` has `complete=true`; an early decoder exit or
+  truncated stream fails the launcher. These captures observe guest network
+  traffic; use a host-interface capture when diagnosing host-side REST traffic.
+  Keep the capture root outside a pressure runner's disposable `out/` tree.
 - Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
 - Ensure `/updates` and `/host` are enabled for host tool tests:
   - `cas.enable = true` (and `ui_providers.updates.*` as needed)
