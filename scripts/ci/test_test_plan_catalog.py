@@ -68,6 +68,27 @@ class TestPlanCatalogTests(unittest.TestCase):
                 self.assertGreaterEqual(action["minimum_test_count"], 1)
                 self.assertNotIn("convergence_phase", action)
 
+    def test_console_convergence_reuses_complete_root_library_after_canary(self) -> None:
+        data = catalog.load_catalog(CATALOG_PATH)
+        actions = catalog.convergence_actions(
+            data, target="qemu", focus_id="console-network"
+        )
+        ids = [action["id"] for action in actions]
+        self.assertLess(
+            ids.index("diagnostic.qemu-canary"),
+            ids.index("host.root-task-qemu-features"),
+        )
+        library_commands = [
+            command
+            for action in actions
+            for command in action["command"].split(" && ")
+            if command.startswith("cargo test -p root-task --no-default-features --features driver-tests-qemu ")
+        ]
+        self.assertEqual(
+            library_commands,
+            ["cargo test -p root-task --no-default-features --features driver-tests-qemu --lib -- --test-threads=1 --skip drivers::driver_task_net"],
+        )
+
     def test_exact_duplicate_command_is_rejected(self) -> None:
         data = catalog.load_catalog(CATALOG_PATH)
         modified = copy.deepcopy(data)

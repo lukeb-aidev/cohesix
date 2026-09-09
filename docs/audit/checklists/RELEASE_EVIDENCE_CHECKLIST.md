@@ -4,7 +4,21 @@
 
 # Release Evidence Checklist
 
-## Run Metadata
+## Release candidate 1.0.0-beta (2026-09-10)
+
+- [x] Preserve the exact `2be878d8d` QEMU Stages 01–04 PASS and Stage 05 FAIL logs.
+- [x] Preserve completed native Jetson benchmarks and exact receipt/completion logs.
+- [x] Bind the TLS storage layout check to the staged `a5ef48045` Pi image.
+- [ ] Close `DD-2026-0026` through `DD-2026-0029` with their required evidence and independent review.
+- [ ] Complete all applicable gates on the final frozen source and image set.
+- [ ] Verify physical Pi SD delivery/readback and required fresh boots.
+- [ ] Verify the extracted Mac, native Linux and Pi release bundles.
+- [ ] Record human review of the AI-assisted Rust before merging to main.
+
+Current decision: **FAIL / release blocked**. See [BLOCKERS.md](../BLOCKERS.md).
+The dated snapshots below describe their original runs only.
+
+## Historical Run Metadata
 - Audit window: `2026-02-14T04:38:51Z` (full baseline run)
 - Baseline commit SHA: `22cd5017d060c3439b6f7fc4f70717f329134803`
 - Auditor: `automation-agent`
