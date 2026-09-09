@@ -712,8 +712,10 @@ SDK reviewed above, measured benchmark workloads, schemas, or thresholds.
 The provisioned-target check builds the manifest-selected console transport:
 `direct-virtio` for QEMU, and the canonical Pi build's `direct-genet` with its
 console-network/smoltcp optimization settings. QEMU production transport
-selection is independent of tracing. Compatibility review of the same eight
-host tools, Python SDK, and raw/REST benchmarks found no public interface,
+selection is independent of tracing, including the transitive `dev-virt` and
+`cohesix-dev` Cargo bundles used by the TCP regression runner. Compatibility
+review of the same eight host tools, Python SDK, and raw/REST benchmarks found
+no public interface,
 workload, schema, or threshold changes; exact image and page admission remain
 required.
 

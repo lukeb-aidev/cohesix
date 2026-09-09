@@ -14,6 +14,7 @@ import re
 import struct
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -274,7 +275,7 @@ def test_qemu_build_orders_worker_identity_before_root_and_keeps_archive_separat
     assert "worker-lora" not in rootfs_block
     assert "cohesix/artifacts/cohesix-worker-images.cpio" in script
     assert "cohesix/artifacts/cohesix-worker-image-manifest.json" in script
-    assert "has_root_task_feature release-qemu" in script
+    assert 'has_root_task_feature "release-qemu"' in script
     assert "has_root_task_feature bootstrap-trace" in script
     for feature in (
         "nine-door-runtime/qemu-evidence",
@@ -286,22 +287,35 @@ def test_qemu_build_orders_worker_identity_before_root_and_keeps_archive_separat
         assert feature in script
 
 
-@pytest.mark.parametrize("root_features,expected_features", [
-    ("release-qemu", {"console-network-runtime/direct-virtio"}),
-    ("release-qemu,bootstrap-trace", {
-        "console-network-runtime/direct-virtio",
-        "nine-door-runtime/qemu-evidence",
-        "console-network-runtime/qemu-evidence",
-        "worker-heart/qemu-evidence",
-        "worker-gpu/qemu-evidence",
-        "worker-lora/qemu-evidence",
-    }),
-    ("dev-virt", set()),
+@pytest.mark.parametrize("root_features", [
+    "release-qemu", "release-qemu,bootstrap-trace", "dev-virt", "cohesix-dev",
+    "net-backend-virtio", "kernel",
 ])
 def test_qemu_component_transport_does_not_require_tracing(
-    root_features: str, expected_features: set[str],
+    root_features: str,
 ) -> None:
-    """Production networking and diagnostic evidence have separate selectors."""
+    """Transport follows Cargo; external GDB probes require trace/dev selection."""
+    manifest = tomllib.loads((ROOT / "apps/root-task/Cargo.toml").read_text())
+    feature_map = manifest["features"]
+    selected = set(root_features.split(","))
+    pending = list(selected)
+    while pending:
+        for feature in feature_map.get(pending.pop(), []):
+            if feature not in selected:
+                selected.add(feature)
+                pending.append(feature)
+    expected_features = set()
+    if "net-backend-virtio" in selected:
+        expected_features.add("console-network-runtime/direct-virtio")
+        probe_selectors = {"bootstrap-trace", "dev-virt", "cohesix-dev"}
+        if set(root_features.split(",")) & probe_selectors:
+            expected_features.update({
+                "nine-door-runtime/qemu-evidence",
+                "console-network-runtime/qemu-evidence",
+                "worker-heart/qemu-evidence",
+                "worker-gpu/qemu-evidence",
+                "worker-lora/qemu-evidence",
+            })
     script = (ROOT / "scripts/cohesix-build-run.sh").read_text(encoding="utf-8")
     selector = script.split("has_root_task_feature() {", 1)[1].split(
         "\ndescribe_file()", 1,
@@ -309,10 +323,14 @@ def test_qemu_component_transport_does_not_require_tracing(
     build = script.split("    SEL4_BUILD_ARGS=(build", 1)[1].split(
         "    ROOT_TASK_BUILD_ARGS=(build", 1,
     )[0]
+    transport = script.split('    NET_BACKEND="rtl8139"', 1)[1].split(
+        '    if [[ -n "$ROOT_TASK_FEATURES" ]]', 1,
+    )[0]
     result = subprocess.run(
         ["bash", "-c", "has_root_task_feature() {" + selector + "\n"
          "log() { :; }\nROOT_TASK_FEATURES=$1\nCARGO_TARGET=aarch64-unknown-none\n"
          "PROFILE_ARGS=(); SEL4_COMPONENT_PACKAGES=()\n"
+         'NET_BACKEND="rtl8139"' + transport + "\n"
          "SEL4_BUILD_ARGS=(build" + build + "\n"
          'printf "%s\\n" "${SEL4_BUILD_ARGS[@]}"', "test", root_features],
         text=True, capture_output=True, check=True,

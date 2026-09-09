@@ -1315,9 +1315,13 @@ PY
     for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
         SEL4_BUILD_ARGS+=(-p "$pkg")
     done
-    if has_root_task_feature release-qemu; then
+    if [[ "$NET_BACKEND" == "virtio" ]]; then
         SEL4_BUILD_ARGS+=(--features "console-network-runtime/direct-virtio")
-        if has_root_task_feature bootstrap-trace; then
+        # External child fault probes are opt-in through tracing or a dev
+        # bundle, separate from the root kernel's baseline diagnostics.
+        if has_root_task_feature bootstrap-trace \
+            || has_root_task_feature dev-virt \
+            || has_root_task_feature cohesix-dev; then
             SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
             log "Enabling external QEMU/GDB service and Worker evidence symbols"
         fi
