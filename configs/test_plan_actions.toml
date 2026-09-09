@@ -337,6 +337,20 @@ test_policy = "nonzero"
 minimum_test_count = 1
 
 [[action]]
+id = "host.console-network-direct-genet"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the complete direct-GENET console runtime feature suite, including the Pi ACK and response contracts absent from default workspace tests."
+command = "cargo test -p console-network-runtime --features direct-genet"
+timeout_seconds = 1200
+trigger_paths = ["apps/console-network-runtime/**", "crates/console-network-abi/**", "apps/root-task/src/hal/console_network.rs", "apps/root-task/src/drivers/driver_task_net.rs", "Cargo.lock"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
 id = "host.pi4-runtime-tests"
 stage = 1
 tier = "common-hermetic"
