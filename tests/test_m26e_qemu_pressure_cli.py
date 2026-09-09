@@ -26,6 +26,53 @@ from scripts.lib.host_ticket_result_barrier import TerminalResultBarrier
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_pressure_helpers_preserve_sealed_preflight_agent_state(tmp_path: Path) -> None:
+    """The eight-lane pressure agent cannot reuse the one-lane receipt WAL."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "start_pressure_helpers() {" + source.split(
+        "start_pressure_helpers() {", 1,
+    )[1].split("\nstop_pressure_helpers() {", 1)[0]
+    boot = tmp_path / "boot with spaces"
+    preflight = boot / "host-ticket-agent"
+    preflight.mkdir(parents=True)
+    sentinels = {name: f"sealed preflight {name}\n" for name in (
+        "cursor.json", "execution-journal.json", "agent.lock",
+    )}
+    for name, contents in sentinels.items():
+        (preflight / name).write_text(contents)
+    tools = tmp_path / "host-tools"
+    tools.mkdir()
+    for name in ("gpu-bridge-host", "host-ticket-agent"):
+        executable = tools / name
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            "import json, pathlib, sys\n"
+            "pathlib.Path(__file__).with_suffix('.argv.json').write_text("
+            "json.dumps(sys.argv[1:]))\n"
+        )
+        executable.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + "\n"
+         'stop_pid() { :; }; sleep() { :; }; kill() { :; }\n'
+         'AGENT_PID= GPU_REFRESH_PID= M26E_REST_AUTH_TOKEN=test-token\n'
+         'HOST_TOOLS="$2" RESOLVED_MANIFEST="$3"\n'
+         'start_pressure_helpers "$1"\nwait\n',
+         "pressure-helper-test", str(boot), str(tools), str(tmp_path / "manifest.json")],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    argv = json.loads((tools / "host-ticket-agent.argv.json").read_text())
+    assert argv[argv.index("--execution-lanes") + 1] == "8"
+    pressure_paths = [Path(argv[argv.index(option) + 1]) for option in (
+        "--cursor", "--execution-journal", "--agent-lock",
+    )]
+    assert len({path.parent for path in pressure_paths}) == 1
+    assert pressure_paths[0].parent.is_dir()
+    assert pressure_paths[0].parent != preflight
+    for name, contents in sentinels.items():
+        assert (preflight / name).read_text() == contents
+
+
 def test_terminal_result_barrier_orders_retirement_before_unchanged_publication() -> None:
     """Only the correlated terminal ECHO is held; credentials remain mandatory."""
     events = []

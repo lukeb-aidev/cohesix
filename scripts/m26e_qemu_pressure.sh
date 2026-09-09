@@ -1681,7 +1681,9 @@ start_pressure_helpers() {
         --rest-url http://127.0.0.1:8080 \
         >> "$boot_dir/gpu-fixture.log" 2>&1 &
     GPU_REFRESH_PID=$!
-    local state_dir="$boot_dir/host-ticket-agent"
+    # The sealed receipt matrix uses a one-lane journal. Pressure is a new
+    # eight-lane agent; its cursor, journal and lock must retain that topology.
+    local state_dir="$boot_dir/pressure-host-ticket-agent"
     mkdir -p "$state_dir"
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     "$HOST_TOOLS/host-ticket-agent" \
@@ -1695,7 +1697,7 @@ start_pressure_helpers() {
         --registry-root "$boot_dir/peft-registry" \
         --export-root "$boot_dir/peft-exports" \
         --adapter-root "$boot_dir/peft-adapters" \
-        >> "$boot_dir/host-ticket-agent.log" 2>&1 &
+        >> "$boot_dir/pressure-host-ticket-agent.log" 2>&1 &
     AGENT_PID=$!
     sleep 1
     kill -0 "$GPU_REFRESH_PID" >/dev/null 2>&1 || die "GPU fixture refresh exited before pressure"
