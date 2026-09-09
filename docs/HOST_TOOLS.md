@@ -724,6 +724,9 @@ only an overlay, the detail pane follows that overlay and clears when its data
 disappears. The Snapshot key field selects the named cached snapshot in offline
 mode.
 
+The native console editor disables spelling, capitalization, and quote
+correction so typed JSON and shell syntax remain literal.
+
 The selected-detail repair corrects only SwarmUI's existing Tauri argument
 wiring and display cache. Compatibility review of `cohsh`, `coh`, `coh-status`,
 `hive-gateway`, `gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`,

@@ -614,6 +614,10 @@ test("Live Hive performance harness stays responsive", async ({ page }) => {
 });
 
 test("Embedded coh prompt accepts input", async ({ page }) => {
+  const editor = page.locator("#console-input input");
+  await expect(editor).toHaveAttribute("autocorrect", "off");
+  await expect(editor).toHaveAttribute("autocapitalize", "off");
+  await expect(editor).toHaveAttribute("spellcheck", "false");
   await runConsoleCommand(page, "help");
   await expect(page.locator("#console-output")).toContainText("coh> help");
 });
