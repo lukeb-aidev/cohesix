@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "2e8a6e3aab7aa80832ec92c064970de16b02a98899a1823bb92f1f04875e19be",
-  "topology_sha256": "77d847e0b16180fb320d24cf41f9ad434ebe7003df73b3e0b653d3d4f3301614",
+  "manifest_sha256": "6fa0d7a933669ca4683ab0627e1334a647946948695d3841d234406f128cb2b7",
+  "topology_sha256": "4526f0e74a1d5064f769c05538c0969bc0d52fef7c2e6d8f9d00ecb02b94b363",
   "topology": {
     "console_network_service": {
       "abi_version": 6,
@@ -417,7 +417,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 2,
           "timeout_badge": 653131778,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-root-fault-service-units-candidate-v6",
           "wcet_us": 2400
@@ -479,7 +479,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 4,
           "timeout_badge": 653131780,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15",
           "wcet_us": 2400
@@ -510,7 +510,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 5,
           "timeout_badge": 653131781,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15",
           "wcet_us": 2400
@@ -541,7 +541,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 7,
           "timeout_badge": 653131782,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-passive-worker-executor-gpu-v1",
           "wcet_us": 4500
@@ -572,7 +572,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 8,
           "timeout_badge": 653131783,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-passive-worker-executor-lora-v1",
           "wcet_us": 7000

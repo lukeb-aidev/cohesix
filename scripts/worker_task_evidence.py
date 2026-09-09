@@ -1611,6 +1611,24 @@ def _generated_inventory(
         raise EvidenceError(
             "generated root or console service differs from the natural-postpone contract"
         )
+    resumable_ids = {
+        "root-fault",
+        "root-worker-supervisor",
+        "root-driver-supervisor",
+        "root-worker-executor-gpu",
+        "root-worker-executor-lora",
+    }
+    resumable = [task for task in tasks if task.get("id") in resumable_ids]
+    if len(resumable) != len(resumable_ids) or any(
+        task.get("execution") != "active"
+        or task.get("admitted") is not True
+        or task.get("critical_reserve") is not True
+        or task.get("timeout_policy") != "natural-postpone"
+        for task in resumable
+    ):
+        raise EvidenceError(
+            "generated critical service differs from the natural-postpone contract"
+        )
     inventory = _inventory(value["inventory"], "generated inventory")
     if inventory != _maximum_inventory(topology):
         raise EvidenceError("generated inventory differs from compiler topology")

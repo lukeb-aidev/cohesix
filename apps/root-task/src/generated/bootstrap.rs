@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "0eca346f5fb27165dbbd0e13c2843c2160f360bb4efc83bc294792d5e2ea01c4";
+    "065d16b71fb7b5d73cd79cfcdf17b6a0b98e97645b855d493345bafd5e1ac8f3";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -272,7 +272,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 252,
         mcp: 252,
         timeout_badge: 653131778,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 2400,
@@ -334,7 +334,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 210,
         mcp: 210,
         timeout_badge: 653131780,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 7200,
@@ -365,7 +365,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 220,
         mcp: 220,
         timeout_badge: 653131781,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 4800,
@@ -396,7 +396,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 80,
         mcp: 200,
         timeout_badge: 653131782,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 4500,
         response_time_us: 7500,
@@ -427,7 +427,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 80,
         mcp: 200,
         timeout_badge: 653131783,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 7000,
         response_time_us: 7200,
@@ -9526,7 +9526,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.17",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=2e8a6e3aab7aa80832ec92c064970de16b02a98899a1823bb92f1f04875e19be",
+    "manifest.sha256=6fa0d7a933669ca4683ab0627e1334a647946948695d3841d234406f128cb2b7",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

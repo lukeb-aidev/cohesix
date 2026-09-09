@@ -419,13 +419,18 @@ generation, authenticated connection, and nonzero control sequence and records
 control-complete without output-drained. Bare physical idle, an unbacked deadline,
 recovery, containment, quarantine, reboot, and operator-owned cuts grant no
 causal wait authority.
-The selected timeout policy for root control and the active console child is
-`NaturalPostpone`: exhausting the current refill postpones execution until a
-valid replenishment. Their standard fault endpoints remain installed and
-terminal; generated timeout capability identities and resources remain
+Root control, the active console child, root-fault, both supervisors, and both
+Worker executors select `NaturalPostpone`: exhausting the current refill
+postpones execution until a valid replenishment. These persistent service loops
+retain bounded work across preemption, including a blocking syscall that has
+not yet been processed. Their SC reservations limit CPU use; they are not
+per-operation or lifetime deadlines. Standard fault endpoints remain installed
+and terminal. Generated timeout capability identities and resources remain
 reserved and accounted even though they are not installed as TCB timeout
-handlers. This policy does not change client deadlines, retries, console
-grammar, or fault authority.
+handlers. Root-emergency retains fail-stop, passive Workers retain return-error
+and containment, and passive NineDoor retains its one-resume recovery contract.
+Client deadlines, receipt liveness, queue bounds, admission/WCET checks, and
+performance gates remain independently enforced.
 
 The selected Pi profile applies the same kernel mechanism to the resumable
 serial, USB, HDMI, GENET, CYW43, and SDIO physical runtimes. Their active SCs remain

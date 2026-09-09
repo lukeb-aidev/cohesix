@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "28971de1e3b21ebcce7d5636c11e2817c591b8224bac5fb9b12b5df14a968e17";
+    "64e55da0ef4b346f0deaab894db0532c8d9d3035ab1f5ab2da6b84d40b0cf559";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -272,7 +272,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 272] = [
         priority: 252,
         mcp: 252,
         timeout_badge: 653131778,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 2600,
@@ -334,7 +334,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 272] = [
         priority: 210,
         mcp: 210,
         timeout_badge: 653131780,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 600,
         response_time_us: 1400,
@@ -365,7 +365,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 272] = [
         priority: 220,
         mcp: 220,
         timeout_badge: 653131781,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 800,
         response_time_us: 800,
@@ -396,7 +396,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 272] = [
         priority: 80,
         mcp: 200,
         timeout_badge: 653131782,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 5000,
         response_time_us: 8300,
@@ -427,7 +427,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 272] = [
         priority: 80,
         mcp: 200,
         timeout_badge: 653131783,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 5000,
         response_time_us: 7400,
@@ -9795,7 +9795,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 55] = [
     "manifest.schema=1.17",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=a48a867083142b652cc97294a754284e8033bc7c7bca6b4a31d6d73f9b80653a",
+    "manifest.sha256=dab30eeee3cf670125ae3da30a39df3637621521a498e9196dbe321070451444",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9844,8 +9844,8 @@ pub const INITIAL_AUDIT_LINES: [&str; 55] = [
     "manifest.hw.network.static_ipv4.ip=192.168.10.42",
     "manifest.hw.network.static_ipv4.prefix_len=24",
     "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
-    "attestation.bound_manifest_sha256=a48a867083142b652cc97294a754284e8033bc7c7bca6b4a31d6d73f9b80653a",
-    "attestation.evidence_sha256=4ca28bab3270ff83857d6de0606828073ae862d7ffa6e97ac7456c52b4f09a04",
+    "attestation.bound_manifest_sha256=dab30eeee3cf670125ae3da30a39df3637621521a498e9196dbe321070451444",
+    "attestation.evidence_sha256=b1e925745035c084af72484771a72ac4cebe23d8f1189676934bf0fd8784712d",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

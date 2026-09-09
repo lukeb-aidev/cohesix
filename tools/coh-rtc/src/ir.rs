@@ -1662,6 +1662,24 @@ impl Manifest {
         {
             bail!("executable Worker roles require enabled SMP+MCS temporal_authority");
         }
+        // These persistent service loops retain their work across kernel
+        // preemption. Their SC is a CPU reservation, not a lifetime deadline;
+        // exhaustion must postpone the loop, including its next blocking syscall.
+        for task in &self.temporal_authority.tasks {
+            if matches!(
+                task.kind,
+                TemporalTaskKind::RootFault
+                    | TemporalTaskKind::WorkerSupervisor
+                    | TemporalTaskKind::DriverSupervisor
+                    | TemporalTaskKind::WorkerExecutor
+            ) && task.timeout_policy != TimeoutPolicy::NaturalPostpone
+            {
+                bail!(
+                    "resumable critical task {} requires natural-postpone scheduling",
+                    task.id
+                );
+            }
+        }
         for admission in &self.worker_resource_admission.executable_roles {
             let expected_donor = match admission.role.as_str() {
                 "worker-heartbeat" | "worker-lora" => "root-worker-executor-lora",
@@ -5127,6 +5145,57 @@ mod tests {
             .expect_err("non-root task must reject a serial bound")
             .to_string()
             .contains("must not declare a VirtIO Operator serial I/O byte bound"));
+    }
+
+    #[test]
+    fn executable_workers_preserve_resumable_critical_reservations() {
+        for source in [
+            "configs/root_task.toml",
+            "configs/root_task_regression.toml",
+            "configs/root_task_pi4_uboot_aarch64.toml",
+        ] {
+            let manifest = load_manifest(&repo_root().join(source)).expect("selected manifest");
+            manifest
+                .validate_worker_runtime()
+                .expect("selected passive Worker contract");
+            for id in [
+                "root-fault",
+                "root-worker-supervisor",
+                "root-driver-supervisor",
+                "root-worker-executor-gpu",
+                "root-worker-executor-lora",
+            ] {
+                let mut invalid = manifest.clone();
+                let task = invalid
+                    .temporal_authority
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .expect("required critical task");
+                assert_eq!(task.timeout_policy, TimeoutPolicy::NaturalPostpone);
+                task.timeout_policy = TimeoutPolicy::Terminal;
+                assert_eq!(
+                    invalid
+                        .validate_worker_runtime()
+                        .expect_err("reservation exhaustion must preserve resumable critical work")
+                        .to_string(),
+                    format!("resumable critical task {id} requires natural-postpone scheduling")
+                );
+            }
+            let emergency = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == "root-emergency")
+                .expect("emergency task");
+            assert_eq!(emergency.timeout_policy, TimeoutPolicy::FailStop);
+            assert!(manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .filter(|task| task.kind == TemporalTaskKind::Worker)
+                .all(|task| task.timeout_policy == TimeoutPolicy::ReturnError));
+        }
     }
 
     fn fixture_manifest() -> super::Manifest {

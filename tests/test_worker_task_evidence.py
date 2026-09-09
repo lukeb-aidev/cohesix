@@ -639,7 +639,17 @@ def _generated_record(target: str) -> dict[str, object]:
                     "timeout_policy": "natural-postpone",
                 },
                 *(
-                    {"id": identifier, "kind": kind}
+                    {
+                        "id": identifier,
+                        "kind": kind,
+                        "execution": "active",
+                        "admitted": True,
+                        "critical_reserve": True,
+                        "timeout_policy": (
+                            "fail-stop" if identifier == "root-emergency"
+                            else "natural-postpone"
+                        ),
+                    }
                     for identifier, kind in critical_tasks[1:]
                 ),
                 {
@@ -3054,6 +3064,34 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
             generated,
             "qemu",
             _session("qemu"),
+        )
+
+
+@pytest.mark.parametrize("target", ["qemu", "pi4"])
+@pytest.mark.parametrize("task_id", [
+    "root-fault",
+    "root-worker-supervisor",
+    "root-driver-supervisor",
+    "root-worker-executor-gpu",
+    "root-worker-executor-lora",
+])
+def test_critical_reservation_policy_cannot_drift_in_evidence(
+    target: str, task_id: str,
+) -> None:
+    generated = _generated_record(target)
+    task = next(
+        task for task in generated["topology"]["temporal_authority"]["tasks"]
+        if task["id"] == task_id
+    )
+    task["timeout_policy"] = "terminal"
+    generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        generated["topology"]
+    )
+    with pytest.raises(
+        evidence.EvidenceError, match="critical service.*natural-postpone"
+    ):
+        evidence._generated_inventory(  # noqa: SLF001
+            generated, target, _session(target)
         )
 
 
