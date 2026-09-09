@@ -4709,40 +4709,6 @@ def test_m26e_qemu_pressure_embedded_python_is_api_aligned() -> None:
                 assert len(node.args) <= 3
 
 
-def test_m26e_qemu_pressure_rejects_hostile_path_overrides() -> None:
-    cases = (
-        (["--run-dir", "out/../escape"], "may not contain '..'"),
-        (["--run-dir", "out/toolchain/sel4-profile-venv/evidence"], "direct child"),
-        (["--sel4-source", "/"], "outside its required root"),
-        (["--profile-python", "/bin/python"], "canonical repository virtualenv"),
-    )
-    clean_env = dict(os.environ)
-    for name in (
-        "COH_AUTH_TOKEN",
-        "COHSH_AUTH_TOKEN",
-        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
-    ):
-        clean_env.pop(name, None)
-    source_parent = REPO_ROOT / "out" / "sel4"
-    source_parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="path-admission-", dir=source_parent) as source:
-        for arguments, expected in cases:
-            # These cases must reject before tool execution or seL4 validation;
-            # supply controlled existing paths instead of a provisioned build.
-            completed = subprocess.run(
-                [str(PRESSURE_RUNNER_PATH), "--check-only",
-                 "--qemu", sys.executable, "--sel4-source", source, *arguments],
-                cwd=REPO_ROOT,
-                env=clean_env,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-            assert completed.returncode != 0
-            assert expected in completed.stderr
-
-
 def test_m26e_qemu_pressure_has_explicit_implementation_surface() -> None:
     source = tomllib.loads(
         (REPO_ROOT / "configs" / "implementation_surfaces.toml").read_text(

@@ -7,6 +7,7 @@
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -78,6 +79,28 @@ def test_replay_cannot_authorize_cleanup(checkout: Path) -> None:
     result = invoke(checkout, "--clean-root", str(checkout), "--reuse-artifacts")
     assert result.returncode == 2
     assert "--clean-root cannot be used with --reuse-artifacts" in result.stderr
+
+
+@pytest.mark.parametrize(("arguments", "expected"), [
+    (["--run-dir", "out/../escape"], "may not contain '..'"),
+    (["--run-dir", "out/toolchain/sel4-profile-venv/evidence"], "direct child"),
+    (["--sel4-source", "/"], "outside its required root"),
+    (["--profile-python", "/bin/python"], "canonical repository virtualenv"),
+])
+def test_selected_checkout_rejects_hostile_path_overrides(
+    checkout: Path, arguments: list[str], expected: str,
+) -> None:
+    """Exercise path admission independently of the caller's checkout or dirt."""
+    source = checkout / "out" / "sel4" / "source"
+    source.mkdir(parents=True)
+    (checkout / "out" / "toolchain" / "sel4-profile-venv").mkdir(parents=True)
+    result = invoke(
+        checkout, "--clean-root", str(checkout),
+        "--qemu", str(Path(sys.executable).resolve()),
+        "--sel4-source", str(source), *arguments,
+    )
+    assert result.returncode != 0
+    assert expected in result.stderr
 
 
 @pytest.mark.parametrize("kind", ["tracked", "untracked"])
