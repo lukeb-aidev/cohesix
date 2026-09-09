@@ -18247,10 +18247,7 @@ where
         // owner now, before its first ready banner and prompt. Do not rebuild
         // this line from compile-time strings: staging seals its image digest.
         if let Some(bytes) = build_marker {
-            let line = match core::str::from_utf8(bytes) {
-                Ok(marker) => marker,
-                Err(_) => "ERR BUILD reason=invalid-utf8",
-            };
+            let line = core::str::from_utf8(bytes).unwrap_or("ERR BUILD reason=invalid-utf8");
             self.emit_serial_line_atomic(line);
         }
         #[cfg(feature = "kernel")]
