@@ -694,6 +694,14 @@ fleet with `buffer-full`. Raw TCP workloads, measured REST operations, report
 schemas, authentication, target buffers, quotas and acceptance thresholds are
 unchanged.
 
+The QEMU Worker GDB validator consumes the current passive Worker ABI v2,
+including its fixed init-page address and role field. Its release qualification
+repair changes only test selection and stale fixtures. Compatibility review of
+`cohsh`, `coh`, `hive-gateway`, `swarmui`, `gpu-bridge-host`,
+`host-sidecar-bridge`, `cas-tool`, `host-ticket-agent`, `tools/cohesix-py`, and
+raw/REST benchmarks found no affected runtime, public interface, workload,
+report schema or threshold.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic

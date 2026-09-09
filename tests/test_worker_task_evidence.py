@@ -524,7 +524,7 @@ def _generated_record(target: str) -> dict[str, object]:
             },
             "task_abi": {
                 "enabled": True,
-                "version": 1,
+                "version": 2,
                 "shared_page_bytes": 4096,
                 "shared_page_vaddr": 0x7100_1000,
             },
@@ -2174,6 +2174,35 @@ def test_live_qemu_collection_rejects_ready_census_topology_drift(
     with pytest.raises(evidence.EvidenceError, match="READY census targets different"):
         evidence._collect_qemu(inputs)  # noqa: SLF001
     assert not inputs.out_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "role,raw_role",
+    [("worker-heartbeat", 1), ("worker-gpu", 2), ("worker-lora", 3)],
+)
+def test_qemu_gdb_binding_accepts_generated_passive_worker_abi(
+    role: str,
+    raw_role: int,
+) -> None:
+    """Bind the real compiler output to the ABI v2 init-page layout."""
+    generated = json.loads(
+        (ROOT / "configs/generated/root_task_topology.json").read_text()
+    )
+    assert evidence._worker_gdb_runtime_binding(generated, role) == (  # noqa: SLF001
+        0x7100_1000,
+        raw_role,
+    )
+
+
+@pytest.mark.parametrize("version", [None, True, 1, 3, "2"])
+def test_qemu_gdb_binding_rejects_unsupported_worker_abi(version: object) -> None:
+    """The v2 decoder cannot silently accept an earlier or unknown layout."""
+    generated = json.loads(
+        (ROOT / "configs/generated/root_task_topology.json").read_text()
+    )
+    generated["topology"]["worker_runtime"]["task_abi"]["version"] = version
+    with pytest.raises(evidence.EvidenceError, match="cannot bind a QEMU VSpace"):
+        evidence._worker_gdb_runtime_binding(generated, "worker-gpu")  # noqa: SLF001
 
 
 def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(

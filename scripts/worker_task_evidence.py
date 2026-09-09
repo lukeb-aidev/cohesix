@@ -4701,7 +4701,7 @@ def _worker_gdb_runtime_binding(
     shared_page_bytes = task_abi.get("shared_page_bytes")
     if (
         task_abi.get("enabled") is not True
-        or task_abi.get("version") != 1
+        or task_abi.get("version") != 2
         or not isinstance(shared_page_vaddr, int)
         or isinstance(shared_page_vaddr, bool)
         or shared_page_vaddr <= 0
