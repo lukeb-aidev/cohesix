@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "64e55da0ef4b346f0deaab894db0532c8d9d3035ab1f5ab2da6b84d40b0cf559";
+    "052dcd123c527e8151c2cca02688b3285dac978763a5641139441ef8beb3b67e";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -195,6 +195,7 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
         bootstrap_budget_us: 400,
         bootstrap_period_us: 10000,
         bootstrap_max_refills: 2,
+        bootstrap_timeout_policy: TimeoutPolicy::NaturalPostpone,
         timeout_endpoint_badge: 653132288,
         consumed_budget_evidence: true,
     },
@@ -9793,9 +9794,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 55] = [
-    "manifest.schema=1.17",
+    "manifest.schema=1.18",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=dab30eeee3cf670125ae3da30a39df3637621521a498e9196dbe321070451444",
+    "manifest.sha256=0cd315649dfd0328c9d8bc44ff0bdcb431acfee3b22c60e5f37b791e748201d7",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9844,8 +9845,8 @@ pub const INITIAL_AUDIT_LINES: [&str; 55] = [
     "manifest.hw.network.static_ipv4.ip=192.168.10.42",
     "manifest.hw.network.static_ipv4.prefix_len=24",
     "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
-    "attestation.bound_manifest_sha256=dab30eeee3cf670125ae3da30a39df3637621521a498e9196dbe321070451444",
-    "attestation.evidence_sha256=b1e925745035c084af72484771a72ac4cebe23d8f1189676934bf0fd8784712d",
+    "attestation.bound_manifest_sha256=0cd315649dfd0328c9d8bc44ff0bdcb431acfee3b22c60e5f37b791e748201d7",
+    "attestation.evidence_sha256=c8f8f45453693f7a55b1aa0af4b47faa9cce5ada870ca87369a0c2d37deba51b",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

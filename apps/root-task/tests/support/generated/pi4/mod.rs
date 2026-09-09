@@ -116,6 +116,7 @@ pub struct WorkerSchedulingConfig {
     pub bootstrap_budget_us: u32,
     pub bootstrap_period_us: u32,
     pub bootstrap_max_refills: u8,
+    pub bootstrap_timeout_policy: TimeoutPolicy,
     pub timeout_endpoint_badge: u64,
     pub consumed_budget_evidence: bool,
 }
@@ -1052,9 +1053,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.17";
+pub const MANIFEST_SCHEMA: &str = "1.18";
 pub const MANIFEST_SHA256: &str =
-    "dab30eeee3cf670125ae3da30a39df3637621521a498e9196dbe321070451444";
+    "0cd315649dfd0328c9d8bc44ff0bdcb431acfee3b22c60e5f37b791e748201d7";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

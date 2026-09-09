@@ -2680,7 +2680,14 @@ impl WorkerKernelBackend for TargetWorkerBackend {
         )
         .map_err(|_| WorkerSupervisorError::Backend)?;
         slot.sc_bound = false;
-        Ok(())
+        // Bootstrap owns no timeout endpoint: it may span bounded refills up
+        // to the READY deadline. Install passive-call containment only after
+        // removing that SC, before publishing READY or allowing any donation.
+        sel4::set_tcb_timeout_endpoint(
+            slot.slots[TCB_SLOT_INDEX],
+            slot.slots[TIMEOUT_FAULT_SLOT_INDEX],
+        )
+        .map_err(|_| WorkerSupervisorError::Backend)
     }
 
     fn publish_control(
@@ -3491,6 +3498,7 @@ fn admit_mcs(
             < generated::worker_resource_admission_config()
                 .object_bits
                 .sched_context_min
+        || scheduling.bootstrap_timeout_policy != generated::TimeoutPolicy::NaturalPostpone
         || scheduling.bootstrap_budget_us == 0
         || scheduling.bootstrap_period_us < scheduling.bootstrap_budget_us
     {
@@ -3525,11 +3533,9 @@ fn admit_mcs(
     )
     .map_err(|_| WorkerSupervisorError::Backend)?;
     slot.sc_bound = true;
-    sel4::set_tcb_timeout_endpoint(
-        slot.slots[TCB_SLOT_INDEX],
-        slot.slots[TIMEOUT_FAULT_SLOT_INDEX],
-    )
-    .map_err(|_| WorkerSupervisorError::Backend)
+    // Keep the standard fault endpoint installed throughout bootstrap.
+    // Its temporary reservation naturally postpones until READY or deadline.
+    Ok(())
 }
 
 fn contain_generation(

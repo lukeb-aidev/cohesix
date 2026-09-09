@@ -310,7 +310,14 @@ one exact instance at a time.
 (400/10,000 us in the selected profiles). `WORKER_TASK_READY` is emitted only
 after the backend successfully unbinds that SC. Evidence collectors validate
 the admission against the bootstrap reservation and require that exact READY
-identity before representing the Worker's steady-state SC as 0/0. Raw
+identity before representing the Worker's steady-state SC as 0/0. Schema 1.18
+makes `worker_runtime.scheduling.bootstrap_timeout_policy = "natural-postpone"`
+explicit: startup may span reservation refills until the unchanged five-second
+READY deadline. Standard faults remain terminal throughout startup. After
+unbinding the bootstrap SC, the backend installs the generated passive Worker's
+`return-error` timeout endpoint before granting READY or admitting a donated
+Call. Failure of either transition step leaves admission closed and the READY
+deadline armed. Raw
 admission bytes remain in the evidence; READY never grants an autonomous SC.
 
 After a Worker fault, root-fault suspends the child and releases any blocked

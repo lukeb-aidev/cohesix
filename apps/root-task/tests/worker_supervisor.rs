@@ -57,6 +57,52 @@ fn all_construction_failures_are_terminal_and_contained() {
 }
 
 #[test]
+fn failed_passive_transition_keeps_ready_closed_and_deadline_armed() {
+    let (image, plan) = image_fixture(WorkerRole::Lora);
+    let mut supervisor = WorkerSupervisor::new(FakeBackend {
+        fail_ready: true,
+        ..FakeBackend::passing()
+    })
+    .expect("generated Worker pool");
+    supervisor
+        .spawn(WorkerRole::Lora, 0, 1, &plan, &image, 100)
+        .expect("spawn");
+    let init = supervisor.backend().init.expect("init");
+    assert_eq!(
+        supervisor.accept_ready(ready_record(init, 1)),
+        Err(WorkerSupervisorError::Backend)
+    );
+    let pending = supervisor
+        .snapshot(WorkerRole::Lora, 0)
+        .expect("pending snapshot");
+    assert_eq!(pending.lifecycle, WorkerLifecycleState::Starting);
+    assert_eq!(pending.ready_sequence, 0);
+    assert_eq!(
+        supervisor
+            .enforce_deadlines(5_099)
+            .expect("before deadline"),
+        0
+    );
+    assert_eq!(
+        supervisor
+            .enforce_deadlines(5_100)
+            .expect("deadline containment"),
+        1
+    );
+    let terminal = supervisor
+        .snapshot(WorkerRole::Lora, 0)
+        .expect("terminal snapshot");
+    assert_eq!(
+        terminal.terminal_reason,
+        Some(WorkerTerminalReason::ReadyTimeout)
+    );
+    assert!(supervisor
+        .backend()
+        .events
+        .contains(&Event::Contain(WorkerTerminalReason::ReadyTimeout)));
+}
+
+#[test]
 fn ready_requires_exact_identity_and_slot_reuse_advances_generations() {
     let (image, plan) = image_fixture(WorkerRole::Heartbeat);
     let mut supervisor =

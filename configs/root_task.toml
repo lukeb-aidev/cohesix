@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.17"
+schema = "1.18"
 
 [root_task.affinity]
 enabled = true
@@ -310,6 +310,7 @@ bootstrap_scheduling_context_bits = 8
 bootstrap_budget_us = 400
 bootstrap_period_us = 10000
 bootstrap_max_refills = 2
+bootstrap_timeout_policy = "natural-postpone"
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
 

@@ -41,6 +41,7 @@ pub struct FakeBackend {
     pub fail_phase: Option<WorkerConstructionPhase>,
     pub containment_complete: bool,
     pub defer_resume: bool,
+    pub fail_ready: bool,
     pub init: Option<WorkerRuntimeInit>,
 }
 
@@ -129,7 +130,11 @@ impl WorkerKernelBackend for FakeBackend {
     }
 
     fn finish_ready(&mut self, _bundle: Self::Bundle) -> Result<(), WorkerSupervisorError> {
-        Ok(())
+        if self.fail_ready {
+            Err(WorkerSupervisorError::Backend)
+        } else {
+            Ok(())
+        }
     }
 
     fn publish_control(

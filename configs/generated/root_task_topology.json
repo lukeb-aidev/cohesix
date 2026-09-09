@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "6fa0d7a933669ca4683ab0627e1334a647946948695d3841d234406f128cb2b7",
-  "topology_sha256": "4526f0e74a1d5064f769c05538c0969bc0d52fef7c2e6d8f9d00ecb02b94b363",
+  "manifest_sha256": "00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc",
+  "topology_sha256": "2311ddaa03c0225c4834107f9fc8bb3249d17deee02448bdd5b41ef18b0de3e2",
   "topology": {
     "console_network_service": {
       "abi_version": 6,
@@ -329,7 +329,7 @@
         ],
         "required": true
       },
-      "schema": "1.17"
+      "schema": "1.18"
     },
     "temporal_authority": {
       "admission_window_us": 10000,
@@ -9514,6 +9514,7 @@
         "bootstrap_max_refills": 2,
         "bootstrap_period_us": 10000,
         "bootstrap_scheduling_context_bits": 8,
+        "bootstrap_timeout_policy": "natural-postpone",
         "consumed_budget_evidence": true,
         "domain": 0,
         "priority": 96,

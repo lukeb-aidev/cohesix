@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "065d16b71fb7b5d73cd79cfcdf17b6a0b98e97645b855d493345bafd5e1ac8f3";
+    "7ef690fc1719cc5cc9486505f6b54098004d43055c93f42d72d87bc96c614660";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -195,6 +195,7 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
         bootstrap_budget_us: 400,
         bootstrap_period_us: 10000,
         bootstrap_max_refills: 2,
+        bootstrap_timeout_policy: TimeoutPolicy::NaturalPostpone,
         timeout_endpoint_badge: 653132288,
         consumed_budget_evidence: true,
     },
@@ -9524,9 +9525,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
-    "manifest.schema=1.17",
+    "manifest.schema=1.18",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=6fa0d7a933669ca4683ab0627e1334a647946948695d3841d234406f128cb2b7",
+    "manifest.sha256=00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

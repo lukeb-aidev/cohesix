@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.17";
+const SCHEMA_VERSION: &str = "1.18";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -5397,6 +5397,56 @@ mod tests {
     }
 
     #[test]
+    fn worker_bootstrap_policy_preserves_refills_and_passive_fault_containment() {
+        for profile in [
+            "root_task.toml",
+            "root_task_regression.toml",
+            "root_task_pi4_uboot_aarch64.toml",
+        ] {
+            let path = repo_root().join("configs").join(profile);
+            let manifest = load_manifest(&path).expect("selected Worker manifest");
+            let scheduling = &manifest.worker_runtime.scheduling;
+            assert_eq!(
+                scheduling.bootstrap_timeout_policy,
+                TimeoutPolicy::NaturalPostpone
+            );
+            assert_eq!(
+                (
+                    scheduling.bootstrap_budget_us,
+                    scheduling.bootstrap_period_us
+                ),
+                (400, 10_000)
+            );
+            assert_eq!(scheduling.bootstrap_max_refills, 2);
+            assert_eq!(manifest.worker_runtime.task_abi.ready_timeout_ms, 5_000);
+            assert!(manifest
+                .temporal_authority
+                .worker_classes
+                .iter()
+                .all(|task| task.timeout_policy == TimeoutPolicy::ReturnError));
+            for policy in [
+                TimeoutPolicy::Terminal,
+                TimeoutPolicy::ReplenishOnce,
+                TimeoutPolicy::ReturnError,
+                TimeoutPolicy::ResumeOnceReturnError,
+                TimeoutPolicy::FailStop,
+            ] {
+                let mut invalid = manifest.clone();
+                invalid.worker_runtime.scheduling.bootstrap_timeout_policy = policy;
+                let error = invalid
+                    .validate_with_base(path.parent())
+                    .expect_err("startup must resume only through its bounded reservation");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("bootstrap_timeout_policy must be natural-postpone"),
+                    "{error:#}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn qemu_worker_runtime_accepts_exact_mcs_task_contract() {
         let path = repo_root().join("configs/root_task.toml");
         let manifest = load_manifest(&path).expect("load checked-in QEMU manifest");
@@ -7164,6 +7214,8 @@ pub struct WorkerSchedulingConfig {
     pub bootstrap_budget_us: u32,
     pub bootstrap_period_us: u32,
     pub bootstrap_max_refills: u8,
+    /// Startup may span refills; the separate READY deadline bounds admission.
+    pub bootstrap_timeout_policy: TimeoutPolicy,
     pub timeout_endpoint_badge: u64,
     pub consumed_budget_evidence: bool,
 }
@@ -7179,6 +7231,7 @@ impl WorkerSchedulingConfig {
                     || self.bootstrap_budget_us != 0
                     || self.bootstrap_period_us != 0
                     || self.bootstrap_max_refills != 0
+                    || self.bootstrap_timeout_policy != TimeoutPolicy::Terminal
                     || self.timeout_endpoint_badge != 0
                     || self.consumed_budget_evidence
                 {
@@ -7193,6 +7246,9 @@ impl WorkerSchedulingConfig {
                     || self.bootstrap_max_refills < 2
                 {
                     bail!("worker_runtime.scheduling passive MCS profile requires a bounded bootstrap SC");
+                }
+                if self.bootstrap_timeout_policy != TimeoutPolicy::NaturalPostpone {
+                    bail!("worker_runtime.scheduling.bootstrap_timeout_policy must be natural-postpone for passive MCS startup");
                 }
                 if self.timeout_endpoint_badge == 0 || !self.consumed_budget_evidence {
                     bail!("worker_runtime.scheduling MCS profile requires timeout endpoint badge and consumed-budget evidence");
@@ -7214,6 +7270,7 @@ impl Default for WorkerSchedulingConfig {
             bootstrap_budget_us: 0,
             bootstrap_period_us: 0,
             bootstrap_max_refills: 0,
+            bootstrap_timeout_policy: TimeoutPolicy::Terminal,
             timeout_endpoint_badge: 0,
             consumed_budget_evidence: false,
         }

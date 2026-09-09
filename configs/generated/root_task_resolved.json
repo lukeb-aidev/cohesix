@@ -4,7 +4,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.17",
+    "schema": "1.18",
     "affinity": {
       "enabled": true,
       "max_cores": 4,
@@ -587,6 +587,7 @@
       "bootstrap_budget_us": 400,
       "bootstrap_period_us": 10000,
       "bootstrap_max_refills": 2,
+      "bootstrap_timeout_policy": "natural-postpone",
       "timeout_endpoint_badge": 653132288,
       "consumed_budget_evidence": true
     }
