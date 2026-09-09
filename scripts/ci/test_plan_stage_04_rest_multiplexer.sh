@@ -857,8 +857,10 @@ export \
 
 # Keep Stage 04 on scripts that are parity-safe over the REST file projection.
 # `busy_backpressure.coh` and `policy_gate.coh` depend on console-parser semantics
-# and remain covered in the TCP regression matrix (Stage 03).
-core_scripts="boot_v0.coh observe_watch.coh session_pool.coh"
+# and remain covered in the TCP regression matrix (Stage 03). The local
+# session_pool benchmark batches /log writes, which REST deliberately rejects: its
+# public ECHO_BATCH endpoint accepts only bounded host ticket result records.
+core_scripts="boot_v0.coh observe_watch.coh host_absent.coh"
 parity_scripts="rest_control_plane_smoke.coh"
 core_parallelism=3
 if ((TP_HOST_JOBS < core_parallelism)); then

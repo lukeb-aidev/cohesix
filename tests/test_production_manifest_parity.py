@@ -89,3 +89,19 @@ def test_paired_production_kernels_retain_release_and_memory_contracts() -> None
         assert config["KernelIsMCS"] == "ON"
         assert config["KernelMaxNumNodes"] == "4"
         assert config["KernelRootCNodeSizeBits"] == cnode_bits
+
+
+def test_regression_profile_admits_its_declared_feature_fixtures() -> None:
+    """Replay, model binding, and Modbus fixtures need their manifest-owned surfaces."""
+    manifest = _manifest("root_task_regression.toml")
+    assert manifest["ecosystem"]["policy"]["enable"] is True
+    assert manifest["ecosystem"]["audit"]["enable"] is True
+    assert manifest["ecosystem"]["audit"]["replay_enable"] is True
+    assert manifest["ecosystem"]["models"]["enable"] is True
+    assert manifest["sidecars"]["modbus"]["enable"] is True
+    assert manifest["sidecars"]["dnp3"]["enable"] is False
+    assert manifest["sidecars"]["modbus"]["adapters"] == [{
+        "id": "modbus-main", "mount": "modbus-main", "scope": "modbus-main",
+        "link": "serial", "baud": 19200,
+        "spool": {"max_entries": 8, "max_bytes": 512},
+    }]

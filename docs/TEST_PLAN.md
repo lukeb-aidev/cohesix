@@ -6278,7 +6278,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
   both finalization paths and the existing timeout composition. Runner-local
   child configuration must not become an input-context change.
 - Stage 04 runs two REST batches:
-  - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
+  - A concurrent "core" batch (boot/proc/host namespace coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/host_absent.coh`. `session_pool.coh` remains a TCP check: REST rejects its batched `/log` writes because public `ECHO_BATCH` is restricted to host ticket result paths.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
     - Note: `scripts/cohsh/busy_backpressure.coh` and `scripts/cohsh/policy_gate.coh` remain covered by the TCP/QEMU regression matrix (Stage 03), where console-parser semantics are validated directly.
 - Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and reads `/proc/lifecycle/state` against the same gateway.
@@ -9685,7 +9685,9 @@ and attach once, then return HELP `15 + OK`, isolated QEMU VirtIO NETSTATS
 `19 + OK`, first-call selected-QEMU SMP activity at `max_cores = 4` `16 + OK`,
 and CACHELOG9 `9 + OK`, then complete PING and QUIT on that socket without
 retry or reconnect and within the existing client timeout. Stage 03 base runs
-the fixed matrix before its `.coh` group. HELP includes the heading and fourteen
+the fixed matrix before its `.coh` group. The regression manifest keeps audit,
+replay, models, and Modbus enabled for its declared positive gated scripts; its fixture
+CAS trust key remains separate from the operational profile. HELP includes the heading and fourteen
 ordered command lines, including separate `caps mcs`, `smp mcs`, `smp poll-time`,
 and `cachelog [n]` entries. NETSTATS contains ten common counter/status rows,
 four isolated-runtime rows, two wired rows, and the three status/test/target

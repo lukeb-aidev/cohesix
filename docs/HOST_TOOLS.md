@@ -732,6 +732,12 @@ Compatibility review of the complete host-tool suite, Python SDK, and raw/REST
 benchmarks requires no implementation change: commands, response framing,
 timeouts, retries, workloads, and thresholds remain unchanged.
 
+The positive gated TCP fixtures retain audit, replay, model, and Modbus support in their
+regression manifest. REST concurrency uses boot, proc, and host namespace scripts;
+the console log-batching pool benchmark remains under TCP because REST batches
+are restricted to host ticket results. This test setup correction changes no
+production profile, host-tool or Python API, benchmark workload, or threshold.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic
