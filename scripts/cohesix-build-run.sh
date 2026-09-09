@@ -1315,9 +1315,12 @@ PY
     for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
         SEL4_BUILD_ARGS+=(-p "$pkg")
     done
-    if has_root_task_feature release-qemu && has_root_task_feature bootstrap-trace; then
-        SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,console-network-runtime/direct-virtio,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
-        log "Enabling external QEMU/GDB service and Worker evidence symbols"
+    if has_root_task_feature release-qemu; then
+        SEL4_BUILD_ARGS+=(--features "console-network-runtime/direct-virtio")
+        if has_root_task_feature bootstrap-trace; then
+            SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
+            log "Enabling external QEMU/GDB service and Worker evidence symbols"
+        fi
     fi
 
     ROOT_TASK_BUILD_ARGS=(build --target "$CARGO_TARGET")

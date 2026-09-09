@@ -1106,12 +1106,14 @@ or imported Stage 01 common-hermetic attestation:
   `release-qemu` AArch64 root-task check. The check builds fresh Worker,
   NineDoor, console-network, and driver-runtime identities inside the Stage 02
   attempt and binds them to the root check under the selected 24 MHz profile.
+  The console child selects `direct-virtio` independently of diagnostic tracing.
 - Pi 4 profile validation against
   the immutable `seL4/build_UBOOT` `pi4_production` artifacts, followed by the
   `release-pi4`
   AArch64 root-task check. Its independently built component bindings use the
-  selected 54 MHz header; this remains compile evidence, not Pi boot or
-  hardware acceptance.
+  selected 54 MHz header and the canonical Pi build's `direct-genet` feature
+  and console-network/smoltcp optimization settings; this remains compile
+  evidence, not Pi boot or hardware acceptance.
 
 The remaining Pi-specific material in this section defines evidence semantics
 for Conditional F. It is not additional Stage 02 execution and must not cause

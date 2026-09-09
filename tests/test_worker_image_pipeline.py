@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 
 import pytest
@@ -283,6 +284,46 @@ def test_qemu_build_orders_worker_identity_before_root_and_keeps_archive_separat
         "worker-lora/qemu-evidence",
     ):
         assert feature in script
+
+
+@pytest.mark.parametrize("root_features,expected_features", [
+    ("release-qemu", {"console-network-runtime/direct-virtio"}),
+    ("release-qemu,bootstrap-trace", {
+        "console-network-runtime/direct-virtio",
+        "nine-door-runtime/qemu-evidence",
+        "console-network-runtime/qemu-evidence",
+        "worker-heart/qemu-evidence",
+        "worker-gpu/qemu-evidence",
+        "worker-lora/qemu-evidence",
+    }),
+    ("dev-virt", set()),
+])
+def test_qemu_component_transport_does_not_require_tracing(
+    root_features: str, expected_features: set[str],
+) -> None:
+    """Production networking and diagnostic evidence have separate selectors."""
+    script = (ROOT / "scripts/cohesix-build-run.sh").read_text(encoding="utf-8")
+    selector = script.split("has_root_task_feature() {", 1)[1].split(
+        "\ndescribe_file()", 1,
+    )[0]
+    build = script.split("    SEL4_BUILD_ARGS=(build", 1)[1].split(
+        "    ROOT_TASK_BUILD_ARGS=(build", 1,
+    )[0]
+    result = subprocess.run(
+        ["bash", "-c", "has_root_task_feature() {" + selector + "\n"
+         "log() { :; }\nROOT_TASK_FEATURES=$1\nCARGO_TARGET=aarch64-unknown-none\n"
+         "PROFILE_ARGS=(); SEL4_COMPONENT_PACKAGES=()\n"
+         "SEL4_BUILD_ARGS=(build" + build + "\n"
+         'printf "%s\\n" "${SEL4_BUILD_ARGS[@]}"', "test", root_features],
+        text=True, capture_output=True, check=True,
+    )
+    arguments = result.stdout.splitlines()
+    actual = {
+        feature
+        for index, argument in enumerate(arguments) if argument == "--features"
+        for feature in arguments[index + 1].split(",")
+    }
+    assert actual == expected_features
 
 
 def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:

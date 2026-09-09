@@ -709,6 +709,14 @@ approval prevents that write, and the control result is preserved without a
 retry. This setup repair requires no changes to the eight host tools or Python
 SDK reviewed above, measured benchmark workloads, schemas, or thresholds.
 
+The provisioned-target check builds the manifest-selected console transport:
+`direct-virtio` for QEMU, and the canonical Pi build's `direct-genet` with its
+console-network/smoltcp optimization settings. QEMU production transport
+selection is independent of tracing. Compatibility review of the same eight
+host tools, Python SDK, and raw/REST benchmarks found no public interface,
+workload, schema, or threshold changes; exact image and page admission remain
+required.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic

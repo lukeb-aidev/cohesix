@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -183,6 +186,14 @@ PY
     ;;
   build)
     printf 'build\n' >>"${FAKE_CARGO_LOG}"
+    python3 - "$@" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+Path(os.environ['FAKE_CARGO_LOG'] + '.args.json').write_text(json.dumps(sys.argv[1:]))
+PY
     exit "${FAKE_BUILD_EXIT:-77}"
     ;;
   *)
@@ -272,9 +283,20 @@ def test_pi4_manifest_mismatch_stops_before_target_component_build(
     assert cargo_log == ["run"]
 
 
-def test_qemu_matching_manifest_reaches_target_component_build(
+@pytest.mark.parametrize("target,network_feature,configs", [
+    ("qemu", "console-network-runtime/direct-virtio", []),
+    ("pi4", "console-network-runtime/direct-genet", [
+        "profile.release.package.console-network-runtime.opt-level=3",
+        "profile.release.package.smoltcp.opt-level=3",
+    ]),
+])
+def test_matching_manifest_selects_production_network_component(
     tmp_path: Path,
+    target: str,
+    network_feature: str,
+    configs: list[str],
 ) -> None:
+    """Build the selected transport without depending on diagnostic features."""
     repo_root, script, state_dir, fake_bin = _write_target_root_fixture(tmp_path)
 
     result, cargo_log = _run_target_root_fixture(
@@ -282,9 +304,13 @@ def test_qemu_matching_manifest_reaches_target_component_build(
         script,
         state_dir,
         fake_bin,
-        target="qemu",
+        target=target,
         selected_manifest_sha="a" * 64,
     )
 
     assert result.returncode == 77
     assert cargo_log == ["run", "build"]
+    arguments = json.loads((repo_root / "cargo.log.args.json").read_text())
+    assert arguments[arguments.index("--features") + 1] == network_feature
+    assert [arguments[i + 1] for i, value in enumerate(arguments)
+            if value == "--config"] == configs

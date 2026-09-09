@@ -44,11 +44,17 @@ case "${target}:${profile}:${features}:${timer_clock_hz}" in
     expected_sel4="${repo_root}/out/sel4/profile-v2/qemu-smp-production"
     selected_manifest="${repo_root}/configs/root_task.toml"
     projection_profile="qemu_smp_production"
+    component_args=(--features "console-network-runtime/direct-virtio")
     ;;
   pi4:pi4_production:release-pi4:54000000)
     expected_sel4="${repo_root}/seL4/build_UBOOT"
     selected_manifest="${repo_root}/configs/root_task_pi4_uboot_aarch64.toml"
     projection_profile="pi4_production"
+    component_args=(
+      --features "console-network-runtime/direct-genet"
+      --config 'profile.release.package.console-network-runtime.opt-level=3'
+      --config 'profile.release.package.smoltcp.opt-level=3'
+    )
     ;;
   *)
     fail "target/profile/features/timer tuple is not canonical"
@@ -129,6 +135,7 @@ read -r selected_manifest_sha compiled_manifest_sha <<<"${projection_identity}"
 
 target_triple="aarch64-unknown-none"
 cargo build --locked --release --target "${target_triple}" \
+  "${component_args[@]}" \
   -p nine-door-runtime \
   -p console-network-runtime \
   -p worker-heart \
