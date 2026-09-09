@@ -41,6 +41,33 @@ class TestPlanCatalogTests(unittest.TestCase):
             )
         )
 
+    def test_direct_genet_contracts_are_required_in_stage_one(self) -> None:
+        data = catalog.load_catalog(CATALOG_PATH)
+
+        for target in ("qemu", "pi4"):
+            with self.subTest(target=target):
+                actions = catalog.select_actions(
+                    data, stage=1, scope="common", target=target
+                )
+                selected = [
+                    action
+                    for action in actions
+                    if action["id"] == "host.console-network-direct-genet"
+                ]
+                self.assertEqual(len(selected), 1)
+                action = selected[0]
+                self.assertEqual(
+                    action["command"],
+                    "cargo test -p console-network-runtime --features direct-genet",
+                )
+                self.assertEqual(action["tier"], "common-hermetic")
+                self.assertEqual(
+                    action.get("evidence_class", "acceptance"), "acceptance"
+                )
+                self.assertEqual(action["test_policy"], "nonzero")
+                self.assertGreaterEqual(action["minimum_test_count"], 1)
+                self.assertNotIn("convergence_phase", action)
+
     def test_exact_duplicate_command_is_rejected(self) -> None:
         data = catalog.load_catalog(CATALOG_PATH)
         modified = copy.deepcopy(data)
