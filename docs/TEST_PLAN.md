@@ -1885,6 +1885,9 @@ For each summary:
   provider-live-labelled fixture input blocks the run;
 - `report.workload.control_write_outcome` is `admitted`; no ACK, HTTP success,
   provider result, or control write is described as accepted or READY;
+- both executable benchmark modes reject any failed GPU/LoRA Worker receipt
+  and any supplied UART root-emergency fail-stop, independently of the
+  aggregate error budget; successful telemetry cannot conceal lost execution;
 - latency, throughput, all error classes, backpressure, operator liveness,
   timeout attribution, and post-run Worker/object state are retained. No
   synthetic id expansion, retry masking, or bounded-refusal reclassification

@@ -4871,6 +4871,21 @@ def capture_executable_state(
     }
 
 
+def validate_executable_run_liveness(
+    stats: Dict[str, OpStats], uart_text: str,
+) -> None:
+    """Worker completion and fatal target status cannot spend a read error budget."""
+    if "[critical] root-emergency fail-stop" in uart_text:
+        raise RestError("executable benchmark observed root-emergency fail-stop")
+    failures = {
+        name: stats[name].err
+        for name in ("worker_gpu_v2_receipt", "worker_lora_v2_receipt")
+        if name in stats and stats[name].err
+    }
+    if failures:
+        raise RestError(f"executable benchmark has failed Worker receipts: {failures}")
+
+
 def hash_required_fault_artifact(
     path_value: Optional[str],
     label: str,
@@ -8862,6 +8877,15 @@ def run_simulation(args: argparse.Namespace) -> int:
         target_session_sha256: Optional[str] = None
         executable_state: Optional[Dict[str, object]] = None
         required_fault_markers: List[str] = []
+        if args.population_mode in {POPULATION_EXECUTABLE, POPULATION_EXECUTABLE_LOG}:
+            try:
+                uart_text = ""
+                if args.qemu_uart_log:
+                    _, uart_text = hash_required_fault_artifact(args.qemu_uart_log, "uart", ())
+                validate_executable_run_liveness(stats, uart_text)
+            except Exception as exc:
+                if run_error is None:
+                    run_error = exc
         if args.population_mode == POPULATION_EXECUTABLE:
             try:
                 state.executable_post_state = capture_executable_state(

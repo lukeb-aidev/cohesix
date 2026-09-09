@@ -42,6 +42,27 @@ sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
 
 
+@pytest.mark.parametrize("failure", [None, "gpu", "lora", "emergency"])
+def test_executable_liveness_is_independent_of_aggregate_read_error_budget(failure):
+    """One missing Worker completion remains fatal among many successful reads."""
+    stats = {
+        "cat_/proc/schedule/summary": rest_perf.OpStats(count=10000, ok=9999, err=1),
+        "worker_gpu_v2_receipt": rest_perf.OpStats(count=10, ok=10),
+        "worker_lora_v2_receipt": rest_perf.OpStats(count=10, ok=10),
+    }
+    uart = "Cohesix console starting\n"
+    if failure in {"gpu", "lora"}:
+        stats[f"worker_{failure}_v2_receipt"].err = 1
+        stats[f"worker_{failure}_v2_receipt"].ok = 9
+    elif failure == "emergency":
+        uart += "[critical] root-emergency fail-stop\n"
+    if failure:
+        with pytest.raises(rest_perf.RestError, match="failed Worker receipts|root-emergency"):
+            rest_perf.validate_executable_run_liveness(stats, uart)
+    else:
+        rest_perf.validate_executable_run_liveness(stats, uart)
+
+
 class RawTranscriptSocket:
     """Supply fixed protocol bytes, including partial-frame reads."""
 

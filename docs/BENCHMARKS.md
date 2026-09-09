@@ -571,6 +571,12 @@ backpressure deltas, MCS timeout/fault scan, and host CPU/RSS samples. The
 flight recorder is diagnostic evidence only and cannot promote an otherwise
 unqualified image.
 
+Both executable modes fail if any GPU/LoRA Worker receipt operation fails or
+the supplied UART records root-emergency fail-stop. The aggregate read error
+budget cannot hide lost Worker completion among successful telemetry reads.
+The summary preserves measured counts and error rates; command exit and the
+end marker report the liveness failure even when that aggregate budget passes.
+
 Each summary also retains top-level `target_session_sha256` and
 `report.executable_state`: exact topology/session hashes; pre/post aggregate
 256-Worker READY censuses plus three-role exemplar identities,
