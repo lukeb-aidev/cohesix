@@ -1835,7 +1835,8 @@ For each summary:
 - one bounded Heartbeat kill/recreate cycle proves terminal teardown and a
   larger supervisor generation; GPU and LoRA retain their identity while their
   receipt and completion sequences increase through real host-ticket-v2 work;
-- exact per-run UART/fault bytes match `fault_artifacts`, the marker index is
+- exact per-run UART, GDB and authenticated Worker-log bytes match
+  `fault_artifacts`, the marker index is
   complete, and the target transcript independently contains all role faults,
   all seven actions with confirmed/rejected/stale outcomes, exact teardown
   booleans, service containment, and the GICv3 target/session markers;

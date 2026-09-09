@@ -644,6 +644,25 @@ federated delivery still execute in host agents.
 | `/worker/<id>/telemetry` | Compatibility alias | Present only when `sharding.legacy_worker_alias` is enabled. |
 | `/queen/telemetry/<device>/...` | Authorized control/append/read | OS-named, bounded telemetry-ingest segments. |
 
+Worker lifecycle observations in `/log/queen.log` use
+`WORKER_LOG id=<u64> part=<0..5> last=<0|1> data=<text>` fragments. One
+observation is at most 1024 UTF-8 bytes; each payload is at most 176 bytes and
+ends at a UTF-8 boundary. `id` is the first fragment's boot-local log sequence.
+All fragments are appended together under the existing nonblocking log lock,
+within the existing 2048-line, 256-byte-per-line retention bound. Overlapping
+exports may repeat identical fragments. Conflicting, missing or malformed
+fragments cannot establish a complete observation. Formatting overflow emits
+`WORKER_LOG_ERROR reason=invalid-record`; lock contention retains the existing
+dropped-write counter. Worker logging does not perform synchronous UART I/O.
+Authentication and role checks for log reads remain unchanged.
+
+`WORKER_TASK_LIFECYCLE_CALL` records the role, slot, lease epoch, supervisor
+generation, capability generation, generated `call_label`, and nonzero
+`sequence` after a shutdown/revoke Call enters its executor queue, with
+`state=admitted`. It proves admission only. A fault test must also observe the
+same generation READY, the child-side Call injection, and its later fault and
+complete teardown; a lifecycle request is not a GPU/LoRA operation receipt.
+
 The `/queen/schedule/ctl`, `/queen/lease/ctl`, and `/queen/export/ctl`
 readback mirrors retain the newest complete JSONL records within generated
 `ctl_max_bytes`. Appending one individually valid record may evict oldest

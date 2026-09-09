@@ -764,12 +764,41 @@ pub fn finish_target_worker_call(
     }
 }
 
-/// Remove one contained Worker's root-fault Reply view before anchor reuse.
+/// Acknowledge one exact recovered Reply after executor-side validation.
+///
+/// A zero recovered request sequence means the executor has validated and
+/// consumed that Reply, or no donor was blocked when the child faulted.
+pub fn acknowledge_target_worker_recovery(
+    worker_index: usize,
+    sequence: u64,
+) -> Result<(), CriticalTcbConstructionError> {
+    if sequence == 0 {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES
+        .get(worker_index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?
+        .compare_exchange(sequence, 0, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)
+}
+
+fn target_worker_fault_ready_for_containment(record: FaultHandoffRecord) -> bool {
+    let Some(index) = crate::critical_tcb::worker_fault_mailbox_index(record.task_index) else {
+        return false;
+    };
+    TARGET_WORKER_RECOVERY_STATES[index].load(Ordering::Acquire) == SERVICE_RECOVERY_REPLIED
+        && TARGET_WORKER_CALL_SEQUENCES[index].load(Ordering::Acquire) == 0
+        && TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES[index].load(Ordering::Acquire) == 0
+}
+
+/// Remove one contained Worker's root-fault Reply view after donor consumption.
 pub fn revoke_target_worker_recovery_reply(
     worker_index: usize,
 ) -> Result<(), CriticalTcbConstructionError> {
     if worker_index >= MAX_EXECUTABLE_WORKER_SLOTS
         || TARGET_WORKER_CALL_SEQUENCES[worker_index].load(Ordering::Acquire) != 0
+        || TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES[worker_index].load(Ordering::Acquire) != 0
     {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
@@ -2754,10 +2783,13 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
                     // loss and must not convert normal coalescence into fatal.
                     break;
                 };
-                let fault = handoff.drain_worker_fault();
+                let fault =
+                    handoff.drain_worker_fault_if(target_worker_fault_ready_for_containment);
+                let fault_pending = handoff.worker_fault_pending();
                 drop(handoff);
                 match fault {
                     Some(record) => Some(WorkerSupervisorItem::Fault(record)),
+                    None if fault_pending => None,
                     None => match TARGET_WORKER_CONTROL.validate_next() {
                         Ok(Some(record)) => Some(WorkerSupervisorItem::Control(record)),
                         Ok(None) => None,

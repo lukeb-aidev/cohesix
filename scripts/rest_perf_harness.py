@@ -45,6 +45,11 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TextIO
 
+try:
+    from scripts.lib import worker_log as worker_logs
+except ImportError:  # Direct script execution.
+    from lib import worker_log as worker_logs
+
 DEFAULT_REST_URL = "http://127.0.0.1:8080"
 DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
@@ -4224,6 +4229,7 @@ def build_qemu_benchmark_target_evidence(
     gdb_path: str,
     max_age_secs: int,
     now_unix_s: Optional[float] = None,
+    worker_log_path: Optional[str] = None,
 ) -> BenchmarkTargetEvidence:
     """Bind a qualified QEMU report to its accepted session and transcripts."""
 
@@ -4248,6 +4254,10 @@ def build_qemu_benchmark_target_evidence(
             "bytes": len(gdb_raw),
         },
     }
+    if worker_log_path:
+        log_raw, log_metadata = read_frozen_artifact(worker_log_path, "QEMU Worker log evidence", BENCHMARK_EVIDENCE_MAX_BYTES)
+        observed_fault_artifacts["worker-log"] = {"sha256": hashlib.sha256(log_raw).hexdigest(), "bytes": len(log_raw)}
+        require_current_artifact(log_metadata, "QEMU Worker log evidence", max_age_secs, now)
     if fault_artifacts != observed_fault_artifacts:
         raise RestError("QEMU fault artifact bytes changed before target-evidence seal")
     require_current_artifact(
@@ -4275,7 +4285,7 @@ def build_qemu_benchmark_target_evidence(
         "root_image_sha256": target_session["root_image_sha256"],
         "target_session_sha256": target_session["target_session_sha256"],
         "component_acceptance_sha256": acceptance["evidence_sha256"],
-        "runtime_evidence_sha256": fault_artifacts["uart"]["sha256"],
+        "runtime_evidence_sha256": fault_artifacts["worker-log" if worker_log_path else "uart"]["sha256"],
         "network_evidence_sha256": fault_artifacts["gdb"]["sha256"],
         "captured_unix_s": int(max(uart_metadata.st_mtime, gdb_metadata.st_mtime)),
     }
@@ -4954,11 +4964,21 @@ def capture_fault_artifacts(
     acceptance: Dict[str, object],
 ) -> Tuple[Dict[str, Dict[str, object]], List[str]]:
     """Retain exact UART/GDB inputs; semantic acceptance remains collector-owned."""
+    worker_log_path = getattr(args, "qemu_worker_log", None)
     uart_artifact, uart_text = hash_required_fault_artifact(
         args.qemu_uart_log,
         "uart",
-        EXECUTABLE_UART_MARKERS,
+        () if worker_log_path else EXECUTABLE_UART_MARKERS,
     )
+    log_artifact = None
+    if worker_log_path:
+        log_artifact, log_text = hash_required_fault_artifact(worker_log_path, "worker", ())
+        try:
+            uart_text = worker_logs.records(log_text)
+        except ValueError as error:
+            raise RestError(str(error)) from error
+        if any(marker not in uart_text for marker in EXECUTABLE_UART_MARKERS):
+            raise RestError("Worker log lacks complete required fault records")
     gdb_artifact, gdb_text = hash_required_fault_artifact(
         args.qemu_gdb_log,
         "gdb",
@@ -4966,8 +4986,12 @@ def capture_fault_artifacts(
     )
     validate_fault_session_binding(uart_text, gdb_text, acceptance)
     artifacts = {"uart": uart_artifact, "gdb": gdb_artifact}
+    marker_source = "uart"
+    if log_artifact is not None:
+        marker_source = "worker-log"
+        artifacts[marker_source] = log_artifact
     markers = [
-        *(f"uart:{marker}" for marker in EXECUTABLE_UART_MARKERS),
+        *(f"{marker_source}:{marker}" for marker in EXECUTABLE_UART_MARKERS),
         *(f"gdb:{marker}" for marker in EXECUTABLE_GDB_MARKERS),
     ]
     return artifacts, markers
@@ -5169,7 +5193,7 @@ def build_executable_report_state(
         state.acceptance_binding is None
         or state.executable_pre_state is None
         or state.executable_post_state is None
-        or set(state.fault_artifacts) != {"uart", "gdb"}
+        or set(state.fault_artifacts) not in ({"uart", "gdb"}, {"uart", "gdb", "worker-log"})
         or not state.lifecycle_cycles
         or not state.receipt_operations
     ):
@@ -5829,6 +5853,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Immutable live QEMU UART transcript used by executable pressure.",
     )
+    launch.add_argument("--qemu-worker-log", default=None, help="Same-boot authenticated qlog exports containing complete Worker evidence.")
     launch.add_argument(
         "--qemu-gdb-log",
         default=None,
@@ -8321,6 +8346,7 @@ def run_simulation(args: argparse.Namespace) -> int:
 
     qemu_proc: Optional[subprocess.Popen] = None
     gateway_proc: Optional[subprocess.Popen] = None
+    worker_log_monitor: Optional[worker_logs.ExportMonitor] = None
 
     try:
         if not args.no_qemu:
@@ -8571,6 +8597,18 @@ def run_simulation(args: argparse.Namespace) -> int:
             run_token=state.run_token,
             status="running",
         )
+
+        if getattr(args, "qemu_worker_log", None):
+            def read_worker_log() -> str:
+                response = client.cat("/log/queen.log", 524288)
+                if response.status != "OK" or not response.end:
+                    raise RestError("Worker qlog export did not complete", response)
+                return "\n".join(response.lines) + "\n"
+
+            worker_log_monitor = worker_logs.ExportMonitor(
+                pathlib.Path(args.qemu_worker_log), read_worker_log,
+            )
+            worker_log_monitor.start()
 
         worker_ids, spawned = ensure_workers(client, state, args.workers_min)
         if args.population_mode == POPULATION_EXECUTABLE:
@@ -8876,6 +8914,15 @@ def run_simulation(args: argparse.Namespace) -> int:
                 if run_error is None:
                     run_error = exc
 
+        if worker_log_monitor is not None:
+            try:
+                worker_log_monitor.finish()
+            except Exception as error:
+                if run_error is None:
+                    run_error = error
+            finally:
+                worker_log_monitor = None
+
         if args.population_mode == POPULATION_EXECUTABLE and run_error is None:
             try:
                 assert state.acceptance_binding is not None
@@ -8912,6 +8959,7 @@ def run_simulation(args: argparse.Namespace) -> int:
                         args.qemu_uart_log,
                         args.qemu_gdb_log,
                         args.benchmark_evidence_max_age_secs,
+                        worker_log_path=args.qemu_worker_log,
                     )
                     (
                         target_session_sha256,
@@ -9058,8 +9106,12 @@ def run_simulation(args: argparse.Namespace) -> int:
             return 1
         return 0
     finally:
-        terminate_process(gateway_proc, "gateway")
-        terminate_process(qemu_proc, "qemu")
+        try:
+            if worker_log_monitor is not None:
+                worker_log_monitor.stop()
+        finally:
+            terminate_process(gateway_proc, "gateway")
+            terminate_process(qemu_proc, "qemu")
 
 
 def pick_worker(rng: random.Random, weights: Dict[str, float]) -> str:

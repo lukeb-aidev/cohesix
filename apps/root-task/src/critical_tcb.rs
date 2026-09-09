@@ -803,9 +803,18 @@ impl CriticalHandoff {
 
     /// Drain one Worker fault before the caller considers policy work.
     pub fn drain_worker_fault(&mut self) -> Option<FaultHandoffRecord> {
+        self.drain_worker_fault_if(|_| true)
+    }
+
+    /// Retain each fault until its recovered donor has consumed the Reply.
+    /// Publication alone cannot authorize deletion of a live caller's metadata.
+    pub fn drain_worker_fault_if(
+        &mut self,
+        ready: impl Fn(FaultHandoffRecord) -> bool,
+    ) -> Option<FaultHandoffRecord> {
         for mailbox in &mut self.worker_faults {
-            if let Some(record) = mailbox.take() {
-                return Some(record);
+            if mailbox.is_some_and(&ready) {
+                return mailbox.take();
             }
         }
         None
@@ -1786,6 +1795,33 @@ pub fn validate_critical_temporal_graph() -> Result<(), CriticalTopologyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_fault_remains_durable_until_recovered_caller_acknowledges() {
+        let mut handoff = CriticalHandoff::new();
+        let first = fault(0, 1);
+        let second = fault(1, 2);
+        handoff.publish_worker_fault(first).unwrap();
+        handoff.publish_worker_fault(second).unwrap();
+        let unconsumed_request = AtomicU64::new(7);
+
+        assert_eq!(
+            handoff.drain_worker_fault_if(|record| {
+                record.task_index != first.task_index
+                    || unconsumed_request.load(Ordering::Acquire) == 0
+            }),
+            Some(second)
+        );
+        assert_eq!(handoff.drain_worker_fault_if(|_| false), None);
+        assert!(handoff.worker_fault_pending());
+        // Copy/validate the recovered Reply before publishing its consumption.
+        assert_eq!(unconsumed_request.swap(0, Ordering::AcqRel), 7);
+        assert_eq!(
+            handoff.drain_worker_fault_if(|_| unconsumed_request.load(Ordering::Acquire) == 0),
+            Some(first)
+        );
+        assert!(!handoff.worker_fault_pending());
+    }
 
     fn identity(slot: u16) -> GenerationIdentity {
         GenerationIdentity {

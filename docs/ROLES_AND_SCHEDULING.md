@@ -240,10 +240,13 @@ generation. A bound supervisor-wake notification coalesces the generated
 heartbeat/GPU/LoRA completion bits with the critical handoff bit. The
 supervisor validates the entire received mask, drains durable child records,
 then drains fault records before root-control records when the critical bit is
-present. The three fault mailboxes are keyed by the generated temporal Worker
-ordinal, not the role-local ABI slot: the current Heartbeat, GPU, and LoRA
-identities each use role-local slot zero and therefore cannot safely index a
-shared mailbox array by `identity.slot`.
+present. The 256 fault mailboxes are keyed by the generated temporal Worker
+ordinal. Each role has its own slot-zero identity, so `identity.slot` alone
+cannot index the shared mailbox array. An admitted endpoint badge is
+`attach_badge_base + (((ordinal + 1) << epoch_bits) | lease_epoch)`;
+the selected 1/127/128 role population gives the first Heartbeat, GPU and LoRA
+instances lane numbers 1, 2 and 129. This preserves distinct instance authority
+within the generated lease-epoch bound.
 
 The QEMU Worker-supervisor and GPU-executor SCs use all ten refill entries
 available in each existing 256-byte object: the selected seL4 16 AArch64 layout has a 96-byte
@@ -302,6 +305,22 @@ root-control donation chain after one bootstrap activation. Workers run only
 on two generated active executors: GPU on core 2, LoRA plus Heartbeat on core
 3. Each executor selects from a fixed bounded fair queue and donates its SC to
 one exact instance at a time.
+
+`WORKER_TASK_ADMISSION` reports the temporary, generated bootstrap SC
+(400/10,000 us in the selected profiles). `WORKER_TASK_READY` is emitted only
+after the backend successfully unbinds that SC. Evidence collectors validate
+the admission against the bootstrap reservation and require that exact READY
+identity before representing the Worker's steady-state SC as 0/0. Raw
+admission bytes remain in the evidence; READY never grants an autonomous SC.
+
+After a Worker fault, root-fault suspends the child and releases any blocked
+executor with the typed recovery Reply. The executor validates that Reply and
+acknowledges its exact request sequence before teardown can delete recovery
+metadata or revoke the generation's objects. Until then, the existing fault
+mailbox retains the record and the supervisor defers it through its bounded
+drain. A fault without a blocked donor needs no acknowledgement. This closes
+the cross-core interval between publishing a recovery Reply and consuming it;
+no additional scheduling context, budget, queue or device authority is added.
 
 `SchedControl` remains root-only. Active scheduling contexts bind to TCBs, not
 notifications. IRQ/locality-bound drivers, autonomous drains, the

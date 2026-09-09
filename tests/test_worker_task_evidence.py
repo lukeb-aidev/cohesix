@@ -414,7 +414,7 @@ def _component(
                 "ready_sequence": 1,
                 "completion_sequence": 2,
                 "endpoint_badge": 638_324_736
-                + ((role_config["role_index"] << 8) | 1),
+                + (((index + 1) << 8) | 1),
                 "fault_badge": 652_279_808 + index,
                 "core": role_config["core"],
                 "scheduling_context": {
@@ -517,6 +517,7 @@ def _generated_record(target: str) -> dict[str, object]:
         "root_task": {},
         "worker_runtime": {
             "max_workers": 3,
+            "scheduling": {"bootstrap_budget_us": 400, "bootstrap_period_us": 10000},
             "endpoint_caps": {
                 "required": True,
                 "attach_badge_base": 638_324_736,
@@ -527,6 +528,8 @@ def _generated_record(target: str) -> dict[str, object]:
                 "version": 2,
                 "shared_page_bytes": 4096,
                 "shared_page_vaddr": 0x7100_1000,
+                "shutdown_call_label": 2,
+                "revoke_call_label": 3,
             },
         },
         "temporal_authority": {
@@ -991,7 +994,6 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     endpoint_base = generated["topology"]["worker_runtime"]["endpoint_caps"][
         "attach_badge_base"
     ]
-    role_bits = {"worker-heartbeat": 1, "worker-gpu": 2, "worker-lora": 4}
 
     lines = [
         "[critical] exact generated fault registry sealed sources=12",
@@ -1024,7 +1026,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         role_row = roles[role]
         task = next(task for task in worker_tasks if task["id"] == f"{role}-slot-0")
         ordinal = worker_tasks.index(task)
-        endpoint = endpoint_base + ((role_bits[role] << 8) | generation)
+        endpoint = endpoint_base + (((ordinal + 1) << 8) | generation)
         fields = [
             "WORKER_TASK_ADMISSION",
             identity(role, generation),
@@ -1032,8 +1034,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             f"endpoint_badge={endpoint}",
             f"fault_badge={fault_base + ordinal}",
             f"core={role_row['core']}",
-            f"sc_budget_us={task['budget_us']}",
-            f"sc_period_us={task['period_us']}",
+            "sc_budget_us=400",
+            "sc_period_us=10000",
             *(f"{key}={role_row['per_slot'][key]}" for key in evidence.INVENTORY_KEYS),
             "state=admitted",
         ]
@@ -2038,10 +2040,42 @@ def test_component_validator_accepts_bounded_role_exemplars() -> None:
         evidence.validate_component(pi_component, "pi4")
 
 
+@pytest.mark.parametrize("retained_log", [False, True])
 def test_live_qemu_benchmark_schema_collection_is_semantically_derived(
-    tmp_path: Path,
+    tmp_path: Path, retained_log: bool,
 ) -> None:
     inputs = _live_qemu_inputs(tmp_path)
+    if retained_log:
+        def export_worker_records(uart_path: Path, destination: Path) -> None:
+            fragments = []
+            for identity, line in enumerate(uart_path.read_text().splitlines()):
+                if not line.startswith(("WORKER_TASK_", "GPU_BRIDGE_FIXTURE_ADMISSION ", "LORA_EXPORT_FIXTURE_ADMISSION ")):
+                    continue
+                parts = [line[offset:offset + 176] for offset in range(0, len(line), 176)]
+                fragments.extend(
+                    f"WORKER_LOG id={identity} part={part} last={int(part == len(parts) - 1)} data={text}"
+                    for part, text in enumerate(parts)
+                )
+            destination.write_text("\n".join(fragments) + "\n")
+
+        inputs.preflight_worker_log = tmp_path / "preflight.worker.log"
+        export_worker_records(inputs.preflight_uart, inputs.preflight_worker_log)
+        inputs.worker_log = []
+        for index, (uart, pressure) in enumerate(zip(inputs.uart, inputs.pressure, strict=True)):
+            path = tmp_path / f"pressure-{index}.worker.log"
+            export_worker_records(uart, path)
+            inputs.worker_log.append(path)
+            summary = json.loads(pressure.read_text())
+            state = summary["report"]["executable_state"]
+            state["fault_artifacts"]["worker-log"] = {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "bytes": path.stat().st_size,
+            }
+            state["required_fault_markers"] = [
+                marker.replace("uart:WORKER_TASK_", "worker-log:WORKER_TASK_")
+                for marker in state["required_fault_markers"]
+            ]
+            pressure.write_text(json.dumps(summary))
     preflight_out = tmp_path / "preflight-component"
     evidence._collect_qemu_preflight(  # noqa: SLF001 - production collector contract
         SimpleNamespace(
@@ -2050,6 +2084,7 @@ def test_live_qemu_benchmark_schema_collection_is_semantically_derived(
             qemu_out=inputs.qemu_out,
             auth_observation=inputs.auth_observation,
             uart=inputs.preflight_uart,
+            worker_log=getattr(inputs, "preflight_worker_log", None),
             cohsh=inputs.cohsh,
             gdb_log=inputs.preflight_gdb_log,
             service_gdb_log=inputs.preflight_service_gdb_log,
@@ -2203,6 +2238,36 @@ def test_qemu_gdb_binding_rejects_unsupported_worker_abi(version: object) -> Non
     generated["topology"]["worker_runtime"]["task_abi"]["version"] = version
     with pytest.raises(evidence.EvidenceError, match="cannot bind a QEMU VSpace"):
         evidence._worker_gdb_runtime_binding(generated, "worker-gpu")  # noqa: SLF001
+
+
+@pytest.mark.parametrize("invalid", [None, "label", "sequence", "ready"])
+def test_lifecycle_fault_proof_requires_admitted_call_after_exact_ready(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    """A shutdown Call proves IPC admission without inventing an operation receipt."""
+    inputs = _live_qemu_inputs(tmp_path)
+    text = inputs.preflight_uart.read_text()
+    identity = (
+        "role=worker-heartbeat slot=0 lease_epoch=2 "
+        "supervisor_generation=2 cap_generation=2"
+    )
+    text = text.replace(
+        f"WORKER_TASK_CONTROL {identity} action=0x0101 outcome=0 sequence=1 state=admitted",
+        f"WORKER_TASK_LIFECYCLE_CALL {identity} "
+        f"call_label={4 if invalid == 'label' else 2} "
+        f"sequence={0 if invalid == 'sequence' else 1} state=admitted",
+    )
+    if invalid == "ready":
+        text = text.replace(f"WORKER_TASK_READY {identity} sequence=1\n", "")
+    markers = evidence._parse_live_worker_markers(text)  # noqa: SLF001
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    if invalid is not None:
+        with pytest.raises(evidence.EvidenceError, match="lifecycle Call"):
+            evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+    else:
+        *_, phases = evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+        assert ("worker-heartbeat", "during-ipc") in phases
+        assert not any(row["role"] == "worker-heartbeat" for row in markers["receipt"])
 
 
 def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
@@ -2552,11 +2617,26 @@ def _pi_component_collection_inputs(
     )
 
 
+@pytest.mark.parametrize("retained_log", [False, True])
 def test_pi_component_collector_derives_exact_live_rows_and_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    retained_log: bool,
 ) -> None:
     inputs = _pi_component_collection_inputs(tmp_path)
+    worker_log = None
+    if retained_log:
+        fragments = []
+        for identity, record in enumerate(inputs.serial.read_text().splitlines()):
+            if not record.startswith("WORKER_TASK_"):
+                continue
+            parts = [record[offset:offset + 176] for offset in range(0, len(record), 176)]
+            fragments.extend(
+                f"WORKER_LOG id={identity} part={part} last={int(part == len(parts) - 1)} data={text}"
+                for part, text in enumerate(parts)
+            )
+        worker_log = tmp_path / "pi4-worker.log"
+        worker_log.write_text("\n".join(fragments) + "\n")
     validated: list[tuple[str, str]] = []
 
     def validate_graph(*args: object, **_kwargs: object) -> object:
@@ -2573,6 +2653,7 @@ def test_pi_component_collector_derives_exact_live_rows_and_bundle(
             target_session=inputs.target_session,
             generated_inventory=inputs.generated_inventory,
             runtime_proof=inputs.runtime_proof,
+            worker_log=worker_log,
             network_capture=inputs.network_capture,
             transport="genet",
             integration_dir=inputs.integration_dir,
@@ -2596,6 +2677,7 @@ def test_pi_component_collector_derives_exact_live_rows_and_bundle(
         "pi4-network-capture",
         "pi4-runtime-dma-proof",
         "pi4-serial-boot",
+        *(["pi4-worker-log"] if retained_log else []),
     ]
     assert sorted(path.name for path in (inputs.out_dir / "integration").iterdir()) == [
         "gpu-receipt-path.json",
@@ -3014,6 +3096,21 @@ def test_component_rejects_unconfirmed_gpu_receipt_and_missing_integration() -> 
     component["integration_evidence"].pop()
     with pytest.raises(evidence.EvidenceError, match="mandatory integration"):
         evidence.validate_component(component, "qemu")
+
+
+def test_worker_bootstrap_reservation_is_distinct_from_passive_ready(tmp_path: Path) -> None:
+    """The temporary 400/10000 SC cannot be reported as a READY reservation."""
+    inputs = _live_qemu_inputs(tmp_path)
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    worker = _component("qemu")["workers"][0]
+    evidence._validate_worker_topology([worker], topology)  # noqa: SLF001
+    worker["scheduling_context"] = {"budget_us": 400, "period_us": 10000}
+    evidence._validate_worker_topology([worker], topology, bootstrap=True)  # noqa: SLF001
+    with pytest.raises(evidence.EvidenceError, match="scheduling context"):
+        evidence._validate_worker_topology([worker], topology)  # noqa: SLF001
+    worker["scheduling_context"]["budget_us"] = 401
+    with pytest.raises(evidence.EvidenceError, match="scheduling context"):
+        evidence._validate_worker_topology([worker], topology, bootstrap=True)  # noqa: SLF001
 
 
 def test_component_rejects_badge_sc_and_outcome_inventory_tamper() -> None:

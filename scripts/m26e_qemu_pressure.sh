@@ -1511,17 +1511,22 @@ else:
 PY
 }
 
-resolved_executable_population() {
+populate_executable_workers() {
+    local boot_dir=$1
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     "$HARNESS_PYTHON" - \
         "$REPO_ROOT/scripts/rest_perf_harness.py" \
-        "$RESOLVED_MANIFEST" <<'PY'
+        "$RESOLVED_MANIFEST" "$boot_dir" <<'PY'
+from dataclasses import asdict
 import hashlib
 import importlib.util
+import json
 import os
+from pathlib import Path
 import sys
+import time
 
-module_path, manifest_path = sys.argv[1:]
+module_path, manifest_path, boot_dir = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("m26e_worker_population", module_path)
 if spec is None or spec.loader is None:
     raise SystemExit("cannot load REST harness for Worker population binding")
@@ -1540,13 +1545,58 @@ client = rest.RestClient(
     os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
 )
 bounds = client.get_json("/v1/meta/bounds")
-print(
-    rest.executable_population_from_manifest_and_bounds(
-        manifest,
-        bounds,
-        hashlib.sha256(raw).hexdigest(),
-    )
+maximum = rest.executable_population_from_manifest_and_bounds(
+    manifest, bounds, hashlib.sha256(raw).hexdigest(),
 )
+slots = rest.executable_role_slots(bounds)
+instances, _ = rest.discover_executable_workers(client, bounds)
+existing = {
+    role: sum(row.role == role and row.lifecycle == "ready" for row in instances)
+    for role in slots
+}
+payloads = {
+    "worker-heartbeat": {
+        "spawn": "heartbeat", "ticks": 100,
+        "budget": {"ttl_s": 900, "ops": 5000},
+    },
+    "worker-gpu": {
+        "spawn": "gpu", "gpu_id": "GPU-0", "mem_mb": 4096,
+        "streams": 2, "ttl_s": 900, "priority": 1,
+    },
+    "worker-lora": {"spawn": "lora", "budget": {"ttl_s": 900, "ops": 5000}},
+}
+with (Path(boot_dir) / "population-admissions.jsonl").open("x") as log:
+    for role in rest.EXECUTABLE_WORKER_ROLES:
+        if existing[role] > slots[role]:
+            raise RuntimeError("live Worker role exceeds generated admission")
+        for index in range(existing[role], slots[role]):
+            response = rest.queen_control_with_approval(
+                client, json.dumps(payloads[role], separators=(",", ":")),
+                f"m26e-population-{role}-{index}",
+            )
+            log.write(json.dumps({"role": role, "index": index, "response": asdict(response)}) + "\n")
+            log.flush()
+            if response.status != "OK":
+                raise RuntimeError(f"Worker population admission failed: {response.error}")
+# Admission is not READY. Read the actual bounded namespace until every
+# generated slot is READY; the pressure harness independently repeats this census.
+deadline = time.monotonic() + 30.0
+while True:
+    instances, discovered = rest.discover_executable_workers(client, bounds)
+    ready = {
+        role: sum(row.role == role and row.lifecycle == "ready" for row in instances)
+        for role in slots
+    }
+    if ready == slots and len(instances) == maximum:
+        break
+    if time.monotonic() >= deadline:
+        raise RuntimeError(f"Worker population did not become READY: {ready}; expected {slots}")
+    time.sleep(0.1)
+(Path(boot_dir) / "population.json").write_text(json.dumps({
+    "maximum_live_tasks": maximum, "expected_slots": slots,
+    "discovered": discovered, "workers": [asdict(row) for row in instances],
+}, indent=2) + "\n")
+print(maximum)
 PY
 }
 
@@ -1710,14 +1760,39 @@ PY_FAULT
     run_cohsh_command "$boot_dir" "kill $worker" "$ordinal"
 }
 
+capture_worker_log() {
+    local boot_dir=$1
+    shift
+    local owner=(--cohsh "$HOST_TOOLS/cohsh")
+    if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
+        owner=(--rest-url http://127.0.0.1:8080)
+    fi
+    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    "$HARNESS_PYTHON" scripts/lib/worker_log.py \
+        --out "$boot_dir/worker.live.log" "${owner[@]}" "$@"
+}
+
+worker_marker_count() {
+    "$HARNESS_PYTHON" - "$1" "$2" <<'PY_WORKER_LOG'
+from pathlib import Path
+import sys
+from scripts.lib.worker_log import records
+path = Path(sys.argv[1])
+text = records(path.read_text(), complete=False) if path.exists() else ""
+print(sum(sys.argv[2] in line for line in text.splitlines()))
+PY_WORKER_LOG
+}
+
 drive_worker_fault_plan() {
     local boot_dir=$1
     local role=$2
     local ordinal_base=$3
     local gdb_log="$boot_dir/$role.gdb.log"
     local before ready_before
-    before=$(grep -F -c "WORKER_TASK_TEARDOWN role=$role " "$boot_dir/uart.live.log" 2>/dev/null || true)
-    ready_before=$(grep -F -c "WORKER_TASK_READY role=$role " "$boot_dir/uart.live.log" 2>/dev/null || true)
+    capture_worker_log "$boot_dir"
+    before=$(worker_marker_count "$boot_dir/worker.live.log" "WORKER_TASK_TEARDOWN role=$role ")
+    ready_before=$(worker_marker_count "$boot_dir/worker.live.log" "WORKER_TASK_READY role=$role ")
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-gdb \
         --gdb "$GDB_BIN" \
         --remote 127.0.0.1:1234 \
@@ -1732,32 +1807,32 @@ drive_worker_fault_plan() {
         --out "$gdb_log" &
     local gdb_pid=$!
     GDB_RUNNER_PID=$gdb_pid
-    sleep 1
+    wait_for_marker_count "$gdb_log.debug.log" "M26E_GDB_ARMED role=$role result=ready" 1 30
     if [[ "$role" == "worker-gpu" ]]; then
         COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
             --mock --registry "$boot_dir/peft-registry" --publish \
             --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
     fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" "$ordinal_base" NONE || true
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 1 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_TEARDOWN role=$role " --count $(( before + 1 )) --timeout 120
     if [[ "$role" == "worker-gpu" ]]; then
         COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
             --mock --registry "$boot_dir/peft-registry" --publish \
             --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
     fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 1 )) NONE || true
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 1 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_READY role=$role " --count $(( ready_before + 1 )) --timeout 120
     trigger_disposable_worker_control "$boot_dir" "$role" $(( ordinal_base + 10 ))
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 2 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_TEARDOWN role=$role " --count $(( before + 2 )) --timeout 120
     if [[ "$role" == "worker-gpu" ]]; then
         COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
             --mock --registry "$boot_dir/peft-registry" --publish \
             --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
     fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 2 )) NONE || true
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 2 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_READY role=$role " --count $(( ready_before + 2 )) --timeout 120
     trigger_disposable_worker_control "$boot_dir" "$role" $(( ordinal_base + 11 ))
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 3 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_TEARDOWN role=$role " --count $(( before + 3 )) --timeout 120
     if ! wait "$gdb_pid"; then
         GDB_RUNNER_PID=""
         die "Worker GDB plan failed for $role"
@@ -1769,7 +1844,7 @@ drive_worker_fault_plan() {
             --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
     fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 3 ))
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 3 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_READY role=$role " --count $(( ready_before + 3 )) --timeout 120
 }
 
 drive_service_fault_plan() {
@@ -2399,8 +2474,11 @@ run_pressure_boot() {
     assert_gateway_unproven
     publish_gpu_fixture "$boot_dir"
     drive_receipt_matrix "$boot_dir"
+    capture_worker_log "$boot_dir"
     publish_gpu_fixture "$boot_dir"
     drive_operator_lifecycle "$boot_dir"
+    capture_worker_log "$boot_dir"
+    cp "$boot_dir/worker.live.log" "$boot_dir/preflight.worker.log"
     freeze_prefix "$boot_dir/uart.live.log" "$boot_dir/preflight.uart.log"
     cp "$boot_dir/cohsh.log" "$boot_dir/preflight.cohsh.log"
     emit_host_integration "$boot_dir" "$boot_dir/preflight.uart.log" "$boot_dir/preflight.cohsh.log"
@@ -2411,6 +2489,7 @@ run_pressure_boot() {
         --qemu-out "$OUT_ROOT" \
         --auth-observation "$AUTH_OBSERVATION" \
         --uart "$boot_dir/preflight.uart.log" \
+        --worker-log "$boot_dir/preflight.worker.log" \
         --cohsh "$boot_dir/preflight.cohsh.log" \
         --gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
         --gdb-log "$boot_dir/worker-gpu.gdb.log" \
@@ -2446,9 +2525,10 @@ run_pressure_boot() {
     start_pressure_helpers "$boot_dir"
 
     local executable_population
-    executable_population="$(resolved_executable_population)"
+    executable_population="$(populate_executable_workers "$boot_dir")"
     [[ "$executable_population" =~ ^[1-9][0-9]*$ ]] || \
         die "resolved executable Worker population is invalid"
+    capture_worker_log "$boot_dir"
 
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     HIVE_GATEWAY_URL=http://127.0.0.1:8080 \
@@ -2459,6 +2539,7 @@ run_pressure_boot() {
         --no-gateway \
         --rest-url http://127.0.0.1:8080 \
         --qemu-uart-log "$boot_dir/uart.live.log" \
+        --qemu-worker-log "$boot_dir/worker.live.log" \
         --qemu-gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
         --target-session "$TARGET_SESSION" \
         --workers-min "$executable_population" \
@@ -2498,18 +2579,20 @@ PY
         die "canonical pressure summary copy differs from immutable harness output"
     summary="$boot_dir/pressure.summary.json"
     python3 - "$summary" "$boot_dir/uart.live.log" "$boot_dir/pressure.uart.log" \
-        "$boot_dir/worker-heartbeat.gdb.log" "$boot_dir/pressure.gdb.log" <<'PY'
+        "$boot_dir/worker-heartbeat.gdb.log" "$boot_dir/pressure.gdb.log" \
+        "$boot_dir/worker.live.log" "$boot_dir/pressure.worker.log" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import sys
 
-summary_path, uart_live, uart_out, gdb_live, gdb_out = map(Path, sys.argv[1:])
+summary_path, uart_live, uart_out, gdb_live, gdb_out, worker_live, worker_out = map(Path, sys.argv[1:])
 summary = json.loads(summary_path.read_text(encoding="utf-8"))
 faults = summary["report"]["executable_state"]["fault_artifacts"]
 for name, source, destination in (
     ("uart", uart_live, uart_out),
     ("gdb", gdb_live, gdb_out),
+    ("worker-log", worker_live, worker_out),
 ):
     expected = faults[name]
     raw = source.read_bytes()
@@ -2702,6 +2785,7 @@ mkdir -p "$FINAL_DIR"
     --qemu-out "$OUT_ROOT" \
     --auth-observation "$AUTH_OBSERVATION" \
     --preflight-uart "$RUN_DIR/medium/preflight.uart.log" \
+    --preflight-worker-log "$RUN_DIR/medium/preflight.worker.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-heartbeat.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-gpu.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-lora.gdb.log" \
@@ -2713,9 +2797,11 @@ mkdir -p "$FINAL_DIR"
     --preflight-service-uart "$RUN_DIR/console-standard-fault/service.uart.log" \
     --preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log" \
     --uart "$RUN_DIR/medium/pressure.uart.log" \
+    --worker-log "$RUN_DIR/medium/pressure.worker.log" \
     --gdb-log "$RUN_DIR/medium/pressure.gdb.log" \
     --pressure "$RUN_DIR/medium/pressure.summary.json" \
     --uart "$RUN_DIR/high/pressure.uart.log" \
+    --worker-log "$RUN_DIR/high/pressure.worker.log" \
     --gdb-log "$RUN_DIR/high/pressure.gdb.log" \
     --pressure "$RUN_DIR/high/pressure.summary.json" \
     --cohsh "$RUN_DIR/high/preflight.cohsh.log" \

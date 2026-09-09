@@ -5,6 +5,7 @@
 
 #![cfg(feature = "kernel")]
 
+use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
@@ -17,6 +18,8 @@ pub const LOG_SNAPSHOT_LINES: usize = 64;
 pub const LOG_EXPORT_BATCH_LINES: usize = LOG_SNAPSHOT_LINES;
 const USER_RING_CAPACITY: usize = 16;
 pub const LOG_USER_SNAPSHOT_LINES: usize = 16;
+const WORKER_RECORD_BYTES: usize = 1024;
+const WORKER_FRAGMENT_BYTES: usize = 176;
 
 #[derive(Clone)]
 struct LogEntry {
@@ -77,6 +80,34 @@ impl LogRing {
         };
         for line in text.lines() {
             self.push_line(line);
+        }
+    }
+
+    /// Keep every fragment of one bounded Worker proof adjacent in the ring.
+    /// The first sequence identifies the record across overlapping LOG exports.
+    fn append_worker_record(&mut self, record: &str) {
+        let id = self.next_seq;
+        let mut remaining = record;
+        let mut part = 0u8;
+        while !remaining.is_empty() {
+            let mut end = remaining.len().min(WORKER_FRAGMENT_BYTES);
+            while !remaining.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            // 176 payload bytes plus the maximum decimal u64/u8 envelope fits
+            // the existing 256-byte log line. No global log bound is enlarged.
+            let _ = write!(
+                line,
+                "WORKER_LOG id={} part={} last={} data={}",
+                id,
+                part,
+                u8::from(end == remaining.len()),
+                &remaining[..end]
+            );
+            self.push_line(line.as_str());
+            remaining = &remaining[end..];
+            part += 1;
         }
     }
 
@@ -325,6 +356,21 @@ pub fn append_log_bytes(payload: &[u8]) {
     let _ = try_append_log_bytes_to(&LOG_RING, &LOG_CONTENTION_DROPPED_WRITES, payload);
 }
 
+/// Retain a complete Worker observation without UART I/O or waiting on a lock.
+/// Overflow is explicit; collectors must never interpret a truncated proof.
+pub(crate) fn append_worker_record(args: fmt::Arguments<'_>) {
+    let mut record: HeaplessString<WORKER_RECORD_BYTES> = HeaplessString::new();
+    if record.write_fmt(args).is_err() || record.contains(['\r', '\n']) {
+        append_log_line("WORKER_LOG_ERROR reason=invalid-record");
+        return;
+    }
+    let Some(mut ring) = LOG_RING.try_lock() else {
+        LOG_CONTENTION_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    ring.append_worker_record(record.as_str());
+}
+
 /// Attempt one complete qlog line without waiting behind a preempted owner.
 ///
 /// Mandatory callers retain their own bounded record until this returns true;
@@ -404,6 +450,44 @@ mod tests {
 
     static TEST_RING: Mutex<LogRing> = Mutex::new(LogRing::new());
     static TEST_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn worker_fragments_preserve_utf8_and_record_identity() {
+        let mut guard = TEST_RING.lock();
+        guard.clear_for_test();
+        let record = "é".repeat(200);
+        guard.append_worker_record(&record);
+        let lines: std::vec::Vec<_> = guard.lines.iter().map(|row| row.line.clone()).collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("WORKER_LOG id=0 part=0 last=0 data="));
+        assert!(lines[2].starts_with("WORKER_LOG id=0 part=2 last=1 data="));
+        let rebuilt: std::string::String = lines
+            .iter()
+            .map(|line| line.split_once(" data=").unwrap().1)
+            .collect();
+        assert_eq!(rebuilt, record);
+        guard.append_worker_record("WORKER_TASK_READY role=worker-heartbeat");
+        assert!(guard
+            .lines
+            .back()
+            .unwrap()
+            .line
+            .starts_with("WORKER_LOG id=3 part=0 last=1 data="));
+    }
+
+    #[test]
+    fn worker_fragment_envelope_fits_existing_line_bound_at_maximum_id() {
+        let mut guard = TEST_RING.lock();
+        guard.clear_for_test();
+        guard.next_seq = u64::MAX - 6;
+        guard.append_worker_record(&"x".repeat(WORKER_RECORD_BYTES));
+        assert_eq!(guard.lines.len(), 6);
+        assert!(guard
+            .lines
+            .iter()
+            .all(|row| !row.line.is_empty() && row.line.len() <= DEFAULT_LINE_CAPACITY));
+        assert!(guard.lines.back().unwrap().line.contains("part=5 last=1"));
+    }
 
     #[test]
     fn contended_diagnostic_append_drops_without_waiting() {

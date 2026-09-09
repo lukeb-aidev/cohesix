@@ -5796,11 +5796,11 @@ impl GpuState {
                         "state={state} source={source} mode={source_mode} epoch={epoch} sequence={sequence} ttl_ms={ttl_ms} bytes={bytes} sha256={sha256}"
                     ))?;
                     if source_mode == "fixture" {
-                        log::info!(
+                        log::info!(target: "worker-evidence",
                             "GPU_BRIDGE_FIXTURE_ADMISSION source={} mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
                             source,
                         );
-                        log::info!(
+                        log::info!(target: "worker-evidence",
                             "LORA_EXPORT_FIXTURE_ADMISSION source={} job={} mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
                             source,
                             QEMU_LORA_EXPORT_JOB_ID,

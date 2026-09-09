@@ -24,6 +24,23 @@ Bind its timestamp and local endpoint to the selected boot and packet capture;
 it cannot replace exact-image target evidence or qualify Worker pressure.
 Existing REST modes, host clients, SDK, and target runtime contracts are unchanged.
 
+Executable QEMU qualification retains complete Worker observations through
+authenticated `/log/queen.log` exports. The canonical runner uses
+`scripts/lib/worker_log.py` before the gateway attaches and the existing gateway
+afterward. `--qemu-worker-log` binds those exports separately in
+`fault_artifacts["worker-log"]`; the runtime-evidence hash identifies that file,
+while UART and GDB retain their own hashes. The REST harness exports the bounded
+log every five seconds during pressure and once after the workload, through
+the same gateway. This observer adds real gateway load; its reads are not
+counted as benchmark operations. Missing, conflicting or incomplete target
+fragments invalidate the evidence. Existing Worker field schemas, fault
+outcomes, pressure thresholds and raw TCP workloads remain unchanged.
+Lifecycle Call admission records distinguish shutdown/revoke IPC from workload
+control receipts. Before timed pressure, the canonical runner fills the exact
+per-role executable slot counts through approved Queen requests and waits for
+actual READY projections. The benchmark independently verifies the complete
+generated population before and after measurement.
+
 Raw mode defaults to unpaced, sequential PINGs with one outstanding request.
 Use `--raw-requests 1024 --raw-request-rate 180` to measure controlled load
 with a ceiling of 180 request starts/s. The optional rate is finite and within

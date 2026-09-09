@@ -3816,14 +3816,30 @@ def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:
             raise AssertionError("executable acceptance drift must fail closed")
 
 
-def test_fault_artifacts_bind_exact_status_identities(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("retained_log", [False, True])
+def test_fault_artifacts_bind_exact_status_identities(tmp_path: pathlib.Path, retained_log: bool) -> None:
     uart, gdb = write_fault_logs(tmp_path)
     args = argparse.Namespace(qemu_uart_log=str(uart), qemu_gdb_log=str(gdb))
+    if retained_log:
+        fragments = []
+        for identity, record in enumerate(uart.read_text().splitlines()):
+            if not record.startswith(("WORKER_TASK_", "GPU_BRIDGE_FIXTURE_ADMISSION ", "LORA_EXPORT_FIXTURE_ADMISSION ")):
+                continue
+            parts = [record[offset:offset + 176] for offset in range(0, len(record), 176)]
+            fragments.extend(f"WORKER_LOG id={identity} part={part} last={int(part == len(parts) - 1)} data={text}"
+                             for part, text in enumerate(parts))
+        worker_log = tmp_path / "worker.log"
+        worker_log.write_text("\n".join(fragments) + "\n")
+        uart.write_text("root boot transcript\n")
+        args.qemu_worker_log = str(worker_log)
     artifacts, markers = rest_perf.capture_fault_artifacts(
         args,
         acceptance_summary(),
     )
-    assert set(artifacts) == {"uart", "gdb"}
+    assert set(artifacts) == ({"uart", "gdb", "worker-log"} if retained_log else {"uart", "gdb"})
+    if retained_log:
+        assert artifacts["worker-log"]["sha256"] == hashlib.sha256(worker_log.read_bytes()).hexdigest()
+        assert "worker-log:WORKER_TASK_TEARDOWN" in markers
     assert artifacts["uart"]["bytes"] == uart.stat().st_size
     assert artifacts["gdb"]["bytes"] == gdb.stat().st_size
     assert "gdb:phase=budget-exhaustion" in markers
@@ -4334,7 +4350,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'GATEWAY_OPERATOR OK KILL role=worker-heartbeat',
         'cp "$boot_dir/qemu-command.txt" "$boot_dir/preflight.qemu-command.txt"',
         'wait_for_gateway_acceptance',
-        'executable_population="$(resolved_executable_population)"',
+        'executable_population="$(populate_executable_workers "$boot_dir")"',
         '--workers-min "$executable_population"',
         '--workers-max "$executable_population"',
         '--target-session "$TARGET_SESSION"',

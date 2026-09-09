@@ -173,6 +173,8 @@ HOST_TOOLS="$1/host-tools"
 GDB_RUNNER_PID=
 sleep() { :; }
 wait_for_marker_count() { :; }
+capture_worker_log() { :; }
+worker_marker_count() { printf '0\n'; }
 spawn_command_for_role() { printf 'spawn %s\n' "$1"; }
 run_cohsh_command() { printf 'operator %s\n' "$2"; }
 trigger_disposable_worker_control() { printf 'shutdown %s %s\n' "$2" "$3"; }

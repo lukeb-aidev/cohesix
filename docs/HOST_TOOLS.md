@@ -39,6 +39,15 @@ handoff check, with no host-tool API change.
 
 ## Generated integration truth
 
+Worker log transport compatibility review: cohsh, coh, hive-gateway, swarmui,
+gpu-bridge-host, cas-tool, host-ticket-agent, host-sidecar-bridge and
+`tools/cohesix-py` continue transporting bounded diagnostic lines without
+interpreting Worker proof fields. Their APIs and generated contracts are
+unchanged. `scripts/lib/worker_log.py`, the QEMU qualification runner, Worker
+evidence collector and REST benchmark harness reassemble the bounded fragments
+and hash the actual authenticated exports separately from UART/GDB. Raw TCP
+benchmark workloads and acceptance thresholds are unchanged.
+
 Pi release build-marker compatibility review: the complete host-tool catalogue,
 `tools/cohesix-py`, raw/REST benchmark scripts, and generated contracts need no
 interface or workload change. The existing sealed `[BUILD]` line is published
