@@ -18230,10 +18230,29 @@ where
 
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        let build_marker = Some(crate::built_info::BUILD_MARKER_BYTES.as_slice());
+        #[cfg(not(all(feature = "kernel", feature = "release-pi4")))]
+        let build_marker = None;
+        self.announce_console_ready_with_build_marker(build_marker);
+    }
+
+    fn announce_console_ready_with_build_marker(&mut self, build_marker: Option<&[u8]>) {
         if self.console_ready_announced {
             return;
         }
         self.console_ready_announced = true;
+        // The production Pi kernel has no DebugPutChar path before UART
+        // admission. Publish the sealed bytes through the ordinary serial
+        // owner now, before its first ready banner and prompt. Do not rebuild
+        // this line from compile-time strings: staging seals its image digest.
+        if let Some(bytes) = build_marker {
+            let line = match core::str::from_utf8(bytes) {
+                Ok(marker) => marker,
+                Err(_) => "ERR BUILD reason=invalid-utf8",
+            };
+            self.emit_serial_line_atomic(line);
+        }
         #[cfg(feature = "kernel")]
         let log_channel_switched_before_prompt =
             self.ninedoor.is_some() && boot_log::switch_logger_to_log_buffer();
@@ -41590,6 +41609,7 @@ mod tests {
 
     #[test]
     fn console_ready_announcement_is_idempotent() {
+        const SEALED_MARKER: &str = "[BUILD] 719c90738da4 2026-09-09T12:08:19Z image-id=258b5edf782d514ca44ed597689e7e3f85540d3acf38e3eb463821f656669464 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1 qemu-driver-task-smoke:0]";
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -41609,11 +41629,16 @@ mod tests {
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
 
-        pump.announce_console_ready();
+        pump.announce_console_ready_with_build_marker(Some(SEALED_MARKER.as_bytes()));
         let first_ready = pump.serial_mut().driver_mut().drain_tx();
         let first_transcript = core::str::from_utf8(first_ready.as_slice()).unwrap();
         assert_eq!(first_transcript.matches("Cohesix console ready").count(), 1);
         assert_eq!(first_transcript.matches("Commands:").count(), 1);
+        assert_eq!(first_transcript.matches(SEALED_MARKER).count(), 1);
+        assert!(
+            first_transcript.find(SEALED_MARKER).unwrap()
+                < first_transcript.find("Cohesix console ready").unwrap()
+        );
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(pump.post_prompt_local_seat_attach_pending_for_test());
 
@@ -41621,14 +41646,33 @@ mod tests {
         {
             pump.post_prompt_local_seat_attach_pending = false;
         }
-        pump.announce_console_ready();
+        pump.announce_console_ready_with_build_marker(Some(SEALED_MARKER.as_bytes()));
         let second_ready = pump.serial_mut().driver_mut().drain_tx();
         let second_transcript = core::str::from_utf8(second_ready.as_slice()).unwrap();
         assert!(!second_transcript.contains("Cohesix console ready"));
         assert!(!second_transcript.contains("Commands:"));
         assert!(!second_transcript.contains(CONSOLE_PROMPT));
+        assert!(!second_transcript.contains(SEALED_MARKER));
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
+    #[test]
+    fn console_ready_reports_invalid_build_identity_without_fabricating_a_marker() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let store = TicketTable::<4>::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+        pump.announce_console_ready_with_build_marker(Some(b"\xff"));
+        let output = pump.serial_mut().driver_mut().drain_tx();
+        let transcript = core::str::from_utf8(output.as_slice()).unwrap();
+        assert!(transcript.contains("ERR BUILD reason=invalid-utf8"));
+        assert!(!transcript.contains("[BUILD]"));
     }
 
     #[cfg(feature = "net-console")]

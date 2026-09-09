@@ -39,6 +39,13 @@ handoff check, with no host-tool API change.
 
 ## Generated integration truth
 
+Pi release build-marker compatibility review: the complete host-tool catalogue,
+`tools/cohesix-py`, raw/REST benchmark scripts, and generated contracts need no
+interface or workload change. The existing sealed `[BUILD]` line is published
+once at serial-console readiness through the admitted driver. The canonical
+serial and image-identity validators keep their exact-marker-before-prompt
+requirement; no parser, threshold, or acceptance condition is relaxed.
+
 `coh-rtc` compiles
 [`configs/host_integration_acceptance.toml`](../configs/host_integration_acceptance.toml)
 into the exact
