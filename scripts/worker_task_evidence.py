@@ -458,6 +458,7 @@ def _parser() -> argparse.ArgumentParser:
     collect_preflight.add_argument("--auth-observation", type=Path, required=True)
     collect_preflight.add_argument("--uart", type=Path, required=True)
     collect_preflight.add_argument("--worker-log", type=Path)
+    collect_preflight.add_argument("--stale-ticket-observations", type=Path)
     collect_preflight.add_argument("--cohsh", type=Path, required=True)
     collect_preflight.add_argument(
         "--gdb-log", type=Path, action="append", required=True
@@ -496,6 +497,7 @@ def _parser() -> argparse.ArgumentParser:
     collect_qemu.add_argument("--cohsh", type=Path, required=True)
     collect_qemu.add_argument("--preflight-uart", type=Path, required=True)
     collect_qemu.add_argument("--preflight-worker-log", type=Path)
+    collect_qemu.add_argument("--stale-ticket-observations", type=Path)
     collect_qemu.add_argument("--worker-log", type=Path, action="append")
     collect_qemu.add_argument(
         "--preflight-gdb-log", type=Path, action="append", required=True
@@ -3942,8 +3944,30 @@ def _validate_marker_lifecycle(
             raise EvidenceError("Worker teardown lacks exact zero-leak containment")
         if any(
             row["line"] > teardown["line"] and _marker_identity(row) == identity
-            for kind in ("ready", "control", "lifecycle_call", "receipt", "completion")
+            for kind in ("ready", "control", "lifecycle_call", "receipt")
             for row in markers.get(kind, [])
+        ):
+            raise EvidenceError("retired Worker identity produced post-revoke activity")
+        later_completions = [
+            row for row in completions
+            if row["line"] > teardown["line"] and _marker_identity(row) == identity
+        ]
+        # accept_completion contains a graceful shutdown synchronously before
+        # HAL logs its validated result. ABI v2 status 5/action 0 is that root
+        # terminal report, not a new operation by the revoked child.
+        if later_completions and (
+            len(later_completions) != 1
+            or teardown["reason"] != "shutdown"
+            or _marker_uint(later_completions[0], "status") != 5
+            or _marker_uint(later_completions[0], "action") != 0
+            or not any(
+                _marker_identity(call) == identity
+                and call["line"] < teardown["line"]
+                and _marker_uint(call, "call_label") == abi["shutdown_call_label"]
+                and _marker_uint(call, "sequence")
+                == _marker_uint(later_completions[0], "sequence")
+                for call in lifecycle_calls
+            )
         ):
             raise EvidenceError("retired Worker identity produced post-revoke activity")
 
@@ -5536,6 +5560,135 @@ def _qemu_critical_gdb(args: argparse.Namespace) -> None:
     print(f"worker evidence: qemu critical duties PASS ({args.out})")
 
 
+def _stale_ticket_observations(
+    path: Path | None,
+    session_raw: bytes,
+    worker_raw: bytes,
+    markers: Mapping[str, list[dict[str, Any]]],
+) -> tuple[set[tuple[int, int]], bytes]:
+    """Verify root fencing after retirement without inventing a child receipt."""
+    if path is None:
+        return set(), b""
+    try:
+        from scripts.rest_perf_harness import parse_host_ticket_current, RestError
+    except ImportError:  # pragma: no cover - command-line entry point
+        from rest_perf_harness import parse_host_ticket_current, RestError
+
+    raw = _read_frozen_artifact(path, "stale ticket observations")
+    data = _strict_json_loads(raw, "stale ticket observations")
+    if not isinstance(data, dict) or set(data) != {
+        "schema", "target_session_sha256", "worker_log_prefix", "records",
+    } or data["schema"] != "cohesix-stale-ticket-observations/v1":
+        raise EvidenceError("invalid stale ticket observation envelope")
+    prefix = data["worker_log_prefix"]
+    if (
+        data["target_session_sha256"] != _sha256(session_raw)
+        or not isinstance(prefix, dict) or set(prefix) != {"bytes", "sha256"}
+        or type(prefix["bytes"]) is not int
+        or not 0 < prefix["bytes"] <= len(worker_raw)
+        or _sha256(worker_raw[:prefix["bytes"]]) != prefix["sha256"]
+    ):
+        raise EvidenceError("stale ticket observations differ from session or Worker log")
+    rows = data["records"]
+    if not isinstance(rows, list) or len(rows) != len(QEMU_RECEIPT_ACTIONS):
+        raise EvidenceError("stale ticket observations require all seven actions")
+    observed: set[tuple[int, int]] = set()
+    tickets: set[str] = set()
+    keys: set[str] = set()
+    old_identities: set[tuple[str, int, int, int, int]] = set()
+    new_identities: set[tuple[str, int, int, int, int]] = set()
+    action_codes = {value: code for code, value in QEMU_RECEIPT_ACTIONS.items()}
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {
+            "action", "role", "ticket_id", "idempotency_key", "before", "result",
+            "replacement_before", "retired", "after", "replacement_after",
+        }:
+            raise EvidenceError("invalid stale ticket observation fields")
+        action = action_codes.get((row["action"], row["role"]))
+        ticket, key = row["ticket_id"], row["idempotency_key"]
+        if (
+            action is None or (action, 8) in observed
+            or not isinstance(ticket, str) or not ticket or ticket in tickets
+            or not isinstance(key, str) or not key or key in keys
+        ):
+            raise EvidenceError("stale ticket actions and correlations must be unique")
+        try:
+            if any(not isinstance(row[name], list)
+                   or any(not isinstance(line, str) for line in row[name])
+                   for name in ("before", "retired", "after")):
+                raise EvidenceError("stale ticket snapshots must retain raw records")
+            before = parse_host_ticket_current(row["before"])
+            retired = parse_host_ticket_current(row["retired"])
+            after = parse_host_ticket_current(row["after"])
+        except RestError as error:
+            raise EvidenceError(f"invalid stale ticket current record: {error}") from error
+        old = _pressure_worker_identity(vars(before))
+        if (
+            before.state != "pending" or before.lifecycle != "ready"
+            or before.role != row["role"] or before.ready_sequence <= 0
+            or after.state != "stale" or after.lifecycle not in {"absent", "terminal"}
+            or retired.state != "pending"
+            or {name: value for name, value in vars(retired).items() if name != "state"}
+            != {name: value for name, value in vars(after).items() if name != "state"}
+            or _pressure_worker_identity(vars(after)) != old
+            or before.worker_id != after.worker_id
+            or before.admission_sequence != after.admission_sequence
+            or after.control_sequence != 0 or after.receipt_sequence != 0
+            or old in old_identities
+        ):
+            raise EvidenceError("stale result is not pinned to the retired admission")
+        result = row["result"]
+        expected_result = {
+            "schema": "host-ticket-result/v2", "id": ticket,
+            "idempotency_key": key, "action": row["action"], "state": "expired",
+            "receipt_mode": "worker", "receipt_worker_role": before.role,
+            "receipt_worker_id": before.worker_id,
+            "receipt_supervisor_generation": before.supervisor_generation,
+            "receipt_cap_generation": before.cap_generation,
+            "resolved_worker_slot": before.slot, "resolved_lease_epoch": before.lease_epoch,
+            "admission_sequence": before.admission_sequence,
+        }
+        if (
+            not isinstance(result, dict)
+            or any(result.get(name) != value for name, value in expected_result.items())
+            or not isinstance(result.get("result_digest"), str)
+            or not SHA256_RE.fullmatch(result["result_digest"])
+        ):
+            raise EvidenceError("held host result differs from its exact admission")
+        replacement = row["replacement_before"]
+        if not isinstance(replacement, dict) or replacement != row["replacement_after"]:
+            raise EvidenceError("late result changed the replacement Worker")
+        new = _pressure_worker_identity(replacement)
+        if (
+            new[0] != old[0] or type(new[1]) is not int or new[1] < 0
+            or any(type(value) is not int or value <= 0 for value in new[2:])
+            or new[3] <= old[3]
+            or (new[1] == old[1] and any(new[index] <= old[index] for index in (2, 4)))
+            or new in new_identities or replacement.get("worker_id") == before.worker_id
+            or replacement.get("lifecycle") != "ready"
+            or type(replacement.get("ready_sequence")) is not int
+            or replacement["ready_sequence"] <= 0
+            or any(replacement.get(name) != 0 for name in (
+                "control_sequence", "receipt_sequence", "completion_sequence",
+            ))
+        ):
+            raise EvidenceError("replacement identity or untouched READY state is invalid")
+        teardowns = [item for item in markers["teardown"] if _marker_identity(item) == old]
+        ready = [item for item in markers["ready"] if _marker_identity(item) == new]
+        if (
+            len(teardowns) != 1 or len(ready) != 1
+            or ready[0]["line"] <= teardowns[0]["line"]
+            or not any(_marker_identity(item) == old for item in markers["ready"])
+        ):
+            raise EvidenceError("stale observation lacks ordered target retirement and READY")
+        observed.add((action, 8))
+        tickets.add(ticket)
+        keys.add(key)
+        old_identities.add(old)
+        new_identities.add(new)
+    return observed, raw
+
+
 def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     if args.out_dir.exists() and any(args.out_dir.iterdir()):
         raise EvidenceError("QEMU preflight output directory must be absent or empty")
@@ -5610,6 +5763,10 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     admissions, matrix, fault_roles, sequential_roles, fault_phase_roles = (
         _validate_marker_lifecycle(markers, topology)
     )
+    stale_matrix, stale_raw = _stale_ticket_observations(
+        getattr(args, "stale_ticket_observations", None), session_raw, worker_log_raw, markers,
+    )
+    matrix.update(stale_matrix)
     expected_matrix = {
         (action, outcome)
         for action in QEMU_RECEIPT_ACTIONS
@@ -5664,6 +5821,7 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     workers = _live_workers_from_uart(markers, admissions, topology)
     raw_evidence = [
         _artifact_row("preflight-uart-transcript", uart_raw),
+        *([_artifact_row("stale-ticket-observations", stale_raw)] if stale_raw else []),
         *([_artifact_row("preflight-worker-log-transcript", worker_log_raw)] if worker_log_raw else []),
         _artifact_row("preflight-cohsh-transcript", cohsh_raw),
         *(
@@ -5841,6 +5999,11 @@ def _collect_qemu(args: argparse.Namespace) -> None:
         preflight_sequential_roles,
         preflight_fault_phase_roles,
     ) = _validate_marker_lifecycle(preflight_markers, topology)
+    stale_matrix, stale_raw = _stale_ticket_observations(
+        getattr(args, "stale_ticket_observations", None),
+        session_raw, preflight_worker_log_raw, preflight_markers,
+    )
+    preflight_matrix.update(stale_matrix)
     if any(
         observation["image_sha256"] != image_hashes[identity[0]]
         for identity, observation in preflight_admissions.items()
@@ -5948,6 +6111,7 @@ def _collect_qemu(args: argparse.Namespace) -> None:
 
     raw_evidence = [
         _artifact_row("cohsh-transcript", cohsh_raw),
+        *([_artifact_row("stale-ticket-observations", stale_raw)] if stale_raw else []),
         _artifact_row("preflight-uart-transcript", preflight_uart_raw),
         *([_artifact_row("preflight-worker-log-transcript", preflight_worker_log_raw)] if preflight_worker_log_raw else []),
         *(_artifact_row(f"worker-log-transcript-{index + 1}", raw) for index, raw in enumerate(worker_log_artifacts)),

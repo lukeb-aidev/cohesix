@@ -5,21 +5,189 @@
 """Check preflight and emitted commands without cleanup, build, or QEMU."""
 
 import ast
+import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import tomllib
 from types import SimpleNamespace
+import urllib.error
+import urllib.request
 
 import pytest
+from scripts.ci import check_host_integration_inventory as host_integration
+from scripts.lib.host_ticket_result_barrier import TerminalResultBarrier
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_expired_receipt_keeps_the_admitted_worker_alive() -> None:
+def test_terminal_result_barrier_orders_retirement_before_unchanged_publication() -> None:
+    """Only the correlated terminal ECHO is held; credentials remain mandatory."""
+    events = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            events.append(("published", self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(201)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    upstream = HTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    result = {"schema": "host-ticket-result/v2", "id": "ticket-1", "state": "expired"}
+    body = json.dumps({"path": "/host/tickets/status", "line": json.dumps(result)}).encode()
+    try:
+        with TerminalResultBarrier(
+            f"http://127.0.0.1:{upstream.server_port}", "test-token", "ticket-1",
+            lambda row: events.append(("retired", row)),
+        ) as barrier:
+            request = urllib.request.Request(barrier.url + "/v1/fs/echo", data=body)
+            with pytest.raises(urllib.error.HTTPError) as refused:
+                urllib.request.urlopen(request, timeout=5)
+            assert refused.value.code == 401
+            assert events == []
+            request.add_header("Authorization", "Bearer test-token")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                assert response.status == 201
+                assert response.read() == b"{}"
+            barrier.verify()
+            assert events == [("retired", result), ("published", body)]
+            with pytest.raises(urllib.error.HTTPError) as duplicate:
+                urllib.request.urlopen(request, timeout=5)
+            assert duplicate.value.code == 502
+            with pytest.raises(ValueError, match="exactly one"):
+                barrier.verify()
+            assert len(events) == 2
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("upstream", ["https://127.0.0.1:8080", "http://localhost:8080",
+                                      "http://127.0.0.1:8080/private"])
+def test_terminal_result_barrier_requires_local_gateway(upstream: str) -> None:
+    with pytest.raises(ValueError, match="loopback"):
+        TerminalResultBarrier(upstream, "test-token", "ticket-1", lambda _: None)
+
+
+@pytest.mark.parametrize("status", [0, 7])
+def test_background_uart_capture_does_not_echo_input_eof(
+    tmp_path: Path, status: int,
+) -> None:
+    """Capture command output without terminal control bytes from the launcher."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "start_uart_capture() {" + source.split(
+        "start_uart_capture() {", 1,
+    )[1].split("\nverify_live_artifacts() {", 1)[0]
+    uart = tmp_path / "uart.log"
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '\nHARNESS_PYTHON="$2"\n'
+         'start_uart_capture "$1" "$2" -c "$3"\n',
+         "capture-test", str(uart), sys.executable,
+         f'import sys; print("capture-sentinel"); sys.exit({status})'],
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=10,
+    )
+    assert result.returncode == status, result.stderr
+    raw = uart.read_bytes()
+    assert b"capture-sentinel\r\n" in raw
+    assert all(byte >= 0x20 or byte in (9, 10, 13) for byte in raw)
+    assert result.stdout == raw
+
+
+@pytest.mark.parametrize("worker_log", ["complete", "missing", "truncated"])
+def test_host_integration_binds_complete_worker_exports(
+    tmp_path: Path, worker_log: str,
+) -> None:
+    """Worker proof comes from authenticated fragments, with UART kept distinct."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    embedded = source.split("emit_host_integration() {", 1)[1].split("<<'PY'\n", 1)[1]
+    embedded = embedded.split("\nPY\n", 1)[0]
+    graph, manifest, uart, cohsh, matrix, worker, stale, output = [
+        tmp_path / name for name in (
+            "graph.json", "manifest.json", "uart.log", "cohsh.log",
+            "matrix.json", "worker.log", "stale.json", "observations.json",
+        )
+    ]
+    stale.write_text(json.dumps({
+        "schema": "cohesix-stale-ticket-observations/v1",
+        "records": [
+            {"action": action, "role": role}
+            for role, actions in (
+                ("worker-gpu", ("gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release")),
+                ("worker-lora", ("peft.export", "peft.import", "peft.activate", "peft.rollback")),
+            ) for action in actions
+        ],
+    }))
+    graph.write_text("{}\n")
+    manifest.write_text("{}\n")
+    uart.write_text("QEMU boot identity belongs to UART\n")
+    cohsh.write_text("OK SPAWN\nOK KILL\nERR worker-bus model-only mode=fixture\n")
+    matrix.write_text(json.dumps({
+        "schema": "cohesix-qemu-receipt-matrix/v1",
+        "records": [
+            {"action": action, "role": role, "outcome": outcome}
+            for role, actions in (
+                ("worker-gpu", ("gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release")),
+                ("worker-lora", ("peft.export", "peft.import", "peft.activate", "peft.rollback")),
+            )
+            for action in actions for outcome in ("succeeded", "failed", "expired")
+        ],
+    }))
+    markers = [
+        "WORKER_TASK_RECEIPT", "WORKER_TASK_COMPLETION",
+        "WORKER_TASK_READY role=worker-heartbeat",
+        "WORKER_TASK_READY role=worker-gpu", "WORKER_TASK_READY role=worker-lora",
+        "GPU_BRIDGE_FIXTURE_ADMISSION fixture=qemu",
+        "LORA_EXPORT_FIXTURE_ADMISSION fixture=qemu",
+    ]
+    if worker_log == "missing":
+        markers.remove("WORKER_TASK_RECEIPT")
+    fragments = []
+    for index, marker in enumerate(markers):
+        fragments += [
+            f"WORKER_LOG id={index} part=0 last=0 data={marker[:8]}",
+            f"WORKER_LOG id={index} part=1 last=1 data={marker[8:]}",
+        ]
+    if worker_log == "truncated":
+        fragments.pop()
+    worker.write_text("\n".join(fragments) + "\n")
+    result = subprocess.run(
+        [sys.executable, "-c", embedded, *map(str, (
+            graph, manifest, uart, cohsh, matrix, worker, stale, output,
+        ))], cwd=ROOT, text=True, capture_output=True, timeout=10,
+    )
+    if worker_log != "complete":
+        assert result.returncode != 0
+        assert not output.exists()
+        assert ("WORKER_TASK_RECEIPT" if worker_log == "missing" else "incomplete") in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    observations = list(host_integration._load_observations(
+        output, hashlib.sha256(graph.read_bytes()).hexdigest(),
+        hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    ).values())
+    assert {row["dependency_id"] for row in observations} == {
+        "gpu-receipt-path", "peft-receipt-path", "worker-control",
+    }
+    expected = {"id": "worker-log-transcript", "bytes": worker.stat().st_size,
+                "sha256": hashlib.sha256(worker.read_bytes()).hexdigest()}
+    for row in observations:
+        assert expected in row["raw_evidence"]
+
+
+@pytest.mark.parametrize("worker_completed", [True, False])
+def test_expired_receipt_keeps_the_admitted_worker_alive(worker_completed: bool) -> None:
     """Expiry requires a live recipient; generation invalidation has its own lane."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
     embedded = source.split("drive_receipt_matrix() {", 1)[1].split("<<'PY'\n", 1)[1]
@@ -32,16 +200,31 @@ def test_expired_receipt_keeps_the_admitted_worker_alive() -> None:
         writes.append((path, json.loads(line)))
         return SimpleNamespace(status="OK")
 
+    times = iter([0, 0, 0, 21])
     scope = {
         "sequence": 0, "json": json,
         "ready": lambda role: SimpleNamespace(
             worker_id="worker7", supervisor_generation=3, cap_generation=4,
+            role="worker-lora", slot=0, lease_epoch=1,
+            receipt_sequence=0, completion_sequence=0,
         ),
         "client": SimpleNamespace(echo=echo), "run_agent": lambda: None,
-        "time": SimpleNamespace(monotonic=lambda: 0),
+        "time": SimpleNamespace(monotonic=lambda: next(times), sleep=lambda _: None),
         "terminal": lambda ticket: "expired", "records": [],
+        "capture_worker_records": lambda: None,
+        "rest": SimpleNamespace(read_host_ticket_current=lambda *args: SimpleNamespace(
+            state="rejected", worker_id="worker7", role="worker-lora", slot=0,
+            lease_epoch=1, supervisor_generation=3, cap_generation=4,
+            lifecycle="ready", receipt_sequence=int(worker_completed),
+            completion_sequence=int(worker_completed),
+            control_sequence=0,
+        )),
     }
     exec(compile(ast.Module(body=[submit], type_ignores=[]), "receipt-submit", "exec"), scope)
+    if not worker_completed:
+        with pytest.raises(RuntimeError, match="lacks its exact Worker receipt"):
+            scope["submit"]("peft.export", "worker-lora", {}, "job", "expired", "operation")
+        return
     scope["submit"]("peft.export", "worker-lora", {}, "job", "expired", "operation")
     assert len(writes) == 1
     assert writes[0][0] == "/host/tickets/spec"

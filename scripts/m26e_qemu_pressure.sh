@@ -1223,15 +1223,63 @@ PY
 start_uart_capture() {
     local uart=$1
     shift
-    if [[ "$PRESSURE_HOST_OS" == "Darwin" ]]; then
-        exec /usr/bin/script -q -F "$uart" "$@"
-    fi
-    if [[ "$PRESSURE_HOST_OS" == "Linux" ]]; then
-        local command_line
-        printf -v command_line '%q ' "$@"
-        exec /usr/bin/script -q -f -c "$command_line" "$uart"
-    fi
-    die "unsupported UART capture host: $PRESSURE_HOST_OS"
+    # Own the PTY without forwarding the unattended runner's stdin EOF. Keep
+    # raw output byte-for-byte; BSD script otherwise injects ^D and backspaces.
+    exec "${HARNESS_PYTHON:-python3}" - "$uart" "$@" <<'PY_CAPTURE'
+import errno
+import os
+from pathlib import Path
+import pty
+import signal
+import subprocess
+import sys
+
+master, slave = pty.openpty()
+child = None
+try:
+    with Path(sys.argv[1]).open("xb") as output:
+        child = subprocess.Popen(
+            sys.argv[2:], stdin=slave, stdout=slave, stderr=slave,
+            start_new_session=True,
+        )
+        os.close(slave)
+        slave = -1
+
+        def forward_signal(signum, _frame):
+            try:
+                os.killpg(child.pid, signum)
+            except ProcessLookupError:
+                pass
+
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, forward_signal)
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            output.write(chunk)
+            output.flush()
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        status = child.wait()
+finally:
+    os.close(master)
+    if slave >= 0:
+        os.close(slave)
+    if child is not None and child.poll() is None:
+        os.killpg(child.pid, signal.SIGTERM)
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+sys.exit(status if status >= 0 else 128 - status)
+PY_CAPTURE
 }
 
 verify_live_artifacts() {
@@ -1578,6 +1626,13 @@ with (Path(boot_dir) / "population-admissions.jsonl").open("x") as log:
             log.flush()
             if response.status != "OK":
                 raise RuntimeError(f"Worker population admission failed: {response.error}")
+            # Population is setup, outside the timed pressure interval. Retain
+            # each admission before later spawns can evict a fragment of it.
+            capture = client.cat("/log/queen.log", 524288)
+            if capture.status != "OK":
+                raise RuntimeError("Worker population log export failed")
+            with (Path(boot_dir) / "worker.live.log").open("a", encoding="utf-8") as output:
+                output.write("\n".join(capture.lines) + "\n")
 # Admission is not READY. Read the actual bounded namespace until every
 # generated slot is READY; the pressure harness independently repeats this census.
 deadline = time.monotonic() + 30.0
@@ -2104,7 +2159,7 @@ def ready(role):
     return rows[0]
 
 
-def run_agent():
+def run_agent(rest_url="http://127.0.0.1:8080"):
     command = [
         str(agent),
         "--manifest", str(manifest),
@@ -2112,7 +2167,7 @@ def run_agent():
         "--execution-journal", str(state_dir / "execution-journal.json"),
         "--agent-lock", str(state_dir / "agent.lock"),
         "--run-once",
-        "--rest-url", "http://127.0.0.1:8080",
+        "--rest-url", rest_url,
         "--registry-root", str(boot / "peft-registry"),
         "--export-root", str(boot / "peft-exports"),
         "--adapter-root", str(boot / "peft-adapters"),
@@ -2160,6 +2215,14 @@ def terminal(ticket_id):
     return None
 
 
+def capture_worker_records():
+    response = client.cat("/log/queen.log", 524288)
+    if response.status != "OK":
+        raise RuntimeError("cannot retain the authenticated Worker log")
+    with (boot / "worker.live.log").open("a", encoding="utf-8") as output:
+        output.write("\n".join(response.lines) + "\n")
+
+
 def submit(action, role, args, subject, expected, operation_id):
     global sequence
     sequence += 1
@@ -2194,7 +2257,34 @@ def submit(action, role, args, subject, expected, operation_id):
         time.sleep(0.1)
     if observed != expected:
         raise RuntimeError(f"{action} expected {expected}, observed {observed}")
-    records.append({"action": action, "role": role, "outcome": expected, "ticket_id": ticket_id})
+    expected_current = "confirmed" if expected == "succeeded" else "rejected"
+    current = None
+    while time.monotonic() < deadline:
+        current = rest.read_host_ticket_current(client, ticket_id, payload["idempotency_key"])
+        if (
+            current.state == expected_current
+            and current.worker_id == before.worker_id
+            and current.role == before.role
+            and current.slot == before.slot
+            and current.lease_epoch == before.lease_epoch
+            and current.supervisor_generation == before.supervisor_generation
+            and current.cap_generation == before.cap_generation
+            and current.lifecycle == "ready"
+            and current.receipt_sequence > before.receipt_sequence
+            and current.completion_sequence > before.completion_sequence
+            and current.completion_sequence == current.receipt_sequence
+            and current.control_sequence == 0
+        ):
+            break
+        time.sleep(0.1)
+    else:
+        capture_worker_records()
+        raise RuntimeError(f"{action}/{expected} lacks its exact Worker receipt: {current}")
+    capture_worker_records()
+    records.append({"action": action, "role": role, "outcome": expected, "ticket_id": ticket_id,
+                    "worker_state": current.state, "worker_id": current.worker_id,
+                    "receipt_sequence": current.receipt_sequence,
+                    "completion_sequence": current.completion_sequence})
 
 
 confirmed = [
@@ -2230,7 +2320,7 @@ rejected = [
 for row in rejected:
     submit(*row[:4], "failed", row[4])
 
-stale = [
+expired = [
     ("gpu.lease.grant", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-stale-grant"),
     ("gpu.lease.renew", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-stale-renew"),
     ("gpu.lease.release", "worker-gpu", {"reason": "m26e-stale"}, gpu_id, "gpu-stale-release"),
@@ -2239,16 +2329,111 @@ stale = [
     ("peft.activate", "worker-lora", {}, "m26e-lora", "peft-stale-activate"),
     ("peft.rollback", "worker-lora", {}, "vision-lora-edge", "peft-stale-rollback"),
 ]
-for row in stale:
+for row in expired:
     submit(*row[:4], "expired", row[4])
 
-expected_actions = {row[0] for row in confirmed + rejected + stale}
+expected_actions = {row[0] for row in confirmed + rejected + expired}
 if len(records) != 21 or {row["action"] for row in records} != expected_actions:
     raise RuntimeError("receipt matrix is incomplete")
 (boot / "receipt-matrix.json").write_text(
     json.dumps({"schema": "cohesix-qemu-receipt-matrix/v1", "records": records}, indent=2, sort_keys=True) + "\n",
     encoding="utf-8",
 )
+
+# Retirement occurs after the real agent has validated the live admission and
+# prepared its terminal result, before that result reaches the existing root.
+from dataclasses import asdict
+import hashlib
+from scripts.lib.host_ticket_result_barrier import TerminalResultBarrier
+
+retirements = []
+
+
+def current_lines(ticket, key):
+    path = rest.HOST_TICKET_CURRENT_PREFIX + rest.host_ticket_correlation_digest(ticket, key)
+    response = client.cat(path, rest.HOST_TICKET_CURRENT_MAX_BYTES)
+    if response.status != "OK":
+        raise RuntimeError("cannot read the exact admitted ticket")
+    rest.parse_host_ticket_current(response.lines)
+    return response.lines
+
+
+for index, (action, role, args_value, subject, _) in enumerate(expired, 1):
+    republish()
+    before = ready(role)
+    ticket = f"m26e-retired-{index:03d}"
+    key = f"m26e-retired-idem-{index:03d}"
+    payload = {
+        "schema": "host-ticket/v2", "id": ticket, "idempotency_key": key,
+        "action": action, "args": args_value, "receipt_mode": "worker",
+        "operation_id": f"m26e-retired-op-{index:03d}", "subject_ref": subject,
+        "receipt_worker_role": role, "receipt_worker_id": before.worker_id,
+        "receipt_supervisor_generation": before.supervisor_generation,
+        "receipt_cap_generation": before.cap_generation, "expires_unix_ms": 1,
+    }
+    response = client.echo("/host/tickets/spec", json.dumps(payload, separators=(",", ":")))
+    if response.status != "OK":
+        raise RuntimeError(f"retirement admission failed: {response.error}")
+    observation = {"action": action, "role": role, "ticket_id": ticket,
+                   "idempotency_key": key, "before": current_lines(ticket, key)}
+
+    def retire_receiver(result):
+        observation["result"] = result
+        response = rest.queen_control_with_approval(
+            client, json.dumps({"kill": before.worker_id}), f"m26e-retired-kill-{index}",
+        )
+        if response.status != "OK":
+            raise RuntimeError(f"retirement kill failed: {response.error}")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            old = next((row for row in instances() if row.worker_id == before.worker_id), None)
+            if old is not None and old.lifecycle == "terminal":
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("retired Worker did not become terminal")
+        spawn = ({"spawn": "gpu", "gpu_id": "GPU-0", "mem_mb": 4096,
+                  "streams": 2, "ttl_s": 120, "priority": 1}
+                 if role == "worker-gpu" else {"spawn": "lora"})
+        response = rest.queen_control_with_approval(
+            client, json.dumps(spawn), f"m26e-retired-spawn-{index}",
+        )
+        if response.status != "OK":
+            raise RuntimeError(f"replacement admission failed: {response.error}")
+        while time.monotonic() < deadline:
+            replacements = [row for row in instances() if row.role == role
+                            and row.lifecycle == "ready"
+                            and row.supervisor_generation > before.supervisor_generation]
+            if len(replacements) == 1:
+                observation["replacement_before"] = asdict(replacements[0])
+                observation["retired"] = current_lines(ticket, key)
+                capture_worker_records()
+                return
+            time.sleep(0.1)
+        raise RuntimeError("replacement Worker did not become READY")
+
+    with TerminalResultBarrier(
+        "http://127.0.0.1:8080", os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+        ticket, retire_receiver,
+    ) as barrier:
+        run_agent(barrier.url)
+        barrier.verify()
+    observation["after"] = current_lines(ticket, key)
+    after = rest.parse_host_ticket_current(observation["after"])
+    replacement = ready(role)
+    observation["replacement_after"] = asdict(replacement)
+    if after.state != "stale" or observation["replacement_before"] != observation["replacement_after"]:
+        raise RuntimeError("late result was not fenced from the replacement Worker")
+    capture_worker_records()
+    retirements.append(observation)
+
+worker_raw = (boot / "worker.live.log").read_bytes()
+(boot / "stale-ticket-observations.json").write_text(json.dumps({
+    "schema": "cohesix-stale-ticket-observations/v1",
+    "target_session_sha256": hashlib.sha256((boot / "target-session.json").read_bytes()).hexdigest(),
+    "worker_log_prefix": {"sha256": hashlib.sha256(worker_raw).hexdigest(), "bytes": len(worker_raw)},
+    "records": retirements,
+}, indent=2, sort_keys=True) + "\n")
 PY
 }
 
@@ -2258,13 +2443,15 @@ emit_host_integration() {
     local cohsh=$3
     local observations="$boot_dir/host-integration-observations.json"
     python3 - "$REPO_ROOT/configs/generated/host_integration_dependency.json" \
-        "$RESOLVED_MANIFEST" "$uart" "$cohsh" "$boot_dir/receipt-matrix.json" "$observations" <<'PY'
+        "$RESOLVED_MANIFEST" "$uart" "$cohsh" "$boot_dir/receipt-matrix.json" \
+        "$boot_dir/preflight.worker.log" "$boot_dir/stale-ticket-observations.json" "$observations" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import sys
+from scripts.lib.worker_log import records as worker_records
 
-graph_path, manifest_path, uart_path, cohsh_path, matrix_path, out_path = map(Path, sys.argv[1:])
+graph_path, manifest_path, uart_path, cohsh_path, matrix_path, worker_path, stale_path, out_path = map(Path, sys.argv[1:])
 graph_raw = graph_path.read_bytes()
 manifest_raw = manifest_path.read_bytes()
 matrix_raw = matrix_path.read_bytes()
@@ -2293,20 +2480,26 @@ required = {
 }
 if observed != required or len(observed) != len(records):
     raise SystemExit("receipt matrix does not contain exact unique target outcomes")
-uart = uart_raw.decode("utf-8")
+stale = json.loads(stale_path.read_bytes())
+if (stale.get("schema") != "cohesix-stale-ticket-observations/v1"
+        or len(stale.get("records", [])) != 7
+        or {(row.get("action"), row.get("role")) for row in stale["records"]}
+        != set(expected.items())):
+    raise SystemExit("stale ticket matrix does not contain all seven retired admissions")
+worker_text = worker_records(worker_path.read_text(encoding="utf-8"))
 for literal in (
     "WORKER_TASK_RECEIPT",
     "WORKER_TASK_COMPLETION",
     "WORKER_TASK_READY role=worker-heartbeat",
     "WORKER_TASK_READY role=worker-gpu",
     "WORKER_TASK_READY role=worker-lora",
-    "NINEDOOR_SERVICE_TEARDOWN",
-    "CONSOLE_NETWORK_TEARDOWN",
     "GPU_BRIDGE_FIXTURE_ADMISSION",
     "LORA_EXPORT_FIXTURE_ADMISSION",
 ):
-    if literal not in uart:
-        raise SystemExit(f"target UART lacks semantic integration marker: {literal}")
+    if literal not in worker_text:
+        raise SystemExit(f"authenticated Worker log lacks semantic integration marker: {literal}")
+# Service teardown belongs to the three separate service-fault boots. The
+# preflight collector validates those exact UART/GDB pairs before acceptance.
 cohsh = cohsh_raw.decode("utf-8")
 for literal in ("OK SPAWN", "OK KILL", "worker-bus", "model-only", "mode=fixture"):
     if literal not in cohsh:
@@ -2314,20 +2507,26 @@ for literal in ("OK SPAWN", "OK KILL", "worker-bus", "model-only", "mode=fixture
 if "ERR" not in cohsh:
     raise SystemExit("cohsh transcript lacks bounded control refusal")
 artifacts = {
-    "gpu-receipt-path": ("confirmed-rejected-stale-worker-receipts-observed", (matrix_path, uart_path)),
-    "peft-receipt-path": ("confirmed-rejected-stale-worker-receipts-observed", (matrix_path, uart_path)),
-    "worker-control": ("spawn-kill-admission-ready-and-refusal-observed", (cohsh_path, uart_path)),
+    "gpu-receipt-path": ("confirmed-rejected-receipts-and-retired-result-fencing-observed", (
+        ("receipt-matrix", matrix_path), ("stale-ticket-observations", stale_path),
+        ("worker-log-transcript", worker_path))),
+    "peft-receipt-path": ("confirmed-rejected-receipts-and-retired-result-fencing-observed", (
+        ("receipt-matrix", matrix_path), ("stale-ticket-observations", stale_path),
+        ("worker-log-transcript", worker_path))),
+    "worker-control": ("spawn-kill-admission-ready-and-refusal-observed", (
+        ("cohsh-transcript", cohsh_path), ("uart-transcript", uart_path),
+        ("worker-log-transcript", worker_path))),
 }
 rows = []
 for row_id in sorted(artifacts):
     result, paths = artifacts[row_id]
     raw_evidence = []
-    for path in paths:
+    for identifier, path in paths:
         raw = path.read_bytes()
         if not raw:
             raise SystemExit(f"empty host-integration artifact: {path}")
         raw_evidence.append(
-            {"id": path.name, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+            {"id": identifier, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
         )
     raw_evidence.sort(key=lambda row: row["id"])
     rows.append(
@@ -2485,6 +2684,7 @@ run_pressure_boot() {
         --auth-observation "$AUTH_OBSERVATION" \
         --uart "$boot_dir/preflight.uart.log" \
         --worker-log "$boot_dir/preflight.worker.log" \
+        --stale-ticket-observations "$boot_dir/stale-ticket-observations.json" \
         --cohsh "$boot_dir/preflight.cohsh.log" \
         --gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
         --gdb-log "$boot_dir/worker-gpu.gdb.log" \
@@ -2781,6 +2981,7 @@ mkdir -p "$FINAL_DIR"
     --auth-observation "$AUTH_OBSERVATION" \
     --preflight-uart "$RUN_DIR/medium/preflight.uart.log" \
     --preflight-worker-log "$RUN_DIR/medium/preflight.worker.log" \
+    --stale-ticket-observations "$RUN_DIR/medium/stale-ticket-observations.json" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-heartbeat.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-gpu.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-lora.gdb.log" \

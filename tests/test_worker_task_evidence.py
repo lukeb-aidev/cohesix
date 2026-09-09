@@ -23,6 +23,99 @@ from scripts import worker_task_evidence as evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("tamper", [
+    None, "session", "log", "missing-action", "duplicate-action", "retarget",
+    "replacement-progress", "result-generation", "retirement-order", "retired-progress",
+])
+def test_stale_ticket_fencing_requires_exact_retired_and_untouched_replacement(
+    tmp_path: Path, tamper: str | None,
+) -> None:
+    """Late results stay at root; neither a new identity nor its progress may change."""
+    session = b"independent-session-bytes"
+    worker = b"independent-authenticated-log-bytes"
+    actions = [
+        ("gpu.lease.grant", "worker-gpu", 0x201),
+        ("gpu.lease.renew", "worker-gpu", 0x202),
+        ("gpu.lease.release", "worker-gpu", 0x203),
+        ("peft.export", "worker-lora", 0x301),
+        ("peft.import", "worker-lora", 0x302),
+        ("peft.activate", "worker-lora", 0x303),
+        ("peft.rollback", "worker-lora", 0x304),
+    ]
+    rows = []
+    markers = {"ready": [], "teardown": []}
+    for index, (action, role, _) in enumerate(actions, 1):
+        old = {"role": role, "slot": "0", "lease_epoch": str(index),
+               "supervisor_generation": str(index * 2), "cap_generation": str(index)}
+        new = dict(old, lease_epoch=str(index + 1),
+                   supervisor_generation=str(index * 2 + 1), cap_generation=str(index + 1))
+        markers["ready"].extend([
+            dict(old, sequence="1", line=index * 10),
+            dict(new, sequence="1", line=index * 10 + 2),
+        ])
+        markers["teardown"].append(dict(old, line=index * 10 + 1))
+
+        def current(state: str, lifecycle: str, sequences: str) -> list[str]:
+            return [f"HOST_TICKET_CURRENT schema=host-ticket-current/v1 state={state} "
+                    f"role={role} worker=worker-{index} lifecycle={lifecycle} "
+                    f"identity=0,{index},{index * 2},{index} sequence={sequences} admission={index}"]
+
+        replacement = {name: (value if name == "role" else int(value))
+                       for name, value in new.items()}
+        replacement.update(worker_id=f"worker-new-{index}", lifecycle="ready",
+                           ready_sequence=1, control_sequence=0,
+                           receipt_sequence=0, completion_sequence=0)
+        rows.append({
+            "action": action, "role": role, "ticket_id": f"ticket-{index}",
+            "idempotency_key": f"key-{index}",
+            "before": current("pending", "ready", "1,0,2,2"),
+            "retired": current("pending", "terminal", "1,0,0,3"),
+            "after": current("stale", "terminal", "1,0,0,3"),
+            "replacement_before": replacement,
+            "replacement_after": copy.deepcopy(replacement),
+            "result": {
+                "schema": "host-ticket-result/v2", "id": f"ticket-{index}",
+                "idempotency_key": f"key-{index}", "action": action, "state": "expired",
+                "receipt_mode": "worker", "receipt_worker_role": role,
+                "receipt_worker_id": f"worker-{index}",
+                "receipt_supervisor_generation": index * 2, "receipt_cap_generation": index,
+                "resolved_worker_slot": 0, "resolved_lease_epoch": index,
+                "admission_sequence": index, "result_digest": "a" * 64,
+            },
+        })
+    data = {"schema": "cohesix-stale-ticket-observations/v1",
+            "target_session_sha256": hashlib.sha256(session).hexdigest(),
+            "worker_log_prefix": {"bytes": len(worker), "sha256": hashlib.sha256(worker).hexdigest()},
+            "records": rows}
+    if tamper == "session":
+        data["target_session_sha256"] = "0" * 64
+    elif tamper == "log":
+        data["worker_log_prefix"]["sha256"] = "0" * 64
+    elif tamper == "missing-action":
+        rows.pop()
+    elif tamper == "duplicate-action":
+        rows[-1] = copy.deepcopy(rows[0])
+    elif tamper == "retarget":
+        rows[0]["after"][0] = rows[0]["after"][0].replace("worker=worker-1", "worker=worker-new-1")
+    elif tamper == "replacement-progress":
+        rows[0]["replacement_after"]["completion_sequence"] = 1
+    elif tamper == "result-generation":
+        rows[0]["result"]["receipt_cap_generation"] = 2
+    elif tamper == "retirement-order":
+        markers["teardown"][0]["line"] = 1000
+    elif tamper == "retired-progress":
+        rows[0]["after"][0] = rows[0]["after"][0].replace("sequence=1,0,0,3", "sequence=1,0,0,4")
+    path = tmp_path / "stale.json"
+    path.write_text(json.dumps(data))
+    if tamper:
+        with pytest.raises(evidence.EvidenceError):
+            evidence._stale_ticket_observations(path, session, worker, markers)
+    else:
+        actual, raw = evidence._stale_ticket_observations(path, session, worker + b"later-log", markers)
+        assert actual == {(code, 8) for _, _, code in actions}
+        assert raw == path.read_bytes()
+
+
 def _pi_live_record_fixture() -> tuple[
     dict[str, object],
     dict[str, object],
@@ -2263,6 +2356,48 @@ def test_lifecycle_fault_proof_requires_admitted_call_after_exact_ready(
         *_, phases = evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
         assert ("worker-heartbeat", "during-ipc") in phases
         assert not any(row["role"] == "worker-heartbeat" for row in markers["receipt"])
+
+
+@pytest.mark.parametrize("invalid", [
+    None, "status", "action", "sequence", "reason", "call", "duplicate", "ready",
+])
+def test_shutdown_terminal_report_is_not_post_revoke_execution(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    """Only the exact root shutdown acknowledgement may follow containment."""
+    inputs = _live_qemu_inputs(tmp_path)
+    text = inputs.preflight_uart.read_text()
+    identity = (
+        "role=worker-heartbeat slot=0 lease_epoch=4 "
+        "supervisor_generation=4 cap_generation=4"
+    )
+    if invalid != "call":
+        text += f"WORKER_TASK_LIFECYCLE_CALL {identity} call_label=2 sequence=1 state=admitted\n"
+    text += (
+        f"WORKER_TASK_TEARDOWN {identity} "
+        f"reason={'fault' if invalid == 'reason' else 'shutdown'} "
+        "tcb_suspended=yes records_cleared=yes scheduling_context_unbound=yes "
+        "mappings_scrubbed=yes descendants_revoked=yes objects_deleted=yes "
+        "generation_fenced=yes state=terminal\n"
+    )
+    completion = (
+        f"WORKER_TASK_COMPLETION {identity} "
+        f"action={'0x0101' if invalid == 'action' else '0x0000'} "
+        f"status={1 if invalid == 'status' else 5} "
+        f"sequence={2 if invalid == 'sequence' else 1}\n"
+    )
+    text += completion
+    if invalid == "duplicate":
+        text += completion
+    if invalid == "ready":
+        text += f"WORKER_TASK_READY {identity} sequence=2\n"
+    markers = evidence._parse_live_worker_markers(text)  # noqa: SLF001
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    if invalid is None:
+        evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+    else:
+        with pytest.raises(evidence.EvidenceError, match="post-revoke"):
+            evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
 
 
 def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(

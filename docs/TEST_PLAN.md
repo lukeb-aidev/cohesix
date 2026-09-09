@@ -1847,13 +1847,37 @@ For each summary:
 - exact per-run UART, GDB and authenticated Worker-log bytes match
   `fault_artifacts`, the marker index is
   complete, and the target transcript independently contains all role faults,
-  all seven actions with confirmed/rejected/stale outcomes, exact teardown
+  all seven actions with confirmed/rejected Worker receipts and root-fenced
+  stale results after retirement, exact teardown
   booleans, service containment, and the GICv3 target/session markers;
+- host-integration observations decode complete authenticated Worker fragments
+  and bind the original Worker-log bytes. Service teardown is validated from
+  the three separate service-fault UART/GDB pairs by the preflight collector;
+  it is not expected on the later receipt boot's UART. The unattended PTY
+  capture owns an empty input channel so launcher EOF cannot inject terminal
+  control bytes; raw UART bytes remain unchanged and strictly validated;
+- a graceful shutdown's root completion report may follow synchronous teardown
+  only once, with ABI status `5`, action `0`, and the same identity/sequence as
+  the prior admitted shutdown Call. This reports the validated terminal result;
+  any later READY, control, receipt, ordinary completion, or duplicate terminal
+  report remains a post-revoke failure;
 - the receipt matrix uses valid advertised GPU subjects and over-bound lease
   operation IDs for deterministic provider rejection. Its expired inputs use
-  `expires_unix_ms=1` while their exact Worker stays READY to receive the stale
-  outcome. Fault and lifecycle injections separately invalidate old-generation
-  authority; destroying a Worker cannot substitute for observing its receipt.
+  `expires_unix_ms=1` while their exact Worker stays READY to receive `Rejected`,
+  as required by the host-ticket mapping in `ROLES_AND_SCHEDULING.md`. All 21
+  success/failure/expiry cases must advance that exact Worker's receipt and
+  completion sequence; a host terminal result alone cannot pass. Each operation
+  retains the authenticated log before the next can evict its records.
+  Seven additional cases hold the real agent's terminal result after admission
+  validation, retire its pinned Worker, and start a fresh same-role generation
+  before forwarding the unchanged result through the existing gateway. The root
+  must retain `stale` for the old admission; the replacement stays READY with
+  unchanged zero receipt/control/completion sequences. The optional collector
+  input `--stale-ticket-observations` binds exact current-ticket records,
+  result identity, ordered target teardown/READY, session hash and retained
+  Worker-log prefix. Without that input the collector still requires the complete
+  legacy marker matrix. Root fencing never claims a child `Stale` completion.
+  Fault and lifecycle injections independently invalidate old-generation authority.
   Activation/rollback must publish the committed host registry and read the
   matching active-model snapshot through the ordinary bridge channel;
 - `/gpu/bridge/status` and the bounded LoRA export job identify only the
