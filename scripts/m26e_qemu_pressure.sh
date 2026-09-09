@@ -1681,10 +1681,11 @@ start_pressure_helpers() {
         --rest-url http://127.0.0.1:8080 \
         >> "$boot_dir/gpu-fixture.log" 2>&1 &
     GPU_REFRESH_PID=$!
-    # The sealed receipt matrix uses a one-lane journal. Pressure is a new
-    # eight-lane agent; its cursor, journal and lock must retain that topology.
+    # Resume the preflight agent's eight-lane cursors and WAL so deliberately
+    # retired tickets cannot be replayed. Keep the original evidence unchanged.
     local state_dir="$boot_dir/pressure-host-ticket-agent"
-    mkdir -p "$state_dir"
+    [[ ! -e "$state_dir" ]] || die "pressure agent state already exists"
+    cp -R "$boot_dir/host-ticket-agent" "$state_dir"
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     "$HOST_TOOLS/host-ticket-agent" \
         --manifest "$RESOLVED_MANIFEST" \
@@ -2168,6 +2169,7 @@ def run_agent(rest_url="http://127.0.0.1:8080"):
         "--cursor", str(state_dir / "cursor.json"),
         "--execution-journal", str(state_dir / "execution-journal.json"),
         "--agent-lock", str(state_dir / "agent.lock"),
+        "--execution-lanes", "8",
         "--run-once",
         "--rest-url", rest_url,
         "--registry-root", str(boot / "peft-registry"),

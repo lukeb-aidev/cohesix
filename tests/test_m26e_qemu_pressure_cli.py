@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_pressure_helpers_preserve_sealed_preflight_agent_state(tmp_path: Path) -> None:
-    """The eight-lane pressure agent cannot reuse the one-lane receipt WAL."""
+    """Pressure resumes the completed WAL without changing the sealed copy."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
     function = "start_pressure_helpers() {" + source.split(
         "start_pressure_helpers() {", 1,
@@ -35,9 +35,14 @@ def test_pressure_helpers_preserve_sealed_preflight_agent_state(tmp_path: Path) 
     boot = tmp_path / "boot with spaces"
     preflight = boot / "host-ticket-agent"
     preflight.mkdir(parents=True)
-    sentinels = {name: f"sealed preflight {name}\n" for name in (
-        "cursor.json", "execution-journal.json", "agent.lock",
-    )}
+    sentinels = {
+        "execution-journal.topology.json": json.dumps({
+            "schema": "host-ticket-execution-lanes/v1", "lanes": 8,
+        }),
+        "cursor.lane-00-of-08.json": '{"raw_next_spec_index":31}\n',
+        "execution-journal.lane-00-of-08.jsonl": "sealed completed ticket\n",
+        "agent.lock": "",
+    }
     for name, contents in sentinels.items():
         (preflight / name).write_text(contents)
     tools = tmp_path / "host-tools"
@@ -71,6 +76,33 @@ def test_pressure_helpers_preserve_sealed_preflight_agent_state(tmp_path: Path) 
     assert pressure_paths[0].parent != preflight
     for name, contents in sentinels.items():
         assert (preflight / name).read_text() == contents
+        assert (pressure_paths[0].parent / name).read_text() == contents
+
+
+def test_receipt_agent_uses_the_pressure_lane_topology(tmp_path: Path) -> None:
+    """Preflight must produce journals that the pressure agent can resume."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    embedded = source.split("drive_receipt_matrix() {", 1)[1].split("<<'PY'\n", 1)[1]
+    embedded = embedded.split("\nPY\n", 1)[0]
+    function = next(node for node in ast.parse(embedded).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "run_agent")
+    commands = []
+
+    def run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    scope = {
+        "agent": tmp_path / "agent", "manifest": tmp_path / "manifest.json",
+        "state_dir": tmp_path / "state", "boot": tmp_path,
+        "agent_log": tmp_path / "agent.log",
+        "subprocess": SimpleNamespace(run=run),
+    }
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "receipt-agent", "exec"), scope)
+    scope["run_agent"]()
+    command, = commands
+    assert command[command.index("--execution-lanes") + 1] == "8"
+    assert "--run-once" in command
 
 
 def test_terminal_result_barrier_orders_retirement_before_unchanged_publication() -> None:

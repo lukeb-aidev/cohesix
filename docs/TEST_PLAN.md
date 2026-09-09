@@ -606,11 +606,12 @@ collector treats cohsh `OK SPAWN`/`OK KILL` only as admission outcomes; READY,
 artifact, receipt, and proof axes come from identity-bound UART/pressure records,
 never from caller-supplied projection text.
 
-Preserve the receipt matrix's one-lane `host-ticket-agent/` state. The
-eight-lane pressure agent uses its own `pressure-host-ticket-agent/` cursor,
-execution journal, and lock, with a separate pressure log. Execution lane
-topology is part of journal identity; changing it cannot reuse or overwrite
-the preflight journal.
+Use eight execution lanes for both receipt preflight and pressure. Preserve
+the completed `host-ticket-agent/` state, then copy its cursors, execution
+journals and lock files into `pressure-host-ticket-agent/` before pressure
+starts. Pressure resumes those cursors and journals with a separate log;
+starting from empty state would replay the deliberately retired tickets.
+Execution lane topology is part of journal identity and remains unchanged.
 
 ```bash
 python3 scripts/worker_task_evidence.py collect-qemu-preflight \
