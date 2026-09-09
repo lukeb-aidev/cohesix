@@ -3203,7 +3203,8 @@ def test_executable_receipt_lanes_bound_roles_independently() -> None:
     assert set(state.ticket_worker_locks) == {"gpu-0", "gpu-1", "lora-0", "lora-1"}
 
 
-def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
+@pytest.mark.parametrize("capture_failure", [False, True])
+def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane(capture_failure: bool) -> None:
     state = rest_perf.SimState(
         bounds=executable_bounds(),
         rest_url="http://127.0.0.1:8080",
@@ -3286,7 +3287,31 @@ def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
             )
             return rest_perf.GatewayResponse("OK", "CAT", path, True, [line], len(line), None)
 
+    class ReceiptCapture:
+        def __init__(self) -> None:
+            self.checkpoints = []
+
+        def checkpoint(self, required):
+            # Proof is retained before this Worker lane becomes available again.
+            self.checkpoints.append(required)
+            assert state.ticket_worker_locks["gpu-0"].locked()
+            assert len(state.receipt_operations) < len(self.checkpoints)
+            if capture_failure:
+                raise ValueError("missing target receipt proof")
+
+    capture = ReceiptCapture()
+    state.worker_log_monitor = capture
     client = ImmediateReceiptClient()
+    if capture_failure:
+        with pytest.raises(ValueError, match="missing target receipt proof"):
+            rest_perf.run_v2_receipt_operation(
+                client, state, "gpu.lease.grant", "worker-gpu",
+                {"ttl_s": 30, "priority": 1}, "GPU-0",
+            )
+        assert not state.receipt_operations
+        assert state.ticket_quarantined_workers == {"gpu-0"}
+        assert not state.ticket_worker_locks["gpu-0"].locked()
+        return
     operation_id = rest_perf.run_v2_receipt_operation(
         client,
         state,
@@ -3310,6 +3335,15 @@ def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
         "gpu-0",
     ]
     assert state.receipt_operation_workers[operation_id] == "gpu-0"
+    assert [row["identity"] for row in state.receipt_operations] == [
+        template.identity_dict(), template.identity_dict(),
+    ]
+    assert capture.checkpoints[1] == [
+        {"marker": "WORKER_TASK_RECEIPT", **template.identity_dict(),
+         "action": "0x0202", "outcome": 1, "sequence": 2},
+        {"marker": "WORKER_TASK_COMPLETION", **template.identity_dict(),
+         "action": "0x0202", "status": 1, "sequence": 2},
+    ]
 
 
 def test_host_model_telemetry_operation_uses_complete_worker_state_bound() -> None:
@@ -3824,6 +3858,59 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(
     assert launched == [
         ["hive-gateway", "--bind", "127.0.0.1:8080", *profile_arguments, "--mock"]
     ]
+
+
+@pytest.mark.parametrize("failed_checkpoint", [None, "WORKER_TASK_TEARDOWN", "WORKER_TASK_READY"])
+def test_lifecycle_captures_target_records_before_fleet_discovery(
+    monkeypatch, failed_checkpoint,
+) -> None:
+    """Fleet traffic cannot run past an unretained lifecycle boundary."""
+    before = rest_perf.WorkerInstance(
+        "worker-1", "worker-heartbeat", "ready", "/shard/00/worker/worker-1/telemetry",
+        0, 1, 1, 1, 1, 0, 0, 0,
+    )
+    after = replace(before, worker_id="worker-2", lease_epoch=2,
+                    supervisor_generation=2, cap_generation=2)
+    events = []
+
+    class Capture:
+        def checkpoint(self, required, **bounds):
+            marker = required[0]["marker"]
+            events.append(marker)
+            if marker == "WORKER_TASK_TEARDOWN":
+                assert required == [{"marker": marker, **before.identity_dict()}]
+            else:
+                assert bounds["after_generation"] == 1
+            if marker == failed_checkpoint:
+                raise ValueError("required target proof is missing")
+
+    state = SimpleNamespace(
+        current_workers_by_id={before.worker_id: before}, bounds={},
+        worker_log_monitor=Capture(), lifecycle_cycles=[],
+    )
+    monkeypatch.setattr(rest_perf, "kill_worker", lambda *_: events.append("kill"))
+    monkeypatch.setattr(rest_perf, "echo_with_policy_retry", lambda *_: events.append("spawn"))
+    observations = iter([[replace(before, lifecycle="terminal")], [after]])
+
+    def discover(*_):
+        events.append("discover")
+        return next(observations), 1
+
+    monkeypatch.setattr(rest_perf, "discover_executable_workers", discover)
+    monkeypatch.setattr(rest_perf, "merge_current_worker_instances", lambda _, rows: rows)
+    monkeypatch.setattr(rest_perf, "capture_executable_state",
+                        lambda *_, **__: {"workers": [{"worker": "worker-2"}]})
+    expected = ["kill", "WORKER_TASK_TEARDOWN", "discover", "spawn",
+                "WORKER_TASK_READY", "discover"]
+    if failed_checkpoint:
+        with pytest.raises(ValueError, match="required target proof"):
+            rest_perf.bounded_heartbeat_lifecycle_cycle(None, state, 15)
+        assert events == expected[:expected.index(failed_checkpoint) + 1]
+        assert not state.lifecycle_cycles
+    else:
+        assert rest_perf.bounded_heartbeat_lifecycle_cycle(None, state, 15) == ["worker-2"]
+        assert events == expected
+        assert state.lifecycle_cycles[0]["after"] == after.identity_dict()
 
 
 @pytest.mark.parametrize("target", ["qemu", "pi4"])

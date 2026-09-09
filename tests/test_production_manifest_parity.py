@@ -40,6 +40,8 @@ def _common_contract(manifest: dict) -> dict:
             for key in ("scheduling_context_bits", "max_refills",
                         "virtio_operator_serial_io_bytes_per_turn"):
                 task.pop(key)
+        if task["id"] in ("root-worker-supervisor", "root-worker-executor-gpu"):
+            task.pop("max_refills")
         tasks.append(task)
     temporal["tasks"] = tasks
     for worker in temporal["worker_classes"]:
@@ -62,6 +64,18 @@ def test_common_production_contract_matches() -> None:
     qemu = _manifest("root_task.toml")
     pi = _manifest("root_task_pi4_uboot_aarch64.toml")
     assert _common_contract(qemu) == _common_contract(pi)
+
+
+def test_target_worker_refill_allocations_preserve_their_exact_bounds() -> None:
+    """Only these two documented target allocations differ beyond root boot SC."""
+    for manifest, expected in (
+        ("root_task.toml", {"root-worker-supervisor": 10, "root-worker-executor-gpu": 10}),
+        ("root_task_pi4_uboot_aarch64.toml", {"root-worker-supervisor": 2, "root-worker-executor-gpu": 8}),
+    ):
+        tasks = {row["id"]: row for row in _manifest(manifest)["temporal_authority"]["tasks"]}
+        for task_id, refills in expected.items():
+            assert tasks[task_id]["max_refills"] == refills
+            assert tasks[task_id]["scheduling_context_bits"] == 8
 
 
 def test_full_supported_population_and_features_are_enabled() -> None:

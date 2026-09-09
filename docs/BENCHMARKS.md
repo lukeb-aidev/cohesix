@@ -584,6 +584,18 @@ timed operation counts for both roles. Optional per-receipt `timing_s`
 (`lane_wait`, `admission`, `completion_wait`, `total`) and positive
 `current_reads` remain diagnostics: finite nonnegative timings do not replace
 identity, monotonic sequence, terminal-status or target-log correlation.
+Each new receipt row also retains the authenticated five-part Worker `identity`;
+receipt sequences belong to one Worker and may coincide across the population.
+Legacy rows qualify only when their original correlation is unambiguous.
+When a QEMU Worker log is supplied, the harness captures teardown and replacement
+READY records before fleet discovery, and captures each receipt/completion pair
+before releasing that Worker lane. These bounded capture reads contribute to the
+measured operation cost. One export can satisfy several completed Workers only
+when each exact identity and sequence matches. Checkpoint exports append only
+previously unretained fragments, verbatim, within the existing 64 MiB evidence
+bound. Missing records, conflicting fragments
+and capture deadlines fail the run; periodic exports alone cannot prove retention
+under pressure. The raw TCP benchmark and its thresholds are unchanged.
 
 Each summary also retains top-level `target_session_sha256` and
 `report.executable_state`: exact topology/session hashes; pre/post aggregate

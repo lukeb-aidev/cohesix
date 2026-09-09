@@ -65,6 +65,12 @@ WORKER_FAILURE_CONTEXT_MAX_BYTES = 2048
 HOST_TICKET_LOG_TAIL_BYTES = 64 * 256
 HOST_TICKET_CURRENT_MAX_BYTES = 256
 HOST_TICKET_CURRENT_PREFIX = "/host/tickets/current/"
+WORKER_RECEIPT_ACTION_CODES = {
+    "gpu.lease.grant": "0x0201", "gpu.lease.renew": "0x0202",
+    "gpu.lease.release": "0x0203", "peft.export": "0x0301",
+    "peft.import": "0x0302", "peft.activate": "0x0303",
+    "peft.rollback": "0x0304",
+}
 DEFAULT_QEMU_SMP = "4,cores=4,threads=1,sockets=1"
 DEFAULT_WORKERS_MIN = 8
 DEFAULT_WORKERS_MAX = 50
@@ -751,6 +757,7 @@ class SimState:
     lifecycle_cycles: List[Dict[str, object]] = field(default_factory=list)
     receipt_operations: List[Dict[str, object]] = field(default_factory=list)
     fault_artifacts: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    worker_log_monitor: Optional[worker_logs.ExportMonitor] = None
     current_workers_by_id: Dict[str, WorkerInstance] = field(default_factory=dict)
     ticket_worker_lanes: Dict[str, queue.Queue[str]] = field(default_factory=dict)
     ticket_worker_locks: Dict[str, threading.Lock] = field(default_factory=dict)
@@ -5151,6 +5158,10 @@ def bounded_heartbeat_lifecycle_cycle(
         raise RestError("lifecycle pressure requires one READY Heartbeat Worker")
     before = heartbeat[0]
     kill_worker(client, state, before.worker_id)
+    if state.worker_log_monitor is not None:
+        state.worker_log_monitor.checkpoint([{
+            "marker": "WORKER_TASK_TEARDOWN", **before.identity_dict(),
+        }], timeout_s=timeout_s)
     deadline = time.time() + timeout_s
     terminal_observed = False
     while time.time() < deadline:
@@ -5176,6 +5187,10 @@ def bounded_heartbeat_lifecycle_cycle(
         separators=(",", ":"),
     )
     echo_with_policy_retry(client, "/queen/ctl", spawn_line, state)
+    if state.worker_log_monitor is not None:
+        state.worker_log_monitor.checkpoint([{
+            "marker": "WORKER_TASK_READY", "role": before.role, "slot": before.slot,
+        }], after_generation=before.supervisor_generation, timeout_s=timeout_s)
     deadline = time.time() + timeout_s
     after: Optional[WorkerInstance] = None
     while time.time() < deadline:
@@ -7408,6 +7423,16 @@ def run_v2_receipt_operation(
             raise RestError(
                 f"v2 {action} pressure operation ended {terminal_state}, not succeeded"
             )
+        if state.worker_log_monitor is not None:
+            action_code = WORKER_RECEIPT_ACTION_CODES[action]
+            state.worker_log_monitor.checkpoint([
+                {"marker": "WORKER_TASK_RECEIPT", **before.identity_dict(),
+                 "action": action_code, "outcome": 1,
+                 "sequence": after.receipt_sequence},
+                {"marker": "WORKER_TASK_COMPLETION", **before.identity_dict(),
+                 "action": action_code, "status": 1,
+                 "sequence": after.completion_sequence},
+            ])
         with state.ticket_state_lock:
             owner = state.receipt_operation_workers.get(resolved_operation_id)
             if owner is not None and owner != before.worker_id:
@@ -7421,6 +7446,7 @@ def run_v2_receipt_operation(
                     "action": action,
                     "role": role,
                     "worker_id": before.worker_id,
+                    "identity": before.identity_dict(),
                     "sequence_before": {
                         "receipt": before.receipt_sequence,
                         "completion": before.completion_sequence,
@@ -8639,6 +8665,7 @@ def run_simulation(args: argparse.Namespace) -> int:
             worker_log_monitor = worker_logs.ExportMonitor(
                 pathlib.Path(args.qemu_worker_log), read_worker_log,
             )
+            state.worker_log_monitor = worker_log_monitor
             worker_log_monitor.start()
 
         worker_ids, spawned = ensure_workers(client, state, args.workers_min)

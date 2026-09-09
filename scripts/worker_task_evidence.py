@@ -4614,8 +4614,24 @@ def _validate_pressure_receipt_shape(operation: object) -> None:
     diagnostics = {"timing_s", "current_reads"}
     if not isinstance(operation, dict) or set(operation) not in (
         required, required | diagnostics,
+        required | {"identity"}, required | diagnostics | {"identity"},
     ):
         raise EvidenceError("pressure receipt operation has an unexpected schema")
+    if "identity" in operation:
+        identity = operation["identity"]
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {
+                "role", "slot", "lease_epoch", "supervisor_generation", "cap_generation",
+            }
+            or identity["role"] != operation["role"]
+            or any(
+                isinstance(identity[key], bool) or not isinstance(identity[key], int)
+                or identity[key] < (0 if key == "slot" else 1)
+                for key in ("slot", "lease_epoch", "supervisor_generation", "cap_generation")
+            )
+        ):
+            raise EvidenceError("pressure receipt identity is malformed")
     if "timing_s" not in operation:
         return
     timing = operation["timing_s"]
@@ -4732,10 +4748,17 @@ def _validate_pressure_cycles_and_receipts(
         status_outcome = {"succeeded": 1, "failed": 2, "expired": 8}[
             operation["status"]
         ]
+        identity = operation.get("identity")
+        expected_identity = None if identity is None else tuple(
+            identity[key] for key in (
+                "role", "slot", "lease_epoch", "supervisor_generation", "cap_generation",
+            )
+        )
         receipt_matches = [
             row
             for row in markers["receipt"]
             if _marker_identity(row)[0] == expected[1]
+            and (expected_identity is None or _marker_identity(row) == expected_identity)
             and _marker_identity(row) not in retired_identities
             and _marker_uint(row, "action", maximum=0xFFFF) == expected[0]
             and _marker_uint(row, "outcome", maximum=0xFFFF) == status_outcome
@@ -4745,6 +4768,7 @@ def _validate_pressure_cycles_and_receipts(
             row
             for row in markers["completion"]
             if _marker_identity(row)[0] == expected[1]
+            and (expected_identity is None or _marker_identity(row) == expected_identity)
             and _marker_identity(row) not in retired_identities
             and _marker_uint(row, "action", maximum=0xFFFF) == expected[0]
             and _marker_uint(row, "status", maximum=0xFFFF) == status_outcome

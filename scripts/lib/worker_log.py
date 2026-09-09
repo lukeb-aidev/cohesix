@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping, Sequence
 import urllib.parse
 import urllib.request
 
@@ -29,6 +29,7 @@ RECORD_PREFIXES = (
     "GPU_BRIDGE_FIXTURE_ADMISSION ",
     "LORA_EXPORT_FIXTURE_ADMISSION ",
 )
+MAX_RETAINED_BYTES = 64 * 1024 * 1024
 
 
 def records(text: str, *, complete: bool = True) -> str:
@@ -82,6 +83,20 @@ class ExportMonitor:
         self.read = read
         self.stop_event = threading.Event()
         self.error: Exception | None = None
+        self.export_lock = threading.Lock()
+        raw = b""
+        if path.exists():
+            with path.open("rb") as retained:
+                raw = retained.read(MAX_RETAINED_BYTES + 1)
+        self.retained_bytes = len(raw)
+        if self.retained_bytes > MAX_RETAINED_BYTES:
+            raise ValueError("Worker log exceeds its evidence byte bound")
+        existing = raw.decode("utf-8")
+        self.fragments = {
+            line for line in existing.splitlines()
+            if line.startswith(("WORKER_LOG ", "WORKER_LOG_ERROR "))
+        }
+        self.observed = set(records(existing, complete=False).splitlines())
         self.thread = threading.Thread(
             target=self._run, name="worker-log-export", daemon=True,
         )
@@ -89,13 +104,67 @@ class ExportMonitor:
     def _run(self) -> None:
         try:
             while not self.stop_event.is_set():
-                append_export(self.path, self.read())
+                self.checkpoint(opportunistic=True)
                 self.stop_event.wait(5)
         except Exception as error:
             self.error = error
 
     def start(self) -> None:
         self.thread.start()
+
+    def checkpoint(
+        self,
+        required: Sequence[Mapping[str, object]] = (),
+        *,
+        after_generation: int = 0,
+        timeout_s: float = 15.0,
+        opportunistic: bool = False,
+    ) -> None:
+        """Retain original fragments before dependent traffic can evict proof."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if opportunistic:
+                if not self.export_lock.acquire(blocking=False):
+                    return
+            elif not self.export_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                raise ValueError("Worker log checkpoint exceeded its capture deadline")
+            try:
+                if self.error is not None:
+                    raise ValueError("Worker log export failed") from self.error
+                # One export may satisfy several concurrently completed Workers.
+                # Their exact identities and sequences remain the proof keys.
+                if required and self._observed(required, after_generation):
+                    return
+                exported = self.read()
+                additions = []
+                for line in dict.fromkeys(exported.splitlines()):
+                    if line.startswith(("WORKER_LOG ", "WORKER_LOG_ERROR ")):
+                        if line not in self.fragments:
+                            additions.append(line)
+                if additions:
+                    payload = "\n".join(additions) + "\n"
+                    if self.retained_bytes + len(payload.encode()) > MAX_RETAINED_BYTES:
+                        self.error = ValueError("Worker log exceeds its evidence byte bound")
+                        raise self.error
+                    append_export(self.path, payload)
+                    self.retained_bytes += len(payload.encode())
+                    self.fragments.update(additions)
+                self.observed.update(records(exported, complete=False).splitlines())
+                if self._observed(required, after_generation):
+                    return
+            finally:
+                self.export_lock.release()
+            if time.monotonic() >= deadline:
+                raise ValueError("Worker log checkpoint lacks required target records")
+            self.stop_event.wait(0.1)
+
+    def _observed(
+        self, required: Sequence[Mapping[str, object]], after_generation: int,
+    ) -> bool:
+        return all(
+            any(record_matches(line, expected, after_generation) for line in self.observed)
+            for expected in required
+        )
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -107,8 +176,24 @@ class ExportMonitor:
 
     def finish(self) -> None:
         self.stop()
-        append_export(self.path, self.read())
+        self.checkpoint()
         records(self.path.read_text())
+
+
+def record_matches(
+    line: str, expected: Mapping[str, object], after_generation: int = 0,
+) -> bool:
+    """Compare exact target fields; equal per-Worker sequences are not identity."""
+    tokens = line.split()
+    if not tokens:
+        return False
+    fields = dict(token.split("=", 1) for token in tokens[1:] if "=" in token)
+    fields["marker"] = tokens[0]
+    generation = fields.get("supervisor_generation", "")
+    return (
+        generation.isdecimal() and int(generation) > after_generation
+        and all(fields.get(key) == str(value) for key, value in expected.items())
+    )
 
 
 def capture(args: argparse.Namespace) -> None:

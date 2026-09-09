@@ -2138,6 +2138,49 @@ def test_component_validator_accepts_bounded_role_exemplars() -> None:
         evidence.validate_component(pi_component, "pi4")
 
 
+@pytest.mark.parametrize("identity_mode", ["exact", "missing", "wrong-generation"])
+def test_pressure_receipts_distinguish_equal_sequences_on_different_workers(
+    identity_mode: str,
+) -> None:
+    """Independent Worker counters can coincide without sharing an identity."""
+    before = {"role": "worker-heartbeat", "slot": 0, "lease_epoch": 1,
+              "supervisor_generation": 1, "cap_generation": 1}
+    after = {**before, "lease_epoch": 2, "supervisor_generation": 2, "cap_generation": 2}
+    gpu = {"role": "worker-gpu", "slot": 3, "lease_epoch": 1,
+           "supervisor_generation": 8, "cap_generation": 1}
+    another = {**gpu, "slot": 4, "supervisor_generation": 9}
+    operation = {
+        "action": "gpu.lease.renew", "role": "worker-gpu", "worker_id": "worker-11",
+        "sequence_before": {"receipt": 6, "completion": 6},
+        "sequence_after": {"receipt": 7, "completion": 7}, "status": "succeeded",
+    }
+    if identity_mode != "missing":
+        operation["identity"] = dict(gpu)
+        if identity_mode == "wrong-generation":
+            operation["identity"]["supervisor_generation"] = 10
+
+    def marker(identity, **fields):
+        return {key: str(value) for key, value in {**identity, **fields}.items()}
+
+    markers = {
+        "teardown": [marker(before, reason="shutdown")], "ready": [marker(after)],
+        "receipt": [marker(identity, action="0x0202", outcome=1, sequence=7)
+                    for identity in (gpu, another)],
+        "completion": [marker(identity, action="0x0202", status=1, sequence=7)
+                       for identity in (gpu, another)],
+    }
+    report = {"lifecycle_cycles": [{
+        "role": "worker-heartbeat", "before": before, "after": after,
+        "kill_admitted": True, "recreate_admitted": True,
+        "terminal_observed": True, "ready_observed": True,
+    }], "receipt_operations": [operation]}
+    if identity_mode == "exact":
+        evidence._validate_pressure_cycles_and_receipts([report], markers)
+    else:
+        with pytest.raises(evidence.EvidenceError, match="differs from exact UART outcome"):
+            evidence._validate_pressure_cycles_and_receipts([report], markers)
+
+
 @pytest.mark.parametrize(
     "invalid", [None, "negative", "infinite", "boolean", "reads", "unknown"],
 )
