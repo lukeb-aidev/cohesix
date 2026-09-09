@@ -751,8 +751,11 @@ fence, while runnable decoded or buffered `Input` retains it. Queued USB bytes
 behind the unchanged parser-readiness/recovery gate are `UsbServiceDebt`, not
 runnable input: they remain retained, get the bounded LocalSeat opportunity,
 and cannot indefinitely exclude independent HDMI and Network after Dispatch.
-Serial input, an active parser chunk, and a partial command retain their existing
-precedence. The transient-publication
+Queued serial input and an active parser chunk retain their existing
+precedence. After Dispatch consumes those bytes, an unfinished serial or USB
+line waits for another keystroke without retaining the Network fence. Its text
+and presentation protection remain intact; physical response tails retain their
+separate fence. The transient-publication
 probe preserves that type and may carry passive USB debt only because every
 minted credit installs the complete mandatory operator rotor before Network
 re-entry; real Input still fences. A terminal-return shortcut remains strict.
@@ -1070,7 +1073,8 @@ ordinary service turn between bursts.
 
 On the deferred physical WiFi path, accepting a partial USB command line routes
 one bounded `Dispatch -> Display -> Serial` presentation successor before
-Network, retaining the exact CYW43 parent and operator fence. A pending reboot
+Network for newly consumed bytes, retaining the exact CYW43 parent. A retained
+partial line alone cannot repeat this shortcut or reserve another operator turn. A pending reboot
 acknowledgement or physical response tail keeps immediate Serial priority and
 leaves the HDMI echo queued. This is presentation ordering, not a new USB,
 display, child, or scheduling budget.

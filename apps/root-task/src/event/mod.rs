@@ -3880,12 +3880,14 @@ const fn linked_cyw43_partial_local_line_display_due(
     physical_console_response_pending: bool,
     local_line_nonempty: bool,
     operator_display_pending: bool,
+    local_input_consumed: bool,
 ) -> bool {
     cyw43_lane_selected
         && !reboot_pending
         && !physical_console_response_pending
         && local_line_nonempty
         && operator_display_pending
+        && local_input_consumed
 }
 
 #[cfg(feature = "kernel")]
@@ -13126,6 +13128,7 @@ where
                     self.physical_console_response_pending(),
                     !self.local_line.is_empty(),
                     self.linked_runtime_operator_display_pending(),
+                    local_input,
                 );
                 #[cfg(not(feature = "net-console"))]
                 let partial_local_line_display_due = false;
@@ -13154,7 +13157,7 @@ where
                     // Root-owned parser/echo bookkeeping above has made a
                     // partial USB command row visible. Submit exactly one
                     // bounded HDMI update before Serial and before any Network
-                    // re-entry, while retaining the CYW43 fence and immutable
+                    // re-entry for newly consumed bytes, preserving the immutable
                     // parent. A response tail or reboot acknowledgement excludes
                     // this route and keeps immediate Serial priority.
                     LinkedRuntimeServicePhase::Display
@@ -18781,9 +18784,11 @@ where
             })
             .unwrap_or((false, false));
         LinkedPhysicalOperatorWork::classify(
-            self.serial.interactive_input_active()
-                || !self.local_line.is_empty()
-                || self.local_seat_chunk_input_pending,
+            // Dispatch has already absorbed partial lines. They remain intact
+            // for the next keystroke, but cannot make progress or fence Network
+            // until another byte arrives. Queued bytes and active chunks retain
+            // physical-operator precedence; response tails are fenced separately.
+            self.serial.input_bytes_pending() || self.local_seat_chunk_input_pending,
             usb_input_pending,
             usb_parser_ready,
             self.linked_local_seat_usb_service_pending(),
@@ -53971,14 +53976,15 @@ mod tests {
     #[test]
     fn pi_attached_wifi_continuation_requires_one_productive_network_successor() {
         assert!(linked_cyw43_partial_local_line_display_due(
-            true, false, false, true, true,
+            true, false, false, true, true, true,
         ));
         for rejected in [
-            linked_cyw43_partial_local_line_display_due(false, false, false, true, true),
-            linked_cyw43_partial_local_line_display_due(true, true, false, true, true),
-            linked_cyw43_partial_local_line_display_due(true, false, true, true, true),
-            linked_cyw43_partial_local_line_display_due(true, false, false, false, true),
-            linked_cyw43_partial_local_line_display_due(true, false, false, true, false),
+            linked_cyw43_partial_local_line_display_due(false, false, false, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, true, false, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, true, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, false, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, true, false, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, true, true, false),
         ] {
             assert!(
                 !rejected,
@@ -58331,6 +58337,63 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::hdmi_completion_status(true, false, 0, 0, false, 0).0,
             "unproven",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn partial_physical_lines_release_network_without_discarding_input() {
+        let serial =
+            SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<8192>::new());
+        let timer = TestTimer::repeated(4, 1_000);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+        pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+
+        pump.serial.driver_mut().push_rx(b"pi");
+        assert!(pump.serial.poll_rx_only());
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Input
+        );
+        assert!(pump.serial.next_line_buffered_quiet().is_none());
+        assert!(
+            pump.serial.interactive_input_active(),
+            "keep partial-line presentation protection"
+        );
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Idle
+        );
+
+        pump.local_line.push_str("help").unwrap();
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Idle
+        );
+        pump.local_seat_chunk_input_pending = true;
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Input
+        );
+        pump.local_seat_chunk_input_pending = false;
+        assert_eq!(pump.local_line.as_str(), "help");
+
+        pump.serial.driver_mut().push_rx(b"ng\r");
+        assert!(pump.serial.poll_rx_only());
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Input
+        );
+        assert_eq!(
+            pump.serial.next_line_buffered_quiet().unwrap().as_str(),
+            "ping"
+        );
+        assert!(!pump.serial.interactive_input_active());
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Idle
         );
     }
 
@@ -63127,9 +63190,11 @@ mod tests {
                 LinkedRuntimeServicePhase::Display,
                 "a partial local-seat line must route Dispatch directly to one bounded Display turn"
             );
-            assert!(pump
-                .linked_runtime_cyw43_operator_rotation_pending
-                .is_some());
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_none(),
+                "drained partial text cannot retain the Network fence"
+            );
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 0,
                 "actual queued input must remain ahead of Network"
@@ -63140,16 +63205,32 @@ mod tests {
                 LinkedRuntimeServicePhase::Serial,
                 "the bounded partial-line Display turn must return to Serial before Network"
             );
-            assert!(pump
-                .linked_runtime_cyw43_operator_rotation_pending
-                .is_some());
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_none(),
+                "drained partial text cannot retain the Network fence"
+            );
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 0,
                 "HDMI echo must not compose with or admit a CYW43 Network turn"
             );
 
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+            pump.local_seat
+                .as_mut()
+                .expect("local seat remains attached")
+                .inject_linked_hdmi_pending_bytes_for_test(1);
+            pump.poll();
+            assert_eq!(pump.local_line.as_str(), "x");
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "retained partial text and display debt cannot repeat the input presentation shortcut",
+            );
+
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
             pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            pump.require_linked_runtime_cyw43_operator_rotation();
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
