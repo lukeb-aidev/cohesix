@@ -4412,10 +4412,20 @@ def executable_target_acceptance_binding(
             "supervisor_generation",
             "cap_generation",
             "ready_sequence",
-            "completion_sequence",
         ):
             if positive_json_int(worker.get(field)) is None:
                 raise RestError(f"{target_name} acceptance Worker {field} is invalid")
+        completion = worker.get("completion_sequence")
+        # Match the shared component-evidence contract: a newly READY passive
+        # Heartbeat has no workload Call, while GPU/LoRA must have completed one.
+        if (
+            not isinstance(completion, int)
+            or isinstance(completion, bool)
+            or completion < (0 if role == "worker-heartbeat" else 1)
+        ):
+            raise RestError(
+                f"{target_name} acceptance Worker completion_sequence is invalid"
+            )
         slot = worker.get("slot")
         core = worker.get("core")
         if (

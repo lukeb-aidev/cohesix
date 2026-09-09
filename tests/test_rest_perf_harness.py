@@ -2503,7 +2503,9 @@ def acceptance_summary() -> dict:
                 "cap_generation": 30 + index,
                 "image_sha256": str(index + 3) * 64,
                 "ready_sequence": 40 + index,
-                "completion_sequence": 50 + index,
+                "completion_sequence": (
+                    0 if role == "worker-heartbeat" else 50 + index
+                ),
                 "core": index,
                 "scheduling_context": {"budget_us": 100, "period_us": 1_000},
                 "object_inventory": inventory,
@@ -3805,6 +3807,45 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(
     assert launched == [
         ["hive-gateway", "--bind", "127.0.0.1:8080", *profile_arguments, "--mock"]
     ]
+
+
+@pytest.mark.parametrize("target", ["qemu", "pi4"])
+@pytest.mark.parametrize("role,sequence,accepted", [
+    ("worker-heartbeat", 0, True),
+    ("worker-heartbeat", 1, True),
+    ("worker-heartbeat", -1, False),
+    ("worker-heartbeat", False, False),
+    ("worker-heartbeat", "0", False),
+    ("worker-heartbeat", None, False),
+    ("worker-gpu", 0, False),
+    ("worker-lora", 0, False),
+])
+def test_acceptance_completion_matches_the_passive_role_contract(
+    target: str, role: str, sequence: object, accepted: bool,
+) -> None:
+    summary = acceptance_summary()
+    proof = rest_perf.BENCHMARK_TARGET_PROOF[target]
+    summary.update(target=target, execution_proof=proof)
+    for worker in summary["workers"]:
+        worker["execution_proof"] = proof
+        if worker["role"] == role:
+            worker["completion_sequence"] = sequence
+    client = SimpleNamespace(status=lambda: {
+        "connected": True,
+        "backend_class": "console-projection",
+        "worker_acceptance": summary,
+    })
+    if accepted:
+        assert rest_perf.executable_target_acceptance_binding(
+            client, executable_bounds(), target
+        ) == summary
+    else:
+        with pytest.raises(
+            rest_perf.RestError, match="completion_sequence is invalid"
+        ):
+            rest_perf.executable_target_acceptance_binding(
+                client, executable_bounds(), target
+            )
 
 
 def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:
