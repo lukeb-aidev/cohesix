@@ -986,6 +986,13 @@ proof, and package verification is not execution evidence. The compatibility
 `/worker/<id>/telemetry` path exists only when the generated profile enables the
 legacy alias.
 
+Fleet discovery in SwarmUI and the benchmark harness enumerates the bounded
+shard address space from generated `shard_bits`, then reads each
+`/shard/<label>/worker` directory and the published Workers' telemetry. Empty
+shards produce no Workers. The aggregate `ls /shard` reply is a bounded view of
+up to 64 distinct active shard labels; it is not a complete fleet index.
+Per-shard read failures and malformed or misplaced Worker records remain errors.
+
 ### Telemetry file upload
 
 `telemetry push` accepts a non-empty local file with one of these extensions:

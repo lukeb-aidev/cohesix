@@ -2790,10 +2790,10 @@ def test_executable_population_discovers_only_canonical_ready_workers() -> None:
 
     class DummyClient:
         def ls(self, path: str) -> rest_perf.GatewayResponse:
+            assert path != "/shard"
             lines = {
-                "/shard": [label],
                 f"/shard/{label}/worker": [worker_id],
-            }[path]
+            }.get(path, [])
             return rest_perf.GatewayResponse(
                 "OK", "LS", path, True, lines, None, None
             )
@@ -2824,6 +2824,82 @@ def test_executable_population_discovers_only_canonical_ready_workers() -> None:
     assert snapshot.ready == 1
     assert snapshot.backend_class == "console-projection"
     assert snapshot.proof_class == "qemu"
+
+
+def test_executable_discovery_reads_all_256_shards_beyond_one_reply() -> None:
+    bounds = executable_bounds(256)
+    bounds["worker_runtime"]["shard_bits"] = 8
+    bounds["worker_runtime"]["roles"][1]["executable_slots"] = 127
+    bounds["worker_runtime"]["roles"][2]["executable_slots"] = 128
+    listings: dict[str, list[str]] = {}
+    for ordinal in range(256):
+        worker_id = f"instance-{ordinal}"
+        label = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+        listings.setdefault(f"/shard/{label}/worker", []).append(worker_id)
+    assert len(listings) > 64
+    calls: list[str] = []
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            calls.append(path)
+            assert path != "/shard", "the aggregate reply cannot hold this fleet"
+            return rest_perf.GatewayResponse(
+                "OK", "LS", path, True, listings.get(path, []), None, None
+            )
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            worker_id = path.split("/")[-2]
+            ordinal = int(worker_id.removeprefix("instance-"))
+            role = (
+                "worker-heartbeat" if ordinal == 0
+                else "worker-gpu" if ordinal < 128
+                else "worker-lora"
+            )
+            state = json.dumps({
+                "schema": "worker-runtime-state/v2",
+                "worker_id": worker_id,
+                "role": role,
+                "state": "ready",
+                "identity": [ordinal, 1, 1, 1],
+                "sequence": [1, 0, 0, 0],
+            })
+            return rest_perf.GatewayResponse(
+                "OK", "TAIL", path, True, [state], None, None
+            )
+
+    instances, discovered = rest_perf.discover_executable_workers(Client(), bounds)
+    assert discovered == 256
+    assert {item.worker_id for item in instances} == {
+        f"instance-{ordinal}" for ordinal in range(256)
+    }
+    assert calls == [f"/shard/{label:02x}/worker" for label in range(256)]
+
+
+def test_executable_discovery_preserves_shard_read_errors() -> None:
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            return rest_perf.GatewayResponse(
+                "ERR", "LS", path, True, [], "permission denied", None
+            )
+
+    with pytest.raises(rest_perf.RestError, match="LS /shard/00/worker failed"):
+        rest_perf.discover_executable_workers(Client(), executable_bounds())
+
+
+def test_executable_discovery_rejects_misplaced_worker() -> None:
+    # The independently computed address excludes shard 00.
+    assert hashlib.sha256(b"instance-0").hexdigest()[:2] != "00"
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            return rest_perf.GatewayResponse(
+                "OK", "LS", path, True, ["instance-0"], None, None
+            )
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["shard_bits"] = 8
+    with pytest.raises(rest_perf.RestError, match="wrong shard"):
+        rest_perf.discover_executable_workers(Client(), bounds)
 
 
 def test_executable_telemetry_operation_fails_closed_without_canonical_path() -> None:

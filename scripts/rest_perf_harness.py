@@ -1504,17 +1504,16 @@ def discover_executable_workers(
     runtime = worker_runtime_bounds(bounds)
     shard_bits = int(runtime["shard_bits"])
     max_id_bytes = int(bounds.get("console", {}).get("max_id_len", 32))
-    shard_response = client.ls("/shard")
-    if shard_response.status != "OK":
-        raise RestError(f"LS /shard failed: {shard_response.error}", shard_response)
-    labels = sorted({line.strip() for line in shard_response.lines if line.strip()})
-    if len(labels) > MAX_DISCOVERED_SHARDS:
-        raise RestError("canonical /shard listing exceeds discovery bound")
+    # One directory response cannot enumerate every active shard in a full
+    # fleet. The generated address space is bounded; each shard's actual
+    # listing and structured telemetry remain the authority for Worker state.
+    shard_count = 1 << shard_bits
+    if shard_count > MAX_DISCOVERED_SHARDS:
+        raise RestError("generated shard address space exceeds discovery bound")
     instances: List[WorkerInstance] = []
     discovered_ids = set()
-    for label in labels:
-        if len(label) != 2 or any(ch not in "0123456789abcdef" for ch in label):
-            raise RestError("canonical /shard listing contains an invalid label")
+    for shard in range(shard_count):
+        label = f"{shard:02x}"
         worker_root = f"/shard/{label}/worker"
         response = client.ls(worker_root)
         if response.status != "OK":

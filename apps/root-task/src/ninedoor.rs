@@ -2934,8 +2934,8 @@ impl NineDoorBridge {
                     .public_id()
                     .ok_or(NineDoorBridgeError::InvalidPayload)?;
                 let label = worker_shard_label(public_id, sharding);
-                if !output.iter().any(|entry| entry.as_str() == label.as_str()) {
-                    push_list_entry(output, label.as_str())?;
+                if !push_bounded_shard_label(output, label.as_str())? {
+                    break;
                 }
             }
             Ok(())
@@ -2950,14 +2950,7 @@ impl NineDoorBridge {
                 HeaplessVec::new();
             for worker in self.workers.iter().rev() {
                 let label = worker_shard_label(worker.id.as_str(), sharding);
-                if recent.iter().any(|entry| entry.as_str() == label.as_str()) {
-                    continue;
-                }
-                let mut entry = HeaplessString::new();
-                entry
-                    .push_str(label.as_str())
-                    .map_err(|_| NineDoorBridgeError::BufferFull)?;
-                if recent.push(entry).is_err() {
+                if !push_bounded_shard_label(&mut recent, label.as_str())? {
                     break;
                 }
             }
@@ -9633,6 +9626,22 @@ fn shard_label_known(label: &str) -> bool {
         .any(|entry| *entry == label)
 }
 
+/// Retain a bounded distinct active-shard view; a full view is not an error.
+/// Complete fleet discovery reads the compiler-declared shard paths directly.
+fn push_bounded_shard_label(
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    label: &str,
+) -> Result<bool, NineDoorBridgeError> {
+    if output.iter().any(|entry| entry.as_str() == label) {
+        return Ok(true);
+    }
+    if output.is_full() {
+        return Ok(false);
+    }
+    push_list_entry(output, label)?;
+    Ok(true)
+}
+
 fn parse_shard_worker_root(path: &str) -> Option<(&str, bool)> {
     let segments = split_path_segments(path);
     match segments.as_slice() {
@@ -12289,6 +12298,22 @@ mod tests {
                     == label.as_str()
             }));
         }
+    }
+
+    #[test]
+    fn active_shard_view_stops_at_64_distinct_labels_without_error() {
+        let mut listing = HeaplessVec::new();
+        for ordinal in 0..64 {
+            assert!(
+                push_bounded_shard_label(&mut listing, &format!("{ordinal:02x}"))
+                    .expect("admit active shard")
+            );
+        }
+        let before = listing.clone();
+        assert!(push_bounded_shard_label(&mut listing, "00").expect("existing shard"));
+        assert!(!push_bounded_shard_label(&mut listing, "40").expect("bounded view"));
+        assert_eq!(listing, before);
+        assert_eq!(listing.len(), 64);
     }
 
     #[test]

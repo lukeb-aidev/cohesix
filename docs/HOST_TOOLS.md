@@ -533,8 +533,9 @@ For a physical Pi gateway, select `--worker-runtime-profile pi4-production`.
 The default `qemu-smp-production` preserves the QEMU contract. This option
 selects the existing compiler-generated Worker roles, limits and namespace
 bounds for `/v1/meta/bounds`; it does not discover or qualify the target.
-Pi uses eight shard bits, while the QEMU profile uses six, so the selection
-must match the target before structured Worker discovery or REST pressure.
+Both current profiles use eight shard bits; their role and resource bounds
+still differ, so the selection must match the target before structured Worker
+discovery or REST pressure.
 
 The gateway owns one authenticated target connection and one bounded broker.
 It schedules three fixed progress classes over that connection: host-ticket
@@ -675,6 +676,23 @@ For gateway mode, set `SWARMUI_REST_URL` or `COH_REST_URL`. Write auth resolves
 from `SWARMUI_REST_AUTH_TOKEN`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`,
 `COHSH_REST_AUTH_TOKEN`, or `COH_REST_AUTH_TOKEN`. Generated display and cache
 defaults are in [snippets/swarmui_defaults.md](snippets/swarmui_defaults.md).
+
+SwarmUI discovers the fleet by reading the compiler-declared shard addresses,
+then each actual Worker directory and structured telemetry record. It does not
+depend on the bounded aggregate `/shard` reply. This applies to direct console,
+gateway and host Secure9P transports; an empty shard is valid, while a refused
+read or invalid Worker record stops discovery.
+
+The release fleet-discovery repair also updates `rest_perf_harness.py` to use
+the gateway's validated generated shard bounds. Compatibility review found no
+change needed in `cohsh`, `coh`, `hive-gateway`, `gpu-bridge-host`,
+`host-sidecar-bridge`, `cas-tool`, `host-ticket-agent` or `tools/cohesix-py`:
+their existing filesystem operations and explicit Worker paths retain their
+contracts. The target aggregate `/shard` view now stops at 64 distinct active
+labels, matching the host model's bounded listing instead of rejecting a full
+fleet with `buffer-full`. Raw TCP workloads, measured REST operations, report
+schemas, authentication, target buffers, quotas and acceptance thresholds are
+unchanged.
 
 ### Cohesix Python package
 

@@ -414,6 +414,13 @@ the exact current target session, and every generated canonical
 matching that component. It never invents ids, substitutes `/worker`, or
 treats reachability as target proof.
 
+The pre-load census enumerates the address space from validated generated
+`worker_runtime.shard_bits` and reads each canonical shard's actual Worker
+listing. It does not depend on the aggregate `/shard` response, whose 64-entry
+bound is smaller than a populated eight-bit layout. Empty shards contribute
+no instances; Worker placement, unique identity and structured READY checks
+remain mandatory. The census is outside the measured workload.
+
 The canonical Mac command performs the clean build and runs medium first, then
 high against a separate fresh equivalent four-core HVF
 `virt,gic-version=3,virtualization=off` boot:
