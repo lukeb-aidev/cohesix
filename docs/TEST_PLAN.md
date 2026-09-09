@@ -1619,6 +1619,9 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Interactive `>coh` prompt (type commands, assert transcript lines).
 - Mint ticket flow (UI-only assertion that the host-returned token is surfaced back into the session field).
 - Live Hive UX (labels, role colors, and dot selection wiring).
+- Native command argument parity (`detailAgent`, `snapshotKey`), selected detail
+  refresh while the canvas is offscreen, and changing/absent telemetry when only
+  an overlay is available.
 - Structured Worker state (declaration, lifecycle, receipt, artifact, and
   proof render independently; absent axes render as unknown).
 - Opaque Worker identity (a role-looking id prefix never supplies a role,

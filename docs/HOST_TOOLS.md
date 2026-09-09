@@ -683,6 +683,19 @@ depend on the bounded aggregate `/shard` reply. This applies to direct console,
 gateway and host Secure9P transports; an empty shard is valid, while a refused
 read or invalid Worker record stops discovery.
 
+The selected Worker's detail refreshes during live polling, including while the
+canvas is scrolled out of view and its animation is paused. If a replay supplies
+only an overlay, the detail pane follows that overlay and clears when its data
+disappears. The Snapshot key field selects the named cached snapshot in offline
+mode.
+
+The selected-detail repair corrects only SwarmUI's existing Tauri argument
+wiring and display cache. Compatibility review of `cohsh`, `coh`, `coh-status`,
+`hive-gateway`, `gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`,
+`cas-tool`, `tools/cohesix-py`, `.coh` workloads and performance scripts requires
+no changes: console/REST operations, generated bounds, target state, benchmark
+workloads and report schemas retain their contracts.
+
 The release fleet-discovery repair also updates `rest_perf_harness.py` to use
 the gateway's validated generated shard bounds. Compatibility review found no
 change needed in `cohsh`, `coh`, `hive-gateway`, `gpu-bridge-host`,

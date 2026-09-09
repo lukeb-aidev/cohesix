@@ -227,8 +227,16 @@ const installTauriMock = async (page, options = {}) => {
   await page.addInitScript(
     ({ helpLines, hiveBootstrap, hiveBatch, mode }) => {
       const pollCalls = [];
-      window.__SWARMUI_TEST = { hivePollCalls: pollCalls };
+      window.__SWARMUI_TEST = {
+        hivePollCalls: pollCalls,
+        invokeCalls: [],
+        detailLines: null,
+        omitDetail: false,
+        overlays: hiveBatch.overlays
+      };
       const respond = async (cmd, payload) => {
+        const state = window.__SWARMUI_TEST;
+        state.invokeCalls.push({ cmd, payload });
         switch (cmd) {
           case "swarmui_mode":
             return mode;
@@ -238,10 +246,12 @@ const installTauriMock = async (page, options = {}) => {
             pollCalls.push(Date.now());
             return {
               ...hiveBatch,
-              detail: payload?.detail_agent
+              overlays: state.overlays,
+              // Tauri commands use camelCase argument names by default.
+              detail: payload?.detailAgent && !state.omitDetail
                 ? {
-                    agent: payload.detail_agent,
-                    lines: [`detail for ${payload.detail_agent}`, "line 2"]
+                    agent: payload.detailAgent,
+                    lines: state.detailLines || [`detail for ${payload.detailAgent}`, "line 2"]
                   }
                 : null
             };
@@ -431,6 +441,62 @@ test("Live Hive selection wiring activates the detail pane", async ({ page }) =>
   await expect(page.locator("#hive-detail-state")).toContainText("receipt=confirmed");
   await expect(page.locator("#hive-detail-state")).toContainText("artifact=verified");
   await expect(page.locator("#hive-detail-state")).toContainText("proof=qemu");
+  await expect(page.locator("#hive-detail-lines")).toHaveText(
+    "detail for opaque-gpu-b\nline 2"
+  );
+  await page.evaluate(() => {
+    window.__SWARMUI_TEST.detailLines = ["updated GPU telemetry", "sequence 2"];
+  });
+  await expect(page.locator("#hive-detail-lines")).toHaveText(
+    "updated GPU telemetry\nsequence 2"
+  );
+});
+
+test("Live detail keeps updating below the offscreen canvas", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "webkit-desktop", "Native Mac reading layout.");
+  await page.setViewportSize({ width: 1100, height: 720 });
+  await focusHiveCanvas(page);
+  await page.evaluate(() => window.__SWARMUI_HIVE_DEBUG.selectAgent("opaque-gpu-b"));
+  await expect(page.locator("#hive-detail-lines")).toHaveText("detail for opaque-gpu-b\nline 2");
+  await page.locator("#hive-detail-title").evaluate((node) =>
+    node.scrollIntoView({ block: "start" })
+  );
+  await expect(page.locator("#hive-canvas")).not.toBeInViewport();
+  await expect(page.locator("#hive-detail-lines")).toBeInViewport();
+  await page.evaluate(() => {
+    window.__SWARMUI_TEST.detailLines = ["new telemetry while reading details"];
+  });
+  await expect(page.locator("#hive-detail-lines")).toHaveText("new telemetry while reading details");
+});
+
+test("Live Hive snapshot key uses the native command argument", async ({ page }) => {
+  await page.locator("#hive-snapshot-key input").fill("operator-snapshot");
+  await page.locator("#hive-start").click();
+  await expect.poll(() => page.evaluate(() =>
+    window.__SWARMUI_TEST.invokeCalls
+      .filter((call) => call.cmd === "swarmui_hive_bootstrap")
+      .at(-1)?.payload
+  )).toEqual({ role: "queen", ticket: null, snapshotKey: "operator-snapshot" });
+});
+
+test("Selected overlay fallback updates when detail is unavailable", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__SWARMUI_TEST.omitDetail = true;
+    window.__SWARMUI_TEST.overlays = [
+      { agent: "opaque-gpu-b", lines: ["GPU telemetry sequence 1"] }
+    ];
+  });
+  await focusHiveCanvas(page);
+  await page.evaluate(() => window.__SWARMUI_HIVE_DEBUG.selectAgent("opaque-gpu-b"));
+  await expect(page.locator("#hive-detail-lines")).toHaveText("GPU telemetry sequence 1");
+  await page.evaluate(() => {
+    window.__SWARMUI_TEST.overlays = [
+      { agent: "opaque-gpu-b", lines: ["GPU telemetry sequence 2"] }
+    ];
+  });
+  await expect(page.locator("#hive-detail-lines")).toHaveText("GPU telemetry sequence 2");
+  await page.evaluate(() => { window.__SWARMUI_TEST.overlays = []; });
+  await expect(page.locator("#hive-detail-lines")).toHaveText("No telemetry yet.");
 });
 
 test("Role-looking Worker ids do not synthesize structured state", async ({ page }) => {
