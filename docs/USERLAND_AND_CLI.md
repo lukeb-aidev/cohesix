@@ -765,7 +765,7 @@ fault remains terminal and its reserved timeout capability/resource stays
 accounted. These scheduling details are likewise invisible to clients.
 
 Full host compatibility is not yet accepted. The fixed one-socket target matrix
-must return HELP 12 total lines, NETSTATS 16, first-call selected-QEMU SMP
+must return HELP 16 total lines, NETSTATS 16, first-call selected-QEMU SMP
 activity 17, and CACHELOG 10 for count nine, then PING and QUIT without
 reconnect, using the preexisting client response timeout. CACHELOG captures one
 immutable bounded snapshot under a single short lock hold; later live-ring

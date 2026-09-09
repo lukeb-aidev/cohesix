@@ -724,6 +724,13 @@ addresses for both QEMU and Pi. Their path checks derive from the selected
 manifests and SHA-256 namespace contract. This fixture correction changes no
 host-tool, SDK, target, or benchmark interface.
 
+The QEMU TCP matrix checks the current fifteen-line HELP body, including its
+ordered command labels, followed by one exact `OK HELP`. This reconciles the
+older eleven-line fixture with the existing shared console help surface.
+Compatibility review of the complete host-tool suite, Python SDK, and raw/REST
+benchmarks requires no implementation change: commands, response framing,
+timeouts, retries, workloads, and thresholds remain unchanged.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic

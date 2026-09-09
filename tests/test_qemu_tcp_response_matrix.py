@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import runpy
 import socket
 import subprocess
 import sys
 import threading
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,10 +25,14 @@ HELP_BODY = [
     "Commands:",
     "  help  - Show this help",
     "  bi    - Show bootinfo summary",
-    "  caps [mcs] - Show capability slots or bounded MCS authority state",
-    "  smp [activity|mcs|dump] - Show activity, MCS topology, or raw debug state",
+    "  caps  - Show capability slots",
+    "  caps mcs - Show bounded live MCS authority and object counts",
+    "  smp [activity|dump] - Show activity or raw debug scheduler state",
+    "  smp mcs - Show generated and live MCS admission state",
+    "  smp poll-time - Show Pi root poll elapsed-time observations",
     "  mem   - Show untyped summary",
     "  ping  - Respond with pong",
+    "  cachelog [n] - Dump recent cache operations",
     "  test  - Self-test (host-only; use cohsh)",
     "  nettest  - Run network self-test",
     "  netstats - Show network counters",
@@ -47,6 +54,28 @@ CACHELOG_BODY = [
     f"[cache] seq={index} op=clean err=0 caller=fixture:{index}"
     for index in range(9, 0, -1)
 ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        HELP_BODY[1:],
+        HELP_BODY[:4] + HELP_BODY[5:],
+        HELP_BODY[:4] + [HELP_BODY[3]] + HELP_BODY[5:],
+        HELP_BODY[:4] + [HELP_BODY[5], HELP_BODY[4]] + HELP_BODY[6:],
+        HELP_BODY + ["  unknown - Unexpected command"],
+    ],
+    ids=("empty", "no-header", "missing", "duplicate", "reordered", "unexpected"),
+)
+def test_help_rejects_incomplete_or_changed_command_surface(body: list[str]) -> None:
+    """Frame count alone must not admit missing, duplicate, or reordered commands."""
+
+    matrix = runpy.run_path(str(SCRIPT))
+    with pytest.raises(matrix["MatrixError"], match="HELP"):
+        matrix["validate_help"](body)
+
+
 def recv_exact(connection: socket.socket, size: int) -> bytes:
     """Read one complete fixture field."""
 
@@ -141,7 +170,7 @@ def test_matrix_preserves_complete_body_first_responses_on_one_connection() -> N
     assert result.stderr == ""
     assert commands == [entry[0] for entry in responses]
     assert result.stdout.splitlines() == [
-        "PASS HELP body_frames=11 ack=OK_HELP",
+        "PASS HELP body_frames=15 ack=OK_HELP",
         "PASS NETSTATS body_frames=15 ack=OK_NETSTATS",
         "PASS SMP body_frames=16 ack=OK_SMP_mode=activity",
         "PASS CACHELOG body_frames=9 ack=OK_CACHELOG",
