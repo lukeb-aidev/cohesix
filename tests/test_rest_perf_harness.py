@@ -1291,6 +1291,53 @@ def test_relaxed_echo_with_policy_retry_queues_on_buffer_full() -> None:
     assert response.status == "OK"
 
 
+@pytest.mark.parametrize("control_status", ["OK", "ERR"])
+def test_qualification_control_consumes_one_approval(control_status: str) -> None:
+    """An approved operation preserves success or the target's real refusal."""
+    calls = []
+    control = rest_perf.GatewayResponse(
+        status=control_status, verb="ECHO", path="/queen/ctl", end=True,
+        lines=[], bytes=None, error="slot-busy" if control_status == "ERR" else None,
+    )
+
+    def echo(path: str, line: str) -> rest_perf.GatewayResponse:
+        calls.append((path, line))
+        if path == "/actions/queue":
+            return replace(control, status="OK", path=path, error=None)
+        return control
+
+    client = SimpleNamespace(echo=echo)
+    payload = '{"spawn":"heartbeat"}'
+    result = rest_perf.queen_control_with_approval(client, payload, "qualify-1")
+    assert result is control
+    assert calls == [
+        ("/actions/queue", '{"id":"qualify-1","target":"/queen/ctl","decision":"approve"}'),
+        ("/queen/ctl", payload),
+    ]
+
+
+def test_qualification_approval_refusal_prevents_control() -> None:
+    """A refused single-use approval must never be followed by a mutation."""
+    calls = []
+    refusal = rest_perf.GatewayResponse(
+        status="ERR", verb="ECHO", path="/actions/queue", end=True,
+        lines=[], bytes=None, error="duplicate-id",
+    )
+
+    def echo(path: str, line: str) -> rest_perf.GatewayResponse:
+        calls.append((path, line))
+        return refusal
+
+    with pytest.raises(rest_perf.RestError, match="duplicate-id") as error:
+        rest_perf.queen_control_with_approval(
+            SimpleNamespace(echo=echo), '{"kill":"worker1"}', "used-id",
+        )
+    assert error.value.response is refusal
+    assert calls == [
+        ("/actions/queue", '{"id":"used-id","target":"/queen/ctl","decision":"approve"}'),
+    ]
+
+
 def test_strict_echo_buffer_full_attempts_once_without_approval() -> None:
     refusal = rest_perf.GatewayResponse(
         status="ERR",

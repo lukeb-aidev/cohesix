@@ -702,6 +702,13 @@ repair changes only test selection and stale fixtures. Compatibility review of
 raw/REST benchmarks found no affected runtime, public interface, workload,
 report schema or threshold.
 
+The QEMU qualification setup follows the existing single-use approval contract:
+it admits an `/actions/queue` decision before each Queen lifecycle write,
+including writes expected to fail for capacity or model-only reasons. Failed
+approval prevents that write, and the control result is preserved without a
+retry. This setup repair requires no changes to the eight host tools or Python
+SDK reviewed above, measured benchmark workloads, schemas, or thresholds.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic

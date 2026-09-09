@@ -1169,7 +1169,14 @@ run_cohsh_command() {
         printf '# Author: Lukas Bower\n'
         printf '# Purpose: Drive one existing Milestone 26e QEMU control operation.\n'
         printf '# Copyright 2026 Lukas Bower\n'
-        printf 'attach queen\nEXPECT OK\n%s\n' "$command"
+        printf 'attach queen\nEXPECT OK\n'
+        case "$command" in
+            spawn\ *|kill\ *)
+                printf "echo '{\"id\":\"m26e-control-%s\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}' > /actions/queue\n" "$ordinal"
+                printf 'EXPECT SUBSTR path=/actions/queue\n'
+                ;;
+        esac
+        printf '%s\n' "$command"
         if [[ "$expectation" != "NONE" ]]; then
             printf 'EXPECT %s\n' "$expectation"
         fi
@@ -1886,9 +1893,10 @@ def bounded_detail(value):
 
 before = ready("worker-heartbeat")
 kill_response = require(
-    client.echo(
-        "/queen/ctl",
+    rest.queen_control_with_approval(
+        client,
         json.dumps({"kill": before.worker_id}, separators=(",", ":")),
+        "m26e-lifecycle-kill",
     ),
     "OK",
     "heartbeat kill",
@@ -1914,7 +1922,7 @@ spawn_payload = json.dumps(
     separators=(",", ":"),
 )
 spawn_response = require(
-    client.echo("/queen/ctl", spawn_payload),
+    rest.queen_control_with_approval(client, spawn_payload, "m26e-lifecycle-spawn"),
     "OK",
     "heartbeat recreate",
 )
@@ -1930,7 +1938,7 @@ if after is None:
     raise RuntimeError("fresh Heartbeat generation was not observed")
 
 duplicate = require(
-    client.echo("/queen/ctl", spawn_payload),
+    rest.queen_control_with_approval(client, spawn_payload, "m26e-lifecycle-full"),
     "ERR",
     "second-live Heartbeat refusal",
 )
@@ -1939,9 +1947,10 @@ if not any(token in duplicate_detail.lower() for token in ("slot", "busy", "alre
     raise RuntimeError("second-live Heartbeat refusal lacks a bounded capacity reason")
 
 worker_bus = require(
-    client.echo(
-        "/queen/ctl",
+    rest.queen_control_with_approval(
+        client,
         json.dumps({"spawn": "worker-bus"}, separators=(",", ":")),
+        "m26e-lifecycle-model",
     ),
     "ERR",
     "WorkerBus model-only refusal",
@@ -2122,15 +2131,17 @@ def submit(action, role, args, subject, expected, operation_id):
     if response.status != "OK":
         raise RuntimeError(f"ticket admission failed for {action}/{expected}: {response.error}")
     if expected == "expired":
-        response = client.echo(
-            "/queen/ctl",
+        response = rest.queen_control_with_approval(
+            client,
             json.dumps({"kill": before.worker_id}, separators=(",", ":")),
+            f"m26e-stale-kill-{sequence}",
         )
         if response.status != "OK":
             raise RuntimeError(f"stale driver could not kill {before.worker_id}")
-        response = client.echo(
-            "/queen/ctl",
+        response = rest.queen_control_with_approval(
+            client,
             json.dumps({"spawn": "gpu" if role == "worker-gpu" else "lora"}),
+            f"m26e-stale-spawn-{sequence}",
         )
         if response.status != "OK":
             raise RuntimeError(f"stale driver could not recreate {role}")

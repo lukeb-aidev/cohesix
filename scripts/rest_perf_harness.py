@@ -6712,6 +6712,24 @@ def telemetry_ingest_enabled(client: RestClient) -> bool:
     return response.status == "OK"
 
 
+def queen_control_with_approval(
+    client: RestClient, line: str, approval_id: str,
+) -> GatewayResponse:
+    """Submit one approved Queen operation, preserving its result without retry.
+
+    Qualification setup is sequential and owns its approval IDs. A refusal to
+    admit the single-use approval prevents the control write entirely.
+    """
+    approval = json.dumps(
+        {"id": approval_id, "target": "/queen/ctl", "decision": "approve"},
+        separators=(",", ":"),
+    )
+    response = client.echo("/actions/queue", approval)
+    if response.status != "OK":
+        raise RestError(f"Queen approval failed: {response.error}", response)
+    return client.echo("/queen/ctl", line)
+
+
 def queue_approval(client: RestClient, target: str, state: SimState) -> None:
     state.approval_seq += 1
     approval_id = f"approve-{state.approval_seq:06d}"

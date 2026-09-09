@@ -1,8 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Keep release pressure cleanup confined to an explicitly selected Git checkout.
+# Purpose: Verify release-pressure cleanup ownership and approved operator command setup.
 # Copyright 2026 Lukas Bower
 
-"""Black-box preflight checks; no test reaches cleanup, build, or QEMU."""
+"""Check preflight and emitted commands without cleanup, build, or QEMU."""
 
 from pathlib import Path
 import shutil
@@ -89,3 +89,34 @@ def test_selected_checkout_rejects_uncommitted_source(
     result = invoke(checkout, "--clean-root", str(checkout))
     assert result.returncode == 2
     assert "--clean-root requires an exact clean candidate checkout" in result.stderr
+
+
+@pytest.mark.parametrize("command", ["spawn heartbeat ticks=100", "kill worker1", "ls /"])
+def test_control_script_approves_only_mutations(tmp_path: Path, command: str) -> None:
+    """The generated script follows the documented single-use approval order."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text(encoding="utf-8")
+    function = "run_cohsh_command() {" + source.split(
+        "run_cohsh_command() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    host_tools = tmp_path / "host-tools"
+    host_tools.mkdir()
+    cohsh = host_tools / "cohsh"
+    cohsh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cohsh.chmod(0o700)
+    subprocess.run(
+        ["bash", "-eu", "-c", function + '\nGATEWAY_PID=\n'
+         'HOST_TOOLS="$1"\nM26E_CONSOLE_AUTH_TOKEN=fixture\n'
+         'run_cohsh_command "$2" "$3" 17\n',
+         "qualification-test", str(host_tools), str(tmp_path), command],
+        check=True, timeout=10, capture_output=True, text=True,
+    )
+    lines = (tmp_path / "cohsh-command-17.coh").read_text(encoding="utf-8").splitlines()
+    commands = [line for line in lines if not line.startswith("#")]
+    approval = (
+        'echo \'{"id":"m26e-control-17","target":"/queen/ctl",'
+        '"decision":"approve"}\' > /actions/queue'
+    )
+    prefix = ["attach queen", "EXPECT OK"]
+    if command.startswith(("spawn ", "kill ")):
+        prefix += [approval, "EXPECT SUBSTR path=/actions/queue"]
+    assert commands == prefix + [command, "EXPECT OK", "quit"]
