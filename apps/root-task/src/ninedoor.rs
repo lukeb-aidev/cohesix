@@ -929,6 +929,20 @@ impl NineDoorBridge {
                     });
                     faulted = true;
                 }
+                Ok(None)
+                    if faulted
+                        && self
+                            .namespace_service
+                            .revocation_evidence()
+                            .is_some_and(|evidence| evidence.stage.requires_fault_handoff()) =>
+                {
+                    // The recovered Call returns before root-fault's next
+                    // publication turn. Its recovery evidence promises that
+                    // exact mailbox record; consume it before beginning local
+                    // teardown so neither classification nor the pending
+                    // generation is abandoned. The outer Recovery turn yields.
+                    return Ok(NineDoorContainmentTurn::InProgress);
+                }
                 Ok(None) => {}
                 Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
                     crate::critical_tcb::FaultHandoffError::Contended,

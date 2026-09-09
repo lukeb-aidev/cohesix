@@ -1856,6 +1856,10 @@ For each summary:
   it is not expected on the later receipt boot's UART. The unattended PTY
   capture owns an empty input channel so launcher EOF cannot inject terminal
   control bytes; raw UART bytes remain unchanged and strictly validated;
+- a recovered NineDoor Call may return before the durable fault mailbox is
+  published. Its Recovery turn must yield until that promised standard-fault or
+  terminal-timeout record is consumed before teardown; a recovered fault cannot
+  pass as a manual revoke or leave a pending old-generation mailbox;
 - a graceful shutdown's root completion report may follow synchronous teardown
   only once, with ABI status `5`, action `0`, and the same identity/sequence as
   the prior admitted shutdown Call. This reports the validated terminal result;
