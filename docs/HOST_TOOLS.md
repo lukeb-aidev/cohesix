@@ -39,6 +39,14 @@ handoff check, with no host-tool API change.
 
 ## Generated integration truth
 
+Passive Heartbeat evidence compatibility: the shared host validator and Python
+collector accept zero completion sequence for a freshly READY Heartbeat that
+has received no workload Call. GPU/LoRA completion and receipt requirements,
+all lifecycle/fault outcomes, exact identities and evidence hashes remain
+required. This fixes the evidence imported by Hive Gateway and SwarmUI; the
+other host tools and `tools/cohesix-py` already transport zero sequences without
+changing their meaning. No target, manifest, raw benchmark or console API changes.
+
 Worker log transport compatibility review: cohsh, coh, hive-gateway, swarmui,
 gpu-bridge-host, cas-tool, host-ticket-agent, host-sidecar-bridge and
 `tools/cohesix-py` continue transporting bounded diagnostic lines without

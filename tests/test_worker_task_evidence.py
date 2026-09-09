@@ -412,7 +412,7 @@ def _component(
                 },
                 "image_sha256": _hash(role),
                 "ready_sequence": 1,
-                "completion_sequence": 2,
+                "completion_sequence": 0 if role == "worker-heartbeat" else 2,
                 "endpoint_badge": 638_324_736
                 + (((index + 1) << 8) | 1),
                 "fault_badge": 652_279_808 + index,
@@ -1100,14 +1100,9 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     fault("worker-heartbeat", 3, "Timeout")
     admission("worker-heartbeat", 4)
     ready("worker-heartbeat", 4)
-    control("worker-heartbeat", 4, 0x0101, 0, 1)
-    lines.append(
-        f"WORKER_TASK_COMPLETION {identity('worker-heartbeat', 4)} "
-        "action=0x0101 status=1 sequence=1"
-    )
 
     final_generation = {"worker-heartbeat": 4, "worker-gpu": 5, "worker-lora": 4}
-    final_sequences = {"worker-heartbeat": 1, "worker-gpu": 1, "worker-lora": 12}
+    final_sequences = {"worker-heartbeat": 0, "worker-gpu": 1, "worker-lora": 12}
     for role in ("worker-gpu", "worker-lora"):
         admission(role, 1)
         fault(role, 1, "Standard")
@@ -3111,6 +3106,24 @@ def test_worker_bootstrap_reservation_is_distinct_from_passive_ready(tmp_path: P
     worker["scheduling_context"]["budget_us"] = 401
     with pytest.raises(evidence.EvidenceError, match="scheduling context"):
         evidence._validate_worker_topology([worker], topology, bootstrap=True)  # noqa: SLF001
+
+
+def test_idle_heartbeat_does_not_hide_an_uncompleted_lifecycle_call(tmp_path: Path) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    identity = (
+        "role=worker-heartbeat slot=0 lease_epoch=4 "
+        "supervisor_generation=4 cap_generation=4"
+    )
+    ready = f"WORKER_TASK_READY {identity} sequence=1\n"
+    text = inputs.preflight_uart.read_text().replace(
+        ready,
+        ready + f"WORKER_TASK_LIFECYCLE_CALL {identity} call_label=2 sequence=1 state=admitted\n",
+    )
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    markers = evidence._parse_live_worker_markers(text)  # noqa: SLF001
+    admissions, *_ = evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+    with pytest.raises(evidence.EvidenceError, match="Heartbeat Call lacks its completion"):
+        evidence._live_workers_from_uart(markers, admissions, topology)  # noqa: SLF001
 
 
 def test_component_rejects_badge_sc_and_outcome_inventory_tamper() -> None:

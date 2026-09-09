@@ -1349,7 +1349,7 @@ def validate_component(record: Mapping[str, Any], target: str) -> None:
                 "execution_proof": TARGET_PROOF[target],
             }
             or worker["ready_sequence"] <= 0
-            or worker["completion_sequence"] <= 0
+            or (role != "worker-heartbeat" and worker["completion_sequence"] <= 0)
         ):
             raise EvidenceError("accepted Worker role state is incomplete")
         _hash(worker["image_sha256"], "Worker image")
@@ -4489,7 +4489,17 @@ def _final_workers_from_pressure(
             if _marker_identity(row) == identity
             and _marker_uint(row, "sequence") == pressure_row["completion_sequence"]
         ]
-        if len(ready) != 1 or len(completion) != 1:
+        idle_heartbeat = (
+            identity[0] == "worker-heartbeat"
+            and pressure_row["completion_sequence"] == 0
+        )
+        if idle_heartbeat and any(
+            _marker_identity(row) == identity
+            for kind in ("control", "lifecycle_call", "receipt", "completion")
+            for row in markers.get(kind, [])
+        ):
+            raise EvidenceError("zero-completion Heartbeat has observed Call activity")
+        if len(ready) != 1 or (not idle_heartbeat and len(completion) != 1):
             raise EvidenceError("final pressure Worker sequences lack exact UART records")
         observation["ready_sequence"] = pressure_row["ready_sequence"]
         observation["completion_sequence"] = pressure_row["completion_sequence"]
@@ -4529,9 +4539,15 @@ def _live_workers_from_uart(
             for row in markers["completion"]
             if _marker_identity(row) == identity
         ]
-        if not completions:
+        idle_heartbeat = role == "worker-heartbeat" and not completions
+        if idle_heartbeat and any(
+            _marker_identity(row) == identity
+            for kind in ("control", "lifecycle_call")
+            for row in markers.get(kind, [])
+        ):
+            raise EvidenceError("preflight Heartbeat Call lacks its completion")
+        if not completions and not idle_heartbeat:
             raise EvidenceError(f"preflight lacks a current completion for {role}")
-        completion = max(completions, key=lambda row: _marker_uint(row, "sequence"))
         if role != "worker-heartbeat" and not any(
             _marker_identity(row) == identity
             and _marker_uint(row, "outcome", maximum=0xFFFF) == 1
@@ -4539,7 +4555,9 @@ def _live_workers_from_uart(
         ):
             raise EvidenceError(f"preflight lacks a confirmed receipt for {role}")
         observation["ready_sequence"] = _marker_uint(ready, "sequence")
-        observation["completion_sequence"] = _marker_uint(completion, "sequence")
+        observation["completion_sequence"] = max(
+            (_marker_uint(row, "sequence") for row in completions), default=0,
+        )
         workers.append(observation)
     _validate_worker_topology(workers, topology)
     return workers

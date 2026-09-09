@@ -723,7 +723,12 @@ compiler topology digest and derives the maximum-role inventory from the
 topology payload. It then requires each observed role's attach badge, fault
 badge, core, passive scheduling context, per-slot object inventory, allowlisted
 active executor donor, and generation-scoped Reply path to equal that generated
-truth. Separately, the topology digest seals all 256 Worker task rows and every
+truth. A fresh passive Heartbeat may have completion sequence zero: it has
+committed READY but has received no workload Call. The collector requires no
+uncompleted control/lifecycle Call for that live identity; the separate
+Heartbeat fault, shutdown, teardown and recreation proofs remain mandatory.
+GPU and LoRA require a positive completion sequence and a confirmed receipt.
+Separately, the topology digest seals all 256 Worker task rows and every
 generated non-Worker row. `temporal_authority.tasks` may exceed the generic
 128-item evidence-list bound only when its exact length, order, identifiers,
 kinds, role classes, driver images, and fault-registry counts are derived from
