@@ -9682,12 +9682,14 @@ commands must remain unchanged.
 The compatibility matrix is a hard promotion gate, not an assumed consequence
 of source or host tests. Its fixed one-socket functional mode must authenticate
 and attach once, then return HELP `15 + OK`, isolated QEMU VirtIO NETSTATS
-`15 + OK`, first-call selected-QEMU SMP activity at `max_cores = 4` `16 + OK`,
+`19 + OK`, first-call selected-QEMU SMP activity at `max_cores = 4` `16 + OK`,
 and CACHELOG9 `9 + OK`, then complete PING and QUIT on that socket without
 retry or reconnect and within the existing client timeout. Stage 03 base runs
 the fixed matrix before its `.coh` group. HELP includes the heading and fourteen
 ordered command lines, including separate `caps mcs`, `smp mcs`, `smp poll-time`,
-and `cachelog [n]` entries. A missing, duplicate, reordered, or
+and `cachelog [n]` entries. NETSTATS contains ten common counter/status rows,
+four isolated-runtime rows, two wired rows, and the three status/test/target
+suffix rows. A missing, duplicate, reordered, or
 unexpected body or terminal frame, timeout, retry, or reconnect fails the
 matrix. The authenticated oversize regression must then use one connection to
 receive exact `ERR FRAME reason=invalid-length`, drain the complete declared

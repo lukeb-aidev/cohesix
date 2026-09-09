@@ -725,7 +725,8 @@ manifests and SHA-256 namespace contract. This fixture correction changes no
 host-tool, SDK, target, or benchmark interface.
 
 The QEMU TCP matrix checks the current fifteen-line HELP body, including its
-ordered command labels, followed by one exact `OK HELP`. This reconciles the
+ordered command labels, followed by one exact `OK HELP`. NETSTATS requires its
+existing nineteen counter/status lines and one exact `OK NETSTATS`. This reconciles the
 older eleven-line fixture with the existing shared console help surface.
 Compatibility review of the complete host-tool suite, Python SDK, and raw/REST
 benchmarks requires no implementation change: commands, response framing,

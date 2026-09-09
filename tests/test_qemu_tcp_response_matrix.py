@@ -40,7 +40,7 @@ HELP_BODY = [
 ]
 NETSTATS_BODY = [
     "netstats: rx_pkts=1 tx_pkts=2 rx_used=3 tx_used=4 polls=5",
-    *[f"netstats: fixture_index={index}" for index in range(2, 13)],
+    *[f"netstats: fixture_index={index}" for index in range(2, 17)],
     "netstatus: fixture=ready",
     "nettest: fixture=none",
     "nettargets: fixture=qemu",
@@ -171,7 +171,7 @@ def test_matrix_preserves_complete_body_first_responses_on_one_connection() -> N
     assert commands == [entry[0] for entry in responses]
     assert result.stdout.splitlines() == [
         "PASS HELP body_frames=15 ack=OK_HELP",
-        "PASS NETSTATS body_frames=15 ack=OK_NETSTATS",
+        "PASS NETSTATS body_frames=19 ack=OK_NETSTATS",
         "PASS SMP body_frames=16 ack=OK_SMP_mode=activity",
         "PASS CACHELOG body_frames=9 ack=OK_CACHELOG",
         "PASS PING body_frames=1 ack=OK_PING_reply=pong",

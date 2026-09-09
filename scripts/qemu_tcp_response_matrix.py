@@ -42,7 +42,7 @@ HELP_COMMANDS = (
     "quit",
 )
 HELP_BODY_FRAMES = 1 + len(HELP_COMMANDS)
-NETSTATS_BODY_FRAMES = 15
+NETSTATS_BODY_FRAMES = 19
 SMP_ACTIVITY_BODY_FRAMES = 16
 
 ACK_RE = re.compile(r"^(?:OK|ERR) [A-Z][A-Z0-9_-]*(?: |$)")
@@ -282,7 +282,7 @@ def run_matrix(
             NETSTATS_BODY_FRAMES,
         )
         validate_netstats(netstats_body)
-        summaries.append("PASS NETSTATS body_frames=15 ack=OK_NETSTATS")
+        summaries.append("PASS NETSTATS body_frames=19 ack=OK_NETSTATS")
 
         smp_body = exchange(
             connection,
