@@ -577,6 +577,14 @@ budget cannot hide lost Worker completion among successful telemetry reads.
 The summary preserves measured counts and error rates; command exit and the
 end marker report the liveness failure even when that aggregate budget passes.
 
+The timed GPU workload renews leases established during setup; its bounded
+256-operation receipt window need not retain those initial grants. QEMU and
+Pi pressure reports require GPU renewal and LoRA export receipts, with positive
+timed operation counts for both roles. Optional per-receipt `timing_s`
+(`lane_wait`, `admission`, `completion_wait`, `total`) and positive
+`current_reads` remain diagnostics: finite nonnegative timings do not replace
+identity, monotonic sequence, terminal-status or target-log correlation.
+
 Each summary also retains top-level `target_session_sha256` and
 `report.executable_state`: exact topology/session hashes; pre/post aggregate
 256-Worker READY censuses plus three-role exemplar identities,

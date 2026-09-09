@@ -63,6 +63,23 @@ def test_executable_liveness_is_independent_of_aggregate_read_error_budget(failu
         rest_perf.validate_executable_run_liveness(stats, uart)
 
 
+@pytest.mark.parametrize("role", ["gpu", "lora"])
+@pytest.mark.parametrize("empty", [True, False])
+def test_executable_liveness_requires_timed_receipts_for_both_roles(role, empty):
+    """Startup grants cannot replace missing timed Worker workload activity."""
+    stats = {
+        "worker_gpu_v2_receipt": rest_perf.OpStats(count=1, ok=1),
+        "worker_lora_v2_receipt": rest_perf.OpStats(count=1, ok=1),
+    }
+    key = f"worker_{role}_v2_receipt"
+    if empty:
+        stats[key] = rest_perf.OpStats()
+    else:
+        del stats[key]
+    with pytest.raises(rest_perf.RestError, match="lacks completed Worker receipt activity"):
+        rest_perf.validate_executable_run_liveness(stats, "")
+
+
 class RawTranscriptSocket:
     """Supply fixed protocol bytes, including partial-frame reads."""
 
@@ -4000,7 +4017,13 @@ def test_qemu_fixture_receipt_paths_require_explicit_fixture_mode() -> None:
         raise AssertionError("production/provider mode must not replace QEMU fixture evidence")
 
 
-def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
+@pytest.mark.parametrize("target", ["qemu", "pi4"])
+@pytest.mark.parametrize(
+    "gpu_action,valid", [("gpu.lease.renew", True), ("gpu.lease.grant", False)],
+)
+def test_executable_report_retains_exact_pre_post_and_identity_graph(
+    target: str, gpu_action: str, valid: bool,
+) -> None:
     state = rest_perf.SimState(
         bounds=executable_bounds(),
         rest_url="http://127.0.0.1:8080",
@@ -4044,18 +4067,37 @@ def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
     state.executable_post_state = {"workers": post_workers, "proc": {}}
     state.lifecycle_cycles = [{"role": "worker-heartbeat"}]
     state.receipt_operations = [
-        {"action": "gpu.lease.grant", "role": "worker-gpu"},
+        {"action": gpu_action, "role": "worker-gpu"},
         {"action": "peft.export", "role": "worker-lora"},
-    ]
+    ] * 128
     state.fault_artifacts = {
         "uart": {"sha256": "a" * 64, "bytes": 1},
         "gdb": {"sha256": "b" * 64, "bytes": 1},
     }
+    if target == "pi4":
+        state.acceptance_binding["record_kind"] = "performance-execution-binding"
+        state.target_evidence = rest_perf.BenchmarkTargetEvidence(
+            target="pi4", transport="wifi", proof_class="fresh-pi",
+            source_sha256="9" * 64, manifest_sha256="f" * 64,
+            image_sha256="8" * 64, root_image_sha256="c" * 64,
+            target_session_sha256="b" * 64, component_acceptance_sha256=None,
+            runtime_evidence_sha256="7" * 64, network_evidence_sha256="6" * 64,
+            evidence_sha256="5" * 64, captured_unix_s=1,
+        )
+
+    def build_report():
+        if target == "pi4":
+            return rest_perf.build_pi_executable_report_state(state)
+        return rest_perf.build_executable_report_state(
+            state, ["uart:WORKER_TASK_FAULT"],
+        )
+
     rest_perf.validate_executable_post_state(state)
-    digest, report = rest_perf.build_executable_report_state(
-        state,
-        ["uart:WORKER_TASK_FAULT"],
-    )
+    if not valid:
+        with pytest.raises(rest_perf.RestError, match="did not drive.*GPU and LoRA"):
+            build_report()
+        return
+    digest, report = build_report()
     assert digest == "b" * 64
     assert set(report) == {
         "topology_sha256",
@@ -4064,9 +4106,11 @@ def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
         "post",
         "lifecycle_cycles",
         "receipt_operations",
-        "fault_artifacts",
-        "required_fault_markers",
-    }
+    } | (
+        {"fault_artifacts", "required_fault_markers"} if target == "qemu"
+        else {"target_evidence"}
+    )
+    assert report["receipt_operations"] == state.receipt_operations
     assert set(report["target_session"]) == {
         "manifest_sha256",
         "root_image_sha256",

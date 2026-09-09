@@ -4887,6 +4887,12 @@ def validate_executable_run_liveness(
     """Worker completion and fatal target status cannot spend a read error budget."""
     if "[critical] root-emergency fail-stop" in uart_text:
         raise RestError("executable benchmark observed root-emergency fail-stop")
+    missing = [
+        name for name in ("worker_gpu_v2_receipt", "worker_lora_v2_receipt")
+        if name not in stats or stats[name].ok <= 0
+    ]
+    if missing:
+        raise RestError(f"executable benchmark lacks completed Worker receipt activity: {missing}")
     failures = {
         name: stats[name].err
         for name in ("worker_gpu_v2_receipt", "worker_lora_v2_receipt")
@@ -5231,7 +5237,7 @@ def build_executable_report_state(
         for operation in state.receipt_operations
     }
     required_driven = {
-        ("gpu.lease.grant", "worker-gpu"),
+        ("gpu.lease.renew", "worker-gpu"),
         ("peft.export", "worker-lora"),
     }
     if not required_driven.issubset(driven):
@@ -5285,7 +5291,7 @@ def build_pi_executable_report_state(
         for operation in state.receipt_operations
     }
     if not {
-        ("gpu.lease.grant", "worker-gpu"),
+        ("gpu.lease.renew", "worker-gpu"),
         ("peft.export", "worker-lora"),
     }.issubset(driven):
         raise RestError("Pi executable pressure did not drive GPU and LoRA receipts")

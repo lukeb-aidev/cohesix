@@ -2138,6 +2138,46 @@ def test_component_validator_accepts_bounded_role_exemplars() -> None:
         evidence.validate_component(pi_component, "pi4")
 
 
+@pytest.mark.parametrize(
+    "invalid", [None, "negative", "infinite", "boolean", "reads", "unknown"],
+)
+def test_pressure_receipt_timing_diagnostics_preserve_exact_proof(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    """The emitted diagnostics are optional, typed, finite and never authority."""
+    inputs = _live_qemu_inputs(tmp_path)
+    for path in inputs.pressure:
+        summary = json.loads(path.read_text())
+        operation = summary["report"]["executable_state"]["receipt_operations"][0]
+        operation.update(
+            timing_s={
+                "lane_wait": 0.0, "admission": 0.01,
+                "completion_wait": 0.02, "total": 0.03,
+            },
+            current_reads=2,
+        )
+        if invalid in {"negative", "infinite", "boolean"}:
+            operation["timing_s"]["admission"] = {
+                "negative": -1, "infinite": float("inf"), "boolean": True,
+            }[invalid]
+        elif invalid == "reads":
+            operation["current_reads"] = 0
+        elif invalid == "unknown":
+            operation["untrusted_authority"] = True
+        _write(path, summary)
+    if invalid:
+        expected = (
+            "invalid JSON.*non-finite number" if invalid == "infinite"
+            else "receipt.*(schema|diagnostics)"
+        )
+        with pytest.raises(evidence.EvidenceError, match=expected):
+            evidence._collect_qemu(inputs)
+        assert not inputs.out_dir.exists()
+    else:
+        evidence._collect_qemu(inputs)
+        assert (inputs.out_dir / "worker-task-evidence.json").is_file()
+
+
 @pytest.mark.parametrize("retained_log", [False, True])
 def test_live_qemu_benchmark_schema_collection_is_semantically_derived(
     tmp_path: Path, retained_log: bool,

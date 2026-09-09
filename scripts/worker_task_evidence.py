@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -4605,6 +4606,34 @@ def _live_workers_from_uart(
     return workers
 
 
+def _validate_pressure_receipt_shape(operation: object) -> None:
+    """Keep receipt proof exact while accepting bounded timing diagnostics."""
+    required = {
+        "action", "role", "worker_id", "sequence_before", "sequence_after", "status",
+    }
+    diagnostics = {"timing_s", "current_reads"}
+    if not isinstance(operation, dict) or set(operation) not in (
+        required, required | diagnostics,
+    ):
+        raise EvidenceError("pressure receipt operation has an unexpected schema")
+    if "timing_s" not in operation:
+        return
+    timing = operation["timing_s"]
+    if (
+        not isinstance(timing, dict)
+        or set(timing) != {"lane_wait", "admission", "completion_wait", "total"}
+        or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or (isinstance(value, float) and not math.isfinite(value)) or value < 0
+            for value in timing.values()
+        )
+        or isinstance(operation["current_reads"], bool)
+        or not isinstance(operation["current_reads"], int)
+        or operation["current_reads"] <= 0
+    ):
+        raise EvidenceError("pressure receipt timing diagnostics are invalid")
+
+
 def _validate_pressure_cycles_and_receipts(
     reports: Sequence[Mapping[str, Any]],
     markers: Mapping[str, list[dict[str, Any]]],
@@ -4674,15 +4703,7 @@ def _validate_pressure_cycles_and_receipts(
         raise EvidenceError("pressure reports lack live receipt operations")
     retired_identities = {_marker_identity(row) for row in markers["teardown"]}
     for operation in operations:
-        if not isinstance(operation, dict) or set(operation) != {
-            "action",
-            "role",
-            "worker_id",
-            "sequence_before",
-            "sequence_after",
-            "status",
-        }:
-            raise EvidenceError("pressure receipt operation has an unexpected schema")
+        _validate_pressure_receipt_shape(operation)
         action = operation["action"]
         expected = next(
             (
