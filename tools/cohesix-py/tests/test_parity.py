@@ -1,20 +1,29 @@
+# Author: Lukas Bower
+# Purpose: Verify Python client parity and host registry transaction boundaries.
+# Copyright 2026 Lukas Bower
+
 """Parity tests for the Cohesix Python client."""
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import cast
 from urllib.parse import parse_qs, urlparse
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cohesix.audit import CohesixAudit
-from cohesix.backends import MockBackend, RestBackend
+from cohesix.backends import Backend, MockBackend, RestBackend
 from cohesix.client import CohesixClient, GpuLeaseArgs
+from cohesix.errors import CohesixError
 from cohesix.ticket import TicketError, normalize_ticket
 
 
@@ -271,3 +280,47 @@ def start_rest_server(backend: MockBackend) -> tuple[ThreadingHTTPServer, str]:
     thread.start()
     base_url = f"http://127.0.0.1:{server.server_port}"
     return server, base_url
+
+
+def registry(tmp_path: Path) -> Path:
+    """Create two independently named models and the prior committed pointer."""
+    for model in ("old", "new"):
+        directory = tmp_path / "available" / model
+        directory.mkdir(parents=True)
+        (directory / "manifest.toml").write_text(f'[model]\nid="{model}"\n')
+    (tmp_path / "active").write_text("old\n")
+    return tmp_path
+
+
+def test_local_activation_and_rollback_make_no_backend_calls(tmp_path: Path) -> None:
+    client = CohesixClient(cast(Backend, object()))
+    root = registry(tmp_path)
+    audit = CohesixAudit()
+    client.peft_activate("new", root, audit)
+    assert (root / "active").read_text() == "new\n"
+    client.peft_rollback(root, audit)
+    assert (root / "active").read_text() == "old\n"
+    assert audit.lines == [
+        "peft activated model=new execution_location=host projection=pending",
+        "peft rollback from=new to=old execution_location=host projection=pending",
+    ]
+
+
+def test_state_preparation_failure_preserves_active_pointer(tmp_path: Path) -> None:
+    client = CohesixClient(cast(Backend, object()))
+    client.policy = deepcopy(client.policy)
+    client.policy["peft"]["activate"]["max_state_bytes"] = 1
+    root = registry(tmp_path)
+    with pytest.raises(CohesixError, match="max_state_bytes"):
+        client.peft_activate("new", root)
+    assert (root / "active").read_text() == "old\n"
+    assert not (root / "active_state.toml").exists()
+
+
+def test_interrupted_pointer_commit_requires_reconciliation(tmp_path: Path) -> None:
+    client = CohesixClient(cast(Backend, object()))
+    root = registry(tmp_path)
+    (root / "active_state.toml").write_text('current="new"\nprevious="old"\n')
+    with pytest.raises(CohesixError, match="reconcile the interrupted commit"):
+        client.peft_rollback(root)
+    assert (root / "active").read_text() == "old\n"

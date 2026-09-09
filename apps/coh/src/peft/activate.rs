@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Coh peft activation and rollback helpers.
 // Author: Lukas Bower
@@ -9,16 +9,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use cohsh_core::wire::AckStatus;
 use serde::{Deserialize, Serialize};
 
 use crate::peft::{
     write_atomic, REGISTRY_ACTIVE_FILE, REGISTRY_AVAILABLE_DIR, REGISTRY_STATE_FILE,
 };
 use crate::policy::{CohPeftActivatePolicy, CohPolicy};
-use crate::{validate_component, CohAccess, CohAudit};
-
-const GPU_ACTIVE_PATH: &str = "/gpu/models/active";
+use crate::{validate_component, CohAudit};
 
 /// Activation request parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,9 +33,8 @@ pub struct PeftRollbackSpec {
     pub registry_root: PathBuf,
 }
 
-/// Activate a model by swapping the active pointer.
-pub fn activate_model<C: CohAccess>(
-    client: &mut C,
+/// Commit the host registry pointer; a bridge snapshot separately publishes it.
+pub fn activate_model(
     policy: &CohPolicy,
     spec: &PeftActivateSpec,
     audit: &mut CohAudit,
@@ -58,17 +54,18 @@ pub fn activate_model<C: CohAccess>(
     state.previous = previous;
     state.current = spec.model_id.clone();
 
-    write_active_pointer(registry_root, &state.current)?;
     write_state(registry_root, &policy.peft.activate, &state)?;
+    write_active_pointer(registry_root, &state.current)?;
 
-    write_active_9p(client, &spec.model_id, audit)?;
-    audit.push_line(format!("peft activated model={}", spec.model_id));
+    audit.push_line(format!(
+        "peft activated model={} execution_location=host projection=pending",
+        spec.model_id
+    ));
     Ok(())
 }
 
-/// Roll back to the previous active model pointer.
-pub fn rollback_model<C: CohAccess>(
-    client: &mut C,
+/// Commit the previous host pointer; this does not reload an inference runtime.
+pub fn rollback_model(
     policy: &CohPolicy,
     spec: &PeftRollbackSpec,
     audit: &mut CohAudit,
@@ -87,12 +84,11 @@ pub fn rollback_model<C: CohAccess>(
     state.current = previous.clone();
     state.previous = Some(current.clone());
 
-    write_active_pointer(registry_root, &state.current)?;
     write_state(registry_root, &policy.peft.activate, &state)?;
+    write_active_pointer(registry_root, &state.current)?;
 
-    write_active_9p(client, &state.current, audit)?;
     audit.push_line(format!(
-        "peft rollback from={} to={}",
+        "peft rollback from={} to={} execution_location=host projection=pending",
         current, state.current
     ));
     Ok(())
@@ -106,8 +102,12 @@ struct PeftState {
 
 fn load_state(root: &Path, policy: &CohPeftActivatePolicy) -> Result<PeftState> {
     let state_path = root.join(REGISTRY_STATE_FILE);
-    if !state_path.is_file() {
-        let current = read_active_pointer(root, policy).unwrap_or_default();
+    if !state_path.try_exists()? {
+        let current = if root.join(REGISTRY_ACTIVE_FILE).try_exists()? {
+            read_active_pointer(root, policy)?
+        } else {
+            String::new()
+        };
         return Ok(PeftState {
             current,
             previous: None,
@@ -118,6 +118,11 @@ fn load_state(root: &Path, policy: &CohPeftActivatePolicy) -> Result<PeftState> 
         .map_err(|_| anyhow!("state file {} is not UTF-8", state_path.display()))?;
     let state: PeftState = toml::from_str(&text)
         .with_context(|| format!("invalid state TOML in {}", state_path.display()))?;
+    if read_active_pointer(root, policy)? != state.current {
+        return Err(anyhow!(
+            "registry state differs from active pointer; reconcile the interrupted commit"
+        ));
+    }
     Ok(state)
 }
 
@@ -151,18 +156,6 @@ fn read_active_pointer(root: &Path, policy: &CohPeftActivatePolicy) -> Result<St
         .find(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("active pointer {} is empty", path.display()))?;
     Ok(line.to_owned())
-}
-
-fn write_active_9p<C: CohAccess>(
-    client: &mut C,
-    model_id: &str,
-    audit: &mut CohAudit,
-) -> Result<()> {
-    let payload = format!("{}\n", model_id);
-    let written = client.write_append(GPU_ACTIVE_PATH, payload.as_bytes())?;
-    let detail = format!("path={GPU_ACTIVE_PATH} bytes={written}");
-    audit.push_ack(AckStatus::Ok, "ECHO", Some(detail.as_str()));
-    Ok(())
 }
 
 fn ensure_registry_model(root: &Path, model_id: &str) -> Result<()> {

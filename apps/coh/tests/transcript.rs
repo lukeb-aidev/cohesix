@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Compare coh transcript output against shared fixtures.
 // Author: Lukas Bower
@@ -202,14 +202,14 @@ fn coh_peft_transcript_matches_cohsh_baseline() -> Result<()> {
         registry_root: registry_root.path().to_path_buf(),
     };
     let mut audit = CohAudit::new();
-    peft::activate_model(&mut client, &policy, &activate, &mut audit)?;
+    peft::activate_model(&policy, &activate, &mut audit)?;
     transcript.extend(audit.into_lines());
 
     let rollback = peft::PeftRollbackSpec {
         registry_root: registry_root.path().to_path_buf(),
     };
     let mut audit = CohAudit::new();
-    peft::rollback_model(&mut client, &policy, &rollback, &mut audit)?;
+    peft::rollback_model(&policy, &rollback, &mut audit)?;
     transcript.extend(audit.into_lines());
 
     transcript_support::compare_transcript("coh", PEFT_SCENARIO, "cohsh.txt", &transcript);

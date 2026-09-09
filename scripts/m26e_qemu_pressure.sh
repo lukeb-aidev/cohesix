@@ -1664,9 +1664,10 @@ import sys
 root = Path(sys.argv[1])
 registry = root / "peft-registry"
 base = registry / "available" / "vision-base-v1"
+export_base = registry / "available" / "fixture-base-model"
 lora = registry / "available" / "vision-lora-edge"
 adapter = root / "peft-adapters" / "fixture-adapter"
-for path in (base, lora, adapter, root / "peft-exports"):
+for path in (base, export_base, lora, adapter, root / "peft-exports"):
     path.mkdir(parents=True, exist_ok=True)
 
 adapter_bytes = b"fixture-adapter\n"
@@ -1678,6 +1679,13 @@ sha = lambda value: hashlib.sha256(value).hexdigest()
 (adapter / "lora.json").write_bytes(lora_bytes)
 (base / "manifest.toml").write_text(
     '[model]\nid = "vision-base-v1"\n'
+    f'cas_sha256 = "{sha(b"fixture-base")}"\nformat = "gguf"\n',
+    encoding="utf-8",
+)
+# The target's bounded LoRA export names this base in base_model.ref. Keep it
+# available when the real import operation adds its derived adapter manifest.
+(export_base / "manifest.toml").write_text(
+    '[model]\nid = "fixture-base-model"\n'
     f'cas_sha256 = "{sha(b"fixture-base")}"\nformat = "gguf"\n',
     encoding="utf-8",
 )
@@ -2008,8 +2016,14 @@ worker_bus = require(
     "WorkerBus model-only refusal",
 )
 worker_bus_detail = bounded_detail(worker_bus.error)
-if "model-only" not in worker_bus_detail.lower():
-    raise RuntimeError("WorkerBus refusal does not preserve model-only semantics")
+bus_roles = [
+    row for row in rest.worker_runtime_bounds(bounds)["roles"]
+    if row["role"] == "worker-bus"
+]
+if len(bus_roles) != 1 or bus_roles[0]["declaration"] != "model-only" or bus_roles[0]["executable_slots"] != 0:
+    raise RuntimeError("WorkerBus does not retain its generated model-only declaration")
+if "detail=invalid-payload" not in worker_bus_detail:
+    raise RuntimeError("raw WorkerBus spawn lacks the target's invalid-payload refusal")
 
 gpu = require(client.cat("/gpu/bridge/status", 8192), "OK", "GPU fixture read")
 gpu_text = " ".join(gpu.lines)
@@ -2024,7 +2038,7 @@ lines = (
     f"status={spawn_response.status}",
     "GATEWAY_OPERATOR ERR SPAWN role=worker-heartbeat "
     f"reason={duplicate_detail}",
-    "GATEWAY_OPERATOR ERR SPAWN role=worker-bus reason=model-only "
+    "GATEWAY_OPERATOR ERR SPAWN role=worker-bus declaration=model-only "
     f"detail={worker_bus_detail}",
     f"GATEWAY_OPERATOR OK CAT path=/gpu/bridge/status {gpu_text}",
     "GATEWAY_OPERATOR OK LS path=/shard",
@@ -2090,20 +2104,6 @@ def ready(role):
     return rows[0]
 
 
-def wait_fresh(role, generation):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        try:
-            row = ready(role)
-        except Exception:
-            time.sleep(0.1)
-            continue
-        if row.supervisor_generation > generation:
-            return row
-        time.sleep(0.1)
-    raise RuntimeError(f"fresh {role} generation was not observed")
-
-
 def run_agent():
     command = [
         str(agent),
@@ -2146,7 +2146,7 @@ def republish():
 
 def terminal(ticket_id):
     for path in ("/host/tickets/status", "/host/tickets/deadletter"):
-        response = client.tail(path, 8192)
+        response = client.tail(path, rest.HOST_TICKET_LOG_TAIL_BYTES)
         if response.status != "OK":
             raise RuntimeError(f"cannot read {path}")
         for line in response.lines:
@@ -2179,25 +2179,11 @@ def submit(action, role, args, subject, expected, operation_id):
         "receipt_supervisor_generation": before.supervisor_generation,
         "receipt_cap_generation": before.cap_generation,
     }
+    if expected == "expired":
+        payload["expires_unix_ms"] = 1
     response = client.echo("/host/tickets/spec", json.dumps(payload, separators=(",", ":")))
     if response.status != "OK":
         raise RuntimeError(f"ticket admission failed for {action}/{expected}: {response.error}")
-    if expected == "expired":
-        response = rest.queen_control_with_approval(
-            client,
-            json.dumps({"kill": before.worker_id}, separators=(",", ":")),
-            f"m26e-stale-kill-{sequence}",
-        )
-        if response.status != "OK":
-            raise RuntimeError(f"stale driver could not kill {before.worker_id}")
-        response = rest.queen_control_with_approval(
-            client,
-            json.dumps({"spawn": "gpu" if role == "worker-gpu" else "lora"}),
-            f"m26e-stale-spawn-{sequence}",
-        )
-        if response.status != "OK":
-            raise RuntimeError(f"stale driver could not recreate {role}")
-        wait_fresh(role, before.supervisor_generation)
     run_agent()
     deadline = time.monotonic() + 20
     observed = None
@@ -2222,12 +2208,20 @@ for row in confirmed:
     submit(*row[:4], "succeeded", row[4])
 republish()
 submit("peft.activate", "worker-lora", {}, "m26e-lora", "succeeded", "peft-activate-confirmed")
+republish()
+active = client.cat("/gpu/models/active", 8192)
+if active.status != "OK" or active.lines != ["m26e-lora"]:
+    raise RuntimeError("activated host model was not installed by the bridge snapshot")
 submit("peft.rollback", "worker-lora", {}, "vision-lora-edge", "succeeded", "peft-rollback-confirmed")
+republish()
+active = client.cat("/gpu/models/active", 8192)
+if active.status != "OK" or active.lines != ["vision-lora-edge"]:
+    raise RuntimeError("rolled-back host model was not installed by the bridge snapshot")
 
 rejected = [
-    ("gpu.lease.grant", "worker-gpu", {"ttl_s": 60}, "GPU-MISSING", "gpu-reject-grant"),
-    ("gpu.lease.renew", "worker-gpu", {"ttl_s": 60}, "GPU-MISSING", "gpu-reject-renew"),
-    ("gpu.lease.release", "worker-gpu", {"reason": "m26e-reject"}, "GPU-MISSING", "gpu-reject-release"),
+    ("gpu.lease.grant", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-reject-grant-operation-over-32-bytes"),
+    ("gpu.lease.renew", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-reject-renew-operation-over-32-bytes"),
+    ("gpu.lease.release", "worker-gpu", {"reason": "m26e-reject"}, gpu_id, "gpu-reject-release-operation-over-32-bytes"),
     ("peft.export", "worker-lora", {}, "missing-export-job", "peft-reject-export"),
     ("peft.import", "worker-lora", {"adapter_ref": "missing-adapter", "job_id": export_job}, "missing-import", "peft-reject-import"),
     ("peft.activate", "worker-lora", {}, "missing-model", "peft-reject-activate"),

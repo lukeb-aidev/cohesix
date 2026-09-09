@@ -11,8 +11,6 @@ use coh::peft::{
 };
 use coh::policy::CohPolicy;
 use coh::CohAudit;
-use cohesix_ticket::Role;
-use cohsh::client::{CohClient, InProcessTransport};
 use gpu_bridge_host::auto_bridge_with_registry;
 use nine_door::NineDoor;
 use tempfile::TempDir;
@@ -124,28 +122,78 @@ fn peft_import_activate_rollback_roundtrip() -> Result<()> {
     assert_eq!(imported.base_model_id.as_deref(), Some(BASE_MODEL));
     server.install_gpu_nodes(&snapshot)?;
 
-    let connection = server.connect().context("open NineDoor session")?;
-    let transport = InProcessTransport::new(connection);
-    let mut client = CohClient::connect(transport, Role::Queen, None)?;
-
     let mut audit = CohAudit::new();
     let activate = PeftActivateSpec {
         model_id: MODEL_ID.to_owned(),
         registry_root: registry_root.path().to_path_buf(),
     };
-    activate_model(&mut client, &policy, &activate, &mut audit)?;
+    activate_model(&policy, &activate, &mut audit)?;
 
     let active = std::fs::read_to_string(registry_root.path().join("active"))?;
-    assert!(active.trim() == MODEL_ID);
+    assert_eq!(active.trim(), MODEL_ID);
+    assert_eq!(
+        audit.lines(),
+        &[format!(
+            "peft activated model={MODEL_ID} execution_location=host projection=pending"
+        )]
+    );
 
     let mut audit = CohAudit::new();
     let rollback = PeftRollbackSpec {
         registry_root: registry_root.path().to_path_buf(),
     };
-    rollback_model(&mut client, &policy, &rollback, &mut audit)?;
+    rollback_model(&policy, &rollback, &mut audit)?;
 
     let active_after = std::fs::read_to_string(registry_root.path().join("active"))?;
-    assert!(active_after.trim() == BASE_MODEL);
+    assert_eq!(active_after.trim(), BASE_MODEL);
+    Ok(())
+}
+
+#[test]
+fn activation_preparation_failure_preserves_active_pointer() -> Result<()> {
+    let registry = TempDir::new()?;
+    write_file(
+        &registry.path().join("available/new/manifest.toml"),
+        b"[model]\nid=\"new\"\n",
+    )?;
+    write_file(&registry.path().join("active"), b"old\n")?;
+    let mut policy = CohPolicy::from_generated();
+    policy.peft.activate.max_state_bytes = 1;
+    let error = activate_model(
+        &policy,
+        &PeftActivateSpec {
+            model_id: "new".to_owned(),
+            registry_root: registry.path().to_owned(),
+        },
+        &mut CohAudit::new(),
+    )
+    .expect_err("oversized prepared state must fail");
+    assert!(error.to_string().contains("max_state_bytes"));
+    assert_eq!(std::fs::read(registry.path().join("active"))?, b"old\n");
+    assert!(!registry.path().join("active_state.toml").exists());
+    Ok(())
+}
+
+#[test]
+fn interrupted_pointer_commit_requires_reconciliation() -> Result<()> {
+    let registry = TempDir::new()?;
+    write_file(&registry.path().join("active"), b"old\n")?;
+    write_file(
+        &registry.path().join("active_state.toml"),
+        b"current=\"new\"\nprevious=\"old\"\n",
+    )?;
+    let error = rollback_model(
+        &CohPolicy::from_generated(),
+        &PeftRollbackSpec {
+            registry_root: registry.path().to_owned(),
+        },
+        &mut CohAudit::new(),
+    )
+    .expect_err("partial state must not be treated as a committed activation");
+    assert!(error
+        .to_string()
+        .contains("reconcile the interrupted commit"));
+    assert_eq!(std::fs::read(registry.path().join("active"))?, b"old\n");
     Ok(())
 }
 

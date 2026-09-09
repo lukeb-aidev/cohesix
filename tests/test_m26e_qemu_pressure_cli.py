@@ -4,15 +4,72 @@
 
 """Check preflight and emitted commands without cleanup, build, or QEMU."""
 
+import ast
+import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tomllib
+from types import SimpleNamespace
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_expired_receipt_keeps_the_admitted_worker_alive() -> None:
+    """Expiry requires a live recipient; generation invalidation has its own lane."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    embedded = source.split("drive_receipt_matrix() {", 1)[1].split("<<'PY'\n", 1)[1]
+    embedded = embedded.split("\nPY\n", 1)[0]
+    submit = next(node for node in ast.parse(embedded).body
+                  if isinstance(node, ast.FunctionDef) and node.name == "submit")
+    writes = []
+
+    def echo(path: str, line: str) -> SimpleNamespace:
+        writes.append((path, json.loads(line)))
+        return SimpleNamespace(status="OK")
+
+    scope = {
+        "sequence": 0, "json": json,
+        "ready": lambda role: SimpleNamespace(
+            worker_id="worker7", supervisor_generation=3, cap_generation=4,
+        ),
+        "client": SimpleNamespace(echo=echo), "run_agent": lambda: None,
+        "time": SimpleNamespace(monotonic=lambda: 0),
+        "terminal": lambda ticket: "expired", "records": [],
+    }
+    exec(compile(ast.Module(body=[submit], type_ignores=[]), "receipt-submit", "exec"), scope)
+    scope["submit"]("peft.export", "worker-lora", {}, "job", "expired", "operation")
+    assert len(writes) == 1
+    assert writes[0][0] == "/host/tickets/spec"
+    assert writes[0][1]["expires_unix_ms"] == 1
+    assert writes[0][1]["receipt_worker_id"] == "worker7"
+    assert writes[0][1]["receipt_supervisor_generation"] == 3
+    assert writes[0][1]["receipt_cap_generation"] == 4
+
+
+def test_receipt_fixture_contains_the_exported_adapters_base(tmp_path: Path) -> None:
+    """The QEMU export's base_model.ref must resolve after a real PEFT import."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "prepare_host_fixture() {" + source.split(
+        "prepare_host_fixture() {", 1,
+    )[1].split("\ntrigger_disposable_worker_control() {", 1)[0]
+    subprocess.run(
+        ["bash", "-eu", "-c", function + '\nprepare_host_fixture "$1"\n',
+         "fixture-test", str(tmp_path)],
+        check=True, capture_output=True, text=True, timeout=10,
+    )
+    available = tmp_path / "peft-registry/available"
+    exported_base = tomllib.loads((available / "fixture-base-model/manifest.toml").read_text())
+    assert exported_base["model"]["id"] == "fixture-base-model"
+    assert exported_base["model"]["format"] == "gguf"
+    for path in available.glob("*/manifest.toml"):
+        model = tomllib.loads(path.read_text())["model"]
+        if "base" in model:
+            assert (available / model["base"] / "manifest.toml").is_file()
 
 
 @pytest.fixture

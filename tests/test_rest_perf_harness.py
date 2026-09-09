@@ -4342,7 +4342,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'exact_option("-accel", accelerator)',
         'exact_option("-machine", machine)',
         'exact_option("-cpu", cpu)',
-        'wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180',
+        'wait_for_marker_count "$boot_dir/uart.live.log" "[mark] root-console.start.ok" 1 180',
         "rest.wait_for_gateway(client, 60.0)",
         'die "direct cohsh command attempted while hive-gateway owns the console"',
         'kill -INT "$pid"',
@@ -4431,7 +4431,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     assert source.count('"$BUILD_RUN" --clean --no-run') == 1
     assert source.count(
         'wait_for_marker_count "$boot_dir/uart.live.log" '
-        '"Cohesix console ready" 1 180'
+        '"[mark] root-console.start.ok" 1 180'
     ) == 2
     canonical_build = source.index(
         'log "building canonical release-qemu,bootstrap-trace artifacts"'

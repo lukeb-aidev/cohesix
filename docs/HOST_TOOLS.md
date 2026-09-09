@@ -757,6 +757,28 @@ approval prevents that write, and the control result is preserved without a
 retry. This setup repair requires no changes to the eight host tools or Python
 SDK reviewed above, measured benchmark workloads, schemas, or thresholds.
 
+PEFT activation and rollback commit the host registry pointer. The Rust library
+helpers take policy, registry specification, and audit arguments; they no longer
+take a target client or write the read-only `/gpu/models/active` view. The `coh`
+CLI then publishes the registry through its existing validated GPU bridge
+snapshot workflow. The ticket agent and Python helpers report
+`execution_location=host projection=pending`; the configured, serialized
+`gpu-bridge-host --registry <root> --publish` publisher updates the target view.
+A host registry commit does not prove snapshot publication or inference reload.
+An interrupted state/pointer commit fails closed pending reconciliation, and
+state preparation precedes replacement of the prior active pointer.
+
+The matching release qualification repair preserves all seven receipt actions
+and their three outcomes. GPU negative cases use valid advertised devices and
+operation IDs beyond the existing 32-byte lease bound, so admission succeeds
+and the provider rejects before I/O. Expired tickets retain their exact READY
+Worker so it can receive the stale result; the independent fault/lifecycle
+tests prove teardown and generation invalidation. Compatibility review covers
+all eight shipped host executables, `coh-status`, `tools/cohesix-py`, generated
+contracts, and raw/REST benchmarks. Changes are confined to `coh`, the ticket
+agent, Python's local PEFT helpers, and qualification fixtures; no target path,
+authority, schema, benchmark workload, threshold, or renewal round-trip changes.
+
 The provisioned-target check builds the manifest-selected console transport:
 `direct-virtio` for QEMU, and the canonical Pi build's `direct-genet` with its
 console-network/smoltcp optimization settings. QEMU production transport

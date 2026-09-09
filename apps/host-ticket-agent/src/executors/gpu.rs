@@ -60,6 +60,7 @@ fn execute_v2(
         .operation_id
         .as_deref()
         .ok_or_else(|| anyhow!("host-ticket/v2 requires operation_id"))?;
+    validate_lease_id(operation_id)?;
     let subject_ref = spec
         .subject_ref
         .as_deref()
@@ -298,11 +299,7 @@ fn validate_existing_lease_binding(
     Ok(())
 }
 
-fn find_active_lease(
-    transport: &mut dyn Transport,
-    session: &Session,
-    operation_id: &str,
-) -> Result<Option<String>> {
+fn validate_lease_id(operation_id: &str) -> Result<()> {
     if operation_id.is_empty()
         || operation_id.len() > MAX_LEASE_ID_LEN
         || !operation_id
@@ -313,6 +310,15 @@ fn find_active_lease(
             "lease operation_id must be a 1..={MAX_LEASE_ID_LEN} byte simple token"
         ));
     }
+    Ok(())
+}
+
+fn find_active_lease(
+    transport: &mut dyn Transport,
+    session: &Session,
+    operation_id: &str,
+) -> Result<Option<String>> {
+    validate_lease_id(operation_id)?;
     let path = format!("{PROC_LEASE_BY_ID_PREFIX}{operation_id}");
     let lines = transport.read(session, path.as_str())?;
     if lines.len() > 1 {
@@ -635,6 +641,26 @@ mod tests {
         .expect_err("missing observation is pending");
         assert!(super::super::is_provider_pending(&error));
         assert_eq!(transport.writes.len(), 1);
+    }
+
+    #[test]
+    fn v2_gpu_actions_reject_oversized_lease_ids_before_provider_io() {
+        for action in ["gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release"] {
+            let mut transport = GpuTransport::new(true);
+            let mut spec = v2_gpu_spec(action);
+            spec.operation_id = Some("x".repeat(33));
+            let error = execute(
+                &mut transport,
+                &Session::new(1.into(), Role::Queen),
+                &spec,
+                &ExecutorConfig::default(),
+            )
+            .expect_err("host lease IDs are bounded to 32 bytes");
+            assert!(error.to_string().contains("1..=32 byte simple token"));
+            assert!(transport.writes.is_empty());
+            assert!(transport.reads.is_empty());
+            assert!(transport.lists.is_empty());
+        }
     }
 
     #[test]
