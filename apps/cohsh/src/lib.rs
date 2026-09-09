@@ -514,7 +514,16 @@ fn cat_ack_detail(path: &str, lines: &[String]) -> String {
     format!("path={path} data={}", selected.join("|"))
 }
 
-fn parse_wait_ms(entry: &ScriptLine, text: &str, state: Option<&ScriptState>) -> Result<u64> {
+struct ScriptWait<'a> {
+    millis: u64,
+    tail: Option<(&'a str, &'a str)>,
+}
+
+fn parse_script_wait<'a>(
+    entry: &ScriptLine,
+    text: &'a str,
+    state: Option<&ScriptState>,
+) -> Result<ScriptWait<'a>> {
     let rest = text.strip_prefix("WAIT").unwrap_or(text).trim_start();
     let mut args = rest.split_whitespace();
     let Some(value) = args.next() else {
@@ -525,14 +534,6 @@ fn parse_wait_ms(entry: &ScriptLine, text: &str, state: Option<&ScriptState>) ->
             "WAIT requires milliseconds",
         ));
     };
-    if args.next().is_some() {
-        return Err(format_script_error(
-            entry.number,
-            text,
-            state,
-            "WAIT accepts a single millisecond value",
-        ));
-    }
     let millis: u64 = value.parse().map_err(|_| {
         format_script_error(
             entry.number,
@@ -549,7 +550,45 @@ fn parse_wait_ms(entry: &ScriptLine, text: &str, state: Option<&ScriptState>) ->
             &format!("WAIT exceeds max of {MAX_SCRIPT_WAIT_MS}ms"),
         ));
     }
-    Ok(millis)
+    let tail = match args.next() {
+        None => None,
+        Some("TAIL") => {
+            let path = args.next().ok_or_else(|| {
+                format_script_error(entry.number, text, state, "WAIT TAIL requires a path")
+            })?;
+            ensure_valid_path(path)?;
+            if args.next() != Some("SUBSTR") {
+                return Err(format_script_error(
+                    entry.number,
+                    text,
+                    state,
+                    "WAIT TAIL requires SUBSTR text",
+                ));
+            }
+            let after_millis = rest[value.len()..].trim_start();
+            let after_tail = after_millis["TAIL".len()..].trim_start();
+            let after_path = after_tail[path.len()..].trim_start();
+            let needle = after_path["SUBSTR".len()..].trim();
+            if needle.is_empty() {
+                return Err(format_script_error(
+                    entry.number,
+                    text,
+                    state,
+                    "WAIT TAIL requires nonempty SUBSTR text",
+                ));
+            }
+            Some((path, needle))
+        }
+        Some(_) => {
+            return Err(format_script_error(
+                entry.number,
+                text,
+                state,
+                "WAIT accepts milliseconds or milliseconds TAIL path SUBSTR text",
+            ))
+        }
+    };
+    Ok(ScriptWait { millis, tail })
 }
 
 fn parse_script_lines<R: BufRead>(reader: R) -> Result<Vec<ScriptLine>> {
@@ -605,7 +644,8 @@ pub fn validate_script<R: BufRead>(reader: R) -> Result<()> {
             continue;
         }
         if keyword == "WAIT" {
-            let _ = parse_wait_ms(entry, text, None)?;
+            let wait = parse_script_wait(entry, text, None)?;
+            last_command_seen |= wait.tail.is_some();
             continue;
         }
         last_command_seen = true;
@@ -645,8 +685,13 @@ pub fn tokenize_script<R: BufRead>(reader: R) -> Result<Vec<String>> {
             continue;
         }
         if keyword == "WAIT" {
-            let millis = parse_wait_ms(entry, text, None)?;
-            tokens.push(format!("WAIT {millis}"));
+            let wait = parse_script_wait(entry, text, None)?;
+            if let Some((path, needle)) = wait.tail {
+                tokens.push(format!("WAIT {} TAIL {path} SUBSTR {needle}", wait.millis));
+                last_command_seen = true;
+            } else {
+                tokens.push(format!("WAIT {}", wait.millis));
+            }
             continue;
         }
         last_command_seen = true;
@@ -2238,8 +2283,27 @@ impl<T: Transport, W: Write> Shell<T, W> {
             }
 
             if keyword == "WAIT" {
-                let millis = parse_wait_ms(entry, text, self.script_state.as_ref())?;
-                thread::sleep(Duration::from_millis(millis));
+                let wait = parse_script_wait(entry, text, self.script_state.as_ref())?;
+                if let Some((path, needle)) = wait.tail {
+                    self.begin_script_command(text);
+                    let execution = self.wait_for_script_tail(path, needle, wait.millis);
+                    for ack in &execution.transcript.ack_lines {
+                        self.write_ack_line(ack)?;
+                    }
+                    for line in &execution.transcript.output_lines {
+                        self.write_line(line)?;
+                    }
+                    if let Some(err) = execution.error {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            self.script_state.as_ref(),
+                            &err.to_string(),
+                        ));
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(wait.millis));
+                }
                 index = index.saturating_add(1);
                 continue;
             }
@@ -2265,6 +2329,33 @@ impl<T: Transport, W: Write> Shell<T, W> {
             index = index.saturating_add(1);
         }
         Ok(())
+    }
+
+    fn wait_for_script_tail(&mut self, path: &str, needle: &str, millis: u64) -> CommandExecution {
+        let start = Instant::now();
+        let budget = Duration::from_millis(millis);
+        loop {
+            // Repeat only an authenticated read. A refusal or transport failure is
+            // final; queued lifecycle data may progress without replaying a mutation.
+            let execution = self.execute_test_command(&format!("tail {path}"));
+            if execution.error.is_some()
+                || execution
+                    .transcript
+                    .output_lines
+                    .iter()
+                    .any(|line| line.contains(needle))
+            {
+                return execution;
+            }
+            let remaining = budget.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                return CommandExecution::err(
+                    anyhow!("WAIT TAIL condition not observed within {millis}ms: {needle}"),
+                    execution.transcript,
+                );
+            }
+            thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
     }
 
     fn run_selftest(&mut self, options: TestOptions) -> Result<TestReport> {
@@ -2551,8 +2642,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
             }
 
             if keyword == "WAIT" {
-                let wait_ms = match parse_wait_ms(entry, text, Some(&state)) {
-                    Ok(ms) => ms,
+                let wait = match parse_script_wait(entry, text, Some(&state)) {
+                    Ok(wait) => wait,
                     Err(err) => {
                         checks.push(TestCheck {
                             name: truncate_text(
@@ -2566,16 +2657,32 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return false;
                     }
                 };
-                thread::sleep(Duration::from_millis(wait_ms));
+                let (passed, detail) = if let Some((path, needle)) = wait.tail {
+                    state.begin_command(text);
+                    let remaining = options.timeout.saturating_sub(start.elapsed());
+                    let millis = remaining.as_millis().min(u128::from(wait.millis)) as u64;
+                    let execution = self.wait_for_script_tail(path, needle, millis);
+                    record_transcript(&mut state, &execution.transcript);
+                    match execution.error {
+                        Some(err) => (false, format!("ERR {err}")),
+                        None => (true, "OK read condition observed".to_owned()),
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(wait.millis));
+                    (true, format!("OK waited {}ms", wait.millis))
+                };
                 checks.push(TestCheck {
                     name: truncate_text(
                         &format!("line {}: {text}", entry.number),
                         TEST_CHECK_NAME_MAX_CHARS,
                     ),
-                    ok: true,
-                    detail: truncate_text(&format!("OK waited {wait_ms}ms"), TEST_DETAIL_MAX_CHARS),
-                    transcript_excerpt: None,
+                    ok: passed,
+                    detail: truncate_text(&detail, TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: format_state_excerpt(&state),
                 });
+                if !passed {
+                    return false;
+                }
                 index = index.saturating_add(1);
                 continue;
             }
@@ -5731,6 +5838,27 @@ mod tests {
             state.last_command_line.as_deref(),
             Some("test --mode quick")
         );
+    }
+
+    #[test]
+    fn selftest_read_condition_preserves_success_and_failure() {
+        for (needle, expected) in [("tail", true), ("absent", false)] {
+            let mut output = Vec::new();
+            let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+            shell.attach(Role::Queen, None).unwrap();
+            let lines = parse_script_lines(io::Cursor::new(format!(
+                "WAIT 0 TAIL /log/queen.log SUBSTR {needle}\n"
+            )))
+            .unwrap();
+            let options = parse_test_args(["--no-mutate"].into_iter()).unwrap();
+            let mut checks = Vec::new();
+            assert_eq!(
+                shell.run_selftest_lines(&lines, &options, Instant::now(), &mut checks),
+                expected
+            );
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].ok, expected);
+        }
     }
 
     #[cfg(feature = "tcp")]

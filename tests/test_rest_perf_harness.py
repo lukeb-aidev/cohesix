@@ -2933,6 +2933,72 @@ def test_executable_discovery_preserves_shard_read_errors() -> None:
         rest_perf.discover_executable_workers(Client(), executable_bounds())
 
 
+@pytest.mark.parametrize("still_listed", [False, True])
+def test_executable_discovery_requires_confirmed_generation_removal(
+    still_listed: bool,
+) -> None:
+    worker_id = "worker-1"
+    # This fixture's address is independently derived from the shard contract.
+    shard = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+    worker_root = f"/shard/{shard}/worker"
+    reads = 0
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            nonlocal reads
+            lines = []
+            if path == worker_root:
+                reads += 1
+                if reads == 1 or still_listed:
+                    lines = [worker_id]
+            return rest_perf.GatewayResponse("OK", "LS", path, True, lines, None, None)
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            assert path == f"{worker_root}/{worker_id}/telemetry"
+            error = f"ERR TAIL reason=policy detail=invalid-path path={path} error=invalid path"
+            return rest_perf.GatewayResponse("ERR", "TAIL", path, True, [], None, error)
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["shard_bits"] = 8
+    if still_listed:
+        with pytest.raises(rest_perf.RestError, match="TAIL .* failed"):
+            rest_perf.discover_executable_workers(Client(), bounds)
+    else:
+        assert rest_perf.discover_executable_workers(Client(), bounds) == ([], 0)
+    assert reads == 2
+
+
+@pytest.mark.parametrize("failure", ["denied", "truncated", "wrong-path", "invalid-listing"])
+def test_executable_discovery_preserves_errors_during_removal(failure: str) -> None:
+    worker_id = "worker-1"
+    shard = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+    worker_root = f"/shard/{shard}/worker"
+    reads = 0
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            nonlocal reads
+            lines = []
+            if path == worker_root:
+                reads += 1
+                lines = [worker_id] if reads == 1 else ["../escape"]
+            return rest_perf.GatewayResponse("OK", "LS", path, True, lines, None, None)
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            detail = "denied" if failure == "denied" else "invalid-path"
+            error = f"ERR TAIL reason=policy detail={detail} path={path} error=invalid path"
+            return rest_perf.GatewayResponse(
+                "ERR", "TAIL", path + ("-other" if failure == "wrong-path" else ""),
+                failure != "truncated", [], None, error,
+            )
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["shard_bits"] = 8
+    with pytest.raises(rest_perf.RestError):
+        rest_perf.discover_executable_workers(Client(), bounds)
+    assert reads == (2 if failure == "invalid-listing" else 1)
+
+
 def test_executable_discovery_rejects_misplaced_worker() -> None:
     # The independently computed address excludes shard 00.
     assert hashlib.sha256(b"instance-0").hexdigest()[:2] != "00"

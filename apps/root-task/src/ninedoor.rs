@@ -3115,7 +3115,13 @@ impl NineDoorBridge {
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let target_index =
                 flat_slot_index(snapshot.role, identity.slot).map_err(worker_target_error)?;
-            let worker_index = self.workers.len();
+            // The target admission selects a contained slot and advances its
+            // identity. Its old terminal projection remains readable until
+            // this point, then the fresh generation replaces that exact
+            // entry. Appending would leave an unreadable old identity in
+            // LS and consume another ring on every recreation.
+            let worker_index =
+                self.target_worker_indexes[target_index].unwrap_or(self.workers.len());
             let mut worker = WorkerTelemetry {
                 id,
                 ring: TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize),
@@ -3129,7 +3135,11 @@ impl NineDoorBridge {
                 target_published: false,
             };
             worker.apply_target_snapshot(snapshot)?;
-            self.workers.push(worker);
+            if worker_index < self.workers.len() {
+                self.workers[worker_index] = worker;
+            } else {
+                self.workers.push(worker);
+            }
             self.target_worker_indexes[target_index] = Some(worker_index);
             let _ = worker_id;
             return Ok(());

@@ -1252,10 +1252,14 @@ PY
         "$SEL4_BUILD_DIR/kernel/gen_headers/plat/platform_gen.h"
 
     log "Regenerating target-qualified Python projection contracts"
+    local python_qemu_profile="$CANONICAL_QEMU_PROFILE"
+    if [[ "$SEL4_PROFILE" == "$CANONICAL_QEMU_KVM_PROFILE" ]]; then
+        python_qemu_profile="$CANONICAL_QEMU_KVM_PROFILE"
+    fi
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
         "$PROJECT_ROOT/configs/root_task.toml" \
         --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
-        --profile qemu_smp_production \
+        --profile "$python_qemu_profile" \
         --out "$GENERATED_CONFIG_DIR/cohesix_python_qemu_smp_production.json"
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
         "$PROJECT_ROOT/configs/root_task_pi4_uboot_aarch64.toml" \
@@ -1659,6 +1663,10 @@ PY
         --net-backend "$NET_BACKEND" >/dev/null || \
         fail "could not bind immutable QEMU launch artifacts"
     log "Bound immutable QEMU launch artifacts: $LAUNCH_ARTIFACT_RECORD"
+
+    python3 "$PROJECT_ROOT/scripts/ci/qemu_artifact.py" stage-release-configs \
+        --generated-dir "$GENERATED_CONFIG_DIR" --artifact-dir "$OUT_DIR_ABS" || \
+        fail "could not retain generated release configurations"
 
     launch_qemu_artifacts
 }

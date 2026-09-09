@@ -84,6 +84,12 @@ fn ready_requires_exact_identity_and_slot_reuse_advances_generations() {
         supervisor.accept_ready(ready_record(init, 2)),
         Err(WorkerSupervisorError::InvalidRecord)
     );
+    let second_init = supervisor.backend().init.expect("fresh generation init");
+    let restarted = supervisor
+        .accept_ready(ready_record(second_init, 1))
+        .expect("READY sequence restarts within the fresh identity");
+    assert_eq!(restarted.ready_sequence, 1);
+    assert_eq!(restarted.identity, Some(second.identity));
 }
 
 #[test]

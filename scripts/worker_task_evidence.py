@@ -256,7 +256,7 @@ QEMU_RECEIPT_ACTIONS = {
 QEMU_TERMINAL_OUTCOMES = {1: "confirmed", 2: "rejected", 8: "stale"}
 QEMU_WORKER_SYMBOLS = (
     "_start",
-    "cohesix_worker_qemu_evidence_control_handler",
+    "cohesix_worker_qemu_evidence_call_dispatch",
     "cohesix_worker_qemu_evidence_standard_fault",
     "cohesix_worker_qemu_evidence_timeout_spin",
 )
@@ -3985,12 +3985,12 @@ def _validate_gdb_markers(
         ),
         (
             "during-ipc",
-            "cohesix_worker_qemu_evidence_control_handler",
+            "cohesix_worker_qemu_evidence_call_dispatch",
             "redirect-standard-fault",
         ),
         (
             "budget-exhaustion",
-            "cohesix_worker_qemu_evidence_control_handler",
+            "cohesix_worker_qemu_evidence_call_dispatch",
             "redirect-timeout-spin",
         ),
     }
@@ -4809,7 +4809,7 @@ def _qemu_gdb(args: argparse.Namespace) -> None:
     inject_elf = elf_paths[args.inject_role]
     addresses = _worker_symbol_addresses(nm, inject_elf)
     entry = addresses["_start"]
-    control = addresses["cohesix_worker_qemu_evidence_control_handler"]
+    control = addresses["cohesix_worker_qemu_evidence_call_dispatch"]
     standard = addresses["cohesix_worker_qemu_evidence_standard_fault"]
     timeout_spin = addresses["cohesix_worker_qemu_evidence_timeout_spin"]
     shared_page_vaddr, role_raw = _worker_gdb_runtime_binding(
@@ -4863,12 +4863,12 @@ commands 2
   end
   set $m26e_control_hits = $m26e_control_hits + 1
   if $m26e_control_hits == 1
-    printf "M26E_GDB_INJECTION role={args.inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued\\n"
+    printf "M26E_GDB_INJECTION role={args.inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued\\n"
     set $pc = 0x{standard:x}
     continue
   end
   if $m26e_control_hits == 2
-    printf "M26E_GDB_INJECTION role={args.inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-timeout-spin result=continued\\n"
+    printf "M26E_GDB_INJECTION role={args.inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued\\n"
     set $pc = 0x{timeout_spin:x}
     disable 2
     detach
@@ -4929,13 +4929,13 @@ continue
         ("pre-ready", "_start", "zero-x0", "continued"),
         (
             "during-ipc",
-            "cohesix_worker_qemu_evidence_control_handler",
+            "cohesix_worker_qemu_evidence_call_dispatch",
             "redirect-standard-fault",
             "continued",
         ),
         (
             "budget-exhaustion",
-            "cohesix_worker_qemu_evidence_control_handler",
+            "cohesix_worker_qemu_evidence_call_dispatch",
             "redirect-timeout-spin",
             "continued",
         ),

@@ -27,6 +27,17 @@ attach queen cohesix-ticket-0100300000000000000000000000000304002f6c6f6700010000
 EXPECT OK
 spawn heartbeat ticks=40 ttl_s=60
 EXPECT OK
+# Observe READY under the ordinary Queen ticket, then restore the write-only test ticket.
+detach
+EXPECT OK
+attach queen
+EXPECT OK
+WAIT 2000 TAIL /shard/13/worker/worker-1/telemetry SUBSTR "state":"ready"
+EXPECT OK
+detach
+EXPECT OK
+attach queen cohesix-ticket-0100300000000000000000000000000304002f6c6f67000100000006002f717565656e010000000006002f7368617264010000000000000000000000000000000001000000.0c714a86a89a2abc049395e486dbd2a8ce6ba7076ce508a02431a22319629672
+EXPECT OK
 # Force ring wraparound with repeated appends (payload <= 96 chars).
 echo wrap-0123456789012345678901234567890123456789012345678901234567890123456789012345678901234 > /shard/13/worker/worker-1/telemetry
 EXPECT OK

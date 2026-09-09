@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
-- `swarmui.defaults.sha256`: `28da60241bc55a2a4be65819698c21cc6cd6d30db4bf57a7a6f37e7e39bcb03e`
+- `manifest.sha256`: `2e8a6e3aab7aa80832ec92c064970de16b02a98899a1823bb92f1f04875e19be`
+- `swarmui.defaults.sha256`: `8f8fdc08f62849b7868cc8c7ceb9b60bf7fecde9f566b9913af08ecccd7b78b3`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -38,4 +38,4 @@
 - `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`128`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._
+_Generated from `configs/root_task.toml` (sha256: `2e8a6e3aab7aa80832ec92c064970de16b02a98899a1823bb92f1f04875e19be`)._

@@ -239,6 +239,28 @@ fn telemetry_regression_uses_explicit_bandwidth_fixture_before_workload() {
         .expect("operational telemetry spawn");
     assert!(quota_idx < spawn_idx);
     assert!(spawn_idx < tail_idx);
+    let ready_idx = tokens
+        .iter()
+        .position(|token| {
+            token == "WAIT 2000 TAIL /shard/13/worker/worker-1/telemetry SUBSTR \"state\":\"ready\""
+        })
+        .expect("explicit target readiness read");
+    assert!(spawn_idx < ready_idx && ready_idx < tail_idx);
+    assert_eq!(tokens[ready_idx - 2], "attach queen");
+    let restored = tokens[ready_idx + 4]
+        .strip_prefix("attach queen ")
+        .expect("restore restricted ticket after readiness observation");
+    let restricted = TicketToken::decode(restored, &key).expect("valid restricted ticket");
+    assert!(restricted
+        .claims()
+        .scopes
+        .iter()
+        .any(|scope| scope.path == "/shard" && scope.verb == TicketVerb::Write));
+    assert!(!restricted
+        .claims()
+        .scopes
+        .iter()
+        .any(|scope| scope.path == "/shard" && scope.verb == TicketVerb::Read));
 }
 
 #[test]
@@ -311,7 +333,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "telemetry_push_create.coh:5fd750c00e702d1660c35a96b141f067dd5fa5de14f11720524f3a1ef0cc154c"
             .to_owned(),
-        "telemetry_ring.coh:e2eb77dd05985279182a59c027132dcb84353b9d4cf81b5beb30dbf43f6c6698"
+        "telemetry_ring.coh:7defd57b4b496990b64eeec193d02a2f63a76c7879e88e3804588cfaf1f46f92"
             .to_owned(),
         "worker_host_model.coh:971fad19faabe4ffd7f322f61944b9bb548810229d3617ab65090765a996122e"
             .to_owned(),

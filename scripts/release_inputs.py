@@ -97,6 +97,25 @@ def payload_records(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     for path in evidence.QEMU_REQUIRED_FILES:
         if path.startswith("host-tools/"):
             mappings[f"bin/{Path(path).name}"] = path
+    root = Path(artifact["_resolved_artifact_root"])
+    for path in evidence.retained_release_config_paths(root):
+        if path not in by_path:
+            raise evidence.EvidenceError(
+                f"release configuration is not bound to the tested artifact: {path}"
+            )
+        mappings[path.removeprefix("release-configs/")] = path
+    profile = evidence.read_json(
+        root / "release-configs/configs/generated/cohesix_python_qemu_smp_production.json"
+    )
+    if profile.get("target") != "qemu" or profile.get("target_profile") != artifact["sel4"]["profile"]:
+        raise evidence.EvidenceError("retained Python contract has the wrong native QEMU profile")
+    for generated, field in (
+        ("root_task_resolved.json", "resolved_manifest"),
+        ("cohsh_policy.toml", "policy"),
+    ):
+        record = by_path.get(f"release-configs/configs/generated/{generated}")
+        if record is None or record["sha256"] != artifact[field]["sha256"]:
+            raise evidence.EvidenceError(f"retained {generated} differs from the tested configuration")
     return {
         destination: {
             "sha256": by_path[source]["sha256"],
@@ -133,10 +152,10 @@ def main() -> int:
                 Path(__file__).resolve().parents[1] / "configs/root_task.toml"
             ),
         )
+        records = payload_records(artifact)
         if args.bundle is None:
             print(artifact["_resolved_artifact_root"])
         else:
-            records = payload_records(artifact)
             verify_payload(args.bundle, records)
             evidence.atomic_write_json(
                 args.bundle / "BUILD_PROVENANCE.json",

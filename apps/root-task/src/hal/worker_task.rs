@@ -2161,6 +2161,12 @@ impl TargetWorkerRuntime {
                     self.last_policy_sequence = record.sequence;
                     return Ok(());
                 }
+                // Shared-page sequences restart in each admitted generation.
+                // Identity and admission are checked above, and containment has
+                // revoked the prior child's page before a terminal slot is reused.
+                self.ready_sequences[index] = 0;
+                self.receipt_sequences[index] = 0;
+                self.completion_sequences[index] = 0;
                 self.supervisor
                     .backend_mut()
                     .activate_deferred_slot(role, role_slot)?;

@@ -5,6 +5,10 @@
 
 use std::collections::VecDeque;
 use std::io::Cursor;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use anyhow::{anyhow, Result};
 use cohesix_ticket::Role;
@@ -19,6 +23,9 @@ struct ScriptTransport {
     tail_ack: Option<String>,
     write_ack: Option<String>,
     tail_lines: Vec<String>,
+    tail_batches: VecDeque<Vec<String>>,
+    tail_calls: Arc<AtomicUsize>,
+    tail_error: Option<&'static str>,
 }
 
 impl Transport for ScriptTransport {
@@ -42,10 +49,17 @@ impl Transport for ScriptTransport {
         _path: &str,
         _lines: Option<u16>,
     ) -> Result<Vec<String>> {
+        self.tail_calls.fetch_add(1, Ordering::Relaxed);
         if let Some(ack) = self.tail_ack.as_ref() {
             self.pending_ack.push_back(ack.clone());
         }
-        Ok(self.tail_lines.clone())
+        if let Some(error) = self.tail_error {
+            return Err(anyhow!(error));
+        }
+        Ok(self
+            .tail_batches
+            .pop_front()
+            .unwrap_or_else(|| self.tail_lines.clone()))
     }
 
     fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
@@ -169,6 +183,81 @@ fn expect_requires_prior_command() {
     assert!(message.contains("line 1"));
     assert!(message.contains("EXPECT OK"));
     assert!(message.contains("last response: <none>"));
+}
+
+#[test]
+fn script_wait_tail_validates_read_only_grammar_and_path() {
+    validate_script(Cursor::new(
+        "WAIT 2000 TAIL /worker/worker-1/telemetry SUBSTR lifecycle=ready\nEXPECT OK\n",
+    ))
+    .expect("bounded read condition is valid");
+    for text in [
+        "WAIT 2001 TAIL /worker/worker-1/telemetry SUBSTR lifecycle=ready",
+        "WAIT 1 ECHO /queen/ctl SUBSTR ready",
+        "WAIT 1 TAIL /worker/../queen/ctl SUBSTR ready",
+        "WAIT 1 TAIL /worker/worker-1/telemetry SUBSTR",
+        "WAIT 1 TAIL /worker/worker-1/telemetry ready",
+    ] {
+        assert!(validate_script(Cursor::new(text)).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn script_wait_tail_requires_observed_data_after_queued_admission() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = ScriptTransport {
+        tail_ack: Some("OK TAIL".to_owned()),
+        tail_calls: calls.clone(),
+        tail_batches: VecDeque::from([
+            vec!["lifecycle=queued".to_owned()],
+            vec!["lifecycle=ready".to_owned()],
+        ]),
+        ..Default::default()
+    };
+    let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
+    shell.run_script(Cursor::new("attach queen\nWAIT 2000 TAIL /worker/worker-1/telemetry SUBSTR lifecycle=ready\nEXPECT OK\n"))
+        .expect("readiness must come from the later completed read");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn script_wait_tail_does_not_treat_acknowledgement_as_ready_data() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = ScriptTransport {
+        tail_ack: Some("OK TAIL lifecycle=ready".to_owned()),
+        tail_calls: calls.clone(),
+        tail_lines: vec!["lifecycle=queued".to_owned()],
+        ..Default::default()
+    };
+    let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
+    let error = shell
+        .run_script(Cursor::new(
+            "attach queen\nWAIT 0 TAIL /worker/worker-1/telemetry SUBSTR lifecycle=ready\n",
+        ))
+        .expect_err("an acknowledgement cannot prove the data condition");
+    assert!(error
+        .to_string()
+        .contains("condition not observed within 0ms"));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn script_wait_tail_propagates_refusal_without_retrying() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = ScriptTransport {
+        tail_ack: Some("ERR TAIL reason=policy".to_owned()),
+        tail_calls: calls.clone(),
+        tail_error: Some("permission denied"),
+        ..Default::default()
+    };
+    let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
+    let error = shell
+        .run_script(Cursor::new(
+            "attach queen\nWAIT 2000 TAIL /worker/worker-1/telemetry SUBSTR lifecycle=ready\n",
+        ))
+        .expect_err("a refusal is final");
+    assert!(error.to_string().contains("permission denied"));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 
 #[test]

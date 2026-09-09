@@ -245,6 +245,16 @@ ordinal, not the role-local ABI slot: the current Heartbeat, GPU, and LoRA
 identities each use role-local slot zero and therefore cannot safely index a
 shared mailbox array by `identity.slot`.
 
+The QEMU Worker-supervisor and GPU-executor SCs use all ten refill entries
+available in each existing 256-byte object: the selected seL4 16 AArch64 layout has a 96-byte
+header and 16-byte refills. Repeated control and READY waits otherwise split
+the budget into fragments that a two-entry queue repeatedly defers. This
+changes no CPU allocation: the supervisor retains `3000/10000 us`, core 1,
+priority 210; the GPU executor retains `5000/10000 us`, core 2, priority 80.
+Both retain terminal timeout containment. The Pi profile remains at its
+existing refill setting. Kernel timeout consumption accumulates
+since the previous accounting reset; it is not a single-turn duration.
+
 The fixed `worker-task-abi/v2` outcome field has the exact values
 `NotApplicable=0`, `Confirmed=1`, `Rejected=2`, and `Stale=8`. The explicit
 stale value extends the existing fixed layout without changing its record

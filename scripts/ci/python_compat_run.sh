@@ -179,7 +179,7 @@ if wheel.stat().st_size <= 0 or wheel.stat().st_size > 64 * 1024 * 1024:
     raise SystemExit("python-compat: wheel size is outside the 1..64 MiB bound")
 with zipfile.ZipFile(wheel) as archive:
     names = sorted(archive.namelist())
-    if any("qemu_smp_production" in name or "pi4_production" in name for name in names):
+    if any("qemu_smp" in name or "pi4_production" in name for name in names):
         raise SystemExit("python-compat: target-qualified contract leaked into shared wheel")
     required_modules = {
         "cohesix/__init__.py",
@@ -213,13 +213,14 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 contracts = {}
-for target, path, profile in (
-    ("qemu", qemu_path, "qemu_smp_production"),
-    ("pi4", pi4_path, "pi4_production"),
+for target, path, profiles in (
+    ("qemu", qemu_path, ("qemu_smp_production", "qemu_smp_kvm_production")),
+    ("pi4", pi4_path, ("pi4_production",)),
 ):
     raw = path.read_bytes()
     value = json.loads(raw)
-    if value.get("target") != target or value.get("target_profile") != profile:
+    profile = value.get("target_profile")
+    if value.get("target") != target or profile not in profiles:
         raise SystemExit(f"python-compat: {target} profile contract identity mismatch")
     contracts[target] = {
         "filename": path.name,

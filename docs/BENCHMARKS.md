@@ -420,6 +420,11 @@ listing. It does not depend on the aggregate `/shard` response, whose 64-entry
 bound is smaller than a populated eight-bit layout. Empty shards contribute
 no instances; Worker placement, unique identity and structured READY checks
 remain mandatory. The census is outside the measured workload.
+Because listing and telemetry are separate reads, a retired generation may
+disappear between them. An exact, completed `invalid-path` telemetry refusal
+is excluded from the count only when one fresh, validated listing of the same
+shard confirms its removal. Other read failures and malformed listings fail
+the census; discovery never replays control mutations.
 
 The canonical Mac command performs the clean build and runs medium first, then
 high against a separate fresh equivalent four-core HVF

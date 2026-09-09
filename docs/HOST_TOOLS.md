@@ -378,10 +378,21 @@ Mac input selection uses the equivalent files from its own accepted tree.
 `scripts/release_inputs.py` verifies source identity, native profile, every guest
 and tool hash, and the passing result. Archival verification on Mac does not
 assert that Mac can execute Linux artifacts; launch checks remain native.
+Each build also retains the compiler-selected configuration set under
+`release-configs/configs/generated/`. Artifact recording hashes that exact set,
+and assembly copies it from the accepted native build. The QEMU Python contract
+keeps its existing filename on both hosts; its `target_profile` is HVF or KVM
+according to the selected build.
 
 Build the exact Pi stage and target-neutral Python wheel using their existing
 canonical workflows. The Pi stage must identify the same clean commit. Then run
 the read-only release preflight, substituting the retained paths below:
+
+Run `scripts/ci/python_compat_run.sh --wheel-smoke` on each native checkout after
+its selected-profile build, using the same target-neutral wheel. Retain both
+package manifests and set `PYTHON_PACKAGE_MANIFEST` to the Mac record and
+`LINUX_PYTHON_PACKAGE_MANIFEST` to the downloaded Linux record before preflight
+or assembly. Each record must bind the contracts retained by its native build.
 
 ```bash
 scripts/release_bundle.sh --check-manifest --linux \
@@ -417,7 +428,7 @@ host-tool preparation. Its source archive includes the complete tracked generate
 contract directory, including both Python target contracts.
 
 Each host bundle contains `BUILD_PROVENANCE.json` with source, accepted artifact
-and TCP-result identities, native profile/timer, and exact guest/tool hashes.
+and TCP-result identities, native profile/timer, and exact guest/tool/configuration hashes.
 The Pi bundle contains a compact raw MBR/FAT32 image, its SHA-256 sidecar and
 `cohesix-pi4-portable-sd-image/v2` metadata including the sealed boot identity.
 Image capacity derives from the payload. Any card at least `minimum_target_bytes`

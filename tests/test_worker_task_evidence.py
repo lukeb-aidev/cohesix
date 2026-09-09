@@ -1153,8 +1153,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
                         for role in evidence.REQUIRED_ROLES
                     ),
                     f"M26E_GDB_INJECTION role={inject_role} phase=pre-ready symbol=_start action=zero-x0 result=continued",
-                    f"M26E_GDB_INJECTION role={inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued",
-                    f"M26E_GDB_INJECTION role={inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-timeout-spin result=continued",
+                    f"M26E_GDB_INJECTION role={inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued",
+                    f"M26E_GDB_INJECTION role={inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued",
                 ]
             )
             + "\n"
@@ -2217,8 +2217,8 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=during-ipc register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=budget-exhaustion register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready symbol=_start action=zero-x0 result=continued' "
-        "'M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued' "
-        "'M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-timeout-spin result=continued'\n",
+        "'M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued' "
+        "'M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued'\n",
         encoding="utf-8",
     )
     fake_gdb.chmod(0o755)
@@ -2227,7 +2227,7 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
         "#!/bin/sh\n"
         "printf '%s\\n' "
         "'0000000000210000 T _start' "
-        "'0000000000210100 T cohesix_worker_qemu_evidence_control_handler' "
+        "'0000000000210100 T cohesix_worker_qemu_evidence_call_dispatch' "
         "'0000000000210200 T cohesix_worker_qemu_evidence_standard_fault' "
         "'0000000000210300 T cohesix_worker_qemu_evidence_timeout_spin'\n",
         encoding="utf-8",

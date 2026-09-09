@@ -231,7 +231,7 @@ It cannot identify a running target. Live Worker calls require one explicit,
 regular, non-symlink compiler output:
 
 - `configs/generated/cohesix_python_qemu_smp_production.json` for
-  `qemu_smp_production`;
+  the selected `qemu_smp_production` Mac or `qemu_smp_kvm_production` Linux build;
 - `configs/generated/cohesix_python_pi4_production.json` for
   `pi4_production`.
 

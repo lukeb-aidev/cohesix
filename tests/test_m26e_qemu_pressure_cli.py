@@ -143,3 +143,63 @@ def test_control_script_approves_only_mutations(tmp_path: Path, command: str) ->
     if command.startswith(("spawn ", "kill ")):
         prefix += [approval, "EXPECT SUBSTR path=/actions/queue"]
     assert commands == prefix + [command, "EXPECT OK", "quit"]
+
+
+@pytest.mark.parametrize("role", ["worker-heartbeat", "worker-gpu", "worker-lora"])
+def test_fault_plan_drives_two_passive_lifecycle_calls(tmp_path: Path, role: str) -> None:
+    """Each role needs received IPC between READY and the two execution faults."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text(encoding="utf-8")
+    function = "drive_worker_fault_plan() {" + source.split(
+        "drive_worker_fault_plan() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    host_tools = tmp_path / "host-tools"
+    host_tools.mkdir()
+    fixture = host_tools / "gpu-bridge-host"
+    fixture.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fixture.chmod(0o700)
+    (tmp_path / "uart.live.log").write_text("", encoding="utf-8")
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '''
+HARNESS_PYTHON=true
+GDB_BIN=fixture
+TARGET_SESSION=fixture
+GENERATED_INVENTORY=fixture
+WORKER_MANIFEST=fixture
+WORKER_HEART_ELF=fixture
+WORKER_GPU_ELF=fixture
+WORKER_LORA_ELF=fixture
+M26E_CONSOLE_AUTH_TOKEN=fixture
+HOST_TOOLS="$1/host-tools"
+GDB_RUNNER_PID=
+sleep() { :; }
+wait_for_marker_count() { :; }
+spawn_command_for_role() { printf 'spawn %s\n' "$1"; }
+run_cohsh_command() { printf 'operator %s\n' "$2"; }
+trigger_disposable_worker_control() { printf 'shutdown %s %s\n' "$2" "$3"; }
+drive_worker_fault_plan "$1" "$2" 100
+''', "fault-plan-test", str(tmp_path), role],
+        check=True, capture_output=True, text=True, timeout=10,
+    )
+    assert result.stdout.splitlines() == [
+        f"operator spawn {role}", f"operator spawn {role}",
+        f"shutdown {role} 110", f"operator spawn {role}",
+        f"shutdown {role} 111", f"operator spawn {role}",
+    ]
+
+
+def test_fault_control_refuses_an_existing_gateway_owner(tmp_path: Path) -> None:
+    """A phase error must stop before attempting direct TCP authentication."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text(encoding="utf-8")
+    function = "trigger_disposable_worker_control() {" + source.split(
+        "trigger_disposable_worker_control() {", 1,
+    )[1].split("\ndrive_worker_fault_plan() {", 1)[0]
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '''
+die() { printf '%s\n' "$*" >&2; exit 2; }
+GATEWAY_PID=123
+trigger_disposable_worker_control "$1" worker-heartbeat 1
+''', "fault-owner-test", str(tmp_path)],
+        check=False, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 2
+    assert "requires the pre-gateway phase" in result.stderr

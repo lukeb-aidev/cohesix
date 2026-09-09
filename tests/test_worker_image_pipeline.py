@@ -349,7 +349,7 @@ def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:
         encoding="utf-8"
     )
     symbols = (
-        "cohesix_worker_qemu_evidence_control_handler",
+        "cohesix_worker_qemu_evidence_call_dispatch",
         "cohesix_worker_qemu_evidence_standard_fault",
         "cohesix_worker_qemu_evidence_timeout_spin",
     )
@@ -365,8 +365,11 @@ def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:
         assert '#[cfg(feature = "qemu-evidence")]' in prefix
     assert (
         '#[cfg(feature = "qemu-evidence")]\n'
-        "    cohesix_worker_qemu_evidence_control_handler();"
+        "        cohesix_worker_qemu_evidence_call_dispatch();"
     ) in runtime
+    call_hook = runtime.index("        cohesix_worker_qemu_evidence_call_dispatch();")
+    assert runtime.index("let sequence = match validate_call(") < call_hook
+    assert call_hook < runtime.index("let (status, terminal) = match operation")
     hook_block = runtime.split("/// Stable external-QEMU evidence hook", maxsplit=1)[1]
     hook_block = hook_block.split("/// Enter one isolated Worker", maxsplit=1)[0]
     assert "sel4_sys" not in hook_block

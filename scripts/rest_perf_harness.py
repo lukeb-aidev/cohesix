@@ -1496,6 +1496,34 @@ def parse_worker_runtime_state(
     return latest
 
 
+def list_canonical_workers(
+    client: RestClient,
+    worker_root: str,
+    shard_label: str,
+    shard_bits: int,
+    max_id_bytes: int,
+) -> List[str]:
+    """Validate one bounded shard listing, including removal re-observations."""
+    response = client.ls(worker_root)
+    if response.status != "OK":
+        raise RestError(f"LS {worker_root} failed: {response.error}", response)
+    worker_ids: List[str] = []
+    seen = set()
+    for raw_id in response.lines:
+        worker_id = raw_id.strip()
+        if not valid_worker_id(worker_id, max_id_bytes):
+            raise RestError(f"invalid Worker id in {worker_root}")
+        if worker_id in seen:
+            raise RestError(f"duplicate Worker id across canonical shards: {worker_id}")
+        if expected_worker_shard_label(worker_id, shard_bits) != shard_label:
+            raise RestError(f"Worker {worker_id} is published under the wrong shard")
+        seen.add(worker_id)
+        if len(seen) > MAX_DISCOVERED_WORKERS:
+            raise RestError("canonical Worker discovery exceeds harness bound")
+        worker_ids.append(worker_id)
+    return worker_ids
+
+
 def discover_executable_workers(
     client: RestClient,
     bounds: dict,
@@ -1512,26 +1540,41 @@ def discover_executable_workers(
         raise RestError("generated shard address space exceeds discovery bound")
     instances: List[WorkerInstance] = []
     discovered_ids = set()
+    removed_ids = set()
     for shard in range(shard_count):
         label = f"{shard:02x}"
         worker_root = f"/shard/{label}/worker"
-        response = client.ls(worker_root)
-        if response.status != "OK":
-            raise RestError(f"LS {worker_root} failed: {response.error}", response)
-        for raw_id in response.lines:
-            worker_id = raw_id.strip()
-            if not valid_worker_id(worker_id, max_id_bytes):
-                raise RestError(f"invalid Worker id in {worker_root}")
+        for worker_id in list_canonical_workers(
+            client, worker_root, label, shard_bits, max_id_bytes
+        ):
             if worker_id in discovered_ids:
                 raise RestError(f"duplicate Worker id across canonical shards: {worker_id}")
-            if expected_worker_shard_label(worker_id, shard_bits) != label:
-                raise RestError(f"Worker {worker_id} is published under the wrong shard")
             discovered_ids.add(worker_id)
             if len(discovered_ids) > MAX_DISCOVERED_WORKERS:
                 raise RestError("canonical Worker discovery exceeds harness bound")
             telemetry_path = f"{worker_root}/{worker_id}/telemetry"
             tail = client.tail(telemetry_path, MAX_WORKER_STATE_TAIL_BYTES)
             if tail.status != "OK":
+                # LS and TAIL are separate reads. Containment may remove a
+                # retired generation between them. Omit only an exact missing
+                # path response confirmed by one validated fresh shard read.
+                missing_error = (
+                    "ERR TAIL reason=policy detail=invalid-path "
+                    f"path={telemetry_path} error=invalid path"
+                )
+                if (
+                    tail.status == "ERR"
+                    and tail.verb == "TAIL"
+                    and tail.path == telemetry_path
+                    and tail.end
+                    and not tail.lines
+                    and tail.error == missing_error
+                    and worker_id not in list_canonical_workers(
+                        client, worker_root, label, shard_bits, max_id_bytes
+                    )
+                ):
+                    removed_ids.add(worker_id)
+                    continue
                 raise RestError(f"TAIL {telemetry_path} failed: {tail.error}", tail)
             instance = parse_worker_runtime_state(
                 tail.lines,
@@ -1541,7 +1584,7 @@ def discover_executable_workers(
             if instance is not None:
                 instances.append(instance)
     instances.sort(key=lambda item: (item.role, item.worker_id))
-    return instances, len(discovered_ids)
+    return instances, len(discovered_ids) - len(removed_ids)
 
 
 def valid_sha256(value: object) -> bool:

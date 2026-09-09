@@ -434,7 +434,9 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 7200
 admitted = true
-max_refills = 2
+# Use every refill entry in the existing 256-byte SC (96-byte header, 16-byte entries).
+# Repeated control/READY waits must not postpone the only replenishment until exhaustion.
+max_refills = 10
 priority = 210
 mcp = 210
 timeout_badge = 653131780
@@ -486,7 +488,8 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 7500
 admitted = true
-max_refills = 8
+# Passive Call/Reply bursts use the full refill capacity of this existing 256-byte SC.
+max_refills = 10
 priority = 80
 mcp = 200
 timeout_badge = 653131782

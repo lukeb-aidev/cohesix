@@ -1653,100 +1653,61 @@ trigger_disposable_worker_control() {
     local boot_dir=$1
     local role=$2
     local ordinal=$3
-    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
-    python3 - "$REPO_ROOT/scripts/rest_perf_harness.py" \
-        "$HOST_TOOLS/host-ticket-agent" "$RESOLVED_MANIFEST" \
-        "$boot_dir" "$role" "$ordinal" <<'PY'
+    [[ -z "$GATEWAY_PID" ]] || die "direct Worker fault control requires the pre-gateway phase"
+    local worker
+    worker=$(COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+        "$HARNESS_PYTHON" - "$REPO_ROOT" "$boot_dir" "$role" "$ordinal" <<'PY_FAULT'
 import importlib.util
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
-module_path, agent_raw, manifest_raw, boot_raw, role, ordinal = sys.argv[1:]
-spec = importlib.util.spec_from_file_location("m26e_fault_control", module_path)
+repo, boot = map(Path, sys.argv[1:3])
+role, ordinal = sys.argv[3:]
+sys.path.insert(0, str(repo / "tools/cohesix-py"))
+from cohesix.backends import TcpBackend
+from cohesix.worker import load_profile_contract
+
+spec = importlib.util.spec_from_file_location("fault_state", repo / "scripts/rest_perf_harness.py")
 if spec is None or spec.loader is None:
-    raise SystemExit("cannot load REST harness for disposable Worker control")
+    raise SystemExit("cannot load canonical Worker state parser")
 rest = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = rest
 spec.loader.exec_module(rest)
-client = rest.RestClient(
-    "http://127.0.0.1:8080",
-    10.0,
-    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+contract = load_profile_contract(repo / "configs/generated/cohesix_python_qemu_smp_production.json")
+backend = TcpBackend("127.0.0.1", 31337, os.environ["COH_AUTH_TOKEN"], "queen", None, timeout_s=10.0)
+observed = []
+seen = set()
+try:
+    for shard in range(1 << int(contract.namespace["shard_bits"])):
+        prefix = f"/shard/{shard:02x}/worker"
+        for worker_id in backend.list_dir(prefix):
+            path = contract.telemetry_path(worker_id)
+            if path != f"{prefix}/{worker_id}/telemetry" or worker_id in seen:
+                raise SystemExit("invalid or duplicate canonical Worker placement")
+            seen.add(worker_id)
+            if len(seen) > contract.maximum_live_tasks:
+                raise SystemExit("fault census exceeds the generated population")
+            raw = backend.tail_file(path, rest.MAX_WORKER_STATE_TAIL_BYTES)
+            worker = rest.parse_worker_runtime_state(raw.decode("utf-8").splitlines(), worker_id, path)
+            if worker is not None and worker.role == role and worker.lifecycle == "ready":
+                observed.append(worker)
+finally:
+    backend.close()
+if len(observed) != 1:
+    raise SystemExit(f"expected exactly one READY {role}, observed {len(observed)}")
+from dataclasses import asdict
+(boot / f"fault-control-{role}-{ordinal}.json").write_text(
+    json.dumps({"transport": "direct-tcp", "operation": "shutdown", "worker": asdict(observed[0])}, indent=2) + "\n",
+    encoding="utf-8",
 )
-bounds = client.get_json("/v1/meta/bounds")
-instances, _ = rest.discover_executable_workers(client, bounds)
-ready = [
-    instance
-    for instance in instances
-    if instance.role == role and instance.lifecycle == "ready"
-]
-if len(ready) != 1:
-    raise SystemExit(f"expected exactly one READY {role} for disposable control")
-gpu_id, job_id = rest.require_qemu_fixture_receipt_paths(client)
-if role == "worker-gpu":
-    action = "gpu.lease.grant"
-    args = {"ttl_s": 60, "priority": 1}
-    subject = gpu_id
-    operation = f"gpu-fault-{ordinal}"
-elif role == "worker-lora":
-    action = "peft.export"
-    args = {}
-    subject = job_id
-    operation = f"peft-fault-{ordinal}"
-else:
-    raise SystemExit(f"disposable v2 control is not defined for {role}")
-worker = ready[0]
-ticket = {
-    "schema": "host-ticket/v2",
-    "id": f"m26e-fault-{role}-{ordinal}",
-    "idempotency_key": f"m26e-fault-idem-{role}-{ordinal}",
-    "action": action,
-    "args": args,
-    "receipt_mode": "worker",
-    "operation_id": operation,
-    "subject_ref": subject,
-    "receipt_worker_role": role,
-    "receipt_worker_id": worker.worker_id,
-    "receipt_supervisor_generation": worker.supervisor_generation,
-    "receipt_cap_generation": worker.cap_generation,
-}
-response = client.echo(
-    "/host/tickets/spec",
-    json.dumps(ticket, separators=(",", ":")),
-)
-if response.status != "OK":
-    raise SystemExit(f"disposable control ticket was not admitted: {response.error}")
-boot = Path(boot_raw)
-state = boot / "fault-agent"
-state.mkdir(parents=True, exist_ok=True)
-command = [
-    agent_raw,
-    "--manifest", manifest_raw,
-    "--cursor", str(state / "cursor.json"),
-    "--execution-journal", str(state / "execution-journal.json"),
-    "--agent-lock", str(state / "agent.lock"),
-    "--run-once",
-    "--rest-url", "http://127.0.0.1:8080",
-    "--registry-root", str(boot / "peft-registry"),
-    "--export-root", str(boot / "peft-exports"),
-    "--adapter-root", str(boot / "peft-adapters"),
-]
-completed = subprocess.run(
-    command,
-    check=False,
-    capture_output=True,
-    text=True,
-    timeout=30,
-)
-with (boot / "fault-agent.log").open("a", encoding="utf-8") as handle:
-    handle.write(completed.stdout)
-    handle.write(completed.stderr)
-if completed.returncode != 0:
-    raise SystemExit(f"disposable control agent pass failed: {completed.returncode}")
-PY
+print(observed[0].worker_id)
+PY_FAULT
+    )
+    # Shutdown is a real passive Call/Reply operation for every role. The
+    # instrumented child traps after call validation, before dispatch/reply.
+    run_cohsh_command "$boot_dir" "kill $worker" "$ordinal"
 }
 
 drive_worker_fault_plan() {
@@ -1772,25 +1733,41 @@ drive_worker_fault_plan() {
     local gdb_pid=$!
     GDB_RUNNER_PID=$gdb_pid
     sleep 1
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" "$ordinal_base" NONE || true
     wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 1 )) 120
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 1 )) NONE || true
     wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 1 )) 120
-    if [[ "$role" != "worker-heartbeat" ]]; then
-        trigger_disposable_worker_control "$boot_dir" "$role" 1
-    fi
+    trigger_disposable_worker_control "$boot_dir" "$role" $(( ordinal_base + 10 ))
     wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 2 )) 120
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 2 )) NONE || true
     wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 2 )) 120
-    if [[ "$role" != "worker-heartbeat" ]]; then
-        trigger_disposable_worker_control "$boot_dir" "$role" 2
-    fi
+    trigger_disposable_worker_control "$boot_dir" "$role" $(( ordinal_base + 11 ))
     wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 3 )) 120
     if ! wait "$gdb_pid"; then
         GDB_RUNNER_PID=""
         die "Worker GDB plan failed for $role"
     fi
     GDB_RUNNER_PID=""
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 3 ))
     wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 3 )) 120
 }

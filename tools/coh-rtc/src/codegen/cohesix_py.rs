@@ -671,13 +671,13 @@ pub fn render_profile_contract(
             manifest.profile.name
         );
     }
-    let expected_sel4_profile = match target {
-        "qemu" => "qemu_smp_production",
-        "pi4" => "pi4_production",
+    let supported_sel4_profiles: &[&str] = match target {
+        "qemu" => &["qemu_smp_production", "qemu_smp_kvm_production"],
+        "pi4" => &["pi4_production"],
         _ => unreachable!("target was validated above"),
     };
-    if sel4_profile != expected_sel4_profile {
-        bail!("target {target} requires seL4 profile {expected_sel4_profile}, got {sel4_profile}");
+    if !supported_sel4_profiles.contains(&sel4_profile) {
+        bail!("target {target} requires a supported production seL4 profile, got {sel4_profile}");
     }
     if !manifest.worker_runtime.task_abi.enabled
         || manifest.worker_runtime.task_abi.version != 2

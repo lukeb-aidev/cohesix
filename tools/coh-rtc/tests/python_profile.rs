@@ -71,6 +71,18 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
 }
 
 #[test]
+fn native_kvm_contract_retains_its_selected_profile() {
+    let (_, kvm) = render("root_task.toml", "qemu_smp_kvm_production", "qemu");
+    assert_eq!(kvm["target"], "qemu");
+    assert_eq!(kvm["target_profile"], "qemu_smp_kvm_production");
+    assert_eq!(kvm["manifest_profile"], "virt-aarch64");
+    assert_eq!(
+        kvm["proof_boundary"]["python_projection_is_authority"],
+        false
+    );
+}
+
+#[test]
 fn target_and_sel4_profile_mismatch_fail_closed() {
     let manifest_path = repo_root().join("configs/root_task.toml");
     let manifest = coh_rtc::ir::load_manifest(&manifest_path).expect("load manifest");
@@ -83,6 +95,15 @@ fn target_and_sel4_profile_mismatch_fail_closed() {
     )
     .expect_err("QEMU manifest must not become Pi contract");
     assert!(error.to_string().contains("requires manifest profile"));
+    for profile in ["pi4_production", "qemu_smp_diagnostic", "unknown"] {
+        assert!(cohesix_py::render_profile_contract(
+            &manifest,
+            &hash_bytes(&resolved),
+            profile,
+            "qemu",
+        )
+        .is_err());
+    }
 }
 
 #[test]
