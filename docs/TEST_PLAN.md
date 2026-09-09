@@ -1070,6 +1070,10 @@ the stable required check `ci` directly; there is no aggregate fan-in job.
   configuration. The launcher must agree with the generated GICv3 and
   31,250,000 Hz timer truth of `qemu_smp_kvm_production`.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
+  Observe the guest's `root-console.start.ok` serial marker before the first
+  authenticated console request. Do not probe the forwarded console port with
+  an unauthenticated connection: QEMU may defer that connection until the guest
+  listens, consuming its sole console slot during a later test operation.
   For automated runs without host BPF privileges, set `COHESIX_QEMU_CAPTURE_DIR`
   to a private evidence directory and `COHESIX_QEMU_TCPDUMP` to a tcpdump executable
   that supports pcap input through `-r -`. Both canonical QEMU launchers start

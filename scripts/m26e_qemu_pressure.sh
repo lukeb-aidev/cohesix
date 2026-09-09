@@ -2419,8 +2419,9 @@ run_service_fault_boot() {
     [[ "$QEMU_PID" =~ ^[0-9]+$ ]] || die "service QEMU pidfile is malformed"
     ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
     verify_qemu_command "$boot_dir" no
-    wait_for_port 127.0.0.1 31337 180
-    wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180
+    # A bare host-forward probe can remain pending in slirp until the guest
+    # listens, then occupy its sole console slot during authenticated control.
+    wait_for_marker_count "$boot_dir/uart.live.log" "[mark] root-console.start.ok" 1 180
     verify_live_artifacts
 
     drive_service_fault_plan \
@@ -2456,8 +2457,8 @@ run_pressure_boot() {
     [[ "$QEMU_PID" =~ ^[0-9]+$ ]] || die "QEMU pidfile is malformed"
     ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
     verify_qemu_command "$boot_dir" no
-    wait_for_port 127.0.0.1 31337 180
-    wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180
+    # Observe guest readiness without creating an unauthenticated connection.
+    wait_for_marker_count "$boot_dir/uart.live.log" "[mark] root-console.start.ok" 1 180
     verify_live_artifacts
     # Three role-specific GDB plans use only the qemu-evidence symbols and the
     # existing spawn/fault/recreate lifecycle. They run before the first
