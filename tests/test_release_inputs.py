@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
+from unittest import mock
 
 import pytest
 
@@ -31,6 +34,13 @@ def fixture_module():
 @pytest.fixture
 def accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Create a hash-bound TCP result and its separate native artifact."""
+    return accepted_inputs(tmp_path, monkeypatch, "sha256:" + "a" * 64)
+
+
+def accepted_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str,
+) -> tuple[Path, Path, str, dict[str, Path]]:
+    """Bind a fixture artifact and its TCP result to the producer's identity."""
     support = fixture_module()
     helper = release.evidence
     monkeypatch.setattr(helper.platform, "system", lambda: "Darwin")
@@ -57,11 +67,10 @@ def accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "--artifact-dir", str(inputs["artifact"]),
     ]) == 0
     artifact = tmp_path / "artifact.json"
-    support.record_artifact(helper, inputs, artifact)
+    support.record_artifact(helper, inputs, artifact, source_digest=source)
     log = tmp_path / "tcp.log"
     log.write_text("fixture: authenticated boot smoke passed\n")
     result = tmp_path / "result.json"
-    source = "sha256:" + "a" * 64
     assert (
         helper.main(
             [
@@ -101,6 +110,44 @@ def accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         == 0
     )
     return artifact, result, source, inputs
+
+
+def test_staged_source_identity_reaches_release_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The staged producer and standalone factory agree without rebinding proof."""
+    import test_plan_evidence as staged
+    from test_test_plan_evidence import RunnerFixture
+
+    fixture = RunnerFixture()
+    try:
+        state = fixture.state("release-source")
+        with mock.patch.dict(os.environ, fixture.environment(), clear=True):
+            context = staged.capture_context(fixture.root, state, 1, "qemu")
+        assert context["schema"] == "cohesix.test-plan-input-context/v2"
+        artifact, result, source, _ = accepted_inputs(
+            tmp_path, monkeypatch, "sha256:" + context["source_digest"],
+        )
+
+        def factory_digest() -> str:
+            return subprocess.check_output([
+                sys.executable, str(fixture.root / "scripts/ci/qemu_artifact.py"),
+                "source-digest", "--repo-root", str(fixture.root),
+            ], text=True).strip()
+
+        release.verified_inputs(artifact, result, factory_digest(), "macos")
+        original = fixture.root / "tracked.txt"
+        baseline = original.read_bytes()
+        original.write_bytes(b"changed source\n")
+        with pytest.raises(release.evidence.EvidenceError, match="source digest"):
+            release.verified_inputs(artifact, result, factory_digest(), "macos")
+        original.write_bytes(baseline)
+        assert factory_digest() == source
+        original.chmod(original.stat().st_mode | 0o100)
+        with pytest.raises(release.evidence.EvidenceError, match="source digest"):
+            release.verified_inputs(artifact, result, factory_digest(), "macos")
+    finally:
+        fixture.close()
 
 
 def test_archival_inspection_preserves_local_launch_checks(accepted, monkeypatch):

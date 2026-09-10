@@ -28,12 +28,13 @@ import urllib.parse
 import uuid
 from typing import Any, NoReturn, Sequence
 
+import qemu_artifact
 from test_plan_catalog import load_catalog, select_actions
 
 
 ACTION_SCHEMA = "cohesix.test-plan-action/v1"
 ATTEMPT_SCHEMA = "cohesix.test-plan-attempt/v1"
-CONTEXT_SCHEMA = "cohesix.test-plan-input-context/v1"
+CONTEXT_SCHEMA = "cohesix.test-plan-input-context/v2"
 PENDING_SCHEMA = "cohesix.test-plan-pending-attempt/v1"
 QUALIFICATION_SCHEMA = "cohesix.test-plan-target-qualification/v1"
 REF_SCHEMA = "cohesix.test-plan-attestation-ref/v1"
@@ -545,7 +546,10 @@ def capture_context(
             if mode == "160000"
         ],
     }
-    source_digest = canonical_digest(source)
+    try:
+        source_digest = qemu_artifact.source_digest(root).removeprefix("sha256:")
+    except qemu_artifact.EvidenceError as error:
+        raise EvidenceError(str(error)) from error
 
     config_output = git_bytes(
         root,
@@ -597,6 +601,7 @@ def capture_context(
     config_digest = canonical_digest(config)
 
     action_paths = [
+        "scripts/ci/qemu_artifact.py",
         "scripts/ci/test_plan_common.sh",
         "scripts/ci/test_plan_evidence.py",
         "scripts/ci/test_plan_resources.sh",

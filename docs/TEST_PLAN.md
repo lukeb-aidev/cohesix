@@ -922,6 +922,15 @@ Each stage attempt records:
   assertions pass.
 
 `stage_XX.attestation` is an atomic reference to the immutable manifest.
+Input context v2 uses `scripts/ci/qemu_artifact.py source-digest` for the same
+complete Git, checkout-byte, executable-mode, and submodule identity used by
+standalone artifacts and the release factory. The context stores the untagged
+hex digest; artifact/result interfaces retain the `sha256:` prefix. The
+separate `source` object retains diagnostic metadata and is not the source
+digest's hash input. Context v1 evidence remains historical and is never
+translated to v2; a changed context requires a fresh attempt through the
+normal fail-closed resume/import checks.
+
 Compatibility `.done` files are not authority and are published only after the
 attestation verifies. Missing/malformed provenance, changed inputs, tampered
 logs/actions/artifacts, an iteration result, target mismatch, or a failed

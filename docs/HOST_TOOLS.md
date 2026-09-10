@@ -402,6 +402,11 @@ Mac input selection uses the equivalent files from its own accepted tree.
 `scripts/release_inputs.py` verifies source identity, native profile, every guest
 and tool hash, and the passing result. Archival verification on Mac does not
 assert that Mac can execute Linux artifacts; launch checks remain native.
+Staged context v2, standalone target evidence, and the release factory use the
+same `scripts/ci/qemu_artifact.py source-digest` calculation. Historical staged
+context v1 used a different source hash; rerun qualification when it does not
+match the factory's current source identity. Do not rewrite retained artifacts
+or their passing results to substitute a new digest.
 Each build also retains the compiler-selected configuration set under
 `release-configs/configs/generated/`. Artifact recording hashes that exact set,
 and assembly copies it from the accepted native build. The QEMU Python contract
@@ -478,6 +483,16 @@ target contracts and is exercised from the extracted package. `rest_perf_harness
 QEMU pressure and Pi performance scripts retain workload/report schemas and target
 acceptance authority; only the release artifact selection and installation
 qualification workflow change.
+
+The staged source-identity repair changes only evidence production and its
+context schema. Compatibility review of `cohsh`, `coh`, `gpu-bridge-host`,
+`host-sidecar-bridge`, `cas-tool`, `swarmui`, `hive-gateway`, and
+`host-ticket-agent` found no CLI, wire, namespace, feature, or payload changes.
+`tools/cohesix-py` retains its generated target contracts and wheel API.
+Raw/REST benchmarks and QEMU/Pi pressure scripts retain workloads, report
+schemas, retries, thresholds, and target authority; their existing source
+bindings now agree with staged production. Packaging still verifies the exact
+native artifact and matching TCP result and requires fresh installation proof.
 
 ## Tool catalog
 

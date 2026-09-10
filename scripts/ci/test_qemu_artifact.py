@@ -180,10 +180,10 @@ def record_artifact(
     output: Path,
     *,
     accelerator: str | None = None,
+    source_digest: str = "sha256:" + ("a" * 64),
 ) -> str:
     """Record one fixture artifact and return its ID."""
 
-    source_digest = "sha256:" + ("a" * 64)
     if accelerator is None:
         accelerator = "hvf" if helper.platform.system() == "Darwin" else "kvm"
     qemu_raw = inputs["qemu"].read_bytes()

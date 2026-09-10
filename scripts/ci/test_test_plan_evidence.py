@@ -202,6 +202,7 @@ class RunnerFixture:
         (self.root / "configs").mkdir()
         self.tools.mkdir()
         for name in (
+            "qemu_artifact.py",
             "test_plan_common.sh",
             "test_plan_evidence.py",
             "test_plan_resources.sh",
