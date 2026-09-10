@@ -4998,6 +4998,13 @@ fn bootstrap<P: Platform>(
         extra_range.clone(),
     )?;
 
+    #[cfg(all(
+        feature = "release-pi4",
+        feature = "bootstrap-trace",
+        target_os = "none"
+    ))]
+    layout::publish_early_root_text_samples();
+
     // The current PCIe ownership proof is internally synchronous, so settle
     // it before EventPump begins enforcing one linked-runtime operation per
     // outer turn. A missing proof remains fail-closed: the retained USB attach

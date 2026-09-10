@@ -42,6 +42,268 @@ fn root_text_word_checksum(mut hash: u32, word: u32) -> u32 {
     hash
 }
 
+#[cfg(any(test, all(feature = "release-pi4", feature = "bootstrap-trace")))]
+mod root_text_retention {
+    use core::fmt::Write;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use heapless::String;
+    use spin::Mutex;
+
+    const CUTS: [&str; 3] = ["root-entry", "ipc-installed", "fault-receivers-active"];
+    const COMPLETE_MASK: u8 = 0b111;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(super) struct Sample {
+        pub(super) start: usize,
+        pub(super) hash: u32,
+        pub(super) word_34: u32,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct Publication {
+        captured: u8,
+        published: u8,
+        capture_failed: bool,
+    }
+
+    impl Publication {
+        fn complete(self) -> bool {
+            self.captured == COMPLETE_MASK
+                && self.published == COMPLETE_MASK
+                && !self.capture_failed
+        }
+    }
+
+    struct Samples {
+        slots: [Option<Sample>; 3],
+        publication_attempted: bool,
+        capture_failed: bool,
+    }
+
+    impl Samples {
+        const fn new() -> Self {
+            Self {
+                slots: [None; 3],
+                publication_attempted: false,
+                capture_failed: false,
+            }
+        }
+
+        fn capture(&mut self, slot: usize, sample: Sample) -> bool {
+            if self.publication_attempted {
+                self.capture_failed = true;
+                return false;
+            }
+            let Some(destination) = self.slots.get_mut(slot) else {
+                self.capture_failed = true;
+                return false;
+            };
+            if destination.is_some() {
+                self.capture_failed = true;
+                return false;
+            }
+            *destination = Some(sample);
+            true
+        }
+
+        fn publish_once(
+            &mut self,
+            mut publish: impl FnMut(&str, Sample) -> bool,
+        ) -> Option<Publication> {
+            if self.publication_attempted {
+                return None;
+            }
+            self.publication_attempted = true;
+            let mut result = Publication {
+                captured: 0,
+                published: 0,
+                capture_failed: self.capture_failed,
+            };
+            for (slot, sample) in self.slots.iter().enumerate() {
+                if let Some(sample) = sample {
+                    result.captured |= 1 << slot;
+                    if publish(CUTS[slot], *sample) {
+                        result.published |= 1 << slot;
+                    }
+                }
+            }
+            Some(result)
+        }
+    }
+
+    // Only root bootstrap writes these fixed samples. try_lock never waits on
+    // another TCB; original values remain private and are never overwritten.
+    static EARLY_SAMPLES: Mutex<Samples> = Mutex::new(Samples::new());
+    static CAPTURE_CONTENDED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn render(cut: &str, sample: Sample) -> Result<String<224>, core::fmt::Error> {
+        let mut line = String::new();
+        write!(
+            line,
+            "[diag root-text/v1] cut={cut} start=0x{:x} bytes=4092 fnv1a32=0x{:08x} word34=0x{:08x}",
+            sample.start, sample.hash, sample.word_34,
+        )?;
+        Ok(line)
+    }
+
+    pub(super) fn capture_early(cut: &str, sample: Sample) -> bool {
+        let Some(slot) = CUTS.iter().position(|candidate| *candidate == cut) else {
+            return false;
+        };
+        if let Some(mut retained) = EARLY_SAMPLES.try_lock() {
+            retained.capture(slot, sample);
+        } else {
+            CAPTURE_CONTENDED.store(true, Ordering::Release);
+        }
+        true
+    }
+
+    pub(super) fn publish() {
+        let result = if let Some(mut retained) = EARLY_SAMPLES.try_lock() {
+            retained.publish_once(|cut, sample| {
+                let Ok(line) = render(cut, sample) else {
+                    return false;
+                };
+                // Each rendered record fits the existing 256-byte log line.
+                // This nonblocking sink acknowledges actual retention; there
+                // is no UART operation or fresh text-page read while locked.
+                crate::log_buffer::try_append_retained_log_line(line.as_str())
+            })
+        } else {
+            crate::bootstrap::log::retain_bootstrap_audit_line(
+                "[diag root-text-retention/v1] state=failed reason=publication-lock-contended",
+            );
+            return;
+        };
+        let Some(mut result) = result else {
+            return;
+        };
+        result.capture_failed |= CAPTURE_CONTENDED.load(Ordering::Acquire);
+        let mut line = String::<192>::new();
+        let formatted = write!(
+            line,
+            "[diag root-text-retention/v1] state={} source=capture-time publish=pre-pcie captured=0x{:x} published=0x{:x} capture_failed={}",
+            if result.complete() { "complete" } else { "failed" },
+            result.captured,
+            result.published,
+            u8::from(result.capture_failed),
+        );
+        if formatted.is_err() || !crate::log_buffer::try_append_retained_log_line(line.as_str()) {
+            crate::bootstrap::log::force_uart_line(
+                "[diag root-text-retention/v1] state=failed reason=summary-retention-unavailable",
+            );
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{render, Sample, Samples};
+
+        fn sample(value: u32) -> Sample {
+            Sample {
+                start: 4,
+                hash: value,
+                word_34: value + 1,
+            }
+        }
+
+        #[test]
+        fn original_cut_values_survive_until_one_ordered_publication() {
+            let mut samples = Samples::new();
+            assert!(samples.capture(1, sample(20)));
+            assert!(samples.capture(0, sample(10)));
+            assert!(samples.capture(2, sample(30)));
+            let mut emitted = std::vec::Vec::new();
+            let result = samples.publish_once(|cut, sample| {
+                emitted.push((cut.to_owned(), sample));
+                true
+            });
+            assert!(result.expect("first publication exists").complete());
+            assert_eq!(
+                emitted,
+                [
+                    ("root-entry".to_owned(), sample(10)),
+                    ("ipc-installed".to_owned(), sample(20)),
+                    ("fault-receivers-active".to_owned(), sample(30)),
+                ]
+            );
+            assert_eq!(
+                samples.publish_once(|_, _| panic!("no second publication")),
+                None
+            );
+            assert!(!samples.capture(0, sample(40)));
+            assert_eq!(samples.slots[0], Some(sample(10)));
+        }
+
+        #[test]
+        fn duplicate_and_out_of_range_capture_never_replace_original_sample() {
+            let mut samples = Samples::new();
+            assert!(samples.capture(0, sample(10)));
+            assert!(!samples.capture(0, sample(20)));
+            assert!(!samples.capture(3, sample(30)));
+            assert_eq!(samples.slots, [Some(sample(10)), None, None]);
+            let result = samples
+                .publish_once(|_, _| true)
+                .expect("first publication");
+            assert_eq!(result.captured, 0b001);
+            assert_eq!(result.published, 0b001);
+            assert!(result.capture_failed);
+            assert!(!result.complete());
+        }
+
+        #[test]
+        fn missing_and_unaccepted_records_cannot_be_reported_complete() {
+            let mut samples = Samples::new();
+            assert!(samples.capture(0, sample(10)));
+            assert!(samples.capture(2, sample(30)));
+            let result = samples
+                .publish_once(|cut, _| cut == "root-entry")
+                .expect("first publication");
+            assert_eq!(result.captured, 0b101);
+            assert_eq!(result.published, 0b001);
+            assert!(!result.capture_failed);
+            assert!(!result.complete());
+            assert_eq!(samples.slots[2], Some(sample(30)));
+            assert_eq!(
+                samples.publish_once(|_, _| panic!("no second publication")),
+                None
+            );
+        }
+
+        #[test]
+        fn capture_time_record_format_preserves_values_and_existing_line_bound() {
+            assert_eq!(
+                render("root-entry", sample(0x1234)).expect("bounded format").as_str(),
+                "[diag root-text/v1] cut=root-entry start=0x4 bytes=4092 fnv1a32=0x00001234 word34=0x00001235"
+            );
+            let longest = render(
+                "fault-receivers-active",
+                Sample {
+                    start: usize::MAX,
+                    hash: u32::MAX,
+                    word_34: u32::MAX,
+                },
+            )
+            .expect("known longest early cut fits");
+            assert!(longest.len() <= 224);
+            assert!(render(&"x".repeat(224), sample(1)).is_err());
+        }
+    }
+}
+
+/// Publish the three original early samples after bulk child admission, before
+/// either Pi network lane begins PCIe and constructor diagnostics. Publication
+/// performs no text reads; missing/rejected samples remain evidence failures.
+#[cfg(all(
+    feature = "release-pi4",
+    feature = "bootstrap-trace",
+    target_os = "none"
+))]
+pub(crate) fn publish_early_root_text_samples() {
+    root_text_retention::publish();
+}
+
 /// Observe the first mapped text page at fixed bootstrap boundaries. The
 /// loaded ELF supplies the independent expected checksum and instruction word;
 /// this sample neither changes mappings nor repairs or resumes a fault.
@@ -77,11 +339,18 @@ pub(crate) fn trace_root_text(cut: &str) {
             word_34 = word;
         }
     }
-    let mut line = String::<224>::new();
-    let _ = write!(
-        line,
-        "[diag root-text/v1] cut={cut} start=0x{start:x} bytes=4092 fnv1a32=0x{hash:08x} word34=0x{word_34:08x}",
-    );
+    let sample = root_text_retention::Sample {
+        start,
+        hash,
+        word_34,
+    };
+    if root_text_retention::capture_early(cut, sample) {
+        return;
+    }
+    let Ok(line) = root_text_retention::render(cut, sample) else {
+        force_uart_line("[diag root-text/v1] state=invalid-record");
+        return;
+    };
     crate::bootstrap::log::retain_bootstrap_audit_line(line.as_str());
 }
 

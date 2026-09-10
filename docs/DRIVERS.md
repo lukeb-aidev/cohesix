@@ -2066,11 +2066,17 @@ to avoid a null Rust pointer on the selected zero-based image. Compare samples
 with the retained exact ELF; matching data reads alone do not prove the bytes
 fetched by the instruction cache. These boot-only diagnostics grant no recovery
 or acceptance credit and do not add steady-state sampling.
-The static Queen log receives these bounded audit records even before UART
-admission, when a release kernel has no DebugPutChar sink. Raw emission is
-allowed only before root releases UART ownership. Collection requires every
-actual checksum cut from the exact boot before bounded log eviction; a logging
-attempt or matching source alone does not prove physical integrity.
+The three earliest measurements use fixed private capture slots so bulk child
+admission cannot evict them before the console exists. Their original values
+are published once at the common pre-PCIe boundary after local-seat runtime
+construction; publication never re-samples text or substitutes a later value
+for an earlier measurement. The bounded capture/publication status identifies
+missing records or failed nonblocking publication. GENET constructor samples
+continue directly into the static Queen log. A release kernel needs no
+DebugPutChar sink; physical UART emission remains subject to sole-owner
+handoff. Collection requires every actual checksum cut from the exact boot
+before bounded log eviction; a logging attempt or matching source alone does
+not prove physical integrity.
 
 HAL's PCIe register-page cache returns the newly mapped address on its first
 successful publication, or the existing winner if another publication won.
