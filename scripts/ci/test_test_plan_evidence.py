@@ -576,6 +576,29 @@ class TestPlanEvidenceTests(unittest.TestCase):
         untracked = self.fixture.run(state, stage=1)
         self.assertNotEqual(untracked.returncode, 0)
 
+    def test_submodule_worktree_drift_blocks_resume(self) -> None:
+        """Shared factory identity must retain the staged submodule-state guard."""
+        child = RunnerFixture()
+        try:
+            self.fixture._git(
+                "-c", "protocol.file.allow=always", "submodule", "add", "--",
+                str(child.root), "child",
+            )
+            self.fixture._git("commit", "-qm", "bind child source")
+            state = self.fixture.state("submodule-drift")
+            self.assert_success(self.fixture.run(state, stage=1))
+            (self.fixture.root / "child/tracked.txt").write_text(
+                "uncommitted child change\n", encoding="utf-8",
+            )
+            resumed = self.fixture.run(state, stage=1, resume=True)
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn(
+                "stage 01 has stale or corrupt target-qualified evidence",
+                resumed.stdout + resumed.stderr,
+            )
+        finally:
+            child.close()
+
     def test_toolchain_drift_blocks_resume(self) -> None:
         state = self.fixture.state("toolchain-drift")
         fake_cargo = self.fixture.tools / "cargo"

@@ -926,8 +926,10 @@ Input context v2 uses `scripts/ci/qemu_artifact.py source-digest` for the same
 complete Git, checkout-byte, executable-mode, and submodule identity used by
 standalone artifacts and the release factory. The context stores the untagged
 hex digest; artifact/result interfaces retain the `sha256:` prefix. The
-separate `source` object retains diagnostic metadata and is not the source
-digest's hash input. Context v1 evidence remains historical and is never
+separate `source` object retains the staged Git-status and submodule-state
+metadata, bound by `source_state_digest` to preserve the existing resume/import
+guards alongside the shared source digest. Context v1 evidence remains
+historical and is never
 translated to v2; a changed context requires a fresh attempt through the
 normal fail-closed resume/import checks.
 
