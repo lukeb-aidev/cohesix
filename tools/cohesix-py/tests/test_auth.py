@@ -11,10 +11,21 @@ import tempfile
 from pathlib import Path
 
 import sys
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cohesix.auth import resolve_tcp_auth_token  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolated_auth_environment(monkeypatch) -> None:
+    """Authentication tests control every resolver input, including release CI."""
+    for key in (
+        "COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN", "COH_RTC_MANIFEST",
+        "COH_MANIFEST", "COHESIX_MANIFEST",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 def _write_manifest(path: Path, queen_secret: str) -> None:
@@ -76,6 +87,14 @@ def test_resolve_tcp_auth_token_uses_env_when_manifest_missing() -> None:
         finally:
             os.environ.clear()
             os.environ.update(original)
+
+
+def test_primary_token_environment_precedes_legacy_fallback(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("COH_AUTH_TOKEN", "primary-test-token")
+    monkeypatch.setenv("COHSH_AUTH_TOKEN", "legacy-test-token")
+    assert resolve_tcp_auth_token(
+        None, manifest_paths=[tmp_path / "missing.toml"],
+    ) == "primary-test-token"
 
 
 def test_resolve_tcp_auth_token_rejects_insecure_placeholder_explicit() -> None:

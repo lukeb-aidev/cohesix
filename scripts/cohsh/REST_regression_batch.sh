@@ -89,12 +89,12 @@ if [[ ! -d "${SCRIPT_ROOT}" ]]; then
   fail "script root not found: ${SCRIPT_ROOT}"
 fi
 
+# Match the Stage 04 concurrent core: every operation and ACK assertion is
+# supported by the REST projection. Console parser/pool checks stay under TCP.
 DEFAULT_SCRIPTS=(
   "boot_v0.coh"
   "observe_watch.coh"
-  "busy_backpressure.coh"
-  "session_pool.coh"
-  "tcp_basic.coh"
+  "root_cut_basic.coh"
 )
 
 if [[ -n "${COHSH_SCRIPT_LIST:-}" ]]; then

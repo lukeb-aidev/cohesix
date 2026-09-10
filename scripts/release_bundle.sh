@@ -44,6 +44,7 @@ LINUX_OUT_DIR=""
 IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
 PYTHON_WHEEL_DIR="${PYTHON_WHEEL_DIR:-${ROOT_DIR}/out/python-wheels}"
 PYTHON_PACKAGE_MANIFEST="${PYTHON_PACKAGE_MANIFEST:-${ROOT_DIR}/out/python-compat/m26e-python-package.json}"
+LINUX_PYTHON_PACKAGE_MANIFEST="${LINUX_PYTHON_PACKAGE_MANIFEST:-$PYTHON_PACKAGE_MANIFEST}"
 
 usage() {
   cat <<'USAGE'
@@ -90,6 +91,8 @@ Env overrides:
                                     intended only for non-mutating pre-regeneration validation)
   PYTHON_WHEEL_DIR (defaults to out/python-wheels; must contain one target-neutral wheel)
   PYTHON_PACKAGE_MANIFEST (defaults to out/python-compat/m26e-python-package.json)
+  LINUX_PYTHON_PACKAGE_MANIFEST (native Linux Python package manifest; defaults
+                                 to PYTHON_PACKAGE_MANIFEST for --linux-only)
 
 Remote builder environment locations are never inferred from hostnames or users
 and have no embedded Jetson/NVMe defaults; they must be supplied as arguments.
@@ -335,8 +338,9 @@ PY
 }
 
 validate_python_package_inputs() {
+  local package_manifest="$1" generated_dir="$2"
   require_dir "$PYTHON_WHEEL_DIR"
-  require_file "$PYTHON_PACKAGE_MANIFEST"
+  require_file "$package_manifest"
   local wheel_candidates=()
   while IFS= read -r candidate; do
     wheel_candidates+=("$candidate")
@@ -344,15 +348,15 @@ validate_python_package_inputs() {
   [[ ${#wheel_candidates[@]} -eq 1 ]] || fail \
     "Python release input requires exactly one target-neutral cohesix wheel"
   local wheel="${wheel_candidates[0]}"
-  [[ ! -L "$wheel" && ! -L "$PYTHON_PACKAGE_MANIFEST" ]] || fail \
+  [[ ! -L "$wheel" && ! -L "$package_manifest" ]] || fail \
     "Python release inputs must be regular non-symlink files"
 
   python3 - \
-    "$PYTHON_PACKAGE_MANIFEST" \
+    "$package_manifest" \
     "$wheel" \
     "$(release_inventory_path)" \
-    "${ROOT_DIR}/configs/generated/cohesix_python_qemu_smp_production.json" \
-    "${ROOT_DIR}/configs/generated/cohesix_python_pi4_production.json" <<'PY'
+    "${generated_dir}/cohesix_python_qemu_smp_production.json" \
+    "${generated_dir}/cohesix_python_pi4_production.json" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -413,7 +417,14 @@ validate_release_inventory_inputs() {
   python3 "${ROOT_DIR}/scripts/ci/check_implementation_surfaces.py" \
     --repo-root "$ROOT_DIR" \
     --inventory "$inventory"
-  validate_python_package_inputs
+  if [[ "$LINUX_ONLY" -ne 1 ]]; then
+    validate_python_package_inputs "$PYTHON_PACKAGE_MANIFEST" \
+      "${MACOS_OUT_DIR}/release-configs/configs/generated"
+  fi
+  if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
+    validate_python_package_inputs "$LINUX_PYTHON_PACKAGE_MANIFEST" \
+      "${LINUX_OUT_DIR}/release-configs/configs/generated"
+  fi
 
   INVENTORY_PATH="$inventory" \
   ROOT_DIR="$ROOT_DIR" \
@@ -781,11 +792,13 @@ bundle_release() {
   local host_tools_dir="$2"
   local archive_mode="${3:-local}"
   local artifact="$MACOS_ARTIFACT" result="$MACOS_RESULT" host="macos"
+  local package_manifest="$PYTHON_PACKAGE_MANIFEST"
   OUT_DIR="$MACOS_OUT_DIR"
   if [[ "$archive_mode" == "remote-linux" ]]; then
     artifact="$LINUX_ARTIFACT"
     result="$LINUX_RESULT"
     host="linux"
+    package_manifest="$LINUX_PYTHON_PACKAGE_MANIFEST"
     OUT_DIR="$LINUX_OUT_DIR"
   fi
   STAGING_DIR="${OUT_DIR}/staging"
@@ -850,7 +863,7 @@ bundle_release() {
     cp -p "$source_path" "${bundle_dir}/${selected_path}"
   done < <(release_inventory_values target_images)
   while IFS= read -r selected_path; do
-    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+    cp -p "${OUT_DIR}/release-configs/${selected_path}" "${bundle_dir}/${selected_path}"
   done < <(release_inventory_values generated_configs)
   while IFS= read -r selected_path; do
     cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
@@ -878,7 +891,7 @@ bundle_release() {
   mkdir -p "${bundle_dir}/python/dist"
   cp -p "$PYTHON_RELEASE_WHEEL" \
     "${bundle_dir}/python/dist/$(basename "$PYTHON_RELEASE_WHEEL")"
-  cp -p "$PYTHON_PACKAGE_MANIFEST" \
+  cp -p "$package_manifest" \
     "${bundle_dir}/python/m26e-python-package.json"
 
   while IFS= read -r selected_path; do

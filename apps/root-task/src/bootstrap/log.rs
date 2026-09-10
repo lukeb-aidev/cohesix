@@ -84,6 +84,11 @@ impl Log for BootstrapLogger {
             return;
         }
 
+        if record.target() == "worker-evidence" {
+            log_buffer::append_worker_record(*record.args());
+            return;
+        }
+
         let line = format_record_line(record);
         let log_buffer_active = log_buffer::log_channel_active();
         let skip_buffer = skip_log_buffer_target(record.target());

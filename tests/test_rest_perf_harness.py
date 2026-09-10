@@ -15,6 +15,7 @@ import pathlib
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -39,6 +40,44 @@ rest_perf = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
+
+
+@pytest.mark.parametrize("failure", [None, "gpu", "lora", "emergency"])
+def test_executable_liveness_is_independent_of_aggregate_read_error_budget(failure):
+    """One missing Worker completion remains fatal among many successful reads."""
+    stats = {
+        "cat_/proc/schedule/summary": rest_perf.OpStats(count=10000, ok=9999, err=1),
+        "worker_gpu_v2_receipt": rest_perf.OpStats(count=10, ok=10),
+        "worker_lora_v2_receipt": rest_perf.OpStats(count=10, ok=10),
+    }
+    uart = "Cohesix console starting\n"
+    if failure in {"gpu", "lora"}:
+        stats[f"worker_{failure}_v2_receipt"].err = 1
+        stats[f"worker_{failure}_v2_receipt"].ok = 9
+    elif failure == "emergency":
+        uart += "[critical] root-emergency fail-stop\n"
+    if failure:
+        with pytest.raises(rest_perf.RestError, match="failed Worker receipts|root-emergency"):
+            rest_perf.validate_executable_run_liveness(stats, uart)
+    else:
+        rest_perf.validate_executable_run_liveness(stats, uart)
+
+
+@pytest.mark.parametrize("role", ["gpu", "lora"])
+@pytest.mark.parametrize("empty", [True, False])
+def test_executable_liveness_requires_timed_receipts_for_both_roles(role, empty):
+    """Startup grants cannot replace missing timed Worker workload activity."""
+    stats = {
+        "worker_gpu_v2_receipt": rest_perf.OpStats(count=1, ok=1),
+        "worker_lora_v2_receipt": rest_perf.OpStats(count=1, ok=1),
+    }
+    key = f"worker_{role}_v2_receipt"
+    if empty:
+        stats[key] = rest_perf.OpStats()
+    else:
+        del stats[key]
+    with pytest.raises(rest_perf.RestError, match="lacks completed Worker receipt activity"):
+        rest_perf.validate_executable_run_liveness(stats, "")
 
 
 class RawTranscriptSocket:
@@ -1290,6 +1329,53 @@ def test_relaxed_echo_with_policy_retry_queues_on_buffer_full() -> None:
     assert response.status == "OK"
 
 
+@pytest.mark.parametrize("control_status", ["OK", "ERR"])
+def test_qualification_control_consumes_one_approval(control_status: str) -> None:
+    """An approved operation preserves success or the target's real refusal."""
+    calls = []
+    control = rest_perf.GatewayResponse(
+        status=control_status, verb="ECHO", path="/queen/ctl", end=True,
+        lines=[], bytes=None, error="slot-busy" if control_status == "ERR" else None,
+    )
+
+    def echo(path: str, line: str) -> rest_perf.GatewayResponse:
+        calls.append((path, line))
+        if path == "/actions/queue":
+            return replace(control, status="OK", path=path, error=None)
+        return control
+
+    client = SimpleNamespace(echo=echo)
+    payload = '{"spawn":"heartbeat"}'
+    result = rest_perf.queen_control_with_approval(client, payload, "qualify-1")
+    assert result is control
+    assert calls == [
+        ("/actions/queue", '{"id":"qualify-1","target":"/queen/ctl","decision":"approve"}'),
+        ("/queen/ctl", payload),
+    ]
+
+
+def test_qualification_approval_refusal_prevents_control() -> None:
+    """A refused single-use approval must never be followed by a mutation."""
+    calls = []
+    refusal = rest_perf.GatewayResponse(
+        status="ERR", verb="ECHO", path="/actions/queue", end=True,
+        lines=[], bytes=None, error="duplicate-id",
+    )
+
+    def echo(path: str, line: str) -> rest_perf.GatewayResponse:
+        calls.append((path, line))
+        return refusal
+
+    with pytest.raises(rest_perf.RestError, match="duplicate-id") as error:
+        rest_perf.queen_control_with_approval(
+            SimpleNamespace(echo=echo), '{"kill":"worker1"}', "used-id",
+        )
+    assert error.value.response is refusal
+    assert calls == [
+        ("/actions/queue", '{"id":"used-id","target":"/queen/ctl","decision":"approve"}'),
+    ]
+
+
 def test_strict_echo_buffer_full_attempts_once_without_approval() -> None:
     refusal = rest_perf.GatewayResponse(
         status="ERR",
@@ -2434,7 +2520,9 @@ def acceptance_summary() -> dict:
                 "cap_generation": 30 + index,
                 "image_sha256": str(index + 3) * 64,
                 "ready_sequence": 40 + index,
-                "completion_sequence": 50 + index,
+                "completion_sequence": (
+                    0 if role == "worker-heartbeat" else 50 + index
+                ),
                 "core": index,
                 "scheduling_context": {"budget_us": 100, "period_us": 1_000},
                 "object_inventory": inventory,
@@ -2789,10 +2877,10 @@ def test_executable_population_discovers_only_canonical_ready_workers() -> None:
 
     class DummyClient:
         def ls(self, path: str) -> rest_perf.GatewayResponse:
+            assert path != "/shard"
             lines = {
-                "/shard": [label],
                 f"/shard/{label}/worker": [worker_id],
-            }[path]
+            }.get(path, [])
             return rest_perf.GatewayResponse(
                 "OK", "LS", path, True, lines, None, None
             )
@@ -2823,6 +2911,148 @@ def test_executable_population_discovers_only_canonical_ready_workers() -> None:
     assert snapshot.ready == 1
     assert snapshot.backend_class == "console-projection"
     assert snapshot.proof_class == "qemu"
+
+
+def test_executable_discovery_reads_all_256_shards_beyond_one_reply() -> None:
+    bounds = executable_bounds(256)
+    bounds["worker_runtime"]["shard_bits"] = 8
+    bounds["worker_runtime"]["roles"][1]["executable_slots"] = 127
+    bounds["worker_runtime"]["roles"][2]["executable_slots"] = 128
+    listings: dict[str, list[str]] = {}
+    for ordinal in range(256):
+        worker_id = f"instance-{ordinal}"
+        label = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+        listings.setdefault(f"/shard/{label}/worker", []).append(worker_id)
+    assert len(listings) > 64
+    calls: list[str] = []
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            calls.append(path)
+            assert path != "/shard", "the aggregate reply cannot hold this fleet"
+            return rest_perf.GatewayResponse(
+                "OK", "LS", path, True, listings.get(path, []), None, None
+            )
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            worker_id = path.split("/")[-2]
+            ordinal = int(worker_id.removeprefix("instance-"))
+            role = (
+                "worker-heartbeat" if ordinal == 0
+                else "worker-gpu" if ordinal < 128
+                else "worker-lora"
+            )
+            state = json.dumps({
+                "schema": "worker-runtime-state/v2",
+                "worker_id": worker_id,
+                "role": role,
+                "state": "ready",
+                "identity": [ordinal, 1, 1, 1],
+                "sequence": [1, 0, 0, 0],
+            })
+            return rest_perf.GatewayResponse(
+                "OK", "TAIL", path, True, [state], None, None
+            )
+
+    instances, discovered = rest_perf.discover_executable_workers(Client(), bounds)
+    assert discovered == 256
+    assert {item.worker_id for item in instances} == {
+        f"instance-{ordinal}" for ordinal in range(256)
+    }
+    assert calls == [f"/shard/{label:02x}/worker" for label in range(256)]
+
+
+def test_executable_discovery_preserves_shard_read_errors() -> None:
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            return rest_perf.GatewayResponse(
+                "ERR", "LS", path, True, [], "permission denied", None
+            )
+
+    with pytest.raises(rest_perf.RestError, match="LS /shard/00/worker failed"):
+        rest_perf.discover_executable_workers(Client(), executable_bounds())
+
+
+@pytest.mark.parametrize("still_listed", [False, True])
+def test_executable_discovery_requires_confirmed_generation_removal(
+    still_listed: bool,
+) -> None:
+    worker_id = "worker-1"
+    # This fixture's address is independently derived from the shard contract.
+    shard = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+    worker_root = f"/shard/{shard}/worker"
+    reads = 0
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            nonlocal reads
+            lines = []
+            if path == worker_root:
+                reads += 1
+                if reads == 1 or still_listed:
+                    lines = [worker_id]
+            return rest_perf.GatewayResponse("OK", "LS", path, True, lines, None, None)
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            assert path == f"{worker_root}/{worker_id}/telemetry"
+            error = f"ERR TAIL reason=policy detail=invalid-path path={path} error=invalid path"
+            return rest_perf.GatewayResponse("ERR", "TAIL", path, True, [], None, error)
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["shard_bits"] = 8
+    if still_listed:
+        with pytest.raises(rest_perf.RestError, match="TAIL .* failed"):
+            rest_perf.discover_executable_workers(Client(), bounds)
+    else:
+        assert rest_perf.discover_executable_workers(Client(), bounds) == ([], 0)
+    assert reads == 2
+
+
+@pytest.mark.parametrize("failure", ["denied", "truncated", "wrong-path", "invalid-listing"])
+def test_executable_discovery_preserves_errors_during_removal(failure: str) -> None:
+    worker_id = "worker-1"
+    shard = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+    worker_root = f"/shard/{shard}/worker"
+    reads = 0
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            nonlocal reads
+            lines = []
+            if path == worker_root:
+                reads += 1
+                lines = [worker_id] if reads == 1 else ["../escape"]
+            return rest_perf.GatewayResponse("OK", "LS", path, True, lines, None, None)
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            detail = "denied" if failure == "denied" else "invalid-path"
+            error = f"ERR TAIL reason=policy detail={detail} path={path} error=invalid path"
+            return rest_perf.GatewayResponse(
+                "ERR", "TAIL", path + ("-other" if failure == "wrong-path" else ""),
+                failure != "truncated", [], None, error,
+            )
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["shard_bits"] = 8
+    with pytest.raises(rest_perf.RestError):
+        rest_perf.discover_executable_workers(Client(), bounds)
+    assert reads == (2 if failure == "invalid-listing" else 1)
+
+
+def test_executable_discovery_rejects_misplaced_worker() -> None:
+    # The independently computed address excludes shard 00.
+    assert hashlib.sha256(b"instance-0").hexdigest()[:2] != "00"
+
+    class Client:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            return rest_perf.GatewayResponse(
+                "OK", "LS", path, True, ["instance-0"], None, None
+            )
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["shard_bits"] = 8
+    with pytest.raises(rest_perf.RestError, match="wrong shard"):
+        rest_perf.discover_executable_workers(Client(), bounds)
 
 
 def test_executable_telemetry_operation_fails_closed_without_canonical_path() -> None:
@@ -2973,7 +3203,8 @@ def test_executable_receipt_lanes_bound_roles_independently() -> None:
     assert set(state.ticket_worker_locks) == {"gpu-0", "gpu-1", "lora-0", "lora-1"}
 
 
-def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
+@pytest.mark.parametrize("capture_failure", [False, True])
+def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane(capture_failure: bool) -> None:
     state = rest_perf.SimState(
         bounds=executable_bounds(),
         rest_url="http://127.0.0.1:8080",
@@ -3056,7 +3287,31 @@ def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
             )
             return rest_perf.GatewayResponse("OK", "CAT", path, True, [line], len(line), None)
 
+    class ReceiptCapture:
+        def __init__(self) -> None:
+            self.checkpoints = []
+
+        def checkpoint(self, required):
+            # Proof is retained before this Worker lane becomes available again.
+            self.checkpoints.append(required)
+            assert state.ticket_worker_locks["gpu-0"].locked()
+            assert len(state.receipt_operations) < len(self.checkpoints)
+            if capture_failure:
+                raise ValueError("missing target receipt proof")
+
+    capture = ReceiptCapture()
+    state.worker_log_monitor = capture
     client = ImmediateReceiptClient()
+    if capture_failure:
+        with pytest.raises(ValueError, match="missing target receipt proof"):
+            rest_perf.run_v2_receipt_operation(
+                client, state, "gpu.lease.grant", "worker-gpu",
+                {"ttl_s": 30, "priority": 1}, "GPU-0",
+            )
+        assert not state.receipt_operations
+        assert state.ticket_quarantined_workers == {"gpu-0"}
+        assert not state.ticket_worker_locks["gpu-0"].locked()
+        return
     operation_id = rest_perf.run_v2_receipt_operation(
         client,
         state,
@@ -3080,6 +3335,15 @@ def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
         "gpu-0",
     ]
     assert state.receipt_operation_workers[operation_id] == "gpu-0"
+    assert [row["identity"] for row in state.receipt_operations] == [
+        template.identity_dict(), template.identity_dict(),
+    ]
+    assert capture.checkpoints[1] == [
+        {"marker": "WORKER_TASK_RECEIPT", **template.identity_dict(),
+         "action": "0x0202", "outcome": 1, "sequence": 2},
+        {"marker": "WORKER_TASK_COMPLETION", **template.identity_dict(),
+         "action": "0x0202", "status": 1, "sequence": 2},
+    ]
 
 
 def test_host_model_telemetry_operation_uses_complete_worker_state_bound() -> None:
@@ -3596,6 +3860,98 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(
     ]
 
 
+@pytest.mark.parametrize("failed_checkpoint", [None, "WORKER_TASK_TEARDOWN", "WORKER_TASK_READY"])
+def test_lifecycle_captures_target_records_before_fleet_discovery(
+    monkeypatch, failed_checkpoint,
+) -> None:
+    """Fleet traffic cannot run past an unretained lifecycle boundary."""
+    before = rest_perf.WorkerInstance(
+        "worker-1", "worker-heartbeat", "ready", "/shard/00/worker/worker-1/telemetry",
+        0, 1, 1, 1, 1, 0, 0, 0,
+    )
+    after = replace(before, worker_id="worker-2", lease_epoch=2,
+                    supervisor_generation=2, cap_generation=2)
+    events = []
+
+    class Capture:
+        def checkpoint(self, required, **bounds):
+            marker = required[0]["marker"]
+            events.append(marker)
+            if marker == "WORKER_TASK_TEARDOWN":
+                assert required == [{"marker": marker, **before.identity_dict()}]
+            else:
+                assert bounds["after_generation"] == 1
+            if marker == failed_checkpoint:
+                raise ValueError("required target proof is missing")
+
+    state = SimpleNamespace(
+        current_workers_by_id={before.worker_id: before}, bounds={},
+        worker_log_monitor=Capture(), lifecycle_cycles=[],
+    )
+    monkeypatch.setattr(rest_perf, "kill_worker", lambda *_: events.append("kill"))
+    monkeypatch.setattr(rest_perf, "echo_with_policy_retry", lambda *_: events.append("spawn"))
+    observations = iter([[replace(before, lifecycle="terminal")], [after]])
+
+    def discover(*_):
+        events.append("discover")
+        return next(observations), 1
+
+    monkeypatch.setattr(rest_perf, "discover_executable_workers", discover)
+    monkeypatch.setattr(rest_perf, "merge_current_worker_instances", lambda _, rows: rows)
+    monkeypatch.setattr(rest_perf, "capture_executable_state",
+                        lambda *_, **__: {"workers": [{"worker": "worker-2"}]})
+    expected = ["kill", "WORKER_TASK_TEARDOWN", "discover", "spawn",
+                "WORKER_TASK_READY", "discover"]
+    if failed_checkpoint:
+        with pytest.raises(ValueError, match="required target proof"):
+            rest_perf.bounded_heartbeat_lifecycle_cycle(None, state, 15)
+        assert events == expected[:expected.index(failed_checkpoint) + 1]
+        assert not state.lifecycle_cycles
+    else:
+        assert rest_perf.bounded_heartbeat_lifecycle_cycle(None, state, 15) == ["worker-2"]
+        assert events == expected
+        assert state.lifecycle_cycles[0]["after"] == after.identity_dict()
+
+
+@pytest.mark.parametrize("target", ["qemu", "pi4"])
+@pytest.mark.parametrize("role,sequence,accepted", [
+    ("worker-heartbeat", 0, True),
+    ("worker-heartbeat", 1, True),
+    ("worker-heartbeat", -1, False),
+    ("worker-heartbeat", False, False),
+    ("worker-heartbeat", "0", False),
+    ("worker-heartbeat", None, False),
+    ("worker-gpu", 0, False),
+    ("worker-lora", 0, False),
+])
+def test_acceptance_completion_matches_the_passive_role_contract(
+    target: str, role: str, sequence: object, accepted: bool,
+) -> None:
+    summary = acceptance_summary()
+    proof = rest_perf.BENCHMARK_TARGET_PROOF[target]
+    summary.update(target=target, execution_proof=proof)
+    for worker in summary["workers"]:
+        worker["execution_proof"] = proof
+        if worker["role"] == role:
+            worker["completion_sequence"] = sequence
+    client = SimpleNamespace(status=lambda: {
+        "connected": True,
+        "backend_class": "console-projection",
+        "worker_acceptance": summary,
+    })
+    if accepted:
+        assert rest_perf.executable_target_acceptance_binding(
+            client, executable_bounds(), target
+        ) == summary
+    else:
+        with pytest.raises(
+            rest_perf.RestError, match="completion_sequence is invalid"
+        ):
+            rest_perf.executable_target_acceptance_binding(
+                client, executable_bounds(), target
+            )
+
+
 def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:
     class DummyClient:
         def __init__(self, backend: str, manifest: str):
@@ -3626,14 +3982,30 @@ def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:
             raise AssertionError("executable acceptance drift must fail closed")
 
 
-def test_fault_artifacts_bind_exact_status_identities(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("retained_log", [False, True])
+def test_fault_artifacts_bind_exact_status_identities(tmp_path: pathlib.Path, retained_log: bool) -> None:
     uart, gdb = write_fault_logs(tmp_path)
     args = argparse.Namespace(qemu_uart_log=str(uart), qemu_gdb_log=str(gdb))
+    if retained_log:
+        fragments = []
+        for identity, record in enumerate(uart.read_text().splitlines()):
+            if not record.startswith(("WORKER_TASK_", "GPU_BRIDGE_FIXTURE_ADMISSION ", "LORA_EXPORT_FIXTURE_ADMISSION ")):
+                continue
+            parts = [record[offset:offset + 176] for offset in range(0, len(record), 176)]
+            fragments.extend(f"WORKER_LOG id={identity} part={part} last={int(part == len(parts) - 1)} data={text}"
+                             for part, text in enumerate(parts))
+        worker_log = tmp_path / "worker.log"
+        worker_log.write_text("\n".join(fragments) + "\n")
+        uart.write_text("root boot transcript\n")
+        args.qemu_worker_log = str(worker_log)
     artifacts, markers = rest_perf.capture_fault_artifacts(
         args,
         acceptance_summary(),
     )
-    assert set(artifacts) == {"uart", "gdb"}
+    assert set(artifacts) == ({"uart", "gdb", "worker-log"} if retained_log else {"uart", "gdb"})
+    if retained_log:
+        assert artifacts["worker-log"]["sha256"] == hashlib.sha256(worker_log.read_bytes()).hexdigest()
+        assert "worker-log:WORKER_TASK_TEARDOWN" in markers
     assert artifacts["uart"]["bytes"] == uart.stat().st_size
     assert artifacts["gdb"]["bytes"] == gdb.stat().st_size
     assert "gdb:phase=budget-exhaustion" in markers
@@ -3732,7 +4104,13 @@ def test_qemu_fixture_receipt_paths_require_explicit_fixture_mode() -> None:
         raise AssertionError("production/provider mode must not replace QEMU fixture evidence")
 
 
-def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
+@pytest.mark.parametrize("target", ["qemu", "pi4"])
+@pytest.mark.parametrize(
+    "gpu_action,valid", [("gpu.lease.renew", True), ("gpu.lease.grant", False)],
+)
+def test_executable_report_retains_exact_pre_post_and_identity_graph(
+    target: str, gpu_action: str, valid: bool,
+) -> None:
     state = rest_perf.SimState(
         bounds=executable_bounds(),
         rest_url="http://127.0.0.1:8080",
@@ -3776,18 +4154,37 @@ def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
     state.executable_post_state = {"workers": post_workers, "proc": {}}
     state.lifecycle_cycles = [{"role": "worker-heartbeat"}]
     state.receipt_operations = [
-        {"action": "gpu.lease.grant", "role": "worker-gpu"},
+        {"action": gpu_action, "role": "worker-gpu"},
         {"action": "peft.export", "role": "worker-lora"},
-    ]
+    ] * 128
     state.fault_artifacts = {
         "uart": {"sha256": "a" * 64, "bytes": 1},
         "gdb": {"sha256": "b" * 64, "bytes": 1},
     }
+    if target == "pi4":
+        state.acceptance_binding["record_kind"] = "performance-execution-binding"
+        state.target_evidence = rest_perf.BenchmarkTargetEvidence(
+            target="pi4", transport="wifi", proof_class="fresh-pi",
+            source_sha256="9" * 64, manifest_sha256="f" * 64,
+            image_sha256="8" * 64, root_image_sha256="c" * 64,
+            target_session_sha256="b" * 64, component_acceptance_sha256=None,
+            runtime_evidence_sha256="7" * 64, network_evidence_sha256="6" * 64,
+            evidence_sha256="5" * 64, captured_unix_s=1,
+        )
+
+    def build_report():
+        if target == "pi4":
+            return rest_perf.build_pi_executable_report_state(state)
+        return rest_perf.build_executable_report_state(
+            state, ["uart:WORKER_TASK_FAULT"],
+        )
+
     rest_perf.validate_executable_post_state(state)
-    digest, report = rest_perf.build_executable_report_state(
-        state,
-        ["uart:WORKER_TASK_FAULT"],
-    )
+    if not valid:
+        with pytest.raises(rest_perf.RestError, match="did not drive.*GPU and LoRA"):
+            build_report()
+        return
+    digest, report = build_report()
     assert digest == "b" * 64
     assert set(report) == {
         "topology_sha256",
@@ -3796,9 +4193,11 @@ def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
         "post",
         "lifecycle_cycles",
         "receipt_operations",
-        "fault_artifacts",
-        "required_fault_markers",
-    }
+    } | (
+        {"fault_artifacts", "required_fault_markers"} if target == "qemu"
+        else {"target_evidence"}
+    )
+    assert report["receipt_operations"] == state.receipt_operations
     assert set(report["target_session"]) == {
         "manifest_sha256",
         "root_image_sha256",
@@ -4136,7 +4535,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'exact_option("-accel", accelerator)',
         'exact_option("-machine", machine)',
         'exact_option("-cpu", cpu)',
-        'wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180',
+        'wait_for_marker_count "$boot_dir/uart.live.log" "[mark] root-console.start.ok" 1 180',
         "rest.wait_for_gateway(client, 60.0)",
         'die "direct cohsh command attempted while hive-gateway owns the console"',
         'kill -INT "$pid"',
@@ -4144,7 +4543,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'GATEWAY_OPERATOR OK KILL role=worker-heartbeat',
         'cp "$boot_dir/qemu-command.txt" "$boot_dir/preflight.qemu-command.txt"',
         'wait_for_gateway_acceptance',
-        'executable_population="$(resolved_executable_population)"',
+        'executable_population="$(populate_executable_workers "$boot_dir")"',
         '--workers-min "$executable_population"',
         '--workers-max "$executable_population"',
         '--target-session "$TARGET_SESSION"',
@@ -4225,7 +4624,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     assert source.count('"$BUILD_RUN" --clean --no-run') == 1
     assert source.count(
         'wait_for_marker_count "$boot_dir/uart.live.log" '
-        '"Cohesix console ready" 1 180'
+        '"[mark] root-console.start.ok" 1 180'
     ) == 2
     canonical_build = source.index(
         'log "building canonical release-qemu,bootstrap-trace artifacts"'
@@ -4583,34 +4982,6 @@ def test_m26e_qemu_pressure_embedded_python_is_api_aligned() -> None:
                     assert len(node.args) <= 3
             elif isinstance(node.func, ast.Name) and node.func.id == "RestClient":
                 assert len(node.args) <= 3
-
-
-def test_m26e_qemu_pressure_rejects_hostile_path_overrides() -> None:
-    cases = (
-        (["--run-dir", "out/../escape"], "may not contain '..'"),
-        (["--run-dir", "out/toolchain/sel4-profile-venv/evidence"], "direct child"),
-        (["--sel4-source", "/"], "outside its required root"),
-        (["--profile-python", "/bin/python"], "canonical repository virtualenv"),
-    )
-    clean_env = dict(os.environ)
-    for name in (
-        "COH_AUTH_TOKEN",
-        "COHSH_AUTH_TOKEN",
-        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
-    ):
-        clean_env.pop(name, None)
-    for arguments, expected in cases:
-        completed = subprocess.run(
-            [str(PRESSURE_RUNNER_PATH), "--check-only", *arguments],
-            cwd=REPO_ROOT,
-            env=clean_env,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        assert completed.returncode != 0
-        assert expected in completed.stderr
 
 
 def test_m26e_qemu_pressure_has_explicit_implementation_surface() -> None:

@@ -1825,6 +1825,14 @@ where
         !self.rx.is_empty() || !self.line.is_empty()
     }
 
+    /// Whether Dispatch can consume another byte without waiting for input.
+    ///
+    /// A retained partial line still suppresses unsolicited console mirroring,
+    /// but cannot reserve Network service while the operator is idle.
+    pub(crate) fn input_bytes_pending(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
     /// HAL scheduling contract consumed by this port.
     #[must_use]
     pub fn driver_task_contract(&self) -> DriverTaskContract {

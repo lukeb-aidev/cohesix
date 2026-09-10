@@ -12,7 +12,9 @@ import json
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -273,7 +275,7 @@ def test_qemu_build_orders_worker_identity_before_root_and_keeps_archive_separat
     assert "worker-lora" not in rootfs_block
     assert "cohesix/artifacts/cohesix-worker-images.cpio" in script
     assert "cohesix/artifacts/cohesix-worker-image-manifest.json" in script
-    assert "has_root_task_feature release-qemu" in script
+    assert 'has_root_task_feature "release-qemu"' in script
     assert "has_root_task_feature bootstrap-trace" in script
     for feature in (
         "nine-door-runtime/qemu-evidence",
@@ -285,12 +287,69 @@ def test_qemu_build_orders_worker_identity_before_root_and_keeps_archive_separat
         assert feature in script
 
 
+@pytest.mark.parametrize("root_features", [
+    "release-qemu", "release-qemu,bootstrap-trace", "dev-virt", "cohesix-dev",
+    "net-backend-virtio", "kernel",
+])
+def test_qemu_component_transport_does_not_require_tracing(
+    root_features: str,
+) -> None:
+    """Transport follows Cargo; external GDB probes require trace/dev selection."""
+    manifest = tomllib.loads((ROOT / "apps/root-task/Cargo.toml").read_text())
+    feature_map = manifest["features"]
+    selected = set(root_features.split(","))
+    pending = list(selected)
+    while pending:
+        for feature in feature_map.get(pending.pop(), []):
+            if feature not in selected:
+                selected.add(feature)
+                pending.append(feature)
+    expected_features = set()
+    if "net-backend-virtio" in selected:
+        expected_features.add("console-network-runtime/direct-virtio")
+        probe_selectors = {"bootstrap-trace", "dev-virt", "cohesix-dev"}
+        if set(root_features.split(",")) & probe_selectors:
+            expected_features.update({
+                "nine-door-runtime/qemu-evidence",
+                "console-network-runtime/qemu-evidence",
+                "worker-heart/qemu-evidence",
+                "worker-gpu/qemu-evidence",
+                "worker-lora/qemu-evidence",
+            })
+    script = (ROOT / "scripts/cohesix-build-run.sh").read_text(encoding="utf-8")
+    selector = script.split("has_root_task_feature() {", 1)[1].split(
+        "\ndescribe_file()", 1,
+    )[0]
+    build = script.split("    SEL4_BUILD_ARGS=(build", 1)[1].split(
+        "    ROOT_TASK_BUILD_ARGS=(build", 1,
+    )[0]
+    transport = script.split('    NET_BACKEND="rtl8139"', 1)[1].split(
+        '    if [[ -n "$ROOT_TASK_FEATURES" ]]', 1,
+    )[0]
+    result = subprocess.run(
+        ["bash", "-c", "has_root_task_feature() {" + selector + "\n"
+         "log() { :; }\nROOT_TASK_FEATURES=$1\nCARGO_TARGET=aarch64-unknown-none\n"
+         "PROFILE_ARGS=(); SEL4_COMPONENT_PACKAGES=()\n"
+         'NET_BACKEND="rtl8139"' + transport + "\n"
+         "SEL4_BUILD_ARGS=(build" + build + "\n"
+         'printf "%s\\n" "${SEL4_BUILD_ARGS[@]}"', "test", root_features],
+        text=True, capture_output=True, check=True,
+    )
+    arguments = result.stdout.splitlines()
+    actual = {
+        feature
+        for index, argument in enumerate(arguments) if argument == "--features"
+        for feature in arguments[index + 1].split(",")
+    }
+    assert actual == expected_features
+
+
 def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:
     runtime = (ROOT / "apps" / "worker-heart" / "src" / "target_runtime.rs").read_text(
         encoding="utf-8"
     )
     symbols = (
-        "cohesix_worker_qemu_evidence_control_handler",
+        "cohesix_worker_qemu_evidence_call_dispatch",
         "cohesix_worker_qemu_evidence_standard_fault",
         "cohesix_worker_qemu_evidence_timeout_spin",
     )
@@ -306,8 +365,11 @@ def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:
         assert '#[cfg(feature = "qemu-evidence")]' in prefix
     assert (
         '#[cfg(feature = "qemu-evidence")]\n'
-        "    cohesix_worker_qemu_evidence_control_handler();"
+        "        cohesix_worker_qemu_evidence_call_dispatch();"
     ) in runtime
+    call_hook = runtime.index("        cohesix_worker_qemu_evidence_call_dispatch();")
+    assert runtime.index("let sequence = match validate_call(") < call_hook
+    assert call_hook < runtime.index("let (status, terminal) = match operation")
     hook_block = runtime.split("/// Stable external-QEMU evidence hook", maxsplit=1)[1]
     hook_block = hook_block.split("/// Enter one isolated Worker", maxsplit=1)[0]
     assert "sel4_sys" not in hook_block

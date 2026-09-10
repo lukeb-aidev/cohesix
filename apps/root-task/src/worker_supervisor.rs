@@ -549,7 +549,8 @@ pub trait WorkerKernelBackend {
         bundle: Self::Bundle,
     ) -> Result<WorkerResumeDisposition, WorkerSupervisorError>;
 
-    /// Unbind the one-shot bootstrap SC after READY proves the child is blocked.
+    /// Unbind the bootstrap SC and install passive-call fault containment
+    /// before granting READY or executable donation authority.
     fn finish_ready(&mut self, bundle: Self::Bundle) -> Result<(), WorkerSupervisorError>;
 
     /// Publish one durable control and enqueue its exact synchronous Call.

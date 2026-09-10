@@ -706,7 +706,14 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                     model_id: model,
                     registry_root,
                 };
-                let result = peft::activate_model(&mut client, policy, &spec, &mut audit);
+                let result = peft::activate_model(policy, &spec, &mut audit).and_then(|()| {
+                    publish_gpu_registry(
+                        &mut client,
+                        Some(&spec.registry_root),
+                        args.connect.mock,
+                        &mut audit,
+                    )
+                });
                 handle_result(result, audit, "PEFT")
             } else {
                 let mut client = match connect_access(&args.connect, policy, role, ticket) {
@@ -727,7 +734,14 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                     model_id: model,
                     registry_root,
                 };
-                let result = peft::activate_model(&mut client, policy, &spec, &mut audit);
+                let result = peft::activate_model(policy, &spec, &mut audit).and_then(|()| {
+                    publish_gpu_registry(
+                        &mut client,
+                        Some(&spec.registry_root),
+                        args.connect.mock,
+                        &mut audit,
+                    )
+                });
                 handle_result(result, audit, "PEFT")
             }
         }
@@ -750,7 +764,14 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                     }
                 };
                 let spec = peft::PeftRollbackSpec { registry_root };
-                let result = peft::rollback_model(&mut client, policy, &spec, &mut audit);
+                let result = peft::rollback_model(policy, &spec, &mut audit).and_then(|()| {
+                    publish_gpu_registry(
+                        &mut client,
+                        Some(&spec.registry_root),
+                        args.connect.mock,
+                        &mut audit,
+                    )
+                });
                 handle_result(result, audit, "PEFT")
             } else {
                 let mut client = match connect_access(&args.connect, policy, role, ticket) {
@@ -768,7 +789,14 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                     }
                 };
                 let spec = peft::PeftRollbackSpec { registry_root };
-                let result = peft::rollback_model(&mut client, policy, &spec, &mut audit);
+                let result = peft::rollback_model(policy, &spec, &mut audit).and_then(|()| {
+                    publish_gpu_registry(
+                        &mut client,
+                        Some(&spec.registry_root),
+                        args.connect.mock,
+                        &mut audit,
+                    )
+                });
                 handle_result(result, audit, "PEFT")
             }
         }

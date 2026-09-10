@@ -179,7 +179,8 @@ mod tests {
             "cohesix-worker-integration-evidence/v1"
         );
         assert_eq!(contract.maximum_live_tasks, 256);
-        assert_eq!(contract.shard_bits, 6);
+        // PRODUCTION_PROFILES declares the common 8-bit / 256-shard namespace.
+        assert_eq!(contract.shard_bits, 8);
         assert!(contract.legacy_worker_alias);
         assert_eq!(
             contract.canonical_telemetry_template,

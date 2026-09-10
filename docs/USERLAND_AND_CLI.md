@@ -740,7 +740,7 @@ then local-seat input first. During an authenticated session it gives bounded
 TCP response flushing priority while continuing to service both physical
 inputs and fatal output.
 
-The selected internal contract is manifest schema 1.17 and console ABI/READY
+The selected internal contract is manifest schema 1.18 and console ABI/READY
 v6. Root may authorize one through eight already-ordered response lines in one
 binary `SendBatch` control, but the child still emits one ordinary
 length-prefixed line per replenishment-bounded Session unit. For one exact
@@ -765,7 +765,7 @@ fault remains terminal and its reserved timeout capability/resource stays
 accounted. These scheduling details are likewise invisible to clients.
 
 Full host compatibility is not yet accepted. The fixed one-socket target matrix
-must return HELP 12 total lines, NETSTATS 16, first-call selected-QEMU SMP
+must return HELP 16 total lines, NETSTATS 20, first-call selected-QEMU SMP
 activity 17, and CACHELOG 10 for count nine, then PING and QUIT without
 reconnect, using the preexisting client response timeout. CACHELOG captures one
 immutable bounded snapshot under a single short lock hold; later live-ring
@@ -986,6 +986,13 @@ proof, and package verification is not execution evidence. The compatibility
 `/worker/<id>/telemetry` path exists only when the generated profile enables the
 legacy alias.
 
+Fleet discovery in SwarmUI and the benchmark harness enumerates the bounded
+shard address space from generated `shard_bits`, then reads each
+`/shard/<label>/worker` directory and the published Workers' telemetry. Empty
+shards produce no Workers. The aggregate `ls /shard` reply is a bounded view of
+up to 64 distinct active shard labels; it is not a complete fleet index.
+Per-shard read failures and malformed or misplaced Worker records remain errors.
+
 ### Telemetry file upload
 
 `telemetry push` accepts a non-empty local file with one of these extensions:
@@ -1027,6 +1034,13 @@ includes, macros, or runtime downloads.
 - `EXPECT SUBSTR <text>` and `EXPECT NOT <text>` apply case-sensitive checks
   to the last response line.
 - `WAIT <ms>` is a local delay capped at 2000 ms; it sends no target command.
+- `WAIT <ms> TAIL <path> SUBSTR <text>` polls authenticated, completed `TAIL`
+  data for a case-sensitive substring. The same 2000 ms bound limits polling;
+  each read retains the transport response timeout. A refusal or transport
+  error fails immediately. It never repeats a mutation, and an acknowledgement
+  alone cannot satisfy the data condition. Subsequent `EXPECT` statements use
+  the final read response. Use this after asynchronous admission before testing
+  READY-only operations, with a ticket that permits reading the selected path.
 - A script contains at most 256 non-empty statements.
 
 Assertions apply to the most recent command response recorded by `cohsh`. A
@@ -1077,8 +1091,8 @@ inputs and regenerate every affected output.
 
 <!-- coh-rtc:cohsh-policy:start -->
 ### cohsh client policy (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
-- `policy.sha256`: `89329729e1e8b2664e4255d6dd8e35b742a6655dfbe284d7bf8b1440b54758b1`
+- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
+- `policy.sha256`: `26692e133973442788ca5e190ba7f2208a87ff6fbccb8eeb6513118989c11a9e`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `24`
 - `cohsh.tail.poll_ms_default`: `1000`
@@ -1095,7 +1109,7 @@ inputs and regenerate every affected output.
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._
+_Generated from `configs/root_task.toml` (sha256: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`)._
 <!-- coh-rtc:cohsh-policy:end -->
 
 </details>
@@ -1105,7 +1119,7 @@ _Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff
 
 <!-- coh-rtc:cohsh-client:start -->
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
+- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
 - `worker.task_abi_schema`: `worker-task-abi/v2`
 - `worker.task_abi_version`: `2`
 - `worker.observation_schema`: `cohesix-worker-observation/v1`
@@ -1140,7 +1154,7 @@ _Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._
+_Generated from `configs/root_task.toml` (sha256: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`)._
 <!-- coh-rtc:cohsh-client:end -->
 
 </details>
@@ -1153,7 +1167,7 @@ _Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff
 - `help`
 - `bi`
 - `caps [mcs]`
-- `smp [activity|mcs|dump]`
+- `smp [activity|mcs|poll-time|dump]`
 - `mem`
 - `ping`
 - `test`
@@ -1207,8 +1221,8 @@ _Generated by coh-rtc (sha256: `1b869521f68c26d43c1ad278fbc557f2442e438ab12d443a
 
 <!-- coh-rtc:coh-policy:start -->
 ### coh policy defaults (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
-- `policy.sha256`: `04450bfefeaa8bb82de1515a27efc3e58fcbf02b0a3181469f026e311ab17156`
+- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
+- `policy.sha256`: `d112815438a28bd93ac1f1c9c3f37278861fda0490c71765054f9f6f40b4e21b`
 - `coh.worker.task_abi_schema`: `worker-task-abi/v2`
 - `coh.worker.task_abi_version`: `2`
 - `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
@@ -1276,8 +1290,8 @@ _Generated by coh-rtc (sha256: `8ff5f5a73c1e4d454f1263e3235d01d2bde35adb6553bd57
 
 <!-- coh-rtc:cohesix-py:start -->
 ### Cohesix Python defaults (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
-- `cohesix.defaults.sha256`: `cb980eff7d965cacfea156a2c86a4fc91c9400c86c865d76746983c06dc98d06`
+- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
+- `cohesix.defaults.sha256`: `3baba160393d41541b5a0c553094481e5f56a20c0d04a63f3a03446e5582a7f1`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `console.max_line_len`: `2304`
@@ -1295,7 +1309,7 @@ _Generated by coh-rtc (sha256: `8ff5f5a73c1e4d454f1263e3235d01d2bde35adb6553bd57
 - `coh.run.breadcrumb.max_line_bytes`: `512`
 - `coh.peft.import.registry_root`: `out/model_registry`
 
-_Generated by coh-rtc (sha256: `7a0881c48742bbecdb43b039ae231ac5a4a2d7950f801e75aa2e9641981e69f2`)._
+_Generated by coh-rtc (sha256: `1cd46545bd9c41db82fab6183a446296dc3f114ce8a544d4ba7766d55b07dd13`)._
 <!-- coh-rtc:cohesix-py:end -->
 
 </details>
@@ -1305,8 +1319,8 @@ _Generated by coh-rtc (sha256: `7a0881c48742bbecdb43b039ae231ac5a4a2d7950f801e75
 
 <!-- coh-rtc:swarmui-defaults:start -->
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
-- `swarmui.defaults.sha256`: `28da60241bc55a2a4be65819698c21cc6cd6d30db4bf57a7a6f37e7e39bcb03e`
+- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
+- `swarmui.defaults.sha256`: `eb6eef8ba8b0348508f02d032f012f6fb5792c1a9acb9f2e2f3e8dce08bae719`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -1340,7 +1354,7 @@ _Generated by coh-rtc (sha256: `7a0881c48742bbecdb43b039ae231ac5a4a2d7950f801e75
 - `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`128`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._
+_Generated from `configs/root_task.toml` (sha256: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`)._
 <!-- coh-rtc:swarmui-defaults:end -->
 
 </details>

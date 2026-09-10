@@ -628,6 +628,14 @@ pub(crate) enum NamespaceTransportFailureStage {
     ResponseFrame,
 }
 
+impl NamespaceTransportFailureStage {
+    /// A recovered Call promises a later durable root-fault record. Local
+    /// revocation must consume that record before retiring the generation.
+    pub(crate) const fn requires_fault_handoff(self) -> bool {
+        matches!(self, Self::RecoveryFault | Self::RecoveryTimeout)
+    }
+}
+
 /// Bounded scalar evidence retained before terminal generation revocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NamespaceTransportFailureEvidence {
@@ -1263,6 +1271,28 @@ mod tests {
         NAMESPACE_RUNTIME_INIT_DESCRIPTOR_BYTES, NAMESPACE_RUNTIME_INIT_VERSION,
         NAMESPACE_SERVICE_ENDPOINT_SLOT, NAMESPACE_SERVICE_REPLY_SLOT,
     };
+
+    #[test]
+    fn recovered_calls_require_the_promised_fault_handoff() {
+        use NamespaceTransportFailureStage::*;
+        for stage in [RecoveryFault, RecoveryTimeout] {
+            assert!(stage.requires_fault_handoff());
+        }
+        for stage in [
+            ManualRevoke,
+            Exchange,
+            RequestContract,
+            CallArm,
+            Call,
+            RecoveryBookkeeping,
+            ReplyMetadata,
+            ReplySequence,
+            ChildRejected,
+            ResponseFrame,
+        ] {
+            assert!(!stage.requires_fault_handoff());
+        }
+    }
 
     struct PreparedMockExchange {
         corrupt_sequence: bool,

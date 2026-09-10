@@ -84,6 +84,8 @@ Env overrides:
   COHESIX_QEMU_CROSS_HOST_REPLAY (0|1; default: 0)
                         Allow Linux to replay immutable Mac-built guest inputs;
                         valid only with --launch-existing and a rebound record
+  COHESIX_QEMU_CAPTURE_DIR (private capture root; optional for TCP launches)
+  COHESIX_QEMU_TCPDUMP (tcpdump executable supporting -r -; required with capture)
   COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_kvm_production|
                         qemu_smp_diagnostic; validates an explicitly selected
                         build tree against that contract)
@@ -554,6 +556,17 @@ print_tcp_summary() {
     log "TCP smoke: printf \"hi\" | nc -v 127.0.0.1 ${smoke_port}"
 }
 
+run_qemu_executable() {
+    if [[ -n "${COHESIX_QEMU_CAPTURE_DIR:-}" && "$TRANSPORT" == "tcp" ]]; then
+        [[ -n "${COHESIX_QEMU_TCPDUMP:-}" ]] || \
+            fail "COHESIX_QEMU_CAPTURE_DIR requires COHESIX_QEMU_TCPDUMP"
+        exec python3 "$SCRIPT_DIR/lib/qemu_launch_artifacts.py" capture \
+            --root "$COHESIX_QEMU_CAPTURE_DIR" --tcpdump "$COHESIX_QEMU_TCPDUMP" \
+            -- "$QEMU_BIN" "$@"
+    fi
+    exec "$QEMU_BIN" "$@"
+}
+
 run_qemu_attempt() {
     local smoke_port="$1"
     local log_file="$2"
@@ -584,7 +597,7 @@ run_qemu_attempt() {
     mkfifo "$fifo_path"
     tee "$log_file" < "$fifo_path" &
     tee_pid=$!
-    "$QEMU_BIN" "${QEMU_ARGS[@]}" > "$fifo_path" 2>&1 &
+    run_qemu_executable "${QEMU_ARGS[@]}" > "$fifo_path" 2>&1 &
     QEMU_PID=$!
     trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
 
@@ -751,7 +764,7 @@ launch_qemu_artifacts() {
         if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
             QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
         fi
-        exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+        run_qemu_executable "${QEMU_ARGS[@]}"
     fi
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
@@ -1252,10 +1265,14 @@ PY
         "$SEL4_BUILD_DIR/kernel/gen_headers/plat/platform_gen.h"
 
     log "Regenerating target-qualified Python projection contracts"
+    local python_qemu_profile="$CANONICAL_QEMU_PROFILE"
+    if [[ "$SEL4_PROFILE" == "$CANONICAL_QEMU_KVM_PROFILE" ]]; then
+        python_qemu_profile="$CANONICAL_QEMU_KVM_PROFILE"
+    fi
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
         "$PROJECT_ROOT/configs/root_task.toml" \
         --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
-        --profile qemu_smp_production \
+        --profile "$python_qemu_profile" \
         --out "$GENERATED_CONFIG_DIR/cohesix_python_qemu_smp_production.json"
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
         "$PROJECT_ROOT/configs/root_task_pi4_uboot_aarch64.toml" \
@@ -1315,9 +1332,16 @@ PY
     for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
         SEL4_BUILD_ARGS+=(-p "$pkg")
     done
-    if has_root_task_feature release-qemu && has_root_task_feature bootstrap-trace; then
-        SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,console-network-runtime/direct-virtio,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
-        log "Enabling external QEMU/GDB service and Worker evidence symbols"
+    if [[ "$NET_BACKEND" == "virtio" ]]; then
+        SEL4_BUILD_ARGS+=(--features "console-network-runtime/direct-virtio")
+        # External child fault probes are opt-in through tracing or a dev
+        # bundle, separate from the root kernel's baseline diagnostics.
+        if has_root_task_feature bootstrap-trace \
+            || has_root_task_feature dev-virt \
+            || has_root_task_feature cohesix-dev; then
+            SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
+            log "Enabling external QEMU/GDB service and Worker evidence symbols"
+        fi
     fi
 
     ROOT_TASK_BUILD_ARGS=(build --target "$CARGO_TARGET")
@@ -1652,6 +1676,10 @@ PY
         --net-backend "$NET_BACKEND" >/dev/null || \
         fail "could not bind immutable QEMU launch artifacts"
     log "Bound immutable QEMU launch artifacts: $LAUNCH_ARTIFACT_RECORD"
+
+    python3 "$PROJECT_ROOT/scripts/ci/qemu_artifact.py" stage-release-configs \
+        --generated-dir "$GENERATED_CONFIG_DIR" --artifact-dir "$OUT_DIR_ABS" || \
+        fail "could not retain generated release configurations"
 
     launch_qemu_artifacts
 }

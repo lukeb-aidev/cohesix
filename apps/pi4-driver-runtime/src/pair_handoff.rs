@@ -32,6 +32,7 @@ fn route_code(route: RuntimeNotificationRoute) -> u8 {
     }
 }
 
+#[cfg(any(target_os = "none", test))]
 fn publish(mut record: DriverRuntimePairHandoff) {
     let ring = super::RuntimeRingWindow::local();
     let base = DRIVER_RUNTIME_PAIR_HANDOFF_OFFSET;
@@ -53,6 +54,11 @@ fn publish(mut record: DriverRuntimePairHandoff) {
     super::driver_task_shared_store_barrier();
     super::driver_task_shared_clean_range(super::DRIVER_TASK_RING_VADDR + base, 44);
 }
+
+// Host library builds have neither a mapped driver ring nor the explicit unit
+// test buffer. Keep the diagnostic state available without physical publication.
+#[cfg(not(any(target_os = "none", test)))]
+fn publish(_record: DriverRuntimePairHandoff) {}
 
 /// Each stage is retained once, so stalled receives/owner loops cannot turn
 /// this diagnostic into a log or polling workload. Neither a failed write nor

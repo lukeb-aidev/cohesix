@@ -240,10 +240,23 @@ generation. A bound supervisor-wake notification coalesces the generated
 heartbeat/GPU/LoRA completion bits with the critical handoff bit. The
 supervisor validates the entire received mask, drains durable child records,
 then drains fault records before root-control records when the critical bit is
-present. The three fault mailboxes are keyed by the generated temporal Worker
-ordinal, not the role-local ABI slot: the current Heartbeat, GPU, and LoRA
-identities each use role-local slot zero and therefore cannot safely index a
-shared mailbox array by `identity.slot`.
+present. The 256 fault mailboxes are keyed by the generated temporal Worker
+ordinal. Each role has its own slot-zero identity, so `identity.slot` alone
+cannot index the shared mailbox array. An admitted endpoint badge is
+`attach_badge_base + (((ordinal + 1) << epoch_bits) | lease_epoch)`;
+the selected 1/127/128 role population gives the first Heartbeat, GPU and LoRA
+instances lane numbers 1, 2 and 129. This preserves distinct instance authority
+within the generated lease-epoch bound.
+
+The QEMU Worker-supervisor and GPU-executor SCs use all ten refill entries
+available in each existing 256-byte object: the selected seL4 16 AArch64 layout has a 96-byte
+header and 16-byte refills. Repeated control and READY waits otherwise split
+the budget into fragments that a two-entry queue repeatedly defers. This
+changes no CPU allocation: the supervisor retains `3000/10000 us`, core 1,
+priority 210; the GPU executor retains `5000/10000 us`, core 2, priority 80.
+Both retain terminal timeout containment. The Pi profile remains at its
+existing refill setting. Kernel timeout consumption accumulates
+since the previous accounting reset; it is not a single-turn duration.
 
 The fixed `worker-task-abi/v2` outcome field has the exact values
 `NotApplicable=0`, `Confirmed=1`, `Rejected=2`, and `Stale=8`. The explicit
@@ -292,6 +305,29 @@ root-control donation chain after one bootstrap activation. Workers run only
 on two generated active executors: GPU on core 2, LoRA plus Heartbeat on core
 3. Each executor selects from a fixed bounded fair queue and donates its SC to
 one exact instance at a time.
+
+`WORKER_TASK_ADMISSION` reports the temporary, generated bootstrap SC
+(400/10,000 us in the selected profiles). `WORKER_TASK_READY` is emitted only
+after the backend successfully unbinds that SC. Evidence collectors validate
+the admission against the bootstrap reservation and require that exact READY
+identity before representing the Worker's steady-state SC as 0/0. Schema 1.18
+makes `worker_runtime.scheduling.bootstrap_timeout_policy = "natural-postpone"`
+explicit: startup may span reservation refills until the unchanged five-second
+READY deadline. Standard faults remain terminal throughout startup. After
+unbinding the bootstrap SC, the backend installs the generated passive Worker's
+`return-error` timeout endpoint before granting READY or admitting a donated
+Call. Failure of either transition step leaves admission closed and the READY
+deadline armed. Raw
+admission bytes remain in the evidence; READY never grants an autonomous SC.
+
+After a Worker fault, root-fault suspends the child and releases any blocked
+executor with the typed recovery Reply. The executor validates that Reply and
+acknowledges its exact request sequence before teardown can delete recovery
+metadata or revoke the generation's objects. Until then, the existing fault
+mailbox retains the record and the supervisor defers it through its bounded
+drain. A fault without a blocked donor needs no acknowledgement. This closes
+the cross-core interval between publishing a recovery Reply and consuming it;
+no additional scheduling context, budget, queue or device authority is added.
 
 `SchedControl` remains root-only. Active scheduling contexts bind to TCBs, not
 notifications. IRQ/locality-bound drivers, autonomous drains, the
@@ -390,13 +426,18 @@ generation, authenticated connection, and nonzero control sequence and records
 control-complete without output-drained. Bare physical idle, an unbacked deadline,
 recovery, containment, quarantine, reboot, and operator-owned cuts grant no
 causal wait authority.
-The selected timeout policy for root control and the active console child is
-`NaturalPostpone`: exhausting the current refill postpones execution until a
-valid replenishment. Their standard fault endpoints remain installed and
-terminal; generated timeout capability identities and resources remain
+Root control, the active console child, root-fault, both supervisors, and both
+Worker executors select `NaturalPostpone`: exhausting the current refill
+postpones execution until a valid replenishment. These persistent service loops
+retain bounded work across preemption, including a blocking syscall that has
+not yet been processed. Their SC reservations limit CPU use; they are not
+per-operation or lifetime deadlines. Standard fault endpoints remain installed
+and terminal. Generated timeout capability identities and resources remain
 reserved and accounted even though they are not installed as TCB timeout
-handlers. This policy does not change client deadlines, retries, console
-grammar, or fault authority.
+handlers. Root-emergency retains fail-stop, passive Workers retain return-error
+and containment, and passive NineDoor retains its one-resume recovery contract.
+Client deadlines, receipt liveness, queue bounds, admission/WCET checks, and
+performance gates remain independently enforced.
 
 The selected Pi profile applies the same kernel mechanism to the resumable
 serial, USB, HDMI, GENET, CYW43, and SDIO physical runtimes. Their active SCs remain
@@ -710,8 +751,11 @@ fence, while runnable decoded or buffered `Input` retains it. Queued USB bytes
 behind the unchanged parser-readiness/recovery gate are `UsbServiceDebt`, not
 runnable input: they remain retained, get the bounded LocalSeat opportunity,
 and cannot indefinitely exclude independent HDMI and Network after Dispatch.
-Serial input, an active parser chunk, and a partial command retain their existing
-precedence. The transient-publication
+Queued serial input and an active parser chunk retain their existing
+precedence. After Dispatch consumes those bytes, an unfinished serial or USB
+line waits for another keystroke without retaining the Network fence. Its text
+and presentation protection remain intact; physical response tails retain their
+separate fence. The transient-publication
 probe preserves that type and may carry passive USB debt only because every
 minted credit installs the complete mandatory operator rotor before Network
 re-entry; real Input still fences. A terminal-return shortcut remains strict.
@@ -1029,7 +1073,8 @@ ordinary service turn between bursts.
 
 On the deferred physical WiFi path, accepting a partial USB command line routes
 one bounded `Dispatch -> Display -> Serial` presentation successor before
-Network, retaining the exact CYW43 parent and operator fence. A pending reboot
+Network for newly consumed bytes, retaining the exact CYW43 parent. A retained
+partial line alone cannot repeat this shortcut or reserve another operator turn. A pending reboot
 acknowledgement or physical response tail keeps immediate Serial priority and
 leaves the HDMI echo queued. This is presentation ordering, not a new USB,
 display, child, or scheduling budget.

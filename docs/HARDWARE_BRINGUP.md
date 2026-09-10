@@ -563,7 +563,12 @@ reboot helper and additionally compares any observed asynchronous result with
 the final generation-tagged status. Before acquiring the UART for diagnostics,
 it validates the exact clean identity sidecar, canonical `cohsh`, Queen
 manifest, and `boot_v0.coh` peer inputs. It refuses to begin live evidence
-unless the sidecar's exact sealed marker is observed. The gate wrapper remains
+unless the sidecar's exact sealed marker is observed. Production Pi builds
+publish the sealed `[BUILD]` bytes through the admitted serial driver immediately
+before `Cohesix console ready` and its first prompt. This publication does not
+depend on seL4 `CONFIG_PRINTING` or a root-owned debug UART sink. Early debug
+breadcrumbs are separate diagnostics; their absence cannot waive image identity.
+The gate wrapper remains
 the canonical path for a controlled concurrent serial/pcap proof.
 Gate-proof `--normalize-only` remains safe for historical logs but cannot create
 the live admission-to-terminal link.

@@ -261,8 +261,12 @@ def load_profile_contract(
     ):
         raise CohesixError("profile contract names the wrong target")
     profile = str(data["target_profile"])
-    expected_profile = "qemu_smp_production" if target == "qemu" else "pi4_production"
-    if profile != expected_profile:
+    supported_profiles = (
+        ("qemu_smp_production", "qemu_smp_kvm_production")
+        if target == "qemu"
+        else ("pi4_production",)
+    )
+    if profile not in supported_profiles:
         raise CohesixError("profile contract names the wrong production profile")
     expected_manifest_profile = (
         "virt-aarch64" if target == "qemu" else "pi4-uboot-aarch64"

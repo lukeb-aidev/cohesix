@@ -161,7 +161,14 @@ pub mod sel4;
 pub mod sel4_view;
 
 /// Generated manifest tables and bootstrap helpers (do not edit).
-#[path = "generated/mod.rs"]
+#[cfg_attr(
+    all(test, feature = "driver-tests-pi4"),
+    path = "../tests/support/generated/pi4/mod.rs"
+)]
+#[cfg_attr(
+    not(all(test, feature = "driver-tests-pi4")),
+    path = "generated/mod.rs"
+)]
 pub mod generated;
 
 /// Root policy boundary for the isolated TCP console/network child.

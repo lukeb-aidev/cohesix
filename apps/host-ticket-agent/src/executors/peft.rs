@@ -207,10 +207,8 @@ fn execute_v2(
             let manifest =
                 confined_registry_model(&registry_root, &subject, true)?.join("manifest.toml");
             hash_file(&manifest, 8192)?;
-            let mut access = TransportAccess::new(transport, session);
             let mut audit = CohAudit::new();
             activate_model(
-                &mut access,
                 &CohPolicy::from_generated(),
                 &PeftActivateSpec {
                     model_id: subject.clone(),
@@ -219,7 +217,7 @@ fn execute_v2(
                 &mut audit,
             )?;
             Ok(format!(
-                "peft.activate model={subject} ack_lines={}",
+                "peft.activate model={subject} execution_location=host projection=pending audit_lines={}",
                 audit.lines().len()
             ))
         }
@@ -230,10 +228,8 @@ fn execute_v2(
             let manifest =
                 confined_registry_model(&registry_root, &subject, true)?.join("manifest.toml");
             hash_file(&manifest, 8192)?;
-            let mut access = TransportAccess::new(transport, session);
             let mut audit = CohAudit::new();
             rollback_model(
-                &mut access,
                 &CohPolicy::from_generated(),
                 &PeftRollbackSpec {
                     registry_root: registry_root.clone(),
@@ -248,7 +244,7 @@ fn execute_v2(
                 ));
             }
             Ok(format!(
-                "peft.rollback model={subject} ack_lines={}",
+                "peft.rollback model={subject} execution_location=host projection=pending audit_lines={}",
                 audit.lines().len()
             ))
         }
@@ -326,8 +322,8 @@ fn execute_compat_import(spec: &HostTicketSpec, config: &ExecutorConfig) -> Resu
 }
 
 fn execute_compat_activate(
-    transport: &mut dyn Transport,
-    session: &Session,
+    _transport: &mut dyn Transport,
+    _session: &Session,
     spec: &HostTicketSpec,
     config: &ExecutorConfig,
 ) -> Result<String> {
@@ -338,10 +334,8 @@ fn execute_compat_activate(
     let registry_root = path_arg(spec, "registry_root")
         .or_else(|| path_arg(spec, "registry"))
         .unwrap_or_else(|| config.registry_root.clone());
-    let mut access = TransportAccess::new(transport, session);
     let mut audit = CohAudit::new();
     activate_model(
-        &mut access,
         &CohPolicy::from_generated(),
         &PeftActivateSpec {
             model_id: model_id.clone(),
@@ -356,18 +350,16 @@ fn execute_compat_activate(
 }
 
 fn execute_compat_rollback(
-    transport: &mut dyn Transport,
-    session: &Session,
+    _transport: &mut dyn Transport,
+    _session: &Session,
     spec: &HostTicketSpec,
     config: &ExecutorConfig,
 ) -> Result<String> {
     let registry_root = path_arg(spec, "registry_root")
         .or_else(|| path_arg(spec, "registry"))
         .unwrap_or_else(|| config.registry_root.clone());
-    let mut access = TransportAccess::new(transport, session);
     let mut audit = CohAudit::new();
     rollback_model(
-        &mut access,
         &CohPolicy::from_generated(),
         &PeftRollbackSpec { registry_root },
         &mut audit,

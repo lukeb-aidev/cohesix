@@ -771,11 +771,13 @@ impl WorkerComponentEvidence {
                 if worker.state.lifecycle != LifecycleState::Ready
                     || worker.state.artifact != ArtifactState::Verified
                     || worker.state.execution_proof != expected_proof
-                    || worker.completion_sequence == 0
                     || match worker.identity.role {
+                        // A newly READY passive Heartbeat has no workload Call;
+                        // its independent lifecycle/fault proof remains required.
                         WorkerRole::WorkerHeartbeat => worker.state.receipt != ReceiptState::None,
                         WorkerRole::WorkerGpu | WorkerRole::WorkerLora => {
                             worker.state.receipt != ReceiptState::Confirmed
+                                || worker.completion_sequence == 0
                         }
                         WorkerRole::WorkerBus => true,
                     }
@@ -1518,7 +1520,11 @@ mod tests {
                     WorkerRole::WorkerBus => "bus",
                 }),
                 ready_sequence: 1,
-                completion_sequence: 2,
+                completion_sequence: if role == WorkerRole::WorkerHeartbeat {
+                    0
+                } else {
+                    2
+                },
                 endpoint_badge: 1_u64 << (role as u8),
                 fault_badge: 1_u64 << (8 + role as u8),
                 core: role as u8,
@@ -1570,6 +1576,21 @@ mod tests {
             blockers: Vec::new(),
         };
         assert!(record.validate().is_ok());
+        for role in [WorkerRole::WorkerGpu, WorkerRole::WorkerLora] {
+            let mut missing_completion = record.clone();
+            missing_completion
+                .workers
+                .iter_mut()
+                .find(|worker| worker.identity.role == role)
+                .unwrap()
+                .completion_sequence = 0;
+            assert_eq!(
+                missing_completion.validate(),
+                Err(EvidenceError::InvalidFieldMatrix(
+                    "accepted Worker role state"
+                ))
+            );
+        }
         let mut missing = record.clone();
         missing.workers.pop();
         assert_eq!(

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tomllib
+import zipfile
 
 import pytest
 
@@ -27,6 +29,50 @@ assert SPEC is not None and SPEC.loader is not None
 worker_support = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = worker_support
 SPEC.loader.exec_module(worker_support)
+
+
+@pytest.mark.parametrize("profile", [
+    "qemu_smp_production", "qemu_smp_kvm_production", "qemu_smp_diagnostic",
+])
+def test_python_wheel_inspection_binds_the_selected_native_profile(tmp_path, profile):
+    """Exercise the package inspection used on both native build hosts."""
+    wheel = tmp_path / "cohesix-0.1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for module in (
+            "__init__", "backends", "client", "evidence", "generated",
+            "orchestration", "playbooks", "receipts", "worker",
+        ):
+            archive.writestr(f"cohesix/{module}.py", "")
+        archive.writestr("cohesix-0.1.0.dist-info/METADATA", (
+            "Metadata-Version: 2.1\nName: cohesix\nVersion: 0.1.0\n"
+            "Requires-Python: >=3.11\nProvides-Extra: dev\n"
+            "Provides-Extra: integrations\nProvides-Extra: ml\n"
+        ))
+        archive.writestr("cohesix-0.1.0.dist-info/entry_points.txt", (
+            "[console_scripts]\ncohesix-playbook = cohesix.playbook_cli:main\n"
+        ))
+    qemu = tmp_path / "qemu.json"
+    pi4 = tmp_path / "pi4.json"
+    qemu.write_text(json.dumps({"target": "qemu", "target_profile": profile}))
+    pi4.write_text(json.dumps({"target": "pi4", "target_profile": "pi4_production"}))
+    source = (ROOT / "scripts/ci/python_compat_run.sh").read_text()
+    function = "inspect_wheel() {" + source.split("inspect_wheel() {", 1)[1].split(
+        "\nrun_smoke() {", 1
+    )[0]
+    output = tmp_path / "inspection.json"
+    result = subprocess.run([
+        "bash", "-c", 'interpreters=("$1"); wheel=$2; qemu_contract=$3; pi4_contract=$4\n'
+        + function + '\ninspect_wheel "$5"', "wheel-inspection-test",
+        sys.executable, str(wheel), str(qemu), str(pi4), str(output),
+    ], capture_output=True, text=True)
+    if profile == "qemu_smp_diagnostic":
+        assert result.returncode != 0
+        assert "profile contract identity mismatch" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        record = json.loads(output.read_text())["profile_contracts"]["qemu"]
+        assert record["target_profile"] == profile
+        assert record["sha256"] == hashlib.sha256(qemu.read_bytes()).hexdigest()
 
 
 @pytest.mark.parametrize("suffix", ["MacOS", "linux", "Pi4"])

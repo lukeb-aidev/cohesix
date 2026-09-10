@@ -3749,11 +3749,11 @@ mod tests {
         let agents = discover_workers_with(
             "/shard",
             |path| match path {
-                "/shard" => Ok(vec![shard.clone()]),
                 path if path == shard_root => Ok(vec![worker_id.to_owned()]),
-                other => Err(SwarmUiError::Hive(format!(
-                    "unexpected discovery path {other}"
-                ))),
+                path => {
+                    assert_ne!(path, "/shard");
+                    Ok(Vec::new())
+                }
             },
             |path| {
                 assert_eq!(path, telemetry_path);
@@ -3776,6 +3776,56 @@ mod tests {
         assert_eq!(worker.receipt, None);
         assert_eq!(worker.artifact, None);
         assert_eq!(worker.execution_proof, None);
+    }
+
+    #[test]
+    fn canonical_worker_discovery_visits_full_generated_address_space() {
+        // The eight-bit profile has more shard addresses than one 64-line
+        // directory response. Empty addresses must not become Worker records.
+        assert_eq!(generated::SWARMUI_WORKER_SHARD_BITS, 8);
+        let mut calls = Vec::new();
+        let agents = discover_workers_with(
+            "/shard",
+            |path| {
+                calls.push(path.to_owned());
+                Ok(Vec::new())
+            },
+            |path| Err(SwarmUiError::Hive(format!("unpublished Worker {path}"))),
+        )
+        .expect("empty canonical address space");
+        assert!(agents.is_empty());
+        let expected: Vec<_> = (0..256)
+            .map(|label| format!("/shard/{label:02x}/worker"))
+            .collect();
+        assert_eq!(calls, expected);
+    }
+
+    #[test]
+    fn canonical_worker_discovery_preserves_directory_refusals() {
+        let result = discover_workers_with(
+            "/shard",
+            |path| Err(SwarmUiError::Hive(format!("permission denied at {path}"))),
+            |_| Ok(Vec::new()),
+        );
+        assert!(result
+            .expect_err("directory refusal must stop discovery")
+            .to_string()
+            .contains("permission denied at /shard/00/worker"));
+        assert!(worker_shard_roots("/worker").is_err());
+    }
+
+    #[test]
+    fn canonical_worker_discovery_rejects_misplaced_worker() {
+        assert_ne!(worker_shard_label("instance-0"), "00");
+        let result = discover_workers_with(
+            "/shard",
+            |_| Ok(vec!["instance-0".to_owned()]),
+            |_| Ok(Vec::new()),
+        );
+        assert!(result
+            .expect_err("misplaced Worker must stop discovery")
+            .to_string()
+            .contains("misplaced"));
     }
 
     #[test]
@@ -4113,15 +4163,9 @@ fn discover_workers<T: cohsh_core::Secure9pTransport>(
     worker_root: &str,
 ) -> Result<Vec<SwarmUiHiveAgent>, SwarmUiError> {
     let mut listings = HashMap::new();
-    let shards = read_lines(client, worker_root)?;
-    listings.insert(worker_root.to_owned(), shards.clone());
-    for label in shards {
-        let label = label.trim();
-        if valid_shard_label(label) {
-            let path = format!("{worker_root}/{label}/worker");
-            let entries = read_lines(client, &path)?;
-            listings.insert(path, entries);
-        }
+    for path in worker_shard_roots(worker_root)? {
+        let entries = read_lines(client, &path)?;
+        listings.insert(path, entries);
     }
     discover_workers_with(
         worker_root,
@@ -4141,16 +4185,9 @@ fn discover_workers_console<T: CohshTransport + ?Sized>(
     worker_root: &str,
 ) -> Result<Vec<SwarmUiHiveAgent>, SwarmUiError> {
     let mut listings = HashMap::new();
-    let shards = list_entries_console(transport, session, worker_root)?;
-    listings.insert(worker_root.to_owned(), shards);
-    let shard_labels = listings.get(worker_root).cloned().unwrap_or_default();
-    for label in shard_labels {
-        let label = label.trim();
-        if valid_shard_label(label) {
-            let path = format!("{worker_root}/{label}/worker");
-            let entries = list_entries_console(transport, session, &path)?;
-            listings.insert(path, entries);
-        }
+    for path in worker_shard_roots(worker_root)? {
+        let entries = list_entries_console(transport, session, &path)?;
+        listings.insert(path, entries);
     }
     discover_workers_with(
         worker_root,
@@ -4179,26 +4216,13 @@ where
     L: FnMut(&str) -> Result<Vec<String>, SwarmUiError>,
     R: FnMut(&str) -> Result<Vec<String>, SwarmUiError>,
 {
-    if worker_root != "/shard" {
-        return Err(SwarmUiError::Hive(
-            "generated Worker discovery root is not canonical /shard".to_owned(),
-        ));
-    }
     let mut agents = Vec::new();
-    let mut seen_labels = HashSet::new();
     let mut seen_workers = HashSet::new();
-    for label in list(worker_root)? {
-        let label = label.trim();
-        if !valid_shard_label(label) || !seen_labels.insert(label.to_owned()) {
-            return Err(SwarmUiError::Hive(format!(
-                "invalid or duplicate Worker shard label {label:?}"
-            )));
-        }
-        let shard_root = format!("{worker_root}/{label}/worker");
+    for shard_root in worker_shard_roots(worker_root)? {
         for worker_id in list(&shard_root)? {
             let worker_id = worker_id.trim();
             if !valid_worker_component(worker_id)
-                || worker_shard_label(worker_id) != label
+                || format!("{worker_root}/{}/worker", worker_shard_label(worker_id)) != shard_root
                 || !seen_workers.insert(worker_id.to_owned())
             {
                 return Err(SwarmUiError::Hive(format!(
@@ -4273,11 +4297,23 @@ fn valid_worker_component(worker_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-fn valid_shard_label(label: &str) -> bool {
-    label.len() == 2
-        && label
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+fn worker_shard_roots(
+    worker_root: &str,
+) -> Result<impl Iterator<Item = String> + '_, SwarmUiError> {
+    if worker_root != "/shard" {
+        return Err(SwarmUiError::Hive(
+            "generated Worker discovery root is not canonical /shard".to_owned(),
+        ));
+    }
+    let bits = generated::SWARMUI_WORKER_SHARD_BITS;
+    if !(1..=8).contains(&bits) {
+        return Err(SwarmUiError::Hive(
+            "generated Worker shard_bits is outside 1..=8".to_owned(),
+        ));
+    }
+    // A bounded /shard reply is not a complete fleet index. Enumerate only
+    // generated addresses, then require actual directory and telemetry reads.
+    Ok((0..(1u16 << bits)).map(move |shard| format!("{worker_root}/{shard:02x}/worker")))
 }
 
 fn worker_shard_label(worker_id: &str) -> String {

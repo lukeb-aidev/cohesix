@@ -28,15 +28,16 @@ static LAST_CONTROL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CURRENT_CONTROL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Stable external-QEMU evidence hook reached on every admitted control turn.
+/// Stable external-QEMU evidence hook reached after validating each received call.
 ///
 /// The hook has no authority and is present only in explicitly instrumented
 /// QEMU Worker images. GDB may break here before redirecting the same child to
-/// its existing standard-fault path.
+/// its existing standard-fault path. Lifecycle calls also reach this hook, so
+/// passive Heartbeat faults require no invented autonomous work.
 #[cfg(feature = "qemu-evidence")]
 #[inline(never)]
 #[no_mangle]
-pub extern "C" fn cohesix_worker_qemu_evidence_control_handler() {
+pub extern "C" fn cohesix_worker_qemu_evidence_call_dispatch() {
     core::hint::black_box(cohesix_worker_qemu_evidence_standard_fault as *const ());
     core::hint::black_box(cohesix_worker_qemu_evidence_timeout_spin as *const ());
     core::hint::black_box(());
@@ -121,6 +122,8 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
             );
         }
         CURRENT_CONTROL_SEQUENCE.store(sequence, Ordering::Release);
+        #[cfg(feature = "qemu-evidence")]
+        cohesix_worker_qemu_evidence_call_dispatch();
         let (status, terminal) = match operation {
             WorkerCallOperation::Control => {
                 let Some(control) = read_stable_control(page) else {
@@ -371,8 +374,6 @@ fn process_control(
     init: WorkerRuntimeInit,
     control: WorkerControlRecord,
 ) -> WorkerCompletionStatus {
-    #[cfg(feature = "qemu-evidence")]
-    cohesix_worker_qemu_evidence_control_handler();
     let action = match control.worker_action() {
         Ok(action) => action,
         Err(_) => publish_fault_and_trap(

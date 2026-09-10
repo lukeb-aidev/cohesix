@@ -4181,18 +4181,22 @@ fn driver_task_ring_publish_continuation_grant(
         command.aux1,
         grant_id,
     );
-    let base = ring_root_ptr + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
-    let write = |offset: usize, value: u32| {
-        // SAFETY: Every requested offset is a u32-aligned field of the fixed
-        // primitive-only continuation record inside the admitted ring page.
-        unsafe {
-            core::ptr::write_volatile((base + offset) as *mut u32, value);
-        }
+    let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
+        return false;
     };
+    let record_offset = usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let Some(base) = ring_root_ptr.checked_add(record_offset) else {
+        return false;
+    };
+    // Use the same HAL-owned bounded window as the ring readers. Each store
+    // remains volatile, and the grant ID is still the sequence-last commit.
+    let write =
+        |offset: usize, value: u32| ring.window.write_u32(record_offset + offset, value).is_ok();
     let grant_id_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id);
     let consumed_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id);
-    write(grant_id_offset, 0);
-    write(consumed_offset, 0);
+    if !write(grant_id_offset, 0) || !write(consumed_offset, 0) {
+        return false;
+    }
     driver_task_shared_publish_range(base + grant_id_offset, core::mem::size_of::<u32>() * 2);
 
     for (offset, value) in [
@@ -4213,11 +4217,15 @@ fn driver_task_ring_publish_continuation_grant(
             grant.generation,
         ),
     ] {
-        write(offset, value);
+        if !write(offset, value) {
+            return false;
+        }
     }
     driver_task_shared_publish_range(base, grant_id_offset);
 
-    write(grant_id_offset, grant.grant_id);
+    if !write(grant_id_offset, grant.grant_id) {
+        return false;
+    }
     driver_task_shared_publish_range(base + grant_id_offset, core::mem::size_of::<u32>());
 
     true
@@ -11617,7 +11625,7 @@ pub fn driver_task_bus_owner_transport_caps_with_shared(
     Some((endpoint, ring_frame_cap, shared_frame_caps))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "kernel"))]
 static DRIVER_TASK_TEST_RX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// Return one stable, passive sample of the CYW43 private-RX queue level.
@@ -16567,17 +16575,21 @@ fn driver_task_ring_ack_one_way_wait_receipt(
     {
         return false;
     }
-    let magic_ptr = (ring_root_ptr
-        + usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET)
-        + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic))
-        as *mut u32;
-    // SAFETY: The admitted ring page contains the fixed primitive DROW record.
-    // The parked child has transferred ownership of the magic word to root;
-    // root writes the sole acknowledgement value before signalling that child.
-    unsafe {
-        core::ptr::write_volatile(magic_ptr, DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC);
+    let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
+        return false;
+    };
+    let magic_offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET)
+        + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic);
+    // The exact parked-child check above transfers only this acknowledgement
+    // word. The HAL window checks its range and alignment before the store.
+    if ring
+        .window
+        .write_u32(magic_offset, DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC)
+        .is_err()
+    {
+        return false;
     }
-    driver_task_shared_publish_range(magic_ptr as usize, core::mem::size_of::<u32>());
+    driver_task_shared_publish_range(ring_root_ptr + magic_offset, core::mem::size_of::<u32>());
 
     driver_task_ring_publish_barrier(ring_root_ptr);
     true
@@ -38944,6 +38956,16 @@ mod tests {
         command.flags |= DRIVER_TASK_RING_FLAG_ONE_WAY;
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = 7;
+
+        // Invalid address arithmetic must fail before any grant word is stored.
+        for invalid_base in [0, 1, usize::MAX - 3] {
+            assert!(!driver_task_ring_publish_continuation_grant(
+                invalid_base,
+                command,
+                1
+            ));
+        }
+        assert!(ring_page.0.iter().all(|word| *word == 0));
 
         assert_eq!(next_driver_task_retained_grant_id(0), Some(1));
         assert_eq!(next_driver_task_retained_grant_id(1), Some(2));

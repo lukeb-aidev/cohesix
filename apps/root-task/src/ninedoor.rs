@@ -929,6 +929,20 @@ impl NineDoorBridge {
                     });
                     faulted = true;
                 }
+                Ok(None)
+                    if faulted
+                        && self
+                            .namespace_service
+                            .revocation_evidence()
+                            .is_some_and(|evidence| evidence.stage.requires_fault_handoff()) =>
+                {
+                    // The recovered Call returns before root-fault's next
+                    // publication turn. Its recovery evidence promises that
+                    // exact mailbox record; consume it before beginning local
+                    // teardown so neither classification nor the pending
+                    // generation is abandoned. The outer Recovery turn yields.
+                    return Ok(NineDoorContainmentTurn::InProgress);
+                }
                 Ok(None) => {}
                 Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
                     crate::critical_tcb::FaultHandoffError::Contended,
@@ -2934,8 +2948,8 @@ impl NineDoorBridge {
                     .public_id()
                     .ok_or(NineDoorBridgeError::InvalidPayload)?;
                 let label = worker_shard_label(public_id, sharding);
-                if !output.iter().any(|entry| entry.as_str() == label.as_str()) {
-                    push_list_entry(output, label.as_str())?;
+                if !push_bounded_shard_label(output, label.as_str())? {
+                    break;
                 }
             }
             Ok(())
@@ -2950,14 +2964,7 @@ impl NineDoorBridge {
                 HeaplessVec::new();
             for worker in self.workers.iter().rev() {
                 let label = worker_shard_label(worker.id.as_str(), sharding);
-                if recent.iter().any(|entry| entry.as_str() == label.as_str()) {
-                    continue;
-                }
-                let mut entry = HeaplessString::new();
-                entry
-                    .push_str(label.as_str())
-                    .map_err(|_| NineDoorBridgeError::BufferFull)?;
-                if recent.push(entry).is_err() {
+                if !push_bounded_shard_label(&mut recent, label.as_str())? {
                     break;
                 }
             }
@@ -3122,7 +3129,13 @@ impl NineDoorBridge {
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let target_index =
                 flat_slot_index(snapshot.role, identity.slot).map_err(worker_target_error)?;
-            let worker_index = self.workers.len();
+            // The target admission selects a contained slot and advances its
+            // identity. Its old terminal projection remains readable until
+            // this point, then the fresh generation replaces that exact
+            // entry. Appending would leave an unreadable old identity in
+            // LS and consume another ring on every recreation.
+            let worker_index =
+                self.target_worker_indexes[target_index].unwrap_or(self.workers.len());
             let mut worker = WorkerTelemetry {
                 id,
                 ring: TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize),
@@ -3136,7 +3149,11 @@ impl NineDoorBridge {
                 target_published: false,
             };
             worker.apply_target_snapshot(snapshot)?;
-            self.workers.push(worker);
+            if worker_index < self.workers.len() {
+                self.workers[worker_index] = worker;
+            } else {
+                self.workers.push(worker);
+            }
             self.target_worker_indexes[target_index] = Some(worker_index);
             let _ = worker_id;
             return Ok(());
@@ -5793,11 +5810,11 @@ impl GpuState {
                         "state={state} source={source} mode={source_mode} epoch={epoch} sequence={sequence} ttl_ms={ttl_ms} bytes={bytes} sha256={sha256}"
                     ))?;
                     if source_mode == "fixture" {
-                        log::info!(
+                        log::info!(target: "worker-evidence",
                             "GPU_BRIDGE_FIXTURE_ADMISSION source={} mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
                             source,
                         );
-                        log::info!(
+                        log::info!(target: "worker-evidence",
                             "LORA_EXPORT_FIXTURE_ADMISSION source={} job={} mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
                             source,
                             QEMU_LORA_EXPORT_JOB_ID,
@@ -9633,6 +9650,22 @@ fn shard_label_known(label: &str) -> bool {
         .any(|entry| *entry == label)
 }
 
+/// Retain a bounded distinct active-shard view; a full view is not an error.
+/// Complete fleet discovery reads the compiler-declared shard paths directly.
+fn push_bounded_shard_label(
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    label: &str,
+) -> Result<bool, NineDoorBridgeError> {
+    if output.iter().any(|entry| entry.as_str() == label) {
+        return Ok(true);
+    }
+    if output.is_full() {
+        return Ok(false);
+    }
+    push_list_entry(output, label)?;
+    Ok(true)
+}
+
 fn parse_shard_worker_root(path: &str) -> Option<(&str, bool)> {
     let segments = split_path_segments(path);
     match segments.as_slice() {
@@ -12289,6 +12322,22 @@ mod tests {
                     == label.as_str()
             }));
         }
+    }
+
+    #[test]
+    fn active_shard_view_stops_at_64_distinct_labels_without_error() {
+        let mut listing = HeaplessVec::new();
+        for ordinal in 0..64 {
+            assert!(
+                push_bounded_shard_label(&mut listing, &format!("{ordinal:02x}"))
+                    .expect("admit active shard")
+            );
+        }
+        let before = listing.clone();
+        assert!(push_bounded_shard_label(&mut listing, "00").expect("existing shard"));
+        assert!(!push_bounded_shard_label(&mut listing, "40").expect("bounded view"));
+        assert_eq!(listing, before);
+        assert_eq!(listing.len(), 64);
     }
 
     #[test]

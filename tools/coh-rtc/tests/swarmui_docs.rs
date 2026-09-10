@@ -129,7 +129,7 @@ fn generated_swarmui_defaults_expose_worker_runtime_bounds() {
         "SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 256",
         "SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str",
         "\"/shard/<label>/worker/<id>/telemetry\"",
-        "SWARMUI_WORKER_SHARD_BITS: u8 = 6",
+        "SWARMUI_WORKER_SHARD_BITS: u8 = 8",
         "SWARMUI_WORKER_LEGACY_ALIAS: bool = true",
         "(\"worker-bus\", \"model-only\", 0)",
         "(\"worker-lora\", \"executable\", 128)",

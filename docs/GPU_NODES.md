@@ -97,6 +97,14 @@ After the accepted TTL, it atomically withdraws the provider generation and
 returns to unavailable state. Concurrent publishers must be serialized because
 the bridge control path is single-writer.
 
+`coh peft activate` and `coh peft rollback` commit the local registry, then use
+this snapshot channel to publish it. Their Rust library helpers, the ticket
+agent, and Python's `peft_activate`/`peft_rollback` report the host pointer
+commit separately as `projection=pending`. For those callers, the configured
+bridge publisher must publish that registry before `/gpu/models/active`
+changes. A successful ticket receipt proves its host action and Worker receipt;
+it does not prove a published model or inference reload.
+
 The canonical schema and generated limits are documented in
 [INTERFACES.md](INTERFACES.md). When prose and generated output disagree, the
 generated profile is authoritative and the documentation drift must be fixed.

@@ -39,6 +39,30 @@ handoff check, with no host-tool API change.
 
 ## Generated integration truth
 
+Passive Heartbeat evidence compatibility: the shared host validator and Python
+collector accept zero completion sequence for a freshly READY Heartbeat that
+has received no workload Call. GPU/LoRA completion and receipt requirements,
+all lifecycle/fault outcomes, exact identities and evidence hashes remain
+required. This fixes the evidence imported by Hive Gateway and SwarmUI; the
+other host tools and `tools/cohesix-py` already transport zero sequences without
+changing their meaning. No target, manifest, raw benchmark or console API changes.
+
+Worker log transport compatibility review: cohsh, coh, hive-gateway, swarmui,
+gpu-bridge-host, cas-tool, host-ticket-agent, host-sidecar-bridge and
+`tools/cohesix-py` continue transporting bounded diagnostic lines without
+interpreting Worker proof fields. Their APIs and generated contracts are
+unchanged. `scripts/lib/worker_log.py`, the QEMU qualification runner, Worker
+evidence collector and REST benchmark harness reassemble the bounded fragments
+and hash the actual authenticated exports separately from UART/GDB. Raw TCP
+benchmark workloads and acceptance thresholds are unchanged.
+
+Pi release build-marker compatibility review: the complete host-tool catalogue,
+`tools/cohesix-py`, raw/REST benchmark scripts, and generated contracts need no
+interface or workload change. The existing sealed `[BUILD]` line is published
+once at serial-console readiness through the admitted driver. The canonical
+serial and image-identity validators keep their exact-marker-before-prompt
+requirement; no parser, threshold, or acceptance condition is relaxed.
+
 `coh-rtc` compiles
 [`configs/host_integration_acceptance.toml`](../configs/host_integration_acceptance.toml)
 into the exact
@@ -378,10 +402,21 @@ Mac input selection uses the equivalent files from its own accepted tree.
 `scripts/release_inputs.py` verifies source identity, native profile, every guest
 and tool hash, and the passing result. Archival verification on Mac does not
 assert that Mac can execute Linux artifacts; launch checks remain native.
+Each build also retains the compiler-selected configuration set under
+`release-configs/configs/generated/`. Artifact recording hashes that exact set,
+and assembly copies it from the accepted native build. The QEMU Python contract
+keeps its existing filename on both hosts; its `target_profile` is HVF or KVM
+according to the selected build.
 
 Build the exact Pi stage and target-neutral Python wheel using their existing
 canonical workflows. The Pi stage must identify the same clean commit. Then run
 the read-only release preflight, substituting the retained paths below:
+
+Run `scripts/ci/python_compat_run.sh --wheel-smoke` on each native checkout after
+its selected-profile build, using the same target-neutral wheel. Retain both
+package manifests and set `PYTHON_PACKAGE_MANIFEST` to the Mac record and
+`LINUX_PYTHON_PACKAGE_MANIFEST` to the downloaded Linux record before preflight
+or assembly. Each record must bind the contracts retained by its native build.
 
 ```bash
 scripts/release_bundle.sh --check-manifest --linux \
@@ -417,7 +452,7 @@ host-tool preparation. Its source archive includes the complete tracked generate
 contract directory, including both Python target contracts.
 
 Each host bundle contains `BUILD_PROVENANCE.json` with source, accepted artifact
-and TCP-result identities, native profile/timer, and exact guest/tool hashes.
+and TCP-result identities, native profile/timer, and exact guest/tool/configuration hashes.
 The Pi bundle contains a compact raw MBR/FAT32 image, its SHA-256 sidecar and
 `cohesix-pi4-portable-sd-image/v2` metadata including the sealed boot identity.
 Image capacity derives from the payload. Any card at least `minimum_target_bytes`
@@ -533,8 +568,9 @@ For a physical Pi gateway, select `--worker-runtime-profile pi4-production`.
 The default `qemu-smp-production` preserves the QEMU contract. This option
 selects the existing compiler-generated Worker roles, limits and namespace
 bounds for `/v1/meta/bounds`; it does not discover or qualify the target.
-Pi uses eight shard bits, while the QEMU profile uses six, so the selection
-must match the target before structured Worker discovery or REST pressure.
+Both current profiles use eight shard bits; their role and resource bounds
+still differ, so the selection must match the target before structured Worker
+discovery or REST pressure.
 
 The gateway owns one authenticated target connection and one bounded broker.
 It schedules three fixed progress classes over that connection: host-ticket
@@ -675,6 +711,107 @@ For gateway mode, set `SWARMUI_REST_URL` or `COH_REST_URL`. Write auth resolves
 from `SWARMUI_REST_AUTH_TOKEN`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`,
 `COHSH_REST_AUTH_TOKEN`, or `COH_REST_AUTH_TOKEN`. Generated display and cache
 defaults are in [snippets/swarmui_defaults.md](snippets/swarmui_defaults.md).
+
+SwarmUI discovers the fleet by reading the compiler-declared shard addresses,
+then each actual Worker directory and structured telemetry record. It does not
+depend on the bounded aggregate `/shard` reply. This applies to direct console,
+gateway and host Secure9P transports; an empty shard is valid, while a refused
+read or invalid Worker record stops discovery.
+
+The selected Worker's detail refreshes during live polling, including while the
+canvas is scrolled out of view and its animation is paused. If a replay supplies
+only an overlay, the detail pane follows that overlay and clears when its data
+disappears. The Snapshot key field selects the named cached snapshot in offline
+mode.
+
+The native console editor disables spelling, capitalization, and quote
+correction so typed JSON and shell syntax remain literal.
+
+The selected-detail repair corrects only SwarmUI's existing Tauri argument
+wiring and display cache. Compatibility review of `cohsh`, `coh`, `coh-status`,
+`hive-gateway`, `gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`,
+`cas-tool`, `tools/cohesix-py`, `.coh` workloads and performance scripts requires
+no changes: console/REST operations, generated bounds, target state, benchmark
+workloads and report schemas retain their contracts.
+
+The release fleet-discovery repair also updates `rest_perf_harness.py` to use
+the gateway's validated generated shard bounds. Compatibility review found no
+change needed in `cohsh`, `coh`, `hive-gateway`, `gpu-bridge-host`,
+`host-sidecar-bridge`, `cas-tool`, `host-ticket-agent` or `tools/cohesix-py`:
+their existing filesystem operations and explicit Worker paths retain their
+contracts. The target aggregate `/shard` view now stops at 64 distinct active
+labels, matching the host model's bounded listing instead of rejecting a full
+fleet with `buffer-full`. Raw TCP workloads, measured REST operations, report
+schemas, authentication, target buffers, quotas and acceptance thresholds are
+unchanged.
+
+The QEMU Worker GDB validator consumes the current passive Worker ABI v2,
+including its fixed init-page address and role field. Its release qualification
+repair changes only test selection and stale fixtures. Compatibility review of
+`cohsh`, `coh`, `hive-gateway`, `swarmui`, `gpu-bridge-host`,
+`host-sidecar-bridge`, `cas-tool`, `host-ticket-agent`, `tools/cohesix-py`, and
+raw/REST benchmarks found no affected runtime, public interface, workload,
+report schema or threshold.
+
+The QEMU qualification setup follows the existing single-use approval contract:
+it admits an `/actions/queue` decision before each Queen lifecycle write,
+including writes expected to fail for capacity or model-only reasons. Failed
+approval prevents that write, and the control result is preserved without a
+retry. This setup repair requires no changes to the eight host tools or Python
+SDK reviewed above, measured benchmark workloads, schemas, or thresholds.
+
+PEFT activation and rollback commit the host registry pointer. The Rust library
+helpers take policy, registry specification, and audit arguments; they no longer
+take a target client or write the read-only `/gpu/models/active` view. The `coh`
+CLI then publishes the registry through its existing validated GPU bridge
+snapshot workflow. The ticket agent and Python helpers report
+`execution_location=host projection=pending`; the configured, serialized
+`gpu-bridge-host --registry <root> --publish` publisher updates the target view.
+A host registry commit does not prove snapshot publication or inference reload.
+An interrupted state/pointer commit fails closed pending reconciliation, and
+state preparation precedes replacement of the prior active pointer.
+
+The matching release qualification repair preserves all seven receipt actions
+and their three outcomes. GPU negative cases use valid advertised devices and
+operation IDs beyond the existing 32-byte lease bound, so admission succeeds
+and the provider rejects before I/O. Expired tickets retain their exact READY
+Worker so it can receive the stale result; the independent fault/lifecycle
+tests prove teardown and generation invalidation. Compatibility review covers
+all eight shipped host executables, `coh-status`, `tools/cohesix-py`, generated
+contracts, and raw/REST benchmarks. Changes are confined to `coh`, the ticket
+agent, Python's local PEFT helpers, and qualification fixtures; no target path,
+authority, schema, benchmark workload, threshold, or renewal round-trip changes.
+
+The provisioned-target check builds the manifest-selected console transport:
+`direct-virtio` for QEMU, and the canonical Pi build's `direct-genet` with its
+console-network/smoltcp optimization settings. QEMU production transport
+selection is independent of tracing, including the transitive `dev-virt` and
+`cohesix-dev` Cargo bundles used by the TCP regression runner. Compatibility
+review of the same eight host tools, Python SDK, and raw/REST benchmarks found
+no public interface,
+workload, schema, or threshold changes; exact image and page admission remain
+required.
+
+The operational shard and telemetry TCP fixtures use the current 8-bit shard
+addresses for both QEMU and Pi. Their path checks derive from the selected
+manifests and SHA-256 namespace contract. This fixture correction changes no
+host-tool, SDK, target, or benchmark interface.
+
+The QEMU TCP matrix checks the current fifteen-line HELP body, including its
+ordered command labels, followed by one exact `OK HELP`. NETSTATS requires its
+existing nineteen counter/status lines and one exact `OK NETSTATS`. This reconciles the
+older eleven-line fixture with the existing shared console help surface.
+Compatibility review of the complete host-tool suite, Python SDK, and raw/REST
+benchmarks requires no implementation change: commands, response framing,
+timeouts, retries, workloads, and thresholds remain unchanged.
+
+The positive gated TCP fixtures retain audit, replay, model, and Modbus support in their
+regression manifest. REST concurrency uses boot, ingest, and root reachability scripts;
+the console log-batching pool benchmark remains under TCP because REST batches
+are restricted to host ticket results. The host namespace fixture also stays
+under TCP because it checks a console-specific entry count. The REST wrapper
+defaults match the Stage 04 core selection. This test setup correction changes no
+production profile, host-tool or Python API, benchmark workload, or threshold.
 
 ### Cohesix Python package
 

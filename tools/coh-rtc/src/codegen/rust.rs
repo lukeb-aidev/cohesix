@@ -167,6 +167,10 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub bootstrap_budget_us: u32,")?;
     writeln!(mod_contents, "    pub bootstrap_period_us: u32,")?;
     writeln!(mod_contents, "    pub bootstrap_max_refills: u8,")?;
+    writeln!(
+        mod_contents,
+        "    pub bootstrap_timeout_policy: TimeoutPolicy,"
+    )?;
     writeln!(mod_contents, "    pub timeout_endpoint_badge: u64,")?;
     writeln!(mod_contents, "    pub consumed_budget_evidence: bool,")?;
     writeln!(mod_contents, "}}")?;
@@ -1868,7 +1872,7 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
-        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, task_abi: WORKER_TASK_ABI_CONFIG, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, bootstrap_scheduling_context_bits: {}, bootstrap_budget_us: {}, bootstrap_period_us: {}, bootstrap_max_refills: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
+        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, task_abi: WORKER_TASK_ABI_CONFIG, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, bootstrap_scheduling_context_bits: {}, bootstrap_budget_us: {}, bootstrap_period_us: {}, bootstrap_max_refills: {}, bootstrap_timeout_policy: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
         manifest.worker_runtime.implementation_epoch,
         manifest.worker_runtime.max_workers,
         manifest.worker_runtime.ticket_subject_required,
@@ -1896,6 +1900,7 @@ pub fn emit_rust(
         scheduling.bootstrap_budget_us,
         scheduling.bootstrap_period_us,
         scheduling.bootstrap_max_refills,
+        timeout_policy_to_rust(scheduling.bootstrap_timeout_policy),
         scheduling.timeout_endpoint_badge,
         scheduling.consumed_budget_evidence,
     )?;

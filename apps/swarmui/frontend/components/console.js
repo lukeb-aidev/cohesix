@@ -42,6 +42,18 @@ export const setupConsole = (invoke) => {
     return;
   }
 
+  // Commands contain literal quotes and identifiers, not prose. Apply these
+  // settings to Spectrum's actual editor, which lives in its shadow root.
+  customElements.whenDefined("sp-textfield").then(async () => {
+    await input.updateComplete;
+    const editor = input.inputElement;
+    if (editor) {
+      editor.setAttribute("autocorrect", "off");
+      editor.setAttribute("autocapitalize", "off");
+      editor.setAttribute("spellcheck", "false");
+    }
+  });
+
   let streamToken = 0;
   let streaming = false;
   let linesBuffered = 0;

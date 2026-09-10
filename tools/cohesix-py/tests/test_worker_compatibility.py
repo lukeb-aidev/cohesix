@@ -43,6 +43,32 @@ ROLE_CASES = (
 )
 
 
+@pytest.mark.parametrize(
+    ("profile", "accepted"),
+    (
+        ("qemu_smp_production", True),
+        ("qemu_smp_kvm_production", True),
+        ("pi4_production", False),
+        ("qemu_smp_diagnostic", False),
+        ("unknown", False),
+    ),
+)
+def test_qemu_contract_accepts_only_its_production_profiles(
+    tmp_path: Path, profile: str, accepted: bool
+) -> None:
+    """Native KVM and Mac HVF preserve distinct compiler-selected identities."""
+    value = json.loads(QEMU_CONTRACT.read_text(encoding="utf-8"))
+    value["target_profile"] = profile
+    contract_path = tmp_path / "profile.json"
+    contract_path.write_text(json.dumps(value), encoding="utf-8")
+    if accepted:
+        contract = load_profile_contract(contract_path, expected_target="qemu")
+        assert contract.target_profile == profile
+    else:
+        with pytest.raises(CohesixError, match="wrong production profile"):
+            load_profile_contract(contract_path, expected_target="qemu")
+
+
 def _observation(role: str, worker_id: str, generation: int = 1) -> bytes:
     value = {
         "schema": "cohesix-worker-observation/v1",

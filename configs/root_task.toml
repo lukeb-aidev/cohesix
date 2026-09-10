@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.17"
+schema = "1.18"
 
 [root_task.affinity]
 enabled = true
@@ -310,6 +310,7 @@ bootstrap_scheduling_context_bits = 8
 bootstrap_budget_us = 400
 bootstrap_period_us = 10000
 bootstrap_max_refills = 2
+bootstrap_timeout_policy = "natural-postpone"
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
 
@@ -386,7 +387,7 @@ max_refills = 2
 priority = 252
 mcp = 252
 timeout_badge = 653131778
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2400
 wcet_provenance = "m26e-qemu-root-fault-service-units-candidate-v6"
@@ -434,11 +435,13 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 7200
 admitted = true
-max_refills = 2
+# Use every refill entry in the existing 256-byte SC (96-byte header, 16-byte entries).
+# Repeated control/READY waits must not postpone the only replenishment until exhaustion.
+max_refills = 10
 priority = 210
 mcp = 210
 timeout_badge = 653131780
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2400
 wcet_provenance = "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15"
@@ -464,7 +467,7 @@ max_refills = 2
 priority = 220
 mcp = 220
 timeout_badge = 653131781
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2400
 wcet_provenance = "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15"
@@ -486,11 +489,12 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 7500
 admitted = true
-max_refills = 8
+# Passive Call/Reply bursts use the full refill capacity of this existing 256-byte SC.
+max_refills = 10
 priority = 80
 mcp = 200
 timeout_badge = 653131782
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 4500
 wcet_provenance = "m26e-passive-worker-executor-gpu-v1"
@@ -516,7 +520,7 @@ max_refills = 8
 priority = 80
 mcp = 200
 timeout_badge = 653131783
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 7000
 wcet_provenance = "m26e-passive-worker-executor-lora-v1"

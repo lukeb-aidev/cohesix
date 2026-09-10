@@ -20,6 +20,9 @@ and out/ contents after moving the explicit seL4/toolchain inputs to a temporary
 directory. The Linux replay lane never deletes or rebuilds guest artifacts.
 
 Options:
+  --clean-root DIR       Explicitly authorize cleaning out/ and target/ in this
+                         exact disposable Git checkout instead of the default
+                         development checkout. All ownership checks still apply.
   --run-dir DIR          Fresh evidence directory under out/
                          (default: out/m26e-qemu-pressure)
   --sel4-source DIR      Clean upstream seL4 source input
@@ -245,9 +248,11 @@ RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 JOBS=10
 CHECK_ONLY=0
 REUSE_ARTIFACTS=0
+CLEAN_ROOT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --clean-root) [[ $# -ge 2 ]] || die "--clean-root requires a value"; CLEAN_ROOT=$2; shift 2 ;;
         --run-dir) [[ $# -ge 2 ]] || die "--run-dir requires a value"; RUN_DIR=$2; shift 2 ;;
         --sel4-source) [[ $# -ge 2 ]] || die "--sel4-source requires a value"; SEL4_SOURCE=$2; shift 2 ;;
         --sel4-build) [[ $# -ge 2 ]] || die "--sel4-build requires a value"; SEL4_BUILD=$2; SEL4_BUILD_EXPLICIT=1; shift 2 ;;
@@ -275,9 +280,18 @@ if (( REUSE_ARTIFACTS == 1 )); then
         SEL4_BUILD="out/sel4/profile-v2/qemu-smp-kvm-production"
     fi
 fi
-if (( REUSE_ARTIFACTS == 0 )); then
+if [[ -n "$CLEAN_ROOT" ]]; then
+    (( REUSE_ARTIFACTS == 0 )) || die "--clean-root cannot be used with --reuse-artifacts"
+    [[ "$CLEAN_ROOT" == "$REPO_ROOT" && "$CLEAN_ROOT" != / && "$CLEAN_ROOT" != "$HOME" ]] || \
+        die "--clean-root must equal this exact checkout root: $REPO_ROOT"
+    [[ "$(git rev-parse --show-toplevel)" == "$REPO_ROOT" ]] || \
+        die "--clean-root must be the Git checkout root"
+    git rev-parse --verify 'HEAD^{commit}' >/dev/null || die "--clean-root requires a committed candidate"
+    [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || \
+        die "--clean-root requires an exact clean candidate checkout"
+elif (( REUSE_ARTIFACTS == 0 )); then
     [[ "$REPO_ROOT" == "/Users/lukasbower/GitHub/cohesix" ]] || \
-        die "refusing to clean an unexpected repository root: $REPO_ROOT"
+        die "refusing to clean an unexpected repository root: $REPO_ROOT; select a disposable checkout with --clean-root"
 fi
 OUT_DIR="$(canonical_existing_dir "$REPO_ROOT/out" "$REPO_ROOT")"
 TARGET_DIR="$(canonical_existing_dir "$REPO_ROOT/target" "$REPO_ROOT")"
@@ -320,7 +334,9 @@ else
         die "--gdb must select the compiler contract GDB"
 fi
 [[ ! -e "$RUN_DIR" && ! -L "$RUN_DIR" ]] || die "fresh --run-dir already exists: $RUN_DIR"
-[[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
+if [[ -z "$CLEAN_ROOT" ]]; then
+    [[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
+fi
 if (( REUSE_ARTIFACTS == 1 )); then
     HARNESS_PYTHON="$(canonical_existing_file "$(command -v python3)" "" yes)"
 else
@@ -1153,7 +1169,14 @@ run_cohsh_command() {
         printf '# Author: Lukas Bower\n'
         printf '# Purpose: Drive one existing Milestone 26e QEMU control operation.\n'
         printf '# Copyright 2026 Lukas Bower\n'
-        printf 'attach queen\nEXPECT OK\n%s\n' "$command"
+        printf 'attach queen\nEXPECT OK\n'
+        case "$command" in
+            spawn\ *|kill\ *)
+                printf "echo '{\"id\":\"m26e-control-%s\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}' > /actions/queue\n" "$ordinal"
+                printf 'EXPECT SUBSTR path=/actions/queue\n'
+                ;;
+        esac
+        printf '%s\n' "$command"
         if [[ "$expectation" != "NONE" ]]; then
             printf 'EXPECT %s\n' "$expectation"
         fi
@@ -1200,15 +1223,63 @@ PY
 start_uart_capture() {
     local uart=$1
     shift
-    if [[ "$PRESSURE_HOST_OS" == "Darwin" ]]; then
-        exec /usr/bin/script -q -F "$uart" "$@"
-    fi
-    if [[ "$PRESSURE_HOST_OS" == "Linux" ]]; then
-        local command_line
-        printf -v command_line '%q ' "$@"
-        exec /usr/bin/script -q -f -c "$command_line" "$uart"
-    fi
-    die "unsupported UART capture host: $PRESSURE_HOST_OS"
+    # Own the PTY without forwarding the unattended runner's stdin EOF. Keep
+    # raw output byte-for-byte; BSD script otherwise injects ^D and backspaces.
+    exec "${HARNESS_PYTHON:-python3}" - "$uart" "$@" <<'PY_CAPTURE'
+import errno
+import os
+from pathlib import Path
+import pty
+import signal
+import subprocess
+import sys
+
+master, slave = pty.openpty()
+child = None
+try:
+    with Path(sys.argv[1]).open("xb") as output:
+        child = subprocess.Popen(
+            sys.argv[2:], stdin=slave, stdout=slave, stderr=slave,
+            start_new_session=True,
+        )
+        os.close(slave)
+        slave = -1
+
+        def forward_signal(signum, _frame):
+            try:
+                os.killpg(child.pid, signum)
+            except ProcessLookupError:
+                pass
+
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, forward_signal)
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            output.write(chunk)
+            output.flush()
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        status = child.wait()
+finally:
+    os.close(master)
+    if slave >= 0:
+        os.close(slave)
+    if child is not None and child.poll() is None:
+        os.killpg(child.pid, signal.SIGTERM)
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+sys.exit(status if status >= 0 else 128 - status)
+PY_CAPTURE
 }
 
 verify_live_artifacts() {
@@ -1488,17 +1559,22 @@ else:
 PY
 }
 
-resolved_executable_population() {
+populate_executable_workers() {
+    local boot_dir=$1
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     "$HARNESS_PYTHON" - \
         "$REPO_ROOT/scripts/rest_perf_harness.py" \
-        "$RESOLVED_MANIFEST" <<'PY'
+        "$RESOLVED_MANIFEST" "$boot_dir" <<'PY'
+from dataclasses import asdict
 import hashlib
 import importlib.util
+import json
 import os
+from pathlib import Path
 import sys
+import time
 
-module_path, manifest_path = sys.argv[1:]
+module_path, manifest_path, boot_dir = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("m26e_worker_population", module_path)
 if spec is None or spec.loader is None:
     raise SystemExit("cannot load REST harness for Worker population binding")
@@ -1517,13 +1593,65 @@ client = rest.RestClient(
     os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
 )
 bounds = client.get_json("/v1/meta/bounds")
-print(
-    rest.executable_population_from_manifest_and_bounds(
-        manifest,
-        bounds,
-        hashlib.sha256(raw).hexdigest(),
-    )
+maximum = rest.executable_population_from_manifest_and_bounds(
+    manifest, bounds, hashlib.sha256(raw).hexdigest(),
 )
+slots = rest.executable_role_slots(bounds)
+instances, _ = rest.discover_executable_workers(client, bounds)
+existing = {
+    role: sum(row.role == role and row.lifecycle == "ready" for row in instances)
+    for role in slots
+}
+payloads = {
+    "worker-heartbeat": {
+        "spawn": "heartbeat", "ticks": 100,
+        "budget": {"ttl_s": 900, "ops": 5000},
+    },
+    "worker-gpu": {
+        "spawn": "gpu", "gpu_id": "GPU-0", "mem_mb": 4096,
+        "streams": 2, "ttl_s": 900, "priority": 1,
+    },
+    "worker-lora": {"spawn": "lora", "budget": {"ttl_s": 900, "ops": 5000}},
+}
+with (Path(boot_dir) / "population-admissions.jsonl").open("x") as log:
+    for role in rest.EXECUTABLE_WORKER_ROLES:
+        if existing[role] > slots[role]:
+            raise RuntimeError("live Worker role exceeds generated admission")
+        for index in range(existing[role], slots[role]):
+            response = rest.queen_control_with_approval(
+                client, json.dumps(payloads[role], separators=(",", ":")),
+                f"m26e-population-{role}-{index}",
+            )
+            log.write(json.dumps({"role": role, "index": index, "response": asdict(response)}) + "\n")
+            log.flush()
+            if response.status != "OK":
+                raise RuntimeError(f"Worker population admission failed: {response.error}")
+            # Population is setup, outside the timed pressure interval. Retain
+            # each admission before later spawns can evict a fragment of it.
+            capture = client.cat("/log/queen.log", 524288)
+            if capture.status != "OK":
+                raise RuntimeError("Worker population log export failed")
+            with (Path(boot_dir) / "worker.live.log").open("a", encoding="utf-8") as output:
+                output.write("\n".join(capture.lines) + "\n")
+# Admission is not READY. Read the actual bounded namespace until every
+# generated slot is READY; the pressure harness independently repeats this census.
+deadline = time.monotonic() + 30.0
+while True:
+    instances, discovered = rest.discover_executable_workers(client, bounds)
+    ready = {
+        role: sum(row.role == role and row.lifecycle == "ready" for row in instances)
+        for role in slots
+    }
+    if ready == slots and len(instances) == maximum:
+        break
+    if time.monotonic() >= deadline:
+        raise RuntimeError(f"Worker population did not become READY: {ready}; expected {slots}")
+    time.sleep(0.1)
+(Path(boot_dir) / "population.json").write_text(json.dumps({
+    "maximum_live_tasks": maximum, "expected_slots": slots,
+    "discovered": discovered, "workers": [asdict(row) for row in instances],
+}, indent=2) + "\n")
+print(maximum)
 PY
 }
 
@@ -1553,8 +1681,11 @@ start_pressure_helpers() {
         --rest-url http://127.0.0.1:8080 \
         >> "$boot_dir/gpu-fixture.log" 2>&1 &
     GPU_REFRESH_PID=$!
-    local state_dir="$boot_dir/host-ticket-agent"
-    mkdir -p "$state_dir"
+    # Resume the preflight agent's eight-lane cursors and WAL so deliberately
+    # retired tickets cannot be replayed. Keep the original evidence unchanged.
+    local state_dir="$boot_dir/pressure-host-ticket-agent"
+    [[ ! -e "$state_dir" ]] || die "pressure agent state already exists"
+    cp -R "$boot_dir/host-ticket-agent" "$state_dir"
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     "$HOST_TOOLS/host-ticket-agent" \
         --manifest "$RESOLVED_MANIFEST" \
@@ -1567,7 +1698,7 @@ start_pressure_helpers() {
         --registry-root "$boot_dir/peft-registry" \
         --export-root "$boot_dir/peft-exports" \
         --adapter-root "$boot_dir/peft-adapters" \
-        >> "$boot_dir/host-ticket-agent.log" 2>&1 &
+        >> "$boot_dir/pressure-host-ticket-agent.log" 2>&1 &
     AGENT_PID=$!
     sleep 1
     kill -0 "$GPU_REFRESH_PID" >/dev/null 2>&1 || die "GPU fixture refresh exited before pressure"
@@ -1591,9 +1722,10 @@ import sys
 root = Path(sys.argv[1])
 registry = root / "peft-registry"
 base = registry / "available" / "vision-base-v1"
+export_base = registry / "available" / "fixture-base-model"
 lora = registry / "available" / "vision-lora-edge"
 adapter = root / "peft-adapters" / "fixture-adapter"
-for path in (base, lora, adapter, root / "peft-exports"):
+for path in (base, export_base, lora, adapter, root / "peft-exports"):
     path.mkdir(parents=True, exist_ok=True)
 
 adapter_bytes = b"fixture-adapter\n"
@@ -1605,6 +1737,13 @@ sha = lambda value: hashlib.sha256(value).hexdigest()
 (adapter / "lora.json").write_bytes(lora_bytes)
 (base / "manifest.toml").write_text(
     '[model]\nid = "vision-base-v1"\n'
+    f'cas_sha256 = "{sha(b"fixture-base")}"\nformat = "gguf"\n',
+    encoding="utf-8",
+)
+# The target's bounded LoRA export names this base in base_model.ref. Keep it
+# available when the real import operation adds its derived adapter manifest.
+(export_base / "manifest.toml").write_text(
+    '[model]\nid = "fixture-base-model"\n'
     f'cas_sha256 = "{sha(b"fixture-base")}"\nformat = "gguf"\n',
     encoding="utf-8",
 )
@@ -1630,100 +1769,85 @@ trigger_disposable_worker_control() {
     local boot_dir=$1
     local role=$2
     local ordinal=$3
-    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
-    python3 - "$REPO_ROOT/scripts/rest_perf_harness.py" \
-        "$HOST_TOOLS/host-ticket-agent" "$RESOLVED_MANIFEST" \
-        "$boot_dir" "$role" "$ordinal" <<'PY'
+    [[ -z "$GATEWAY_PID" ]] || die "direct Worker fault control requires the pre-gateway phase"
+    local worker
+    worker=$(COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+        "$HARNESS_PYTHON" - "$REPO_ROOT" "$boot_dir" "$role" "$ordinal" <<'PY_FAULT'
 import importlib.util
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
-module_path, agent_raw, manifest_raw, boot_raw, role, ordinal = sys.argv[1:]
-spec = importlib.util.spec_from_file_location("m26e_fault_control", module_path)
+repo, boot = map(Path, sys.argv[1:3])
+role, ordinal = sys.argv[3:]
+sys.path.insert(0, str(repo / "tools/cohesix-py"))
+from cohesix.backends import TcpBackend
+from cohesix.worker import load_profile_contract
+
+spec = importlib.util.spec_from_file_location("fault_state", repo / "scripts/rest_perf_harness.py")
 if spec is None or spec.loader is None:
-    raise SystemExit("cannot load REST harness for disposable Worker control")
+    raise SystemExit("cannot load canonical Worker state parser")
 rest = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = rest
 spec.loader.exec_module(rest)
-client = rest.RestClient(
-    "http://127.0.0.1:8080",
-    10.0,
-    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+contract = load_profile_contract(repo / "configs/generated/cohesix_python_qemu_smp_production.json")
+backend = TcpBackend("127.0.0.1", 31337, os.environ["COH_AUTH_TOKEN"], "queen", None, timeout_s=10.0)
+observed = []
+seen = set()
+try:
+    for shard in range(1 << int(contract.namespace["shard_bits"])):
+        prefix = f"/shard/{shard:02x}/worker"
+        for worker_id in backend.list_dir(prefix):
+            path = contract.telemetry_path(worker_id)
+            if path != f"{prefix}/{worker_id}/telemetry" or worker_id in seen:
+                raise SystemExit("invalid or duplicate canonical Worker placement")
+            seen.add(worker_id)
+            if len(seen) > contract.maximum_live_tasks:
+                raise SystemExit("fault census exceeds the generated population")
+            raw = backend.tail_file(path, rest.MAX_WORKER_STATE_TAIL_BYTES)
+            worker = rest.parse_worker_runtime_state(raw.decode("utf-8").splitlines(), worker_id, path)
+            if worker is not None and worker.role == role and worker.lifecycle == "ready":
+                observed.append(worker)
+finally:
+    backend.close()
+if len(observed) != 1:
+    raise SystemExit(f"expected exactly one READY {role}, observed {len(observed)}")
+from dataclasses import asdict
+(boot / f"fault-control-{role}-{ordinal}.json").write_text(
+    json.dumps({"transport": "direct-tcp", "operation": "shutdown", "worker": asdict(observed[0])}, indent=2) + "\n",
+    encoding="utf-8",
 )
-bounds = client.get_json("/v1/meta/bounds")
-instances, _ = rest.discover_executable_workers(client, bounds)
-ready = [
-    instance
-    for instance in instances
-    if instance.role == role and instance.lifecycle == "ready"
-]
-if len(ready) != 1:
-    raise SystemExit(f"expected exactly one READY {role} for disposable control")
-gpu_id, job_id = rest.require_qemu_fixture_receipt_paths(client)
-if role == "worker-gpu":
-    action = "gpu.lease.grant"
-    args = {"ttl_s": 60, "priority": 1}
-    subject = gpu_id
-    operation = f"gpu-fault-{ordinal}"
-elif role == "worker-lora":
-    action = "peft.export"
-    args = {}
-    subject = job_id
-    operation = f"peft-fault-{ordinal}"
-else:
-    raise SystemExit(f"disposable v2 control is not defined for {role}")
-worker = ready[0]
-ticket = {
-    "schema": "host-ticket/v2",
-    "id": f"m26e-fault-{role}-{ordinal}",
-    "idempotency_key": f"m26e-fault-idem-{role}-{ordinal}",
-    "action": action,
-    "args": args,
-    "receipt_mode": "worker",
-    "operation_id": operation,
-    "subject_ref": subject,
-    "receipt_worker_role": role,
-    "receipt_worker_id": worker.worker_id,
-    "receipt_supervisor_generation": worker.supervisor_generation,
-    "receipt_cap_generation": worker.cap_generation,
+print(observed[0].worker_id)
+PY_FAULT
+    )
+    # Shutdown is a real passive Call/Reply operation for every role. The
+    # instrumented child traps after call validation, before dispatch/reply.
+    run_cohsh_command "$boot_dir" "kill $worker" "$ordinal"
 }
-response = client.echo(
-    "/host/tickets/spec",
-    json.dumps(ticket, separators=(",", ":")),
-)
-if response.status != "OK":
-    raise SystemExit(f"disposable control ticket was not admitted: {response.error}")
-boot = Path(boot_raw)
-state = boot / "fault-agent"
-state.mkdir(parents=True, exist_ok=True)
-command = [
-    agent_raw,
-    "--manifest", manifest_raw,
-    "--cursor", str(state / "cursor.json"),
-    "--execution-journal", str(state / "execution-journal.json"),
-    "--agent-lock", str(state / "agent.lock"),
-    "--run-once",
-    "--rest-url", "http://127.0.0.1:8080",
-    "--registry-root", str(boot / "peft-registry"),
-    "--export-root", str(boot / "peft-exports"),
-    "--adapter-root", str(boot / "peft-adapters"),
-]
-completed = subprocess.run(
-    command,
-    check=False,
-    capture_output=True,
-    text=True,
-    timeout=30,
-)
-with (boot / "fault-agent.log").open("a", encoding="utf-8") as handle:
-    handle.write(completed.stdout)
-    handle.write(completed.stderr)
-if completed.returncode != 0:
-    raise SystemExit(f"disposable control agent pass failed: {completed.returncode}")
-PY
+
+capture_worker_log() {
+    local boot_dir=$1
+    shift
+    local owner=(--cohsh "$HOST_TOOLS/cohsh")
+    if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
+        owner=(--rest-url http://127.0.0.1:8080)
+    fi
+    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    "$HARNESS_PYTHON" scripts/lib/worker_log.py \
+        --out "$boot_dir/worker.live.log" "${owner[@]}" "$@"
+}
+
+worker_marker_count() {
+    "$HARNESS_PYTHON" - "$1" "$2" <<'PY_WORKER_LOG'
+from pathlib import Path
+import sys
+from scripts.lib.worker_log import records
+path = Path(sys.argv[1])
+text = records(path.read_text(), complete=False) if path.exists() else ""
+print(sum(sys.argv[2] in line for line in text.splitlines()))
+PY_WORKER_LOG
 }
 
 drive_worker_fault_plan() {
@@ -1732,8 +1856,9 @@ drive_worker_fault_plan() {
     local ordinal_base=$3
     local gdb_log="$boot_dir/$role.gdb.log"
     local before ready_before
-    before=$(grep -F -c "WORKER_TASK_TEARDOWN role=$role " "$boot_dir/uart.live.log" 2>/dev/null || true)
-    ready_before=$(grep -F -c "WORKER_TASK_READY role=$role " "$boot_dir/uart.live.log" 2>/dev/null || true)
+    capture_worker_log "$boot_dir"
+    before=$(worker_marker_count "$boot_dir/worker.live.log" "WORKER_TASK_TEARDOWN role=$role ")
+    ready_before=$(worker_marker_count "$boot_dir/worker.live.log" "WORKER_TASK_READY role=$role ")
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-gdb \
         --gdb "$GDB_BIN" \
         --remote 127.0.0.1:1234 \
@@ -1748,28 +1873,44 @@ drive_worker_fault_plan() {
         --out "$gdb_log" &
     local gdb_pid=$!
     GDB_RUNNER_PID=$gdb_pid
-    sleep 1
+    wait_for_marker_count "$gdb_log.debug.log" "M26E_GDB_ARMED role=$role result=ready" 1 30
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" "$ordinal_base" NONE || true
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 1 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_TEARDOWN role=$role " --count $(( before + 1 )) --timeout 120
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 1 )) NONE || true
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 1 )) 120
-    if [[ "$role" != "worker-heartbeat" ]]; then
-        trigger_disposable_worker_control "$boot_dir" "$role" 1
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_READY role=$role " --count $(( ready_before + 1 )) --timeout 120
+    trigger_disposable_worker_control "$boot_dir" "$role" $(( ordinal_base + 10 ))
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_TEARDOWN role=$role " --count $(( before + 2 )) --timeout 120
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
     fi
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 2 )) 120
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 2 )) NONE || true
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 2 )) 120
-    if [[ "$role" != "worker-heartbeat" ]]; then
-        trigger_disposable_worker_control "$boot_dir" "$role" 2
-    fi
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_TEARDOWN role=$role " $(( before + 3 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_READY role=$role " --count $(( ready_before + 2 )) --timeout 120
+    trigger_disposable_worker_control "$boot_dir" "$role" $(( ordinal_base + 11 ))
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_TEARDOWN role=$role " --count $(( before + 3 )) --timeout 120
     if ! wait "$gdb_pid"; then
         GDB_RUNNER_PID=""
         die "Worker GDB plan failed for $role"
     fi
     GDB_RUNNER_PID=""
+    if [[ "$role" == "worker-gpu" ]]; then
+        COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HOST_TOOLS/gpu-bridge-host" \
+            --mock --registry "$boot_dir/peft-registry" --publish \
+            --tcp-host 127.0.0.1 --tcp-port 31337 >> "$boot_dir/fault-gpu-fixture.log" 2>&1
+    fi
     run_cohsh_command "$boot_dir" "$(spawn_command_for_role "$role")" $(( ordinal_base + 3 ))
-    wait_for_marker_count "$boot_dir/uart.live.log" "WORKER_TASK_READY role=$role " $(( ready_before + 3 )) 120
+    capture_worker_log "$boot_dir" --wait-marker "WORKER_TASK_READY role=$role " --count $(( ready_before + 3 )) --timeout 120
 }
 
 drive_service_fault_plan() {
@@ -1870,9 +2011,10 @@ def bounded_detail(value):
 
 before = ready("worker-heartbeat")
 kill_response = require(
-    client.echo(
-        "/queen/ctl",
+    rest.queen_control_with_approval(
+        client,
         json.dumps({"kill": before.worker_id}, separators=(",", ":")),
+        "m26e-lifecycle-kill",
     ),
     "OK",
     "heartbeat kill",
@@ -1898,7 +2040,7 @@ spawn_payload = json.dumps(
     separators=(",", ":"),
 )
 spawn_response = require(
-    client.echo("/queen/ctl", spawn_payload),
+    rest.queen_control_with_approval(client, spawn_payload, "m26e-lifecycle-spawn"),
     "OK",
     "heartbeat recreate",
 )
@@ -1914,7 +2056,7 @@ if after is None:
     raise RuntimeError("fresh Heartbeat generation was not observed")
 
 duplicate = require(
-    client.echo("/queen/ctl", spawn_payload),
+    rest.queen_control_with_approval(client, spawn_payload, "m26e-lifecycle-full"),
     "ERR",
     "second-live Heartbeat refusal",
 )
@@ -1923,16 +2065,23 @@ if not any(token in duplicate_detail.lower() for token in ("slot", "busy", "alre
     raise RuntimeError("second-live Heartbeat refusal lacks a bounded capacity reason")
 
 worker_bus = require(
-    client.echo(
-        "/queen/ctl",
+    rest.queen_control_with_approval(
+        client,
         json.dumps({"spawn": "worker-bus"}, separators=(",", ":")),
+        "m26e-lifecycle-model",
     ),
     "ERR",
     "WorkerBus model-only refusal",
 )
 worker_bus_detail = bounded_detail(worker_bus.error)
-if "model-only" not in worker_bus_detail.lower():
-    raise RuntimeError("WorkerBus refusal does not preserve model-only semantics")
+bus_roles = [
+    row for row in rest.worker_runtime_bounds(bounds)["roles"]
+    if row["role"] == "worker-bus"
+]
+if len(bus_roles) != 1 or bus_roles[0]["declaration"] != "model-only" or bus_roles[0]["executable_slots"] != 0:
+    raise RuntimeError("WorkerBus does not retain its generated model-only declaration")
+if "detail=invalid-payload" not in worker_bus_detail:
+    raise RuntimeError("raw WorkerBus spawn lacks the target's invalid-payload refusal")
 
 gpu = require(client.cat("/gpu/bridge/status", 8192), "OK", "GPU fixture read")
 gpu_text = " ".join(gpu.lines)
@@ -1947,7 +2096,7 @@ lines = (
     f"status={spawn_response.status}",
     "GATEWAY_OPERATOR ERR SPAWN role=worker-heartbeat "
     f"reason={duplicate_detail}",
-    "GATEWAY_OPERATOR ERR SPAWN role=worker-bus reason=model-only "
+    "GATEWAY_OPERATOR ERR SPAWN role=worker-bus declaration=model-only "
     f"detail={worker_bus_detail}",
     f"GATEWAY_OPERATOR OK CAT path=/gpu/bridge/status {gpu_text}",
     "GATEWAY_OPERATOR OK LS path=/shard",
@@ -2013,29 +2162,16 @@ def ready(role):
     return rows[0]
 
 
-def wait_fresh(role, generation):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        try:
-            row = ready(role)
-        except Exception:
-            time.sleep(0.1)
-            continue
-        if row.supervisor_generation > generation:
-            return row
-        time.sleep(0.1)
-    raise RuntimeError(f"fresh {role} generation was not observed")
-
-
-def run_agent():
+def run_agent(rest_url="http://127.0.0.1:8080"):
     command = [
         str(agent),
         "--manifest", str(manifest),
         "--cursor", str(state_dir / "cursor.json"),
         "--execution-journal", str(state_dir / "execution-journal.json"),
         "--agent-lock", str(state_dir / "agent.lock"),
+        "--execution-lanes", "8",
         "--run-once",
-        "--rest-url", "http://127.0.0.1:8080",
+        "--rest-url", rest_url,
         "--registry-root", str(boot / "peft-registry"),
         "--export-root", str(boot / "peft-exports"),
         "--adapter-root", str(boot / "peft-adapters"),
@@ -2069,7 +2205,7 @@ def republish():
 
 def terminal(ticket_id):
     for path in ("/host/tickets/status", "/host/tickets/deadletter"):
-        response = client.tail(path, 8192)
+        response = client.tail(path, rest.HOST_TICKET_LOG_TAIL_BYTES)
         if response.status != "OK":
             raise RuntimeError(f"cannot read {path}")
         for line in response.lines:
@@ -2081,6 +2217,14 @@ def terminal(ticket_id):
                 if row.get("state") in {"succeeded", "failed", "expired"}:
                     return row["state"]
     return None
+
+
+def capture_worker_records():
+    response = client.cat("/log/queen.log", 524288)
+    if response.status != "OK":
+        raise RuntimeError("cannot retain the authenticated Worker log")
+    with (boot / "worker.live.log").open("a", encoding="utf-8") as output:
+        output.write("\n".join(response.lines) + "\n")
 
 
 def submit(action, role, args, subject, expected, operation_id):
@@ -2102,23 +2246,11 @@ def submit(action, role, args, subject, expected, operation_id):
         "receipt_supervisor_generation": before.supervisor_generation,
         "receipt_cap_generation": before.cap_generation,
     }
+    if expected == "expired":
+        payload["expires_unix_ms"] = 1
     response = client.echo("/host/tickets/spec", json.dumps(payload, separators=(",", ":")))
     if response.status != "OK":
         raise RuntimeError(f"ticket admission failed for {action}/{expected}: {response.error}")
-    if expected == "expired":
-        response = client.echo(
-            "/queen/ctl",
-            json.dumps({"kill": before.worker_id}, separators=(",", ":")),
-        )
-        if response.status != "OK":
-            raise RuntimeError(f"stale driver could not kill {before.worker_id}")
-        response = client.echo(
-            "/queen/ctl",
-            json.dumps({"spawn": "gpu" if role == "worker-gpu" else "lora"}),
-        )
-        if response.status != "OK":
-            raise RuntimeError(f"stale driver could not recreate {role}")
-        wait_fresh(role, before.supervisor_generation)
     run_agent()
     deadline = time.monotonic() + 20
     observed = None
@@ -2129,7 +2261,34 @@ def submit(action, role, args, subject, expected, operation_id):
         time.sleep(0.1)
     if observed != expected:
         raise RuntimeError(f"{action} expected {expected}, observed {observed}")
-    records.append({"action": action, "role": role, "outcome": expected, "ticket_id": ticket_id})
+    expected_current = "confirmed" if expected == "succeeded" else "rejected"
+    current = None
+    while time.monotonic() < deadline:
+        current = rest.read_host_ticket_current(client, ticket_id, payload["idempotency_key"])
+        if (
+            current.state == expected_current
+            and current.worker_id == before.worker_id
+            and current.role == before.role
+            and current.slot == before.slot
+            and current.lease_epoch == before.lease_epoch
+            and current.supervisor_generation == before.supervisor_generation
+            and current.cap_generation == before.cap_generation
+            and current.lifecycle == "ready"
+            and current.receipt_sequence > before.receipt_sequence
+            and current.completion_sequence > before.completion_sequence
+            and current.completion_sequence == current.receipt_sequence
+            and current.control_sequence == 0
+        ):
+            break
+        time.sleep(0.1)
+    else:
+        capture_worker_records()
+        raise RuntimeError(f"{action}/{expected} lacks its exact Worker receipt: {current}")
+    capture_worker_records()
+    records.append({"action": action, "role": role, "outcome": expected, "ticket_id": ticket_id,
+                    "worker_state": current.state, "worker_id": current.worker_id,
+                    "receipt_sequence": current.receipt_sequence,
+                    "completion_sequence": current.completion_sequence})
 
 
 confirmed = [
@@ -2143,12 +2302,20 @@ for row in confirmed:
     submit(*row[:4], "succeeded", row[4])
 republish()
 submit("peft.activate", "worker-lora", {}, "m26e-lora", "succeeded", "peft-activate-confirmed")
+republish()
+active = client.cat("/gpu/models/active", 8192)
+if active.status != "OK" or active.lines != ["m26e-lora"]:
+    raise RuntimeError("activated host model was not installed by the bridge snapshot")
 submit("peft.rollback", "worker-lora", {}, "vision-lora-edge", "succeeded", "peft-rollback-confirmed")
+republish()
+active = client.cat("/gpu/models/active", 8192)
+if active.status != "OK" or active.lines != ["vision-lora-edge"]:
+    raise RuntimeError("rolled-back host model was not installed by the bridge snapshot")
 
 rejected = [
-    ("gpu.lease.grant", "worker-gpu", {"ttl_s": 60}, "GPU-MISSING", "gpu-reject-grant"),
-    ("gpu.lease.renew", "worker-gpu", {"ttl_s": 60}, "GPU-MISSING", "gpu-reject-renew"),
-    ("gpu.lease.release", "worker-gpu", {"reason": "m26e-reject"}, "GPU-MISSING", "gpu-reject-release"),
+    ("gpu.lease.grant", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-reject-grant-operation-over-32-bytes"),
+    ("gpu.lease.renew", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-reject-renew-operation-over-32-bytes"),
+    ("gpu.lease.release", "worker-gpu", {"reason": "m26e-reject"}, gpu_id, "gpu-reject-release-operation-over-32-bytes"),
     ("peft.export", "worker-lora", {}, "missing-export-job", "peft-reject-export"),
     ("peft.import", "worker-lora", {"adapter_ref": "missing-adapter", "job_id": export_job}, "missing-import", "peft-reject-import"),
     ("peft.activate", "worker-lora", {}, "missing-model", "peft-reject-activate"),
@@ -2157,7 +2324,7 @@ rejected = [
 for row in rejected:
     submit(*row[:4], "failed", row[4])
 
-stale = [
+expired = [
     ("gpu.lease.grant", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-stale-grant"),
     ("gpu.lease.renew", "worker-gpu", {"ttl_s": 60}, gpu_id, "gpu-stale-renew"),
     ("gpu.lease.release", "worker-gpu", {"reason": "m26e-stale"}, gpu_id, "gpu-stale-release"),
@@ -2166,16 +2333,120 @@ stale = [
     ("peft.activate", "worker-lora", {}, "m26e-lora", "peft-stale-activate"),
     ("peft.rollback", "worker-lora", {}, "vision-lora-edge", "peft-stale-rollback"),
 ]
-for row in stale:
+for row in expired:
     submit(*row[:4], "expired", row[4])
 
-expected_actions = {row[0] for row in confirmed + rejected + stale}
+expected_actions = {row[0] for row in confirmed + rejected + expired}
 if len(records) != 21 or {row["action"] for row in records} != expected_actions:
     raise RuntimeError("receipt matrix is incomplete")
 (boot / "receipt-matrix.json").write_text(
     json.dumps({"schema": "cohesix-qemu-receipt-matrix/v1", "records": records}, indent=2, sort_keys=True) + "\n",
     encoding="utf-8",
 )
+
+# Retirement occurs after the real agent has validated the live admission and
+# prepared its terminal result, before that result reaches the existing root.
+from dataclasses import asdict
+import hashlib
+from scripts.lib.host_ticket_result_barrier import TerminalResultBarrier
+
+retirements = []
+
+
+def current_lines(ticket, key):
+    path = rest.HOST_TICKET_CURRENT_PREFIX + rest.host_ticket_correlation_digest(ticket, key)
+    response = client.cat(path, rest.HOST_TICKET_CURRENT_MAX_BYTES)
+    if response.status != "OK":
+        raise RuntimeError("cannot read the exact admitted ticket")
+    rest.parse_host_ticket_current(response.lines)
+    return response.lines
+
+
+for index, (action, role, args_value, subject, _) in enumerate(expired, 1):
+    republish()
+    before = ready(role)
+    ticket = f"m26e-retired-{index:03d}"
+    key = f"m26e-retired-idem-{index:03d}"
+    payload = {
+        "schema": "host-ticket/v2", "id": ticket, "idempotency_key": key,
+        "action": action, "args": args_value, "receipt_mode": "worker",
+        "operation_id": f"m26e-retired-op-{index:03d}", "subject_ref": subject,
+        "receipt_worker_role": role, "receipt_worker_id": before.worker_id,
+        "receipt_supervisor_generation": before.supervisor_generation,
+        "receipt_cap_generation": before.cap_generation, "expires_unix_ms": 1,
+    }
+    response = client.echo("/host/tickets/spec", json.dumps(payload, separators=(",", ":")))
+    if response.status != "OK":
+        raise RuntimeError(f"retirement admission failed: {response.error}")
+    observation = {"action": action, "role": role, "ticket_id": ticket,
+                   "idempotency_key": key, "before": current_lines(ticket, key)}
+
+    def retire_receiver(result):
+        observation["result"] = result
+        response = rest.queen_control_with_approval(
+            client, json.dumps({"kill": before.worker_id}), f"m26e-retired-kill-{index}",
+        )
+        if response.status != "OK":
+            raise RuntimeError(f"retirement kill failed: {response.error}")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            old = next((row for row in instances() if row.worker_id == before.worker_id), None)
+            if old is not None and old.lifecycle == "terminal":
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("retired Worker did not become terminal")
+        spawn = ({"spawn": "gpu", "gpu_id": "GPU-0", "mem_mb": 4096,
+                  "streams": 2, "ttl_s": 120, "priority": 1}
+                 if role == "worker-gpu" else {"spawn": "lora"})
+        response = rest.queen_control_with_approval(
+            client, json.dumps(spawn), f"m26e-retired-spawn-{index}",
+        )
+        if response.status != "OK":
+            raise RuntimeError(f"replacement admission failed: {response.error}")
+        while time.monotonic() < deadline:
+            replacements = [row for row in instances() if row.role == role
+                            and row.lifecycle == "ready"
+                            and row.supervisor_generation > before.supervisor_generation]
+            if len(replacements) == 1:
+                observation["replacement_before"] = asdict(replacements[0])
+                observation["retired"] = current_lines(ticket, key)
+                capture_worker_records()
+                return
+            time.sleep(0.1)
+        raise RuntimeError("replacement Worker did not become READY")
+
+    with TerminalResultBarrier(
+        "http://127.0.0.1:8080", os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+        ticket, retire_receiver,
+    ) as barrier:
+        run_agent(barrier.url)
+        barrier.verify()
+    observation["after"] = current_lines(ticket, key)
+    after = rest.parse_host_ticket_current(observation["after"])
+    replacement = ready(role)
+    observation["replacement_after"] = asdict(replacement)
+    if after.state != "stale" or observation["replacement_before"] != observation["replacement_after"]:
+        raise RuntimeError("late result was not fenced from the replacement Worker")
+    capture_worker_records()
+    retirements.append(observation)
+
+worker_raw = (boot / "worker.live.log").read_bytes()
+(boot / "stale-ticket-observations.json").write_text(json.dumps({
+    "schema": "cohesix-stale-ticket-observations/v1",
+    "target_session_sha256": hashlib.sha256((boot / "target-session.json").read_bytes()).hexdigest(),
+    "worker_log_prefix": {"sha256": hashlib.sha256(worker_raw).hexdigest(), "bytes": len(worker_raw)},
+    "records": retirements,
+}, indent=2, sort_keys=True) + "\n")
+
+# The retirement proof ends with untouched replacements. After sealing that
+# evidence, exercise those current generations so preflight can prove their
+# own completion instead of borrowing a retired Worker's successful receipt.
+republish()
+submit("gpu.lease.grant", "worker-gpu", {"ttl_s": 60, "priority": 1},
+       gpu_id, "succeeded", "replacement-gpu-confirmed")
+submit("peft.export", "worker-lora", {}, export_job,
+       "succeeded", "replacement-lora-confirmed")
 PY
 }
 
@@ -2185,13 +2456,15 @@ emit_host_integration() {
     local cohsh=$3
     local observations="$boot_dir/host-integration-observations.json"
     python3 - "$REPO_ROOT/configs/generated/host_integration_dependency.json" \
-        "$RESOLVED_MANIFEST" "$uart" "$cohsh" "$boot_dir/receipt-matrix.json" "$observations" <<'PY'
+        "$RESOLVED_MANIFEST" "$uart" "$cohsh" "$boot_dir/receipt-matrix.json" \
+        "$boot_dir/preflight.worker.log" "$boot_dir/stale-ticket-observations.json" "$observations" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import sys
+from scripts.lib.worker_log import records as worker_records
 
-graph_path, manifest_path, uart_path, cohsh_path, matrix_path, out_path = map(Path, sys.argv[1:])
+graph_path, manifest_path, uart_path, cohsh_path, matrix_path, worker_path, stale_path, out_path = map(Path, sys.argv[1:])
 graph_raw = graph_path.read_bytes()
 manifest_raw = manifest_path.read_bytes()
 matrix_raw = matrix_path.read_bytes()
@@ -2220,20 +2493,26 @@ required = {
 }
 if observed != required or len(observed) != len(records):
     raise SystemExit("receipt matrix does not contain exact unique target outcomes")
-uart = uart_raw.decode("utf-8")
+stale = json.loads(stale_path.read_bytes())
+if (stale.get("schema") != "cohesix-stale-ticket-observations/v1"
+        or len(stale.get("records", [])) != 7
+        or {(row.get("action"), row.get("role")) for row in stale["records"]}
+        != set(expected.items())):
+    raise SystemExit("stale ticket matrix does not contain all seven retired admissions")
+worker_text = worker_records(worker_path.read_text(encoding="utf-8"))
 for literal in (
     "WORKER_TASK_RECEIPT",
     "WORKER_TASK_COMPLETION",
     "WORKER_TASK_READY role=worker-heartbeat",
     "WORKER_TASK_READY role=worker-gpu",
     "WORKER_TASK_READY role=worker-lora",
-    "NINEDOOR_SERVICE_TEARDOWN",
-    "CONSOLE_NETWORK_TEARDOWN",
     "GPU_BRIDGE_FIXTURE_ADMISSION",
     "LORA_EXPORT_FIXTURE_ADMISSION",
 ):
-    if literal not in uart:
-        raise SystemExit(f"target UART lacks semantic integration marker: {literal}")
+    if literal not in worker_text:
+        raise SystemExit(f"authenticated Worker log lacks semantic integration marker: {literal}")
+# Service teardown belongs to the three separate service-fault boots. The
+# preflight collector validates those exact UART/GDB pairs before acceptance.
 cohsh = cohsh_raw.decode("utf-8")
 for literal in ("OK SPAWN", "OK KILL", "worker-bus", "model-only", "mode=fixture"):
     if literal not in cohsh:
@@ -2241,20 +2520,26 @@ for literal in ("OK SPAWN", "OK KILL", "worker-bus", "model-only", "mode=fixture
 if "ERR" not in cohsh:
     raise SystemExit("cohsh transcript lacks bounded control refusal")
 artifacts = {
-    "gpu-receipt-path": ("confirmed-rejected-stale-worker-receipts-observed", (matrix_path, uart_path)),
-    "peft-receipt-path": ("confirmed-rejected-stale-worker-receipts-observed", (matrix_path, uart_path)),
-    "worker-control": ("spawn-kill-admission-ready-and-refusal-observed", (cohsh_path, uart_path)),
+    "gpu-receipt-path": ("confirmed-rejected-receipts-and-retired-result-fencing-observed", (
+        ("receipt-matrix", matrix_path), ("stale-ticket-observations", stale_path),
+        ("worker-log-transcript", worker_path))),
+    "peft-receipt-path": ("confirmed-rejected-receipts-and-retired-result-fencing-observed", (
+        ("receipt-matrix", matrix_path), ("stale-ticket-observations", stale_path),
+        ("worker-log-transcript", worker_path))),
+    "worker-control": ("spawn-kill-admission-ready-and-refusal-observed", (
+        ("cohsh-transcript", cohsh_path), ("uart-transcript", uart_path),
+        ("worker-log-transcript", worker_path))),
 }
 rows = []
 for row_id in sorted(artifacts):
     result, paths = artifacts[row_id]
     raw_evidence = []
-    for path in paths:
+    for identifier, path in paths:
         raw = path.read_bytes()
         if not raw:
             raise SystemExit(f"empty host-integration artifact: {path}")
         raw_evidence.append(
-            {"id": path.name, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+            {"id": identifier, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
         )
     raw_evidence.sort(key=lambda row: row["id"])
     rows.append(
@@ -2340,8 +2625,9 @@ run_service_fault_boot() {
     [[ "$QEMU_PID" =~ ^[0-9]+$ ]] || die "service QEMU pidfile is malformed"
     ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
     verify_qemu_command "$boot_dir" no
-    wait_for_port 127.0.0.1 31337 180
-    wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180
+    # A bare host-forward probe can remain pending in slirp until the guest
+    # listens, then occupy its sole console slot during authenticated control.
+    wait_for_marker_count "$boot_dir/uart.live.log" "[mark] root-console.start.ok" 1 180
     verify_live_artifacts
 
     drive_service_fault_plan \
@@ -2377,8 +2663,8 @@ run_pressure_boot() {
     [[ "$QEMU_PID" =~ ^[0-9]+$ ]] || die "QEMU pidfile is malformed"
     ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
     verify_qemu_command "$boot_dir" no
-    wait_for_port 127.0.0.1 31337 180
-    wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180
+    # Observe guest readiness without creating an unauthenticated connection.
+    wait_for_marker_count "$boot_dir/uart.live.log" "[mark] root-console.start.ok" 1 180
     verify_live_artifacts
     # Three role-specific GDB plans use only the qemu-evidence symbols and the
     # existing spawn/fault/recreate lifecycle. They run before the first
@@ -2395,8 +2681,11 @@ run_pressure_boot() {
     assert_gateway_unproven
     publish_gpu_fixture "$boot_dir"
     drive_receipt_matrix "$boot_dir"
+    capture_worker_log "$boot_dir"
     publish_gpu_fixture "$boot_dir"
     drive_operator_lifecycle "$boot_dir"
+    capture_worker_log "$boot_dir"
+    cp "$boot_dir/worker.live.log" "$boot_dir/preflight.worker.log"
     freeze_prefix "$boot_dir/uart.live.log" "$boot_dir/preflight.uart.log"
     cp "$boot_dir/cohsh.log" "$boot_dir/preflight.cohsh.log"
     emit_host_integration "$boot_dir" "$boot_dir/preflight.uart.log" "$boot_dir/preflight.cohsh.log"
@@ -2407,6 +2696,8 @@ run_pressure_boot() {
         --qemu-out "$OUT_ROOT" \
         --auth-observation "$AUTH_OBSERVATION" \
         --uart "$boot_dir/preflight.uart.log" \
+        --worker-log "$boot_dir/preflight.worker.log" \
+        --stale-ticket-observations "$boot_dir/stale-ticket-observations.json" \
         --cohsh "$boot_dir/preflight.cohsh.log" \
         --gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
         --gdb-log "$boot_dir/worker-gpu.gdb.log" \
@@ -2442,9 +2733,10 @@ run_pressure_boot() {
     start_pressure_helpers "$boot_dir"
 
     local executable_population
-    executable_population="$(resolved_executable_population)"
+    executable_population="$(populate_executable_workers "$boot_dir")"
     [[ "$executable_population" =~ ^[1-9][0-9]*$ ]] || \
         die "resolved executable Worker population is invalid"
+    capture_worker_log "$boot_dir"
 
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     HIVE_GATEWAY_URL=http://127.0.0.1:8080 \
@@ -2455,6 +2747,7 @@ run_pressure_boot() {
         --no-gateway \
         --rest-url http://127.0.0.1:8080 \
         --qemu-uart-log "$boot_dir/uart.live.log" \
+        --qemu-worker-log "$boot_dir/worker.live.log" \
         --qemu-gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
         --target-session "$TARGET_SESSION" \
         --workers-min "$executable_population" \
@@ -2494,18 +2787,20 @@ PY
         die "canonical pressure summary copy differs from immutable harness output"
     summary="$boot_dir/pressure.summary.json"
     python3 - "$summary" "$boot_dir/uart.live.log" "$boot_dir/pressure.uart.log" \
-        "$boot_dir/worker-heartbeat.gdb.log" "$boot_dir/pressure.gdb.log" <<'PY'
+        "$boot_dir/worker-heartbeat.gdb.log" "$boot_dir/pressure.gdb.log" \
+        "$boot_dir/worker.live.log" "$boot_dir/pressure.worker.log" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import sys
 
-summary_path, uart_live, uart_out, gdb_live, gdb_out = map(Path, sys.argv[1:])
+summary_path, uart_live, uart_out, gdb_live, gdb_out, worker_live, worker_out = map(Path, sys.argv[1:])
 summary = json.loads(summary_path.read_text(encoding="utf-8"))
 faults = summary["report"]["executable_state"]["fault_artifacts"]
 for name, source, destination in (
     ("uart", uart_live, uart_out),
     ("gdb", gdb_live, gdb_out),
+    ("worker-log", worker_live, worker_out),
 ):
     expected = faults[name]
     raw = source.read_bytes()
@@ -2698,6 +2993,8 @@ mkdir -p "$FINAL_DIR"
     --qemu-out "$OUT_ROOT" \
     --auth-observation "$AUTH_OBSERVATION" \
     --preflight-uart "$RUN_DIR/medium/preflight.uart.log" \
+    --preflight-worker-log "$RUN_DIR/medium/preflight.worker.log" \
+    --stale-ticket-observations "$RUN_DIR/medium/stale-ticket-observations.json" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-heartbeat.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-gpu.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-lora.gdb.log" \
@@ -2709,9 +3006,11 @@ mkdir -p "$FINAL_DIR"
     --preflight-service-uart "$RUN_DIR/console-standard-fault/service.uart.log" \
     --preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log" \
     --uart "$RUN_DIR/medium/pressure.uart.log" \
+    --worker-log "$RUN_DIR/medium/pressure.worker.log" \
     --gdb-log "$RUN_DIR/medium/pressure.gdb.log" \
     --pressure "$RUN_DIR/medium/pressure.summary.json" \
     --uart "$RUN_DIR/high/pressure.uart.log" \
+    --worker-log "$RUN_DIR/high/pressure.worker.log" \
     --gdb-log "$RUN_DIR/high/pressure.gdb.log" \
     --pressure "$RUN_DIR/high/pressure.summary.json" \
     --cohsh "$RUN_DIR/high/preflight.cohsh.log" \

@@ -55,6 +55,7 @@ evidence before expansion.
 | Initial root SC 128/256 bytes, 2/8 refills | Clean upstream QEMU allocates 128 bytes at boot; the authenticated Pi overlay allocates 256. A manifest cannot enlarge this pre-existing object. Both sizes are checked against the selected kernel contract. |
 | Root/fault/emergency cores and root budget 9000/5500 us per 10000 us | QEMU can dedicate core 0 to root. Pi also admits 3000 us fault and 250 us emergency reservations on core 0. Copying QEMU's root budget would exceed admission. |
 | Supervisors and LoRA executor budgets | Pi shares core 1 with GENET/serial/USB/HDMI and core 3 with WiFi/SDIO. QEMU can devote more of those cores to supervisors/LoRA. |
+| Worker-supervisor and GPU-executor SC refills | QEMU declares 10 refills for each; Pi retains 2 for its Worker supervisor and 8 for its GPU executor. Both use 256-byte SC objects. These target-specific replenishment allocations preserve the selected scheduling envelopes; parity does not imply identical refill histories. |
 | WCET, response bounds and provenance | Target-specific execution and interference envelopes; equalizing numbers would erase their hardware basis. |
 | Root serial-I/O allowance | QEMU root services the virtual UART; Pi's declared isolated serial owner owns physical I/O. |
 

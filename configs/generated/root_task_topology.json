@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8",
-  "topology_sha256": "28167e323e469156c2f0b2c4ebd9eca8cf4804a5c92ed6b5232900e2960357ab",
+  "manifest_sha256": "00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc",
+  "topology_sha256": "2311ddaa03c0225c4834107f9fc8bb3249d17deee02448bdd5b41ef18b0de3e2",
   "topology": {
     "console_network_service": {
       "abi_version": 6,
@@ -329,7 +329,7 @@
         ],
         "required": true
       },
-      "schema": "1.17"
+      "schema": "1.18"
     },
     "temporal_authority": {
       "admission_window_us": 10000,
@@ -417,7 +417,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 2,
           "timeout_badge": 653131778,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-root-fault-service-units-candidate-v6",
           "wcet_us": 2400
@@ -469,7 +469,7 @@
           "kind": "worker-supervisor",
           "locality_bound": false,
           "max_donation_depth": 0,
-          "max_refills": 2,
+          "max_refills": 10,
           "mcp": 210,
           "period_us": 10000,
           "priority": 210,
@@ -479,7 +479,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 4,
           "timeout_badge": 653131780,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15",
           "wcet_us": 2400
@@ -510,7 +510,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 5,
           "timeout_badge": 653131781,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15",
           "wcet_us": 2400
@@ -531,7 +531,7 @@
           "kind": "worker-executor",
           "locality_bound": false,
           "max_donation_depth": 0,
-          "max_refills": 8,
+          "max_refills": 10,
           "mcp": 200,
           "period_us": 10000,
           "priority": 80,
@@ -541,7 +541,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 7,
           "timeout_badge": 653131782,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-passive-worker-executor-gpu-v1",
           "wcet_us": 4500
@@ -572,7 +572,7 @@
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 8,
           "timeout_badge": 653131783,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
           "wcet_provenance": "m26e-passive-worker-executor-lora-v1",
           "wcet_us": 7000
@@ -9514,6 +9514,7 @@
         "bootstrap_max_refills": 2,
         "bootstrap_period_us": 10000,
         "bootstrap_scheduling_context_bits": 8,
+        "bootstrap_timeout_policy": "natural-postpone",
         "consumed_budget_evidence": true,
         "domain": 0,
         "priority": 96,

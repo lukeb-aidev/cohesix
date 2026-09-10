@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.17";
+const SCHEMA_VERSION: &str = "1.18";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -1661,6 +1661,24 @@ impl Manifest {
             || self.temporal_authority.architecture != SchedulerArchitecture::SmpMcs
         {
             bail!("executable Worker roles require enabled SMP+MCS temporal_authority");
+        }
+        // These persistent service loops retain their work across kernel
+        // preemption. Their SC is a CPU reservation, not a lifetime deadline;
+        // exhaustion must postpone the loop, including its next blocking syscall.
+        for task in &self.temporal_authority.tasks {
+            if matches!(
+                task.kind,
+                TemporalTaskKind::RootFault
+                    | TemporalTaskKind::WorkerSupervisor
+                    | TemporalTaskKind::DriverSupervisor
+                    | TemporalTaskKind::WorkerExecutor
+            ) && task.timeout_policy != TimeoutPolicy::NaturalPostpone
+            {
+                bail!(
+                    "resumable critical task {} requires natural-postpone scheduling",
+                    task.id
+                );
+            }
         }
         for admission in &self.worker_resource_admission.executable_roles {
             let expected_donor = match admission.role.as_str() {
@@ -5029,19 +5047,14 @@ mod tests {
             .find(|task| task.id == "ninedoor-service")
             .expect("NineDoor temporal task")
             .allowed_donors = vec!["root-fault".to_owned()];
-        manifest
-            .temporal_authority
-            .tasks
-            .iter_mut()
-            .find(|task| task.id == "ninedoor-service")
-            .expect("NineDoor temporal task")
-            .core = 1;
-        manifest.ninedoor_service.core = 1;
+        // Keep the canonical same-core topology so this isolates donor
+        // rejection from cross-core donation and admission checks. The
+        // bounded-resume policy rejects the wrong donor before inventory validation.
         assert!(manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("unapproved donor must fail")
             .to_string()
-            .contains("donation inventory"));
+            .contains("bounded timeout resume requires the sole local NineDoor donation chain"));
 
         let mut manifest = load_manifest(&manifest_path).expect("reload fixture manifest");
         manifest
@@ -5132,6 +5145,57 @@ mod tests {
             .expect_err("non-root task must reject a serial bound")
             .to_string()
             .contains("must not declare a VirtIO Operator serial I/O byte bound"));
+    }
+
+    #[test]
+    fn executable_workers_preserve_resumable_critical_reservations() {
+        for source in [
+            "configs/root_task.toml",
+            "configs/root_task_regression.toml",
+            "configs/root_task_pi4_uboot_aarch64.toml",
+        ] {
+            let manifest = load_manifest(&repo_root().join(source)).expect("selected manifest");
+            manifest
+                .validate_worker_runtime()
+                .expect("selected passive Worker contract");
+            for id in [
+                "root-fault",
+                "root-worker-supervisor",
+                "root-driver-supervisor",
+                "root-worker-executor-gpu",
+                "root-worker-executor-lora",
+            ] {
+                let mut invalid = manifest.clone();
+                let task = invalid
+                    .temporal_authority
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .expect("required critical task");
+                assert_eq!(task.timeout_policy, TimeoutPolicy::NaturalPostpone);
+                task.timeout_policy = TimeoutPolicy::Terminal;
+                assert_eq!(
+                    invalid
+                        .validate_worker_runtime()
+                        .expect_err("reservation exhaustion must preserve resumable critical work")
+                        .to_string(),
+                    format!("resumable critical task {id} requires natural-postpone scheduling")
+                );
+            }
+            let emergency = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == "root-emergency")
+                .expect("emergency task");
+            assert_eq!(emergency.timeout_policy, TimeoutPolicy::FailStop);
+            assert!(manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .filter(|task| task.kind == TemporalTaskKind::Worker)
+                .all(|task| task.timeout_policy == TimeoutPolicy::ReturnError));
+        }
     }
 
     fn fixture_manifest() -> super::Manifest {
@@ -5330,6 +5394,56 @@ mod tests {
                 .contains("requires implemented role worker-gpu"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn worker_bootstrap_policy_preserves_refills_and_passive_fault_containment() {
+        for profile in [
+            "root_task.toml",
+            "root_task_regression.toml",
+            "root_task_pi4_uboot_aarch64.toml",
+        ] {
+            let path = repo_root().join("configs").join(profile);
+            let manifest = load_manifest(&path).expect("selected Worker manifest");
+            let scheduling = &manifest.worker_runtime.scheduling;
+            assert_eq!(
+                scheduling.bootstrap_timeout_policy,
+                TimeoutPolicy::NaturalPostpone
+            );
+            assert_eq!(
+                (
+                    scheduling.bootstrap_budget_us,
+                    scheduling.bootstrap_period_us
+                ),
+                (400, 10_000)
+            );
+            assert_eq!(scheduling.bootstrap_max_refills, 2);
+            assert_eq!(manifest.worker_runtime.task_abi.ready_timeout_ms, 5_000);
+            assert!(manifest
+                .temporal_authority
+                .worker_classes
+                .iter()
+                .all(|task| task.timeout_policy == TimeoutPolicy::ReturnError));
+            for policy in [
+                TimeoutPolicy::Terminal,
+                TimeoutPolicy::ReplenishOnce,
+                TimeoutPolicy::ReturnError,
+                TimeoutPolicy::ResumeOnceReturnError,
+                TimeoutPolicy::FailStop,
+            ] {
+                let mut invalid = manifest.clone();
+                invalid.worker_runtime.scheduling.bootstrap_timeout_policy = policy;
+                let error = invalid
+                    .validate_with_base(path.parent())
+                    .expect_err("startup must resume only through its bounded reservation");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("bootstrap_timeout_policy must be natural-postpone"),
+                    "{error:#}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -7100,6 +7214,8 @@ pub struct WorkerSchedulingConfig {
     pub bootstrap_budget_us: u32,
     pub bootstrap_period_us: u32,
     pub bootstrap_max_refills: u8,
+    /// Startup may span refills; the separate READY deadline bounds admission.
+    pub bootstrap_timeout_policy: TimeoutPolicy,
     pub timeout_endpoint_badge: u64,
     pub consumed_budget_evidence: bool,
 }
@@ -7115,6 +7231,7 @@ impl WorkerSchedulingConfig {
                     || self.bootstrap_budget_us != 0
                     || self.bootstrap_period_us != 0
                     || self.bootstrap_max_refills != 0
+                    || self.bootstrap_timeout_policy != TimeoutPolicy::Terminal
                     || self.timeout_endpoint_badge != 0
                     || self.consumed_budget_evidence
                 {
@@ -7129,6 +7246,9 @@ impl WorkerSchedulingConfig {
                     || self.bootstrap_max_refills < 2
                 {
                     bail!("worker_runtime.scheduling passive MCS profile requires a bounded bootstrap SC");
+                }
+                if self.bootstrap_timeout_policy != TimeoutPolicy::NaturalPostpone {
+                    bail!("worker_runtime.scheduling.bootstrap_timeout_policy must be natural-postpone for passive MCS startup");
                 }
                 if self.timeout_endpoint_badge == 0 || !self.consumed_budget_evidence {
                     bail!("worker_runtime.scheduling MCS profile requires timeout endpoint badge and consumed-budget evidence");
@@ -7150,6 +7270,7 @@ impl Default for WorkerSchedulingConfig {
             bootstrap_budget_us: 0,
             bootstrap_period_us: 0,
             bootstrap_max_refills: 0,
+            bootstrap_timeout_policy: TimeoutPolicy::Terminal,
             timeout_endpoint_badge: 0,
             consumed_budget_evidence: false,
         }

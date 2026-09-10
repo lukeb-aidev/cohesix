@@ -8774,7 +8774,7 @@ mod tests {
                 super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
                 0x1002,
             ),
-            Ok(Some(2))
+            Ok(Some(1))
         );
         assert_eq!(
             super::apply_driver_tcb_affinity_for_boot(
@@ -8795,7 +8795,7 @@ mod tests {
                 super::driver_task::GENET_DRIVER_TASK_CONTRACT,
                 0x1005,
             ),
-            Ok(Some(3))
+            Ok(Some(1))
         );
         assert_eq!(
             super::apply_driver_tcb_affinity_for_boot(

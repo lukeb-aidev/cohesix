@@ -48,8 +48,9 @@ file, or JSON object creates Worker READY or target proof.
 ## Milestone 26e Worker compatibility
 
 Worker APIs require an explicit generated `cohesix-python-profile/v1`
-contract. Use the QEMU contract only with `qemu_smp_production` and the Pi
-contract only with `pi4_production`:
+contract. The QEMU contract must match the selected `qemu_smp_production` Mac
+or `qemu_smp_kvm_production` Linux build. Use the Pi contract only with
+`pi4_production`:
 
 ```python
 from cohesix import CohesixClient, MockBackend, load_profile_contract

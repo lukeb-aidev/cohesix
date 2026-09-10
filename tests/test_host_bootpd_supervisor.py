@@ -16,6 +16,9 @@ LAUNCHD_PLIST_PATH = (
     HOST_BOOTPD_DIR / "com.lukasbower.cohesix.en8-bootpd.plist"
 )
 EXTERNAL_RUNTIME_DIR = "/Users/lukasbower/cohesix/host-bootpd"
+INSTALLED_SCRIPT_PATH = (
+    "/Users/lukasbower/GitHub/cohesix/tools/host-bootpd/start-en8-bootpd.zsh"
+)
 
 
 def test_supervisor_recreates_runtime_dir_before_each_service_turn() -> None:
@@ -132,5 +135,7 @@ def test_launchdaemon_binds_external_runtime_and_external_logs() -> None:
     assert launchd["StandardErrorPath"] == (
         f"{EXTERNAL_RUNTIME_DIR}/root-launchd.err.log"
     )
-    assert launchd["ProgramArguments"] == [str(SCRIPT_PATH)]
+    # This bench-specific template binds the installed host service. Merely
+    # reading it from another checkout must not relocate that service.
+    assert launchd["ProgramArguments"] == [INSTALLED_SCRIPT_PATH]
     assert "/out/host-bootpd/" not in str(launchd)

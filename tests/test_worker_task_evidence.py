@@ -23,6 +23,99 @@ from scripts import worker_task_evidence as evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("tamper", [
+    None, "session", "log", "missing-action", "duplicate-action", "retarget",
+    "replacement-progress", "result-generation", "retirement-order", "retired-progress",
+])
+def test_stale_ticket_fencing_requires_exact_retired_and_untouched_replacement(
+    tmp_path: Path, tamper: str | None,
+) -> None:
+    """Late results stay at root; neither a new identity nor its progress may change."""
+    session = b"independent-session-bytes"
+    worker = b"independent-authenticated-log-bytes"
+    actions = [
+        ("gpu.lease.grant", "worker-gpu", 0x201),
+        ("gpu.lease.renew", "worker-gpu", 0x202),
+        ("gpu.lease.release", "worker-gpu", 0x203),
+        ("peft.export", "worker-lora", 0x301),
+        ("peft.import", "worker-lora", 0x302),
+        ("peft.activate", "worker-lora", 0x303),
+        ("peft.rollback", "worker-lora", 0x304),
+    ]
+    rows = []
+    markers = {"ready": [], "teardown": []}
+    for index, (action, role, _) in enumerate(actions, 1):
+        old = {"role": role, "slot": "0", "lease_epoch": str(index),
+               "supervisor_generation": str(index * 2), "cap_generation": str(index)}
+        new = dict(old, lease_epoch=str(index + 1),
+                   supervisor_generation=str(index * 2 + 1), cap_generation=str(index + 1))
+        markers["ready"].extend([
+            dict(old, sequence="1", line=index * 10),
+            dict(new, sequence="1", line=index * 10 + 2),
+        ])
+        markers["teardown"].append(dict(old, line=index * 10 + 1))
+
+        def current(state: str, lifecycle: str, sequences: str) -> list[str]:
+            return [f"HOST_TICKET_CURRENT schema=host-ticket-current/v1 state={state} "
+                    f"role={role} worker=worker-{index} lifecycle={lifecycle} "
+                    f"identity=0,{index},{index * 2},{index} sequence={sequences} admission={index}"]
+
+        replacement = {name: (value if name == "role" else int(value))
+                       for name, value in new.items()}
+        replacement.update(worker_id=f"worker-new-{index}", lifecycle="ready",
+                           ready_sequence=1, control_sequence=0,
+                           receipt_sequence=0, completion_sequence=0)
+        rows.append({
+            "action": action, "role": role, "ticket_id": f"ticket-{index}",
+            "idempotency_key": f"key-{index}",
+            "before": current("pending", "ready", "1,0,2,2"),
+            "retired": current("pending", "terminal", "1,0,0,3"),
+            "after": current("stale", "terminal", "1,0,0,3"),
+            "replacement_before": replacement,
+            "replacement_after": copy.deepcopy(replacement),
+            "result": {
+                "schema": "host-ticket-result/v2", "id": f"ticket-{index}",
+                "idempotency_key": f"key-{index}", "action": action, "state": "expired",
+                "receipt_mode": "worker", "receipt_worker_role": role,
+                "receipt_worker_id": f"worker-{index}",
+                "receipt_supervisor_generation": index * 2, "receipt_cap_generation": index,
+                "resolved_worker_slot": 0, "resolved_lease_epoch": index,
+                "admission_sequence": index, "result_digest": "a" * 64,
+            },
+        })
+    data = {"schema": "cohesix-stale-ticket-observations/v1",
+            "target_session_sha256": hashlib.sha256(session).hexdigest(),
+            "worker_log_prefix": {"bytes": len(worker), "sha256": hashlib.sha256(worker).hexdigest()},
+            "records": rows}
+    if tamper == "session":
+        data["target_session_sha256"] = "0" * 64
+    elif tamper == "log":
+        data["worker_log_prefix"]["sha256"] = "0" * 64
+    elif tamper == "missing-action":
+        rows.pop()
+    elif tamper == "duplicate-action":
+        rows[-1] = copy.deepcopy(rows[0])
+    elif tamper == "retarget":
+        rows[0]["after"][0] = rows[0]["after"][0].replace("worker=worker-1", "worker=worker-new-1")
+    elif tamper == "replacement-progress":
+        rows[0]["replacement_after"]["completion_sequence"] = 1
+    elif tamper == "result-generation":
+        rows[0]["result"]["receipt_cap_generation"] = 2
+    elif tamper == "retirement-order":
+        markers["teardown"][0]["line"] = 1000
+    elif tamper == "retired-progress":
+        rows[0]["after"][0] = rows[0]["after"][0].replace("sequence=1,0,0,3", "sequence=1,0,0,4")
+    path = tmp_path / "stale.json"
+    path.write_text(json.dumps(data))
+    if tamper:
+        with pytest.raises(evidence.EvidenceError):
+            evidence._stale_ticket_observations(path, session, worker, markers)
+    else:
+        actual, raw = evidence._stale_ticket_observations(path, session, worker + b"later-log", markers)
+        assert actual == {(code, 8) for _, _, code in actions}
+        assert raw == path.read_bytes()
+
+
 def _pi_live_record_fixture() -> tuple[
     dict[str, object],
     dict[str, object],
@@ -412,9 +505,9 @@ def _component(
                 },
                 "image_sha256": _hash(role),
                 "ready_sequence": 1,
-                "completion_sequence": 2,
+                "completion_sequence": 0 if role == "worker-heartbeat" else 2,
                 "endpoint_badge": 638_324_736
-                + ((role_config["role_index"] << 8) | 1),
+                + (((index + 1) << 8) | 1),
                 "fault_badge": 652_279_808 + index,
                 "core": role_config["core"],
                 "scheduling_context": {
@@ -517,6 +610,7 @@ def _generated_record(target: str) -> dict[str, object]:
         "root_task": {},
         "worker_runtime": {
             "max_workers": 3,
+            "scheduling": {"bootstrap_budget_us": 400, "bootstrap_period_us": 10000},
             "endpoint_caps": {
                 "required": True,
                 "attach_badge_base": 638_324_736,
@@ -524,9 +618,11 @@ def _generated_record(target: str) -> dict[str, object]:
             },
             "task_abi": {
                 "enabled": True,
-                "version": 1,
+                "version": 2,
                 "shared_page_bytes": 4096,
                 "shared_page_vaddr": 0x7100_1000,
+                "shutdown_call_label": 2,
+                "revoke_call_label": 3,
             },
         },
         "temporal_authority": {
@@ -543,7 +639,17 @@ def _generated_record(target: str) -> dict[str, object]:
                     "timeout_policy": "natural-postpone",
                 },
                 *(
-                    {"id": identifier, "kind": kind}
+                    {
+                        "id": identifier,
+                        "kind": kind,
+                        "execution": "active",
+                        "admitted": True,
+                        "critical_reserve": True,
+                        "timeout_policy": (
+                            "fail-stop" if identifier == "root-emergency"
+                            else "natural-postpone"
+                        ),
+                    }
                     for identifier, kind in critical_tasks[1:]
                 ),
                 {
@@ -991,7 +1097,6 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     endpoint_base = generated["topology"]["worker_runtime"]["endpoint_caps"][
         "attach_badge_base"
     ]
-    role_bits = {"worker-heartbeat": 1, "worker-gpu": 2, "worker-lora": 4}
 
     lines = [
         "[critical] exact generated fault registry sealed sources=12",
@@ -1024,7 +1129,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         role_row = roles[role]
         task = next(task for task in worker_tasks if task["id"] == f"{role}-slot-0")
         ordinal = worker_tasks.index(task)
-        endpoint = endpoint_base + ((role_bits[role] << 8) | generation)
+        endpoint = endpoint_base + (((ordinal + 1) << 8) | generation)
         fields = [
             "WORKER_TASK_ADMISSION",
             identity(role, generation),
@@ -1032,8 +1137,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             f"endpoint_badge={endpoint}",
             f"fault_badge={fault_base + ordinal}",
             f"core={role_row['core']}",
-            f"sc_budget_us={task['budget_us']}",
-            f"sc_period_us={task['period_us']}",
+            "sc_budget_us=400",
+            "sc_period_us=10000",
             *(f"{key}={role_row['per_slot'][key]}" for key in evidence.INVENTORY_KEYS),
             "state=admitted",
         ]
@@ -1098,14 +1203,9 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     fault("worker-heartbeat", 3, "Timeout")
     admission("worker-heartbeat", 4)
     ready("worker-heartbeat", 4)
-    control("worker-heartbeat", 4, 0x0101, 0, 1)
-    lines.append(
-        f"WORKER_TASK_COMPLETION {identity('worker-heartbeat', 4)} "
-        "action=0x0101 status=1 sequence=1"
-    )
 
     final_generation = {"worker-heartbeat": 4, "worker-gpu": 5, "worker-lora": 4}
-    final_sequences = {"worker-heartbeat": 1, "worker-gpu": 1, "worker-lora": 12}
+    final_sequences = {"worker-heartbeat": 0, "worker-gpu": 1, "worker-lora": 12}
     for role in ("worker-gpu", "worker-lora"):
         admission(role, 1)
         fault(role, 1, "Standard")
@@ -1153,8 +1253,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
                         for role in evidence.REQUIRED_ROLES
                     ),
                     f"M26E_GDB_INJECTION role={inject_role} phase=pre-ready symbol=_start action=zero-x0 result=continued",
-                    f"M26E_GDB_INJECTION role={inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued",
-                    f"M26E_GDB_INJECTION role={inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-timeout-spin result=continued",
+                    f"M26E_GDB_INJECTION role={inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued",
+                    f"M26E_GDB_INJECTION role={inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued",
                 ]
             )
             + "\n"
@@ -2038,10 +2138,125 @@ def test_component_validator_accepts_bounded_role_exemplars() -> None:
         evidence.validate_component(pi_component, "pi4")
 
 
+@pytest.mark.parametrize("identity_mode", ["exact", "missing", "wrong-generation"])
+def test_pressure_receipts_distinguish_equal_sequences_on_different_workers(
+    identity_mode: str,
+) -> None:
+    """Independent Worker counters can coincide without sharing an identity."""
+    before = {"role": "worker-heartbeat", "slot": 0, "lease_epoch": 1,
+              "supervisor_generation": 1, "cap_generation": 1}
+    after = {**before, "lease_epoch": 2, "supervisor_generation": 2, "cap_generation": 2}
+    gpu = {"role": "worker-gpu", "slot": 3, "lease_epoch": 1,
+           "supervisor_generation": 8, "cap_generation": 1}
+    another = {**gpu, "slot": 4, "supervisor_generation": 9}
+    operation = {
+        "action": "gpu.lease.renew", "role": "worker-gpu", "worker_id": "worker-11",
+        "sequence_before": {"receipt": 6, "completion": 6},
+        "sequence_after": {"receipt": 7, "completion": 7}, "status": "succeeded",
+    }
+    if identity_mode != "missing":
+        operation["identity"] = dict(gpu)
+        if identity_mode == "wrong-generation":
+            operation["identity"]["supervisor_generation"] = 10
+
+    def marker(identity, **fields):
+        return {key: str(value) for key, value in {**identity, **fields}.items()}
+
+    markers = {
+        "teardown": [marker(before, reason="shutdown")], "ready": [marker(after)],
+        "receipt": [marker(identity, action="0x0202", outcome=1, sequence=7)
+                    for identity in (gpu, another)],
+        "completion": [marker(identity, action="0x0202", status=1, sequence=7)
+                       for identity in (gpu, another)],
+    }
+    report = {"lifecycle_cycles": [{
+        "role": "worker-heartbeat", "before": before, "after": after,
+        "kill_admitted": True, "recreate_admitted": True,
+        "terminal_observed": True, "ready_observed": True,
+    }], "receipt_operations": [operation]}
+    if identity_mode == "exact":
+        evidence._validate_pressure_cycles_and_receipts([report], markers)
+    else:
+        with pytest.raises(evidence.EvidenceError, match="differs from exact UART outcome"):
+            evidence._validate_pressure_cycles_and_receipts([report], markers)
+
+
+@pytest.mark.parametrize(
+    "invalid", [None, "negative", "infinite", "boolean", "reads", "unknown"],
+)
+def test_pressure_receipt_timing_diagnostics_preserve_exact_proof(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    """The emitted diagnostics are optional, typed, finite and never authority."""
+    inputs = _live_qemu_inputs(tmp_path)
+    for path in inputs.pressure:
+        summary = json.loads(path.read_text())
+        operation = summary["report"]["executable_state"]["receipt_operations"][0]
+        operation.update(
+            timing_s={
+                "lane_wait": 0.0, "admission": 0.01,
+                "completion_wait": 0.02, "total": 0.03,
+            },
+            current_reads=2,
+        )
+        if invalid in {"negative", "infinite", "boolean"}:
+            operation["timing_s"]["admission"] = {
+                "negative": -1, "infinite": float("inf"), "boolean": True,
+            }[invalid]
+        elif invalid == "reads":
+            operation["current_reads"] = 0
+        elif invalid == "unknown":
+            operation["untrusted_authority"] = True
+        _write(path, summary)
+    if invalid:
+        expected = (
+            "invalid JSON.*non-finite number" if invalid == "infinite"
+            else "receipt.*(schema|diagnostics)"
+        )
+        with pytest.raises(evidence.EvidenceError, match=expected):
+            evidence._collect_qemu(inputs)
+        assert not inputs.out_dir.exists()
+    else:
+        evidence._collect_qemu(inputs)
+        assert (inputs.out_dir / "worker-task-evidence.json").is_file()
+
+
+@pytest.mark.parametrize("retained_log", [False, True])
 def test_live_qemu_benchmark_schema_collection_is_semantically_derived(
-    tmp_path: Path,
+    tmp_path: Path, retained_log: bool,
 ) -> None:
     inputs = _live_qemu_inputs(tmp_path)
+    if retained_log:
+        def export_worker_records(uart_path: Path, destination: Path) -> None:
+            fragments = []
+            for identity, line in enumerate(uart_path.read_text().splitlines()):
+                if not line.startswith(("WORKER_TASK_", "GPU_BRIDGE_FIXTURE_ADMISSION ", "LORA_EXPORT_FIXTURE_ADMISSION ")):
+                    continue
+                parts = [line[offset:offset + 176] for offset in range(0, len(line), 176)]
+                fragments.extend(
+                    f"WORKER_LOG id={identity} part={part} last={int(part == len(parts) - 1)} data={text}"
+                    for part, text in enumerate(parts)
+                )
+            destination.write_text("\n".join(fragments) + "\n")
+
+        inputs.preflight_worker_log = tmp_path / "preflight.worker.log"
+        export_worker_records(inputs.preflight_uart, inputs.preflight_worker_log)
+        inputs.worker_log = []
+        for index, (uart, pressure) in enumerate(zip(inputs.uart, inputs.pressure, strict=True)):
+            path = tmp_path / f"pressure-{index}.worker.log"
+            export_worker_records(uart, path)
+            inputs.worker_log.append(path)
+            summary = json.loads(pressure.read_text())
+            state = summary["report"]["executable_state"]
+            state["fault_artifacts"]["worker-log"] = {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "bytes": path.stat().st_size,
+            }
+            state["required_fault_markers"] = [
+                marker.replace("uart:WORKER_TASK_", "worker-log:WORKER_TASK_")
+                for marker in state["required_fault_markers"]
+            ]
+            pressure.write_text(json.dumps(summary))
     preflight_out = tmp_path / "preflight-component"
     evidence._collect_qemu_preflight(  # noqa: SLF001 - production collector contract
         SimpleNamespace(
@@ -2050,6 +2265,7 @@ def test_live_qemu_benchmark_schema_collection_is_semantically_derived(
             qemu_out=inputs.qemu_out,
             auth_observation=inputs.auth_observation,
             uart=inputs.preflight_uart,
+            worker_log=getattr(inputs, "preflight_worker_log", None),
             cohsh=inputs.cohsh,
             gdb_log=inputs.preflight_gdb_log,
             service_gdb_log=inputs.preflight_service_gdb_log,
@@ -2176,6 +2392,107 @@ def test_live_qemu_collection_rejects_ready_census_topology_drift(
     assert not inputs.out_dir.exists()
 
 
+@pytest.mark.parametrize(
+    "role,raw_role",
+    [("worker-heartbeat", 1), ("worker-gpu", 2), ("worker-lora", 3)],
+)
+def test_qemu_gdb_binding_accepts_generated_passive_worker_abi(
+    role: str,
+    raw_role: int,
+) -> None:
+    """Bind the real compiler output to the ABI v2 init-page layout."""
+    generated = json.loads(
+        (ROOT / "configs/generated/root_task_topology.json").read_text()
+    )
+    assert evidence._worker_gdb_runtime_binding(generated, role) == (  # noqa: SLF001
+        0x7100_1000,
+        raw_role,
+    )
+
+
+@pytest.mark.parametrize("version", [None, True, 1, 3, "2"])
+def test_qemu_gdb_binding_rejects_unsupported_worker_abi(version: object) -> None:
+    """The v2 decoder cannot silently accept an earlier or unknown layout."""
+    generated = json.loads(
+        (ROOT / "configs/generated/root_task_topology.json").read_text()
+    )
+    generated["topology"]["worker_runtime"]["task_abi"]["version"] = version
+    with pytest.raises(evidence.EvidenceError, match="cannot bind a QEMU VSpace"):
+        evidence._worker_gdb_runtime_binding(generated, "worker-gpu")  # noqa: SLF001
+
+
+@pytest.mark.parametrize("invalid", [None, "label", "sequence", "ready"])
+def test_lifecycle_fault_proof_requires_admitted_call_after_exact_ready(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    """A shutdown Call proves IPC admission without inventing an operation receipt."""
+    inputs = _live_qemu_inputs(tmp_path)
+    text = inputs.preflight_uart.read_text()
+    identity = (
+        "role=worker-heartbeat slot=0 lease_epoch=2 "
+        "supervisor_generation=2 cap_generation=2"
+    )
+    text = text.replace(
+        f"WORKER_TASK_CONTROL {identity} action=0x0101 outcome=0 sequence=1 state=admitted",
+        f"WORKER_TASK_LIFECYCLE_CALL {identity} "
+        f"call_label={4 if invalid == 'label' else 2} "
+        f"sequence={0 if invalid == 'sequence' else 1} state=admitted",
+    )
+    if invalid == "ready":
+        text = text.replace(f"WORKER_TASK_READY {identity} sequence=1\n", "")
+    markers = evidence._parse_live_worker_markers(text)  # noqa: SLF001
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    if invalid is not None:
+        with pytest.raises(evidence.EvidenceError, match="lifecycle Call"):
+            evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+    else:
+        *_, phases = evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+        assert ("worker-heartbeat", "during-ipc") in phases
+        assert not any(row["role"] == "worker-heartbeat" for row in markers["receipt"])
+
+
+@pytest.mark.parametrize("invalid", [
+    None, "status", "action", "sequence", "reason", "call", "duplicate", "ready",
+])
+def test_shutdown_terminal_report_is_not_post_revoke_execution(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    """Only the exact root shutdown acknowledgement may follow containment."""
+    inputs = _live_qemu_inputs(tmp_path)
+    text = inputs.preflight_uart.read_text()
+    identity = (
+        "role=worker-heartbeat slot=0 lease_epoch=4 "
+        "supervisor_generation=4 cap_generation=4"
+    )
+    if invalid != "call":
+        text += f"WORKER_TASK_LIFECYCLE_CALL {identity} call_label=2 sequence=1 state=admitted\n"
+    text += (
+        f"WORKER_TASK_TEARDOWN {identity} "
+        f"reason={'fault' if invalid == 'reason' else 'shutdown'} "
+        "tcb_suspended=yes records_cleared=yes scheduling_context_unbound=yes "
+        "mappings_scrubbed=yes descendants_revoked=yes objects_deleted=yes "
+        "generation_fenced=yes state=terminal\n"
+    )
+    completion = (
+        f"WORKER_TASK_COMPLETION {identity} "
+        f"action={'0x0101' if invalid == 'action' else '0x0000'} "
+        f"status={1 if invalid == 'status' else 5} "
+        f"sequence={2 if invalid == 'sequence' else 1}\n"
+    )
+    text += completion
+    if invalid == "duplicate":
+        text += completion
+    if invalid == "ready":
+        text += f"WORKER_TASK_READY {identity} sequence=2\n"
+    markers = evidence._parse_live_worker_markers(text)  # noqa: SLF001
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    if invalid is None:
+        evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+    else:
+        with pytest.raises(evidence.EvidenceError, match="post-revoke"):
+            evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+
+
 def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
     tmp_path: Path,
 ) -> None:
@@ -2188,8 +2505,8 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=during-ipc register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=budget-exhaustion register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready symbol=_start action=zero-x0 result=continued' "
-        "'M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued' "
-        "'M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-timeout-spin result=continued'\n",
+        "'M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued' "
+        "'M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued'\n",
         encoding="utf-8",
     )
     fake_gdb.chmod(0o755)
@@ -2198,7 +2515,7 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
         "#!/bin/sh\n"
         "printf '%s\\n' "
         "'0000000000210000 T _start' "
-        "'0000000000210100 T cohesix_worker_qemu_evidence_control_handler' "
+        "'0000000000210100 T cohesix_worker_qemu_evidence_call_dispatch' "
         "'0000000000210200 T cohesix_worker_qemu_evidence_standard_fault' "
         "'0000000000210300 T cohesix_worker_qemu_evidence_timeout_spin'\n",
         encoding="utf-8",
@@ -2523,11 +2840,26 @@ def _pi_component_collection_inputs(
     )
 
 
+@pytest.mark.parametrize("retained_log", [False, True])
 def test_pi_component_collector_derives_exact_live_rows_and_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    retained_log: bool,
 ) -> None:
     inputs = _pi_component_collection_inputs(tmp_path)
+    worker_log = None
+    if retained_log:
+        fragments = []
+        for identity, record in enumerate(inputs.serial.read_text().splitlines()):
+            if not record.startswith("WORKER_TASK_"):
+                continue
+            parts = [record[offset:offset + 176] for offset in range(0, len(record), 176)]
+            fragments.extend(
+                f"WORKER_LOG id={identity} part={part} last={int(part == len(parts) - 1)} data={text}"
+                for part, text in enumerate(parts)
+            )
+        worker_log = tmp_path / "pi4-worker.log"
+        worker_log.write_text("\n".join(fragments) + "\n")
     validated: list[tuple[str, str]] = []
 
     def validate_graph(*args: object, **_kwargs: object) -> object:
@@ -2544,6 +2876,7 @@ def test_pi_component_collector_derives_exact_live_rows_and_bundle(
             target_session=inputs.target_session,
             generated_inventory=inputs.generated_inventory,
             runtime_proof=inputs.runtime_proof,
+            worker_log=worker_log,
             network_capture=inputs.network_capture,
             transport="genet",
             integration_dir=inputs.integration_dir,
@@ -2567,6 +2900,7 @@ def test_pi_component_collector_derives_exact_live_rows_and_bundle(
         "pi4-network-capture",
         "pi4-runtime-dma-proof",
         "pi4-serial-boot",
+        *(["pi4-worker-log"] if retained_log else []),
     ]
     assert sorted(path.name for path in (inputs.out_dir / "integration").iterdir()) == [
         "gpu-receipt-path.json",
@@ -2728,15 +3062,17 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
         ("ninedoor-service", "between-calls-revoke"),
         ("console-network", "during-call-standard"),
     )
-    for relative, root_budget, root_provenance in (
+    for relative, root_budget, root_refills, root_provenance in (
         (
             "configs/root_task.toml",
             9_000,
+            2,
             "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             "configs/root_task_pi4_uboot_aarch64.toml",
             5_500,
+            8,
             "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
         ),
     ):
@@ -2757,7 +3093,7 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
         assert root_matches[0]["admitted"] is True
         assert root_matches[0]["budget_us"] == root_budget
         assert root_matches[0]["period_us"] == 10_000
-        assert root_matches[0]["max_refills"] == 2
+        assert root_matches[0]["max_refills"] == root_refills
         assert root_matches[0]["wcet_provenance"] == root_provenance
         assert len(matches) == 1
         assert matches[0]["execution"] == "active"
@@ -2811,6 +3147,34 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
             generated,
             "qemu",
             _session("qemu"),
+        )
+
+
+@pytest.mark.parametrize("target", ["qemu", "pi4"])
+@pytest.mark.parametrize("task_id", [
+    "root-fault",
+    "root-worker-supervisor",
+    "root-driver-supervisor",
+    "root-worker-executor-gpu",
+    "root-worker-executor-lora",
+])
+def test_critical_reservation_policy_cannot_drift_in_evidence(
+    target: str, task_id: str,
+) -> None:
+    generated = _generated_record(target)
+    task = next(
+        task for task in generated["topology"]["temporal_authority"]["tasks"]
+        if task["id"] == task_id
+    )
+    task["timeout_policy"] = "terminal"
+    generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        generated["topology"]
+    )
+    with pytest.raises(
+        evidence.EvidenceError, match="critical service.*natural-postpone"
+    ):
+        evidence._generated_inventory(  # noqa: SLF001
+            generated, target, _session(target)
         )
 
 
@@ -2983,6 +3347,39 @@ def test_component_rejects_unconfirmed_gpu_receipt_and_missing_integration() -> 
     component["integration_evidence"].pop()
     with pytest.raises(evidence.EvidenceError, match="mandatory integration"):
         evidence.validate_component(component, "qemu")
+
+
+def test_worker_bootstrap_reservation_is_distinct_from_passive_ready(tmp_path: Path) -> None:
+    """The temporary 400/10000 SC cannot be reported as a READY reservation."""
+    inputs = _live_qemu_inputs(tmp_path)
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    worker = _component("qemu")["workers"][0]
+    evidence._validate_worker_topology([worker], topology)  # noqa: SLF001
+    worker["scheduling_context"] = {"budget_us": 400, "period_us": 10000}
+    evidence._validate_worker_topology([worker], topology, bootstrap=True)  # noqa: SLF001
+    with pytest.raises(evidence.EvidenceError, match="scheduling context"):
+        evidence._validate_worker_topology([worker], topology)  # noqa: SLF001
+    worker["scheduling_context"]["budget_us"] = 401
+    with pytest.raises(evidence.EvidenceError, match="scheduling context"):
+        evidence._validate_worker_topology([worker], topology, bootstrap=True)  # noqa: SLF001
+
+
+def test_idle_heartbeat_does_not_hide_an_uncompleted_lifecycle_call(tmp_path: Path) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    identity = (
+        "role=worker-heartbeat slot=0 lease_epoch=4 "
+        "supervisor_generation=4 cap_generation=4"
+    )
+    ready = f"WORKER_TASK_READY {identity} sequence=1\n"
+    text = inputs.preflight_uart.read_text().replace(
+        ready,
+        ready + f"WORKER_TASK_LIFECYCLE_CALL {identity} call_label=2 sequence=1 state=admitted\n",
+    )
+    topology = json.loads(inputs.generated_inventory.read_text())["topology"]
+    markers = evidence._parse_live_worker_markers(text)  # noqa: SLF001
+    admissions, *_ = evidence._validate_marker_lifecycle(markers, topology)  # noqa: SLF001
+    with pytest.raises(evidence.EvidenceError, match="Heartbeat Call lacks its completion"):
+        evidence._live_workers_from_uart(markers, admissions, topology)  # noqa: SLF001
 
 
 def test_component_rejects_badge_sc_and_outcome_inventory_tamper() -> None:

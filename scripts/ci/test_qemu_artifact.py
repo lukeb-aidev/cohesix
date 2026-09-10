@@ -51,6 +51,63 @@ def write_executable(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def test_release_configs_retain_selected_bytes_before_regeneration(helper, tmp_path):
+    generated = tmp_path / "generated"
+    generated.mkdir()
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    paths = [
+        "configs/generated/implementation_surface_inventory.json",
+        "configs/generated/native-profile.json",
+    ]
+    (generated / "implementation_surface_inventory.json").write_text(
+        json.dumps({"release": {"generated_configs": paths}})
+    )
+    source = generated / "native-profile.json"
+    source.write_text('{"profile":"qemu_smp_kvm_production"}')
+    assert helper.main([
+        "stage-release-configs", "--generated-dir", str(generated),
+        "--artifact-dir", str(artifact),
+    ]) == 0
+    source.write_text('{"profile":"qemu_smp_production"}')
+    retained = artifact / "release-configs/configs/generated/native-profile.json"
+    assert json.loads(retained.read_text()) == {"profile": "qemu_smp_kvm_production"}
+    assert helper.retained_release_config_paths(artifact) == [
+        f"release-configs/{path}" for path in paths
+    ]
+    (retained.parent / "stale.json").write_text("{}")
+    with pytest.raises(helper.EvidenceError, match="differ from compiler inventory"):
+        helper.retained_release_config_paths(artifact)
+
+
+@pytest.mark.parametrize("invalid", [
+    "../outside", "configs/generated/../outside", "/configs/generated/absolute",
+    "configs/generated/./normalized", "configs/generated/bad\nname",
+])
+def test_release_config_inventory_rejects_escaping_or_noncanonical_paths(helper, invalid):
+    with pytest.raises(helper.EvidenceError, match="generated_configs inventory"):
+        helper.release_config_paths({"release": {"generated_configs": [
+            "configs/generated/implementation_surface_inventory.json", invalid,
+        ]}})
+
+
+def test_release_config_staging_rejects_symlink_input(helper, tmp_path):
+    generated = tmp_path / "generated"
+    generated.mkdir()
+    inventory = generated / "implementation_surface_inventory.json"
+    inventory.write_text(json.dumps({"release": {"generated_configs": [
+        "configs/generated/implementation_surface_inventory.json",
+        "configs/generated/linked.json",
+    ]}}))
+    (generated / "linked.json").symlink_to(inventory)
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    assert helper.main([
+        "stage-release-configs", "--generated-dir", str(generated),
+        "--artifact-dir", str(artifact),
+    ]) == 1
+
+
 def create_artifact_inputs(tmp_path: Path) -> dict[str, Path]:
     """Create the minimum canonical artifact and evidence inputs."""
 

@@ -649,6 +649,7 @@ class CohesixClient:
     def peft_activate(
         self, model_id: str, registry_root: Path, audit: Optional[CohesixAudit] = None
     ) -> None:
+        """Commit a host registry pointer; publish it with gpu-bridge-host separately."""
         validate_component(model_id)
         activate_policy = self.policy.get("peft", {}).get("activate", {})
         enforce_id_bytes(model_id, int(activate_policy.get("max_model_id_bytes", 0) or 0))
@@ -662,19 +663,18 @@ class CohesixClient:
         state["previous"] = previous
         state["current"] = model_id
 
-        write_atomic(registry_root / "active", f"{model_id}\n".encode("utf-8"))
         write_state(registry_root, activate_policy, state)
+        write_atomic(registry_root / "active", f"{model_id}\n".encode("utf-8"))
 
-        path = "/gpu/models/active"
-        payload = f"{model_id}\n".encode("utf-8")
-        written = self.backend.write_append(path, payload)
         if audit is not None:
-            audit.push_ack("OK", "ECHO", f"path={path} bytes={written}")
-            audit.push_line(f"peft activated model={model_id}")
+            audit.push_line(
+                f"peft activated model={model_id} execution_location=host projection=pending"
+            )
 
     def peft_rollback(
         self, registry_root: Path, audit: Optional[CohesixAudit] = None
     ) -> None:
+        """Commit the prior host pointer without writing the read-only target view."""
         activate_policy = self.policy.get("peft", {}).get("activate", {})
         state = load_state(registry_root, activate_policy)
         previous = state.get("previous")
@@ -687,15 +687,14 @@ class CohesixClient:
         current = state.get("current")
         state["current"] = previous
         state["previous"] = current
-        write_atomic(registry_root / "active", f"{previous}\n".encode("utf-8"))
         write_state(registry_root, activate_policy, state)
+        write_atomic(registry_root / "active", f"{previous}\n".encode("utf-8"))
 
-        path = "/gpu/models/active"
-        payload = f"{previous}\n".encode("utf-8")
-        written = self.backend.write_append(path, payload)
         if audit is not None:
-            audit.push_ack("OK", "ECHO", f"path={path} bytes={written}")
-            audit.push_line(f"peft rollback from={current} to={previous}")
+            audit.push_line(
+                f"peft rollback from={current} to={previous} "
+                "execution_location=host projection=pending"
+            )
 
 
 # Helper functions
@@ -1070,7 +1069,7 @@ def write_atomic(path: Path, payload: bytes) -> None:
 
 def load_state(root: Path, policy: Dict[str, object]) -> Dict[str, Optional[str]]:
     state_path = root / "active_state.toml"
-    if not state_path.is_file():
+    if not state_path.exists():
         current = read_active_pointer(root, policy)
         return {"current": current, "previous": None}
     max_state_bytes = int(policy.get("max_state_bytes", 0) or 0)
@@ -1087,6 +1086,10 @@ def load_state(root: Path, policy: Dict[str, object]) -> Dict[str, Optional[str]
             current = _parse_toml_string(line)
         if line.strip().startswith("previous"):
             previous = _parse_toml_string(line)
+    if read_active_pointer(root, policy) != current:
+        raise CohesixError(
+            "registry state differs from active pointer; reconcile the interrupted commit"
+        )
     return {"current": current, "previous": previous}
 
 

@@ -3880,12 +3880,14 @@ const fn linked_cyw43_partial_local_line_display_due(
     physical_console_response_pending: bool,
     local_line_nonempty: bool,
     operator_display_pending: bool,
+    local_input_consumed: bool,
 ) -> bool {
     cyw43_lane_selected
         && !reboot_pending
         && !physical_console_response_pending
         && local_line_nonempty
         && operator_display_pending
+        && local_input_consumed
 }
 
 #[cfg(feature = "kernel")]
@@ -8547,6 +8549,9 @@ where
     retired_console_cache_snapshot: Option<crate::hal::cache::CacheLogSnapshot>,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
+    // Retain the attachment class so containment never inspects a failed adapter.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    network_virtio_attached: bool,
     #[cfg(feature = "net-console")]
     net_unavailable_detail: Option<HeaplessString<192>>,
     #[cfg(feature = "net-console")]
@@ -9283,6 +9288,8 @@ where
             retired_console_cache_snapshot: None,
             #[cfg(feature = "net-console")]
             net: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            network_virtio_attached: false,
             #[cfg(feature = "net-console")]
             net_unavailable_detail: None,
             #[cfg(feature = "net-console")]
@@ -9554,6 +9561,11 @@ where
     #[cfg(feature = "net-console")]
     pub fn attach_initial_network(&mut self, net: &'a mut dyn NetPoller) {
         self.audit.info("event-pump: init network");
+        #[cfg(feature = "kernel")]
+        {
+            self.network_virtio_attached = net.driver_task_contract()
+                == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT;
+        }
         self.net = Some(net);
         #[cfg(feature = "kernel")]
         {
@@ -9576,6 +9588,11 @@ where
             return false;
         }
         self.audit.info("event-pump: attach deferred network");
+        #[cfg(feature = "kernel")]
+        {
+            self.network_virtio_attached = net.driver_task_contract()
+                == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT;
+        }
         self.net = Some(net);
         self.net_unavailable_detail = None;
         self.network_service_quarantined = false;
@@ -11922,10 +11939,7 @@ where
     fn isolated_virtio_compact_path_attached(&self) -> bool {
         !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && !crate::serial::serial_linked_runtime_transport_active()
-            && self.net.as_ref().is_some_and(|net| {
-                net.driver_task_contract()
-                    == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
-            })
+            && self.network_virtio_attached
     }
 
     /// Snapshot only retained work visible without issuing an IPC or NIC
@@ -12173,9 +12187,10 @@ where
             return;
         }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        let cyw43_outer_turn_required = !self.net.as_ref().is_some_and(|net| {
-            net.driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
-        });
+        let cyw43_outer_turn_required = self.network_service_quarantined
+            || !self.net.as_ref().is_some_and(|net| {
+                net.driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+            });
         #[cfg(all(feature = "kernel", not(feature = "net-console")))]
         let cyw43_outer_turn_required = true;
         #[cfg(feature = "kernel")]
@@ -12196,9 +12211,7 @@ where
             return;
         }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        let ordinary_virtio_contract_attached = self.net.as_ref().is_some_and(|net| {
-            net.driver_task_contract() == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
-        });
+        let ordinary_virtio_contract_attached = self.network_virtio_attached;
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         let split_ordinary_virtio_turn = ordinary_virtio_contract_attached;
         #[cfg(not(all(feature = "kernel", feature = "net-console")))]
@@ -13115,6 +13128,7 @@ where
                     self.physical_console_response_pending(),
                     !self.local_line.is_empty(),
                     self.linked_runtime_operator_display_pending(),
+                    local_input,
                 );
                 #[cfg(not(feature = "net-console"))]
                 let partial_local_line_display_due = false;
@@ -13143,7 +13157,7 @@ where
                     // Root-owned parser/echo bookkeeping above has made a
                     // partial USB command row visible. Submit exactly one
                     // bounded HDMI update before Serial and before any Network
-                    // re-entry, while retaining the CYW43 fence and immutable
+                    // re-entry for newly consumed bytes, preserving the immutable
                     // parent. A response tail or reboot acknowledgement excludes
                     // this route and keeps immediate Serial priority.
                     LinkedRuntimeServicePhase::Display
@@ -13926,7 +13940,8 @@ where
     /// separately qualified direct-VirtIO selector.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn isolated_direct_genet_response_lane_attached(&self) -> bool {
-        crate::serial::serial_linked_runtime_transport_active()
+        !self.network_service_quarantined
+            && crate::serial::serial_linked_runtime_transport_active()
             && self.net.as_ref().is_some_and(|net| {
                 direct_genet_response_identity_matches(DirectGenetResponseIdentityEvidence {
                     active_connection_id: net.active_console_conn_id(),
@@ -18218,10 +18233,26 @@ where
 
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        let build_marker = Some(crate::built_info::BUILD_MARKER_BYTES.as_slice());
+        #[cfg(not(all(feature = "kernel", feature = "release-pi4")))]
+        let build_marker = None;
+        self.announce_console_ready_with_build_marker(build_marker);
+    }
+
+    fn announce_console_ready_with_build_marker(&mut self, build_marker: Option<&[u8]>) {
         if self.console_ready_announced {
             return;
         }
         self.console_ready_announced = true;
+        // The production Pi kernel has no DebugPutChar path before UART
+        // admission. Publish the sealed bytes through the ordinary serial
+        // owner now, before its first ready banner and prompt. Do not rebuild
+        // this line from compile-time strings: staging seals its image digest.
+        if let Some(bytes) = build_marker {
+            let line = core::str::from_utf8(bytes).unwrap_or("ERR BUILD reason=invalid-utf8");
+            self.emit_serial_line_atomic(line);
+        }
         #[cfg(feature = "kernel")]
         let log_channel_switched_before_prompt =
             self.ninedoor.is_some() && boot_log::switch_logger_to_log_buffer();
@@ -18753,9 +18784,11 @@ where
             })
             .unwrap_or((false, false));
         LinkedPhysicalOperatorWork::classify(
-            self.serial.interactive_input_active()
-                || !self.local_line.is_empty()
-                || self.local_seat_chunk_input_pending,
+            // Dispatch has already absorbed partial lines. They remain intact
+            // for the next keystroke, but cannot make progress or fence Network
+            // until another byte arrives. Queued bytes and active chunks retain
+            // physical-operator precedence; response tails are fenced separately.
+            self.serial.input_bytes_pending() || self.local_seat_chunk_input_pending,
             usb_input_pending,
             usb_parser_ready,
             self.linked_local_seat_usb_service_pending(),
@@ -38818,6 +38851,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "net-console")]
     #[test]
     fn direct_genet_slice_netstats_are_exact_at_legal_maxima() {
         let receipt = console_network_abi::DirectGenetRuntimeSliceReceipt {
@@ -41577,6 +41611,7 @@ mod tests {
 
     #[test]
     fn console_ready_announcement_is_idempotent() {
+        const SEALED_MARKER: &str = "[BUILD] 719c90738da4 2026-09-09T12:08:19Z image-id=258b5edf782d514ca44ed597689e7e3f85540d3acf38e3eb463821f656669464 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1 qemu-driver-task-smoke:0]";
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -41596,11 +41631,16 @@ mod tests {
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
 
-        pump.announce_console_ready();
+        pump.announce_console_ready_with_build_marker(Some(SEALED_MARKER.as_bytes()));
         let first_ready = pump.serial_mut().driver_mut().drain_tx();
         let first_transcript = core::str::from_utf8(first_ready.as_slice()).unwrap();
         assert_eq!(first_transcript.matches("Cohesix console ready").count(), 1);
         assert_eq!(first_transcript.matches("Commands:").count(), 1);
+        assert_eq!(first_transcript.matches(SEALED_MARKER).count(), 1);
+        assert!(
+            first_transcript.find(SEALED_MARKER).unwrap()
+                < first_transcript.find("Cohesix console ready").unwrap()
+        );
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(pump.post_prompt_local_seat_attach_pending_for_test());
 
@@ -41608,14 +41648,33 @@ mod tests {
         {
             pump.post_prompt_local_seat_attach_pending = false;
         }
-        pump.announce_console_ready();
+        pump.announce_console_ready_with_build_marker(Some(SEALED_MARKER.as_bytes()));
         let second_ready = pump.serial_mut().driver_mut().drain_tx();
         let second_transcript = core::str::from_utf8(second_ready.as_slice()).unwrap();
         assert!(!second_transcript.contains("Cohesix console ready"));
         assert!(!second_transcript.contains("Commands:"));
         assert!(!second_transcript.contains(CONSOLE_PROMPT));
+        assert!(!second_transcript.contains(SEALED_MARKER));
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
+    #[test]
+    fn console_ready_reports_invalid_build_identity_without_fabricating_a_marker() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let store = TicketTable::<4>::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+        pump.announce_console_ready_with_build_marker(Some(b"\xff"));
+        let output = pump.serial_mut().driver_mut().drain_tx();
+        let transcript = core::str::from_utf8(output.as_slice()).unwrap();
+        assert!(transcript.contains("ERR BUILD reason=invalid-utf8"));
+        assert!(!transcript.contains("[BUILD]"));
     }
 
     #[cfg(feature = "net-console")]
@@ -44753,7 +44812,7 @@ mod tests {
         containment_diagnostic_pending_reads: core::cell::Cell<usize>,
         containment_diagnostic_line_reads: core::cell::Cell<usize>,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
-        driver_contract_reads: core::cell::Cell<usize>,
+        driver_contract_reads: std::rc::Rc<core::cell::Cell<usize>>,
         response_identity_reads: core::cell::Cell<usize>,
         response_lane_reads: core::cell::Cell<usize>,
         poll_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
@@ -44821,7 +44880,7 @@ mod tests {
                 containment_diagnostic_pending_reads: core::cell::Cell::new(0),
                 containment_diagnostic_line_reads: core::cell::Cell::new(0),
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
-                driver_contract_reads: core::cell::Cell::new(0),
+                driver_contract_reads: std::rc::Rc::new(core::cell::Cell::new(0)),
                 response_identity_reads: core::cell::Cell::new(0),
                 response_lane_reads: core::cell::Cell::new(0),
                 poll_observer: None,
@@ -45532,7 +45591,15 @@ mod tests {
         }
 
         let (netstats, netstats_terminal) = run(Command::NetStats);
-        assert_eq!(netstats.len(), 16);
+        // Pi includes fourteen additional bounded session/idle diagnostics.
+        assert_eq!(
+            netstats.len(),
+            if cfg!(feature = "release-pi4") {
+                30
+            } else {
+                16
+            }
+        );
         assert_eq!(netstats_terminal, ["OK NETSTATS"]);
         assert_eq!(netstats.last().map(String::as_str), Some("OK NETSTATS"));
         assert!(!netstats.iter().any(|line| line == "END"));
@@ -46453,6 +46520,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn quarantined_empty_virtio_operator_returns_before_runtime_tail() {
         let serial =
@@ -46543,6 +46612,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_rotates_outer_phases_with_one_refill_sized_unit() {
         assert_eq!(
@@ -46729,6 +46800,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_tail_drain_backpressure_admits_only_operator_until_clear() {
         let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
@@ -46807,6 +46880,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_prompt_tail_queue_owns_one_predispatch_turn() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -46875,6 +46950,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_prompt_tail_backpressure_frees_one_record_before_retry() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47005,6 +47082,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_runtime_compact_prelude_ticks_and_reconciles_without_network_poll() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47213,6 +47292,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_operator_serial_backlog_uses_one_shared_bounded_cursor() {
         const EXPECTED_ROOT_CONTROL_SERIAL_BYTES: usize = 64;
@@ -47303,6 +47384,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_operator_retains_rx_for_later_serial_dispatch() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47376,6 +47459,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_output_record_admission_preserves_fifo_and_response_barrier() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -47466,6 +47551,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn ordinary_virtio_output_record_admission_retains_long_serial_tail() {
         const EXPECTED_ROOT_CONTROL_SERIAL_BYTES: usize = 64;
@@ -47795,6 +47882,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn quarantined_virtio_still_suppresses_pi_only_raw_idle_trace() {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
@@ -50810,7 +50899,7 @@ mod tests {
             assert_eq!(
                 pump.metrics()
                     .net_direct_genet_cross_core_signal_only_admissions,
-                1
+                0
             );
             assert_eq!(pump.metrics().net_direct_genet_active_tail_admitted, 2);
             assert_eq!(pump.metrics().net_direct_genet_active_tail_closed, 1);
@@ -50862,7 +50951,7 @@ mod tests {
         #[cfg(feature = "kernel")]
         assert!(
             rendered.contains(
-                "netstats: isolated_hot_tail opened=1 signal_only_admit=1 admitted=2 closed=1 max_wall_us=8"
+                "netstats: isolated_hot_tail opened=1 signal_only_admit=0 admitted=2 closed=1 max_wall_us=8"
             ),
             "{rendered}"
         );
@@ -53887,14 +53976,15 @@ mod tests {
     #[test]
     fn pi_attached_wifi_continuation_requires_one_productive_network_successor() {
         assert!(linked_cyw43_partial_local_line_display_due(
-            true, false, false, true, true,
+            true, false, false, true, true, true,
         ));
         for rejected in [
-            linked_cyw43_partial_local_line_display_due(false, false, false, true, true),
-            linked_cyw43_partial_local_line_display_due(true, true, false, true, true),
-            linked_cyw43_partial_local_line_display_due(true, false, true, true, true),
-            linked_cyw43_partial_local_line_display_due(true, false, false, false, true),
-            linked_cyw43_partial_local_line_display_due(true, false, false, true, false),
+            linked_cyw43_partial_local_line_display_due(false, false, false, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, true, false, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, true, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, false, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, true, false, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, true, true, false),
         ] {
             assert!(
                 !rejected,
@@ -58252,6 +58342,63 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn partial_physical_lines_release_network_without_discarding_input() {
+        let serial =
+            SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<8192>::new());
+        let timer = TestTimer::repeated(4, 1_000);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+        pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+
+        pump.serial.driver_mut().push_rx(b"pi");
+        assert!(pump.serial.poll_rx_only());
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Input
+        );
+        assert!(pump.serial.next_line_buffered_quiet().is_none());
+        assert!(
+            pump.serial.interactive_input_active(),
+            "keep partial-line presentation protection"
+        );
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Idle
+        );
+
+        pump.local_line.push_str("help").unwrap();
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Idle
+        );
+        pump.local_seat_chunk_input_pending = true;
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Input
+        );
+        pump.local_seat_chunk_input_pending = false;
+        assert_eq!(pump.local_line.as_str(), "help");
+
+        pump.serial.driver_mut().push_rx(b"ng\r");
+        assert!(pump.serial.poll_rx_only());
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Input
+        );
+        assert_eq!(
+            pump.serial.next_line_buffered_quiet().unwrap().as_str(),
+            "ping"
+        );
+        assert!(!pump.serial.interactive_input_active());
+        assert_eq!(
+            pump.linked_physical_operator_work(),
+            LinkedPhysicalOperatorWork::Idle
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn pi_idle_fence_keeps_usb_readiness_debt_runnable() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -58310,6 +58457,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn pi_root_control_idle_fence_rejects_every_runnable_level() {
         let idle = PiRootControlIdleFenceEvidence {
@@ -63042,9 +63190,11 @@ mod tests {
                 LinkedRuntimeServicePhase::Display,
                 "a partial local-seat line must route Dispatch directly to one bounded Display turn"
             );
-            assert!(pump
-                .linked_runtime_cyw43_operator_rotation_pending
-                .is_some());
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_none(),
+                "drained partial text cannot retain the Network fence"
+            );
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 0,
                 "actual queued input must remain ahead of Network"
@@ -63055,16 +63205,32 @@ mod tests {
                 LinkedRuntimeServicePhase::Serial,
                 "the bounded partial-line Display turn must return to Serial before Network"
             );
-            assert!(pump
-                .linked_runtime_cyw43_operator_rotation_pending
-                .is_some());
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_none(),
+                "drained partial text cannot retain the Network fence"
+            );
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 0,
                 "HDMI echo must not compose with or admit a CYW43 Network turn"
             );
 
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+            pump.local_seat
+                .as_mut()
+                .expect("local seat remains attached")
+                .inject_linked_hdmi_pending_bytes_for_test(1);
+            pump.poll();
+            assert_eq!(pump.local_line.as_str(), "x");
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "retained partial text and display debt cannot repeat the input presentation shortcut",
+            );
+
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
             pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            pump.require_linked_runtime_cyw43_operator_rotation();
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
@@ -63628,6 +63794,8 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn direct_genet_fused_drain_fails_closed_without_exact_generated_pi_topology() {
         struct LinkedRuntimeTestReset;
@@ -63970,6 +64138,8 @@ mod tests {
                 .with_network(&mut genet)
                 .with_local_seat(&mut local_seat);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            // Exercise the ordinary response lane without a fused continuation.
+            pump.direct_genet_continuation_mode = None;
 
             assert!(
                 pump.poll_root_control_quantum_for_state(true, true),
@@ -65476,7 +65646,14 @@ mod tests {
                 !explicit_yield,
                 "the selected cross-core topology must retain the exact completed rotor",
             );
-            assert_eq!(direct_genet_continuation_mode_from_generated(), None);
+            assert_eq!(
+                direct_genet_continuation_mode_from_generated(),
+                if cfg!(feature = "driver-tests-pi4") {
+                    Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
+                } else {
+                    None
+                },
+            );
             let continuation = pump
                 .take_pi_root_control_productive_continuation_identity()
                 .expect("the exact selected-profile drain must publish one retained identity");
@@ -69385,6 +69562,7 @@ mod tests {
         });
         local_seat.mark_root_console_ready();
         let mut transcript = Vec::new();
+        let contract_reads = net.driver_contract_reads.clone();
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut net)
@@ -69404,6 +69582,7 @@ mod tests {
             pump.pending_stream = Some(pending);
             assert_eq!(pump.stream_output_source, None);
             assert_eq!(pump.stream_net_conn_id, None);
+            contract_reads.set(0); // Attachment was healthy; the poison boundary starts here.
             pump.quarantine_network_service_after_cyw43_terminal_failure();
             assert!(
                 pump.pending_stream.is_none(),
@@ -69513,6 +69692,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.profile_backend = "bcmgenet-v5";
         net.status.backend = "bcmgenet-v5";
         net.status.active_driver = "cyw43";
@@ -70422,6 +70602,8 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    // This contract requires the generated QEMU root-control partition.
+    #[cfg(not(feature = "driver-tests-pi4"))]
     #[test]
     fn qemu_manifest_hides_usb_wifi_debug_surface() {
         let driver = LoopbackSerial::<4096>::new();
@@ -71363,6 +71545,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.address_source = "wifi-host-eapol-pending";
@@ -71584,6 +71767,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.interface_policy = "wifi";
@@ -71646,6 +71830,7 @@ mod tests {
         let mut wifi = FakeWifiDebug::new();
         wifi.runtime_required = true;
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.interface_policy = "wifi";

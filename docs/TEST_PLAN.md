@@ -498,12 +498,16 @@ script -q "$RUN/preflight/uart.log" \
 
 Run `qemu-gdb` once for each role, preserving argument order. Each invocation
 stays attached for three generations: the operator spawns the role for the
-pre-READY fault, recreates it and submits one ordinary role work item for the
-during-IPC standard fault, recreates it and submits one more work item for MCS
-budget exhaustion, then recreates a final READY instance. GPU and LoRA work
-uses bounded v2 tickets and `host-ticket-agent --run-once`; Heartbeat uses its
-ordinary publish turn. These disposable work items are not the claimed source
-of the later seven-action receipt matrix.
+pre-READY fault, recreates it and submits an approved `kill` for the
+during-IPC standard fault, then repeats that lifecycle call for MCS budget
+exhaustion before creating a final READY instance. The instrumented
+`cohesix_worker_qemu_evidence_call_dispatch` hook runs after validating the
+received call and before its dispatch or reply. All three passive roles can
+therefore exercise the real shutdown IPC path; Heartbeat needs no autonomous
+publish turn. The runner reads the exact READY identity through the Python
+SDK over direct TCP and publishes fresh GPU fixture inventory before each GPU
+spawn. These direct sessions close before the gateway first attaches. The
+separate seven-action matrix continues to use real v2 host tickets and receipts.
 
 ```bash
 GDB=out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gdb
@@ -601,6 +605,13 @@ present, derive the component needed by the gateway before pressure. The
 collector treats cohsh `OK SPAWN`/`OK KILL` only as admission outcomes; READY,
 artifact, receipt, and proof axes come from identity-bound UART/pressure records,
 never from caller-supplied projection text.
+
+Use eight execution lanes for both receipt preflight and pressure. Preserve
+the completed `host-ticket-agent/` state, then copy its cursors, execution
+journals and lock files into `pressure-host-ticket-agent/` before pressure
+starts. Pressure resumes those cursors and journals with a separate log;
+starting from empty state would replay the deliberately retired tickets.
+Execution lane topology is part of journal identity and remains unchanged.
 
 ```bash
 python3 scripts/worker_task_evidence.py collect-qemu-preflight \
@@ -719,7 +730,12 @@ compiler topology digest and derives the maximum-role inventory from the
 topology payload. It then requires each observed role's attach badge, fault
 badge, core, passive scheduling context, per-slot object inventory, allowlisted
 active executor donor, and generation-scoped Reply path to equal that generated
-truth. Separately, the topology digest seals all 256 Worker task rows and every
+truth. A fresh passive Heartbeat may have completion sequence zero: it has
+committed READY but has received no workload Call. The collector requires no
+uncompleted control/lifecycle Call for that live identity; the separate
+Heartbeat fault, shutdown, teardown and recreation proofs remain mandatory.
+GPU and LoRA require a positive completion sequence and a confirmed receipt.
+Separately, the topology digest seals all 256 Worker task rows and every
 generated non-Worker row. `temporal_authority.tasks` may exceed the generic
 128-item evidence-list bound only when its exact length, order, identifiers,
 kinds, role classes, driver images, and fault-registry counts are derived from
@@ -771,9 +787,11 @@ shipping a partial as-built contract.
 `ROOT_CRITICAL_OBJECTS scope=constructed-actual` separately records seven
 constructed critical TCBs: the five root duties plus the two active Worker
 executor lanes. Six are restricted children. Its active SC/Reply counts and
-installed standard/timeout fault-cap counts form the bounded actual critical-
+minted standard/timeout fault-cap counts form the bounded actual critical-
 domain census and remain distinct from the complete generated fault-registry
-capacity; neither is inferred from the admitted maximum.
+capacity; neither is inferred from the admitted maximum. Timeout caps remain
+minted and registered under NaturalPostpone even though the TCB has no installed
+timeout handler; this cap census is not a handler-installation count.
 
 Full-system evidence remains a verification-only layer over immutable accepted
 component/root records. Its explicit `cohesix-mcs-smp-run-input/v1` observation
@@ -976,7 +994,7 @@ from that catalog.
 | `diagnostic.guard-root-mcs` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test mcs_activation_order -- --test-threads=1` |
 | `diagnostic.guard-worker` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1` |
 | `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test ninedoor_service_isolation -- --test-threads=1` |
-| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test console_network_service && cargo test -p root-task --test direct_genet_network_phasing && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
+| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test console_network_service && cargo test -p root-task --test direct_genet_network_phasing && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
 | `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib -- --test-threads=1` |
 | `diagnostic.guard-pi4-driver-contracts` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --test driver_task_mcs -- --test-threads=1 && cargo test -p coh-rtc --test pi4_profile && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test direct_genet_network_phasing` |
 | `diagnostic.guard-live-transport` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `cargo test -p cohsh --no-default-features --features tcp` |
@@ -992,6 +1010,16 @@ from that catalog.
 `performance.gateway-telemetry` may be selected alongside either target, but
 its retained evidence is Conditional D's host-model gateway comparator; it is
 not QEMU or Pi target-performance evidence.
+
+Resumable critical service loops use the selected generated NaturalPostpone
+policy. Retain their reserved timeout caps and independent standard-fault
+routing, and require successful
+post-refill work and receipts under pressure. Passive Worker timeout injection,
+NineDoor recovery, emergency fail-stop, per-core reservations, and all existing
+pressure thresholds remain required. Kernel `scConsumed` is cumulative since
+its last reset; do not report it as single-operation WCET. A debugger-interrupted
+kernel snapshot is diagnostic evidence and cannot replace uninterrupted timing
+or repeatability results.
 
 ## GitHub Actions gate mapping
 
@@ -1033,9 +1061,10 @@ the stable required check `ci` directly; there is no aggregate fan-in job.
   upstream SMC path for SMC-selected platforms, and reject a duplicate or
   missing PSCI SMP driver. Apple-Silicon/macOS uses HVF, `cortex-a57`, and
   `kernel-irqchip=off`; AArch64 Linux uses KVM, the `host` CPU, and the
-  in-kernel GICv3. Both host envelopes require generated `TIMER_CLOCK_HZ` and
-  the console-network descriptor to equal the guest-visible 24,000,000 Hz
-  virtual-counter frequency. TCG, `-icount`, or any other timer frequency is
+  in-kernel GICv3. Generated `TIMER_CLOCK_HZ` and the console-network descriptor
+  must equal the guest-visible virtual-counter frequency: 24,000,000 Hz for
+  macOS `qemu_smp_production` and 31,250,000 Hz for Linux
+  `qemu_smp_kvm_production`. TCG, `-icount`, or a mismatched timer frequency is
   diagnostic-only and cannot establish QEMU acceptance or performance
   evidence.
 - Milestone 26d profile closure requires all five fresh
@@ -1057,9 +1086,22 @@ the stable required check `ci` directly; there is no aggregate fan-in job.
 - macOS: FUSE mount coverage is optional unless the MacFUSE runtime is installed and approved (verify `/dev/macfuse0` exists, or `/dev/osxfuse0` on older OSXFUSE).
 - On Linux, KVM requires `/dev/kvm`, `-cpu host`, and the in-kernel GICv3;
   `kernel-irqchip=off` is the macOS HVF envelope and is invalid for this KVM
-  configuration. The launcher must still agree with the generated GICv3 and
-  24,000,000 Hz timer truth.
+  configuration. The launcher must agree with the generated GICv3 and
+  31,250,000 Hz timer truth of `qemu_smp_kvm_production`.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
+  Observe the guest's `root-console.start.ok` serial marker before the first
+  authenticated console request. Do not probe the forwarded console port with
+  an unauthenticated connection: QEMU may defer that connection until the guest
+  listens, consuming its sole console slot during a later test operation.
+  For automated runs without host BPF privileges, set `COHESIX_QEMU_CAPTURE_DIR`
+  to a private evidence directory and `COHESIX_QEMU_TCPDUMP` to a tcpdump executable
+  that supports pcap input through `-r -`. Both canonical QEMU launchers start
+  tcpdump before QEMU and retain the complete guest `net0` stream, decoded log,
+  launch command and completion record in a fresh directory for each boot.
+  Check every `result.json` has `complete=true`; an early decoder exit or
+  truncated stream fails the launcher. These captures observe guest network
+  traffic; use a host-interface capture when diagnosing host-side REST traffic.
+  Keep the capture root outside a pressure runner's disposable `out/` tree.
 - Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
 - Ensure `/updates` and `/host` are enabled for host tool tests:
   - `cas.enable = true` (and `ui_providers.updates.*` as needed)
@@ -1067,6 +1109,14 @@ the stable required check `ci` directly; there is no aggregate fan-in job.
   - Re-run `coh-rtc` and `scripts/check-generated.sh` if toggled.
 - Use a fresh run/log directory. Retain failed attempts and their exact inputs;
   do not clear shared log or evidence directories before a rerun.
+
+The hosted `driver-tests-pi4` suite selects compiler-generated Pi tables from
+`apps/root-task/tests/support/generated/pi4/`. This preserves the default QEMU
+tables while exercising the Pi registry, bounds and admission configuration.
+After changing the Pi manifest, regenerate this test profile with
+`scripts/check-generated.sh --update-pi4-test-profile`; the ordinary generated
+check verifies both profiles. These host tests do not constitute Pi boot or
+hardware acceptance.
 
 ## Performance baselines (Authoritative)
 - Performance evidence is only valid when it is **stored and reviewable**:
@@ -1144,12 +1194,14 @@ or imported Stage 01 common-hermetic attestation:
   `release-qemu` AArch64 root-task check. The check builds fresh Worker,
   NineDoor, console-network, and driver-runtime identities inside the Stage 02
   attempt and binds them to the root check under the selected 24 MHz profile.
+  The console child selects `direct-virtio` independently of diagnostic tracing.
 - Pi 4 profile validation against
   the immutable `seL4/build_UBOOT` `pi4_production` artifacts, followed by the
   `release-pi4`
   AArch64 root-task check. Its independently built component bindings use the
-  selected 54 MHz header; this remains compile evidence, not Pi boot or
-  hardware acceptance.
+  selected 54 MHz header and the canonical Pi build's `direct-genet` feature
+  and console-network/smoltcp optimization settings; this remains compile
+  evidence, not Pi boot or hardware acceptance.
 
 The remaining Pi-specific material in this section defines evidence semantics
 for Conditional F. It is not additional Stage 02 execution and must not cause
@@ -1183,6 +1235,8 @@ cannot be repaired by a passing compile or a historical transcript.
   sidecar, UI, and client feature gates. It must preserve the selected base
   QEMU operational topology, including the root, Worker, temporal-authority,
   NineDoor, console-network, resource-admission, and timer contracts exactly.
+  Audit/replay, model, and Modbus support must be enabled for their positive
+  gated fixtures; repository-only CAS trust remains separate from production.
 - The batch snapshots generated projections and restores them in an EXIT trap,
   including failure and interrupt paths. Each artifact and boot result has a
   machine-readable source/profile/manifest/image/action/log binding.
@@ -1606,6 +1660,9 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Interactive `>coh` prompt (type commands, assert transcript lines).
 - Mint ticket flow (UI-only assertion that the host-returned token is surfaced back into the session field).
 - Live Hive UX (labels, role colors, and dot selection wiring).
+- Native command argument parity (`detailAgent`, `snapshotKey`), selected detail
+  refresh while the canvas is offscreen, and changing/absent telemetry when only
+  an overlay is available.
 - Structured Worker state (declaration, lifecycle, receipt, artifact, and
   proof render independently; absent axes render as unknown).
 - Opaque Worker identity (a role-looking id prefix never supplies a role,
@@ -1705,7 +1762,7 @@ the same canonical Python 3.11+ selection as Stage 01.
   both finalization paths and the existing timeout composition. Runner-local
   child configuration must not become an input-context change.
 - Stage 04 runs two REST batches:
-  - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
+  - A concurrent "core" batch (boot, ingest, and root reachability): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/root_cut_basic.coh`. This is also the default selection for `REST_regression_batch.sh`. `session_pool.coh` remains a TCP check because REST batches only host ticket results. `host_absent.coh` remains under TCP because its entry-count assertion uses a console-specific ACK detail.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
     - Note: `scripts/cohsh/busy_backpressure.coh` and `scripts/cohsh/policy_gate.coh` remain covered by the TCP/QEMU regression matrix (Stage 03), where console-parser semantics are validated directly.
 - Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and reads `/proc/lifecycle/state` against the same gateway.
@@ -1719,7 +1776,8 @@ the same canonical Python 3.11+ selection as Stage 01.
 ### Conditional B2 — Milestone 26e QEMU executable-Worker REST pressure
 
 Run the canonical `scripts/m26e_qemu_pressure.sh` command in
-[BENCHMARKS.md](BENCHMARKS.md). The macOS lane cleans repository `target/` and
+[BENCHMARKS.md](BENCHMARKS.md). Use a disposable checkout with
+`--clean-root "$PWD"` when retaining development outputs. The macOS lane cleans repository `target/` and
 `out/`, rebuilds the selected SMP+MCS seL4 profile, and uses
 `scripts/cohesix-build-run.sh` for one canonical artifact build. The runner
 then invokes the standalone exact-artifact session emitter once; it does not
@@ -1805,15 +1863,57 @@ For each summary:
 - one bounded Heartbeat kill/recreate cycle proves terminal teardown and a
   larger supervisor generation; GPU and LoRA retain their identity while their
   receipt and completion sequences increase through real host-ticket-v2 work;
-- exact per-run UART/fault bytes match `fault_artifacts`, the marker index is
+- exact per-run UART, GDB and authenticated Worker-log bytes match
+  `fault_artifacts`, the marker index is
   complete, and the target transcript independently contains all role faults,
-  all seven actions with confirmed/rejected/stale outcomes, exact teardown
+  all seven actions with confirmed/rejected Worker receipts and root-fenced
+  stale results after retirement, exact teardown
   booleans, service containment, and the GICv3 target/session markers;
+- host-integration observations decode complete authenticated Worker fragments
+  and bind the original Worker-log bytes. Service teardown is validated from
+  the three separate service-fault UART/GDB pairs by the preflight collector;
+  it is not expected on the later receipt boot's UART. The unattended PTY
+  capture owns an empty input channel so launcher EOF cannot inject terminal
+  control bytes; raw UART bytes remain unchanged and strictly validated;
+- a recovered NineDoor Call may return before the durable fault mailbox is
+  published. Its Recovery turn must yield until that promised standard-fault or
+  terminal-timeout record is consumed before teardown; a recovered fault cannot
+  pass as a manual revoke or leave a pending old-generation mailbox;
+- a graceful shutdown's root completion report may follow synchronous teardown
+  only once, with ABI status `5`, action `0`, and the same identity/sequence as
+  the prior admitted shutdown Call. This reports the validated terminal result;
+  any later READY, control, receipt, ordinary completion, or duplicate terminal
+  report remains a post-revoke failure;
+- the receipt matrix uses valid advertised GPU subjects and over-bound lease
+  operation IDs for deterministic provider rejection. Its expired inputs use
+  `expires_unix_ms=1` while their exact Worker stays READY to receive `Rejected`,
+  as required by the host-ticket mapping in `ROLES_AND_SCHEDULING.md`. All 21
+  success/failure/expiry cases must advance that exact Worker's receipt and
+  completion sequence; a host terminal result alone cannot pass. Each operation
+  retains the authenticated log before the next can evict its records.
+  Seven additional cases hold the real agent's terminal result after admission
+  validation, retire its pinned Worker, and start a fresh same-role generation
+  before forwarding the unchanged result through the existing gateway. The root
+  must retain `stale` for the old admission; the replacement stays READY with
+  unchanged zero receipt/control/completion sequences. The optional collector
+  input `--stale-ticket-observations` binds exact current-ticket records,
+  result identity, ordered target teardown/READY, session hash and retained
+  Worker-log prefix. Without that input the collector still requires the complete
+  legacy marker matrix. Root fencing never claims a child `Stale` completion.
+  After sealing the retirement evidence, the final GPU and LoRA replacements
+  must each complete a fresh confirmed receipt before preflight acceptance;
+  a retired generation's completion cannot qualify its replacement.
+  Fault and lifecycle injections independently invalidate old-generation authority.
+  Activation/rollback must publish the committed host registry and read the
+  matching active-model snapshot through the ordinary bridge channel;
 - `/gpu/bridge/status` and the bounded LoRA export job identify only the
   QEMU/bootstrap-trace fixture path. Missing, expired, production-labelled, or
   provider-live-labelled fixture input blocks the run;
 - `report.workload.control_write_outcome` is `admitted`; no ACK, HTTP success,
   provider result, or control write is described as accepted or READY;
+- both executable benchmark modes reject any failed GPU/LoRA Worker receipt
+  and any supplied UART root-emergency fail-stop, independently of the
+  aggregate error budget; successful telemetry cannot conceal lost execution;
 - latency, throughput, all error classes, backpressure, operator liveness,
   timeout attribution, and post-run Worker/object state are retained. No
   synthetic id expansion, retry masking, or bounded-refusal reclassification
@@ -3059,10 +3159,10 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/root_task.toml` — `sha256:06c1e3e5496f7c04554ceff9fab423e7f48738ef177e094dac391d0bf60ff369`
-- `configs/generated/root_task_resolved.json` — `sha256:ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:a67be421617a22b8aca017835bfc5798ca99037ebffaabaa97b9ab0295b2333e`
-- Pi `pi4_production` transient resolved binding — `sha256:a48a867083142b652cc97294a754284e8033bc7c7bca6b4a31d6d73f9b80653a`
+- `configs/root_task.toml` — `sha256:0c935240a8c0b6a859cdbdc14c95005f054fc862b21c4279f22a2dd34103031e`
+- `configs/generated/root_task_resolved.json` — `sha256:00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:1fd3f4b72c4d9eab253a8045c3df92e24ea3c489a64818af5515f7899f0d2ed9`
+- Pi `pi4_production` transient resolved binding — `sha256:dab30eeee3cf670125ae3da30a39df3637621521a498e9196dbe321070451444`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`
@@ -3076,11 +3176,11 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 - `tests/fixtures/transcripts/converge_v0/tcp.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/cohsh.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/coh.txt` — `sha256:96b57611f848ef6f9691678df8b20f261dffd47db449cd63459f12f166c0f4a7`
-- `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:7c88f30c480d960990ccc741d775f8c13bb9fd4a29779e19a3445eb1f761cbdb`
+- `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:367fe0ef871277d7e3606a6747946304f1dff2217c360190f2fc8dd115f015fa`
 - `tests/fixtures/transcripts/converge_v0/coh-status.txt` — `sha256:b026211888edf50538f61b66c79dc6ae1eaf59cc33b8dd3506e57ae60b3606c4`
 - `tests/fixtures/transcripts/control_plane_v0/cohsh.txt` — `sha256:f43434e6b3071753596e919021e573cb7f6a9831123769dd7cefb5b0c115c1ef`
 - `tests/fixtures/transcripts/run_demo_v0/cohsh.txt` — `sha256:d429aa09972892adaeabed60ef2a36e4fe366eb9e730a8467a85f27870957040`
-- `tests/fixtures/transcripts/peft_roundtrip_v0/cohsh.txt` — `sha256:a761096db1c412e8b775f3bdb78a9aec79b95ef787d0e933406d23c20285f7db`
+- `tests/fixtures/transcripts/peft_roundtrip_v0/cohsh.txt` — `sha256:ba07819ad952f6f03c4b2d583e5c5deb3459a07b7d61eb6052b47cf9536d7c2c`
 - `tests/fixtures/transcripts/trace_v0/cohsh.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
 - `tests/fixtures/transcripts/trace_v0/swarmui.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
 - `tests/fixtures/transcripts/trace_v0/coh-status.txt` — `sha256:a002a369390cc197714ac291ba08531966af658ed797c569f1ece4bab9b1820b`

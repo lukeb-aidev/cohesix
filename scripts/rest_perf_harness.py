@@ -45,6 +45,11 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TextIO
 
+try:
+    from scripts.lib import worker_log as worker_logs
+except ImportError:  # Direct script execution.
+    from lib import worker_log as worker_logs
+
 DEFAULT_REST_URL = "http://127.0.0.1:8080"
 DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
@@ -60,6 +65,12 @@ WORKER_FAILURE_CONTEXT_MAX_BYTES = 2048
 HOST_TICKET_LOG_TAIL_BYTES = 64 * 256
 HOST_TICKET_CURRENT_MAX_BYTES = 256
 HOST_TICKET_CURRENT_PREFIX = "/host/tickets/current/"
+WORKER_RECEIPT_ACTION_CODES = {
+    "gpu.lease.grant": "0x0201", "gpu.lease.renew": "0x0202",
+    "gpu.lease.release": "0x0203", "peft.export": "0x0301",
+    "peft.import": "0x0302", "peft.activate": "0x0303",
+    "peft.rollback": "0x0304",
+}
 DEFAULT_QEMU_SMP = "4,cores=4,threads=1,sockets=1"
 DEFAULT_WORKERS_MIN = 8
 DEFAULT_WORKERS_MAX = 50
@@ -746,6 +757,7 @@ class SimState:
     lifecycle_cycles: List[Dict[str, object]] = field(default_factory=list)
     receipt_operations: List[Dict[str, object]] = field(default_factory=list)
     fault_artifacts: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    worker_log_monitor: Optional[worker_logs.ExportMonitor] = None
     current_workers_by_id: Dict[str, WorkerInstance] = field(default_factory=dict)
     ticket_worker_lanes: Dict[str, queue.Queue[str]] = field(default_factory=dict)
     ticket_worker_locks: Dict[str, threading.Lock] = field(default_factory=dict)
@@ -1496,6 +1508,34 @@ def parse_worker_runtime_state(
     return latest
 
 
+def list_canonical_workers(
+    client: RestClient,
+    worker_root: str,
+    shard_label: str,
+    shard_bits: int,
+    max_id_bytes: int,
+) -> List[str]:
+    """Validate one bounded shard listing, including removal re-observations."""
+    response = client.ls(worker_root)
+    if response.status != "OK":
+        raise RestError(f"LS {worker_root} failed: {response.error}", response)
+    worker_ids: List[str] = []
+    seen = set()
+    for raw_id in response.lines:
+        worker_id = raw_id.strip()
+        if not valid_worker_id(worker_id, max_id_bytes):
+            raise RestError(f"invalid Worker id in {worker_root}")
+        if worker_id in seen:
+            raise RestError(f"duplicate Worker id across canonical shards: {worker_id}")
+        if expected_worker_shard_label(worker_id, shard_bits) != shard_label:
+            raise RestError(f"Worker {worker_id} is published under the wrong shard")
+        seen.add(worker_id)
+        if len(seen) > MAX_DISCOVERED_WORKERS:
+            raise RestError("canonical Worker discovery exceeds harness bound")
+        worker_ids.append(worker_id)
+    return worker_ids
+
+
 def discover_executable_workers(
     client: RestClient,
     bounds: dict,
@@ -1504,35 +1544,49 @@ def discover_executable_workers(
     runtime = worker_runtime_bounds(bounds)
     shard_bits = int(runtime["shard_bits"])
     max_id_bytes = int(bounds.get("console", {}).get("max_id_len", 32))
-    shard_response = client.ls("/shard")
-    if shard_response.status != "OK":
-        raise RestError(f"LS /shard failed: {shard_response.error}", shard_response)
-    labels = sorted({line.strip() for line in shard_response.lines if line.strip()})
-    if len(labels) > MAX_DISCOVERED_SHARDS:
-        raise RestError("canonical /shard listing exceeds discovery bound")
+    # One directory response cannot enumerate every active shard in a full
+    # fleet. The generated address space is bounded; each shard's actual
+    # listing and structured telemetry remain the authority for Worker state.
+    shard_count = 1 << shard_bits
+    if shard_count > MAX_DISCOVERED_SHARDS:
+        raise RestError("generated shard address space exceeds discovery bound")
     instances: List[WorkerInstance] = []
     discovered_ids = set()
-    for label in labels:
-        if len(label) != 2 or any(ch not in "0123456789abcdef" for ch in label):
-            raise RestError("canonical /shard listing contains an invalid label")
+    removed_ids = set()
+    for shard in range(shard_count):
+        label = f"{shard:02x}"
         worker_root = f"/shard/{label}/worker"
-        response = client.ls(worker_root)
-        if response.status != "OK":
-            raise RestError(f"LS {worker_root} failed: {response.error}", response)
-        for raw_id in response.lines:
-            worker_id = raw_id.strip()
-            if not valid_worker_id(worker_id, max_id_bytes):
-                raise RestError(f"invalid Worker id in {worker_root}")
+        for worker_id in list_canonical_workers(
+            client, worker_root, label, shard_bits, max_id_bytes
+        ):
             if worker_id in discovered_ids:
                 raise RestError(f"duplicate Worker id across canonical shards: {worker_id}")
-            if expected_worker_shard_label(worker_id, shard_bits) != label:
-                raise RestError(f"Worker {worker_id} is published under the wrong shard")
             discovered_ids.add(worker_id)
             if len(discovered_ids) > MAX_DISCOVERED_WORKERS:
                 raise RestError("canonical Worker discovery exceeds harness bound")
             telemetry_path = f"{worker_root}/{worker_id}/telemetry"
             tail = client.tail(telemetry_path, MAX_WORKER_STATE_TAIL_BYTES)
             if tail.status != "OK":
+                # LS and TAIL are separate reads. Containment may remove a
+                # retired generation between them. Omit only an exact missing
+                # path response confirmed by one validated fresh shard read.
+                missing_error = (
+                    "ERR TAIL reason=policy detail=invalid-path "
+                    f"path={telemetry_path} error=invalid path"
+                )
+                if (
+                    tail.status == "ERR"
+                    and tail.verb == "TAIL"
+                    and tail.path == telemetry_path
+                    and tail.end
+                    and not tail.lines
+                    and tail.error == missing_error
+                    and worker_id not in list_canonical_workers(
+                        client, worker_root, label, shard_bits, max_id_bytes
+                    )
+                ):
+                    removed_ids.add(worker_id)
+                    continue
                 raise RestError(f"TAIL {telemetry_path} failed: {tail.error}", tail)
             instance = parse_worker_runtime_state(
                 tail.lines,
@@ -1542,7 +1596,7 @@ def discover_executable_workers(
             if instance is not None:
                 instances.append(instance)
     instances.sort(key=lambda item: (item.role, item.worker_id))
-    return instances, len(discovered_ids)
+    return instances, len(discovered_ids) - len(removed_ids)
 
 
 def valid_sha256(value: object) -> bool:
@@ -4182,6 +4236,7 @@ def build_qemu_benchmark_target_evidence(
     gdb_path: str,
     max_age_secs: int,
     now_unix_s: Optional[float] = None,
+    worker_log_path: Optional[str] = None,
 ) -> BenchmarkTargetEvidence:
     """Bind a qualified QEMU report to its accepted session and transcripts."""
 
@@ -4206,6 +4261,10 @@ def build_qemu_benchmark_target_evidence(
             "bytes": len(gdb_raw),
         },
     }
+    if worker_log_path:
+        log_raw, log_metadata = read_frozen_artifact(worker_log_path, "QEMU Worker log evidence", BENCHMARK_EVIDENCE_MAX_BYTES)
+        observed_fault_artifacts["worker-log"] = {"sha256": hashlib.sha256(log_raw).hexdigest(), "bytes": len(log_raw)}
+        require_current_artifact(log_metadata, "QEMU Worker log evidence", max_age_secs, now)
     if fault_artifacts != observed_fault_artifacts:
         raise RestError("QEMU fault artifact bytes changed before target-evidence seal")
     require_current_artifact(
@@ -4233,7 +4292,7 @@ def build_qemu_benchmark_target_evidence(
         "root_image_sha256": target_session["root_image_sha256"],
         "target_session_sha256": target_session["target_session_sha256"],
         "component_acceptance_sha256": acceptance["evidence_sha256"],
-        "runtime_evidence_sha256": fault_artifacts["uart"]["sha256"],
+        "runtime_evidence_sha256": fault_artifacts["worker-log" if worker_log_path else "uart"]["sha256"],
         "network_evidence_sha256": fault_artifacts["gdb"]["sha256"],
         "captured_unix_s": int(max(uart_metadata.st_mtime, gdb_metadata.st_mtime)),
     }
@@ -4360,10 +4419,20 @@ def executable_target_acceptance_binding(
             "supervisor_generation",
             "cap_generation",
             "ready_sequence",
-            "completion_sequence",
         ):
             if positive_json_int(worker.get(field)) is None:
                 raise RestError(f"{target_name} acceptance Worker {field} is invalid")
+        completion = worker.get("completion_sequence")
+        # Match the shared component-evidence contract: a newly READY passive
+        # Heartbeat has no workload Call, while GPU/LoRA must have completed one.
+        if (
+            not isinstance(completion, int)
+            or isinstance(completion, bool)
+            or completion < (0 if role == "worker-heartbeat" else 1)
+        ):
+            raise RestError(
+                f"{target_name} acceptance Worker completion_sequence is invalid"
+            )
         slot = worker.get("slot")
         core = worker.get("core")
         if (
@@ -4819,6 +4888,27 @@ def capture_executable_state(
     }
 
 
+def validate_executable_run_liveness(
+    stats: Dict[str, OpStats], uart_text: str,
+) -> None:
+    """Worker completion and fatal target status cannot spend a read error budget."""
+    if "[critical] root-emergency fail-stop" in uart_text:
+        raise RestError("executable benchmark observed root-emergency fail-stop")
+    missing = [
+        name for name in ("worker_gpu_v2_receipt", "worker_lora_v2_receipt")
+        if name not in stats or stats[name].ok <= 0
+    ]
+    if missing:
+        raise RestError(f"executable benchmark lacks completed Worker receipt activity: {missing}")
+    failures = {
+        name: stats[name].err
+        for name in ("worker_gpu_v2_receipt", "worker_lora_v2_receipt")
+        if name in stats and stats[name].err
+    }
+    if failures:
+        raise RestError(f"executable benchmark has failed Worker receipts: {failures}")
+
+
 def hash_required_fault_artifact(
     path_value: Optional[str],
     label: str,
@@ -4912,11 +5002,21 @@ def capture_fault_artifacts(
     acceptance: Dict[str, object],
 ) -> Tuple[Dict[str, Dict[str, object]], List[str]]:
     """Retain exact UART/GDB inputs; semantic acceptance remains collector-owned."""
+    worker_log_path = getattr(args, "qemu_worker_log", None)
     uart_artifact, uart_text = hash_required_fault_artifact(
         args.qemu_uart_log,
         "uart",
-        EXECUTABLE_UART_MARKERS,
+        () if worker_log_path else EXECUTABLE_UART_MARKERS,
     )
+    log_artifact = None
+    if worker_log_path:
+        log_artifact, log_text = hash_required_fault_artifact(worker_log_path, "worker", ())
+        try:
+            uart_text = worker_logs.records(log_text)
+        except ValueError as error:
+            raise RestError(str(error)) from error
+        if any(marker not in uart_text for marker in EXECUTABLE_UART_MARKERS):
+            raise RestError("Worker log lacks complete required fault records")
     gdb_artifact, gdb_text = hash_required_fault_artifact(
         args.qemu_gdb_log,
         "gdb",
@@ -4924,8 +5024,12 @@ def capture_fault_artifacts(
     )
     validate_fault_session_binding(uart_text, gdb_text, acceptance)
     artifacts = {"uart": uart_artifact, "gdb": gdb_artifact}
+    marker_source = "uart"
+    if log_artifact is not None:
+        marker_source = "worker-log"
+        artifacts[marker_source] = log_artifact
     markers = [
-        *(f"uart:{marker}" for marker in EXECUTABLE_UART_MARKERS),
+        *(f"{marker_source}:{marker}" for marker in EXECUTABLE_UART_MARKERS),
         *(f"gdb:{marker}" for marker in EXECUTABLE_GDB_MARKERS),
     ]
     return artifacts, markers
@@ -5054,6 +5158,10 @@ def bounded_heartbeat_lifecycle_cycle(
         raise RestError("lifecycle pressure requires one READY Heartbeat Worker")
     before = heartbeat[0]
     kill_worker(client, state, before.worker_id)
+    if state.worker_log_monitor is not None:
+        state.worker_log_monitor.checkpoint([{
+            "marker": "WORKER_TASK_TEARDOWN", **before.identity_dict(),
+        }], timeout_s=timeout_s)
     deadline = time.time() + timeout_s
     terminal_observed = False
     while time.time() < deadline:
@@ -5079,6 +5187,10 @@ def bounded_heartbeat_lifecycle_cycle(
         separators=(",", ":"),
     )
     echo_with_policy_retry(client, "/queen/ctl", spawn_line, state)
+    if state.worker_log_monitor is not None:
+        state.worker_log_monitor.checkpoint([{
+            "marker": "WORKER_TASK_READY", "role": before.role, "slot": before.slot,
+        }], after_generation=before.supervisor_generation, timeout_s=timeout_s)
     deadline = time.time() + timeout_s
     after: Optional[WorkerInstance] = None
     while time.time() < deadline:
@@ -5127,7 +5239,7 @@ def build_executable_report_state(
         state.acceptance_binding is None
         or state.executable_pre_state is None
         or state.executable_post_state is None
-        or set(state.fault_artifacts) != {"uart", "gdb"}
+        or set(state.fault_artifacts) not in ({"uart", "gdb"}, {"uart", "gdb", "worker-log"})
         or not state.lifecycle_cycles
         or not state.receipt_operations
     ):
@@ -5140,7 +5252,7 @@ def build_executable_report_state(
         for operation in state.receipt_operations
     }
     required_driven = {
-        ("gpu.lease.grant", "worker-gpu"),
+        ("gpu.lease.renew", "worker-gpu"),
         ("peft.export", "worker-lora"),
     }
     if not required_driven.issubset(driven):
@@ -5194,7 +5306,7 @@ def build_pi_executable_report_state(
         for operation in state.receipt_operations
     }
     if not {
-        ("gpu.lease.grant", "worker-gpu"),
+        ("gpu.lease.renew", "worker-gpu"),
         ("peft.export", "worker-lora"),
     }.issubset(driven):
         raise RestError("Pi executable pressure did not drive GPU and LoRA receipts")
@@ -5787,6 +5899,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Immutable live QEMU UART transcript used by executable pressure.",
     )
+    launch.add_argument("--qemu-worker-log", default=None, help="Same-boot authenticated qlog exports containing complete Worker evidence.")
     launch.add_argument(
         "--qemu-gdb-log",
         default=None,
@@ -6713,6 +6826,24 @@ def telemetry_ingest_enabled(client: RestClient) -> bool:
     return response.status == "OK"
 
 
+def queen_control_with_approval(
+    client: RestClient, line: str, approval_id: str,
+) -> GatewayResponse:
+    """Submit one approved Queen operation, preserving its result without retry.
+
+    Qualification setup is sequential and owns its approval IDs. A refusal to
+    admit the single-use approval prevents the control write entirely.
+    """
+    approval = json.dumps(
+        {"id": approval_id, "target": "/queen/ctl", "decision": "approve"},
+        separators=(",", ":"),
+    )
+    response = client.echo("/actions/queue", approval)
+    if response.status != "OK":
+        raise RestError(f"Queen approval failed: {response.error}", response)
+    return client.echo("/queen/ctl", line)
+
+
 def queue_approval(client: RestClient, target: str, state: SimState) -> None:
     state.approval_seq += 1
     approval_id = f"approve-{state.approval_seq:06d}"
@@ -7292,6 +7423,16 @@ def run_v2_receipt_operation(
             raise RestError(
                 f"v2 {action} pressure operation ended {terminal_state}, not succeeded"
             )
+        if state.worker_log_monitor is not None:
+            action_code = WORKER_RECEIPT_ACTION_CODES[action]
+            state.worker_log_monitor.checkpoint([
+                {"marker": "WORKER_TASK_RECEIPT", **before.identity_dict(),
+                 "action": action_code, "outcome": 1,
+                 "sequence": after.receipt_sequence},
+                {"marker": "WORKER_TASK_COMPLETION", **before.identity_dict(),
+                 "action": action_code, "status": 1,
+                 "sequence": after.completion_sequence},
+            ])
         with state.ticket_state_lock:
             owner = state.receipt_operation_workers.get(resolved_operation_id)
             if owner is not None and owner != before.worker_id:
@@ -7305,6 +7446,7 @@ def run_v2_receipt_operation(
                     "action": action,
                     "role": role,
                     "worker_id": before.worker_id,
+                    "identity": before.identity_dict(),
                     "sequence_before": {
                         "receipt": before.receipt_sequence,
                         "completion": before.completion_sequence,
@@ -8261,6 +8403,7 @@ def run_simulation(args: argparse.Namespace) -> int:
 
     qemu_proc: Optional[subprocess.Popen] = None
     gateway_proc: Optional[subprocess.Popen] = None
+    worker_log_monitor: Optional[worker_logs.ExportMonitor] = None
 
     try:
         if not args.no_qemu:
@@ -8511,6 +8654,19 @@ def run_simulation(args: argparse.Namespace) -> int:
             run_token=state.run_token,
             status="running",
         )
+
+        if getattr(args, "qemu_worker_log", None):
+            def read_worker_log() -> str:
+                response = client.cat("/log/queen.log", 524288)
+                if response.status != "OK" or not response.end:
+                    raise RestError("Worker qlog export did not complete", response)
+                return "\n".join(response.lines) + "\n"
+
+            worker_log_monitor = worker_logs.ExportMonitor(
+                pathlib.Path(args.qemu_worker_log), read_worker_log,
+            )
+            state.worker_log_monitor = worker_log_monitor
+            worker_log_monitor.start()
 
         worker_ids, spawned = ensure_workers(client, state, args.workers_min)
         if args.population_mode == POPULATION_EXECUTABLE:
@@ -8764,6 +8920,15 @@ def run_simulation(args: argparse.Namespace) -> int:
         target_session_sha256: Optional[str] = None
         executable_state: Optional[Dict[str, object]] = None
         required_fault_markers: List[str] = []
+        if args.population_mode in {POPULATION_EXECUTABLE, POPULATION_EXECUTABLE_LOG}:
+            try:
+                uart_text = ""
+                if args.qemu_uart_log:
+                    _, uart_text = hash_required_fault_artifact(args.qemu_uart_log, "uart", ())
+                validate_executable_run_liveness(stats, uart_text)
+            except Exception as exc:
+                if run_error is None:
+                    run_error = exc
         if args.population_mode == POPULATION_EXECUTABLE:
             try:
                 state.executable_post_state = capture_executable_state(
@@ -8816,6 +8981,15 @@ def run_simulation(args: argparse.Namespace) -> int:
                 if run_error is None:
                     run_error = exc
 
+        if worker_log_monitor is not None:
+            try:
+                worker_log_monitor.finish()
+            except Exception as error:
+                if run_error is None:
+                    run_error = error
+            finally:
+                worker_log_monitor = None
+
         if args.population_mode == POPULATION_EXECUTABLE and run_error is None:
             try:
                 assert state.acceptance_binding is not None
@@ -8852,6 +9026,7 @@ def run_simulation(args: argparse.Namespace) -> int:
                         args.qemu_uart_log,
                         args.qemu_gdb_log,
                         args.benchmark_evidence_max_age_secs,
+                        worker_log_path=args.qemu_worker_log,
                     )
                     (
                         target_session_sha256,
@@ -8998,8 +9173,12 @@ def run_simulation(args: argparse.Namespace) -> int:
             return 1
         return 0
     finally:
-        terminate_process(gateway_proc, "gateway")
-        terminate_process(qemu_proc, "qemu")
+        try:
+            if worker_log_monitor is not None:
+                worker_log_monitor.stop()
+        finally:
+            terminate_process(gateway_proc, "gateway")
+            terminate_process(qemu_proc, "qemu")
 
 
 def pick_worker(rng: random.Random, weights: Dict[str, float]) -> str:

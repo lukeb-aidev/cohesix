@@ -24,6 +24,23 @@ Bind its timestamp and local endpoint to the selected boot and packet capture;
 it cannot replace exact-image target evidence or qualify Worker pressure.
 Existing REST modes, host clients, SDK, and target runtime contracts are unchanged.
 
+Executable QEMU qualification retains complete Worker observations through
+authenticated `/log/queen.log` exports. The canonical runner uses
+`scripts/lib/worker_log.py` before the gateway attaches and the existing gateway
+afterward. `--qemu-worker-log` binds those exports separately in
+`fault_artifacts["worker-log"]`; the runtime-evidence hash identifies that file,
+while UART and GDB retain their own hashes. The REST harness exports the bounded
+log every five seconds during pressure and once after the workload, through
+the same gateway. This observer adds real gateway load; its reads are not
+counted as benchmark operations. Missing, conflicting or incomplete target
+fragments invalidate the evidence. Existing Worker field schemas, fault
+outcomes, pressure thresholds and raw TCP workloads remain unchanged.
+Lifecycle Call admission records distinguish shutdown/revoke IPC from workload
+control receipts. Before timed pressure, the canonical runner fills the exact
+per-role executable slot counts through approved Queen requests and waits for
+actual READY projections. The benchmark independently verifies the complete
+generated population before and after measurement.
+
 Raw mode defaults to unpaced, sequential PINGs with one outstanding request.
 Use `--raw-requests 1024 --raw-request-rate 180` to measure controlled load
 with a ceiling of 180 request starts/s. The optional rate is finite and within
@@ -414,6 +431,18 @@ the exact current target session, and every generated canonical
 matching that component. It never invents ids, substitutes `/worker`, or
 treats reachability as target proof.
 
+The pre-load census enumerates the address space from validated generated
+`worker_runtime.shard_bits` and reads each canonical shard's actual Worker
+listing. It does not depend on the aggregate `/shard` response, whose 64-entry
+bound is smaller than a populated eight-bit layout. Empty shards contribute
+no instances; Worker placement, unique identity and structured READY checks
+remain mandatory. The census is outside the measured workload.
+Because listing and telemetry are separate reads, a retired generation may
+disappear between them. An exact, completed `invalid-path` telemetry refusal
+is excluded from the count only when one fresh, validated listing of the same
+shard confirms its removal. Other read failures and malformed listings fail
+the census; discovery never replays control mutations.
+
 The canonical Mac command performs the clean build and runs medium first, then
 high against a separate fresh equivalent four-core HVF
 `virt,gic-version=3,virtualization=off` boot:
@@ -452,6 +481,13 @@ generated topology, Worker population, root/service bounds, workload, and
 source patch are equivalent; they are not a substitute for the macOS lane's
 seL4 profile validation or complete staged release acceptance. A launch record
 must match the selected host profile before load.
+
+To preserve development outputs, run from a fresh disposable Git checkout with
+`--clean-root "$PWD"`. Provision its own `out/sel4` source and `out/toolchain`
+inputs first; do not symlink `out/` or `target/` to the development checkout.
+The explicit root must equal the script's Git checkout root and contain an
+exact clean commit; a detached candidate is supported. The same ownership, no-writer, profile and provenance checks apply. `--check-only` can
+validate the prepared checkout before the clean build.
 
 The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
 SMP+MCS seL4 profile, and performs one canonical
@@ -534,6 +570,32 @@ mark, and exit reasons with the report throughput and p50/p95/p99, gateway
 backpressure deltas, MCS timeout/fault scan, and host CPU/RSS samples. The
 flight recorder is diagnostic evidence only and cannot promote an otherwise
 unqualified image.
+
+Both executable modes fail if any GPU/LoRA Worker receipt operation fails or
+the supplied UART records root-emergency fail-stop. The aggregate read error
+budget cannot hide lost Worker completion among successful telemetry reads.
+The summary preserves measured counts and error rates; command exit and the
+end marker report the liveness failure even when that aggregate budget passes.
+
+The timed GPU workload renews leases established during setup; its bounded
+256-operation receipt window need not retain those initial grants. QEMU and
+Pi pressure reports require GPU renewal and LoRA export receipts, with positive
+timed operation counts for both roles. Optional per-receipt `timing_s`
+(`lane_wait`, `admission`, `completion_wait`, `total`) and positive
+`current_reads` remain diagnostics: finite nonnegative timings do not replace
+identity, monotonic sequence, terminal-status or target-log correlation.
+Each new receipt row also retains the authenticated five-part Worker `identity`;
+receipt sequences belong to one Worker and may coincide across the population.
+Legacy rows qualify only when their original correlation is unambiguous.
+When a QEMU Worker log is supplied, the harness captures teardown and replacement
+READY records before fleet discovery, and captures each receipt/completion pair
+before releasing that Worker lane. These bounded capture reads contribute to the
+measured operation cost. One export can satisfy several completed Workers only
+when each exact identity and sequence matches. Checkpoint exports append only
+previously unretained fragments, verbatim, within the existing 64 MiB evidence
+bound. Missing records, conflicting fragments
+and capture deadlines fail the run; periodic exports alone cannot prove retention
+under pressure. The raw TCP benchmark and its thresholds are unchanged.
 
 Each summary also retains top-level `target_session_sha256` and
 `report.executable_state`: exact topology/session hashes; pre/post aggregate

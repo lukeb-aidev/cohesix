@@ -8,6 +8,16 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 generated_root="$repo_root/configs/generated"
 manifest_path="$repo_root/configs/root_task.toml"
+update_pi4_test_profile=0
+case "${1:-}" in
+  "") ;;
+  --update-pi4-test-profile) update_pi4_test_profile=1 ;;
+  *)
+    printf 'Usage: scripts/check-generated.sh [--update-pi4-test-profile]\n' >&2
+    exit 2
+    ;;
+esac
+[[ $# -le 1 ]] || exit 2
 
 if [[ ! -f "$manifest_path" ]]; then
   echo "configs/root_task.toml missing; run coh-rtc" >&2
@@ -53,42 +63,46 @@ host_integration_doc="$work_dir/host_integration_dependency.md"
 cohesix_python_qemu_profile="$work_dir/cohesix_python_qemu_smp_production.json"
 cohesix_python_pi4_profile="$work_dir/cohesix_python_pi4_production.json"
 
-cargo run -p coh-rtc -- \
-  "$manifest_path" \
-  --out "$generated_dir" \
-  --manifest "$manifest_out" \
-  --cas-manifest-template "$cas_template" \
-  --cli-script "$cli_script" \
-  --doc-snippet "$doc_snippet" \
-  --gpu-breadcrumbs-snippet "$gpu_breadcrumbs" \
-  --observability-interfaces-snippet "$observability_interfaces" \
-  --observability-security-snippet "$observability_security" \
-  --ticket-quotas-snippet "$ticket_quotas" \
-  --trace-policy-snippet "$trace_policy" \
-  --cas-interfaces-snippet "$cas_interfaces" \
-  --cas-security-snippet "$cas_security" \
-  --cbor-snippet "$cbor_snippet" \
-  --cohsh-policy "$cohsh_policy" \
-  --cohsh-policy-rust "$cohsh_policy_rust" \
-  --cohsh-policy-doc "$cohsh_policy_doc" \
-  --cohsh-client-rust "$cohsh_client_rust" \
-  --cohsh-client-doc "$cohsh_client_doc" \
-  --cohsh-grammar-doc "$cohsh_grammar_doc" \
-  --cohsh-ticket-policy-doc "$cohsh_ticket_policy_doc" \
-  --coh-policy "$coh_policy" \
-  --coh-policy-rust "$coh_policy_rust" \
-  --coh-policy-doc "$coh_policy_doc" \
-  --swarmui-defaults "$swarmui_defaults" \
-  --swarmui-defaults-rust "$swarmui_defaults_rust" \
-  --swarmui-defaults-doc "$swarmui_defaults_doc" \
-  --implementation-surfaces "$repo_root/configs/implementation_surfaces.toml" \
-  --implementation-surface-inventory "$implementation_surface_inventory" \
-  --host-integration-source "$repo_root/configs/host_integration_acceptance.toml" \
-  --host-integration-graph "$host_integration_graph" \
-  --host-integration-doc "$host_integration_doc" \
-  --cohesix-py-defaults "$cohesix_py_defaults" \
-  --cohesix-py-doc "$cohesix_py_doc" \
-  --coh-doctor-doc "$coh_doctor_doc"
+generate_selected_manifest() {
+  cargo run -p coh-rtc -- \
+    "$manifest_path" \
+    --out "$generated_dir" \
+    --manifest "$manifest_out" \
+    --cas-manifest-template "$cas_template" \
+    --cli-script "$cli_script" \
+    --doc-snippet "$doc_snippet" \
+    --gpu-breadcrumbs-snippet "$gpu_breadcrumbs" \
+    --observability-interfaces-snippet "$observability_interfaces" \
+    --observability-security-snippet "$observability_security" \
+    --ticket-quotas-snippet "$ticket_quotas" \
+    --trace-policy-snippet "$trace_policy" \
+    --cas-interfaces-snippet "$cas_interfaces" \
+    --cas-security-snippet "$cas_security" \
+    --cbor-snippet "$cbor_snippet" \
+    --cohsh-policy "$cohsh_policy" \
+    --cohsh-policy-rust "$cohsh_policy_rust" \
+    --cohsh-policy-doc "$cohsh_policy_doc" \
+    --cohsh-client-rust "$cohsh_client_rust" \
+    --cohsh-client-doc "$cohsh_client_doc" \
+    --cohsh-grammar-doc "$cohsh_grammar_doc" \
+    --cohsh-ticket-policy-doc "$cohsh_ticket_policy_doc" \
+    --coh-policy "$coh_policy" \
+    --coh-policy-rust "$coh_policy_rust" \
+    --coh-policy-doc "$coh_policy_doc" \
+    --swarmui-defaults "$swarmui_defaults" \
+    --swarmui-defaults-rust "$swarmui_defaults_rust" \
+    --swarmui-defaults-doc "$swarmui_defaults_doc" \
+    --implementation-surfaces "$repo_root/configs/implementation_surfaces.toml" \
+    --implementation-surface-inventory "$implementation_surface_inventory" \
+    --host-integration-source "$repo_root/configs/host_integration_acceptance.toml" \
+    --host-integration-graph "$host_integration_graph" \
+    --host-integration-doc "$host_integration_doc" \
+    --cohesix-py-defaults "$cohesix_py_defaults" \
+    --cohesix-py-doc "$cohesix_py_doc" \
+    --coh-doctor-doc "$coh_doctor_doc"
+}
+
+generate_selected_manifest
 
 cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
   "$repo_root/configs/root_task.toml" \
@@ -168,5 +182,21 @@ python3 "$repo_root/scripts/ci/check_host_integration_inventory.py" \
 if [[ -f "$repo_root/scripts/ci/security_nist.sh" ]]; then
   "$repo_root/scripts/ci/security_nist.sh"
 fi
+
+# Pi host feature tests must exercise the complete compiler-owned Pi registry.
+# All secondary outputs stay in scratch space; the default QEMU tables remain
+# the source checkout's production selection.
+manifest_path="$repo_root/configs/root_task_pi4_uboot_aarch64.toml"
+generated_dir="$work_dir/pi4-generated"
+manifest_out="$work_dir/pi4-root-task-resolved.json"
+generate_selected_manifest
+pi4_test_profile="$repo_root/apps/root-task/tests/support/generated/pi4"
+if [[ "$update_pi4_test_profile" == "1" ]]; then
+  mkdir -p "$pi4_test_profile"
+  cp "$generated_dir/mod.rs" "$pi4_test_profile/mod.rs"
+  cp "$generated_dir/bootstrap.rs" "$pi4_test_profile/bootstrap.rs"
+fi
+compare_file "$pi4_test_profile/mod.rs" "$generated_dir/mod.rs"
+compare_file "$pi4_test_profile/bootstrap.rs" "$generated_dir/bootstrap.rs"
 
 printf "coh-rtc outputs match committed artefacts.\n"

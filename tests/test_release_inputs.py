@@ -35,6 +35,27 @@ def accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     helper = release.evidence
     monkeypatch.setattr(helper.platform, "system", lambda: "Darwin")
     inputs = support.create_artifact_inputs(tmp_path)
+    generated = tmp_path / "generated"
+    generated.mkdir()
+    configs = {
+        "root_task_resolved.json": inputs["resolved"].read_bytes(),
+        "cohsh_policy.toml": inputs["policy"].read_bytes(),
+        "cohesix_python_qemu_smp_production.json": json.dumps({
+            "target": "qemu", "target_profile": "qemu_smp_production",
+        }).encode(),
+    }
+    configs["implementation_surface_inventory.json"] = json.dumps({
+        "release": {"generated_configs": [
+            f"configs/generated/{name}"
+            for name in [*configs, "implementation_surface_inventory.json"]
+        ]},
+    }).encode()
+    for name, payload in configs.items():
+        (generated / name).write_bytes(payload)
+    assert helper.main([
+        "stage-release-configs", "--generated-dir", str(generated),
+        "--artifact-dir", str(inputs["artifact"]),
+    ]) == 0
     artifact = tmp_path / "artifact.json"
     support.record_artifact(helper, inputs, artifact)
     log = tmp_path / "tcp.log"
@@ -100,7 +121,10 @@ def test_archival_inspection_preserves_local_launch_checks(accepted, monkeypatch
 
 @pytest.mark.parametrize(
     "relative",
-    ["host-tools/coh", "staging/rootserver", "staging/cohesix/manifest.json"],
+    [
+        "host-tools/coh", "staging/rootserver", "staging/cohesix/manifest.json",
+        "release-configs/configs/generated/root_task_resolved.json",
+    ],
 )
 def test_stale_host_or_guest_bytes_are_rejected(accepted, relative):
     artifact, result, source, inputs = accepted
@@ -138,9 +162,12 @@ def test_packaged_payload_cannot_be_rebuilt_after_acceptance(accepted, tmp_path)
     records = release.payload_records(record)
     bundle = tmp_path / "bundle"
     for destination in records:
-        origin = release.IMAGE_PATHS.get(
-            destination, f"host-tools/{Path(destination).name}"
-        )
+        if destination.startswith("configs/"):
+            origin = f"release-configs/{destination}"
+        else:
+            origin = release.IMAGE_PATHS.get(
+                destination, f"host-tools/{Path(destination).name}"
+            )
         path = bundle / destination
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((inputs["artifact"] / origin).read_bytes())
@@ -148,6 +175,28 @@ def test_packaged_payload_cannot_be_rebuilt_after_acceptance(accepted, tmp_path)
     (bundle / "bin/coh").write_bytes(b"another build")
     with pytest.raises(release.evidence.EvidenceError, match="mismatch"):
         release.verify_payload(bundle, records)
+
+
+def test_unbound_configuration_cannot_be_added_after_testing(accepted):
+    artifact, result, source, _ = accepted
+    record = release.verified_inputs(artifact, result, source, "macos")
+    record["files"] = [
+        row for row in record["files"]
+        if row["path"] != "release-configs/configs/generated/cohsh_policy.toml"
+    ]
+    with pytest.raises(release.evidence.EvidenceError, match="not bound"):
+        release.payload_records(record)
+
+
+def test_foreign_native_python_profile_cannot_enter_payload(accepted):
+    artifact, result, source, inputs = accepted
+    record = release.verified_inputs(artifact, result, source, "macos")
+    profile = inputs["artifact"] / "release-configs/configs/generated/cohesix_python_qemu_smp_production.json"
+    profile.write_text(json.dumps({
+        "target": "qemu", "target_profile": "qemu_smp_kvm_production",
+    }))
+    with pytest.raises(release.evidence.EvidenceError, match="wrong native QEMU profile"):
+        release.payload_records(record)
 
 
 def test_another_valid_artifact_does_not_satisfy_the_tcp_binding(accepted):

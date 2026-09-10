@@ -81,7 +81,7 @@ fn canonical_worker_telemetry_path(worker_id: &str) -> String {
 }
 
 fn worker_shards() -> ShardLayout {
-    ShardLayout::enabled(6, true)
+    ShardLayout::enabled(8, true)
 }
 
 fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {

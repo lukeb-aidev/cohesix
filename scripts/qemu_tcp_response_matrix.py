@@ -24,8 +24,25 @@ RESPONSE_TIMEOUT_SECONDS = 30.0
 QUIT_CLOSE_TIMEOUT_SECONDS = 30.0
 CACHELOG_MATRIX_COUNT = 9
 
-HELP_BODY_FRAMES = 11
-NETSTATS_BODY_FRAMES = 15
+# Ordered public command labels; descriptions remain presentation text.
+HELP_COMMANDS = (
+    "help",
+    "bi",
+    "caps",
+    "caps mcs",
+    "smp [activity|dump]",
+    "smp mcs",
+    "smp poll-time",
+    "mem",
+    "ping",
+    "cachelog [n]",
+    "test",
+    "nettest",
+    "netstats",
+    "quit",
+)
+HELP_BODY_FRAMES = 1 + len(HELP_COMMANDS)
+NETSTATS_BODY_FRAMES = 19
 SMP_ACTIVITY_BODY_FRAMES = 16
 
 ACK_RE = re.compile(r"^(?:OK|ERR) [A-Z][A-Z0-9_-]*(?: |$)")
@@ -180,12 +197,13 @@ def exchange(
 
 
 def validate_help(body: Sequence[str]) -> None:
-    """Validate the stable QEMU help envelope."""
+    """Require the complete ordered QEMU command surface without duplicates."""
 
-    if body[0] != "Commands:" or not any("netstats" in line for line in body):
+    if not body or body[0] != "Commands:":
         raise MatrixError("HELP body is missing the canonical command surface")
-    if not any("quit" in line for line in body):
-        raise MatrixError("HELP body is missing the quit command")
+    commands = tuple(line.split(" - ", maxsplit=1)[0].strip() for line in body[1:])
+    if commands != HELP_COMMANDS:
+        raise MatrixError("HELP command surface is missing, duplicated, reordered, or unexpected")
 
 
 def validate_netstats(body: Sequence[str]) -> None:
@@ -255,7 +273,7 @@ def run_matrix(
 
         help_body = exchange(connection, "help", "OK HELP", HELP_BODY_FRAMES)
         validate_help(help_body)
-        summaries.append("PASS HELP body_frames=11 ack=OK_HELP")
+        summaries.append(f"PASS HELP body_frames={HELP_BODY_FRAMES} ack=OK_HELP")
 
         netstats_body = exchange(
             connection,
@@ -264,7 +282,7 @@ def run_matrix(
             NETSTATS_BODY_FRAMES,
         )
         validate_netstats(netstats_body)
-        summaries.append("PASS NETSTATS body_frames=15 ack=OK_NETSTATS")
+        summaries.append("PASS NETSTATS body_frames=19 ack=OK_NETSTATS")
 
         smp_body = exchange(
             connection,

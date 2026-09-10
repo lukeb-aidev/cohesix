@@ -453,6 +453,19 @@ pub fn run_target_worker_executor(lane: TargetWorkerExecutorLane) -> ! {
                             "[critical] Worker executor recovery reply invalid",
                         );
                     }
+                    super::critical_tcb::acknowledge_target_worker_recovery(
+                        request.flat_index,
+                        request.sequence,
+                    )
+                    .unwrap_or_else(|_| {
+                        target_worker_executor_fail(
+                            "[critical] Worker executor recovery acknowledgement failed",
+                        )
+                    });
+                    // Reuse the existing completion wake after the retained
+                    // fault becomes eligible for teardown; no ordinary Worker
+                    // completion record is fabricated for a recovered Call.
+                    completed += 1;
                 }
                 super::critical_tcb::TargetWorkerCallCompletion::Normal => {
                     if reply_tag.label() != WORKER_CALL_SUCCESS_LABEL
@@ -1611,7 +1624,7 @@ impl TargetWorkerRuntime {
             return Err(WorkerSupervisorError::InvalidState);
         }
         arm_target_worker_projection()?;
-        log::info!(
+        log::info!(target: "worker-evidence",
             "WORKER_TASK_ACTIVATION workers={} state=armed-suspended fault_receiver=active",
             slots,
         );
@@ -1759,7 +1772,7 @@ impl TargetWorkerRuntime {
         self.last_service_context.role_slot = role_slot;
         self.supervisor.submit_control(control)?;
         update_target_worker_projection(self.supervisor.snapshot(role, role_slot)?)?;
-        log::info!(
+        log::info!(target: "worker-evidence",
             "WORKER_TASK_CONTROL role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} action=0x{:04x} outcome={} sequence={} state=admitted",
             role_label(role),
             control.identity.slot,
@@ -1933,7 +1946,7 @@ impl TargetWorkerRuntime {
                 let accepted = self.supervisor.accept_ready(ready)?;
                 self.ready_sequences[index] = ready.sequence;
                 update_target_worker_projection(accepted)?;
-                log::info!(
+                log::info!(target: "worker-evidence",
                     "WORKER_TASK_READY role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} sequence={}",
                     role_label(role),
                     ready.identity.slot,
@@ -1952,7 +1965,7 @@ impl TargetWorkerRuntime {
                     let accepted = self.supervisor.accept_gpu_receipt(receipt)?;
                     self.receipt_sequences[index] = receipt.sequence;
                     update_target_worker_projection(accepted)?;
-                    log::info!(
+                    log::info!(target: "worker-evidence",
                         "WORKER_TASK_RECEIPT role=worker-gpu slot={} lease_epoch={} supervisor_generation={} cap_generation={} action=0x{:04x} outcome={} sequence={}",
                         receipt.identity.slot,
                         receipt.identity.lease_epoch,
@@ -1969,7 +1982,7 @@ impl TargetWorkerRuntime {
                     let accepted = self.supervisor.accept_peft_receipt(receipt)?;
                     self.receipt_sequences[index] = receipt.sequence;
                     update_target_worker_projection(accepted)?;
-                    log::info!(
+                    log::info!(target: "worker-evidence",
                         "WORKER_TASK_RECEIPT role=worker-lora slot={} lease_epoch={} supervisor_generation={} cap_generation={} action=0x{:04x} outcome={} sequence={}",
                         receipt.identity.slot,
                         receipt.identity.lease_epoch,
@@ -2019,7 +2032,7 @@ impl TargetWorkerRuntime {
                 };
                 if terminal_fault {
                     mark_target_worker_lifecycle(role, role_slot, WorkerLifecycleState::Faulted)?;
-                    log::error!(
+                    log::error!(target: "worker-evidence",
                         "WORKER_TASK_COMPLETION_FAULT role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} status={} state=faulted",
                         role_label(role),
                         completion.identity.slot,
@@ -2032,7 +2045,7 @@ impl TargetWorkerRuntime {
                 self.completion_sequences[index] = completion.sequence;
                 update_target_worker_projection(accepted)?;
                 mark_target_worker_completion(role, role_slot, completion.sequence)?;
-                log::info!(
+                log::info!(target: "worker-evidence",
                     "WORKER_TASK_COMPLETION role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} action=0x{:04x} status={} sequence={}",
                     role_label(role),
                     completion.identity.slot,
@@ -2074,7 +2087,7 @@ impl TargetWorkerRuntime {
             return Err(WorkerSupervisorError::InvalidGeneration);
         }
         if snapshot.lifecycle == WorkerLifecycleState::Terminal {
-            log::info!(
+            log::info!(target: "worker-evidence",
                 "WORKER_TASK_FAULT role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} state=terminal outcome=already-contained",
                 role_label(role),
                 identity.slot,
@@ -2085,7 +2098,7 @@ impl TargetWorkerRuntime {
             return Ok(());
         }
         mark_target_worker_lifecycle(role, role_slot, WorkerLifecycleState::Faulted)?;
-        log::error!(
+        log::error!(target: "worker-evidence",
             "WORKER_TASK_FAULT role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} class={:?} observed_badge={} state=faulted",
             role_label(role),
             identity.slot,
@@ -2150,7 +2163,7 @@ impl TargetWorkerRuntime {
                     self.supervisor.runtime_init(role, role_slot)?,
                 )?;
                 if !target_worker_admit_pending(role, role_slot, identity)? {
-                    log::info!(
+                    log::info!(target: "worker-evidence",
                         "WORKER_TASK_SPAWN_ADMITTED role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} state=cancelled-suspended",
                         role_label(role),
                         identity.slot,
@@ -2161,6 +2174,12 @@ impl TargetWorkerRuntime {
                     self.last_policy_sequence = record.sequence;
                     return Ok(());
                 }
+                // Shared-page sequences restart in each admitted generation.
+                // Identity and admission are checked above, and containment has
+                // revoked the prior child's page before a terminal slot is reused.
+                self.ready_sequences[index] = 0;
+                self.receipt_sequences[index] = 0;
+                self.completion_sequences[index] = 0;
                 self.supervisor
                     .backend_mut()
                     .activate_deferred_slot(role, role_slot)?;
@@ -2168,7 +2187,7 @@ impl TargetWorkerRuntime {
                     .supervisor
                     .arm_preconstructed_ready_deadline(role, role_slot, now_ms)?;
                 update_target_worker_projection(self.supervisor.snapshot(role, role_slot)?)?;
-                log::info!(
+                log::info!(target: "worker-evidence",
                     "WORKER_TASK_SPAWN_ADMITTED role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} state=starting ready_deadline_ms={}",
                     role_label(role),
                     receipt.identity.slot,
@@ -2187,7 +2206,7 @@ impl TargetWorkerRuntime {
                     return Err(WorkerSupervisorError::InvalidGeneration);
                 }
                 if current.lifecycle == WorkerLifecycleState::Terminal {
-                    log::info!(
+                    log::info!(target: "worker-evidence",
                         "WORKER_TASK_SHUTDOWN role={} lease_epoch={} supervisor_generation={} cap_generation={} state=terminal outcome=already-contained",
                         role_label(role),
                         identity.lease_epoch,
@@ -2209,7 +2228,7 @@ impl TargetWorkerRuntime {
                     return Err(WorkerSupervisorError::InvalidGeneration);
                 }
                 if current.lifecycle == WorkerLifecycleState::Terminal {
-                    log::info!(
+                    log::info!(target: "worker-evidence",
                         "WORKER_TASK_REVOKE role={} lease_epoch={} supervisor_generation={} cap_generation={} state=terminal outcome=already-contained",
                         role_label(role),
                         identity.lease_epoch,
@@ -2594,7 +2613,7 @@ impl WorkerKernelBackend for TargetWorkerBackend {
         let endpoint_badge =
             root_admitted_endpoint_badge(slot.role, slot.role_slot, worker_identity.lease_epoch)?;
         let objects = admission.per_slot;
-        log::info!(
+        log::info!(target: "worker-evidence",
             "WORKER_TASK_ADMISSION role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} image_sha256={} endpoint_badge={} fault_badge={} core={} sc_budget_us={} sc_period_us={} tcbs={} cnodes={} vspaces={} page_tables={} asids={} frames={} endpoints={} notifications={} fault_caps={} timeout_fault_caps={} reply_objects={} scheduling_contexts={} cspace_slots={} untyped_bytes={} state=admitted",
             slot.role_label,
             worker_identity.slot,
@@ -2661,7 +2680,14 @@ impl WorkerKernelBackend for TargetWorkerBackend {
         )
         .map_err(|_| WorkerSupervisorError::Backend)?;
         slot.sc_bound = false;
-        Ok(())
+        // Bootstrap owns no timeout endpoint: it may span bounded refills up
+        // to the READY deadline. Install passive-call containment only after
+        // removing that SC, before publishing READY or allowing any donation.
+        sel4::set_tcb_timeout_endpoint(
+            slot.slots[TCB_SLOT_INDEX],
+            slot.slots[TIMEOUT_FAULT_SLOT_INDEX],
+        )
+        .map_err(|_| WorkerSupervisorError::Backend)
     }
 
     fn publish_control(
@@ -2708,7 +2734,21 @@ impl WorkerKernelBackend for TargetWorkerBackend {
             .get_mut(index)
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
         slot.validate_handle(bundle)?;
-        enqueue_worker_call(critical, index, slot, sequence, call_label)
+        let identity = slot
+            .identity
+            .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+        enqueue_worker_call(critical, index, slot, sequence, call_label)?;
+        log::info!(target: "worker-evidence",
+            "WORKER_TASK_LIFECYCLE_CALL role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} call_label={} sequence={} state=admitted",
+            slot.role_label,
+            identity.slot,
+            identity.lease_epoch,
+            identity.supervisor_generation,
+            identity.cap_generation,
+            call_label,
+            sequence,
+        );
+        Ok(())
     }
 
     fn contain(
@@ -2726,7 +2766,7 @@ impl WorkerKernelBackend for TargetWorkerBackend {
             return Err(WorkerSupervisorError::InvalidGeneration);
         }
         let proof = contain_generation(self, index)?;
-        log::info!(
+        log::info!(target: "worker-evidence",
             "WORKER_TASK_TEARDOWN role={} slot={} lease_epoch={} supervisor_generation={} cap_generation={} reason={} tcb_suspended={} records_cleared={} scheduling_context_unbound={} mappings_scrubbed={} descendants_revoked={} objects_deleted={} generation_fenced={} state=terminal",
             role_label(identity.worker_role().map_err(|_| WorkerSupervisorError::InvalidGeneration)?),
             identity.slot,
@@ -3458,6 +3498,7 @@ fn admit_mcs(
             < generated::worker_resource_admission_config()
                 .object_bits
                 .sched_context_min
+        || scheduling.bootstrap_timeout_policy != generated::TimeoutPolicy::NaturalPostpone
         || scheduling.bootstrap_budget_us == 0
         || scheduling.bootstrap_period_us < scheduling.bootstrap_budget_us
     {
@@ -3492,11 +3533,9 @@ fn admit_mcs(
     )
     .map_err(|_| WorkerSupervisorError::Backend)?;
     slot.sc_bound = true;
-    sel4::set_tcb_timeout_endpoint(
-        slot.slots[TCB_SLOT_INDEX],
-        slot.slots[TIMEOUT_FAULT_SLOT_INDEX],
-    )
-    .map_err(|_| WorkerSupervisorError::Backend)
+    // Keep the standard fault endpoint installed throughout bootstrap.
+    // Its temporary reservation naturally postpones until READY or deadline.
+    Ok(())
 }
 
 fn contain_generation(

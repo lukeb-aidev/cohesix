@@ -3,7 +3,7 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`
+- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
 - `worker.task_abi_schema`: `worker-task-abi/v2`
 - `worker.task_abi_version`: `2`
 - `worker.observation_schema`: `cohesix-worker-observation/v1`
@@ -38,4 +38,4 @@
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8`)._
+_Generated from `configs/root_task.toml` (sha256: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`)._

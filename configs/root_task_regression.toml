@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.17"
+schema = "1.18"
 
 [root_task.affinity]
 enabled = true
@@ -310,6 +310,7 @@ bootstrap_scheduling_context_bits = 8
 bootstrap_budget_us = 400
 bootstrap_period_us = 10000
 bootstrap_max_refills = 2
+bootstrap_timeout_policy = "natural-postpone"
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
 
@@ -386,7 +387,7 @@ max_refills = 2
 priority = 252
 mcp = 252
 timeout_badge = 653131778
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2400
 wcet_provenance = "m26e-qemu-root-fault-service-units-candidate-v6"
@@ -434,11 +435,13 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 7200
 admitted = true
-max_refills = 2
+# Use every refill entry in the existing 256-byte SC (96-byte header, 16-byte entries).
+# Repeated control/READY waits must not postpone the only replenishment until exhaustion.
+max_refills = 10
 priority = 210
 mcp = 210
 timeout_badge = 653131780
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2400
 wcet_provenance = "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15"
@@ -464,7 +467,7 @@ max_refills = 2
 priority = 220
 mcp = 220
 timeout_badge = 653131781
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2400
 wcet_provenance = "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15"
@@ -486,11 +489,12 @@ blocking_us = 0
 jitter_us = 0
 response_time_us = 7500
 admitted = true
-max_refills = 8
+# Passive Call/Reply bursts use the full refill capacity of this existing 256-byte SC.
+max_refills = 10
 priority = 80
 mcp = 200
 timeout_badge = 653131782
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 4500
 wcet_provenance = "m26e-passive-worker-executor-gpu-v1"
@@ -516,7 +520,7 @@ max_refills = 8
 priority = 80
 mcp = 200
 timeout_badge = 653131783
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 7000
 wcet_provenance = "m26e-passive-worker-executor-lora-v1"
@@ -1301,8 +1305,16 @@ role = "worker-lora"
 secret = "worker-lora"
 
 [sidecars.modbus]
-enable = false
+enable = true
 mount_at = "/bus"
+
+[[sidecars.modbus.adapters]]
+id = "modbus-main"
+mount = "modbus-main"
+scope = "modbus-main"
+link = "serial"
+baud = 19200
+spool = { max_entries = 8, max_bytes = 512 }
 
 [sidecars.dnp3]
 enable = false
@@ -1389,10 +1401,10 @@ rest_url = "http://127.0.0.1:8082"
 auth_ref = "COHESIX_RELAY_HIVE_C_TOKEN"
 
 [ecosystem.audit]
-enable = false
+enable = true
 journal_max_bytes = 8192
 decisions_max_bytes = 4096
-replay_enable = false
+replay_enable = true
 replay_max_entries = 64
 replay_ctl_max_bytes = 1024
 replay_status_max_bytes = 1024
@@ -1413,4 +1425,4 @@ id = "systemd-restart"
 target = "/host/systemd/*/restart"
 
 [ecosystem.models]
-enable = false
+enable = true

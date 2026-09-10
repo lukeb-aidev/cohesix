@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Verify shard-aware cohsh script flows with and without legacy aliases.
 // Author: Lukas Bower
@@ -34,13 +34,13 @@ fn run_script(server: NineDoor) -> anyhow::Result<()> {
 #[test]
 fn shard_script_passes_with_alias_enabled() -> anyhow::Result<()> {
     run_script(NineDoor::new_with_shard_layout(ShardLayout::enabled(
-        6, true,
+        8, true,
     )))
 }
 
 #[test]
 fn shard_script_rejects_legacy_alias_when_disabled() {
-    let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(6, false));
+    let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, false));
     let err = run_script(server).expect_err("legacy alias should fail when disabled");
     let message = err.to_string();
     assert!(message.contains("/worker/worker-1/telemetry"), "{message}");

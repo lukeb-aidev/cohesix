@@ -471,3 +471,17 @@ def test_stage4_script_has_valid_bash_syntax() -> None:
         capture_output=True,
         text=True,
     )
+
+
+def test_stage4_core_uses_supported_rest_file_operations() -> None:
+    """The concurrent batch must not route the console-only log batching benchmark."""
+    source = STAGE4_SCRIPT.read_text(encoding="utf-8")
+    core = source.split('core_scripts="', maxsplit=1)[1].split('"', maxsplit=1)[0].split()
+    assert core == ["boot_v0.coh", "observe_watch.coh", "root_cut_basic.coh"]
+    tcp_source = (REPO_ROOT / "scripts/cohsh/run_regression_batch.sh").read_text()
+    base = tcp_source.split("BASE_SCRIPTS=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    assert '"session_pool.coh"' in base
+    assert '"host_absent.coh"' in base
+    rest_source = SCRIPT.read_text(encoding="utf-8")
+    defaults = rest_source.split("DEFAULT_SCRIPTS=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    assert [word.strip('"') for word in defaults.split()] == core

@@ -14,6 +14,14 @@ semantics are defined in [API_GUIDELINES.md](API_GUIDELINES.md), control schemas
 in [INTERFACES.md](INTERFACES.md), and live topology in
 [HOST_TOOLS.md](HOST_TOOLS.md).
 
+The local `CohesixClient.peft_activate` and `peft_rollback` helpers update only
+the host registry and report `execution_location=host projection=pending`.
+They make no backend write to `/gpu/models/active`, which is read-only. Publish
+the same registry with the configured `gpu-bridge-host --registry <root>
+--publish` workflow to update the target snapshot. Serialize publication with
+other publishers. A successful local call does not provide a Worker receipt,
+target publication proof, or inference reload.
+
 See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
 evidence terms.
 
@@ -231,7 +239,7 @@ It cannot identify a running target. Live Worker calls require one explicit,
 regular, non-symlink compiler output:
 
 - `configs/generated/cohesix_python_qemu_smp_production.json` for
-  `qemu_smp_production`;
+  the selected `qemu_smp_production` Mac or `qemu_smp_kvm_production` Linux build;
 - `configs/generated/cohesix_python_pi4_production.json` for
   `pi4_production`.
 

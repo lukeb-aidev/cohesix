@@ -711,10 +711,16 @@ const renderHiveDetail = (batch) => {
     `proof=${worker.execution_proof ?? "unknown"}`,
   ].join(" ");
   const detailLines = detail && Array.isArray(detail.lines) ? detail.lines.join("\n") : "";
+  const selectedOverlay = Array.isArray(batch.overlays)
+    ? batch.overlays.find((overlay) => overlay.agent === hiveDetailAgent)
+    : null;
+  const overlayLines = Array.isArray(selectedOverlay?.lines)
+    ? selectedOverlay.lines.join("\n")
+    : "";
   const detailSignature =
     `selected:${hiveDetailAgent || ""}|` +
     `state:${stateText}|` +
-    `detail:${detail?.agent || ""}:${detailLines}`;
+    `detail:${detail?.agent || ""}:${detailLines}|overlay:${overlayLines}`;
   if (detailSignature === hiveDetailSignature) {
     return;
   }
@@ -1125,7 +1131,7 @@ const pollHive = async (generation = hivePollGeneration) => {
   const res = await invoke("swarmui_hive_poll", {
     role: session.role,
     ticket: session.ticket,
-    detail_agent: hiveDetailAgent,
+    detailAgent: hiveDetailAgent,
   });
   hivePollInFlight = false;
   if (!hiveActive || generation !== hivePollGeneration) {
@@ -1140,7 +1146,9 @@ const pollHive = async (generation = hivePollGeneration) => {
     return;
   }
   lastHiveBatch = res.result;
-  if (!hiveRenderActive) {
+  // Reading telemetry below the canvas must not pause the visible text panels.
+  // The controller separately suspends offscreen animation.
+  if (!hiveDocVisible) {
     hiveUiNeedsFlush = true;
   } else {
     applyHiveBatch(res.result);
@@ -1171,7 +1179,7 @@ const startHive = async () => {
   const res = await invoke("swarmui_hive_bootstrap", {
     role: session.role,
     ticket: session.ticket,
-    snapshot_key: snapshotKey,
+    snapshotKey,
   });
   if (!res.ok) {
     setStatus("hive-status", `Hive blocked (${res.error})`);

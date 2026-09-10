@@ -129,15 +129,51 @@ fn shard_regression_uses_distinct_admitted_role_slots() {
     );
     let rendered = tokens.join("\n");
     for path in [
-        "/shard/04/worker/worker-1/telemetry",
+        "/shard/13/worker/worker-1/telemetry",
         "/worker/worker-1/telemetry",
-        "/shard/07/worker/worker-2/telemetry",
+        "/shard/1c/worker/worker-2/telemetry",
         "/worker/worker-2/telemetry",
     ] {
         assert!(
             rendered.contains(path),
             "missing shard or alias path {path}"
         );
+    }
+}
+
+#[test]
+fn operational_shard_fixtures_match_both_selected_manifests() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for name in ["root_task.toml", "root_task_pi4_uboot_aarch64.toml"] {
+        let source =
+            fs::read_to_string(root.join("configs").join(name)).expect("read operational manifest");
+        let manifest: toml::Value = toml::from_str(&source).expect("parse manifest");
+        assert_eq!(manifest["sharding"]["shard_bits"].as_integer(), Some(8));
+    }
+    for (script, workers) in [
+        ("shard_1k.coh", &["worker-1", "worker-2"][..]),
+        ("telemetry_ring.coh", &["worker-1"][..]),
+    ] {
+        let source = fs::read_to_string(root.join("scripts/cohsh").join(script))
+            .expect("read operational shard fixture");
+        let tokens = tokenize_script(BufReader::new(source.as_bytes()))
+            .expect("tokenize operational shard fixture");
+        for worker in workers {
+            // The namespace contract uses the leading SHA-256 bits, independently
+            // of the production path renderer or its generated constants.
+            let label = Sha256::digest(worker.as_bytes())[0];
+            let expected = format!("/shard/{label:02x}/worker/{worker}/telemetry");
+            let suffix = format!("/worker/{worker}/telemetry");
+            let paths: Vec<_> = tokens
+                .iter()
+                .flat_map(|line| line.split_whitespace())
+                .filter(|word| word.contains("/shard/") && word.ends_with(&suffix))
+                .collect();
+            assert!(!paths.is_empty(), "missing shard coverage for {worker}");
+            for path in paths {
+                assert_eq!(path.trim_start_matches("path="), expected);
+            }
+        }
     }
 }
 
@@ -203,6 +239,28 @@ fn telemetry_regression_uses_explicit_bandwidth_fixture_before_workload() {
         .expect("operational telemetry spawn");
     assert!(quota_idx < spawn_idx);
     assert!(spawn_idx < tail_idx);
+    let ready_idx = tokens
+        .iter()
+        .position(|token| {
+            token == "WAIT 2000 TAIL /shard/13/worker/worker-1/telemetry SUBSTR \"state\":\"ready\""
+        })
+        .expect("explicit target readiness read");
+    assert!(spawn_idx < ready_idx && ready_idx < tail_idx);
+    assert_eq!(tokens[ready_idx - 2], "attach queen");
+    let restored = tokens[ready_idx + 4]
+        .strip_prefix("attach queen ")
+        .expect("restore restricted ticket after readiness observation");
+    let restricted = TicketToken::decode(restored, &key).expect("valid restricted ticket");
+    assert!(restricted
+        .claims()
+        .scopes
+        .iter()
+        .any(|scope| scope.path == "/shard" && scope.verb == TicketVerb::Write));
+    assert!(!restricted
+        .claims()
+        .scopes
+        .iter()
+        .any(|scope| scope.path == "/shard" && scope.verb == TicketVerb::Read));
 }
 
 #[test]
@@ -265,7 +323,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
-        "shard_1k.coh:ab629eb34349af79af2d321fda6a3fde0a262666c7b76ab27f38a0e82f39ab87"
+        "shard_1k.coh:18cb0d8b12f71488f3874650c0739beed554d7775998a47e56f3f5e374d84574"
             .to_owned(),
         "sidecar_integration.coh:7371003a707d038727841bc7e0e6d005767d048ecdd83806400d9687ad316aa3"
             .to_owned(),
@@ -275,7 +333,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "telemetry_push_create.coh:5fd750c00e702d1660c35a96b141f067dd5fa5de14f11720524f3a1ef0cc154c"
             .to_owned(),
-        "telemetry_ring.coh:e31b36c1e967bc951268f2e95f5f65d2d26ecf581141494ffd8cdaca7554312d"
+        "telemetry_ring.coh:7defd57b4b496990b64eeec193d02a2f63a76c7879e88e3804588cfaf1f46f92"
             .to_owned(),
         "worker_host_model.coh:971fad19faabe4ffd7f322f61944b9bb548810229d3617ab65090765a996122e"
             .to_owned(),

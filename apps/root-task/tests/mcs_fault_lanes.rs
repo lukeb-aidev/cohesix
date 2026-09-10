@@ -321,7 +321,7 @@ fn generated_console_and_ninedoor_faults_select_exact_service_units() {
     assert_eq!(ninedoor.execution, generated::TemporalExecution::Passive);
     assert_eq!(
         ninedoor.timeout_policy,
-        generated::TimeoutPolicy::ReturnError
+        generated::TimeoutPolicy::ResumeOnceReturnError
     );
     assert_eq!(console.kind, generated::TemporalTaskKind::Service);
     assert_eq!(console.execution, generated::TemporalExecution::Active);
@@ -839,6 +839,29 @@ fn worker_supervisor_fanin_follows_durable_publication() {
         "fn handle_one_deadline(",
     );
     assert!(immediate.contains("take_validated_worker_control"));
+}
+
+#[test]
+fn worker_timeout_endpoint_starts_only_after_bootstrap_sc_is_unbound() {
+    let source = include_str!("../src/hal/worker_task.rs");
+    let admission = source_section(source, "fn admit_mcs(", "fn contain_generation(");
+    assert!(admission.contains(
+        "scheduling.bootstrap_timeout_policy != generated::TimeoutPolicy::NaturalPostpone"
+    ));
+    assert!(admission.contains("slot.slots[STANDARD_FAULT_SLOT_INDEX]"));
+    assert!(!admission.contains("set_tcb_timeout_endpoint"));
+    let ready = source_section(source, "fn finish_ready(", "fn publish_control(");
+    let unbind = ready
+        .find("sel4::unbind_sched_context_object(")
+        .expect("bootstrap SC unbind");
+    let released = ready
+        .find("slot.sc_bound = false;")
+        .expect("retained SC state");
+    let timeout = ready
+        .find("sel4::set_tcb_timeout_endpoint(")
+        .expect("passive timeout containment");
+    assert!(unbind < released && released < timeout);
+    assert!(ready[timeout..].contains(".map_err(|_| WorkerSupervisorError::Backend)"));
 }
 
 #[test]

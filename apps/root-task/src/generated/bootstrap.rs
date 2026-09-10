@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "e8babe233c64bdbb366e19e5564a72590952f8b1be7032ff25d82cf3d0cbcf01";
+    "7ef690fc1719cc5cc9486505f6b54098004d43055c93f42d72d87bc96c614660";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -195,6 +195,7 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
         bootstrap_budget_us: 400,
         bootstrap_period_us: 10000,
         bootstrap_max_refills: 2,
+        bootstrap_timeout_policy: TimeoutPolicy::NaturalPostpone,
         timeout_endpoint_badge: 653132288,
         consumed_budget_evidence: true,
     },
@@ -272,7 +273,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 252,
         mcp: 252,
         timeout_badge: 653131778,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 2400,
@@ -330,11 +331,11 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         deadline_us: 10000,
         blocking_us: 0,
         jitter_us: 0,
-        max_refills: 2,
+        max_refills: 10,
         priority: 210,
         mcp: 210,
         timeout_badge: 653131780,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 7200,
@@ -365,7 +366,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 220,
         mcp: 220,
         timeout_badge: 653131781,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 2400,
         response_time_us: 4800,
@@ -392,11 +393,11 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         deadline_us: 10000,
         blocking_us: 0,
         jitter_us: 0,
-        max_refills: 8,
+        max_refills: 10,
         priority: 80,
         mcp: 200,
         timeout_badge: 653131782,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 4500,
         response_time_us: 7500,
@@ -427,7 +428,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 265] = [
         priority: 80,
         mcp: 200,
         timeout_badge: 653131783,
-        timeout_policy: TimeoutPolicy::Terminal,
+        timeout_policy: TimeoutPolicy::NaturalPostpone,
         consumed_time_evidence: true,
         wcet_us: 7000,
         response_time_us: 7200,
@@ -9524,9 +9525,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
-    "manifest.schema=1.17",
+    "manifest.schema=1.18",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=ac74936969b07595a96e81a3371ff71097fc1942006df2c9e6f979db394db5f8",
+    "manifest.sha256=00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
