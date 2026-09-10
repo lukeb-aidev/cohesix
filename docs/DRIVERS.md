@@ -2057,7 +2057,7 @@ credit, run only during GENET bootstrap, and add no steady-state sampling.
 Trace consumers may preserve these lines without interpreting them as driver
 completion, ABI records or performance evidence.
 
-Pi bootstrap also emits `[diag root-text/v1]` at root entry, IPC installation,
+Pi bootstrap also retains `[diag root-text/v1]` at root entry, IPC installation,
 fault-receiver activation and the GENET constructor cuts. Each sample reads
 4092 bytes starting four bytes after the linker text base, reports FNV-1a32
 over their little-endian bytes and the word at text offset `0x34`, and performs
@@ -2066,6 +2066,11 @@ to avoid a null Rust pointer on the selected zero-based image. Compare samples
 with the retained exact ELF; matching data reads alone do not prove the bytes
 fetched by the instruction cache. These boot-only diagnostics grant no recovery
 or acceptance credit and do not add steady-state sampling.
+The static Queen log receives these bounded audit records even before UART
+admission, when a release kernel has no DebugPutChar sink. Raw emission is
+allowed only before root releases UART ownership. Collection requires every
+actual checksum cut from the exact boot before bounded log eviction; a logging
+attempt or matching source alone does not prove physical integrity.
 
 HAL's PCIe register-page cache returns the newly mapped address on its first
 successful publication, or the existing winner if another publication won.
@@ -2087,10 +2092,20 @@ windows and interrupt quiescence, release PERST with readback, wait the existing
 reset bits return typed HAL errors before accessing the next register bank.
 The bounded receipts identify `first_access=sw-init`, bridge release and SerDes
 release; the old pre-reset `status_before` sample is deliberately absent.
-Per-phase admission distinguishes idle, in-progress and completed setup.
-Only completed setup permits reuse, and even reuse checks reset/SerDes release
-before reading status. Every failed attempt rearms the phase; status bits alone
-never skip initial root setup. Exact endpoint configuration remains mandatory.
+One owner admission state distinguishes idle, in-progress and complete setup.
+Both local-seat USB and the SDIO prerequisite handoff require the same complete
+proof; link/MSI flags alone are insufficient. Only full endpoint and firmware
+completion permits reuse, which still checks reset/SerDes release before
+reading status. Starting revalidation revokes consumer admission until that check completes;
+any failure rearms fresh reset and setup. Exact endpoint configuration remains mandatory.
+Physical settle intervals use an ordered exported virtual-counter read
+(`dsb sy; isb; mrs CNTVCT_EL0; isb`) and generated timer frequency with checked
+conversion and typed failure when the clock is invalid. Ordinary telemetry
+counter reads retain their existing behavior.
+CPU iteration counts never stand in for the 100-us, 100-ms, 5-ms or 20-ms waits.
+Safe early HDMI checkpoints remain bounded within these waits. The existing
+configuration-selector barriers, readbacks and retry bound remain; selector
+access has no additional invented elapsed-time requirement.
 The complete proof also owes one VL805 firmware reload after each actual
 PERST, including initial U-Boot takeover. Issue the existing
 `NOTIFY_XHCI_RESET` mailbox tag for device `0x100000` only after root windows,

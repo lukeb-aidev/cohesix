@@ -82,7 +82,7 @@ pub(crate) fn trace_root_text(cut: &str) {
         line,
         "[diag root-text/v1] cut={cut} start=0x{start:x} bytes=4092 fnv1a32=0x{hash:08x} word34=0x{word_34:08x}",
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    crate::bootstrap::log::retain_bootstrap_audit_line(line.as_str());
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

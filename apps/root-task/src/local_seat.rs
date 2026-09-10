@@ -8678,8 +8678,7 @@ fn build_linked_hdmi_retained_frame(
     target_os = "none"
 ))]
 fn linked_local_seat_pcie_hal_prep_ready() -> bool {
-    crate::hal::pi4_pcie::pi4_pcie_link_and_rc_ready_proven()
-        && crate::hal::pi4_pcie::pi4_pcie_irq_sources_masked_proven()
+    crate::hal::pi4_pcie::pi4_vl805_pcie_ownership_proven()
 }
 
 #[cfg(all(
@@ -8739,7 +8738,7 @@ pub fn prepare_linked_local_seat_pcie_hal_before_event_pump() -> bool {
         .prove_pi4_vl805_pcie_ownership()
         .or_else(|_| hal.prove_pi4_vl805_pcie_ownership_after_mailbox_reset())
         .is_ok_and(|proof| proof.interrupt_modes_quiesced() && proof.pcie_device_control_ready());
-    if prepared || linked_local_seat_pcie_hal_prep_ready() {
+    if prepared && linked_local_seat_pcie_hal_prep_ready() {
         if !LINKED_LOCAL_SEAT_PCIE_HAL_PREP_READY_LOGGED.swap(true, Ordering::AcqRel) {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,

@@ -163,22 +163,18 @@ const RPI4_PCIE_DMA_BUS_BASE: u64 = 0x0000_0004_0000_0000;
 const RPI4_PCIE_DMA_CPU_BASE: u64 = 0;
 const RPI4_PCIE_DMA_WINDOW_BYTES: u64 = 0x0000_0001_0000_0000;
 const RPI4_PCIE_MMIO_WINDOW_SIZE: u64 = 0x4000_0000;
-const PCIE_ROOT_DELAY_BASE_SPINS_PER_MS: usize = 50_000;
-const PCIE_ROOT_DELAY_SPIN_SAFETY_MULTIPLIER: usize = 10;
-const PCIE_SPINS_PER_MS: usize =
-    PCIE_ROOT_DELAY_BASE_SPINS_PER_MS.saturating_mul(PCIE_ROOT_DELAY_SPIN_SAFETY_MULTIPLIER);
-const PCIE_SHORT_SETTLE_SPINS: usize = PCIE_SPINS_PER_MS / 10;
-const PCIE_POST_PERST_SETTLE_MS: usize = 100;
-const PCIE_LINK_POLL_TOTAL_MS: usize = 100;
-const PCIE_LINK_POLL_INTERVAL_MS: usize = 5;
-const PCIE_LINK_POLL_ATTEMPTS: usize = PCIE_LINK_POLL_TOTAL_MS / PCIE_LINK_POLL_INTERVAL_MS;
-const PCIE_POST_PERST_SETTLE_SPINS: usize =
-    PCIE_POST_PERST_SETTLE_MS.saturating_mul(PCIE_SPINS_PER_MS);
-const PCIE_LINK_POLL_SPINS: usize = PCIE_LINK_POLL_INTERVAL_MS.saturating_mul(PCIE_SPINS_PER_MS);
-const VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS: usize = 20;
-const VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS: usize =
-    VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS.saturating_mul(PCIE_SPINS_PER_MS);
-const PCIE_EXT_CFG_SELECT_SETTLE_SPINS: usize = 1_024;
+// These are hardware durations from the selected BCM2711 reset contract, never
+// CPU iteration counts. The selected seL4 build supplies the counter frequency.
+const PCIE_SHORT_SETTLE_US: u64 = 100;
+const PCIE_POST_PERST_SETTLE_MS: u64 = 100;
+const PCIE_LINK_POLL_TOTAL_MS: u64 = 100;
+const PCIE_LINK_POLL_INTERVAL_MS: u64 = 5;
+const PCIE_LINK_POLL_ATTEMPTS: u64 = PCIE_LINK_POLL_TOTAL_MS / PCIE_LINK_POLL_INTERVAL_MS;
+const VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS: u64 = 20;
+// Bound optional service and nonadvancing-clock work, not elapsed time. Only
+// the virtual-counter deadline may complete a physical wait successfully.
+const PCIE_COUNTER_CHECKPOINT_SAMPLES: usize = 50_000;
+const PCIE_COUNTER_STALL_SAMPLES: usize = 50_000;
 const PCIE_EXT_CFG_SELECTOR_RETRIES: usize = 2;
 const VL805_XHCI_PORTSC_BASE_OFFSET: usize = 0x420;
 const VL805_XHCI_PORTSC_STRIDE: usize = 0x10;
@@ -188,8 +184,8 @@ static PCIE_ROOT_CFG_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_STATUS_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_DATA_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_INDEX_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
-static PCIE_ROOT_INIT_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
-static PCIE_ROOT_INIT_POST_MAILBOX_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
+// Initial and retry phases prepare the same controller and share admission.
+static PCIE_ROOT_INIT_STATE: AtomicUsize = AtomicUsize::new(0);
 static PCIE_LINK_AND_RC_READY_PROVEN: AtomicUsize = AtomicUsize::new(0);
 static PCIE_IRQ_SOURCES_MASKED_PROVEN: AtomicUsize = AtomicUsize::new(0);
 static PCIE_OWNER_QUEUE_HEAD: AtomicUsize = AtomicUsize::new(0);
@@ -547,13 +543,6 @@ impl Pi4PcieProofPhase {
     const fn powers_vl805_usb_hcd(self) -> bool {
         matches!(self, Self::Initial)
     }
-
-    fn root_init_latch(self) -> &'static AtomicUsize {
-        match self {
-            Self::Initial => &PCIE_ROOT_INIT_ATTEMPTED,
-            Self::PostMailboxReset => &PCIE_ROOT_INIT_POST_MAILBOX_ATTEMPTED,
-        }
-    }
 }
 
 // READY covers the complete bridge/endpoint proof and the firmware reload owed
@@ -563,16 +552,21 @@ const PCIE_ROOT_INIT_ACTIVE: usize = 1;
 const PCIE_ROOT_INIT_READY: usize = 2;
 
 fn begin_pi4_pcie_root_init_attempt(latch: &AtomicUsize) -> Result<bool, HalError> {
-    match latch.compare_exchange(
-        PCIE_ROOT_INIT_IDLE,
-        PCIE_ROOT_INIT_ACTIVE,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    ) {
-        Ok(_) => Ok(true),
-        Err(PCIE_ROOT_INIT_READY) => Ok(false),
-        Err(_) => Err(HalError::Unsupported("pcie-root-init-in-progress")),
+    let previous = latch.load(Ordering::Acquire);
+    if !matches!(previous, PCIE_ROOT_INIT_IDLE | PCIE_ROOT_INIT_READY) {
+        return Err(HalError::Unsupported("pcie-root-init-in-progress"));
     }
+    // Revalidation is exclusive too: no consumer may retain admission while
+    // reset, endpoint or firmware validity is being checked again.
+    latch
+        .compare_exchange(
+            previous,
+            PCIE_ROOT_INIT_ACTIVE,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map(|old| old == PCIE_ROOT_INIT_IDLE)
+        .map_err(|_| HalError::Unsupported("pcie-root-init-in-progress"))
 }
 
 fn finish_pi4_pcie_root_init_attempt(latch: &AtomicUsize, ready: bool) {
@@ -608,7 +602,7 @@ fn notify_vl805_reset_after_pcie_ready(
             VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS
         ),
     );
-    boot_log::force_uart_line(begin.as_str());
+    boot_log::retain_bootstrap_audit_line(begin.as_str());
 
     let result = match pi4_wifi::notify_vl805_reset(hal) {
         Ok(result) => result,
@@ -620,12 +614,12 @@ fn notify_vl805_reset_after_pcie_ready(
                     "[local-seat] vl805 reset ownership=runtime-unconfirmed stage={stage} action=mailbox-notify-failed err={err}"
                 ),
             );
-            boot_log::force_uart_line(fail.as_str());
+            boot_log::retain_bootstrap_audit_line(fail.as_str());
             return Err(err);
         }
     };
 
-    pcie_spin_delay(VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS);
+    pcie_delay_us(VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS * 1_000)?;
     let result_label = match result {
         pi4_wifi::Vl805ResetNotifyResult::Acked => "mailbox-notify+settle",
     };
@@ -636,7 +630,7 @@ fn notify_vl805_reset_after_pcie_ready(
             "[local-seat] vl805 reset ownership=runtime-owned stage={stage} detail={result_label} action=mailbox-notify-complete"
         ),
     );
-    boot_log::force_uart_line(done.as_str());
+    boot_log::retain_bootstrap_audit_line(done.as_str());
     Ok(())
 }
 
@@ -727,15 +721,35 @@ pub fn pi4_pcie_irq_sources_masked_proven() -> bool {
     PCIE_IRQ_SOURCES_MASKED_PROVEN.load(Ordering::Acquire) != 0
 }
 
-pub fn invalidate_pi4_pcie_runtime_proofs(reason: &'static str) {
+const fn pi4_vl805_pcie_admission_ready(state: usize, link_ready: bool, irq_masked: bool) -> bool {
+    state == PCIE_ROOT_INIT_READY && link_ready && irq_masked
+}
+
+/// Admit USB and firmware-mailbox handoff only after the same complete proof.
+/// Link/MSI observations remain diagnostic facts, not endpoint admission.
+#[must_use]
+pub fn pi4_vl805_pcie_ownership_proven() -> bool {
+    pi4_vl805_pcie_admission_ready(
+        PCIE_ROOT_INIT_STATE.load(Ordering::Acquire),
+        pi4_pcie_link_and_rc_ready_proven(),
+        pi4_pcie_irq_sources_masked_proven(),
+    )
+}
+
+fn clear_pi4_pcie_link_proofs() {
     PCIE_LINK_AND_RC_READY_PROVEN.store(0, Ordering::Release);
     PCIE_IRQ_SOURCES_MASKED_PROVEN.store(0, Ordering::Release);
+}
+
+pub fn invalidate_pi4_pcie_runtime_proofs(reason: &'static str) {
+    PCIE_ROOT_INIT_STATE.store(PCIE_ROOT_INIT_IDLE, Ordering::Release);
+    clear_pi4_pcie_link_proofs();
     let mut line = heapless::String::<160>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!("[local-seat] vl805 pcie proof invalidated reason={reason}"),
     );
-    boot_log::force_uart_line(line.as_str());
+    boot_log::retain_bootstrap_audit_line(line.as_str());
 }
 
 #[must_use]
@@ -1115,9 +1129,29 @@ fn prove_pi4_vl805_pcie_ownership(
     hal: &mut KernelHal<'_>,
     phase: Pi4PcieProofPhase,
 ) -> Result<Pi4Vl805PcieProof, HalError> {
-    let fresh = begin_pi4_pcie_root_init_attempt(phase.root_init_latch())?;
+    let fresh = begin_pi4_pcie_root_init_attempt(&PCIE_ROOT_INIT_STATE)?;
+    if fresh {
+        clear_pi4_pcie_link_proofs();
+    }
     let result = prove_pi4_vl805_pcie_ownership_attempt(hal, phase, fresh);
-    finish_pi4_pcie_root_init_attempt(phase.root_init_latch(), result.is_ok());
+    if result.is_err() {
+        clear_pi4_pcie_link_proofs();
+    }
+    finish_pi4_pcie_root_init_attempt(&PCIE_ROOT_INIT_STATE, result.is_ok());
+    let mut line = heapless::String::<240>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 complete-proof stage={} fresh={} ready={} source=hal",
+            phase.label(),
+            fresh as u8,
+            pi4_vl805_pcie_ownership_proven() as u8,
+        ),
+    );
+    if let Err(error) = &result {
+        let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" error={error}"));
+    }
+    boot_log::retain_bootstrap_audit_line(line.as_str());
     result
 }
 
@@ -1197,15 +1231,12 @@ fn prove_pi4_vl805_pcie_ownership_attempt(
     let mut vendor_id = 0xffff;
     let mut device_id = 0xffff;
     let mut vendor_device = 0xffff_ffff;
-    for attempt in 0..=PCIE_EXT_CFG_SELECTOR_RETRIES {
+    for _ in 0..=PCIE_EXT_CFG_SELECTOR_RETRIES {
         vendor_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE)?;
         device_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE + 2)?;
         vendor_device = vl805_vendor_device_dword(vendor_id, device_id);
         if !vl805_ext_cfg_selector_echo(vendor_device) {
             break;
-        }
-        if attempt < PCIE_EXT_CFG_SELECTOR_RETRIES {
-            pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
         }
     }
     if vendor_id != VL805_PCI_VENDOR_ID || device_id != VL805_PCI_DEVICE_ID {
@@ -1283,7 +1314,6 @@ fn prove_pi4_vl805_pcie_ownership_attempt(
         vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR1, 0)?;
         vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR0, assigned_bar0)?;
         fence(Ordering::SeqCst);
-        pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
         let reassigned_bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0)?;
         let reassigned_bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1)?;
         let mut line = heapless::String::<240>::new();
@@ -1430,6 +1460,9 @@ fn prepare_pi4_pcie_root(
     // U-Boot's OS_PREPARE remove hook leaves INIT/PERST asserted and SerDes
     // powered down. SW_INIT is the only controller register we may access
     // until INIT is released. Even a diagnostic status read can raise SError.
+    // Validate the selected exported clock before the first controller access.
+    // A missing clock cannot authorize a reset followed by a guessed delay.
+    let _ = pcie_counter_clock()?;
     let init_page = map_pcie_reg_page_cached(hal, BCM2711_PCIE_RGR1_SW_INIT_1, "pi4-pcie-sw-init")?;
     let sw_init_reg = same_page_reg_virt(init_page, BCM2711_PCIE_RGR1_SW_INIT_1)?;
     let hard_debug = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_HARD_PCIE_HARD_DEBUG)?;
@@ -1452,7 +1485,7 @@ fn prepare_pi4_pcie_root(
             phase.label()
         ),
     );
-    boot_log::force_uart_line(begin.as_str());
+    boot_log::retain_bootstrap_audit_line(begin.as_str());
 
     let reset_asserted = mmio_set_bits_u32_flush(
         sw_init_reg,
@@ -1464,21 +1497,26 @@ fn prepare_pi4_pcie_root(
     ) {
         return Err(HalError::Unsupported("pcie-root-reset-assert-unconfirmed"));
     }
-    pcie_spin_delay(PCIE_SHORT_SETTLE_SPINS);
+    boot_log::retain_bootstrap_audit_line(
+        "[local-seat] vl805 bcm2711-pcie reset asserted init=1 perst=1 readback=confirmed",
+    );
+    pcie_delay_us(PCIE_SHORT_SETTLE_US)?;
 
     let bridge_released = mmio_clear_bits_u32_flush(sw_init_reg, PCIE_RGR1_SW_INIT_1_INIT_MASK);
     if !pcie_reset_readback_matches(bridge_released, PCIE_RGR1_SW_INIT_1_PERST_MASK) {
         return Err(HalError::Unsupported("pcie-root-reset-release-unconfirmed"));
     }
-    boot_log::force_uart_line(
+    boot_log::retain_bootstrap_audit_line(
         "[local-seat] vl805 bcm2711-pcie bridge-reset released readback=confirmed",
     );
     let serdes = mmio_clear_bits_u32_flush(hard_debug, PCIE_HARD_DEBUG_SERDES_IDDQ_MASK);
     if !pcie_serdes_released(serdes) {
         return Err(HalError::Unsupported("pcie-serdes-release-unconfirmed"));
     }
-    pcie_spin_delay(PCIE_SHORT_SETTLE_SPINS);
-    boot_log::force_uart_line("[local-seat] vl805 bcm2711-pcie serdes released readback=confirmed");
+    pcie_delay_us(PCIE_SHORT_SETTLE_US)?;
+    boot_log::retain_bootstrap_audit_line(
+        "[local-seat] vl805 bcm2711-pcie serdes released readback=confirmed",
+    );
 
     let misc_ctrl = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_MISC_CTRL)?;
     let rc_bar1 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO)?;
@@ -1500,12 +1538,15 @@ fn prepare_pi4_pcie_root(
         return Err(HalError::Unsupported("pcie-perst-release-unconfirmed"));
     }
     fence(Ordering::SeqCst);
-    pcie_spin_delay(PCIE_POST_PERST_SETTLE_SPINS);
+    boot_log::retain_bootstrap_audit_line(
+        "[local-seat] vl805 bcm2711-pcie perst released init=0 perst=0 readback=confirmed",
+    );
+    pcie_delay_us(PCIE_POST_PERST_SETTLE_MS * 1_000)?;
 
     let mut status_after = mmio_read_u32(status_reg);
-    let mut polls = 0usize;
+    let mut polls = 0u64;
     while polls < PCIE_LINK_POLL_ATTEMPTS && !pcie_status_link_up_and_rc(status_after) {
-        pcie_spin_delay(PCIE_LINK_POLL_SPINS);
+        pcie_delay_us(PCIE_LINK_POLL_INTERVAL_MS * 1_000)?;
         polls += 1;
         status_after = mmio_read_u32(status_reg);
     }
@@ -1519,17 +1560,16 @@ fn prepare_pi4_pcie_root(
     let _ = core::fmt::Write::write_fmt(
         &mut done,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback retry={}",
+            "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} clock=cntvct-el0 write_flush=readback retry={}",
             phase.label(),
             ready as u8,
             PCIE_POST_PERST_SETTLE_MS,
             PCIE_LINK_POLL_TOTAL_MS,
             PCIE_LINK_POLL_INTERVAL_MS,
-            PCIE_ROOT_DELAY_SPIN_SAFETY_MULTIPLIER,
             if ready { "closed" } else { "armed" },
         ),
     );
-    boot_log::force_uart_line(done.as_str());
+    boot_log::retain_bootstrap_audit_line(done.as_str());
 
     Ok(status_after)
 }
@@ -1670,7 +1710,6 @@ fn configure_pi4_pcie_root_bridge(root_cfg_page: usize) -> Result<(), HalError> 
         PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK,
     );
     fence(Ordering::SeqCst);
-    pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
 
     let command_after = pci_cfg_read_u16(root_cfg_page, PCI_CFG_COMMAND_STATUS);
     let bus_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_PRIMARY_BUS);
@@ -1739,35 +1778,120 @@ fn configure_pcie_outbound_window_regs(
     );
 }
 
-fn pcie_spin_delay(spins: usize) {
-    pcie_spin_delay_with(
-        spins,
-        |count| {
-            for _ in 0..count {
-                core::hint::spin_loop();
-            }
-        },
-        || {
-            // HAL's flushed MMIO waits hold no driver Reply or frame ticket.
-            // This only offers the existing child-owned startup tile a turn;
-            // its CNTVCT guard disables the path after serial cutover.
-            let _ = super::poll_early_hdmi_boot_progress();
-        },
-    );
+fn pcie_counter_ticks() -> Result<u64, HalError> {
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        feature = "timers-arch-counter"
+    ))]
+    {
+        let ticks = crate::arch::aarch64::timer::timer_counter_ticks_ordered();
+        if ticks == 0 {
+            return Err(HalError::Unsupported("pcie-counter-unavailable"));
+        }
+        Ok(ticks)
+    }
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        feature = "timers-arch-counter"
+    )))]
+    {
+        Err(HalError::Unsupported("pcie-counter-unavailable"))
+    }
 }
 
-fn pcie_spin_delay_with(
-    mut remaining: usize,
-    mut delay: impl FnMut(usize),
+fn pcie_counter_clock() -> Result<(u64, u64), HalError> {
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        feature = "timers-arch-counter"
+    ))]
+    {
+        let frequency = crate::arch::aarch64::timer::timer_freq_hz();
+        if frequency == 0 {
+            return Err(HalError::Unsupported("pcie-counter-frequency"));
+        }
+        Ok((pcie_counter_ticks()?, frequency))
+    }
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        feature = "timers-arch-counter"
+    )))]
+    {
+        Err(HalError::Unsupported("pcie-counter-unavailable"))
+    }
+}
+
+fn pcie_wait_deadline(start: u64, duration_us: u64, frequency: u64) -> Result<u64, HalError> {
+    if start == 0 || frequency == 0 || duration_us == 0 {
+        return Err(HalError::Unsupported("pcie-counter-duration"));
+    }
+    // Round upward: a fractional final counter tick may never shorten a
+    // hardware minimum. u128 contains the complete product of two u64 values.
+    let ticks = (u128::from(duration_us) * u128::from(frequency)).div_ceil(1_000_000);
+    let ticks = u64::try_from(ticks).map_err(|_| HalError::Unsupported("pcie-counter-duration"))?;
+    start
+        .checked_add(ticks)
+        .ok_or(HalError::Unsupported("pcie-counter-deadline"))
+}
+
+fn pcie_delay_us(duration_us: u64) -> Result<(), HalError> {
+    let (start, frequency) = pcie_counter_clock()?;
+    let deadline = pcie_wait_deadline(start, duration_us, frequency)?;
+    let end = pcie_wait_until_with(start, deadline, pcie_counter_ticks, || {
+        // This synchronous HAL wait holds no child Reply or display ticket.
+        // The existing child-owned tile and its own CNTVCT cadence retain the
+        // only authority to draw. A checkpoint never completes this wait.
+        let _ = super::poll_early_hdmi_boot_progress();
+    })?;
+    let mut line = heapless::String::<208>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] pcie wait source=cntvct-el0 requested_us={duration_us} hz={frequency} start={start} deadline={deadline} end={end}",
+        ),
+    );
+    boot_log::retain_bootstrap_audit_line(line.as_str());
+    Ok(())
+}
+
+fn pcie_wait_until_with(
+    start: u64,
+    deadline: u64,
+    mut counter: impl FnMut() -> Result<u64, HalError>,
     mut checkpoint: impl FnMut(),
-) {
-    // Preserve every original hardware-settle iteration. Chunking provides
-    // service opportunities; it is neither a clock nor a shorter PCIe wait.
-    while remaining != 0 {
-        let count = remaining.min(50_000);
-        delay(count);
-        remaining -= count;
-        checkpoint();
+) -> Result<u64, HalError> {
+    if start == 0 || deadline <= start {
+        return Err(HalError::Unsupported("pcie-counter-deadline"));
+    }
+    let mut previous = start;
+    let mut unchanged = 0usize;
+    let mut samples = 0usize;
+    loop {
+        let now = counter()?;
+        if now < previous {
+            return Err(HalError::Unsupported("pcie-counter-backwards"));
+        }
+        if now >= deadline {
+            return Ok(now);
+        }
+        if now == previous {
+            unchanged += 1;
+            if unchanged == PCIE_COUNTER_STALL_SAMPLES {
+                return Err(HalError::Unsupported("pcie-counter-stalled"));
+            }
+        } else {
+            unchanged = 0;
+        }
+        previous = now;
+        core::hint::spin_loop();
+        samples += 1;
+        if samples == PCIE_COUNTER_CHECKPOINT_SAMPLES {
+            checkpoint();
+            samples = 0;
+        }
     }
 }
 
@@ -2384,7 +2508,8 @@ fn bcm2711_ext_cfg_select(index_reg: usize) -> u32 {
     fence(Ordering::SeqCst);
     let selected = mmio_read_u32(index_reg);
     fence(Ordering::SeqCst);
-    pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
+    // The selected U-Boot config path accesses DATA after writing INDEX. Our
+    // existing readback and barriers drain selection without a guessed delay.
     selected
 }
 
@@ -2597,45 +2722,102 @@ mod tests {
 
     #[test]
     fn pcie_progress_checkpoints_preserve_the_complete_settle_wait() {
-        for (spins, expected_calls) in [(0, 0), (1, 1), (50_000, 1), (50_001, 2)] {
-            let mut delayed = 0;
-            let mut calls = 0;
-            pcie_spin_delay_with(
-                spins,
-                |count| {
-                    assert!((1..=50_000).contains(&count));
-                    delayed += count;
-                },
-                || calls += 1,
-            );
-            assert_eq!(delayed, spins);
-            assert_eq!(calls, expected_calls);
-        }
+        let mut sample = 100;
+        let mut checkpoints = 0;
+        pcie_wait_until_with(
+            100,
+            50_102,
+            || {
+                sample += 1;
+                Ok(sample)
+            },
+            || checkpoints += 1,
+        )
+        .expect("deadline reached after the optional service checkpoint");
+        assert_eq!(sample, 50_102);
+        assert_eq!(checkpoints, 1);
     }
 
     #[test]
     fn bcm2711_root_init_timing_matches_uboot_link_contract() {
-        assert_eq!(
-            PCIE_SPINS_PER_MS,
-            PCIE_ROOT_DELAY_BASE_SPINS_PER_MS * PCIE_ROOT_DELAY_SPIN_SAFETY_MULTIPLIER
-        );
-        assert!(PCIE_ROOT_DELAY_SPIN_SAFETY_MULTIPLIER >= 10);
+        assert_eq!(PCIE_SHORT_SETTLE_US, 100);
         assert_eq!(PCIE_POST_PERST_SETTLE_MS, 100);
         assert_eq!(PCIE_LINK_POLL_TOTAL_MS, 100);
         assert_eq!(PCIE_LINK_POLL_INTERVAL_MS, 5);
         assert_eq!(PCIE_LINK_POLL_ATTEMPTS, 20);
-        assert_eq!(PCIE_SHORT_SETTLE_SPINS, PCIE_SPINS_PER_MS / 10);
-        assert!(PCIE_POST_PERST_SETTLE_SPINS >= 1_000 * PCIE_SHORT_SETTLE_SPINS);
-        assert!(PCIE_EXT_CFG_SELECT_SETTLE_SPINS < PCIE_LINK_POLL_SPINS);
         assert_eq!(
             PCIE_LINK_POLL_ATTEMPTS * PCIE_LINK_POLL_INTERVAL_MS,
             PCIE_LINK_POLL_TOTAL_MS
         );
         assert_eq!(VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS, 20);
-        assert_eq!(
-            VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS,
-            VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS * PCIE_SPINS_PER_MS
-        );
+    }
+
+    #[test]
+    fn pcie_counter_deadlines_use_generated_frequency_and_round_up() {
+        // Independent units: 54 MHz yields 54 ticks/us; a fractional final
+        // tick must extend the minimum wait, never truncate it.
+        for (duration_us, frequency, expected_delta) in [
+            (100, 54_000_000, 5_400),
+            (100_000, 54_000_000, 5_400_000),
+            (5_000, 54_000_000, 270_000),
+            (20_000, 54_000_000, 1_080_000),
+            (100, 31_250_000, 3_125),
+            (1, 32_768, 1),
+        ] {
+            assert_eq!(
+                pcie_wait_deadline(123, duration_us, frequency).expect("valid deadline"),
+                123 + expected_delta
+            );
+        }
+        for (start, duration, frequency) in [
+            (0, 100, 54_000_000),
+            (1, 0, 54_000_000),
+            (1, 100, 0),
+            (u64::MAX, 100, 54_000_000),
+            (1, u64::MAX, u64::MAX),
+        ] {
+            assert!(pcie_wait_deadline(start, duration, frequency).is_err());
+        }
+    }
+
+    #[test]
+    fn pcie_counter_wait_rejects_missing_backwards_and_stalled_samples() {
+        assert!(matches!(
+            pcie_wait_until_with(100, 200, || Ok(99), || {}),
+            Err(HalError::Unsupported("pcie-counter-backwards"))
+        ));
+        assert!(matches!(
+            pcie_wait_until_with(
+                100,
+                200,
+                || Err(HalError::Unsupported("pcie-counter-unavailable")),
+                || {}
+            ),
+            Err(HalError::Unsupported("pcie-counter-unavailable"))
+        ));
+        let mut samples = 0;
+        assert!(matches!(
+            pcie_wait_until_with(
+                100,
+                200,
+                || {
+                    samples += 1;
+                    Ok(100)
+                },
+                || {}
+            ),
+            Err(HalError::Unsupported("pcie-counter-stalled"))
+        ));
+        assert_eq!(samples, 50_000);
+        let mut samples = [100, 101, 101, 199, 200].into_iter();
+        assert!(pcie_wait_until_with(
+            100,
+            200,
+            || Ok(samples.next().expect("bounded counter samples")),
+            || {}
+        )
+        .is_ok());
+        assert!(pcie_wait_until_with(100, 100, || Ok(100), || {}).is_err());
     }
 
     #[test]
@@ -3059,8 +3241,63 @@ mod tests {
         assert!(begin_pi4_pcie_root_init_attempt(&latch).unwrap());
         finish_pi4_pcie_root_init_attempt(&latch, true);
         assert!(!begin_pi4_pcie_root_init_attempt(&latch).unwrap());
+        assert_eq!(latch.load(Ordering::Acquire), PCIE_ROOT_INIT_ACTIVE);
+        assert!(begin_pi4_pcie_root_init_attempt(&latch).is_err());
         finish_pi4_pcie_root_init_attempt(&latch, false);
         assert!(begin_pi4_pcie_root_init_attempt(&latch).unwrap());
+    }
+
+    #[test]
+    fn usb_and_sdio_admission_reject_partial_failed_and_revalidating_proofs() {
+        let state = AtomicUsize::new(PCIE_ROOT_INIT_IDLE);
+        // Even both successful partial observations cannot admit an endpoint
+        // whose BAR/device-control/command/firmware proof has not completed.
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            true
+        ));
+        assert!(begin_pi4_pcie_root_init_attempt(&state).expect("fresh proof"));
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            true
+        ));
+        finish_pi4_pcie_root_init_attempt(&state, false);
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            true
+        ));
+        assert!(begin_pi4_pcie_root_init_attempt(&state).expect("failed proof rearms reset"));
+        finish_pi4_pcie_root_init_attempt(&state, true);
+        assert!(pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            true
+        ));
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            false,
+            true
+        ));
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            false
+        ));
+        assert!(!begin_pi4_pcie_root_init_attempt(&state).expect("reuse without reset"));
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            true
+        ));
+        finish_pi4_pcie_root_init_attempt(&state, false);
+        assert!(!pi4_vl805_pcie_admission_ready(
+            state.load(Ordering::Acquire),
+            true,
+            true
+        ));
     }
 
     #[test]

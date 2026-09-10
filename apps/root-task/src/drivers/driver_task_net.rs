@@ -4809,9 +4809,9 @@ impl Cyw43BootstrapSupervisor {
             }
             Cyw43BootstrapPhase::CheckSdioPrerequisites => {
                 const STAGE: &str = "sdio-mailbox-prereq";
-                if !crate::hal::pi4_pcie::pi4_pcie_link_and_rc_ready_proven()
-                    || !crate::hal::pi4_pcie::pi4_pcie_irq_sources_masked_proven()
-                {
+                // Firmware-mailbox authority cannot leave root while a PCIe
+                // endpoint or VL805 firmware obligation remains incomplete.
+                if !crate::hal::pi4_pcie::pi4_vl805_pcie_ownership_proven() {
                     if !self.retained_wait_open(STAGE) {
                         return self.fail(DriverTaskNetError::RuntimeInit(
                             "sdio-mailbox-prereq-deadline",

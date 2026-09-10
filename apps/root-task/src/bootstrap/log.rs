@@ -572,6 +572,35 @@ pub fn force_uart_line_raw_without_prompt_refresh(line: &str) {
     force_uart_line_raw_with_console_seq_inner(line, next_console_event_seq(), false);
 }
 
+/// Retain a bounded boot audit observation even before a UART sink is admitted.
+/// The static Queen log exists before logger handoff. Its nonblocking append
+/// preserves release-kernel evidence when DebugPutChar is unavailable; after
+/// UART ownership transfers, only the linked runtime may emit physical bytes.
+/// Collectors still require the actual record and detect missing/evicted data.
+pub(crate) fn retain_bootstrap_audit_line(line: &str) {
+    retain_bootstrap_audit_line_with(
+        line,
+        linked_runtime_owns_uart(),
+        log_buffer::append_log_line,
+        |line| emit_uart_payload_with_suffix(line.as_bytes(), None, true, false),
+    );
+}
+
+fn retain_bootstrap_audit_line_with(
+    line: &str,
+    uart_released: bool,
+    mut retain: impl FnMut(&str),
+    mut emit: impl FnMut(&str),
+) {
+    if line.trim().is_empty() {
+        return;
+    }
+    retain(line);
+    if !uart_released {
+        emit(line);
+    }
+}
+
 fn force_uart_line_raw_with_console_seq_inner(line: &str, console_seq: u32, refresh_prompt: bool) {
     if line.trim().is_empty() {
         return;
@@ -993,6 +1022,32 @@ mod tests {
         assert!(serial_prompt_refresh_should_emit(true, b"log\r\n"));
         assert!(!serial_prompt_refresh_should_emit(true, b""));
         assert!(!serial_prompt_refresh_should_emit(false, b"log\r\n"));
+    }
+
+    #[test]
+    fn bootstrap_audit_record_precedes_optional_uart_and_survives_handoff() {
+        use std::cell::RefCell;
+
+        const LINE: &str = "[diag root-text/v1] cut=root-entry bytes=4092";
+        for (uart_released, expected) in [
+            (false, vec![("log", LINE), ("uart", LINE)]),
+            (true, vec![("log", LINE)]),
+        ] {
+            let observed = RefCell::new(Vec::new());
+            retain_bootstrap_audit_line_with(
+                LINE,
+                uart_released,
+                |line| observed.borrow_mut().push(("log", line.to_owned())),
+                |line| observed.borrow_mut().push(("uart", line.to_owned())),
+            );
+            assert_eq!(
+                observed.into_inner(),
+                expected
+                    .into_iter()
+                    .map(|(sink, line)| (sink, line.to_owned()))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

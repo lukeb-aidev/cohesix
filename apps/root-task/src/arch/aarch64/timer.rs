@@ -70,6 +70,23 @@ pub fn timer_counter_ticks() -> u64 {
     }
 }
 
+/// Sample the virtual counter between completed device access and a hardware
+/// minimum wait. DSB completes prior accesses; the ISBs bound instruction
+/// speculation around the sample. This stronger boundary is for HAL waits,
+/// while ordinary telemetry retains the existing inexpensive accessor.
+#[must_use]
+#[inline(always)]
+pub fn timer_counter_ticks_ordered() -> u64 {
+    #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
+    {
+        read_timer_register(TimerRegister::VirtualCounterOrdered)
+    }
+    #[cfg(not(all(feature = "timers-arch-counter", target_os = "none")))]
+    {
+        0
+    }
+}
+
 /// Read the frequency advertised by the architectural counter register.
 ///
 /// This is runtime evidence rather than generated configuration truth. QEMU
@@ -95,6 +112,7 @@ fn parse_u64(value: &str) -> Option<u64> {
 #[derive(Clone, Copy)]
 enum TimerRegister {
     VirtualCounter,
+    VirtualCounterOrdered,
     Frequency,
 }
 
@@ -104,11 +122,24 @@ fn read_timer_register(register: TimerRegister) -> u64 {
     let value: u64;
     // SAFETY: `timers-arch-counter` is accepted only when the selected seL4
     // build exports CNTVCT_EL0/CNTFRQ_EL0 to EL0. Both registers are read-only
-    // at EL0 and are used only for bounded timer/latency telemetry.
+    // at EL0 and are used only for bounded timer/latency observation and HAL
+    // waits. The ordered variant uses unprivileged DSB/ISB and preserves the
+    // compiler memory clobber to order device access against its timestamp;
+    // it never accesses a timer-control or physical-counter register.
     unsafe {
         match register {
             TimerRegister::VirtualCounter => {
                 asm!("mrs {value}, cntvct_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+            }
+            TimerRegister::VirtualCounterOrdered => {
+                asm!(
+                    "dsb sy",
+                    "isb",
+                    "mrs {value}, cntvct_el0",
+                    "isb",
+                    value = out(reg) value,
+                    options(nostack, preserves_flags),
+                );
             }
             TimerRegister::Frequency => {
                 asm!("mrs {value}, cntfrq_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
