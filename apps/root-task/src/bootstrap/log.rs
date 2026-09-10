@@ -573,15 +573,16 @@ pub fn force_uart_line_raw_without_prompt_refresh(line: &str) {
 }
 
 /// Retain a bounded boot audit observation even before a UART sink is admitted.
-/// The static Queen log exists before logger handoff. Its nonblocking append
-/// preserves release-kernel evidence when DebugPutChar is unavailable; after
-/// UART ownership transfers, only the linked runtime may emit physical bytes.
-/// Collectors still require the actual record and detect missing/evicted data.
+/// The static Queen log's explicit trusted boot reserve survives ordinary
+/// eviction during WiFi startup. Its nonblocking append latches capture failures;
+/// after UART transfer, only the linked runtime may emit physical bytes.
 pub(crate) fn retain_bootstrap_audit_line(line: &str) {
     retain_bootstrap_audit_line_with(
         line,
         linked_runtime_owns_uart(),
-        log_buffer::append_log_line,
+        |line| {
+            let _ = log_buffer::try_append_boot_audit_line(line);
+        },
         |line| emit_uart_payload_with_suffix(line.as_bytes(), None, true, false),
     );
 }

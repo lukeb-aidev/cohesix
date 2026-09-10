@@ -899,6 +899,14 @@ Run `help` in the shell for the exact inventory compiled into the binary.
 Payload schemas, control paths, and `/proc` nodes are intentionally not
 duplicated here. Use [INTERFACES.md](INTERFACES.md).
 
+`cat /log/queen.log` includes the bounded trusted boot-audit reserve as well as
+the ordinary retained log, in original sequence order without duplicate copies.
+`log` and default `tail /log/queen.log` still return the newest 64 records;
+explicit tails retain the 1..256 bound. Full CAT can be larger than the ordinary
+ring alone and remains subject to the existing attachment quota and transport
+limits. A boot-audit failure record or an incomplete CAT stream is not complete
+boot evidence; see [DRIVERS.md](DRIVERS.md#8-build-diagnostics-for-developers-not-incidents).
+
 ### Session behavior
 
 - Interactive TCP mode reconnects with bounded backoff after a transport loss;

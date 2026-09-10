@@ -2072,11 +2072,39 @@ are published once at the common pre-PCIe boundary after local-seat runtime
 construction; publication never re-samples text or substitutes a later value
 for an earlier measurement. The bounded capture/publication status identifies
 missing records or failed nonblocking publication. GENET constructor samples
-continue directly into the static Queen log. A release kernel needs no
-DebugPutChar sink; physical UART emission remains subject to sole-owner
-handoff. Collection requires every actual checksum cut from the exact boot
-before bounded log eviction; a logging attempt or matching source alone does
-not prove physical integrity.
+continue directly into the static Queen log through its explicit trusted boot
+audit sink. That sink also retains the original PCIe reset, readback, wait,
+firmware and complete-proof observations through the longer WiFi startup.
+A fixed reserve holds at most 63 complete 256-byte audit records and one
+capture-failure receipt, alongside the unchanged 2048-line ordinary ring.
+Only explicit trusted bootstrap emitters use the reserve; ordinary logging,
+driver-fault retry and user `echo` cannot acquire it by matching a prefix.
+One nonblocking ring-lock admission assigns the same sequence and payload to
+the saved and ordinary copies. Empty, multiline, oversized or excess captures
+are rejected before either copy is written; contention is also a failure.
+
+Full `/log/queen.log` export merges saved records older than the ordinary ring
+with the ordinary records in original sequence order, removing only the duplicate
+copy with the same sequence. The cursor's byte count covers this logical union
+at its frozen end sequence; later captures cannot enter an existing export.
+Each batch rechecks the bounded saved prefix so an unread audit record survives
+ordinary eviction between batches. Ordinary records retain their existing
+eviction semantics. Tails select the exact latest N records of the same union;
+the supported 1..256 tails and ordinary 64-record snapshots are unchanged.
+
+Capture failures latch sticky flags: bit 0 is lock contention, bit 1 an invalid
+record, bit 2 reserve exhaustion, and bit 3 sequence exhaustion. Before freezing
+the next export cursor, the reserved slot records
+`[diag boot-audit/v1] state=failed reason=capture-unavailable first_observed_failures=0x<mask> recorded_at=log-export`
+at its actual later sequence. It does not pretend to be an original hardware
+observation. If the lifetime sequence has exhausted `u64`, no further sequenced
+record can be allocated, including the failure receipt; capture still returns
+failure and cannot acknowledge retention. Collectors must reject this failure
+receipt as well as missing,
+duplicate or mismatched required audit observations. A release kernel needs no
+DebugPutChar sink; physical UART emission remains subject to sole-owner handoff.
+Every required original checksum cut and ordered hardware receipt remains
+mandatory; retained source or a logging attempt does not prove physical integrity.
 
 HAL's PCIe register-page cache returns the newly mapped address on its first
 successful publication, or the existing winner if another publication won.

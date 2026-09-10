@@ -656,6 +656,19 @@ fragments cannot establish a complete observation. Formatting overflow emits
 dropped-write counter. Worker logging does not perform synchronous UART I/O.
 Authentication and role checks for log reads remain unchanged.
 
+The Queen log also preserves up to 63 trusted bootstrap audit records, each at
+most 256 bytes, plus one reserved failure record, beyond ordinary eviction.
+Only explicit internal boot emitters can use this reserve; user messages and
+Worker fragments remain in the ordinary 2048-line ring. Full CAT export presents
+the saved records and ordinary ring in original sequence order, emitting each
+sequence once. Its byte admission and frozen end sequence cover that logical
+union. TAIL still selects the latest requested records, defaulting to 64 and
+bounded to 256. Capture overflow, contention or invalid input produces an
+explicit `[diag boot-audit/v1] state=failed` record on the next export; it cannot
+establish complete boot evidence. This adds no path, command, authority or wire
+frame and changes no ticket quota. The internal receipt details and physical
+acceptance requirements are defined in [DRIVERS.md](DRIVERS.md#8-build-diagnostics-for-developers-not-incidents).
+
 `WORKER_TASK_LIFECYCLE_CALL` records the role, slot, lease epoch, supervisor
 generation, capability generation, generated `call_label`, and nonzero
 `sequence` after a shutdown/revoke Call enters its executor queue, with

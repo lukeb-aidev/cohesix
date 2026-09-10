@@ -168,7 +168,7 @@ mod root_text_retention {
                 // Each rendered record fits the existing 256-byte log line.
                 // This nonblocking sink acknowledges actual retention; there
                 // is no UART operation or fresh text-page read while locked.
-                crate::log_buffer::try_append_retained_log_line(line.as_str())
+                crate::log_buffer::try_append_boot_audit_line(line.as_str())
             })
         } else {
             crate::bootstrap::log::retain_bootstrap_audit_line(
@@ -189,7 +189,7 @@ mod root_text_retention {
             result.published,
             u8::from(result.capture_failed),
         );
-        if formatted.is_err() || !crate::log_buffer::try_append_retained_log_line(line.as_str()) {
+        if formatted.is_err() || !crate::log_buffer::try_append_boot_audit_line(line.as_str()) {
             crate::bootstrap::log::force_uart_line(
                 "[diag root-text-retention/v1] state=failed reason=summary-retention-unavailable",
             );
