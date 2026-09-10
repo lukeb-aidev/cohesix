@@ -155,10 +155,15 @@ the existing host transport semantics and adds no target authority.
 
 ## Current project status
 
-Milestone 26e is in QEMU-first implementation and qualification. The selected
+Milestone 26e and release **1.0.0-beta** are still in qualification. The selected
 profiles declare an SMP+MCS target with isolated root services, executable
 Heartbeat/GPU/LoRA Workers, and isolated physical drivers. Full promotion still
 requires separate exact-artifact QEMU and fresh-Pi evidence.
+
+The latest checked-in host bundles are **0.9.0-beta**. The planned **1.0.0-beta**
+Mac, Linux ARM64, and Pi 4 bundles have not been published; the Pi bundle will
+include the first complete SD-card image. Existing releases are snapshots of
+their own source and do not include all capabilities described by current main.
 
 See [Current status](docs/STATUS.md) for the capability and evidence snapshot,
 and the [Build Plan](docs/BUILD_PLAN.md) for the complete record of planned and
@@ -167,25 +172,37 @@ authenticated `cohsh`, and benchmark results remain separate proof states.
 
 ## Get started
 
+The commands below use **Bash**. On a Mac, enter `bash` in each terminal before
+running them.
+
 ### Run a release bundle
 
-Versioned bundles under [releases/](releases/) include release-specific
-`QUICKSTART.md` instructions. The common QEMU flow is:
+Choose the matching Mac or Linux ARM64 archive under [releases/](releases/)
+and follow its bundled `QUICKSTART.md` and release notes. After extraction, verify its
+`MANIFEST.sha256` before running tools: use `shasum -a 256 --check MANIFEST.sha256`
+on Mac or `sha256sum --check MANIFEST.sha256` on Linux. The common host-bundle
+QEMU flow is:
 
-1. Extract the bundle and run `./scripts/setup_environment.sh`. This installs
+1. From the extracted bundle root, run `./scripts/setup_environment.sh`. This installs
    QEMU/runtime libraries and creates `.venv` when the bundled Python client is
    present.
 2. Start `./qemu/run.sh` in one terminal.
-3. In another terminal, provide the deployment's TCP console authentication
-   token without echoing it and connect as Queen:
+3. In another terminal, change into the same extracted bundle. Obtain the
+   target's TCP console credential using that release's guide, then enter it
+   without echoing it and connect as Queen:
 
    ```bash
-   read -r -s COHSH_AUTH_TOKEN
+   read -r -s -p 'Target console token: ' COHSH_AUTH_TOKEN
+   printf '\n'
    export COHSH_AUTH_TOKEN
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 \
      --role queen
    unset COHSH_AUTH_TOKEN
    ```
+
+The planned Pi 4 archive contains the SD image and documentation; it requires
+the matching host archive for CLI, Python, and SwarmUI tools. See the current
+[Quickstart](docs/QUICKSTART.md) for the three-bundle installation workflow.
 
 Direct TCP is authenticated but not encrypted. Keep it on loopback or carry it
 through an authenticated tunnel.
@@ -214,14 +231,18 @@ source "$HOME/.cargo/env"
 source .venv/bin/activate
 ```
 
-The Linux installer builds Cohesix host tools and provides QEMU/TCG. It does
-not create the pinned macOS seL4 compiler/profile inputs or turn a diagnostic
-QEMU run into release acceptance. Follow the current-tree
-[Quickstart](docs/QUICKSTART.md) for the shortest mock and QEMU paths, and
-[Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) when constructing fresh seL4
-16.0.0 target artifacts on the primary host.
+These installers prepare dependencies; they do not build the Cohesix host
+binaries or seL4 guest. For host-tool builds and native Linux QEMU, follow the
+[host-tool guide](docs/HOST_TOOLS.md#release-factory). Native Linux QEMU uses
+`qemu_smp_kvm_production`, KVM, and a 31.25 MHz host counter. The Mac guest uses
+`qemu_smp_production`, HVF, and 24 MHz; these guest artifacts are not interchangeable.
 
-Build and start the QEMU TCP-console profile:
+For the **Mac source build below**, first
+[prepare the external seL4 16.0.0 project](docs/TOOLCHAIN_MAC_ARM64.md#2-prepare-the-external-sel4-project-source),
+then [configure, build, and validate](docs/TOOLCHAIN_MAC_ARM64.md#6-rebuilding-sel4-profiles)
+`qemu_smp_production` into `out/sel4/profile-v2/qemu-smp-production`.
+The setup installer does not create that build directory. Once it is ready,
+build and start the QEMU TCP-console profile:
 
 ```bash
 SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
@@ -234,19 +255,25 @@ SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
     --transport tcp
 ```
 
-Then connect from another terminal using the deployment's console
-authentication token:
+Then connect from another Bash terminal at the repository root. The QEMU
+console token is the Queen ticket's `secret` in
+`configs/generated/root_task_resolved.json`; view it locally without copying
+it into shared logs. Editing this generated file does not change the credential
+already compiled into the guest.
 
 ```bash
-read -r -s COHSH_AUTH_TOKEN
+read -r -s -p 'Target console token: ' COHSH_AUTH_TOKEN
+printf '\n'
 export COHSH_AUTH_TOKEN
 out/cohesix/host-tools/cohsh \
   --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
 unset COHSH_AUTH_TOKEN
 ```
 
-For Raspberry Pi 4, use that runbook's separate workflow. Building or flashing
-an image is not proof that the board booted that image.
+For Raspberry Pi 4 source builds and flashing, follow
+[Hardware Bring-up](docs/HARDWARE_BRINGUP.md). Use the Pi image's own console
+credential and network address. Building or flashing an image is not proof
+that the board booted that image.
 
 ## Documentation
 
@@ -269,7 +296,7 @@ the selected resolved manifest.
 
 | Document | Use it to |
 | --- | --- |
-| [Quickstart](docs/QUICKSTART.md) | Run the shortest safe mock or current-source QEMU path |
+| [Quickstart](docs/QUICKSTART.md) | Set up Mac/Linux host tools, boot QEMU or install the Pi 4 image, and connect directly or through the gateway |
 | [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | Complete one end-to-end live workflow |
 | [Operator recipes](docs/OPERATOR_RECIPES.md) | Perform advanced evidence, mount, lifecycle, ticket, federation, and PEFT tasks |
 | [Failure modes](docs/FAILURE_MODES.md) | Diagnose and recover from observable failures |

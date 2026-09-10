@@ -357,8 +357,10 @@ See [Userland and CLI](USERLAND_AND_CLI.md) for commands,
 
 This section requires a source checkout; the runtime bundles intentionally omit
 the build toolchain. Follow the [source README](../README.md#build-the-current-source-tree)
-for the Mac or Linux installer. The Mac installer creates the canonical seL4
-profile. For a Mac source build, activate the tools from the repository root:
+for the Mac or Linux installer. The installers prepare dependencies; they do
+not build Cohesix host binaries or seL4 target artifacts. Complete the source
+README's external seL4 preparation and QEMU profile build before running the
+Mac source build below. Then activate the tools from the repository root:
 
 ```bash
 source "$HOME/.cargo/env"
@@ -371,7 +373,7 @@ export SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production"
 ```
 
 Use `out/cohesix/host-tools/` in place of the release's `bin/` for host commands.
-The Linux installer supplies host tools and diagnostic QEMU; the native Linux
-release lane additionally requires its own built 31.25 MHz KVM seL4 profile.
+The Linux installer supplies host-build dependencies and diagnostic QEMU; the
+native Linux release lane requires its own built 31.25 MHz KVM seL4 profile.
 See the [release factory](HOST_TOOLS.md#release-factory) for native builds and
 release qualification. Do not mix checkout artifacts with an extracted release.
