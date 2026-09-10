@@ -1246,6 +1246,8 @@ def write_action(
 def context_binding(context: dict[str, Any]) -> dict[str, Any]:
     """Return the small binding subset embedded in a stage manifest."""
 
+    if context.get("schema") != CONTEXT_SCHEMA:
+        fail("unsupported input context schema; start a fresh test-plan attempt")
     fields = (
         "schema",
         "stage",
@@ -1259,7 +1261,10 @@ def context_binding(context: dict[str, Any]) -> dict[str, Any]:
         "dependencies",
         "context_digest",
     )
-    return {field: context[field] for field in fields}
+    try:
+        return {field: context[field] for field in fields}
+    except KeyError as error:
+        raise EvidenceError(f"input context is missing field {error.args[0]}") from error
 
 
 def finalize_attempt(

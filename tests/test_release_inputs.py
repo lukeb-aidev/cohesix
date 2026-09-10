@@ -150,6 +150,23 @@ def test_staged_source_identity_reaches_release_factory(
         fixture.close()
 
 
+@pytest.mark.parametrize("schema", ["cohesix.test-plan-input-context/v1", "unknown"])
+def test_staged_context_rejects_unsupported_schema(schema: str) -> None:
+    """Old evidence cannot acquire the new source binding through implicit defaults."""
+    import test_plan_evidence as staged
+
+    with pytest.raises(staged.EvidenceError, match="unsupported input context schema"):
+        staged.context_binding({"schema": schema})
+
+
+def test_staged_context_rejects_missing_binding() -> None:
+    """Malformed current evidence returns a typed error at its input boundary."""
+    import test_plan_evidence as staged
+
+    with pytest.raises(staged.EvidenceError, match="input context is missing field stage"):
+        staged.context_binding({"schema": "cohesix.test-plan-input-context/v2"})
+
+
 def test_archival_inspection_preserves_local_launch_checks(accepted, monkeypatch):
     artifact, result, source, inputs = accepted
     # A release assembler may inspect retained bytes on another host without
