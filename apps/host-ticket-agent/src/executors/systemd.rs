@@ -13,7 +13,10 @@ use host_sidecar_bridge::providers::{
 };
 
 use super::{arg_str, target_components, ExecutorConfig};
-use crate::{text::bounded_utf8_lossy, HostTicketSpec};
+use crate::{
+    text::{bounded_single_line, bounded_utf8_lossy, truncate_utf8},
+    HostTicketSpec,
+};
 
 const MAX_CAPTURE_BYTES: usize = 256;
 
@@ -102,7 +105,7 @@ fn run_systemctl(args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| format!("run systemctl {}", args.join(" ")))?;
-    let stdout = bounded_utf8_lossy(&output.stdout, MAX_CAPTURE_BYTES);
+    let stdout = capture_systemctl_stdout(&output.stdout);
     let stderr = bounded_utf8_lossy(&output.stderr, MAX_CAPTURE_BYTES);
     if !output.status.success() {
         return Err(anyhow!(
@@ -141,17 +144,52 @@ fn resolve_unit(spec: &HostTicketSpec) -> Result<String> {
 }
 
 fn summarize_output(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let summary = bounded_single_line(text, MAX_CAPTURE_BYTES);
+    if summary.is_empty() {
         return "none".to_owned();
     }
-    trimmed.to_owned()
+    summary
+}
+
+fn capture_systemctl_stdout(bytes: &[u8]) -> String {
+    // Property boundaries belong to the parser; only receipt text is flattened.
+    truncate_utf8(String::from_utf8_lossy(bytes).trim(), MAX_CAPTURE_BYTES)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn captured_systemctl_properties_remain_separate_records() {
+        for output in [
+            b"ActiveState=inactive\nSubState=dead\n".as_slice(),
+            b"SubState=dead\r\nActiveState=inactive\r\n".as_slice(),
+        ] {
+            let captured = capture_systemctl_stdout(output);
+            let status = parse_systemd_show_output(&captured).expect("two property records");
+            assert_eq!(status.state, "inactive");
+            assert_eq!(status.sub, "dead");
+        }
+    }
+
+    #[test]
+    fn captured_systemctl_output_retains_the_utf8_byte_bound() {
+        let output = format!("{}🙂tail", "x".repeat(255));
+        assert_eq!(capture_systemctl_stdout(output.as_bytes()), "x".repeat(255));
+        assert_eq!(capture_systemctl_stdout(b"a\xff\nb"), "a\u{fffd}\nb");
+    }
+
+    #[test]
+    fn systemctl_receipt_summary_is_a_bounded_single_line() {
+        assert_eq!(
+            summarize_output("  active\r\nrunning\t\0  "),
+            "active  running"
+        );
+        assert_eq!(summarize_output("\n\r\t"), "none");
+        assert_eq!(summarize_output(&"x".repeat(257)).len(), 256);
+    }
 
     #[test]
     fn resolve_unit_from_target() {

@@ -649,6 +649,16 @@ scope, executes supported host actions, records status, and resumes from a
 bounded cursor. Optional federation relay behavior is defined entirely by the
 resolved manifest; `--relay` does not invent peers or delegated authority.
 
+The systemd executor preserves separate `ActiveState` and `SubState` property
+records within its existing 256-byte UTF-8-safe output bound. Receipt and error
+summaries remain bounded single lines. Parsing a host observation does not
+establish that its target publication path exists or that a provider is ready.
+Release compatibility review covers `cohsh`, `coh`, `hive-gateway`, `swarmui`,
+`gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`, `cas-tool`,
+`tools/cohesix-py`, generated contracts and benchmark scripts: this correction
+changes only the agent's systemd output parsing, with no public protocol,
+policy, report schema, workload or threshold change.
+
 ```bash
 cargo run -p host-ticket-agent -- --help
 cargo run -p host-ticket-agent -- --rest-url "$COH_REST_URL" --run-once
