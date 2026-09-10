@@ -358,6 +358,9 @@ const MAX_SCRIPT_RESPONSES: usize = 8;
 const QUEEN_CTL_PATH: &str = CLIENT_QUEEN_CTL_PATH;
 const QUEEN_LIFECYCLE_CTL_PATH: &str = CLIENT_QUEEN_LIFECYCLE_CTL_PATH;
 const QUEEN_LOG_PATH: &str = CLIENT_LOG_PATH;
+// The target's default Queen-log snapshot contains its newest 64 records.
+#[cfg(feature = "in-process")]
+const QUEEN_LOG_DEFAULT_TAIL_LINES: u16 = 64;
 const TEST_SCRIPT_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const TEST_SCRIPT_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
@@ -1112,7 +1115,9 @@ impl Transport for NineDoorTransport {
     }
 
     fn tail(&mut self, _session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
-        let line_limit = ensure_valid_tail_lines(lines)?;
+        let line_limit = ensure_valid_tail_lines(
+            lines.or_else(|| (path == QUEEN_LOG_PATH).then_some(QUEEN_LOG_DEFAULT_TAIL_LINES)),
+        )?;
         match self.read_lines(path) {
             Ok(lines) => {
                 let detail = format!("path={path}");
@@ -5406,6 +5411,44 @@ mod tests {
         let rendered = String::from_utf8(output).unwrap();
         assert!(rendered.contains("Cohesix boot: root-task online"));
         assert!(rendered.contains("tick 1"));
+    }
+
+    #[cfg(feature = "in-process")]
+    #[test]
+    fn in_process_queen_log_tail_matches_target_snapshot_window() {
+        let mut transport = NineDoorTransport::new(NineDoor::new());
+        let session = transport.attach(Role::Queen, None).expect("Queen session");
+        let records: Vec<String> = (0..300).map(|index| format!("entry-{index:03}")).collect();
+        for record in &records {
+            transport
+                .write(&session, QUEEN_LOG_PATH, format!("{record}\n").as_bytes())
+                .expect("append one complete record");
+        }
+
+        assert_eq!(
+            transport
+                .tail(&session, QUEEN_LOG_PATH, None)
+                .expect("default tail"),
+            records[236..]
+        );
+        assert_eq!(
+            transport
+                .tail(&session, QUEEN_LOG_PATH, Some(256))
+                .expect("explicit maximum"),
+            records[44..]
+        );
+        assert_eq!(
+            transport
+                .tail(&session, QUEEN_LOG_PATH, Some(1))
+                .expect("one record"),
+            ["entry-299"]
+        );
+        let all = transport
+            .read(&session, QUEEN_LOG_PATH)
+            .expect("complete file read");
+        assert_eq!(&all[all.len() - 300..], records);
+        assert!(transport.tail(&session, QUEEN_LOG_PATH, Some(0)).is_err());
+        assert!(transport.tail(&session, QUEEN_LOG_PATH, Some(257)).is_err());
     }
 
     #[cfg(feature = "in-process")]

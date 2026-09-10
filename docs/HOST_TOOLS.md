@@ -4,6 +4,25 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Host Tools
 
+The in-process `cohsh` transport, including Hive Gateway `--mock`, defaults
+`TAIL /log/queen.log` to the newest 64 records, matching the operational target.
+Explicit requests retain the existing 1..256 line bound; CAT still reads the
+complete model file. Other paths retain their existing tail behavior. The
+native 3,000-Worker Conditional E comparator exposed the former unbounded model
+default: its growing log exceeded the unchanged 32 KiB response ceiling.
+The benchmark workload, request byte limits, population, retry policy and error
+budget remain unchanged after the model correction; the failed run is retained.
+
+For this restoration the complete host-tool compatibility review covers `coh`,
+`cohsh`, `coh-status`, Hive Gateway, SwarmUI, `gpu-bridge-host`,
+`host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, and
+`console-ack-wire`, plus `tools/cohesix-py`, `.coh` scripts, the REST performance
+harness and M26e pressure runner. Only the in-process `cohsh` implementation
+changes. Gateway and host clients inherit the bounded model result; direct TCP,
+Python implementations, generated contracts, namespaces, acknowledgements and
+benchmark reports require no changes. This conformance repair supplies no
+physical hardware or live provider proof.
+
 Cohesix keeps CUDA, NVML, container integrations, REST, desktop UI, packaging,
 and automation on the host. Host tools may perform local work, but every target
 read or mutation remains a projection of the documented console and Secure9P
