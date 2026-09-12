@@ -19,6 +19,7 @@ image_identity_path=""
 profile=""
 operation_script=""
 operation_log=""
+worker_restart_evidence=""
 qemu_pid=""
 
 usage() {
@@ -59,7 +60,8 @@ write_observation() {
     "${image_path}" \
     "${image_identity_path}" \
     "${operation_script}" \
-    "${operation_log}" <<'PY'
+    "${operation_log}" \
+    "${worker_restart_evidence}" <<'PY'
 import hashlib
 import json
 import os
@@ -81,6 +83,7 @@ import sys
     identity_raw,
     operation_raw,
     operation_log_raw,
+    worker_restart_raw,
 ) = sys.argv[1:]
 
 
@@ -119,6 +122,7 @@ payload = {
     "image_identity": file_record(identity_raw),
     "operation_script": file_record(operation_raw),
     "operation_log": file_record(operation_log_raw),
+    "worker_restart_evidence": file_record(worker_restart_raw),
 }
 output = Path(output_raw).resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
@@ -168,34 +172,6 @@ wait_for_marker() {
       return 1
     fi
     if [[ -f "${path}" ]] && grep -Fq -- "${marker}" "${path}"; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  return 1
-}
-
-marker_count() {
-  local path=$1
-  local marker=$2
-  if [[ ! -f "${path}" ]]; then
-    printf '0\n'
-    return 0
-  fi
-  grep -F -c -- "${marker}" "${path}" || true
-}
-
-wait_for_marker_count() {
-  local path=$1
-  local marker=$2
-  local minimum=$3
-  local timeout=$4
-  local deadline=$((SECONDS + timeout))
-  while (( SECONDS < deadline )); do
-    if [[ -n "${qemu_pid}" ]] && ! kill -0 "${qemu_pid}" 2>/dev/null; then
-      return 1
-    fi
-    if (( $(marker_count "${path}" "${marker}") >= minimum )); then
       return 0
     fi
     sleep 0.2
@@ -367,11 +343,6 @@ PY
   token=${COHSH_AUTH_TOKEN:-$(resolve_auth_token "${repo_root}/configs/root_task.toml")}
   local binary
   binary=$(cohsh_binary "${qemu_out}/host-tools/cohsh")
-  local worker_ready_before=0
-  if [[ "${focus}" == "worker" ]]; then
-    worker_ready_before=$(marker_count \
-      "${serial_log}" "WORKER_TASK_READY role=worker-heartbeat")
-  fi
   operation_log="${state_dir}/target-operation.log"
   run_live_operation \
     "${binary}" 127.0.0.1 "${port}" "${token}" \
@@ -379,12 +350,18 @@ PY
     die "live QEMU operation failed"
   if [[ "${focus}" == "worker" ]]; then
     current_layer="changed-service-ready"
-    wait_for_marker_count \
-      "${serial_log}" \
-      "WORKER_TASK_READY role=worker-heartbeat" \
-      "$((worker_ready_before + 2))" \
-      120 || \
-      die "Worker startup/teardown/restart did not produce two real READY generations"
+    worker_restart_evidence="${state_dir}/worker-restart.json"
+    PYTHONPATH="${repo_root}" python3 - \
+      "${operation_log}" "${worker_restart_evidence}" <<'PY'
+import json
+from pathlib import Path
+import sys
+from scripts.lib.worker_log import validate_restart
+
+source, destination = map(Path, sys.argv[1:])
+proof = validate_restart(source.read_text(encoding="utf-8"))
+destination.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n")
+PY
   fi
 
   current_layer="unexpected-target-fault"

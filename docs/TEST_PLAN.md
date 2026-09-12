@@ -220,6 +220,19 @@ transcript to contain remote NineDoor readiness, successful authentication and
 Queen attachment, and one successful `CAT`; a boot-only UART marker cannot
 stand in for the operation.
 
+The Worker restart canary publishes a distinct single-use policy approval
+before each create/kill/create write. Each asynchronous lifecycle step uses
+the existing bounded `WAIT 2000 TAIL` contract to observe the expected READY
+record in the Queen log or terminal telemetry before the next step. Read a
+new Worker's telemetry only after READY publishes its namespace. Two completed
+authenticated Queen-log exports retain the actual `WORKER_TASK_READY`
+generations and the intervening complete `WORKER_TASK_TEARDOWN`. The validator
+requires the same slot, increasing lease/supervisor/capability generations, and every terminal
+containment field; UART mirroring and admission acknowledgements cannot
+substitute for these records. The observation binds `worker_restart_evidence`
+to this parsed proof and still requires successful `cohsh` completion,
+including response framing and QUIT/EOF.
+
 The QEMU proof ladder is:
 
 ```text

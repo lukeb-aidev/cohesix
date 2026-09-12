@@ -300,10 +300,18 @@ def main() -> int:
             "cohesix-qemu-launch-artifacts.json",
             "verify-pi4-evidence",
             "pi4_image_identity.py",
-            "WORKER_TASK_READY",
+            "from scripts.lib.worker_log import validate_restart",
+            "proof = validate_restart(source.read_text(encoding=\"utf-8\"))",
+            '"worker_restart_evidence": file_record(worker_restart_raw)',
             "Cohesix console ready",
         ),
         "scripts/ci/test_plan_target_canary.sh",
+    )
+    require(
+        errors,
+        read(ROOT / "scripts" / "lib" / "worker_log.py"),
+        ("def validate_restart(", "WORKER_TASK_READY", "WORKER_TASK_TEARDOWN"),
+        "scripts/lib/worker_log.py",
     )
     require(
         errors,

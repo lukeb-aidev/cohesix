@@ -1,12 +1,32 @@
 # Author: Lukas Bower
-# Purpose: Exercise bounded executable Worker startup, teardown, and restart recovery.
+# Purpose: Observe policy-approved Worker READY, terminal teardown, and fresh-generation recovery.
 # Copyright 2026 Lukas Bower
 attach queen
 EXPECT OK
+echo '{"id":"converge-worker-create-1","target":"/queen/ctl","decision":"approve"}' > /actions/queue
+EXPECT OK
 spawn heartbeat ticks=8 ttl_s=60 ops=16
+EXPECT OK
+WAIT 2000 TAIL /log/queen.log SUBSTR WORKER_TASK_READY role=worker-heartbeat slot=0 lease_epoch=1 supervisor_generation=1 cap_generation=1
+EXPECT OK
+tail /shard/13/worker/worker-1/telemetry
+EXPECT OK
+cat /log/queen.log
+EXPECT OK
+echo '{"id":"converge-worker-kill-1","target":"/queen/ctl","decision":"approve"}' > /actions/queue
 EXPECT OK
 kill worker-1
 EXPECT OK
+WAIT 2000 TAIL /shard/13/worker/worker-1/telemetry SUBSTR "state":"terminal"
+EXPECT OK
+echo '{"id":"converge-worker-create-2","target":"/queen/ctl","decision":"approve"}' > /actions/queue
+EXPECT OK
 spawn heartbeat ticks=8 ttl_s=60 ops=16
+EXPECT OK
+WAIT 2000 TAIL /log/queen.log SUBSTR WORKER_TASK_READY role=worker-heartbeat slot=0 lease_epoch=2 supervisor_generation=257 cap_generation=2
+EXPECT OK
+tail /shard/1c/worker/worker-2/telemetry
+EXPECT OK
+cat /log/queen.log
 EXPECT OK
 quit

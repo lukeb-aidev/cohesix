@@ -75,6 +75,137 @@ def append_export(path: Path, text: str) -> None:
             output.write("\n")
 
 
+def validate_restart(text: str) -> dict[str, object]:
+    """Require two real READY generations around complete terminal containment.
+
+    The caller must also require successful cohsh exit: its TCP reader accepts
+    CAT data only after the matching acknowledgement and END, and QUIT only
+    after target EOF. UART mirroring and acknowledgement text are not records.
+    """
+    auth_markers = (
+        "[cohsh][tcp] remote NineDoor ready as role Queen",
+        "[console] OK AUTH",
+        "[console] OK ATTACH role=queen",
+    )
+    seen_auth: set[str] = set()
+    exports: list[str] = []
+    telemetry: list[tuple[str, list[dict[str, object]]]] = []
+    collecting = False
+    tail_path: str | None = None
+    export_count = 0
+    quit_seen = False
+    for line in text.splitlines():
+        if line in auth_markers:
+            seen_auth.add(line)
+        if line.startswith("[console] ERR"):
+            raise ValueError("Worker restart transcript contains a refusal")
+        if line.startswith("[console] OK CAT path=/log/queen.log "):
+            if seen_auth != set(auth_markers):
+                raise ValueError("Worker export precedes authenticated Queen attachment")
+            collecting = True
+            export_count += 1
+        elif line.startswith(("[console]", "[cohsh]")):
+            collecting = False
+        elif collecting:
+            exports.append(line)
+        if line == "[console] OK QUIT":
+            quit_seen = True
+        if line.startswith("[console] OK TAIL path=/shard/"):
+            if seen_auth != set(auth_markers):
+                raise ValueError("Worker telemetry precedes authenticated Queen attachment")
+            tail_path = line.split("path=", 1)[1].split()[0]
+            telemetry.append((tail_path, []))
+        elif line.startswith(("[console]", "[cohsh]")):
+            tail_path = None
+        elif tail_path and line.startswith("{"):
+            row = json.loads(line)
+            if isinstance(row, dict) and row.get("schema") == "worker-runtime-state/v2":
+                telemetry[-1][1].append(row)
+    if export_count != 2 or not quit_seen:
+        raise ValueError("Worker restart needs two authenticated CAT exports and QUIT")
+
+    identity_keys = ("slot", "lease_epoch", "supervisor_generation", "cap_generation")
+    expected_phases = (
+        ("/shard/13/worker/worker-1/telemetry", "worker-1", "ready"),
+        ("/shard/13/worker/worker-1/telemetry", "worker-1", "terminal"),
+        ("/shard/1c/worker/worker-2/telemetry", "worker-2", "ready"),
+    )
+    if len(telemetry) != len(expected_phases):
+        raise ValueError("Worker restart lacks its three completed telemetry barriers")
+    observed_phases = []
+    for (path, rows), (expected_path, worker_id, state) in zip(telemetry, expected_phases):
+        if path != expected_path or not rows:
+            raise ValueError("Worker restart telemetry path differs from the selected shard")
+        row = rows[-1]
+        if (row.get("worker_id"), row.get("role"), row.get("state")) != (
+            worker_id, "worker-heartbeat", state,
+        ):
+            raise ValueError("Worker restart telemetry phase or public identity mismatch")
+        for key in ("identity", "sequence"):
+            value = row.get(key)
+            if not isinstance(value, list) or len(value) != 4 or any(
+                type(word) is not int or not 0 <= word <= 2**32 - 1 for word in value
+            ):
+                raise ValueError(f"invalid Worker telemetry {key}")
+        if row["sequence"][0] == 0:
+            raise ValueError("Worker telemetry has no accepted READY sequence")
+        observed_phases.append(row)
+    ready: list[tuple[int, tuple[int, ...]]] = []
+    teardown: list[tuple[int, tuple[int, ...], dict[str, str]]] = []
+    for index, line in enumerate(records("\n".join(exports)).splitlines()):
+        tokens = line.split()
+        marker = tokens[0]
+        if marker not in {"WORKER_TASK_READY", "WORKER_TASK_TEARDOWN"}:
+            continue
+        fields: dict[str, str] = {}
+        for token in tokens[1:]:
+            key, separator, value = token.partition("=")
+            if not separator or key in fields:
+                raise ValueError("malformed or duplicate Worker record field")
+            fields[key] = value
+        if fields.get("role") != "worker-heartbeat":
+            continue
+        numeric_keys = identity_keys + (("sequence",) if marker.endswith("READY") else ())
+        for key in numeric_keys:
+            value = fields.get(key, "")
+            if not value.isascii() or not value.isdecimal() or int(value) > 2**64 - 1:
+                raise ValueError(f"invalid Worker record {key}")
+            if key != "slot" and int(value) == 0:
+                raise ValueError(f"zero Worker record {key}")
+        identity = tuple(int(fields[key]) for key in identity_keys)
+        if marker == "WORKER_TASK_READY":
+            ready.append((index, identity))
+        else:
+            teardown.append((index, identity, fields))
+    if len(ready) != 2:
+        raise ValueError("Worker restart needs exactly two actual READY records")
+    (first_index, first), (second_index, second) = ready
+    if first[0] != second[0] or any(new <= old for old, new in zip(first[1:], second[1:])):
+        raise ValueError("Worker restart did not advance the same slot's generation tuple")
+    if [tuple(row["identity"]) for row in observed_phases] != [first, first, second]:
+        raise ValueError("Worker telemetry and retained READY generation identities differ")
+    containment = (
+        "tcb_suspended", "records_cleared", "scheduling_context_unbound",
+        "mappings_scrubbed", "descendants_revoked", "objects_deleted", "generation_fenced",
+    )
+    matching = [
+        fields for index, identity, fields in teardown
+        if first_index < index < second_index and identity == first
+    ]
+    if len(matching) != 1 or (
+        matching[0].get("state"), matching[0].get("reason")
+    ) != ("terminal", "shutdown") or any(
+        matching[0].get(key) != "yes" for key in containment
+    ):
+        raise ValueError("Worker restart lacks complete containment of the first generation")
+    return {
+        "ready_generations": [dict(zip(identity_keys, first)), dict(zip(identity_keys, second))],
+        "terminal_containment": matching[0],
+        "authenticated_cat_exports": export_count,
+        "telemetry_phases": observed_phases,
+    }
+
+
 class ExportMonitor:
     """One bounded reader through the existing gateway; failures invalidate proof."""
 

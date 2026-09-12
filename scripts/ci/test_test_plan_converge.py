@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -35,6 +38,7 @@ def load_module(name: str, path: Path):
 
 catalog = load_module("test_plan_catalog", CATALOG_TOOL)
 converge = load_module("convergence_test_runner", CONVERGE_TOOL)
+worker_logs = load_module("convergence_worker_logs", REPO_ROOT / "scripts/lib/worker_log.py")
 
 
 def fake_catalog(*, fail_entry: bool = False) -> str:
@@ -233,6 +237,199 @@ class ConvergenceSelectionTests(unittest.TestCase):
             source,
         )
         self.assertIn('--qemu "${qemu_bin}"', source)
+
+    def test_worker_operation_approves_each_governed_lifecycle_write(self) -> None:
+        """The selected single-use gate needs a fresh approval per mutation."""
+        manifest = tomllib.loads(
+            (REPO_ROOT / "configs" / "root_task.toml").read_text(encoding="utf-8")
+        )
+        policy = manifest["ecosystem"]["policy"]
+        self.assertTrue(policy["enable"])
+        self.assertIn(
+            {"id": "queen-ctl", "target": "/queen/ctl"}, policy["rules"]
+        )
+        source = (REPO_ROOT / "scripts" / "cohsh" / "converge_worker.coh").read_text(
+            encoding="utf-8"
+        )
+        commands = [
+            words
+            for line in source.splitlines()
+            if (words := shlex.split(line, comments=True)) and words[0] != "EXPECT"
+        ]
+        mutations = [
+            (index, words)
+            for index, words in enumerate(commands)
+            if words[0] in {"spawn", "kill"}
+        ]
+        self.assertEqual([words[0] for _, words in mutations], ["spawn", "kill", "spawn"])
+        approval_ids: set[str] = set()
+        for index, mutation in mutations:
+            with self.subTest(mutation=mutation, command_index=index):
+                self.assertGreater(index, 0)
+                approval_command = commands[index - 1]
+                self.assertEqual(approval_command[0], "echo")
+                self.assertEqual(approval_command[2:], [">", "/actions/queue"])
+                approval = json.loads(approval_command[1])
+                self.assertEqual(approval["target"], "/queen/ctl")
+                self.assertEqual(approval["decision"], "approve")
+                self.assertIsInstance(approval["id"], str)
+                self.assertTrue(approval["id"])
+                self.assertNotIn(approval["id"], approval_ids)
+                approval_ids.add(approval["id"])
+
+    def test_worker_operation_observes_lifecycle_before_dependent_mutations(self) -> None:
+        """Each asynchronous phase uses bounded target data before proceeding."""
+        source = (REPO_ROOT / "scripts/cohsh/converge_worker.coh").read_text()
+        lines = [
+            line.strip() for line in source.splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+        manifest = tomllib.loads((REPO_ROOT / "configs/root_task.toml").read_text())
+        self.assertEqual(manifest["sharding"]["shard_bits"], 8)
+        mutations = [
+            index for index, line in enumerate(lines)
+            if line.split()[0] in {"spawn", "kill"}
+        ]
+        phases = zip(
+            mutations, ("worker-1", "worker-1", "worker-2"),
+            ("ready", "terminal", "ready"),
+        )
+        for index, worker_id, state in phases:
+            shard = hashlib.sha256(worker_id.encode()).hexdigest()[:2]
+            path = f"/shard/{shard}/worker/{worker_id}/telemetry"
+            if state == "terminal":
+                expected = f'WAIT 2000 TAIL {path} SUBSTR "state":"terminal"'
+                self.assertEqual(
+                    lines[index + 1:index + 4],
+                    ["EXPECT OK", expected, "EXPECT OK"],
+                )
+            else:
+                generation = 1 if worker_id == "worker-1" else 2
+                # Every executable slot is constructed before public admission;
+                # the supervisor generation is global, while lease/cap are per slot.
+                resource_admission = manifest["worker_resource_admission"]
+                population = sum(
+                    role["executable_slots"]
+                    for role in resource_admission["executable_roles"]
+                )
+                supervisor = 1 if worker_id == "worker-1" else population + 1
+                expected = (
+                    "WAIT 2000 TAIL /log/queen.log SUBSTR WORKER_TASK_READY "
+                    f"role=worker-heartbeat slot=0 lease_epoch={generation} "
+                    f"supervisor_generation={supervisor} cap_generation={generation}"
+                )
+                self.assertEqual(
+                    lines[index + 1:index + 6],
+                    ["EXPECT OK", expected, "EXPECT OK", f"tail {path}", "EXPECT OK"],
+                )
+        self.assertEqual(lines.count("cat /log/queen.log"), 2)
+
+
+class WorkerRestartEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def transcript(
+        *, second_generation: int = 2, contained: bool = True,
+        reason: str = "shutdown",
+    ) -> str:
+        """Independent protocol fixture contains fragmented target record bytes."""
+        first = (
+            "role=worker-heartbeat slot=0 lease_epoch=1 "
+            "supervisor_generation=1 cap_generation=1"
+        )
+        second = (
+            f"role=worker-heartbeat slot=0 lease_epoch={second_generation} "
+            f"supervisor_generation={second_generation} "
+            f"cap_generation={second_generation}"
+        )
+        messages = [
+            f"WORKER_TASK_READY {first} sequence=1",
+            f"WORKER_TASK_TEARDOWN {first} reason={reason} tcb_suspended=yes "
+            "records_cleared=yes scheduling_context_unbound=yes "
+            "mappings_scrubbed=yes descendants_revoked=yes objects_deleted=yes "
+            f"generation_fenced={'yes' if contained else 'no'} state=terminal",
+            f"WORKER_TASK_READY {second} sequence=1",
+        ]
+        fragments = []
+        for identity, message in enumerate(messages, 1):
+            parts = [message[index:index + 120] for index in range(0, len(message), 120)]
+            fragments.append("\n".join(
+                f"WORKER_LOG id={identity} part={part} "
+                f"last={int(part == len(parts) - 1)} data={data}"
+                for part, data in enumerate(parts)
+            ))
+
+        def telemetry(worker_id: str, state: str, generation: int) -> str:
+            return json.dumps({
+                "schema": "worker-runtime-state/v2", "worker_id": worker_id,
+                "role": "worker-heartbeat", "state": state,
+                "identity": [0, generation, generation, generation],
+                "sequence": [1, 0, 0, 0],
+            })
+
+        return "\n".join([
+            "[cohsh][tcp] remote NineDoor ready as role Queen", "[console] OK AUTH",
+            "[console] OK ATTACH role=queen",
+            "[console] OK TAIL path=/shard/13/worker/worker-1/telemetry",
+            telemetry("worker-1", "ready", 1),
+            "[console] OK CAT path=/log/queen.log lines=2",
+            fragments[0], "[console] OK ECHO path=/queen/ctl bytes=19",
+            "[console] OK TAIL path=/shard/13/worker/worker-1/telemetry",
+            telemetry("worker-1", "terminal", 1),
+            "[console] OK TAIL path=/shard/1c/worker/worker-2/telemetry",
+            telemetry("worker-2", "ready", second_generation),
+            "[console] OK CAT path=/log/queen.log lines=8", *fragments,
+            "[console] OK QUIT", "closing session",
+        ])
+
+    def test_completed_exports_deduplicate_identical_fragments(self) -> None:
+        proof = worker_logs.validate_restart(self.transcript())
+        self.assertEqual(
+            [row["supervisor_generation"] for row in proof["ready_generations"]],
+            [1, 2],
+        )
+
+    def test_repeated_generation_is_not_restart(self) -> None:
+        with self.assertRaisesRegex(ValueError, "generation tuple"):
+            worker_logs.validate_restart(self.transcript(second_generation=1))
+
+    def test_incomplete_containment_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "containment"):
+            worker_logs.validate_restart(self.transcript(contained=False))
+
+    def test_fault_containment_cannot_replace_requested_shutdown(self) -> None:
+        with self.assertRaisesRegex(ValueError, "containment"):
+            worker_logs.validate_restart(self.transcript(reason="fault"))
+
+    def test_acknowledgements_and_uart_text_are_not_worker_records(self) -> None:
+        text = self.transcript().replace("WORKER_LOG id=", "UART WORKER_LOG id=")
+        with self.assertRaisesRegex(ValueError, "two actual READY"):
+            worker_logs.validate_restart(text)
+
+    def test_missing_fragment_is_not_completed_proof(self) -> None:
+        text = "\n".join(
+            line for line in self.transcript().splitlines()
+            if "id=2 part=1 " not in line
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            worker_logs.validate_restart(text)
+
+    def test_wrong_telemetry_identity_or_shard_is_rejected(self) -> None:
+        for text in (
+            self.transcript().replace('"worker_id": "worker-2"', '"worker_id": "worker-1"'),
+            self.transcript().replace("/shard/1c/worker/worker-2", "/shard/13/worker/worker-2"),
+            self.transcript().replace('"identity": [0, 2, 2, 2]', '"identity": [0, 3, 3, 3]'),
+        ):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                worker_logs.validate_restart(text)
+
+    def test_failed_or_unauthenticated_export_is_rejected(self) -> None:
+        for text in (
+            self.transcript().replace("[console] OK AUTH", "[console] ERR AUTH"),
+            self.transcript().replace("[console] OK AUTH", "unrelated text"),
+            self.transcript().replace("[console] OK QUIT", "missing terminal response"),
+        ):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                worker_logs.validate_restart(text)
 
 
 class ConvergenceEvidenceTests(unittest.TestCase):
