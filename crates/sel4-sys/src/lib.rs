@@ -2886,6 +2886,9 @@ mod imp {
     pub const invocation_label_TCBResume: seL4_Word = 12;
     pub const invocation_label_TCBBindNotification: seL4_Word = 13;
     pub const invocation_label_TCBUnbindNotification: seL4_Word = 14;
+    // Host-only CNode labels mirror seL4 16 MCS for wrapper compilation.
+    pub const invocation_label_CNodeRevoke: seL4_Word = 18;
+    pub const invocation_label_CNodeDelete: seL4_Word = 19;
     pub const MCS_INVOCATION_LABEL_TCB_SET_TIMEOUT_ENDPOINT: seL4_Word = 9;
     pub const MCS_INVOCATION_LABEL_SCHED_CONTROL_CONFIGURE_FLAGS: seL4_Word = 33;
     pub const MCS_INVOCATION_LABEL_SCHED_CONTEXT_BIND: seL4_Word = 34;

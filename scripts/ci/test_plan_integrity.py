@@ -302,7 +302,7 @@ def main() -> int:
             "pi4_image_identity.py",
             "from scripts.lib.worker_log import validate_restart",
             "proof = validate_restart(source.read_text(encoding=\"utf-8\"))",
-            '"worker_restart_evidence": file_record(worker_restart_raw)',
+            'payload["worker_restart_evidence"] = file_record(worker_restart_raw)',
             "Cohesix console ready",
         ),
         "scripts/ci/test_plan_target_canary.sh",

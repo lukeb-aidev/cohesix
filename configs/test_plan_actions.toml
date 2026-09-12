@@ -676,8 +676,8 @@ tier = "non-claiming"
 evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["qemu"]
-description = "Freeze the target-discovered Worker fault-lifecycle invariant after real Worker READY."
-command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1"
+description = "Freeze the pure Worker fault-lifecycle invariant after real Worker READY."
+command = "cargo test -p root-task --no-default-features --test worker_fault_lifecycle -- --test-threads=1"
 timeout_seconds = 900
 trigger_paths = ["apps/root-task/src/hal/worker_task.rs", "apps/root-task/src/userland/**"]
 expected_evidence = ["focused-regression-result"]

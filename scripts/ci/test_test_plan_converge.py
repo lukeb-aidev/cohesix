@@ -543,6 +543,8 @@ class ConvergenceEvidenceTests(unittest.TestCase):
             payload = json.loads(observation.read_text(encoding="utf-8"))
             self.assertEqual(payload["result"], "BLOCKED")
             self.assertFalse(payload["claiming"])
+            # Non-Worker consumers retain the exact v2 observation shape.
+            self.assertNotIn("worker_restart_evidence", payload)
 
 
 if __name__ == "__main__":

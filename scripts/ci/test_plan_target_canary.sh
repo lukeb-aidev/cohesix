@@ -122,8 +122,9 @@ payload = {
     "image_identity": file_record(identity_raw),
     "operation_script": file_record(operation_raw),
     "operation_log": file_record(operation_log_raw),
-    "worker_restart_evidence": file_record(worker_restart_raw),
 }
+if worker_restart_raw:
+    payload["worker_restart_evidence"] = file_record(worker_restart_raw)
 output = Path(output_raw).resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
 temporary = output.with_name(f".{output.name}.{os.getpid()}.tmp")
