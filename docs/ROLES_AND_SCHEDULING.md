@@ -72,6 +72,18 @@ UART chunks independent of ordinary logging locks and queues. The remaining
 restricted duties and all service/Worker recovery retain the registry seal
 prerequisite. QEMU retains sealed activation for every restricted duty.
 
+Restricted critical TCBs have distinct retained kernel IPC frames while sharing
+root image globals. Binding a child frame does not change the userspace
+`__sel4_ipc_buffer` pointer or establish a Rust view of the child address.
+Notification-only MCS waits and empty polls return no message data and must
+not read or write that shared pointer. Nonempty endpoint messages retain their
+defined payload behavior. Restricted fault handling uses caller-owned fast
+registers. The private driver-supervisor entry receives an exclusive typed
+reference to its fresh retained IPC frame and reborrows it for synchronous
+extra-cap/error storage. Its notification wait does not access that frame.
+Safe badge outputs are optional mutable references. These memory contracts do
+not change Reply ownership, capability authority, budgets or fault transitions.
+
 Ordinary Worker service drains its existing bounded immediate fault/policy
 work, then snapshots the claimed-slot bitmap under the existing projection
 lock. It checks every claimed slot in manifest order using that call's time

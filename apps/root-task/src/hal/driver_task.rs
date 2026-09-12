@@ -1340,11 +1340,11 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
     loop {
         let mut badge: sel4_sys::seL4_Word = 0;
         #[cfg(not(sel4_config_kernel_mcs))]
-        let _ = crate::sel4::recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge);
+        let _ = crate::sel4::recv(DRIVER_TASK_CHILD_COMMAND_SLOT, Some(&mut badge));
         #[cfg(sel4_config_kernel_mcs)]
         let _ = crate::sel4::recv_with_reply(
             DRIVER_TASK_CHILD_COMMAND_SLOT,
-            &mut badge,
+            Some(&mut badge),
             pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
         );
         let _ = badge;
@@ -9976,8 +9976,9 @@ pub fn driver_runtime_registry_slot(contract: DriverTaskContract) -> Option<u16>
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn root_driver_supervisor_contain_fault(
     record: crate::critical_tcb::FaultHandoffRecord,
-    ipc_buffer_vaddr: usize,
+    ipc_buffer: &mut sel4_sys::seL4_IPCBuffer,
 ) -> Result<(), DriverSupervisorContainmentError> {
+    let ipc_buffer_vaddr = core::ptr::from_mut(&mut *ipc_buffer) as usize;
     let contract = driver_contract_for_runtime_slot(record.identity.slot)
         .ok_or(DriverSupervisorContainmentError::UnknownRuntimeSlot)?;
     let slot = driver_task_slot_for_contract(contract)
@@ -9997,7 +9998,6 @@ pub fn root_driver_supervisor_contain_fault(
     );
     if root_tcb == 0
         || supervisor_tcb == 0
-        || ipc_buffer_vaddr == 0
         || slot.mcs_supervisor_authority_ready.load(Ordering::Acquire) == 0
         || record.tcb_cap != root_tcb
         || record.identity.cap_generation != slot.mcs_cap_generation.load(Ordering::Acquire)
@@ -10122,7 +10122,7 @@ pub fn root_driver_supervisor_contain_fault(
     crate::sel4::unbind_sched_context_object(
         supervisor_sc as sel4_sys::seL4_CPtr,
         supervisor_tcb as sel4_sys::seL4_CPtr,
-        Some(ipc_buffer_vaddr),
+        Some(ipc_buffer),
     )
     .map_err(|error| {
         fail_driver_supervisor_fault_diagnostic(
@@ -10203,7 +10203,7 @@ pub fn root_driver_supervisor_contain_fault(
 #[cfg(all(feature = "kernel", not(sel4_config_kernel_mcs)))]
 pub fn root_driver_supervisor_contain_fault(
     _record: crate::critical_tcb::FaultHandoffRecord,
-    _ipc_buffer_vaddr: usize,
+    _ipc_buffer: &mut sel4_sys::seL4_IPCBuffer,
 ) -> Result<(), DriverSupervisorContainmentError> {
     Err(DriverSupervisorContainmentError::UnsupportedScheduler)
 }
@@ -10606,7 +10606,7 @@ fn poll_cyw43_root_wake_badge(notification: usize) -> sel4_sys::seL4_Word {
     #[cfg(not(test))]
     {
         let mut badge = 0;
-        let _ = crate::sel4::poll(notification as sel4_sys::seL4_CPtr, &mut badge);
+        let _ = crate::sel4::poll(notification as sel4_sys::seL4_CPtr, Some(&mut badge));
         badge
     }
 }
@@ -19677,7 +19677,10 @@ impl Cyw43SdioPairRestartExecutor for Cyw43SdioPairRestartProductionExecutor {
             Cyw43SdioPairRestartOperation::DrainNotification(member) => {
                 let context = Self::context(cursor, member);
                 let mut badge = 0;
-                let _ = crate::sel4::poll(context.notification as sel4_sys::seL4_CPtr, &mut badge);
+                let _ = crate::sel4::poll(
+                    context.notification as sel4_sys::seL4_CPtr,
+                    Some(&mut badge),
+                );
                 Cyw43SdioPairRestartOperationOutcome::Complete
             }
             Cyw43SdioPairRestartOperation::AcknowledgeIrq(member) => {

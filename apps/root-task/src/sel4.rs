@@ -954,6 +954,10 @@ pub fn reply(info: seL4_MessageInfo) {
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn reply_to(reply_cap: seL4_CPtr, info: seL4_MessageInfo, message_registers: [seL4_Word; 4]) {
+    // SAFETY: The owned four-word array stays initialized and readable until
+    // Reply returns. Runtime fault/call state retains the single-use Reply
+    // association; selected restricted replies have no extra caps or slow MRs.
+    // Any additional fields on other callers use their retained bound buffer.
     unsafe {
         syscall::reply_to(reply_cap, info, &message_registers);
     }
@@ -962,7 +966,11 @@ pub fn reply_to(reply_cap: seL4_CPtr, info: seL4_MessageInfo, message_registers:
 #[cfg(feature = "kernel")]
 #[track_caller]
 #[inline]
-pub fn recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+pub fn recv(dest: seL4_CPtr, badge: Option<&mut seL4_Word>) -> seL4_MessageInfo {
+    let badge = badge.map_or(ptr::null_mut(), ptr::from_mut);
+    // SAFETY: A supplied badge is exclusively borrowed for this call; null
+    // omits the output. Bootstrap owns the calling TCB's live IPC storage,
+    // and the kernel validates the receive capability.
     unsafe { syscall::recv(dest, badge) }
 }
 
@@ -972,24 +980,36 @@ pub fn recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
 #[inline]
 pub fn recv_with_reply(
     dest: seL4_CPtr,
-    badge: *mut seL4_Word,
+    badge: Option<&mut seL4_Word>,
     reply: seL4_CPtr,
 ) -> (seL4_MessageInfo, [seL4_Word; 4]) {
+    let badge = badge.map_or(ptr::null_mut(), ptr::from_mut);
     let mut message_registers = [0; 4];
+    // SAFETY: The optional badge and four distinct initialized MR slots stay
+    // exclusively borrowed until receive returns. Bootstrap retains the IPC
+    // buffer, and the kernel validates endpoint and explicit Reply authority.
     let info = unsafe { syscall::recv_with_reply(dest, badge, reply, &mut message_registers) };
     (info, message_registers)
 }
 
 #[cfg(feature = "kernel")]
 #[inline]
-pub fn wait(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+pub fn wait(dest: seL4_CPtr, badge: Option<&mut seL4_Word>) -> seL4_MessageInfo {
+    let badge = badge.map_or(ptr::null_mut(), ptr::from_mut);
+    // SAFETY: The optional badge borrow remains live and exclusive across
+    // the wait. The calling TCB's IPC storage is retained by bootstrap; the
+    // kernel validates the notification capability.
     unsafe { syscall::wait(dest, badge) }
 }
 
 /// Issues a non-blocking receive on the supplied endpoint.
 #[cfg(feature = "kernel")]
 #[inline]
-pub fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+pub fn nb_recv(dest: seL4_CPtr, badge: Option<&mut seL4_Word>) -> seL4_MessageInfo {
+    let badge = badge.map_or(ptr::null_mut(), ptr::from_mut);
+    // SAFETY: The optional badge is a live exclusive output borrow, and the
+    // current TCB retains initialized IPC storage. Kernel object validation
+    // and the selected classic/MCS receive semantics remain in the wrapper.
     unsafe { syscall::nb_recv(dest, badge) }
 }
 
@@ -998,16 +1018,24 @@ pub fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
 #[inline]
 pub fn nb_recv_with_reply(
     dest: seL4_CPtr,
-    badge: *mut seL4_Word,
+    badge: Option<&mut seL4_Word>,
     reply: seL4_CPtr,
 ) -> seL4_MessageInfo {
+    let badge = badge.map_or(ptr::null_mut(), ptr::from_mut);
+    // SAFETY: The optional badge is exclusively borrowed for the invocation.
+    // Bootstrap retains IPC storage; seL4 validates the endpoint and Reply
+    // object before associating any received caller with that object.
     unsafe { syscall::nb_recv_with_reply(dest, badge, reply) }
 }
 
 /// Issues a non-blocking wait on the supplied notification object.
 #[cfg(feature = "kernel")]
 #[inline]
-pub fn poll(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+pub fn poll(dest: seL4_CPtr, badge: Option<&mut seL4_Word>) -> seL4_MessageInfo {
+    let badge = badge.map_or(ptr::null_mut(), ptr::from_mut);
+    // SAFETY: The optional badge is live exclusive output storage; the
+    // calling TCB retains its IPC buffer. The kernel validates notification
+    // authority and a missing output is represented by the permitted null.
     unsafe { syscall::poll(dest, badge) }
 }
 
@@ -1135,6 +1163,10 @@ pub fn call_with_message_registers_unchecked(
 ) -> (seL4_MessageInfo, [seL4_Word; 4]) {
     guard_ipc_destination("call_with_message_registers_unchecked", dest);
     let [mut mr0, mut mr1, mut mr2, mut mr3] = message_registers;
+    // SAFETY: The four initialized stack words are distinct exclusive outputs
+    // for this synchronous Call. Runtime admission retains the calling TCB's
+    // bound IPC frame for any additional fields; explicit fast MRs bypass the
+    // global userspace getter and seL4 validates invocation authority.
     let reply =
         unsafe { syscall::call_with_mrs(dest, info, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
     (reply, [mr0, mr1, mr2, mr3])
@@ -2217,15 +2249,45 @@ pub fn configure_sched_context(
     }
 }
 
+/// Invoke a kernel object with zero extra caps and at most two request words.
+///
+/// Object calls retain the kernel's typed error even for invalid capabilities;
+/// they do not pass through the console endpoint guard. All four return words
+/// stay in this caller's stack, including on failure from a restricted TCB.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+fn call_kernel_object_with_fast_registers(
+    service: seL4_CPtr,
+    label: seL4_Word,
+    request: Option<[seL4_Word; 2]>,
+) -> (seL4_Error, [seL4_Word; 4]) {
+    let (length, [mut mr0, mut mr1]) = request.map_or((0, [0, 0]), |words| (2, words));
+    let mut mr2 = 0;
+    let mut mr3 = 0;
+    let info = seL4_MessageInfo::new(label, 0, 0, length);
+    // SAFETY: These four initialized stack words are distinct, exclusively
+    // borrowed and live throughout Call. The fixed request has no extra caps
+    // and no slow outgoing MRs. Success data and every caller-consumed error
+    // field fit the returned locals. The kernel may store a fifth lookup-error
+    // word in this TCB's own retained bound IPC frame; these typed wrappers do
+    // not expose it. The explicit-MR syscall never uses the shared userspace
+    // getter. seL4 validates the capability, object type and arguments.
+    let reply = unsafe {
+        sel4_sys::seL4_CallWithMRs(service, info, &mut mr0, &mut mr1, &mut mr2, &mut mr3)
+    };
+    (reply.label() as seL4_Error, [mr0, mr1, mr2, mr3])
+}
+
 /// Returns and resets the SC's consumed-time evidence.
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn sched_context_consumed(sched_context: seL4_CPtr) -> Result<u64, seL4_Error> {
-    // SAFETY: The SC CPtr is owned by root bootstrap and the kernel validates
-    // the invoked object type.
-    let result = unsafe { sel4_sys::seL4_SchedContext_Consumed(sched_context) };
-    let error = result.error as seL4_Error;
+    let (error, words) = call_kernel_object_with_fast_registers(
+        sched_context,
+        sel4_sys::invocation_label_SchedContextConsumed as seL4_Word,
+        None,
+    );
     if error == seL4_NoError {
-        Ok(result.consumed)
+        Ok(words[0] as u64)
     } else {
         Err(error)
     }
@@ -2250,24 +2312,14 @@ pub fn yield_to_sched_context(sched_context: seL4_CPtr) -> Result<u64, seL4_Erro
 pub fn unbind_sched_context_object(
     sched_context: seL4_CPtr,
     tcb_cap: seL4_CPtr,
-    current_ipc_buffer: Option<usize>,
+    current_ipc_buffer: Option<&mut sel4_sys::seL4_IPCBuffer>,
 ) -> Result<(), seL4_Error> {
-    let current_ipc_buffer = match current_ipc_buffer {
-        Some(address)
-            if address == 0 || address % core::mem::align_of::<sel4_sys::seL4_IPCBuffer>() != 0 =>
-        {
-            return Err(sel4_sys::seL4_InvalidArgument)
-        }
-        value => value,
-    };
-    let ipc_buffer = current_ipc_buffer.map_or(core::ptr::null_mut(), |address| {
-        address as *mut sel4_sys::seL4_IPCBuffer
-    });
+    let ipc_buffer = current_ipc_buffer.map_or(ptr::null_mut(), ptr::from_mut);
     // SAFETY: Both CPtrs are retained for the same constructed generation.
-    // The supplied IPC-buffer mapping is either null for the init TCB or the
-    // exact buffer bound to the restricted critical TCB and retained by its
-    // `CriticalChildBacking`. The syscall wrapper writes only that buffer's
-    // extra-cap lane, and seL4 validates the object type and association.
+    // The supplied IPC buffer is either null for the init TCB or an exclusive
+    // live borrow of the restricted caller's bound buffer. The borrow spans
+    // the synchronous extra-cap/error-MR exchange, and seL4 validates object
+    // type and association before unbinding the target.
     let result =
         unsafe { sel4_sys::seL4_SchedContext_UnbindObject(sched_context, tcb_cap, ipc_buffer) };
     if result == seL4_NoError {
@@ -2432,8 +2484,11 @@ pub(crate) fn suspend_tcb_bounded(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> 
 #[cfg(feature = "kernel")]
 #[inline(always)]
 fn suspend_tcb_syscall(guarded_tcb: seL4_CPtr) -> Result<(), seL4_Error> {
-    // SAFETY: The guarded CPtr is a TCB capability; seL4 validates the operation.
-    let result = unsafe { sel4_sys::seL4_TCB_Suspend(guarded_tcb) };
+    let (result, _) = call_kernel_object_with_fast_registers(
+        guarded_tcb,
+        sel4_sys::invocation_label_TCBSuspend as seL4_Word,
+        None,
+    );
     if result == seL4_NoError {
         Ok(())
     } else {
@@ -2648,20 +2703,24 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub(crate) fn cnode_delete_bounded(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
-    let depth_word: seL4_Word = depth.into();
-    // SAFETY: Callers provide a valid CNode root/index/depth triple from bootstrap-owned caps;
-    // seL4 validates the addressed slot.
-    unsafe { seL4_CNode_Delete(root, index, depth_word) }
+    let (error, _) = call_kernel_object_with_fast_registers(
+        root,
+        sel4_sys::invocation_label_CNodeDelete as seL4_Word,
+        Some([index, seL4_Word::from(depth)]),
+    );
+    error
 }
 
 /// Safe projection of `seL4_CNode_Revoke` for driver-task cap rollback.
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn cnode_revoke(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
-    let depth_word: seL4_Word = depth.into();
-    // SAFETY: Callers provide a valid CNode root/index/depth triple from bootstrap-owned caps;
-    // seL4 validates the addressed slot before revoking descendants.
-    unsafe { seL4_CNode_Revoke(root, index, depth_word) }
+    let (error, _) = call_kernel_object_with_fast_registers(
+        root,
+        sel4_sys::invocation_label_CNodeRevoke as seL4_Word,
+        Some([index, seL4_Word::from(depth)]),
+    );
+    error
 }
 
 /// Creates a level-triggered IRQ handler capability in the supplied init-root slot.
@@ -6572,15 +6631,16 @@ impl<'a> KernelEnv<'a> {
 
     /// Installs an IPC buffer for a child TCB without changing root's libsel4 pointer.
     ///
-    /// The frame remains mapped in root for bounded shared-record access, but
-    /// `__sel4_ipc_buffer` belongs to the calling TCB and must never be switched
-    /// while configuring a remote child.
+    /// This binds kernel state only: a child virtual address does not prove a
+    /// mapping in the caller and therefore cannot produce a Rust memory view.
+    /// The caller's `__sel4_ipc_buffer` is never switched while configuring a
+    /// remote child; HAL retains the separately admitted frame and mappings.
     pub fn bind_child_ipc_buffer(
         &self,
         tcb_cap: seL4_CPtr,
         buffer_frame: seL4_CPtr,
         buffer_vaddr: usize,
-    ) -> Result<IpcBufView, seL4_Error> {
+    ) -> Result<(), seL4_Error> {
         if buffer_vaddr == 0 || buffer_vaddr & (IpcBufView::PAGE_LEN - 1) != 0 {
             return Err(sel4_sys::seL4_AlignmentError);
         }
@@ -6589,17 +6649,15 @@ impl<'a> KernelEnv<'a> {
         let guarded_frame =
             sel4_guard::guard_cptr("IPCInstall.bind_child", "ipc_frame", buffer_frame);
         // SAFETY: The guarded TCB and frame are bootstrap-owned kernel
-        // capabilities. The frame is page-aligned and mapped at `buffer_word`;
-        // seL4 validates the object types and target TCB configuration.
+        // capabilities. seL4 validates object types, buffer alignment and
+        // target TCB configuration; this call does not dereference the child
+        // virtual address in the calling TCB's address space.
         let result =
             unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(guarded_tcb, buffer_word, guarded_frame) };
         if result != seL4_NoError {
             return Err(result);
         }
-        // SAFETY: `buffer_vaddr` names the still-live page mapping whose frame
-        // was installed above; the returned view does not mutate root's global
-        // libsel4 IPC-buffer pointer.
-        Ok(unsafe { IpcBufView::new(buffer_vaddr as *const u8, guarded_frame) })
+        Ok(())
     }
 
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.

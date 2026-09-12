@@ -697,7 +697,7 @@ impl KernelIrqBinding {
         F: FnOnce() -> Result<(), HalError>,
     {
         let mut badge = 0;
-        let _ = sel4::poll(self.notification_slot, &mut badge);
+        let _ = sel4::poll(self.notification_slot, Some(&mut badge));
         if badge == 0 {
             return Ok(IrqServiceOutcome::Idle);
         }
@@ -715,7 +715,7 @@ impl KernelIrqBinding {
         F: FnOnce() -> Result<(), HalError>,
     {
         let mut badge = 0;
-        let _ = sel4::wait(self.notification_slot, &mut badge);
+        let _ = sel4::wait(self.notification_slot, Some(&mut badge));
         clear_device_source()?;
         self.ack_from_hal()?;
         Ok(badge)
@@ -7052,7 +7052,7 @@ impl<'a> KernelHal<'a> {
         F: FnOnce(&mut Self) -> Result<(), HalError>,
     {
         let mut badge = 0;
-        let _ = sel4::poll(binding.notification_slot, &mut badge);
+        let _ = sel4::poll(binding.notification_slot, Some(&mut badge));
         if badge == 0 {
             return Ok(IrqServiceOutcome::Idle);
         }
@@ -7072,7 +7072,7 @@ impl<'a> KernelHal<'a> {
         F: FnOnce(&mut Self) -> Result<(), HalError>,
     {
         let mut badge = 0;
-        let _ = sel4::wait(binding.notification_slot, &mut badge);
+        let _ = sel4::wait(binding.notification_slot, Some(&mut badge));
         clear_device_source(self)?;
         binding.ack_from_hal()?;
         Ok(badge)

@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the sel4-sys library and public module surface.
+// Purpose: Bind the selected seL4 syscall ABI and explicit IPC storage ownership.
 // Author: Lukas Bower
 #![cfg_attr(target_os = "none", no_std)]
 #![allow(non_camel_case_types)]
@@ -9,6 +9,47 @@
 #![allow(non_upper_case_globals)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
+
+/// Copy fast receive registers only when the returned tag defines message data.
+///
+/// The selected MCS Wait/NBWait ABI also accepts endpoint messages. Our receive
+/// assembly seeds MessageInfo to zero; notification delivery and an empty poll
+/// change only the badge. Those returns must not touch the shared userspace IPC
+/// pointer, while nonempty endpoint messages retain libsel4's four-word copy.
+#[inline(always)]
+fn copy_nonempty_received_mrs(
+    info: seL4_MessageInfo,
+    message_registers: [seL4_Word; 4],
+    copy_back: impl FnOnce([seL4_Word; 4]),
+) {
+    if info.length() != 0 {
+        copy_back(message_registers);
+    }
+}
+
+/// Read fast send registers only when the outgoing tag defines message data.
+///
+/// Empty notification/endpoint sends have no fast payload. Supplying private
+/// zeros avoids selecting another TCB's buffer through the process-global
+/// userspace getter. Nonempty sends retain the existing four-register read.
+#[inline(always)]
+fn read_nonempty_sent_mrs(
+    info: seL4_MessageInfo,
+    read_words: impl FnOnce() -> [seL4_Word; 4],
+) -> [seL4_Word; 4] {
+    if info.length() == 0 {
+        [0; 4]
+    } else {
+        read_words()
+    }
+}
+
+/// Store only the four fast words in the caller-selected, exclusively borrowed
+/// IPC buffer; extra-cap storage and remaining message words are unchanged.
+#[inline(always)]
+fn copy_fast_message_registers(ipc_buffer: &mut seL4_IPCBuffer, message_registers: [seL4_Word; 4]) {
+    ipc_buffer.msg[..4].copy_from_slice(&message_registers);
+}
 
 /// Storage for the root runtime's bootstrap TLS-base word. Alignment alone
 /// does not reserve bytes: the exported object must own the complete word.
@@ -580,16 +621,27 @@ mod imp {
         asm!("svc #0", in("x7") scno, options(nostack, preserves_flags));
     }
 
+    /// Send using implicit fast registers only for a nonempty payload.
+    ///
+    /// # Safety
+    /// `dest` must carry the caller's admitted send authority. For nonzero
+    /// length, the global getter must select the caller's live aligned IPC
+    /// buffer with all four fast words initialized and exclusively accessible.
+    /// Any extra words/caps selected by the tag require the caller's valid
+    /// kernel-bound IPC buffer. Zero length does not access the global getter.
     #[inline(always)]
     pub unsafe fn seL4_Send(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
+        let words = super::read_nonempty_sent_mrs(msg_info, || {
+            [seL4_GetMR(0), seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3)]
+        });
         arm_sys_send(
             seL4_SysSend as seL4_Word,
             dest as seL4_Word,
             msg_info.words[0],
-            seL4_GetMR(0),
-            seL4_GetMR(1),
-            seL4_GetMR(2),
-            seL4_GetMR(3),
+            words[0],
+            words[1],
+            words[2],
+            words[3],
         );
     }
 
@@ -629,16 +681,25 @@ mod imp {
         );
     }
 
+    /// Attempt a nonblocking send with the same storage contract as [`seL4_Send`].
+    ///
+    /// # Safety
+    /// The caller must satisfy [`seL4_Send`]'s capability, initialized nonempty
+    /// fast-register and kernel-bound extra-field requirements. Zero length
+    /// does not access the process-global userspace IPC getter.
     #[inline(always)]
     pub unsafe fn seL4_NBSend(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
+        let words = super::read_nonempty_sent_mrs(msg_info, || {
+            [seL4_GetMR(0), seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3)]
+        });
         arm_sys_send(
             seL4_SysNBSend as seL4_Word,
             dest as seL4_Word,
             msg_info.words[0],
-            seL4_GetMR(0),
-            seL4_GetMR(1),
-            seL4_GetMR(2),
-            seL4_GetMR(3),
+            words[0],
+            words[1],
+            words[2],
+            words[3],
         );
     }
 
@@ -1411,6 +1472,14 @@ mod imp {
         info
     }
 
+    /// Wait without retaining an MCS Reply association.
+    ///
+    /// # Safety
+    /// `src` must name the caller's admitted receive capability. A non-null
+    /// badge must be aligned, exclusively writable and live across the wait.
+    /// Nonempty endpoint messages require exclusive ownership of the installed
+    /// userspace IPC buffer, matching the current TCB's live kernel-bound frame.
+    /// Notification and empty returns do not access that global userspace pointer.
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_Wait(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
@@ -1433,10 +1502,9 @@ mod imp {
             0,
         );
 
-        seL4_SetMR(0, msg0);
-        seL4_SetMR(1, msg1);
-        seL4_SetMR(2, msg2);
-        seL4_SetMR(3, msg3);
+        super::copy_nonempty_received_mrs(info, [msg0, msg1, msg2, msg3], |words| {
+            set_error_mrs(words[0], words[1], words[2], words[3]);
+        });
 
         if !sender_badge.is_null() {
             *sender_badge = badge;
@@ -1451,6 +1519,12 @@ mod imp {
         seL4_Recv(src, sender_badge)
     }
 
+    /// Nonblockingly wait without retaining an MCS Reply association.
+    ///
+    /// # Safety
+    /// The capability, nullable badge and nonempty-message IPC-buffer
+    /// prerequisites are the same as [`seL4_Wait`]. An empty return grants
+    /// neither a message payload nor reply authority.
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_NBWait(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
@@ -1473,10 +1547,9 @@ mod imp {
             0,
         );
 
-        seL4_SetMR(0, msg0);
-        seL4_SetMR(1, msg1);
-        seL4_SetMR(2, msg2);
-        seL4_SetMR(3, msg3);
+        super::copy_nonempty_received_mrs(info, [msg0, msg1, msg2, msg3], |words| {
+            set_error_mrs(words[0], words[1], words[2], words[3]);
+        });
 
         if !sender_badge.is_null() {
             *sender_badge = badge;
@@ -1497,11 +1570,11 @@ mod imp {
     }
 
     fn set_error_mrs(mr0: seL4_Word, mr1: seL4_Word, mr2: seL4_Word, mr3: seL4_Word) {
+        // SAFETY: Callers using implicit IPC storage execute as its sole
+        // userspace owner with the global pointer installed and live. Restricted
+        // threads supply explicit storage instead; empty waits never call here.
         unsafe {
-            seL4_SetMR(0, mr0);
-            seL4_SetMR(1, mr1);
-            seL4_SetMR(2, mr2);
-            seL4_SetMR(3, mr3);
+            super::copy_fast_message_registers(&mut *seL4_GetIPCBuffer(), [mr0, mr1, mr2, mr3]);
         }
     }
 
@@ -2127,6 +2200,7 @@ mod imp {
             period,
             extra_refills,
             badge,
+            core::ptr::null_mut(),
         )
     }
 
@@ -2156,6 +2230,12 @@ mod imp {
     }
 
     /// Unbind one TCB or notification from an MCS scheduling context.
+    ///
+    /// # Safety
+    /// A non-null `ipc_buffer` must be the current TCB's bound, live, aligned
+    /// buffer, exclusively writable for both the extra-cap input and any error
+    /// MRs. Null selects the installed global buffer and requires its exclusive
+    /// userspace owner. `service` and `cap` must be the admitted SC/object pair.
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_SchedContext_UnbindObject(
@@ -2168,11 +2248,16 @@ mod imp {
         } else {
             (*ipc_buffer).caps_or_badges[0] = cap;
         }
-        invoke_mcs_object(
+        invoke_mcs_object_with_mrs(
             service,
             invocation_label_SchedContextUnbindObject as seL4_Word,
             1,
             0,
+            0,
+            0,
+            0,
+            0,
+            ipc_buffer,
         )
     }
 
@@ -2212,9 +2297,27 @@ mod imp {
         extra_caps: seL4_Word,
         length: seL4_Word,
     ) -> seL4_Error {
-        invoke_mcs_object_with_mrs(service, label, extra_caps, length, 0, 0, 0, 0)
+        invoke_mcs_object_with_mrs(
+            service,
+            label,
+            extra_caps,
+            length,
+            0,
+            0,
+            0,
+            0,
+            core::ptr::null_mut(),
+        )
     }
 
+    /// Invoke with private fast MRs and preserve any error words in the same
+    /// IPC buffer that the caller used for the invocation's extra-cap fields.
+    ///
+    /// # Safety
+    /// The service and initialized message fields must match the selected MCS
+    /// ABI. Null selects the live, exclusively owned global userspace buffer;
+    /// a non-null pointer must be the current TCB's live, aligned, exclusively
+    /// writable bound buffer. This borrow must outlive the synchronous Call.
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     unsafe fn invoke_mcs_object_with_mrs(
@@ -2226,12 +2329,21 @@ mod imp {
         mut mr1: seL4_Word,
         mut mr2: seL4_Word,
         mut mr3: seL4_Word,
+        ipc_buffer: *mut seL4_IPCBuffer,
     ) -> seL4_Error {
         let tag = seL4_MessageInfo::new(label, 0, extra_caps, length);
         let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
         let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
         if result != seL4_NoError {
-            set_error_mrs(mr0, mr1, mr2, mr3);
+            if ipc_buffer.is_null() {
+                set_error_mrs(mr0, mr1, mr2, mr3);
+            } else {
+                // SAFETY: The UnbindObject caller retains its actual bound IPC
+                // buffer exclusively through this invocation. Copy only the
+                // returned fast error words into that same explicit storage;
+                // never resolve or modify the root-global userspace buffer.
+                super::copy_fast_message_registers(&mut *ipc_buffer, [mr0, mr1, mr2, mr3]);
+            }
         }
         result
     }
@@ -3848,6 +3960,99 @@ mod tests {
     use super::*;
 
     static HOST_IPC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn empty_ipc_skips_storage_access_and_nonempty_ipc_preserves_fast_words() {
+        // Selected MCS notification/empty returns retain the assembly's zero
+        // length. Zero-length endpoint messages likewise define no payload.
+        // Nonempty endpoint messages preserve the four fast register outputs,
+        // including when the kernel also returns words through its IPC buffer.
+        for (label, length, expected_copies) in [
+            (0, 0, 0),
+            (0x71, 0, 0),
+            (0x71, 1, 1),
+            (0x71, 4, 1),
+            (0x71, 5, 1),
+            (0x71, 120, 1),
+        ] {
+            let mut ipc = seL4_IPCBuffer::default();
+            ipc.msg.fill(0xa5);
+            let mut copies = 0;
+            let returned = [0x11, 0x22, 0x33, 0x44];
+            let info = seL4_MessageInfo::new(label, 0, 0, length);
+            copy_nonempty_received_mrs(info, returned, |words| {
+                copies += 1;
+                copy_fast_message_registers(&mut ipc, words);
+            });
+            assert_eq!(copies, expected_copies);
+            if expected_copies == 0 {
+                assert_eq!(ipc.msg, [0xa5; 120]);
+            } else {
+                assert_eq!(&ipc.msg[..4], &[0x11, 0x22, 0x33, 0x44]);
+                assert_eq!(&ipc.msg[4..], &[0xa5; 116]);
+            }
+            assert_eq!(info.label(), label);
+            assert_eq!(info.length(), length);
+
+            // The outgoing tag independently defines whether a payload exists.
+            // A zero-length send must not even call the implicit storage getter;
+            // nonempty sends preserve its four fast words without modifying it.
+            let outgoing = [0x55, 0x66, 0x77, 0x88];
+            let mut reads = 0;
+            let sent = read_nonempty_sent_mrs(info, || {
+                reads += 1;
+                outgoing
+            });
+            assert_eq!(reads, expected_copies);
+            assert_eq!(
+                sent,
+                if expected_copies == 0 {
+                    [0; 4]
+                } else {
+                    outgoing
+                }
+            );
+            assert_eq!(outgoing, [0x55, 0x66, 0x77, 0x88]);
+        }
+    }
+
+    #[test]
+    fn fast_error_mrs_change_only_the_selected_ipc_buffer_prefix() {
+        // UnbindObject's error words belong to the caller-selected IPC frame,
+        // not another TCB's userspace-global frame. The four-word boundary is
+        // the selected AArch64 syscall ABI, independent of the message tail.
+        let mut root = seL4_IPCBuffer::default();
+        root.msg.fill(0xa5);
+        root.caps_or_badges.fill(0x44);
+        let mut restricted = seL4_IPCBuffer::default();
+        restricted.msg.fill(0x5a);
+        restricted.tag = seL4_MessageInfo::new(0x71, 0, 1, 0);
+        restricted.userData = 0x81;
+        restricted.caps_or_badges.fill(0x55);
+        restricted.receiveCNode = 0x91;
+        restricted.receiveIndex = 0x92;
+        restricted.receiveDepth = 0x93;
+
+        copy_fast_message_registers(&mut restricted, [1, 2, 3, 4]);
+        assert_eq!(&restricted.msg[..4], &[1, 2, 3, 4]);
+        assert_eq!(&restricted.msg[4..], &[0x5a; 116]);
+        assert_eq!(restricted.tag.label(), 0x71);
+        assert_eq!(restricted.tag.extra_caps(), 1);
+        assert_eq!(restricted.tag.length(), 0);
+        assert_eq!(restricted.userData, 0x81);
+        assert_eq!(restricted.caps_or_badges, [0x55; 4]);
+        assert_eq!(restricted.receiveCNode, 0x91);
+        assert_eq!(restricted.receiveIndex, 0x92);
+        assert_eq!(restricted.receiveDepth, 0x93);
+        assert_eq!(root.msg, [0xa5; 120]);
+        assert_eq!(root.caps_or_badges, [0x44; 4]);
+
+        // The ordinary root path retains its existing four-word copy-back.
+        copy_fast_message_registers(&mut root, [5, 6, 7, 8]);
+        assert_eq!(&root.msg[..4], &[5, 6, 7, 8]);
+        assert_eq!(&root.msg[4..], &[0xa5; 116]);
+        assert_eq!(&restricted.msg[..4], &[1, 2, 3, 4]);
+    }
 
     fn host_ipc_tag() -> seL4_MessageInfo {
         // SAFETY: Host tests use the crate-owned synthetic IPC buffer.

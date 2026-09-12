@@ -379,7 +379,7 @@ pub fn run_target_worker_executor(lane: TargetWorkerExecutorLane) -> ! {
     }
     loop {
         let mut badge = 0;
-        let _ = sel4::wait(TARGET_WORKER_EXECUTOR_INBOX_SLOT, &mut badge);
+        let _ = sel4::wait(TARGET_WORKER_EXECUTOR_INBOX_SLOT, Some(&mut badge));
         if badge != 1 {
             target_worker_executor_fail("[critical] Worker executor wake badge invalid");
         }

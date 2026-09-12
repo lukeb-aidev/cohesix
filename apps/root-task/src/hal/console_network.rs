@@ -1130,7 +1130,7 @@ impl ConsoleNetworkRuntime {
             ));
         }
         let mut badge = 0;
-        let _ = sel4::poll(self.child_to_root_notification, &mut badge);
+        let _ = sel4::poll(self.child_to_root_notification, Some(&mut badge));
         if badge == 0 {
             return Ok(ConsoleNetworkTurn {
                 input_completions:

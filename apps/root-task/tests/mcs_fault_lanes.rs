@@ -38,11 +38,10 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 fn target_runtime_blocks_on_one_shared_endpoint_and_one_reply() {
     let source = include_str!("../src/hal/critical_tcb.rs");
 
-    assert!(
-        source.contains("sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT)")
-    );
+    assert!(source
+        .contains("sel4::recv_with_reply(CHILD_INBOX_SLOT, Some(&mut badge), CHILD_REPLY_SLOT)"));
     assert!(source.contains("let (registration, fault_class) = resolve_target_fault(badge)?;"));
-    assert!(source.contains("sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge)"));
+    assert!(source.contains("sel4::wait(CHILD_DRIVER_RELEASE_SLOT, Some(&mut observed_badge))"));
     assert!(source.contains("sel4::signal_unchecked(CHILD_DRIVER_RELEASE_SIGNAL_SLOT)"));
     assert!(!source.contains("nb_recv_with_reply"));
     assert!(!source.contains("CHILD_TIMEOUT_INBOX_SLOT"));
@@ -241,7 +240,7 @@ fn terminal_critical_fault_commits_one_resumable_action_per_refill() {
 
     let retained_branch = &classify_turn[retained_start..critical_start];
     let release_wait = retained_branch
-        .find("sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge)")
+        .find("sel4::wait(CHILD_DRIVER_RELEASE_SLOT, Some(&mut observed_badge))")
         .expect("driver release wait");
     let release_validation = retained_branch
         .find("DRIVER_FAULT_REPLY_BUSY.load(Ordering::Acquire)")
@@ -698,6 +697,9 @@ fn restricted_critical_ipc_uses_explicit_registers_and_bound_extra_cap_lane() {
     );
     assert!(construction.contains("let ipc_buffer_vaddr = ipc_frame.ptr().as_ptr() as usize;"));
     assert!(construction.contains("ipc_buffer_vaddr as seL4_Word,"));
+    assert!(critical.contains(
+        "extern \"C\" fn root_driver_supervisor_entry(ipc_buffer: &mut sel4_sys::seL4_IPCBuffer)"
+    ));
 
     let driver = include_str!("../src/hal/driver_task.rs");
     let containment = source_section(
@@ -705,9 +707,59 @@ fn restricted_critical_ipc_uses_explicit_registers_and_bound_extra_cap_lane() {
         "pub fn root_driver_supervisor_contain_fault(",
         "/// Classic kernels cannot consume the MCS driver-supervisor hook.",
     );
-    assert!(containment.contains("Some(ipc_buffer_vaddr)"));
+    assert!(containment.contains("Some(ipc_buffer)"));
     assert!(containment.contains("crate::sel4::reply_to("));
     assert!(!containment.contains("set_message_register"));
+
+    let wrappers = include_str!("../src/sel4.rs");
+    let private_call = source_section(
+        wrappers,
+        "fn call_kernel_object_with_fast_registers(",
+        "/// Returns and resets the SC's consumed-time evidence.",
+    );
+    assert!(private_call.contains("seL4_CallWithMRs("));
+    assert!(private_call.contains("Option<[seL4_Word; 2]>"));
+    // Kernel object errors must remain typed results; console guards would
+    // turn an invalid capability into a panic before the kernel can reply.
+    for forbidden in [
+        "guard_ipc_destination(",
+        "ipc_bootstrap_trap(",
+        "seL4_GetIPCBuffer(",
+        "seL4_GetMR(",
+        "seL4_SetMR(",
+    ] {
+        assert!(
+            !private_call.contains(forbidden),
+            "private call uses {forbidden}"
+        );
+    }
+    for (start, end, label) in [
+        (
+            "pub fn sched_context_consumed(",
+            "/// Yields to the TCB",
+            "SchedContextConsumed",
+        ),
+        (
+            "fn suspend_tcb_syscall(",
+            "/// Resumes a suspended TCB",
+            "TCBSuspend",
+        ),
+        (
+            "pub(crate) fn cnode_delete_bounded(",
+            "/// Safe projection of `seL4_CNode_Revoke`",
+            "CNodeDelete",
+        ),
+        (
+            "pub fn cnode_revoke(",
+            "/// Creates a level-triggered IRQ handler",
+            "CNodeRevoke",
+        ),
+    ] {
+        let operation = source_section(wrappers, start, end);
+        assert!(operation.contains("call_kernel_object_with_fast_registers("));
+        assert!(operation.contains(label));
+        assert!(!operation.contains("unsafe {"));
+    }
 
     let syscall = include_str!("../src/sel4/syscall.rs");
     assert!(syscall.contains("seL4_RecvWithMRs"));

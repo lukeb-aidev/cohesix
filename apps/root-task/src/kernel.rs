@@ -7898,7 +7898,7 @@ impl KernelIpc {
                     return;
                 }
                 let mut badge: sel4_sys::seL4_Word = 0;
-                let info = crate::sel4::nb_recv(self.fault_endpoint.raw(), &mut badge);
+                let info = crate::sel4::nb_recv(self.fault_endpoint.raw(), Some(&mut badge));
                 if !Self::message_present(&info, badge) {
                     return;
                 }
@@ -8120,12 +8120,12 @@ impl KernelIpc {
         let mut badge: sel4_sys::seL4_Word = 0;
         let (info, fast_message_registers) = match mode {
             RootControlReceiveMode::Nonblocking => (
-                sel4::nb_recv_with_reply(self.control_ep.raw(), &mut badge, reply),
+                sel4::nb_recv_with_reply(self.control_ep.raw(), Some(&mut badge), reply),
                 None,
             ),
             RootControlReceiveMode::Blocking => {
                 let (info, registers) =
-                    sel4::recv_with_reply(self.control_ep.raw(), &mut badge, reply);
+                    sel4::recv_with_reply(self.control_ep.raw(), Some(&mut badge), reply);
                 (info, Some(registers))
             }
         };
@@ -8187,7 +8187,7 @@ impl KernelIpc {
 
         self.announce_control_receive_once(now_ms, bootstrap);
         let mut badge: sel4_sys::seL4_Word = 0;
-        let info = sel4::poll(self.control_ep.raw(), &mut badge);
+        let info = sel4::poll(self.control_ep.raw(), Some(&mut badge));
         if !Self::message_present(&info, badge) {
             if bootstrap {
                 log::trace!(

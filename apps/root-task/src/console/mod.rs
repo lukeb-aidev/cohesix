@@ -42,7 +42,7 @@ use sel4_sys::seL4_CPtr;
 pub fn start(ep_slot: u32, _bi: &sel4_sys::seL4_BootInfo) {
     log::info!("[console] ready on endpoint slot=0x{:04x}", ep_slot);
     loop {
-        let msg = sel4::recv(ep_slot as sel4_sys::seL4_CPtr, core::ptr::null_mut());
+        let msg = sel4::recv(ep_slot as sel4_sys::seL4_CPtr, None);
         match msg {
             0 => log::info!("[console] recv: help | bi | ls-caps | echo"),
             _ => log::info!("[console] unknown verb id={}", msg),

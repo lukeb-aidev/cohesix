@@ -2469,7 +2469,7 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 cohesix_root_fault_qemu_evidence_turn();
                 let mut badge = 0;
                 let (info, message_registers) =
-                    sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+                    sel4::recv_with_reply(CHILD_INBOX_SLOT, Some(&mut badge), CHILD_REPLY_SLOT);
                 #[cfg(feature = "release-pi4")]
                 if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
                     bootstrap_fault_fail_stop(
@@ -2565,7 +2565,8 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                         }
                         FaultReplyDisposition::RetainedByDriver => {
                             let mut observed_badge = 0;
-                            let _ = sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge);
+                            let _ =
+                                sel4::wait(CHILD_DRIVER_RELEASE_SLOT, Some(&mut observed_badge));
                             if observed_badge != release_badge
                                 || DRIVER_FAULT_REPLY_BUSY.load(Ordering::Acquire)
                             {
@@ -2727,7 +2728,8 @@ extern "C" fn root_emergency_entry(_arg0: seL4_Word) -> ! {
     #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
     cohesix_root_emergency_qemu_evidence_wait();
     let mut badge = 0;
-    let (info, registers) = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+    let (info, registers) =
+        sel4::recv_with_reply(CHILD_INBOX_SLOT, Some(&mut badge), CHILD_REPLY_SLOT);
     #[cfg(feature = "release-pi4")]
     if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
         bootstrap_fault_fail_stop(
@@ -2754,7 +2756,7 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
         #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
         cohesix_worker_supervisor_qemu_evidence_wait();
         let mut badge = 0;
-        let _ = sel4::wait(CHILD_INBOX_SLOT, &mut badge);
+        let _ = sel4::wait(CHILD_INBOX_SLOT, Some(&mut badge));
         let Some(drain_critical_handoff) = validate_worker_supervisor_wake(badge) else {
             target_fail_stop(
                 "[critical] Worker supervisor wake badge invalid",
@@ -2846,7 +2848,11 @@ extern "C" fn root_worker_executor_lora_entry(_arg0: seL4_Word) -> ! {
     )
 }
 
-extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
+// The private entry ABI receives the exclusive IPC frame installed by
+// construct_restricted_child. Its thin reference occupies x0. The frame is
+// retained for the child's lifetime; notification waits do not access it, and
+// synchronous containment reborrows it for this TCB's kernel exchange.
+extern "C" fn root_driver_supervisor_entry(ipc_buffer: &mut sel4_sys::seL4_IPCBuffer) -> ! {
     let expected_badge = generated::worker_resource_admission_config()
         .handoff
         .driver_wake_badge;
@@ -2855,7 +2861,7 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
         #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
         cohesix_driver_supervisor_qemu_evidence_wait();
         let mut badge = 0;
-        let _ = sel4::wait(CHILD_INBOX_SLOT, &mut badge);
+        let _ = sel4::wait(CHILD_INBOX_SLOT, Some(&mut badge));
         if badge != expected_badge {
             target_fail_stop(
                 "[critical] driver supervisor wake badge invalid",
@@ -2883,10 +2889,8 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
             {
                 fault_work_observed = true;
             }
-            match crate::hal::driver_task::root_driver_supervisor_contain_fault(
-                record,
-                ipc_buffer_vaddr as usize,
-            ) {
+            match crate::hal::driver_task::root_driver_supervisor_contain_fault(record, ipc_buffer)
+            {
                 Ok(()) => {}
                 Err(
                     crate::hal::driver_task::DriverSupervisorContainmentError::RootProducerActive,
@@ -3274,6 +3278,11 @@ fn construct_restricted_child(
             .map_err(|error| sel4_error("critical.child-notification-bind", error))?;
     }
     install_permanent_cnode_retention(env, resource, cnode)?;
+    // This fresh zeroed page is retained below and has no userspace borrower
+    // after construction. x0 satisfies the driver's private &mut IPCBuffer
+    // entry ABI: a non-null aligned live frame, exclusively used by that TCB.
+    // Other critical entrypoints retain their integer x0 ABI. Kernel accesses
+    // during a child's calls use its installed frame on that child's behalf.
     sel4::write_tcb_registers(tcb, entry, stack_top, ipc_buffer_vaddr as seL4_Word, false)
         .map_err(|error| sel4_error("critical.child-registers", error))?;
 

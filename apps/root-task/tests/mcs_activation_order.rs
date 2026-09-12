@@ -2992,7 +2992,13 @@ fn ninedoor_containment_latches_then_advances_one_successor_committed_unit() {
         .map(|offset| bounded_suspend_start + offset)
         .expect("bounded TCB suspend helper section");
     let bounded_suspend = &sel4_source[bounded_suspend_start..bounded_suspend_end];
-    assert_eq!(bounded_suspend.matches("seL4_TCB_Suspend(").count(), 1);
+    assert_eq!(
+        bounded_suspend
+            .matches("call_kernel_object_with_fast_registers(")
+            .count(),
+        1,
+    );
+    assert!(bounded_suspend.contains("invocation_label_TCBSuspend"));
     assert!(!bounded_suspend.contains("log::"));
     assert!(!bounded_suspend.contains("error_name"));
     assert!(!bounded_suspend.contains("guard_cptr"));
@@ -3007,7 +3013,13 @@ fn ninedoor_containment_latches_then_advances_one_successor_committed_unit() {
         .map(|offset| bounded_delete_start + offset)
         .expect("bounded CNode delete section");
     let bounded_delete = &sel4_source[bounded_delete_start..bounded_delete_end];
-    assert_eq!(bounded_delete.matches("seL4_CNode_Delete(").count(), 1);
+    assert_eq!(
+        bounded_delete
+            .matches("call_kernel_object_with_fast_registers(")
+            .count(),
+        1,
+    );
+    assert!(bounded_delete.contains("invocation_label_CNodeDelete"));
     for forbidden in ["debug_put_char", "log::", "for ", "while ", "loop "] {
         assert!(
             !bounded_delete.contains(forbidden),
