@@ -52,6 +52,13 @@ successful command or test count is not a coverage argument.
   Shared source bytes do not make Mac/HVF and Linux/KVM builds, QEMU and Pi,
   Wi-Fi and GENET, or first-install and saved-policy boots interchangeable.
   Stage 05's current advisory checks still run on every acceptance refresh.
+- For release `1.0.0-beta`, Stage 05 may admit only the explicit DD30 owner
+  decision in [DD30_RELEASE_WAIVER.toml](audit/DD30_RELEASE_WAIVER.toml), selected
+  with `DD_RELEASE_ID=1.0.0-beta` and validated against the active exception and
+  protected implementation hashes. The missing dynamic fault/wake test remains
+  unexecuted and contributes no target/component PASS. This release-specific
+  residual risk does not relax any other finding, target evidence, source
+  binding, staged prerequisite or current advisory check.
 - Review all affected host tools, `tools/cohesix-py`, generated contracts,
   benchmark workloads/report schemas, fixtures, and docs in the same change.
   Record reviewed surfaces requiring no change. Use [HOST_TOOLS.md](HOST_TOOLS.md)

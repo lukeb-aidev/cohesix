@@ -137,7 +137,12 @@ This procedure mirrors RMF intent (Prepare, Categorize, Select, Implement, Asses
 ## 10. Release Decision Criteria
 
 Remediation `target_date` values schedule work; they never defer a P0/P1
-release blocker. Every P0/P1 must be `CLOSED_VERIFIED`. The focused command
+release blocker. Every P0/P1 must be `CLOSED_VERIFIED`, except the explicitly
+selected `1.0.0-beta` DD30 owner waiver documented in
+[EXCEPTIONS.md](EXCEPTIONS.md). That single P1 stays `ACCEPTED_RISK`; it is
+admitted only after matching the approved active exception, owner decision,
+bounded expiry and protected implementation hashes in
+[DD30_RELEASE_WAIVER.toml](DD30_RELEASE_WAIVER.toml). The focused command
 `bash scripts/ci/due_diligence_gate.sh --check-blocking-findings docs/audit/findings.csv`
 checks this predicate without executing other stages. It is not a complete
 Stage 05 verdict; closure metadata and exceptions have their separate checks.
@@ -149,7 +154,11 @@ Stage 05 verdict; closure metadata and exceptions have their separate checks.
 
 - `PASS_WITH_RESIDUAL_RISK`
 - No open `P0/P1`.
-- Only time-bounded accepted `P2` with explicit owner and expiration.
+- Only time-bounded accepted `P2` with explicit owner and expiration, plus the
+  narrow DD30 waiver when explicitly selected by `DD_RELEASE_ID=1.0.0-beta`.
+- DD30's missing dynamic fault/wake test remains unexecuted; waiver admission
+  is a release-authority decision and never a target-test PASS.
+- All other P0/P1 and all current-source staged prerequisites remain binding.
 
 - `FAIL`
 - Any open `P0/P1`.

@@ -11,14 +11,16 @@
 - [x] Record independently verified DD26 storage/ABI closure and its exact artifact identity.
 - [x] Record independently verified DD27 integrity and DD29 firmware/USB closures,
   preserving the human-attested basis of the keyboard-absence case.
-- [ ] Complete DD28 and DD30 proof; two P1 findings still block release.
+- [x] Record DD28 independent physical closure and DD30 explicit owner acceptance
+  for `1.0.0-beta`; preserve the unexecuted dynamic fault/wake gap and P1 severity.
 - [x] Record human approval of all fixes and passing final-source checks at `719043fad`.
 
 Evidence and independent reviewer: [current audit report](../AUDIT_REPORT_2026-09-13.md).
 An automated safety stop prevented the planned debugger error-path diagnostic;
 it was not retried and contributes no fault-injection or error/retry result.
-Current overall decision remains **FAIL**. The following February checklist
-retains its original scope.
+Final Stage 05 acceptance is determined by its current-source gate, including
+explicit DD30 residual-risk admission. The following February checklist retains
+its original scope.
 
 ## Run Metadata
 - Audit date: `2026-02-14`

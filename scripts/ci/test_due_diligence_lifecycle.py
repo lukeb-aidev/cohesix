@@ -4,11 +4,20 @@
 
 from __future__ import annotations
 
+import contextlib
+import csv
+from datetime import date
+import hashlib
+import io
+import json
 import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+
+import due_diligence_lifecycle as lifecycle
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -587,6 +596,341 @@ class DueDiligenceLifecycleTests(unittest.TestCase):
         self.assertIn('DD_GATE_LOG_DIR="${audit_root}"', stage_source)
         self.assertIn("stage_05_artifact_root.path", stage_source)
         self.assertIn("publish-root", stage_source)
+
+
+class ReleaseOwnerWaiverTests(unittest.TestCase):
+    """Exercise the approved record contract without target or real-time input."""
+
+    # The authorization covers these ten production files from the reviewed IPC
+    # repair. This fixture is independent of the validator's protected-file set.
+    protected_paths = (
+        "apps/root-task/src/console/mod.rs",
+        "apps/root-task/src/hal/console_network.rs",
+        "apps/root-task/src/hal/critical_tcb.rs",
+        "apps/root-task/src/hal/driver_task.rs",
+        "apps/root-task/src/hal/mod.rs",
+        "apps/root-task/src/hal/worker_task.rs",
+        "apps/root-task/src/kernel.rs",
+        "apps/root-task/src/sel4.rs",
+        "apps/root-task/src/sel4/syscall.rs",
+        "crates/sel4-sys/src/lib.rs",
+    )
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.audit = self.root / "docs/audit"
+        self.audit.mkdir(parents=True)
+        self.record_path = self.audit / "DD30_RELEASE_WAIVER.toml"
+        self.record = {
+            "schema": "cohesix.release-evidence-waiver/v1",
+            "exception_id": "EX-2026-0030",
+            "finding_id": "DD-2026-0030",
+            "release_id": "1.0.0-beta",
+            "scope_id": "dd30-restricted-ipc-dynamic-fault-wake",
+            "severity": "P1",
+            "disposition": "ACCEPTED_RISK",
+            "status": "APPROVED_ACTIVE",
+            "risk_owner": "Lukas Bower",
+            "approved_by": "Lukas Bower",
+            "decision_date": "2026-09-13",
+            "expiration_date": "2026-10-13",
+            "reviewed_source_commit": (
+                "6d7c16e4a0f5d89c32a4fa0f815c2bfe6babc065"
+            ),
+            "approval_quote": (
+                "There is no debugger, dd30 was a one-off issue. "
+                "Mark it as a pass, we are ready for release"
+            ),
+            "protected_files": [],
+        }
+        for relative in self.protected_paths:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"// reviewed fixture IPC ownership\n")
+            self.record["protected_files"].append({
+                "path": relative,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+        approved_bytes = b"// reviewed fixture IPC ownership\n"
+        git_reader = mock.patch.object(
+            lifecycle, "reviewed_source_bytes", return_value=approved_bytes
+        )
+        git_reader.start()
+        self.addCleanup(git_reader.stop)
+        self.finding = {
+            "finding_id": "DD-2026-0030",
+            "severity": "P1",
+            "disposition": "ACCEPTED_RISK",
+            "commit_sha": "",
+            "closed_date": "",
+            "closure_evidence": "",
+            "risk_owner": "Lukas Bower",
+            "risk_expiration": "2026-10-13",
+        }
+        self.exception = {
+            "exception_id": "EX-2026-0030",
+            "finding_id": "DD-2026-0030",
+            "severity": "P1",
+            "scope": (
+                "release=1.0.0-beta; "
+                "scope=dd30-restricted-ipc-dynamic-fault-wake"
+            ),
+            "risk_owner": "Lukas Bower",
+            "approved_by": "Lukas Bower",
+            "decision_date": "2026-09-13",
+            "expiration_date": "2026-10-13",
+            "status": "APPROVED_ACTIVE",
+        }
+        self.write_record()
+
+    def write_record(self) -> None:
+        """Write the independently declared, comment-capable record fixture."""
+        lines = [
+            f"{key} = {json.dumps(value)}"
+            for key, value in self.record.items()
+            if key != "protected_files"
+        ]
+        for entry in self.record["protected_files"]:
+            lines.append("[[protected_files]]")
+            lines.extend(
+                f"{key} = {json.dumps(value)}" for key, value in entry.items()
+            )
+        self.record_path.write_text("\n".join(lines) + "\n")
+
+    def validate(self, today: date = date(2026, 9, 14)) -> object:
+        return lifecycle.validate_waiver(
+            self.root, self.finding, self.exception, today=today
+        )
+
+    def write_registers(self, extra_finding: dict[str, str] | None = None) -> None:
+        with (self.audit / "findings.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(self.finding))
+            writer.writeheader()
+            writer.writerow(self.finding)
+            if extra_finding:
+                writer.writerow(extra_finding)
+        exception = self.exception
+        cells = [
+            exception["exception_id"], exception["finding_id"],
+            exception["severity"], exception["scope"],
+            "Owner accepts the unexecuted dynamic evidence gap only.",
+            "Reviewed source and existing evidence remain required.",
+            exception["risk_owner"], exception["approved_by"],
+            exception["decision_date"], exception["expiration_date"],
+            exception["status"],
+        ]
+        (self.audit / "EXCEPTIONS.md").write_text(
+            EXCEPTIONS_HEADER + "| " + " | ".join(cells) + " |\n"
+        )
+
+    def run_mode(self, mode: str, release: str = "") -> tuple[int, str, str]:
+        """Inject only the test clock; production has no date override."""
+        class FixedDate(date):
+            @classmethod
+            def today(cls) -> date:
+                return cls(2026, 9, 14)
+
+        argv = [
+            "due_diligence_lifecycle.py", "--mode", mode,
+            "--root", str(self.root),
+            "--findings", str(self.audit / "findings.csv"),
+            "--exceptions", str(self.audit / "EXCEPTIONS.md"),
+            "--release", release,
+        ]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(lifecycle, "date", FixedDate),
+            mock.patch("sys.argv", argv),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            code = lifecycle.main()
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_authorization_window_is_inclusive_and_fails_outside_it(self) -> None:
+        for today in (date(2026, 9, 13), date(2026, 10, 13)):
+            with self.subTest(today=today):
+                admission = self.validate(today)
+                self.assertEqual(
+                    admission.sha256,
+                    hashlib.sha256(self.record_path.read_bytes()).hexdigest(),
+                )
+        for today in (date(2026, 9, 12), date(2026, 10, 14)):
+            with self.subTest(today=today):
+                with self.assertRaises(lifecycle.LifecycleError):
+                    self.validate(today)
+        self.record["expiration_date"] = "2026-10-14"
+        self.write_record()
+        with self.assertRaisesRegex(
+            lifecycle.LifecycleError, "release-specific bound"
+        ):
+            self.validate()
+
+    def test_record_identity_and_approval_cannot_be_repurposed(self) -> None:
+        changes = {
+            "schema": "cohesix.release-evidence-waiver/v2",
+            "exception_id": "EX-2026-0029",
+            "finding_id": "DD-2026-0029",
+            "release_id": "1.0.1-beta",
+            "scope_id": "all-dynamic-tests",
+            "severity": "P0",
+            "disposition": "CLOSED_VERIFIED",
+            "status": "PROPOSED",
+            "risk_owner": "another owner",
+            "approved_by": "another approver",
+            "reviewed_source_commit": "a" * 40,
+            "approval_quote": "All future releases approved",
+            "decision_date": "2026-09-14",
+        }
+        for field, value in changes.items():
+            original = self.record[field]
+            with self.subTest(field=field):
+                self.record[field] = value
+                self.write_record()
+                with self.assertRaises(lifecycle.LifecycleError):
+                    self.validate()
+            self.record[field] = original
+        self.record["extra_allowance"] = True
+        self.write_record()
+        with self.assertRaises(lifecycle.LifecycleError):
+            self.validate()
+
+    def test_register_metadata_must_match_the_approved_record(self) -> None:
+        for row in (self.finding, self.exception):
+            for field in row:
+                if field in {"commit_sha", "closed_date", "closure_evidence"}:
+                    continue
+                original = row[field]
+                with self.subTest(row=row is self.finding, field=field):
+                    row[field] = "mismatch"
+                    with self.assertRaises(lifecycle.LifecycleError):
+                        self.validate()
+                row[field] = original
+
+    def test_every_protected_file_remains_bound(self) -> None:
+        for relative in self.protected_paths:
+            path = self.root / relative
+            original = path.read_bytes()
+            with self.subTest(path=relative):
+                path.write_bytes(original + b"// changed\n")
+                with self.assertRaisesRegex(
+                    lifecycle.LifecycleError, "protected IPC source changed"
+                ):
+                    self.validate()
+                path.unlink()
+                with self.assertRaises(lifecycle.LifecycleError):
+                    self.validate()
+            path.write_bytes(original)
+        entries = self.record["protected_files"]
+        original = entries[-1]
+        for replacement in (
+            entries[0],
+            {"path": "../unreviewed.rs", "sha256": "a" * 64},
+            {"path": original["path"], "sha256": "bad"},
+        ):
+            with self.subTest(replacement=replacement):
+                entries[-1] = replacement
+                self.write_record()
+                with self.assertRaises(lifecycle.LifecycleError):
+                    self.validate()
+        entries.pop()
+        self.write_record()
+        with self.assertRaises(lifecycle.LifecycleError):
+            self.validate()
+
+    def test_record_validation_does_not_silently_admit_a_release(self) -> None:
+        self.write_registers()
+        code, stdout, stderr = self.run_mode("register")
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("validated (not release admission)", stdout)
+        self.assertNotIn("waiver admitted:", stdout)
+        for release in ("", "1.0.1-beta"):
+            with self.subTest(release=release):
+                code, stdout, stderr = self.run_mode("blockers", release)
+                self.assertEqual(code, 1, stdout)
+                self.assertIn("requires explicit DD_RELEASE_ID", stderr)
+                self.assertNotIn("waiver admitted:", stdout)
+        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("waiver admitted:", stdout)
+        self.assertIn("dynamic_fault_wake=NOT_EXECUTED", stdout)
+        self.assertIn("scope=dd30-restricted-ipc-dynamic-fault-wake", stdout)
+        self.assertIn(
+            hashlib.sha256(self.record_path.read_bytes()).hexdigest(), stdout
+        )
+
+    def test_unapproved_or_mismatched_registers_block_release(self) -> None:
+        for status in ("PROPOSED", "REVOKED", "EXPIRED", "CLOSED"):
+            with self.subTest(status=status):
+                self.exception["status"] = status
+                self.write_registers()
+                code, stdout, _ = self.run_mode("blockers", "1.0.0-beta")
+                self.assertEqual(code, 1, stdout)
+                self.assertNotIn("waiver admitted:", stdout)
+        self.exception["status"] = "APPROVED_ACTIVE"
+        for field in ("exception_id", "finding_id", "scope", "approved_by"):
+            original = self.exception[field]
+            with self.subTest(field=field):
+                self.exception[field] = "mismatch"
+                self.write_registers()
+                code, stdout, _ = self.run_mode("blockers", "1.0.0-beta")
+                self.assertEqual(code, 1, stdout)
+            self.exception[field] = original
+
+    def test_unrelated_p0_p1_still_block_and_no_waiver_is_admitted(self) -> None:
+        for severity in ("P0", "P1"):
+            for disposition in ("OPEN", "PENDING_VERIFY", "ACCEPTED_RISK"):
+                with self.subTest(severity=severity, disposition=disposition):
+                    self.write_registers({
+                        **self.finding,
+                        "finding_id": "DD-OTHER",
+                        "severity": severity,
+                        "disposition": disposition,
+                    })
+                    code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
+                    self.assertEqual(code, 1, stdout)
+                    self.assertIn("DD-OTHER", stderr)
+                    self.assertNotIn("waiver admitted:", stdout)
+        for severity in ("P0", "P2", "P3"):
+            with self.subTest(dd30_severity=severity):
+                self.finding["severity"] = severity
+                self.exception["severity"] = severity
+                self.write_registers()
+                code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
+                self.assertEqual(code, 1, stdout)
+                self.assertIn(f"DD-2026-0030 ({severity}, ACCEPTED_RISK)", stderr)
+                code, stdout, stderr = self.run_mode("register")
+                self.assertEqual(code, 1, stdout)
+                self.assertIn("cannot change P1 severity", stderr)
+        self.finding.update(finding_id="DD-OTHER", severity="P2")
+        self.exception.update(finding_id="DD-OTHER", severity="P2")
+        self.write_registers()
+        code, stdout, stderr = self.run_mode("register")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("reserved for DD-2026-0030 severity P1", stderr)
+
+    def test_missing_waiver_and_modified_implementation_fail_admission(self) -> None:
+        self.write_registers()
+        self.record_path.unlink()
+        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("missing regular release waiver", stderr)
+        self.write_record()
+        (self.root / self.protected_paths[0]).write_bytes(b"changed")
+        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("protected IPC source changed", stderr)
+        self.assertNotIn("waiver admitted:", stdout)
+        self.record["protected_files"][0]["sha256"] = hashlib.sha256(
+            b"changed"
+        ).hexdigest()
+        self.write_record()
+        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("protected IPC digest differs from approval", stderr)
+        self.assertNotIn("waiver admitted:", stdout)
 
 
 if __name__ == "__main__":

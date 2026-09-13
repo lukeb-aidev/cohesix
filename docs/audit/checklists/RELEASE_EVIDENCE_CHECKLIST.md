@@ -19,16 +19,22 @@
 - [x] Close DD29 with that reviewer's unchanged-repair review, machine-observed
   keyboard presence and Lukas Bower's explicit human-attested keyboard-absence test.
   No machine trace, image identity or test timestamp is assigned to the attestation.
-- [ ] Close DD28 same-image WiFi proof and DD30 required QEMU/Pi fault/wake proof.
+- [x] Close DD28 with independent exact-image dual-mode reset/firmware/network proof.
+- [x] Record Lukas Bower's DD30 release-specific risk acceptance, preserving P1 severity
+  and the unexecuted dynamic fault/wake test; validate EX30 and protected source hashes.
 - [x] Preserve all eight passing final-source checks at `719043fad` and completed
   focused burn-in repair evidence without rerunning Stages 01–04 or burn-in.
-- [ ] Complete all applicable gates on the final frozen source and image set.
+- Final frozen-source stage completion is recorded by the canonical state directory,
+  not by a pre-execution checkbox. Current-source Stages 01–04 are required because
+  the retained `22e3d08ff` chain fails the canonical source-context check.
 - [ ] Verify physical Pi SD delivery/readback and required fresh boots.
 - [ ] Verify the extracted Mac, native Linux and Pi release bundles.
 - [x] Record Lukas Bower's approval of all fixes and publication through `719043fad`.
 
-Current decision: **FAIL / release blocked**. See [BLOCKERS.md](../BLOCKERS.md).
-The DD26/DD27/DD29 decisions close their scoped defects. Human Rust sign-off
+Finding decision: **verified closures plus explicit DD30 residual risk**. Final
+Stage 05 acceptance requires the canonical current-source execution result.
+See [BLOCKERS.md](../BLOCKERS.md).
+The DD26–29 decisions close their scoped defects. Human Rust sign-off
 is recorded separately. Existing Stages 01–04 retain their source
 bindings; none has been copied or relabelled for a successor commit.
 The dated snapshots below describe their original runs only.

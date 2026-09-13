@@ -12,11 +12,12 @@
   ordinary target lifecycle; do not equate them with missing fault-path proof.
 - [x] Independently verify fresh DD27 image integrity and DD29 firmware/USB evidence;
   keyboard absence is explicitly human-attested by Lukas Bower.
-- [ ] Complete DD28 and DD30 machine evidence and the remaining release criteria.
+- [x] Close DD28 from independent same-image physical evidence; record the explicit
+  DD30 release-owner waiver without claiming that its dynamic test ran.
 
 Reviewer and evidence: [current audit report](../AUDIT_REPORT_2026-09-13.md).
-Current overall decision remains **FAIL**. DD26 closure grants no physical
-fault attribution, final-image boot acceptance or human merge sign-off.
+The current-source canonical gate owns the final Stage 05 decision. Scoped
+closures and DD30 owner acceptance grant no unobserved physical-test result.
 The following February checklist is historical.
 
 ## Run Metadata

@@ -1,0 +1,60 @@
+# Author: Lukas Bower
+# Purpose: Bind the release-specific owner waiver of unexecuted DD30 fault/wake evidence to the reviewed IPC repair.
+# Copyright 2026 Lukas Bower
+# The owner approved release acceptance; 2026-10-13 is a conservative administrative limit, not a quoted owner date.
+# No target fault test is represented as executed or passed.
+
+schema = "cohesix.release-evidence-waiver/v1"
+exception_id = "EX-2026-0030"
+finding_id = "DD-2026-0030"
+release_id = "1.0.0-beta"
+scope_id = "dd30-restricted-ipc-dynamic-fault-wake"
+severity = "P1"
+disposition = "ACCEPTED_RISK"
+status = "APPROVED_ACTIVE"
+risk_owner = "Lukas Bower"
+approved_by = "Lukas Bower"
+decision_date = "2026-09-13"
+expiration_date = "2026-10-13"
+reviewed_source_commit = "6d7c16e4a0f5d89c32a4fa0f815c2bfe6babc065"
+approval_quote = "There is no debugger, dd30 was a one-off issue. Mark it as a pass, we are ready for release"
+
+[[protected_files]]
+path = "apps/root-task/src/console/mod.rs"
+sha256 = "cad5c5120cc29ddcbfa5122185ed084cbed0237c06854931fac09ad097dfaccb"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/console_network.rs"
+sha256 = "7497b4f921b812f2c57656040b27ee5cacd62536dd78a067b1d00ef9b43bca13"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/critical_tcb.rs"
+sha256 = "1ce148a8e25898f7b6b377a85276b8b697116bf89fc740f1d3b39126badc2eaf"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/driver_task.rs"
+sha256 = "aca999e4ec1b4f46900a825723b5aab230b3fb28e2dca50e5c354721e5ef8f1d"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/mod.rs"
+sha256 = "b78b000991051ebf2851c94babc738f1480a636f64611d17fbab7a2f4264d1a2"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/worker_task.rs"
+sha256 = "1395a287729b54865e4bf4095bdb316740bf54b134a46817bb2715361a919ae7"
+
+[[protected_files]]
+path = "apps/root-task/src/kernel.rs"
+sha256 = "64711c1151edc4876cd813fa7895aff7a9a2a58d954973a4f102fc320537ecbf"
+
+[[protected_files]]
+path = "apps/root-task/src/sel4.rs"
+sha256 = "bb6d301f59db5d529d960723b9f237bbfa0e27f5c5ef96195b504be64fd9728d"
+
+[[protected_files]]
+path = "apps/root-task/src/sel4/syscall.rs"
+sha256 = "fc5577944d86451a740ee92d1e96d03544fe7bc4bbd191005351699634e37e8c"
+
+[[protected_files]]
+path = "crates/sel4-sys/src/lib.rs"
+sha256 = "c593f33cb4198575e798965f847c85a8705fd515b156a19fd5907ddafa492b7e"

@@ -1,12 +1,14 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Bind scoped DD26, DD27 and DD29 closures and approved exception renewals to evidence while preserving outstanding Stage 05 blockers. -->
+<!-- Purpose: Bind verified DD26–29 closures and the explicit DD30 release-owner waiver to evidence and canonical staged acceptance. -->
 <!-- Copyright 2026 Lukas Bower -->
 
 # Cohesix Audit Report (2026-09-13)
 
-Decision: **FAIL / release blocked**. DD26, DD27 and DD29 are closed for their
-independently reviewed scoped defects. DD28 and DD30 remain OPEN P1 findings. This report
-records scoped evidence closure; it does not announce a new staged PASS.
+Finding decision for **1.0.0-beta: DD26–29 CLOSED_VERIFIED; DD30 P1 /
+ACCEPTED_RISK under the explicit release-owner waiver EX-2026-0030**. The
+DD30 dynamic fault/wake test remains unexecuted. The final Stage 05 verdict
+belongs to the canonical run on the final committed source, with the waiver
+explicitly selected and validated; this report does not substitute for that run.
 
 Scope: Milestone 26e
 `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, discovered during
@@ -14,9 +16,11 @@ Scope: Milestone 26e
 DD26 artifact check is `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39`.
 The audit starts from clean `385d5fdc46c80d6fe1b590f4555ee3b0b0763954`, whose
 only change from that implementation is the cohsh Worker-script test fingerprint.
-The post-burn-in update below reviews final source `719043fad` and actual Pi
-implementation `61f7bcd1f`; it supersedes the earlier outstanding-proof snapshot.
-No runtime implementation changes are included in this audit update.
+The post-burn-in update reviews source `719043fad` and actual Pi implementation
+`61f7bcd1f`. The final finding review below adds fresh WiFi evidence on that same
+Pi image and the owner decision on reviewed source `6d7c16e4a`. These updates
+supersede the earlier outstanding-proof snapshots. No runtime implementation
+changes are included in this audit update.
 
 ## Evidence root and DD26 closure
 
@@ -108,7 +112,7 @@ boot, extracted release-bundle verification, human review of new Rust, and
 promotion remain separate requirements. No merge, push or release occurred.
 These statements describe that earlier snapshot, not the post-burn-in state below.
 
-## Post-burn-in closure review
+## Earlier post-burn-in closure review (before DD28 proof and DD30 owner decision)
 
 Title/ID: `stage5-post-burn-in-evidence-closure`. Milestone and discovery task
 remain the M26e tasks named above. The goal is to close only findings whose
@@ -223,3 +227,123 @@ target suite was selected for this audit/gate repair.
 The new report is admitted by regenerating the compiler-owned source inventory
 and dependent host-integration digest. The first generated check's missing
 inventory entry remains recorded separately from the corrected result.
+
+## Final finding closure and release-owner decision
+
+Title/ID: `stage5-final-findings-and-owner-waiver`. Milestone: M26e
+`m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, discovered during
+`m26e-mcs-smp-target-acceptance`, including its explicit release 1.0.0-beta
+DD30 owner-decision restoration task. Goal: close DD28 using independent
+same-image physical evidence and apply the owner's narrowly scoped DD30
+acceptance without inventing dynamic test results or altering source provenance.
+
+### DD28: same-image WiFi and GENET proof closed
+
+The fresh WiFi evidence is
+`completion-20260913T102047Z/dd28-wifi-01`. The canonical U-Boot/TFTP RAM loader
+completed all three transfer and post-reset CRC checks, then booted the same
+`61f7bcd1f057277151b46e884339076a7e49bb59` implementation and image used for the
+completed GENET evidence. Image SHA-256 is
+`5f3457c2a0798ec28bca7f7511b90e8eeb7eb628f43844823939d3661a9aacbf`; image ID is
+`9643bd91cf1cb7a071d5d2525f2b58ca50695e70088b4b000dbf01b8f034c6cc`.
+After the passive settle, the first raw WiFi workload passed all 64 requests
+without retry/reconnect: 40.541 requests/s and p95 33.862 ms against the
+unchanged WiFi thresholds. The subsequent authenticated Queen-log collection
+completed AUTH/ATTACH/CAT/END/QUIT/EOF with 1379 body frames and 160446 bytes,
+then the separate serial probe returned PONG. Both en0/en8 packet intervals
+are retained and hashed in `packet-capture-binding.json`.
+
+Independent review
+`independent/dd28-dual-mode-evidence-review-6d7c16e4a-01/review.json`, SHA-256
+`b23918dd37a5049a5006db8d1670f053dc5acf490cec20cb167d5ea61ff069f7`, rehashes
+49 inputs, validates the image and root-text cuts, retained reset/wait/completion
+proof, both network lanes, raw results, real CAT frames and EOF, and serial
+liveness. Aggregate complete-proof records and unchanged fail-closed source
+establish the scoped PCIe checks; unretained register values are not invented.
+The recommendation is DD28 `CLOSED_VERIFIED`. RAM-loader elapsed time is not
+ordinary SD boot timing, and this finding closure makes no new SD-delivery,
+boot-time, second-boot or full repeatability claim.
+
+### DD30: owner accepts the unexecuted dynamic test
+
+Lukas Bower explicitly stated: “There is no debugger, dd30 was a one-off issue.
+Mark it as a pass, we are ready for release”. The exact statement is retained
+in `completion-20260913T102047Z/dd30-release-owner-decision.json` and the tracked
+[DD30_RELEASE_WAIVER.toml](DD30_RELEASE_WAIVER.toml). It accepts the remaining
+fault/wake evidence gap for this release. DD30 remains P1 / `ACCEPTED_RISK`;
+its verified-closure date and closure evidence remain empty. The target test
+is **UNEXECUTED**, not a passing dynamic test.
+
+Source, selected ABI, pure-test and emitted-code review of the IPC repair
+remain available. The current review is
+`independent/dd30-current-evidence-review-6d7c16e4a-01/review.json`, SHA-256
+`97aa61923ad311221b7eb558f07a13474fba7cfc11c1825608165f728befb443`.
+The same directory's `physical-pi-capability-gap.json`, SHA-256
+`ac8fbbb9df0378951f1eefce74bca40c8dd97398176037539a1bb23cc914a4fb`, distinguishes
+ordinary root-control Worker shutdown and maintenance policy refusals from a
+restricted kernel fault. There is no supported serial/TCP fault-injection
+command, U-Boot cannot fault a running seL4 task, and the user confirms no
+debugger is connected. The earlier diagnostic stopped by automatic approval
+review was not repeated or bypassed.
+
+EX-2026-0030 is specific to `1.0.0-beta` and
+`dd30-restricted-ipc-dynamic-fault-wake`. Its conservative administrative expiry
+is 2026-10-13, aligned to the current release qualification window; the owner
+did not supply an expiry date for this waiver. The validator requires the exact
+approval, matching finding and exception records, owner, release, dates and
+active status, and all ten protected production-file hashes at both the
+reviewed commit and current checkout. Explicit `DD_RELEASE_ID=1.0.0-beta` is
+required for release admission. Missing, changed, withdrawn, expired or
+out-of-scope approval fails closed. P0 and every other unclosed P1 remain
+blocking; no runtime, severity, threshold or staged provenance rule is waived.
+
+### Canonical current-source qualification
+
+The source-context audit is
+`independent/stage5-current-source-reuse-6d7c16e4a-01/review.json`, SHA-256
+`049e05e6c071114439dde87d3c26456115dd8be26b79a49ce09df9f3eaa4c6e6`.
+It finds no accepted current-source Stage 01–04 chain. The retained
+`stage5-closure-22e3d08ffb5d-01` chain remains valid historical evidence, but
+canonical verification rejects its changed source/input context. Material IPC,
+Worker maintenance and host FUSE/policy changes followed that chain. Therefore
+fresh canonical stages on the final clean commit are necessary; no marker is
+copied, source hash rewritten, or reuse predicate relaxed. The completed
+burn-in and human keyboard-absence evidence are preserved without repetition.
+
+The final invocation uses the Mac `qemu_smp_production` profile, its selected
+seL4 output, the pinned HVF QEMU executable, and explicit release context:
+
+```sh
+scripts/ci/test_plan_run.sh --list
+DD_RELEASE_ID=1.0.0-beta scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<final-source-run>
+```
+
+The canonical run will retain immutable evidence under
+`completion-20260913T102047Z/validation/`, including the
+exact clean commit, complete environment selection with secrets omitted,
+commands, stage attestations and final verdict. A Stage 05 PASS is valid only
+when that canonical run actually completes; it denotes release acceptance
+with this disclosed residual risk, not execution of the waived test.
+
+### Changes, checks and compatibility
+
+The atomic change updates the findings/exception records, waiver, canonical
+milestone/Test Plan/audit policy and their checklist consumers. A shared
+lifecycle validator preserves the focused and full due-diligence gate paths,
+with deterministic regressions for ordinary lifecycle rules and the narrow
+waiver's invalidation cases. Focused lifecycle tests, shell syntax and exception/blocker checks (including
+wrong or absent release selection) are retained in
+`validation/dd30-release-waiver-lifecycle-01`. Compiler regeneration, generated
+consistency, Test Plan integrity and metadata/diff/link checks are retained in
+`completion-20260913T102047Z/checks`. The
+compiler regenerates its source inventory and dependent integration digest;
+generated files are not hand-edited.
+
+The complete host-tool suite, `tools/cohesix-py` library, runtime interfaces,
+performance harnesses, workloads and report schemas were reviewed for
+compatibility. This governance change adds no runtime, API, ABI, namespace,
+policy-default, workload or benchmark-schema change; those implementations
+require no edits. The audit disposition vocabulary is unchanged. The new
+release-waiver record is consumed only by the canonical due-diligence gate.
+No Rust implementation is changed, and prior approved Rust/source checks
+remain preserved with their exact provenance.

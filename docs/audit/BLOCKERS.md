@@ -6,39 +6,35 @@
 
 ## Current release candidate (2026-09-13)
 
-Release readiness remains **FAIL**. The [current audit report](AUDIT_REPORT_2026-09-13.md)
-records scoped closure of `DD-2026-0026`, `DD-2026-0027` and `DD-2026-0029`,
-the approved EX20–23 renewal through 2026-10-13, and two remaining P1 findings.
-Exact `22e3d08ff` QEMU
-Stages 01–04 passed; their original Stage 05 failure is preserved. Subsequent
-focused checks retain their actual implementation and artifact identities.
-Stages 01–04 are not being rerun during this closure work, per user instruction.
+The finding-level blockers are resolved for explicitly selected release
+`1.0.0-beta`: DD26–29 are `CLOSED_VERIFIED`, and DD30 remains `P1` /
+`ACCEPTED_RISK` under Lukas Bower's release-specific decision. The
+[current audit report](AUDIT_REPORT_2026-09-13.md) binds the evidence and
+[DD30 waiver](DD30_RELEASE_WAIVER.toml). Final Stage 05 acceptance is determined
+by the current-source canonical gate, with the accepted residual risk recorded.
+No target fault test is represented as passed by that decision.
 
-| Finding | Implemented repair | Closure still required |
+| Finding | Disposition and evidence | Remaining boundary |
 | --- | --- | --- |
-| `DD-2026-0028` | Cold reset, firmware completion and ordered timer paths have independent source/emitted review. The exact `61f7bcd1f` GENET boot now retains the ordered reset and firmware observations and passes raw network work. | Complete WiFi boot/network proof and retained PCIe observations for the same image. The completed GENET evidence remains valid. |
-| `DD-2026-0030` | `3746e659f` repairs borrowed outputs, critical-TCB syscall storage and child IPC ownership. Focused Mac/native tests and independent source/emitted checks pass. | Required exact QEMU/Pi fault/wake evidence; the unexecuted debugger error-path diagnostic remains incomplete after an automated safety stop. |
+| `DD-2026-0026` | Independently verified TLS storage/ABI repair and exact `8c050a0aa` image layout. | Historical physical-fault attribution remains unproved; later selected images retain their own layout obligation. |
+| `DD-2026-0027` | Actual `61f7bcd1f` ELF matches all eight acquired integrity cuts; raw console work and independent review pass. | Scoped publication/address defect closure. |
+| `DD-2026-0028` | Both exact `61f7bcd1f` RAM lanes retain ordered reset/waits/firmware completion and pass network work. WiFi also passes authenticated CAT/QUIT/EOF and serial liveness. | RAM-transfer timing does not establish ordinary boot timing, SD delivery or repeatability. |
+| `DD-2026-0029` | Independently reviewed firmware/USB repair, machine-observed presence and Lukas Bower's explicitly confirmed keyboard-absence test. | Absence is human-attested with unspecified image/time/log; no repeat is required. |
+| `DD-2026-0030` | Source/ABI/pure/emitted IPC repair review passes; Lukas Bower accepts the remaining dynamic fault/wake gap under `EX-2026-0030`. | Dynamic fault/wake testing remains unexecuted. Only matching `DD_RELEASE_ID=1.0.0-beta`, active approval and unchanged protected files admit this residual risk through 2026-10-13. |
 
-`DD-2026-0026` is `CLOSED_VERIFIED` for its storage/ABI defect: independent
-review of exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39` verifies a single
-16-byte, 16-aligned TLS object at `0x924b00`, without writable-symbol overlap.
-The report binds that symbol to the staged image and records source/test
-evidence. Historical physical-fault attribution remains unproved; each later
-selected image still requires its own layout check.
+All implementation fixes are human-approved and published through `719043fad`.
+The Pi's fresh WiFi boot uses the same actual `61f7bcd1f` image as the completed
+GENET burn-in. Completed burn-in and historical stage results remain preserved.
+The earlier Stage 01–04 chain is bound to `22e3d08ff`; the canonical verifier
+rejects its reuse for the later approved source. A fresh current-source chain
+is therefore required for final Stage 05 acceptance. No old marker is copied
+or relabelled, and no unrelated burn-in is repeated.
 
-`DD-2026-0027` is `CLOSED_VERIFIED`: independent review binds all eight fresh
-root-text samples to the actual sealed `61f7bcd1f` ELF and verifies successful
-console work. `DD-2026-0029` is `CLOSED_VERIFIED` from independent repair review,
-machine-observed keyboard presence and Lukas Bower's explicit confirmation that
-keyboard absence was tested. The absence case is human-attested; no machine
-log, test timestamp or image identity is inferred. No repeat is required.
-
-DD28 and DD30 remain `OPEN`. The completed focused burn-in recovered the Pi,
-last observed ONLINE with empty active leases on `61f7bcd1f`. All fixes are
-human-approved and pushed through `719043fad`; the current final-source checks
-passed. Stages 01–04 and the completed burn-in were not repeated. Final staged
-acceptance and release delivery remain separate from these scoped closures.
-No target date, severity or acceptance threshold was relaxed.
+The DD30 owner decision is the sole change to the earlier P1 acceptance rule.
+Other findings, severity, performance thresholds, target/source provenance and
+release-delivery requirements remain binding. The frozen-source canonical
+Stage 05 artifact records the final execution verdict separately from this
+pre-execution findings register.
 
 ## Historical gate snapshots
 
@@ -48,7 +44,7 @@ No target date, severity or acceptance threshold was relaxed.
 - M26d P2 exception closure: `PASS` for offline engineering scope,
   `out/test-plan/m26d-unsafe-remediation-qemu` and
   `out/test-plan/m26d-unsafe-remediation-pi4`.
-- Blocking rule: any P0/P1 finding outside `CLOSED_VERIFIED` blocks release.
+- Historical blocking rule: any P0/P1 finding outside `CLOSED_VERIFIED` blocked release. The current DD30-only owner waiver is documented above.
 
 ## Closed In This Run (2026-02-14)
 - `DD-2026-0001`, `DD-2026-0002`, `DD-2026-0003`, `DD-2026-0007`, `DD-2026-0009`, `DD-2026-0010`, `DD-2026-0013`, `DD-2026-0014`, `DD-2026-0015`.
@@ -66,7 +62,11 @@ No target date, severity or acceptance threshold was relaxed.
 - Pi 4 hardware acceptance and reliable every-boot WiFi connection proof remain hardware-gated until the exact image can be exercised repeatedly on a Pi 4 with an available WiFi connection.
 
 ## Exit Criteria
-A blocker may be removed only when:
+A verified blocker may be removed only when:
 - finding disposition is updated to `CLOSED_VERIFIED` in `docs/audit/findings.csv`,
 - closure evidence includes reproducible command/log path and commit SHA,
 - an independent reviewer records verification in `docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md`.
+
+The release-specific DD30 acceptance follows the separate explicit owner-waiver
+contract in [EXCEPTIONS.md](EXCEPTIONS.md); it does not change the finding to
+`CLOSED_VERIFIED` or supply missing target execution.
