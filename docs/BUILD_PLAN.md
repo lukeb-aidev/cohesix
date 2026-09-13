@@ -5923,7 +5923,7 @@ Milestone: Milestone 25e — Evidence Packs + Integration Kits; discovered in Mi
 Goal: Preserve failed exports truthfully and restore bounded reads of legitimate long AuditFS records.
 Inputs: Pi GENET image from commit 15923ebbfe8f, timed-01 Queen-log ELIMIT refusal, fresh-session audit-journal buffer-full result with prior exit code zero.
 Changes:
-  - apps/coh/src/evidence.rs — seal partial summaries on capture failure; return an error for retained capture errors.
+  - apps/coh/src/evidence.rs — seal partial summaries on capture failure; return an error for retained capture errors; use a positive REST read bound to verify empty audit streams.
   - apps/root-task/src/ninedoor.rs — serialize AuditFS journal/decision records with the existing C1 framing, preserving line and stream bounds.
   - apps/coh/tests/evidence_pack.rs — assert required-read stop and optional-read error retention independently of target scheduling.
   - docs/OPERATOR_RECIPES.md and docs/HOST_TOOLS.md — describe nonzero failure, partial case inspection and unchanged quota boundaries.

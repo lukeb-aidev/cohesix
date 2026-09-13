@@ -56,6 +56,12 @@ interfaces, namespaces, quotas, workloads, report schemas and thresholds need
 no change. Boot-video retention affects the generated Pi boot script and its
 handoff check, with no host-tool API change.
 
+Empty AuditFS streams are verified with a positive one-byte read allowance,
+then saved as empty files. Export cursor size zero never becomes a zero-byte
+REST request or a fabricated capture. This host-only edge-case repair changes
+`coh`; the rest of the tool suite, Python SDK, benchmark workloads and target
+contracts retain their current limits and semantics.
+
 The default shared session allowance is 8 MiB. A complete retained Queen log
 can exceed the former 128 KiB allowance before any other operator reads.
 All gateway clients consume the same upstream ticket budget; 8 MiB permits

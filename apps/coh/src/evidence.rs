@@ -373,6 +373,10 @@ fn capture_audit<C: CohAccess>(
         DEFAULT_AUDIT_FALLBACK_MAX_BYTES,
         DEFAULT_AUDIT_FALLBACK_MAX_BYTES,
     ));
+    // REST requires a positive read bound even when the export cursor is empty.
+    // Probe the file instead of manufacturing an empty capture from metadata.
+    let journal_max = journal_max.max(1);
+    let decisions_max = decisions_max.max(1);
 
     if let Some(payload) = read_optional(
         client,

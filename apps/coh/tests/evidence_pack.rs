@@ -264,6 +264,60 @@ fn assert_failed_capture(failure_path: &'static str, expect_host_reads: bool) ->
 }
 
 #[test]
+fn empty_audit_streams_are_read_and_saved_with_positive_rest_bounds() -> Result<()> {
+    struct EmptyAudit {
+        inner: RecordingAccess,
+        audit_reads: Vec<String>,
+    }
+    impl coh::CohAccess for EmptyAudit {
+        fn list_dir(&mut self, path: &str, maximum: usize) -> Result<Vec<String>> {
+            self.inner.list_dir(path, maximum)
+        }
+        fn read_file(&mut self, path: &str, maximum: usize) -> Result<Vec<u8>> {
+            if maximum == 0 {
+                return Err(anyhow!("max_bytes is required"));
+            }
+            match path {
+                "/audit/export" => Ok(
+                    br#"{"journal_base":0,"journal_next":0,"decisions_base":0,"decisions_next":0}"#
+                        .to_vec(),
+                ),
+                "/audit/journal" | "/audit/decisions" => {
+                    self.audit_reads.push(path.to_owned());
+                    Ok(Vec::new())
+                }
+                _ => self.inner.read_file(path, maximum),
+            }
+        }
+        fn write_append(&mut self, _path: &str, _payload: &[u8]) -> Result<usize> {
+            Err(anyhow!("read-only export must not write to the target"))
+        }
+    }
+    let temporary = TempDir::new()?;
+    let spec = EvidencePackSpec {
+        out_dir: temporary.path().join("pack"),
+        with_telemetry: false,
+    };
+    let mut access = EmptyAudit {
+        inner: RecordingAccess::default(),
+        audit_reads: Vec::new(),
+    };
+    let summary = export_pack(
+        &mut access,
+        &CohPolicy::from_generated(),
+        &build_local_bounds(),
+        &spec,
+        &mut CohAudit::new(),
+    )?;
+    assert_eq!(summary.errors, 0);
+    assert_eq!(access.audit_reads, ["/audit/journal", "/audit/decisions"]);
+    for file in ["audit/journal", "audit/decisions"] {
+        assert!(std::fs::read(spec.out_dir.join(file))?.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn malformed_audit_payload_is_not_saved_or_reported_as_captured() -> Result<()> {
     struct MalformedAudit(RecordingAccess);
     impl coh::CohAccess for MalformedAudit {
