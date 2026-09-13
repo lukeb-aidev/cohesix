@@ -1074,6 +1074,13 @@ or changing payload identity.
 | `/replay/ctl` | Control JSON | Bounded `{"from":<cursor>}` request. |
 | `/replay/status` | Read-only | `idle`, `ok`, or `err` state with deterministic sequence fingerprint. |
 
+Audit journal and decision `CAT` reads preserve each complete JSONL record.
+Records longer than the existing 256-byte console line use the existing ordered,
+digest-bound `C1:` frames; shared TCP clients reconstruct the original JSON
+before exposing it to other host tools. The fixed 64-frame response capacity,
+AuditFS retention sizes and ticket byte quotas still apply. An over-capacity
+snapshot is refused explicitly; it is never truncated into a successful export.
+
 Representative strict control records are:
 
 ```json

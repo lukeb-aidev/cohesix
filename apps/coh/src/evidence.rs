@@ -124,65 +124,88 @@ pub fn export_pack<C: CohAccess>(
 
     let mut items = Vec::<EvidenceItem>::new();
 
-    capture_file(
-        client,
-        &spec.out_dir,
-        "/proc/boot",
-        CaptureVerb::Cat,
-        DEFAULT_PROC_BOOT_MAX_BYTES,
-        audit,
-        &mut items,
-        None,
-    )?;
+    let capture_result: Result<()> = (|| {
+        capture_file(
+            client,
+            &spec.out_dir,
+            "/proc/boot",
+            CaptureVerb::Cat,
+            DEFAULT_PROC_BOOT_MAX_BYTES,
+            audit,
+            &mut items,
+            None,
+        )?;
 
-    capture_proc_schedule(client, bounds, spec, audit, &mut items)?;
-    capture_proc_lease(client, bounds, spec, audit, &mut items)?;
+        capture_proc_schedule(client, bounds, spec, audit, &mut items)?;
+        capture_proc_lease(client, bounds, spec, audit, &mut items)?;
 
-    let log_path = bounds.paths.log.as_str();
-    capture_file(
-        client,
-        &spec.out_dir,
-        log_path,
-        CaptureVerb::Cat,
-        DEFAULT_LOG_MAX_BYTES,
-        audit,
-        &mut items,
-        None,
-    )?;
+        let log_path = bounds.paths.log.as_str();
+        capture_file(
+            client,
+            &spec.out_dir,
+            log_path,
+            CaptureVerb::Cat,
+            DEFAULT_LOG_MAX_BYTES,
+            audit,
+            &mut items,
+            None,
+        )?;
 
-    capture_audit(client, spec, audit, &mut items)?;
-    capture_host_tickets(client, spec, audit, &mut items)?;
-    if let Some(payload) = read_optional(
-        client,
-        "/replay/status",
-        DEFAULT_REPLAY_STATUS_MAX_BYTES,
-        CaptureVerb::Cat,
-        audit,
-        &mut items,
-    )? {
-        write_payload(&spec.out_dir, "/replay/status", &payload)?;
-    }
+        capture_audit(client, spec, audit, &mut items)?;
+        capture_host_tickets(client, spec, audit, &mut items)?;
+        if let Some(payload) = read_optional(
+            client,
+            "/replay/status",
+            DEFAULT_REPLAY_STATUS_MAX_BYTES,
+            CaptureVerb::Cat,
+            audit,
+            &mut items,
+        )? {
+            write_payload(&spec.out_dir, "/replay/status", &payload)?;
+        }
 
-    if spec.with_telemetry {
-        let telemetry_dir = spec.out_dir.join("telemetry");
-        let pull_summary = telemetry::pull(client, policy, &telemetry_dir, audit);
-        match pull_summary {
-            Ok(summary) => {
-                audit.push_line(format!(
-                    "evidence telemetry devices={} segments={} bytes={} saved=telemetry/",
-                    summary.devices, summary.segments, summary.bytes
-                ));
+        if spec.with_telemetry {
+            let telemetry_dir = spec.out_dir.join("telemetry");
+            let pull_summary = telemetry::pull(client, policy, &telemetry_dir, audit);
+            match pull_summary {
+                Ok(summary) => {
+                    audit.push_line(format!(
+                        "evidence telemetry devices={} segments={} bytes={} saved=telemetry/",
+                        summary.devices, summary.segments, summary.bytes
+                    ));
+                }
+                Err(err) => {
+                    items.push(EvidenceItem {
+                        path: "/queen/telemetry".to_owned(),
+                        saved_as: "telemetry/".to_owned(),
+                        verb: "PULL".to_owned(),
+                        status: "error".to_owned(),
+                        bytes: None,
+                        detail: Some(safe_detail(&err)),
+                    });
+                }
             }
-            Err(err) => {
-                items.push(EvidenceItem {
-                    path: "/queen/telemetry".to_owned(),
-                    saved_as: "telemetry/".to_owned(),
-                    verb: "PULL".to_owned(),
-                    status: "error".to_owned(),
-                    bytes: None,
-                    detail: Some(safe_detail(&err)),
-                });
+        }
+
+        Ok(())
+    })();
+    if let Err(error) = &capture_result {
+        for item in &mut items {
+            if item.status == "captured" && !spec.out_dir.join(&item.saved_as).is_file() {
+                item.status = "error".to_owned();
+                item.bytes = None;
+                item.detail = Some(safe_detail(error));
             }
+        }
+        if !items.iter().any(|item| item.status == "error") {
+            items.push(EvidenceItem {
+                path: "/".to_owned(),
+                saved_as: "summary.json".to_owned(),
+                verb: "EXPORT".to_owned(),
+                status: "error".to_owned(),
+                bytes: None,
+                detail: Some(safe_detail(error)),
+            });
         }
     }
 
@@ -219,6 +242,13 @@ pub fn export_pack<C: CohAccess>(
         summary.errors
     ));
 
+    capture_result?;
+    anyhow::ensure!(
+        summary.errors == 0,
+        "evidence pack incomplete: {} capture error(s); inspect {}/summary.json",
+        summary.errors,
+        spec.out_dir.display()
+    );
     Ok(summary)
 }
 

@@ -226,6 +226,14 @@ cargo run -p coh -- evidence timeline \
   --input "$pack"
 ```
 
+A capture error returns a nonzero exit status and preserves `summary.json` with
+all completed captures and the first failed required read. Optional-path errors
+also make the export fail; an absent optional path remains a missing row.
+Inspect that partial case before any new capture. A large retained Queen log
+may require a fresh authorized session under its existing byte budget. Do not
+raise quotas, replace the full retained log with a short tail, or treat an
+incomplete audit journal as complete evidence.
+
 Add `--with-telemetry` only when the extra data is relevant and its size and
 sensitivity are acceptable.
 

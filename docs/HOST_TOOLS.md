@@ -591,6 +591,23 @@ host unmount procedure. Generated policy and doctor behavior are in
 Linux, REST, and direct-mode mount procedures are in
 [OPERATOR_RECIPES.md#mounted-namespace-with-fuse](OPERATOR_RECIPES.md#mounted-namespace-with-fuse).
 
+The Milestone 26e burn-in discovered that evidence export could discard a
+required-read failure summary or return success with an optional capture error.
+The scoped Milestone 25e restoration seals partial summaries and returns a
+nonzero failure for either error. Successful contents, redaction, full retained
+Queen-log coverage and existing target quotas remain unchanged. Compatibility
+review covered `cohsh`, `coh-status`, Hive Gateway, SwarmUI, GPU bridge, host
+sidecar/sidecar-bus, host-ticket agent, CAS tooling, the installed Python SDK and
+its CI/SIEM readers, and performance benchmark scripts. Existing readers already
+inspect summary error rows; no wire, schema, manifest, provider, benchmark or
+Python changes are required. Shell callers must respect the corrected nonzero
+exit status. AuditFS journal and decision CAT responses also use the existing
+C1 chunk framing when a legitimate JSON record exceeds one console line, as
+host-ticket records already do. Existing shared TCP reassembly preserves the
+exact JSON before REST, native CLI, SDK, FUSE or UI consumption; line, stream,
+journal and ticket bounds remain unchanged. Native Mac and Linux builds and
+fresh exact-image Pi export require their own retained evidence.
+
 ### `hive-gateway`
 
 Host-only REST multiplexer. It owns the one target TCP console connection and

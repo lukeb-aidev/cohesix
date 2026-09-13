@@ -5869,7 +5869,7 @@ Deliverables:
 
 **Why now (buyability + integration):** Cohesix has a scale-capable, request-authenticated gateway path (25b–25d) and Python orchestration (25c). The highest leverage remaining adoption blocker is not new VM semantics; it is the absence of deterministic, auditor-friendly evidence artifacts and turnkey integration patterns that reuse existing control surfaces without introducing new protocols.
 
-**Status:** Complete — full `docs/TEST_PLAN.md` pass (2026-02-16) and docs-as-built review complete.
+**Status:** Reopened for `m25e-evidence-export-failure-retention`, discovered during the Milestone 26e release burn-in. Restoration is limited to retaining partial export summaries, returning failure when a required or optional capture errors, and routing long AuditFS JSON records through the existing bounded CAT chunk framing. Existing target quotas, read bounds, retained-log coverage, redaction and transport contracts remain unchanged.
 
 ## Goal
 Deliver high-impact, low-risk adoption accelerators that remain host-side and strictly protocol-faithful:
@@ -5905,6 +5905,19 @@ Deliver high-impact, low-risk adoption accelerators that remain host-side and st
 
 ## Task Breakdown
 ```
+Title/ID: m25e-evidence-export-failure-retention
+Milestone: Milestone 25e — Evidence Packs + Integration Kits; discovered in Milestone 26e release burn-in
+Goal: Preserve failed exports truthfully and restore bounded reads of legitimate long AuditFS records.
+Inputs: Pi GENET image from commit 15923ebbfe8f, timed-01 Queen-log ELIMIT refusal, fresh-session audit-journal buffer-full result with prior exit code zero.
+Changes:
+  - apps/coh/src/evidence.rs — seal partial summaries on capture failure; return an error for retained capture errors.
+  - apps/root-task/src/ninedoor.rs — serialize AuditFS journal/decision records with the existing C1 framing, preserving line and stream bounds.
+  - apps/coh/tests/evidence_pack.rs — assert required-read stop and optional-read error retention independently of target scheduling.
+  - docs/OPERATOR_RECIPES.md and docs/HOST_TOOLS.md — describe nonzero failure, partial case inspection and unchanged quota boundaries.
+Commands: cargo test --locked --release -p coh --features fuse --test evidence_pack; cargo build --locked --release -p coh --features fuse,nvml
+Checks: both native builds preserve refusal detail and partial summary, return nonzero on capture errors, and retain exact successful-export contents and redaction.
+Deliverables: native host evidence, focused AuditFS serialization regression, fresh exact-image Pi export and first-failure cases; no manifest, ticket quota, public framing or release acceptance changes.
+
 Title/ID: m25e-coh-evidence-pack
 Goal: Add a deterministic evidence pack exporter that captures bounded, auditor-friendly system state without new semantics.
 Inputs: apps/coh/src/main.rs, apps/coh/src/lib.rs, apps/coh/src/telemetry.rs, crates/cohesix-rest/src/lib.rs, docs/INTERFACES.md.

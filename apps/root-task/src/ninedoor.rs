@@ -2202,10 +2202,16 @@ impl NineDoorBridge {
         }
         if self.audit.enabled {
             if path == AUDIT_JOURNAL_PATH {
-                return lines_from_bytes_into(&self.audit.journal_snapshot(), output);
+                let snapshot = self.audit.journal_snapshot();
+                let text =
+                    str::from_utf8(&snapshot).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+                return cat_lines_from_text_into(text, output);
             }
             if path == AUDIT_DECISIONS_PATH {
-                return lines_from_bytes_into(&self.audit.decisions_snapshot(), output);
+                let snapshot = self.audit.decisions_snapshot();
+                let text =
+                    str::from_utf8(&snapshot).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+                return cat_lines_from_text_into(text, output);
             }
             if path == AUDIT_EXPORT_PATH {
                 return lines_from_bytes_into(&self.audit.export_snapshot(), output);
@@ -12010,6 +12016,38 @@ mod tests {
                 .expect("torn-down disposition"),
             HostTicketV2TerminalDisposition::Stale
         );
+    }
+
+    #[test]
+    fn audit_cat_preserves_long_json_records_through_existing_chunk_frames() {
+        let mut bridge = NineDoorBridge::new();
+        bridge.attached = true;
+        bridge.session_role = Some(SessionRoleLabel::Queen);
+        bridge.audit.enabled = true;
+        let record = format!("{{\"ticket\":\"{}\",\"outcome\":\"ok\"}}", "a".repeat(500));
+        bridge
+            .audit
+            .append_manual_journal(&record)
+            .expect("valid journal record");
+        bridge
+            .audit
+            .append_decisions(record.as_bytes())
+            .expect("valid decision record");
+        for path in [AUDIT_JOURNAL_PATH, AUDIT_DECISIONS_PATH] {
+            let lines = bridge.cat(path).expect("long audit record is readable");
+            assert_eq!(lines.len(), 3);
+            let mut decoded = String::new();
+            for (sequence, line) in lines.iter().enumerate() {
+                assert!(line.len() <= DEFAULT_LINE_CAPACITY);
+                let fields = line.splitn(5, ':').collect::<Vec<_>>();
+                assert_eq!(fields.len(), 5);
+                assert_eq!(fields[0], "C1");
+                assert_eq!(fields[1], format!("{sequence:04x}"));
+                assert_eq!(fields[2], "0003");
+                decoded.push_str(fields[4]);
+            }
+            assert_eq!(decoded, record);
+        }
     }
 
     #[test]

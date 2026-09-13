@@ -188,3 +188,124 @@ impl coh::CohAccess for RecordingAccess {
         Ok(payload.len())
     }
 }
+
+#[test]
+fn failed_required_read_preserves_partial_summary_without_continuing() -> Result<()> {
+    assert_failed_capture("/log/queen.log", false)
+}
+
+#[test]
+fn failed_optional_read_is_not_a_successful_export() -> Result<()> {
+    assert_failed_capture("/host/tickets/status", true)
+}
+
+fn assert_failed_capture(failure_path: &'static str, expect_host_reads: bool) -> Result<()> {
+    struct FailingAccess {
+        inner: RecordingAccess,
+        failure_path: &'static str,
+        paths: Vec<String>,
+    }
+    impl coh::CohAccess for FailingAccess {
+        fn list_dir(&mut self, path: &str, max_bytes: usize) -> Result<Vec<String>> {
+            self.inner.list_dir(path, max_bytes)
+        }
+        fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+            self.paths.push(path.to_owned());
+            if path == self.failure_path {
+                return Err(anyhow!("ERR CAT reason=quota path={path} error=ELIMIT"));
+            }
+            self.inner.read_file(path, max_bytes)
+        }
+        fn write_append(&mut self, _path: &str, _payload: &[u8]) -> Result<usize> {
+            Err(anyhow!("read-only export must not write to the target"))
+        }
+    }
+    let temp = TempDir::new()?;
+    let spec = EvidencePackSpec {
+        out_dir: temp.path().join("pack"),
+        with_telemetry: false,
+    };
+    let mut client = FailingAccess {
+        inner: RecordingAccess::default(),
+        failure_path,
+        paths: Vec::new(),
+    };
+    let result = export_pack(
+        &mut client,
+        &CohPolicy::from_generated(),
+        &build_local_bounds(),
+        &spec,
+        &mut CohAudit::new(),
+    );
+    assert!(result.is_err(), "a capture refusal must fail the export");
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(spec.out_dir.join("summary.json"))?)?;
+    assert_eq!(summary["errors"], 1);
+    let items = summary["items"].as_array().context("summary items")?;
+    let error = items
+        .iter()
+        .find(|item| item["path"] == failure_path)
+        .context("failed path must be retained")?;
+    assert_eq!(error["status"], "error");
+    assert!(error["detail"]
+        .as_str()
+        .context("error detail")?
+        .contains("ELIMIT"));
+    assert_eq!(std::fs::read(spec.out_dir.join("proc/boot"))?, b"boot=ok\n");
+    assert_eq!(
+        client.paths.iter().any(|path| path.starts_with("/host/")),
+        expect_host_reads
+    );
+    assert!(!spec
+        .out_dir
+        .join(failure_path.trim_start_matches('/'))
+        .exists());
+    Ok(())
+}
+
+#[test]
+fn malformed_audit_payload_is_not_saved_or_reported_as_captured() -> Result<()> {
+    struct MalformedAudit(RecordingAccess);
+    impl coh::CohAccess for MalformedAudit {
+        fn list_dir(&mut self, path: &str, max_bytes: usize) -> Result<Vec<String>> {
+            self.0.list_dir(path, max_bytes)
+        }
+        fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+            match path {
+                "/audit/export" => Ok(br#"{"journal_base":0,"journal_next":16,"decisions_base":0,"decisions_next":0}"#.to_vec()),
+                "/audit/journal" => Ok(b"not-json-secret".to_vec()),
+                _ => self.0.read_file(path, max_bytes),
+            }
+        }
+        fn write_append(&mut self, _path: &str, _payload: &[u8]) -> Result<usize> {
+            Err(anyhow!("read-only export must not write to the target"))
+        }
+    }
+    let temp = TempDir::new()?;
+    let spec = EvidencePackSpec {
+        out_dir: temp.path().join("pack"),
+        with_telemetry: false,
+    };
+    let result = export_pack(
+        &mut MalformedAudit(RecordingAccess::default()),
+        &CohPolicy::from_generated(),
+        &build_local_bounds(),
+        &spec,
+        &mut CohAudit::new(),
+    );
+    assert!(result.is_err());
+    let bytes = std::fs::read(spec.out_dir.join("summary.json"))?;
+    let summary: serde_json::Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(summary["errors"], 1);
+    let row = summary["items"]
+        .as_array()
+        .context("summary items")?
+        .iter()
+        .find(|row| row["path"] == "/audit/journal")
+        .context("journal row")?;
+    assert_eq!(row["status"], "error");
+    assert_eq!(row["bytes"], serde_json::Value::Null);
+    assert!(!spec.out_dir.join("audit/journal").exists());
+    assert!(!String::from_utf8(bytes)?.contains("not-json-secret"));
+    Ok(())
+}
