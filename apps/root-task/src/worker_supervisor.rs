@@ -386,6 +386,16 @@ pub enum WorkerLifecycleState {
 }
 
 impl WorkerLifecycleState {
+    /// Maintenance waits for queued work and complete containment, while
+    /// retained terminal identities carry no remaining execution authority.
+    #[must_use]
+    pub const fn blocks_node_drain(self) -> bool {
+        match self {
+            Self::Absent | Self::Terminal => false,
+            Self::Queued | Self::Starting | Self::Ready | Self::Closing | Self::Faulted => true,
+        }
+    }
+
     /// Canonical lowercase label used on operator and host projections.
     #[must_use]
     pub const fn label(self) -> &'static str {

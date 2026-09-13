@@ -697,6 +697,15 @@ and capacity exhaustion are deterministic errors.
 
 ### Worker and mount control
 
+Node `drain`, `quiesce`, and `reset` require zero registered active leases and
+zero pending or uncontained Workers. On executable targets, `queued`,
+`starting`, `ready`, `closing`, and `faulted` states block these transitions;
+`absent` and fully contained `terminal` states do not. Retaining a terminal
+identity and telemetry never restores execution authority or blocks maintenance.
+Host models remove their Worker entries on kill and count the remaining entries
+alongside registered leases. Existing lifecycle error codes and log fields are
+unchanged; `outstanding-leases` includes these Worker obligations.
+
 `/queen/ctl` accepts one JSON object per append. Representative accepted shapes
 include:
 

@@ -2958,7 +2958,7 @@ impl ControlPlane {
                     return Err(protocol);
                 }
             };
-            let outstanding = self.workers.len();
+            let outstanding = self.workers.len().saturating_add(self.lease.active_count());
             let result = self.apply_lifecycle_command(command, now, outstanding);
             match result {
                 Ok(transition) => {

@@ -1006,6 +1006,18 @@ static TARGET_WORKER_PROJECTION: Mutex<TargetWorkerProjection> =
     Mutex::new(TargetWorkerProjection::empty());
 static TARGET_WORKER_SIGNAL_CAP: AtomicUsize = AtomicUsize::new(0);
 
+/// Count pending or uncontained Workers without copying the population onto
+/// the root-control stack. Queued slots count before READY publishes a path.
+#[must_use]
+pub fn target_workers_blocking_node_drain() -> usize {
+    let projection = TARGET_WORKER_PROJECTION.lock();
+    projection.slots[..projection.slot_count]
+        .iter()
+        .flatten()
+        .filter(|slot| slot.namespace.lifecycle.blocks_node_drain())
+        .count()
+}
+
 /// Return the bounded current namespace projection for all executable slots.
 #[must_use]
 pub fn target_worker_namespace_snapshots(

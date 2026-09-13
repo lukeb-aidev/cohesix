@@ -365,6 +365,12 @@ pub(crate) struct LeaseState {
 }
 
 impl LeaseState {
+    /// Registered leases remain outstanding until the owning control path
+    /// preempts them, independently of Worker model entries.
+    pub(crate) fn active_count(&self) -> usize {
+        self.active.len()
+    }
+
     pub(crate) fn new(control: LeaseControlConfig, proc: ProcLeaseConfig) -> Self {
         Self {
             enabled: control.enable,

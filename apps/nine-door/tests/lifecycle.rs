@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate lifecycle namespace nodes and transitions.
 // Author: Lukas Bower
@@ -180,4 +180,55 @@ fn lifecycle_ctl_requires_queen() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn registered_lease_blocks_maintenance_until_preempted() {
+    let server = NineDoor::new();
+    let mut client = attach_queen(&server);
+    let lifecycle_path = vec!["queen".to_owned(), "lifecycle".to_owned(), "ctl".to_owned()];
+    let lease_path = vec!["queen".to_owned(), "lease".to_owned(), "ctl".to_owned()];
+    write_line(
+        &mut client,
+        2,
+        &lease_path,
+        r#"{"op":"grant","id":"maintenance","subject":"operator","resource":"GPU-0","ttl_s":120,"priority":1}"#,
+    );
+    write_line(&mut client, 3, &lifecycle_path, "cordon\n");
+    for (fid, command) in [
+        (4, b"drain\n".as_slice()),
+        (5, b"quiesce\n"),
+        (6, b"reset\n"),
+    ] {
+        client
+            .walk(1, fid, &lifecycle_path)
+            .expect("walk lifecycle");
+        client
+            .open(fid, OpenMode::write_append())
+            .expect("open lifecycle");
+        match client
+            .write(fid, command)
+            .expect_err("lease blocks maintenance")
+        {
+            NineDoorError::Protocol { code, message } => {
+                assert_eq!(code, ErrorCode::Busy);
+                assert_eq!(message, "lifecycle outstanding leases 1");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        client.clunk(fid).expect("clunk lifecycle");
+    }
+    write_line(
+        &mut client,
+        7,
+        &lease_path,
+        r#"{"op":"preempt","id":"maintenance","reason":"maintenance"}"#,
+    );
+    write_line(&mut client, 8, &lifecycle_path, "drain\n");
+    let state_path = vec![
+        "proc".to_owned(),
+        "lifecycle".to_owned(),
+        "state".to_owned(),
+    ];
+    assert_eq!(read_text(&mut client, 9, &state_path), "state=QUIESCED");
 }

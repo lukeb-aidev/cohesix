@@ -3094,7 +3094,11 @@ impl NineDoorBridge {
         let command =
             lifecycle::parse_command(payload).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
         let now_ms = crate::hal::timebase().now_ms();
-        let outstanding = self.workers.len();
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        let workers = crate::hal::worker_task::target_workers_blocking_node_drain();
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+        let workers = self.workers.len();
+        let outstanding = workers.saturating_add(self.lease.active.len());
         match lifecycle::apply_command(command, now_ms, outstanding) {
             Ok(transition) => {
                 let line = lifecycle::format_transition_log(&transition);

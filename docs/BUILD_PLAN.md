@@ -3557,6 +3557,11 @@ Deliverables:
 **Goal**
 Define and enforce a **finite lifecycle state machine** for Cohesix nodes, exposed entirely via file-shaped control surfaces, with deterministic transitions and regression coverage.
 
+**Status:** Reopened for `m21d-maintenance-outstanding-work-restoration`,
+discovered during the Milestone 26e release burn-in. Restore maintenance after
+complete Worker containment and enforce the existing active-lease prerequisite;
+retain terminal evidence and all lifecycle, policy, and admission contracts.
+
 ### Lifecycle states (normative)
 - `BOOTING`
 - `DEGRADED`
@@ -3647,6 +3652,25 @@ mode = "refuse" # or "overwrite_acked"
 
 ### Task Breakdown
 ```
+Title/ID: m21d-maintenance-outstanding-work-restoration
+Milestone: Reopened Milestone 21d — Deterministic Node Lifecycle & Operator Control; discovered in Milestone 26e / m26e-host-integration-dependency-contract and restored with m26e-worker-supervisor-child-isolation
+Goal: Refuse maintenance while work retains authority and allow it after exact Worker containment, even while terminal evidence remains visible.
+Inputs: The 2026-09-13 Pi GENET release burn-in reached 43 completed CUDA/PEFT jobs in 86 minutes, then drain reported 48 outstanding leases from retained Worker entries while the lease table was empty; current Worker projections and registered lease state.
+Changes:
+  - apps/root-task/src/{ninedoor.rs,worker_supervisor.rs,hal/worker_task.rs} — count queued, starting, ready, closing and faulted slots under the existing projection lock without copying the population; count registered active leases; preserve terminal identity and telemetry.
+  - apps/nine-door/src/host/{core.rs,schedule.rs} — enforce registered lease obligations alongside active host-model Workers.
+  - apps/root-task/tests/worker_supervisor.rs + apps/nine-door/tests/lifecycle.rs — independent state classification and lease refusal/preemption contracts.
+  - docs/INTERFACES.md + docs/OPERATOR_RECIPES.md — distinguish Worker containment from the active lease table and retained evidence.
+Compatibility review: cohsh, coh, Hive Gateway/REST, host-ticket-agent, gpu-bridge-host, host-sidecar-bridge, cas-tool, SwarmUI, cohesix-py and raw/REST performance scripts keep their existing grammar, schemas, finite budgets, error mappings, workloads and thresholds. Only the NineDoor host model and maintenance documentation require changes; generated contracts and other host implementations require none. This restores existing maintenance prerequisites without adding an admission path or changing Worker teardown.
+Commands:
+  - cargo test -p root-task --test worker_supervisor --test worker_fault_lifecycle
+  - cargo test -p nine-door --test lifecycle
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks: Queued/starting/ready/closing/faulted states block maintenance; absent/terminal states do not; registered leases refuse drain/quiesce/reset until preemption; fresh exact-image Pi work remains live, retires, permits drain with retained terminal evidence, and resumes new work after both host FUSE remounts. Preserve the original failed timed run and perform only the focused revalidation requested by the operator.
+Deliverables: Scoped repair, host checks, exact Pi build/first-raw and focused maintenance evidence; no new full burn-in or release acceptance claim.
+
 Title/ID: m21d-lifecycle-state-machine
 Goal: Implement the node lifecycle state machine in root-task.
 Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/ROLES_AND_SCHEDULING.md.

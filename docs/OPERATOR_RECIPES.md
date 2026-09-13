@@ -679,7 +679,10 @@ cat /proc/lifecycle/state
 
 After cordon, stop new submissions and continuous publishers. Wait for active
 leases to finish through their owning control paths. Do not edit `/proc`
-output. When the active set is empty:
+output. Also wait for each admitted executable Worker to reach its exact
+`terminal` state after shutdown. Queued, starting, ready, closing, or faulted
+Workers still block maintenance; retained terminal telemetry does not. The
+lease table and Worker lifecycle are separate checks. When both are clear:
 
 ```text
 cat /proc/lease/active
@@ -696,7 +699,7 @@ cat /proc/lifecycle/state
 cat /proc/root/reachable
 ```
 
-`quiesce` is an explicit shortcut only when there are no active leases.
+`quiesce` is an explicit shortcut with the same lease and Worker prerequisites.
 `lifecycle reset` changes lifecycle state to BOOTING; it does not reboot the
 platform. The authenticated `reboot` command is a separate operation.
 

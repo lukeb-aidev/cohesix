@@ -20,6 +20,21 @@ use worker_task_abi::{
 };
 
 #[test]
+fn maintenance_waits_for_every_pending_or_uncontained_worker_state() {
+    for state in [
+        WorkerLifecycleState::Queued,
+        WorkerLifecycleState::Starting,
+        WorkerLifecycleState::Ready,
+        WorkerLifecycleState::Closing,
+        WorkerLifecycleState::Faulted,
+    ] {
+        assert!(state.blocks_node_drain(), "{state:?}");
+    }
+    assert!(!WorkerLifecycleState::Absent.blocks_node_drain());
+    assert!(!WorkerLifecycleState::Terminal.blocks_node_drain());
+}
+
+#[test]
 fn all_construction_failures_are_terminal_and_contained() {
     for phase in [
         WorkerConstructionPhase::Allocate,
