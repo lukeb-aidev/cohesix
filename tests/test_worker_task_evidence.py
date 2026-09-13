@@ -328,6 +328,44 @@ def test_frozen_evidence_rejects_symlink_ancestors(tmp_path: Path) -> None:
         evidence._load(alias / "record.json")  # noqa: SLF001
 
 
+def test_source_inventory_streams_large_tracked_images_without_raising_evidence_limit(
+    tmp_path: Path,
+) -> None:
+    """A 65 MiB source image has an exact digest but is not a bounded evidence file."""
+    path = tmp_path / "disk.img"
+    with path.open("wb") as handle:
+        handle.truncate(65 * 1024 * 1024)
+    expected = hashlib.sha256()
+    for _ in range(65):
+        expected.update(bytes(1024 * 1024))
+    row = evidence._source_inventory_row(tmp_path, Path("disk.img"))
+    assert row["bytes"] == 65 * 1024 * 1024
+    assert row["sha256"] == expected.hexdigest()
+    with pytest.raises(evidence.EvidenceError, match="size is outside"):
+        evidence._read_frozen_artifact(path, "oversized evidence")
+
+
+def test_source_inventory_rejects_mutation_during_streaming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming cannot turn a concurrently changed source into a frozen identity."""
+    path = tmp_path / "source.bin"
+    path.write_bytes(b"before")
+    original_fstat = os.fstat
+    calls = 0
+
+    def mutate_after_read(descriptor: int):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            path.write_bytes(b"after mutation")
+        return original_fstat(descriptor)
+
+    monkeypatch.setattr(os, "fstat", mutate_after_read)
+    with pytest.raises(evidence.EvidenceError, match="source entry changed while frozen"):
+        evidence._source_inventory_row(tmp_path, Path("source.bin"))
+
+
 def test_frozen_evidence_rejects_in_read_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

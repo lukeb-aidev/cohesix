@@ -3297,3 +3297,12 @@ Pi operator/trace checks still apply. Selected images without an issuer must
 advertise unavailable and receive no challenge. Device-bound production
 authority remains the reopened Milestone 26 task. See
 [the signed evidence contract](ATTESTATION.md).
+
+### Exact source inventory and large release images
+
+The source inventory includes every git-visible path, including tracked release
+disk images. Regular source files are SHA-256 hashed over their snapshotted
+extent using reads of at most 1 MiB, then checked for growth and metadata
+changes. The complete path set and content inventory are checked again before
+publication. The independent evidence-file parser retains its 64 MiB bound;
+streaming a large source file does not admit it as an evidence document.

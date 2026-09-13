@@ -13234,6 +13234,18 @@ After Milestone 27:
 
 ## Task Breakdown
 ```
+Title/ID: m27-build-evidence-blockers
+Milestone: Milestone 27 — Operator Utilities / restoration of build and evidence prerequisites; discovery in m27-attestation-verifier, restoring the exact-source invariant of m26e-worker-target-evidence-promotion
+Status: In Progress
+Goal: Restore canonical test and image-build prerequisites without relaxing source integrity, evidence bounds or target acceptance.
+Changes:
+  - tests/test_linux_host_tools_sync.py, tests/test_release_bundle.py, tests/test_sel4_profile.py — exercise the existing exact tracked-tree archive and argument-driven packaging contracts; preserve export-ignore coverage and secret exclusion.
+  - scripts/worker_task_evidence.py + tests/test_worker_task_evidence.py — stream every git-visible regular source file in at most 1 MiB reads, including shipped images larger than the evidence parser's 64 MiB allocation bound; retain exact extent, metadata, path-set and repeated-content checks. This restoration does not reopen M26e runtime or physical behavior.
+  - toolchain and selected build outputs — restore pinned compiler/Python/mkimage and the pristine canonical QEMU profile through documented setup.
+Commands: .venv/bin/python -m pytest -q tests/test_worker_task_evidence.py tests/test_linux_host_tools_sync.py tests/test_release_bundle.py tests/test_sel4_profile.py; scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml; scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27-qualification-qemu
+Checks: Source identities include exact large-image bytes without large allocations; same-read mutations and oversized evidence files still fail; canonical target and acceptance predicates remain unchanged.
+Deliverables: Restored provenance/build workflows and fresh command evidence, separate from physical acceptance.
+
 Title/ID: m27-evidence-case-summary
 Milestone: Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / reviewer-friendly evidence case summary
 Goal: Extend the canonical offline evidence workflow with a deterministic scenario-aware case summary that reconstructs observed request, admission/refusal, state/lease/lifecycle, host-result, and receipt/dead-letter links while declaring missing, errored, unknown, and ambiguous evidence without asserting target, hardware, health, or external-execution proof.

@@ -2142,12 +2142,26 @@ def _source_inventory_row(repo_root: Path, relative: Path) -> dict[str, Any]:
         )
         if identity(before) != identity(after):
             raise EvidenceError(f"source symlink changed while frozen: {relative}")
+        content_sha256 = _sha256(raw)
+        content_bytes = len(raw)
         kind = "symlink"
     elif stat.S_ISREG(before.st_mode):
         try:
             with path.open("rb") as handle:
                 opened = os.fstat(handle.fileno())
-                raw = handle.read(MAX_ARTIFACT_BYTES + 1)
+                # Git-visible source includes shipped disk images. Hash exactly
+                # the snapshotted extent in bounded chunks; the evidence parser's
+                # independent 64 MiB allocation limit does not govern source size.
+                digest = hashlib.sha256()
+                content_bytes = 0
+                while content_bytes < before.st_size:
+                    chunk = handle.read(min(1024 * 1024, before.st_size - content_bytes))
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    content_bytes += len(chunk)
+                grew = bool(handle.read(1))
+                content_sha256 = digest.hexdigest()
                 closed = os.fstat(handle.fileno())
             after = path.lstat()
         except OSError as exc:
@@ -2160,8 +2174,8 @@ def _source_inventory_row(repo_root: Path, relative: Path) -> dict[str, Any]:
             value.st_mtime_ns,
         )
         if (
-            len(raw) != before.st_size
-            or len(raw) > MAX_ARTIFACT_BYTES
+            content_bytes != before.st_size
+            or grew
             or identity(before) != identity(opened)
             or identity(opened) != identity(closed)
             or identity(closed) != identity(after)
@@ -2174,8 +2188,8 @@ def _source_inventory_row(repo_root: Path, relative: Path) -> dict[str, Any]:
         "path": relative.as_posix(),
         "kind": kind,
         "mode": stat.S_IMODE(before.st_mode),
-        "sha256": _sha256(raw),
-        "bytes": len(raw),
+        "sha256": content_sha256,
+        "bytes": content_bytes,
     }
 
 
