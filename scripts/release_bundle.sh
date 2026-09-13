@@ -802,9 +802,15 @@ publication = os.environ.get("RELEASE_PUBLICATION_COMMIT")
 if publication is None:
     raise SystemExit(0)
 repository = f"https://github.com/lukeb-aidev/cohesix/blob/{publication}/"
-for document in [bundle / "README.md", quickstart, *(bundle / "docs").glob("*.md")]:
+version = (bundle / "VERSION.txt").read_text(encoding="utf-8").strip()
+notes_name = f"RELEASE_NOTES-{version}.md"
+notes = bundle / "RELEASE_NOTES.md"
+for document in [bundle / "README.md", quickstart, notes, *(bundle / "docs").glob("*.md")]:
     relative = document.relative_to(bundle)
-    source_relative = Path("docs/QUICKSTART.md") if document == quickstart else relative
+    source_relative = {
+        "QUICKSTART.md": Path("docs/QUICKSTART.md"),
+        "RELEASE_NOTES.md": Path("releases") / notes_name,
+    }.get(relative.as_posix(), relative)
 
     def resolve_link(match):
         label, target = match.groups()
@@ -814,7 +820,7 @@ for document in [bundle / "README.md", quickstart, *(bundle / "docs").glob("*.md
         candidate = (document.parent / parsed.path).resolve()
         if candidate.is_file() and candidate.is_relative_to(bundle.resolve()):
             return match.group(0)
-        if Path(parsed.path).name == "RELEASE_NOTES-1.0.0-beta.md":
+        if Path(parsed.path).name == notes_name:
             local = os.path.relpath(bundle / "RELEASE_NOTES.md", document.parent)
             return f"[{label}]({local}{'#' + parsed.fragment if parsed.fragment else ''})"
         source = Path(os.path.normpath(str(source_relative.parent / parsed.path))).as_posix()

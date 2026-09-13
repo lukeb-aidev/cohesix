@@ -6,8 +6,8 @@
 
 Date: 2026-09-13
 
-Status: Release preparation; final qualification and bundle assembly are in
-progress. This document does not assert a completed release gate.
+Status: Release Stage 5 accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588`.
+Bundle assembly and delivery remain pending.
 
 ## Changes since 0.9.0-beta
 
@@ -126,6 +126,17 @@ one reference host, not a requirement for the host-tool interface.
   dynamic fault/wake evidence gap specifically for 1.0.0-beta. That test is
   unexecuted. The source-bound waiver expires on 2026-10-13 and does not waive
   other release gates or change their results.
+- The owner separately approved carrying forward authentic Stage 1–4 evidence
+  from `22e3d08ff` together with later scoped fixes. The current source's Stage
+  1–4 suite was not rerun. Original source identities and failed attempts remain
+  unchanged; this decision does not waive bundle source or content integrity.
+- The original timed burn-in failed after 86 minutes and 43 jobs. Subsequent
+  focused maintenance, containment, FUSE and job-resumption repairs passed
+  their recorded checks; the full timed profile was not rerun.
+
+The [audit report](../docs/audit/AUDIT_REPORT_2026-09-13.md) and
+[carry-forward policy](../docs/audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
+record the release-owner decision and its limits.
 
 Qualification results remain bound to their original source, image, host and
 target. Publication metadata records documentation and packaging changes separately

@@ -161,11 +161,12 @@ It adds a Raspberry Pi 4 SD-image distribution alongside the native Mac and
 Linux ARM64 host bundles. See the [release notes](releases/RELEASE_NOTES-1.0.0-beta.md)
 for changes since 0.9.0-beta, upgrade guidance, and known limitations.
 
-Release qualification is in progress. The selected source, tested artifacts,
-and distributed images retain separate identities. DD30's remaining dynamic
-fault/wake evidence gap is accepted specifically for this beta; it is not a
-passed test. See the [audit report](docs/audit/AUDIT_REPORT_2026-09-13.md) for
-the scope of that decision.
+Release Stage 5 is accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588` under
+the owner's explicit evidence carry-forward decision. Bundle assembly remains
+pending. The selected source, tested artifacts and distributed images retain
+separate identities. DD30's dynamic fault/wake test remains unexecuted. See the
+[audit report](docs/audit/AUDIT_REPORT_2026-09-13.md) for the accepted gaps and
+the original evidence.
 
 The current release directory is reserved for 1.0.0-beta. Superseded bundles
 and notes remain available from their original

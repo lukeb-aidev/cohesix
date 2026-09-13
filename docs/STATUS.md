@@ -30,7 +30,12 @@ As of 13 September 2026, audit findings DD26–29 are `CLOSED_VERIFIED`. DD30
 remains P1 / `ACCEPTED_RISK` for this release under the owner's source-bound
 waiver; dynamic fault/wake testing remains unexecuted. The
 [audit report](audit/AUDIT_REPORT_2026-09-13.md) records the evidence and limits.
-Final staged qualification and bundle delivery are still in progress.
+Release Stage 5 is accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588`.
+The owner approved carrying forward the original Stage 1–4 records and later
+scoped fix evidence; the current source's Stage 1–4 suite was not rerun. The
+original timed burn-in failure remains recorded alongside its focused repairs.
+Bundle assembly and delivery remain pending, with source and content integrity
+requirements unchanged.
 
 ## Capability snapshot
 
