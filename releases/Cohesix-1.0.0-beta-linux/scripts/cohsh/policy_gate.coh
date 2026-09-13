@@ -1,0 +1,24 @@
+# Author: Lukas Bower
+# Purpose: Prove one-shot PolicyFS gating on a session-local Queen namespace bind.
+# Copyright 2026 Lukas Bower
+attach queen
+EXPECT OK
+echo '{"bind":{"from":"/proc/boot","to":"/policy-gate-proof"}}' > /queen/ctl
+EXPECT ERR
+EXPECT SUBSTR EPERM
+echo '{"id":"policy-gate-bind-1","target":"/queen/ctl","decision":"approve"}' > /actions/queue
+EXPECT OK
+cat /actions/policy-gate-bind-1/status
+EXPECT OK
+EXPECT SUBSTR queued
+echo '{"bind":{"from":"/proc/boot","to":"/policy-gate-proof"}}' > /queen/ctl
+EXPECT OK
+cat /actions/policy-gate-bind-1/status
+EXPECT OK
+EXPECT SUBSTR consumed
+cat /policy-gate-proof
+EXPECT OK
+echo '{"bind":{"from":"/proc/boot","to":"/policy-gate-proof"}}' > /queen/ctl
+EXPECT ERR
+EXPECT SUBSTR EPERM
+quit

@@ -262,7 +262,13 @@ build_tools() {
   source_tree="$(git -C "$ROOT_DIR" rev-parse 'HEAD^{tree}')"
 
   log "Packaging the exact clean source tree for native contract generation"
-  git -C "$ROOT_DIR" archive --format=tar HEAD | gzip -n >"$source_tarball"
+  # Vendor export-ignore rules cannot omit tracked compiler-inventory inputs.
+  # A private bare view overrides archive attributes without changing the caller.
+  local archive_git="${temp_dir}/source.git"
+  git clone --bare --shared --quiet "$ROOT_DIR" "$archive_git"
+  mkdir -p "$archive_git/info"
+  printf '* -export-ignore\n' >"$archive_git/info/attributes"
+  git --git-dir="$archive_git" archive --format=tar "$source_commit" | gzip -n >"$source_tarball"
   local source_sha256
   source_sha256="$(sha256_file "$source_tarball")"
 

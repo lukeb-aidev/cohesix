@@ -1,0 +1,36 @@
+# Author: Lukas Bower
+# Purpose: Validate REST gateway parity for core control-plane nodes (schedule/lease/export) and /proc reads.
+# Copyright 2026 Lukas Bower
+
+attach queen
+EXPECT OK
+
+# Schedule control surface.
+echo '{"id":"sched-1","role":"worker-gpu","priority":2,"ticks":3,"budget_ms":120}' > /queen/schedule/ctl
+EXPECT OK
+cat /proc/schedule/summary
+EXPECT OK
+cat /proc/schedule/queue
+EXPECT OK
+
+# Lease control surface.
+echo '{"op":"grant","id":"lease-1","subject":"queen","resource":"gpu0","ttl_s":300,"priority":5}' > /queen/lease/ctl
+EXPECT OK
+echo '{"op":"preempt","id":"lease-1","reason":"timeout"}' > /queen/lease/ctl
+EXPECT OK
+cat /proc/lease/summary
+EXPECT OK
+cat /proc/lease/active
+EXPECT OK
+cat /proc/lease/preemptions
+EXPECT OK
+
+# Export control surface.
+echo '{"op":"open","id":"export-1","ttl_s":900}' > /queen/export/ctl
+EXPECT OK
+echo '{"op":"close","id":"export-1","reason":"window-complete"}' > /queen/export/ctl
+EXPECT OK
+
+quit
+EXPECT OK
+

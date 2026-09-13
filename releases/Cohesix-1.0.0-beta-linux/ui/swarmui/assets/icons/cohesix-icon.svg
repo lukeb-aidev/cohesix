@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <style>
+    :root{
+      --palette-ember:#f0a257;
+      --ember-dark:#c8732d;
+      --ember-light:#ffd1a3;
+    }
+    .core{stroke:var(--palette-ember);stroke-width:26;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .inner{stroke:var(--ember-dark);stroke-width:26;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .node{fill:var(--ember-light)}
+  </style>
+
+  <!-- Outer hex -->
+  <path class="core" d="M256 78 L410 167 L410 345 L256 434 L102 345 L102 167 Z"/>
+
+  <!-- Inner dark segments -->
+  <path class="inner" d="M270 154 L338 193"/>
+  <path class="inner" d="M352 217 L352 295"/>
+  <path class="inner" d="M338 319 L270 358"/>
+
+  <!-- FINAL: Smaller, clean, centered "C" -->
+  <!-- Center (256,256), radius = 48 -->
+<g transform="translate(-12,0)">
+  <path class="core"
+        d="M304 222
+           A48 48 0 1 0 304 290" />
+</g>
+
+  <!-- Nodes -->
+  <circle class="node" cx="256" cy="78"  r="18"/>
+  <circle class="node" cx="410" cy="167" r="18"/>
+  <circle class="node" cx="410" cy="345" r="18"/>
+  <circle class="node" cx="256" cy="434" r="18"/>
+  <circle class="node" cx="102" cy="345" r="18"/>
+  <circle class="node" cx="102" cy="167" r="18"/>
+</svg>

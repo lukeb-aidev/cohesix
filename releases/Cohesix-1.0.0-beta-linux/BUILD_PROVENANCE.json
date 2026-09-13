@@ -1,0 +1,127 @@
+{
+  "artifact_id": "sha256:d98396f23dc9543c5fbc585ddff84690efca833fde258b35358b619a19768acd",
+  "assembly_mode": "build-only",
+  "files": {
+    "bin/cas-tool": {
+      "sha256": "sha256:6b4ed07ed791968f2e544e3bfefb5d5476e9da69603ed44f2852325f8be5c079",
+      "size": 2703160
+    },
+    "bin/coh": {
+      "sha256": "sha256:131d8dd9967d14e3b0d89be1b0a8491eaf2927387be63db9357c1dbc112a5e60",
+      "size": 4799648
+    },
+    "bin/cohsh": {
+      "sha256": "sha256:3f0d71ea9662d1f71fd8101c6118ddde272731881246cc9f36169217aa2ef1be",
+      "size": 4629792
+    },
+    "bin/gpu-bridge-host": {
+      "sha256": "sha256:9a9cc8827e697bca6f40ec6ac440820801c9cbce9f5397fabdba4bffd1bdb3a7",
+      "size": 2984512
+    },
+    "bin/hive-gateway": {
+      "sha256": "sha256:ad907649b96814c96515b481353a5831ebefd38bfd73a49529c811f950e62139",
+      "size": 4060840
+    },
+    "bin/host-sidecar-bridge": {
+      "sha256": "sha256:be99426ab9dcc4bdc6c277eb48ccda461f0668634a633d46f34b7f74de8e3d65",
+      "size": 3920536
+    },
+    "bin/host-ticket-agent": {
+      "sha256": "sha256:6f2a6fc3dbe6a13e84f2d531260537703e4427067beb4fbe14cf620ac6c2e1a8",
+      "size": 4627112
+    },
+    "bin/swarmui": {
+      "sha256": "sha256:3a0e0ee67810e61f8e068a6ef06cc0789169dce48b42e2cafe05c4d61b873c81",
+      "size": 13778088
+    },
+    "configs/generated/cas_manifest_template.json": {
+      "sha256": "sha256:38d45bad2c2dd1b982504db0d3bef68d7869088b0198dc9b5d1fc5509337c0fb",
+      "size": 390
+    },
+    "configs/generated/cas_manifest_template.json.sha256": {
+      "sha256": "sha256:3ce4be079252aacbe0043ed0598649b92294f221d63b155ca2fe1d8fb9c058e4",
+      "size": 207
+    },
+    "configs/generated/coh_policy.toml": {
+      "sha256": "sha256:62d9fe1017e58dfb332ddf0678b6c0d913b6b521f84ca82a396301fe6e484e90",
+      "size": 1109
+    },
+    "configs/generated/coh_policy.toml.sha256": {
+      "sha256": "sha256:58242d3c229a5f7fc6d95b054bd29bddc047d1e72a7cc9972aaa6a7af350eaac",
+      "size": 185
+    },
+    "configs/generated/cohesix_python_pi4_production.json": {
+      "sha256": "sha256:7349600b2e4a650d0644a04212efd916f5ae8689110c27440cbfbb1277d0823d",
+      "size": 4235
+    },
+    "configs/generated/cohesix_python_qemu_smp_production.json": {
+      "sha256": "sha256:29ba94cba183b09e21c65dbe0a133cd59451d8a48ec3ceacd5b00cb129dc34bc",
+      "size": 4240
+    },
+    "configs/generated/cohsh_policy.toml": {
+      "sha256": "sha256:a0402902bfe61989c48922e8d546bd2aed29790e268f5ef1674996ff92b64639",
+      "size": 606
+    },
+    "configs/generated/cohsh_policy.toml.sha256": {
+      "sha256": "sha256:1830faeae57f1421e39537f488d5368ed3562a4328b50e5922780638f3a8bdd5",
+      "size": 189
+    },
+    "configs/generated/host_integration_dependency.json": {
+      "sha256": "sha256:492acd3fb9cf7b277ede13b6825679df93af3551798352bdcd7df67765530e9f",
+      "size": 68962
+    },
+    "configs/generated/implementation_surface_inventory.json": {
+      "sha256": "sha256:7547cdd20844f8095cc1f366ca75cee9f16ac25e7da5f44f4bf59dd67751fa34",
+      "size": 520453
+    },
+    "configs/generated/root_task_resolved.json": {
+      "sha256": "sha256:f6933e6a52bca103ecff13a53ca06225ed8d7b38dec4b4d0753be08fddfd206b",
+      "size": 297341
+    },
+    "configs/generated/root_task_resolved.json.sha256": {
+      "sha256": "sha256:2802f5791dd68265547ca2d8feecd02dfcb4062a4cf1e6e53b438ffedcafb998",
+      "size": 201
+    },
+    "configs/generated/root_task_topology.json": {
+      "sha256": "sha256:a4e878caccf8b29cbe51751d62b7c29c9ceaa39cfb8e568cc5066f06993e75b2",
+      "size": 304777
+    },
+    "configs/generated/swarmui_defaults.toml": {
+      "sha256": "sha256:923786b9771462e234e67212e55c51f0dd4a539f7c9dea30b600467b9f689d53",
+      "size": 1364
+    },
+    "configs/generated/swarmui_defaults.toml.sha256": {
+      "sha256": "sha256:c28cb6000228e660f3925c83d133e89ac818d361e513cb888628a3aca11b93f2",
+      "size": 197
+    },
+    "image/cohesix-system.cpio": {
+      "sha256": "sha256:0701e9d6e9f1ba7f9d8252a804c0472d052e33054e213343115be41ff0a82e25",
+      "size": 153088
+    },
+    "image/elfloader": {
+      "sha256": "sha256:b2a9d0f36ce8d722d0b4100ba890104fce67648e443a8d89684f6ff727acdc99",
+      "size": 9711160
+    },
+    "image/kernel.elf": {
+      "sha256": "sha256:a067ad1b487bc732698c9a7d62e91962936cb949d56efa9c4a217a9bb912d4c0",
+      "size": 179632
+    },
+    "image/manifest.json": {
+      "sha256": "sha256:f4fa52c6d1210c23a5e955cd7511d614cac1a1ee34318c04c9add7e8b9697989",
+      "size": 6410
+    },
+    "image/rootserver": {
+      "sha256": "sha256:a99fee307fbc8b3cf6e5e90ce278b6e614b9443728caf5fbd40a7b02b6f602bd",
+      "size": 10036896
+    }
+  },
+  "host": "linux",
+  "packaging_is_target_acceptance": false,
+  "result_sha256": null,
+  "schema": "cohesix-release-build-provenance/v1",
+  "sel4_profile": "qemu_smp_kvm_production",
+  "source_commit": "18062f7b4ff0d719e1a6d3f0badb0bebdbeec45d",
+  "source_digest": "sha256:2d2b97a855bea39e7608ecdffd4d4f8f1bdb3189710b61d2f41ad51aa6210161",
+  "test_status": "NOT_RUN",
+  "timer_clock_hz": 31250000
+}

@@ -1,0 +1,51 @@
+# Author: Lukas Bower
+# Purpose: Generated SwarmUI defaults derived from configs/root_task.toml.
+# Copyright 2026 Lukas Bower
+[meta]
+manifest_sha256 = "1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7"
+
+[swarmui]
+ticket_scope = "per-ticket"
+
+[swarmui.cache]
+enabled = false
+max_bytes = 262144
+ttl_s = 3600
+
+[swarmui.hive]
+frame_cap_fps = 30
+step_ms = 16
+lod_zoom_out = 0.7
+lod_zoom_in = 1.25
+lod_event_budget = 512
+snapshot_max_events = 4096
+overlay_lines = 3
+detail_lines = 50
+line_cap_bytes = 160
+per_worker_bytes = 2048
+pending_lines_per_worker = 64
+pending_event_cap = 4096
+poll_workers_per_tick = 32
+status_poll_ms = 500
+degrade_pressure = 1.0
+
+[swarmui.paths]
+telemetry_root = "/worker"
+proc_ingest_root = "/proc/ingest"
+worker_root = "/shard"
+namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"]
+
+[swarmui.worker_runtime]
+maximum_live_tasks = 256
+canonical_telemetry_template = "/shard/<label>/worker/<id>/telemetry"
+shard_bits = 8
+legacy_worker_alias = true
+roles = [
+  { role = "worker-heartbeat", declaration = "executable", executable_slots = 1 },
+  { role = "worker-gpu", declaration = "executable", executable_slots = 127 },
+  { role = "worker-bus", declaration = "model-only", executable_slots = 0 },
+  { role = "worker-lora", declaration = "executable", executable_slots = 128 },
+]
+
+[trace]
+max_bytes = 1048576

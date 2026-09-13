@@ -1,0 +1,20 @@
+# Author: Lukas Bower
+# Purpose: Validate /host control writes and policy approvals for systemd restart.
+# Copyright 2026 Lukas Bower
+attach worker-heartbeat cohesix-ticket-0101080800776f726b65722d31000000000000000000000000.ea7bee86230e67031e6e758fa01c00eaa9c1f0bfff4b41548424a3df0356cff9
+EXPECT OK
+echo restart > /host/systemd/cohesix-agent.service/restart
+EXPECT ERR
+EXPECT SUBSTR EPERM
+detach
+EXPECT OK
+attach queen
+EXPECT OK
+echo restart > /host/systemd/cohesix-agent.service/restart
+EXPECT ERR
+EXPECT SUBSTR EPERM
+echo {"id":"approve-host-restart-1","target":"/host/systemd/cohesix-agent.service/restart","decision":"approve"} > /actions/queue
+EXPECT OK
+echo restart > /host/systemd/cohesix-agent.service/restart
+EXPECT OK
+quit

@@ -1,0 +1,179 @@
+{
+  "boot_identity": {
+    "build_id": "d1309d48d8d092e453cda7f4bfbe07549bd72a38b141d1b9d3a556d8daffbdb8",
+    "build_marker": "[BUILD] 18062f7b4ff0 2026-09-13T12:31:24Z image-id=1bad09a12e62c843d25973d8248d39b2250768730fe84ef3dbcd768948bab2cf features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1 qemu-driver-task-smoke:0]",
+    "build_marker_sha256": "d0af2f2b0ae7e162e5ce802792b2c9ea1c5f188cb160830f75bb1c31f3e6c303",
+    "build_timestamp": "2026-09-13T12:31:24Z",
+    "ctime_ns": 1789302802187025847,
+    "device": 16777234,
+    "embedded_git_commit": "18062f7b4ff0",
+    "git_commit": "18062f7b4ff0d719e1a6d3f0badb0bebdbeec45d",
+    "image_id": "1bad09a12e62c843d25973d8248d39b2250768730fe84ef3dbcd768948bab2cf",
+    "image_sha256": "593a1bebbfa1cf26889e91d3fa8614f06c77c5fedc9e416736c3d58edec3e202",
+    "inode": 210352674,
+    "mtime_ns": 1789302802034808975,
+    "path": "/Users/lukasbower/cohesix-release-workspaces/1.0.0-beta-package/out/release-build/pi4-sd-final/cohesix-image-arm-bcm2711",
+    "rootserver_cpio_sha256": "d04ebcdf5f17f4869f53637b4d54dea72beec9876dc79f64113ad9d601a134f8",
+    "rootserver_member": "rootserver",
+    "rootserver_sha256": "946dcdf225b87462ccc01d0fe6bb64f9ee2efd450504acd773a5d8898fd53360",
+    "schema": "cohesix-pi4-image-identity/v2",
+    "size_bytes": 8863096,
+    "source_tree_clean": true,
+    "uimage_data_crc32": "d4137e29",
+    "uimage_header_crc32": "f89ea255"
+  },
+  "files": [
+    {
+      "path": "bcm2711-rpi-4-b.dtb",
+      "sha256": "03c34e5495d260ea75eeb761f35a088a94b6c829452f3d1553d5aefcad5533a1",
+      "size_bytes": 131072
+    },
+    {
+      "path": "boot.bmp",
+      "sha256": "11450977ca9f6b62c6a0ca2c47873f616d7ece120c6602eb27975abb19576a46",
+      "size_bytes": 204534
+    },
+    {
+      "path": "boot.cmd",
+      "sha256": "f6843fcf0d1a7930e4f3b16a55ac19189be437370da3698b54f676ab63c3708d",
+      "size_bytes": 28736
+    },
+    {
+      "path": "boot.scr.uimg",
+      "sha256": "6aaaa93732bb2cd0fa6eefbe1a5b9ad36cd7eca5204b4fdada78c4072fb344a0",
+      "size_bytes": 28808
+    },
+    {
+      "path": "brcmfmac-dyndbg.cmdline",
+      "sha256": "3d3af940d12541ae89bab009e6e6e6552df70869fb421bdf80d902b08ce15f80",
+      "size_bytes": 257
+    },
+    {
+      "path": "brcmfmac-dyndbg.sh",
+      "sha256": "d50600492e05b53a2786cced9b22b794a2063de72b4eb40817245e7cf12b30e4",
+      "size_bytes": 935
+    },
+    {
+      "path": "cohesix-composition-CMakeCache.txt",
+      "sha256": "766059ee1a21d2d11cbc62975937b13cefc688f1ebe2c264e545f50c69cfd8c9",
+      "size_bytes": 88574
+    },
+    {
+      "path": "cohesix-composition-platform_gen.h",
+      "sha256": "c9dec305771840b97606471227cb72f391db82f56c93993b07b4a5f7aa0c7bc0",
+      "size_bytes": 848
+    },
+    {
+      "path": "cohesix-composition-profile-build-inputs.json",
+      "sha256": "f7cf7317accd60dd5948868b9d83b1eac54b10f35c0ca2b0e542f46498f8f095",
+      "size_bytes": 29792
+    },
+    {
+      "path": "cohesix-driver-runtimes.cpio",
+      "sha256": "572dddee994fceb657a3957c7b298641b048f9efeb290f1f764a8dd3118c1716",
+      "size_bytes": 3615232
+    },
+    {
+      "path": "cohesix-driver-runtimes.cpio.uimg",
+      "sha256": "4490ec6bb5e274a79eab6aec3e1f53d174d9f60321acc271c31d22b332ab7c77",
+      "size_bytes": 3615296
+    },
+    {
+      "path": "cohesix-image-arm-bcm2711",
+      "sha256": "593a1bebbfa1cf26889e91d3fa8614f06c77c5fedc9e416736c3d58edec3e202",
+      "size_bytes": 8863096
+    },
+    {
+      "path": "cohesix-logo.bmp",
+      "sha256": "11450977ca9f6b62c6a0ca2c47873f616d7ece120c6602eb27975abb19576a46",
+      "size_bytes": 204534
+    },
+    {
+      "path": "cohesix-root-task-resolved.json",
+      "sha256": "5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e",
+      "size_bytes": 305013
+    },
+    {
+      "path": "cohesix-root-task-topology.json",
+      "sha256": "c7f704f8b679c1d06d8efd09d6d233b30f9b58df7fe8090fc8a55b18dd096c13",
+      "size_bytes": 312221
+    },
+    {
+      "path": "cohesix-sel4-profile-build-inputs.json",
+      "sha256": "561b52ff574b9c7b27fc7cfc48eebf23a196c34d4f16a96791bb3019ea177827",
+      "size_bytes": 44265
+    },
+    {
+      "path": "cohesix-sel4-profile-tree-state.sha256",
+      "sha256": "662dedc46a0fe5a58989683bbdc1499a453ecc9f246aa57cf0b611822a8ad973",
+      "size_bytes": 65
+    },
+    {
+      "path": "cohesix_boot_state.txt",
+      "sha256": "6f6c19fe1851832f0bd11031df88b5e7101fb6afeeb3e69f677b11a9a0211b82",
+      "size_bytes": 94
+    },
+    {
+      "path": "config.txt",
+      "sha256": "66815c52fc16f18581d8bf81ab1627c7c174a6438a82e81ff6e8fedb8a2f8955",
+      "size_bytes": 217
+    },
+    {
+      "path": "fixup4.dat",
+      "sha256": "304b53a7a5a7129531b2674b0fd55240086c5bbd276ff029c63cd68fcf28c0e1",
+      "size_bytes": 5496
+    },
+    {
+      "path": "overlays/miniuart-bt.dtbo",
+      "sha256": "c38c12945f14ac0c71b609a48c94566b3c323a9cfd39d8cb286799e87e14197e",
+      "size_bytes": 1566
+    },
+    {
+      "path": "overlays/upstream-pi4.dtbo",
+      "sha256": "2a5c9d8c47cb4679fa3aeb8f009ce71411ddd729e653ff6e3202bc0d5f4ebd79",
+      "size_bytes": 2775
+    },
+    {
+      "path": "pi4-image-identity.json",
+      "sha256": "3046ed09e597759ec8746ac4fc66498f2f0dcbb7dba0eed6dc73255c938e31b9",
+      "size_bytes": 1372
+    },
+    {
+      "path": "pi4-runtime-dma-proof.env",
+      "sha256": "78145e16248413a2e7a2a1d1a0ccc92ed55d21061c8d3f7c7e35d87a32f50446",
+      "size_bytes": 6704
+    },
+    {
+      "path": "sel4test-driver-image-arm-bcm2711",
+      "sha256": "593a1bebbfa1cf26889e91d3fa8614f06c77c5fedc9e416736c3d58edec3e202",
+      "size_bytes": 8863096
+    },
+    {
+      "path": "start4.elf",
+      "sha256": "61d198caf99fdf3b82467dc7b5319a6bae1a99fe22c94fdafaa86711490a0c23",
+      "size_bytes": 2299008
+    },
+    {
+      "path": "u-boot.bin",
+      "sha256": "01aeab0e5be84352822970c9a7296faacb5e1f30809b42cfb9729fe1c8696dba",
+      "size_bytes": 713840
+    }
+  ],
+  "filesystem": "FAT32",
+  "image_filename": "cohesix-pi4-sd.img",
+  "image_sha256": "afa3b7b3004326c0424289c1d44394b5e1ec155d44f38f781dd1e8423c88fcc9",
+  "image_size_bytes": 79691776,
+  "minimum_target_bytes": 79691776,
+  "partition_scheme": "MBR",
+  "partition_sector_count": 153600,
+  "partition_start_lba": 2048,
+  "payload_file_count": 27,
+  "payload_size_bytes": 29367446,
+  "schema": "cohesix-pi4-portable-sd-image/v2",
+  "sector_size_bytes": 512,
+  "volume_label": "COHESIX",
+  "assembly_mode": "build-only",
+  "source_digest": "sha256:2d2b97a855bea39e7608ecdffd4d4f8f1bdb3189710b61d2f41ad51aa6210161",
+  "test_status": "NOT_RUN",
+  "packaging_is_target_acceptance": false
+}

@@ -1,0 +1,58 @@
+{
+  "entry_points": [
+    "cohesix-playbook=cohesix.playbook_cli:main"
+  ],
+  "extras": [
+    "dev",
+    "integrations",
+    "ml"
+  ],
+  "profile_contracts": {
+    "pi4": {
+      "bytes": 4235,
+      "filename": "cohesix_python_pi4_production.json",
+      "manifest_sha256": "5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e",
+      "sha256": "7349600b2e4a650d0644a04212efd916f5ae8689110c27440cbfbb1277d0823d",
+      "target_profile": "pi4_production"
+    },
+    "qemu": {
+      "bytes": 4236,
+      "filename": "cohesix_python_qemu_smp_production.json",
+      "manifest_sha256": "1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7",
+      "sha256": "866f87b8f1fdd5f338d4bc0534adca1175e8c92ca9de05a5aa25cabc8e30579f",
+      "target_profile": "qemu_smp_production"
+    }
+  },
+  "python_requires": ">=3.11",
+  "schema": "cohesix-python-package/v1",
+  "wheel": {
+    "bytes": 66881,
+    "filename": "cohesix-0.2.0a2-py3-none-any.whl",
+    "members_sha256": "a19b91e588bc8e9d89103e6733d80e387069987ab82bf1225783f2e580a434ed",
+    "modules": [
+      "cohesix/__init__.py",
+      "cohesix/backends.py",
+      "cohesix/client.py",
+      "cohesix/evidence.py",
+      "cohesix/generated.py",
+      "cohesix/orchestration.py",
+      "cohesix/playbooks.py",
+      "cohesix/receipts.py",
+      "cohesix/worker.py"
+    ],
+    "sha256": "ed4e6e6a97d1533e0f40da10ed2c54afda10daba08a1a5e81635c940f41ac6c1"
+  },
+  "meta": {
+    "author": "Lukas Bower",
+    "purpose": "Bind the release wheel and generated contracts without claiming an installation test.",
+    "copyright": "Copyright 2026 Lukas Bower"
+  },
+  "source_commit": "18062f7b4ff0d719e1a6d3f0badb0bebdbeec45d",
+  "interpreters": [],
+  "test_status": "NOT_RUN",
+  "proof_boundary": {
+    "package_install_is_target_proof": false,
+    "mock_is_target_proof": false,
+    "python_projection_is_authority": false
+  }
+}
