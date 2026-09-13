@@ -501,3 +501,20 @@ with the repository generation workflow.
 - [INTERFACES.md](INTERFACES.md) — control and observability schemas.
 - [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) — canonical live setup.
 - [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) — evidence, mount, ticket, lifecycle, and PEFT procedures.
+
+## Canonical Milestone 27 evidence consumers
+
+`CohesixClient.evidence_case(pack_dir)` and
+`CohesixClient.attestation_result(pack_dir)` read bounded canonical Rust-produced
+artifacts offline. `cohesix.operator.trace_reference` supplies only an opaque
+hash/length reference. The generated diagnostic bounds and shared fixtures in
+`tests/fixtures/operator` govern path confinement, source-event identity,
+redaction (including embedded JSON), scenario and non-authoritative outcomes.
+Unknown additive fields are sanitized; malformed records fail deterministically.
+Missing optional records raise `CohesixError`. There is no Python trace parser or
+attestation verifier. PASS records require matching evidence class, proof scope
+and complete verification metadata; this is structural projection only. See
+[the signed evidence contract](ATTESTATION.md).
+The existing Python evidence producer remains compatible with legacy timeline
+consumers; generate the canonical case using `coh evidence timeline`.
+See [the operator contract](OPERATOR_EVIDENCE.md).

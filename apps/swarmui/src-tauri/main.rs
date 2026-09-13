@@ -19,7 +19,7 @@ use cohsh::RestTransport as CohshRestTransport;
 use cohsh::TcpTransport as CohshTcpTransport;
 use cohsh::COHSH_TCP_PORT;
 use cohsh_core::command::MAX_LINE_LEN;
-use cohsh_core::trace::{TraceLog, TracePolicy};
+use cohsh_core::trace::TracePolicy;
 #[cfg(feature = "rest")]
 use swarmui::resolve_rest_auth_token;
 use swarmui::{
@@ -55,6 +55,7 @@ enum SwarmUiService {
     Secure9p(SwarmUiBackend<TcpTransportFactory>),
     Trace(SwarmUiBackend<TraceTransportFactory>),
     Console(SwarmUiConsoleBackend<CohshTcpTransport>),
+    Captured(SwarmUiConsoleBackend<cohsh::trace_capture::CapturedNamespace>),
     #[cfg(feature = "rest")]
     Rest(SwarmUiConsoleBackend<CohshRestTransport>),
 }
@@ -65,6 +66,7 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.attach(role, ticket),
             SwarmUiService::Trace(backend) => backend.attach(role, ticket),
             SwarmUiService::Console(backend) => backend.attach(role, ticket),
+            SwarmUiService::Captured(backend) => backend.attach(role, ticket),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend.attach(role, ticket),
         }
@@ -75,6 +77,7 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.set_offline(offline),
             SwarmUiService::Trace(backend) => backend.set_offline(offline),
             SwarmUiService::Console(backend) => backend.set_offline(offline),
+            SwarmUiService::Captured(backend) => backend.set_offline(offline),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend.set_offline(offline),
         }
@@ -90,6 +93,7 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.tail_telemetry(role, ticket, worker_id),
             SwarmUiService::Trace(backend) => backend.tail_telemetry(role, ticket, worker_id),
             SwarmUiService::Console(backend) => backend.tail_telemetry(role, ticket, worker_id),
+            SwarmUiService::Captured(backend) => backend.tail_telemetry(role, ticket, worker_id),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend.tail_telemetry(role, ticket, worker_id),
         }
@@ -105,6 +109,7 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.list_namespace(role, ticket, path),
             SwarmUiService::Trace(backend) => backend.list_namespace(role, ticket, path),
             SwarmUiService::Console(backend) => backend.list_namespace(role, ticket, path),
+            SwarmUiService::Captured(backend) => backend.list_namespace(role, ticket, path),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend.list_namespace(role, ticket, path),
         }
@@ -119,6 +124,7 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.fleet_snapshot(role, ticket),
             SwarmUiService::Trace(backend) => backend.fleet_snapshot(role, ticket),
             SwarmUiService::Console(backend) => backend.fleet_snapshot(role, ticket),
+            SwarmUiService::Captured(backend) => backend.fleet_snapshot(role, ticket),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend.fleet_snapshot(role, ticket),
         }
@@ -138,6 +144,9 @@ impl SwarmUiService {
                 .hive_bootstrap(role, ticket, snapshot_key)
                 .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
+                .hive_bootstrap(role, ticket, snapshot_key)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Captured(backend) => backend
                 .hive_bootstrap(role, ticket, snapshot_key)
                 .map_err(|err| err.to_string()),
             #[cfg(feature = "rest")]
@@ -163,6 +172,9 @@ impl SwarmUiService {
             SwarmUiService::Console(backend) => backend
                 .hive_poll(role, ticket, detail_agent)
                 .map_err(|err| err.to_string()),
+            SwarmUiService::Captured(backend) => backend
+                .hive_poll(role, ticket, detail_agent)
+                .map_err(|err| err.to_string()),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend
                 .hive_poll(role, ticket, detail_agent)
@@ -185,6 +197,9 @@ impl SwarmUiService {
             SwarmUiService::Console(backend) => backend
                 .hive_reset(role, ticket)
                 .map_err(|err| err.to_string()),
+            SwarmUiService::Captured(backend) => backend
+                .hive_reset(role, ticket)
+                .map_err(|err| err.to_string()),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend
                 .hive_reset(role, ticket)
@@ -203,6 +218,9 @@ impl SwarmUiService {
             SwarmUiService::Console(backend) => backend
                 .load_hive_replay(payload)
                 .map_err(|err| err.to_string()),
+            SwarmUiService::Captured(backend) => backend
+                .load_hive_replay(payload)
+                .map_err(|err| err.to_string()),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => backend
                 .load_hive_replay(payload)
@@ -215,6 +233,7 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => Ok(backend.console_command(line)),
             SwarmUiService::Trace(backend) => Ok(backend.console_command(line)),
             SwarmUiService::Console(backend) => Ok(backend.console_command(line)),
+            SwarmUiService::Captured(backend) => Ok(backend.console_command(line)),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => Ok(backend.console_command(line)),
         }
@@ -229,6 +248,9 @@ impl SwarmUiService {
                 backend.dump_queen_log().map_err(|err| err.to_string())
             }
             SwarmUiService::Console(backend) => {
+                backend.dump_queen_log().map_err(|err| err.to_string())
+            }
+            SwarmUiService::Captured(backend) => {
                 backend.dump_queen_log().map_err(|err| err.to_string())
             }
             #[cfg(feature = "rest")]
@@ -424,23 +446,37 @@ fn main() {
             if replay_path.is_some() {
                 config.offline = true;
             }
-            let offline = config.offline;
+            let offline = config.offline || trace_replay;
             let mut trace_replay_resolved = None;
             let mut backend = if let Some(path) = trace_replay_path.clone() {
                 let resolved = resolve_replay_path(&path, &data_dir, "traces");
-                trace_replay_resolved = Some(resolved.clone());
-                let payload = fs::read(&resolved).unwrap_or_else(|err| {
-                    panic!("failed to read trace {}: {err}", resolved.display())
-                });
                 let policy = TracePolicy::new(
                     config.trace_max_bytes as u32,
                     swarmui::SECURE9P_MSIZE,
                     MAX_LINE_LEN as u32,
                 );
-                let trace = TraceLog::decode(&payload, policy)
-                    .unwrap_or_else(|err| panic!("failed to decode trace: {err}"));
-                let factory = TraceTransportFactory::new(trace.frames);
-                SwarmUiService::Trace(SwarmUiBackend::new(config, factory))
+                let trace = cohsh::trace_capture::read_trace(&resolved, policy)?;
+                if trace.capture.is_some() {
+                    let expected = cohsh::trace_capture::policy_digest(
+                        policy,
+                        cohsh::CohshPolicy::from_generated().trace.max_duration_ms,
+                    );
+                    let captured = cohsh::trace_capture::CapturedNamespace::new(&trace, &expected)?;
+                    // The supplied transport enforces offline, read-only access.
+                    // Disable the separate cache-only path so retained observations
+                    // reach the normal parsers; the app mode remains offline.
+                    config.offline = false;
+                    config.cache.enabled = false;
+                    SwarmUiService::Captured(SwarmUiConsoleBackend::with_transport(
+                        config, captured,
+                    ))
+                } else {
+                    // The legacy paired hive snapshot has no binding to a live
+                    // capture header. Only version-1 fixture replay may load it.
+                    trace_replay_resolved = Some(resolved.clone());
+                    let factory = TraceTransportFactory::new(trace.frames);
+                    SwarmUiService::Trace(SwarmUiBackend::new(config, factory))
+                }
             } else {
                 match transport.as_str() {
                     "9p" | "secure9p" => {

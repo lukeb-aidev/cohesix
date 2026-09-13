@@ -16,8 +16,8 @@ use coh::console::ConsoleSession;
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
 use coh::rest::RestSession;
 use coh::{
-    doctor, evidence, evidence_timeline, fleet, gpu, mount, peft, run as coh_run, telemetry,
-    CohAccess, CohAudit,
+    doctor, evidence, evidence_timeline, fleet, gpu, mount, operator, peft, run as coh_run,
+    telemetry, CohAccess, CohAudit,
 };
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
@@ -47,6 +47,19 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Explain bounded live state or a canonical offline evidence pack.
+    Inspect(InspectArgs),
+    /// Compare two evidence packs or explicit tcp:// or REST target URLs.
+    Diff(DiffArgs),
+    /// Evaluate attestation evidence without treating measurements as signatures.
+    Attest(AttestArgs),
+    /// Validate and summarize a canonical trace without opening a transport.
+    Trace {
+        #[arg(long, value_name = "FILE")]
+        input: PathBuf,
+    },
+    /// Alias for evidence pack; identical layout, bounds and redaction.
+    Bundle(EvidencePackArgs),
     /// Run deterministic environment checks.
     Doctor(DoctorArgs),
     /// Mount a Secure9P namespace via FUSE.
@@ -63,6 +76,46 @@ enum Command {
     Fleet(FleetArgs),
     /// Evidence pack and timeline operations.
     Evidence(EvidenceArgs),
+}
+
+#[derive(Debug, Parser)]
+struct InspectArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
+    /// Canonical evidence-pack directory. Offline mode opens no transport.
+    #[arg(long, value_name = "DIR")]
+    input: Option<PathBuf>,
+    /// Emit stable JSON instead of escaped structured text.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AttestArgs {
+    #[command(flatten)]
+    inspect: InspectArgs,
+    /// Independently enrolled trust policy; never inferred from target evidence.
+    #[arg(long, value_name = "FILE")]
+    trust_policy: Option<PathBuf>,
+    /// Retain the public request and signed response for offline verification.
+    #[arg(long, value_name = "FILE", conflicts_with = "input")]
+    record: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct DiffArgs {
+    /// Pack directory, tcp://host:port, or http(s)://gateway URL.
+    #[arg(long)]
+    left: String,
+    /// Pack directory, tcp://host:port, or http(s)://gateway URL.
+    #[arg(long)]
+    right: String,
+    /// TCP authentication token; environment resolution matches other coh commands.
+    #[arg(long)]
+    auth_token: Option<String>,
+    /// REST request authentication token.
+    #[arg(long)]
+    rest_auth_token: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -258,11 +311,14 @@ enum FleetCommand {
 #[derive(Debug, Subcommand)]
 enum EvidenceCommand {
     /// Export a deterministic evidence pack directory.
-    Pack(EvidencePackArgs),
+    Pack(Box<EvidencePackArgs>),
     /// Generate `timeline.ndjson` and `timeline.md` from an evidence pack.
     Timeline {
         #[arg(long, value_name = "DIR", alias = "in")]
         input: PathBuf,
+        /// Review framing only; never changes evidence authority.
+        #[arg(long, value_enum, default_value = "generic")]
+        scenario: evidence_timeline::Scenario,
     },
 }
 
@@ -276,6 +332,21 @@ struct EvidencePackArgs {
     /// Include telemetry pulls under `telemetry/` inside the pack.
     #[arg(long, default_value_t = false)]
     with_telemetry: bool,
+    /// Host copy of the source manifest (secret fields are redacted).
+    #[arg(long, value_name = "FILE")]
+    manifest: Option<PathBuf>,
+    /// Host copy of the selected resolved manifest.
+    #[arg(long, value_name = "FILE")]
+    resolved_manifest: Option<PathBuf>,
+    /// Bounded host serial excerpt; authentication and unstructured payloads are withheld.
+    #[arg(long, value_name = "FILE")]
+    serial_log: Option<PathBuf>,
+    /// Canonical redacted live trace to include; legacy traces remain offline fixtures.
+    #[arg(long, value_name = "FILE")]
+    trace: Option<PathBuf>,
+    /// Public challenge and signed response retained by coh attest --record.
+    #[arg(long, value_name = "FILE")]
+    attestation_record: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -292,6 +363,64 @@ fn main() -> Result<()> {
     let policy_path = resolve_policy_path(cli.policy)?;
     let role = Role::from(cli.role);
     match cli.command {
+        Command::Inspect(args) => {
+            run_inspect(role, cli.ticket.as_deref(), &policy_path, args, false)
+        }
+        Command::Attest(args) => run_attest(role, cli.ticket.as_deref(), &policy_path, args),
+        Command::Diff(args) => {
+            let left =
+                read_diff_source(&args.left, &args, role, cli.ticket.as_deref(), &policy_path)?;
+            let right = read_diff_source(
+                &args.right,
+                &args,
+                role,
+                cli.ticket.as_deref(),
+                &policy_path,
+            )?;
+            anyhow::ensure!(
+                left.violations.is_empty() && right.violations.is_empty(),
+                "diff-inconsistent-source"
+            );
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&operator::diff(&left, &right)?)?
+            );
+            Ok(())
+        }
+        Command::Trace { input } => {
+            let payload = operator::read_bounded(&input, operator::MAX_BYTES)?;
+            let policy = cohsh_core::trace::TracePolicy::new(
+                operator::MAX_BYTES as u32,
+                cohsh::SECURE9P_MSIZE,
+                cohsh_core::MAX_LINE_LEN as u32,
+            );
+            let trace = cohsh_core::trace::TraceLog::decode(&payload, policy)?;
+            let capture = if let Some(metadata) = &trace.capture {
+                let expected = cohsh::trace_capture::policy_digest(
+                    policy,
+                    cohsh::CohshPolicy::from_generated().trace.max_duration_ms,
+                );
+                cohsh::trace_capture::replay_lines(&trace, &expected)?;
+                Some(
+                    serde_json::json!({"backend":if metadata.backend == 1 { "tcp-console" } else { "rest-projection" },"completion":metadata.completion,"captured_unix_ms":metadata.captured_unix_ms,"target_sha256":hex::encode(metadata.target_sha256),"session_sha256":hex::encode(metadata.session_sha256),"manifest_sha256":hex::encode(metadata.manifest_sha256),"image_sha256":hex::encode(metadata.image_sha256),"identity_binding":"caller-supplied"}),
+                )
+            } else {
+                None
+            };
+            println!(
+                "{}",
+                serde_json::json!({"schema":"cohesix-trace-summary/v1", "source_class":"offline-trace", "bytes":payload.len(), "sha256":operator::digest(&payload), "frames":trace.frames.len(), "acknowledgements":trace.ack_lines.len(), "capture":capture,"proof":"none"})
+            );
+            Ok(())
+        }
+        Command::Bundle(pack) => run_evidence(
+            role,
+            cli.ticket.as_deref(),
+            &policy_path,
+            EvidenceArgs {
+                command: EvidenceCommand::Pack(Box::new(pack)),
+            },
+        ),
         Command::Doctor(args) => run_doctor(role, cli.ticket.as_deref(), &policy_path, args),
         Command::Mount(args) => {
             let policy = load_policy(&policy_path)?;
@@ -315,6 +444,133 @@ fn main() -> Result<()> {
         }
         Command::Fleet(args) => run_fleet(args),
         Command::Evidence(args) => run_evidence(role, cli.ticket.as_deref(), &policy_path, args),
+    }
+}
+
+fn run_attest(
+    role: Role,
+    ticket: Option<&str>,
+    policy_path: &Path,
+    args: AttestArgs,
+) -> Result<()> {
+    let Some(trust_path) = args.trust_policy else {
+        anyhow::ensure!(
+            args.record.is_none(),
+            "attestation-record-requires-trust-policy"
+        );
+        return run_inspect(role, ticket, policy_path, args.inspect, true);
+    };
+    let trust = operator::read_bounded(&trust_path, cohesix_attestation::MAX_POLICY_BYTES)?;
+    let result = if let Some(input) = args.inspect.input {
+        let snapshot = operator::inspect_pack(&input)?;
+        anyhow::ensure!(snapshot.violations.is_empty(), "inconsistent-evidence");
+        let path = operator::confined_path(&input, "attachments/attestation-record.json")?;
+        let record = operator::read_bounded(&path, coh::attestation::MAX_RECORD_BYTES)?;
+        coh::attestation::offline(&trust, &record)?
+    } else {
+        let policy = load_policy(policy_path)?;
+        anyhow::ensure!(!args.inspect.connect.mock, "mock-attestation-forbidden");
+        let class = if resolve_rest_url(args.inspect.connect.rest_url.as_deref()).is_some() {
+            "host-projection"
+        } else {
+            "live-console"
+        };
+        let mut client = connect_access(&args.inspect.connect, &policy, role, ticket)?;
+        let (result, record) = coh::attestation::live(&mut client, &trust, class)?;
+        if let (Some(path), Some(record)) = (args.record, record) {
+            operator::write_atomic(&path, &serde_json::to_vec_pretty(&record)?)?;
+        }
+        result
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    anyhow::ensure!(
+        result.verdict == "PASS",
+        "attestation-non-attested: {}",
+        result.reason
+    );
+    Ok(())
+}
+
+fn run_inspect(
+    role: Role,
+    ticket: Option<&str>,
+    policy_path: &Path,
+    args: InspectArgs,
+    attestation: bool,
+) -> Result<()> {
+    let snapshot = if let Some(input) = args.input {
+        operator::inspect_pack(&input)?
+    } else {
+        let policy = load_policy(policy_path)?;
+        if args.connect.mock {
+            let (_server, mut client) = connect_mock(role, ticket, false, false)?;
+            operator::inspect_live(&mut client, "mock")?
+        } else {
+            let class = if resolve_rest_url(args.connect.rest_url.as_deref()).is_some() {
+                "host-projection"
+            } else {
+                "live-console"
+            };
+            let mut client = connect_access(&args.connect, &policy, role, ticket)?;
+            operator::inspect_live(&mut client, class)?
+        }
+    };
+    if attestation {
+        let result = operator::attest(&snapshot);
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        anyhow::bail!("attestation-non-attested: {}", result.reason);
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    } else {
+        print!("{}", snapshot.render()?);
+    }
+    anyhow::ensure!(
+        snapshot.violations.is_empty(),
+        "inspect-invariant-violation"
+    );
+    Ok(())
+}
+
+fn read_diff_source(
+    source: &str,
+    args: &DiffArgs,
+    role: Role,
+    ticket: Option<&str>,
+    policy_path: &Path,
+) -> Result<operator::Snapshot> {
+    if let Some(endpoint) = source.strip_prefix("tcp://") {
+        let (host, port) = endpoint
+            .rsplit_once(':')
+            .context("diff TCP source requires host:port")?;
+        anyhow::ensure!(
+            !host.is_empty()
+                && !host.contains(['/', '@'])
+                && !host.chars().any(char::is_whitespace),
+            "diff-tcp-host"
+        );
+        let connect = ConnectArgs {
+            host: host.to_owned(),
+            port: port.parse().context("diff-tcp-port")?,
+            rest_url: None,
+            rest_auth_token: None,
+            auth_token: args.auth_token.clone(),
+            mock: false,
+        };
+        let mut client = connect_console(&connect, &load_policy(policy_path)?, role, ticket)?;
+        operator::inspect_live(&mut client, "live-console")
+    } else if source.starts_with("http://") || source.starts_with("https://") {
+        anyhow::ensure!(
+            role == Role::Queen,
+            "rest transport supports queen role only"
+        );
+        let mut client = RestSession::connect(
+            source.to_owned(),
+            resolve_rest_auth_token(args.rest_auth_token.as_deref()),
+        );
+        operator::inspect_live(&mut client, "host-projection")
+    } else {
+        operator::inspect_pack(Path::new(source.strip_prefix("pack:").unwrap_or(source)))
     }
 }
 
@@ -925,18 +1181,34 @@ fn run_evidence(
                 let mut access = connect_access(&pack.connect, &policy, role, ticket)?;
                 evidence::export_pack(&mut access, &policy, &bounds, &spec, &mut audit).map(|_| ())
             };
+            if result.is_ok() {
+                evidence::attach_artifacts(
+                    &spec.out_dir,
+                    pack.manifest.as_deref(),
+                    pack.resolved_manifest.as_deref(),
+                    pack.serial_log.as_deref(),
+                    pack.trace.as_deref(),
+                    pack.attestation_record.as_deref(),
+                )?;
+                let digest = operator::read_bounded(&spec.out_dir.join("pack.sha256"), 65)?;
+                audit.push_line(format!(
+                    "evidence pack sha256={}",
+                    std::str::from_utf8(&digest)?.trim()
+                ));
+            }
             handle_result(result, audit, "EVIDENCE")
         }
-        EvidenceCommand::Timeline { input } => {
+        EvidenceCommand::Timeline { input, scenario } => {
             let mut audit = CohAudit::new();
-            let result = evidence_timeline::write_timeline(&input).map(|summary| {
-                audit.push_line(format!(
-                    "evidence timeline events={} ndjson={} markdown={}",
-                    summary.events,
-                    summary.ndjson_path.display(),
-                    summary.markdown_path.display()
-                ));
-            });
+            let result =
+                evidence_timeline::write_timeline_with_scenario(&input, scenario).map(|summary| {
+                    audit.push_line(format!(
+                        "evidence timeline events={} ndjson={} markdown={}",
+                        summary.events,
+                        summary.ndjson_path.display(),
+                        summary.markdown_path.display()
+                    ));
+                });
             handle_result(result, audit, "EVIDENCE")
         }
     }

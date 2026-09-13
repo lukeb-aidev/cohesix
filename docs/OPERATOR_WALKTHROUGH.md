@@ -378,3 +378,15 @@ decision from one exact target identity, one shared session, separate target
 and GPU-host observations, and an offline-reviewable evidence pack. That is the
 practical value of Cohesix before it performs any external action: it makes the
 authority, preconditions, unknowns, and eventual result difficult to confuse.
+
+## Read the source-linked case
+
+The existing evidence-pack/timeline walkthrough can now finish with
+`coh evidence timeline --input DIR --scenario federation`. Open `case.md` for
+the cross-hive request stages, then use the canonical event references in
+`case.json` to examine source records. Change the scenario to `incident`,
+`change`, `maintenance`, or `rollout` to frame that review without changing
+its evidence authority. A terminal host status remains a recorded result;
+unknown, missing, error, and ambiguous stages must remain visible. Inspection,
+diffs, trace capture/replay, and typed non-attestation results are documented in
+[Operator inspection and evidence](OPERATOR_EVIDENCE.md).

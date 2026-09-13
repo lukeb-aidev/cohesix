@@ -1078,3 +1078,17 @@ A benchmark is ready for documentation only when all answers are explicit:
 Accepted reports must cite their artifact paths in this section or in a linked
 checked-in audit ledger. Raw iteration files may remain under `out/bench` or
 `logs/bench`, but an uncommitted path alone is not durable documentation.
+
+## Milestone 27 host operator latency
+
+Run `cargo test -p coh --test operator_latency -- --nocapture` and retain the
+output. The fixture harness times bounded pack reads/parsing, inspect rendering,
+self-diff, and non-attested classification at 0, 4 KiB, 64 KiB, and 512 KiB,
+with eight samples per size. It reports microsecond p50/p95 over the 32 samples.
+Correctness asserts finite input/output bounds and exact contract behavior;
+there is no flaky wall-clock threshold. Compare repeated measurements only on
+the same host, build profile, and harness. Classify changes as parser,
+evidence-pack, transport, or artifact-size overhead; this offline harness does
+not measure live transport latency. It is host-tool evidence, never a replacement
+for raw framed TCP, REST, QEMU, or Pi performance acceptance. Existing benchmark
+scripts require no wire or report-schema changes for M27.

@@ -75,6 +75,7 @@ impl CohshPolicy {
             },
             trace: CohshTracePolicy {
                 max_bytes: generated::COHSH_TRACE_MAX_BYTES,
+                max_duration_ms: generated::COHSH_TRACE_MAX_DURATION_MS,
             },
         }
     }
@@ -166,6 +167,8 @@ pub struct CohshHeartbeatPolicy {
 pub struct CohshTracePolicy {
     /// Maximum encoded trace size in bytes.
     pub max_bytes: u32,
+    /// Maximum live capture window in milliseconds.
+    pub max_duration_ms: u32,
 }
 
 /// Optional overrides layered on top of the manifest-derived policy.
@@ -254,6 +257,12 @@ struct HeartbeatTomlSection {
 #[serde(deny_unknown_fields)]
 struct TraceTomlSection {
     max_bytes: u32,
+    #[serde(default = "default_trace_duration_ms")]
+    max_duration_ms: u32,
+}
+
+fn default_trace_duration_ms() -> u32 {
+    generated::COHSH_TRACE_MAX_DURATION_MS
 }
 
 /// Return the default policy path under the working directory or bundle root.
@@ -327,6 +336,7 @@ pub fn load_policy(path: &Path) -> Result<CohshPolicy> {
         },
         trace: CohshTracePolicy {
             max_bytes: parsed.trace.max_bytes,
+            max_duration_ms: parsed.trace.max_duration_ms,
         },
     };
     validate_policy(&policy)?;
@@ -334,6 +344,9 @@ pub fn load_policy(path: &Path) -> Result<CohshPolicy> {
 }
 
 fn validate_policy(policy: &CohshPolicy) -> Result<()> {
+    if policy.trace.max_duration_ms == 0 {
+        return Err(anyhow!("cohsh trace max_duration_ms must be > 0"));
+    }
     if policy.pool.control_sessions == 0 {
         return Err(anyhow!("cohsh pool control_sessions must be >= 1"));
     }

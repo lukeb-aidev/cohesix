@@ -9381,7 +9381,7 @@ mod tests {
 
     static HDMI_READY_LOG_TEST_LOCK: TestMutex<()> = TestMutex::new(());
     use crate::generated::{
-        AttestationConfig, AttestationPolicy, DhcpPolicyConfig, HardwareConfig, HardwareDevice,
+        AttestationConfig, AttestationMode, DhcpPolicyConfig, HardwareConfig, HardwareDevice,
         HardwareNetworkConfig, LocalSeatConfig, NetworkBackendKind, NetworkInterfacePolicy,
         NetworkMode, StaticIpv4Config,
     };
@@ -9488,9 +9488,11 @@ mod tests {
                 },
             },
             attestation: AttestationConfig {
-                enabled: false,
-                policy: AttestationPolicy::TpmOrDice,
-                evidence_max_bytes: 256,
+                mode: AttestationMode::Disabled,
+                required: false,
+                evidence_max_bytes: 8192,
+                challenge_max_bytes: 256,
+                max_age_ms: 30000,
             },
             local_seat: LocalSeatConfig {
                 enabled: true,

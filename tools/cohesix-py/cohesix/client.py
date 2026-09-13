@@ -534,6 +534,18 @@ class CohesixClient:
     def evidence_timeline(self, pack_dir: Path) -> TimelineSummary:
         return write_evidence_timeline(pack_dir)
 
+    def evidence_case(self, pack_dir: Path) -> Mapping[str, Any]:
+        """Consume the canonical Rust case summary offline without promoting proof."""
+        from .operator import read_case
+
+        return read_case(pack_dir)
+
+    def attestation_result(self, pack_dir: Path) -> Mapping[str, Any]:
+        """Read a canonical non-attested outcome; this does not verify a signature."""
+        from .operator import read_attestation_result
+
+        return read_attestation_result(pack_dir)
+
     def queen_kill(self, worker_id: str, audit: Optional[CohesixAudit] = None) -> None:
         worker_id = worker_id.strip()
         if not worker_id:

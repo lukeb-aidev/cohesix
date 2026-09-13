@@ -82,6 +82,7 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     )
     .ok();
     writeln!(contents, "    \"execution_proof\": \"none\",").ok();
+    writeln!(contents, "    \"diagnostic_artifacts\": {{\"max_bytes\": {}, \"max_files\": {}, \"trace_max_duration_ms\": {}}},", manifest.client_policies.trace.max_bytes, 65536 / MAX_PATH_LEN, manifest.client_policies.trace.max_duration_ms).ok();
     writeln!(
         contents,
         "    \"secure9p\": {{\"msize\": {}, \"walk_depth\": {}}},",

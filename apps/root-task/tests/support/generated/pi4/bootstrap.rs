@@ -6,7 +6,7 @@
 #![allow(unused_imports)]
 
 use super::{
-    AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, BadgeRange, CachePolicy,
+    AffinityPolicy, AttestationConfig, AttestationMode, AuditConfig, BadgeRange, CachePolicy,
     CapabilityRights, CasConfig, ConsoleNetworkServiceConfig, ControlPlaneConfig,
     CriticalHandoffConfig, CriticalTcbResource, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile,
     DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy,
@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "e56990d76d93616b04a5802eade2f9ba843ca5923667c3ab9da18e8aa211b620";
+    "aa88eb2d85f19cbff7819a3b667fad11eb3d3ec80dab7ee7428ca599d1936dee";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9483,9 +9483,11 @@ pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
         },
     },
     attestation: AttestationConfig {
-        enabled: true,
-        policy: AttestationPolicy::TpmOrDice,
-        evidence_max_bytes: 256,
+        mode: AttestationMode::MeasurementOnly,
+        required: false,
+        evidence_max_bytes: 8192,
+        challenge_max_bytes: 256,
+        max_age_ms: 30000,
     },
     local_seat: LocalSeatConfig {
         enabled: true,
@@ -9793,10 +9795,10 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 55] = [
-    "manifest.schema=1.18",
+pub const INITIAL_AUDIT_LINES: [&str; 57] = [
+    "manifest.schema=1.20",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e",
+    "manifest.sha256=fabaa97fd061a454a03a9ff628e7d3173fe8f70cc90bb83d1f523cf6a05b76f4",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9838,15 +9840,17 @@ pub const INITIAL_AUDIT_LINES: [&str; 55] = [
     "manifest.hw.network.dhcp.discover_timeout_ms=1500",
     "manifest.hw.network.dhcp.request_timeout_ms=1500",
     "manifest.hw.network.dhcp.max_retries=6",
-    "manifest.hw.attestation.enabled=true",
-    "manifest.hw.attestation.policy=tpm-or-dice",
+    "manifest.hw.attestation.required=false",
+    "manifest.hw.attestation.mode=measurement_only",
     "manifest.hw.local_seat.enabled=true",
     "manifest.hw.local_seat.required=true",
     "manifest.hw.network.static_ipv4.ip=192.168.10.42",
     "manifest.hw.network.static_ipv4.prefix_len=24",
     "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
-    "attestation.bound_manifest_sha256=5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e",
-    "attestation.evidence_sha256=80d90924bf980af3b67ce2a48cefbc7e75e65ad548806df8b880eae2432bd78b",
+    "attestation.mode=measurement_only",
+    "attestation.signed_evidence=unavailable",
+    "attestation.ticket_keys=development_static",
+    "measurement.bound_manifest_sha256=fabaa97fd061a454a03a9ff628e7d3173fe8f70cc90bb83d1f523cf6a05b76f4",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

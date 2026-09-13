@@ -20,7 +20,7 @@ fn base_manifest(extra: &str) -> String {
 # Author: Lukas Bower
 # Purpose: CAS validation test manifest.
 [root_task]
-schema = "1.18"
+schema = "1.20"
 
 [profile]
 name = "virt-aarch64"
@@ -254,4 +254,15 @@ required = false
     );
     let err = compile_error(&manifest);
     assert!(err.contains("cas.store.chunk_bytes"));
+}
+
+#[test]
+fn trace_capture_requires_a_finite_duration() {
+    let error = compile_error(&base_manifest(
+        "[client_policies.trace]\nmax_duration_ms = 0\n",
+    ));
+    assert!(
+        error.contains("client_policies.trace.max_duration_ms must be > 0"),
+        "{error}"
+    );
 }

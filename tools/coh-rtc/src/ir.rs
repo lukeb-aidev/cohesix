@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.18";
+const SCHEMA_VERSION: &str = "1.20";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -551,17 +551,40 @@ impl Manifest {
         let has_tpm = has_device(HardwareDeviceKind::Tpm);
         let has_net = has_device(HardwareDeviceKind::Net);
         let has_wifi = has_device(HardwareDeviceKind::Wifi);
-        if attest.enabled {
-            match attest.policy {
-                AttestationPolicy::TpmOnly if !has_tpm => {
-                    bail!("hw.attestation.policy=tpm-only requires hw.devices[] kind=tpm");
-                }
-                AttestationPolicy::TpmOrDice
-                | AttestationPolicy::DiceOnly
-                | AttestationPolicy::TpmOnly => {}
-            }
+        if attest.challenge_max_bytes != 256 || attest.max_age_ms == 0 || attest.max_age_ms > 60_000
+        {
+            bail!("hw.attestation requires challenge_max_bytes=256 and max_age_ms in 1..=60000");
         }
-
+        if attest.required
+            && matches!(
+                attest.mode,
+                AttestationMode::Disabled | AttestationMode::MeasurementOnly
+            )
+        {
+            bail!("hw.attestation.required requires signed device evidence");
+        }
+        if attest.mode == AttestationMode::Tpm2Quote && !has_tpm {
+            bail!("hw.attestation.mode=tpm2_quote requires an isolated TPM device");
+        }
+        if matches!(
+            attest.mode,
+            AttestationMode::Tpm2Quote | AttestationMode::DiceEvidence
+        ) {
+            if !self.hw.secure_boot || attest.trust_anchor_ref.is_none() {
+                bail!("signed attestation requires secure boot and a provisioned trust-anchor reference");
+            }
+            if attest.ticket_key_policy != TicketKeyPolicy::DeviceBound
+                || self.tickets.iter().any(|ticket| !ticket.secret.is_empty())
+            {
+                bail!("signed attestation forbids literal/static ticket keys");
+            }
+            // The compiler must not advertise an issuer that the selected runtime
+            // image cannot execute. Host quote verification is a separate contract.
+            bail!("signed attestation device provider is unavailable in the selected runtime");
+        }
+        if attest.ticket_key_policy != TicketKeyPolicy::DevelopmentStatic {
+            bail!("device-bound ticket keys require an admitted attestation provider");
+        }
         let profile_name = self.profile.name.as_str();
         if self.hw.network.static_ipv4.ip.len() > MAX_HW_NETWORK_IP_LITERAL_LEN {
             bail!(
@@ -620,17 +643,6 @@ impl Manifest {
             }
             if !has_device(HardwareDeviceKind::Rtc) {
                 bail!("profile.name={profile_name} requires hw.devices[] kind=rtc");
-            }
-            if attest.enabled
-                && matches!(
-                    attest.policy,
-                    AttestationPolicy::TpmOnly | AttestationPolicy::TpmOrDice
-                )
-                && !has_tpm
-            {
-                bail!(
-                    "profile.name={profile_name} with attestation enabled requires TPM device declaration"
-                );
             }
             if local_seat.enabled {
                 let keyboard =
@@ -2627,6 +2639,9 @@ impl Manifest {
         if trace.max_bytes == 0 {
             bail!("client_policies.trace.max_bytes must be > 0");
         }
+        if trace.max_duration_ms == 0 {
+            bail!("client_policies.trace.max_duration_ms must be > 0");
+        }
         self.validate_coh_policy()?;
         Ok(())
     }
@@ -3792,11 +3807,11 @@ impl Default for AffinityPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_manifest, AffinityPolicy, AttestationPolicy, DmaProtectionProfile,
-        DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy,
-        DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, HardwareDevice,
-        HardwareDeviceKind, Manifest, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
-        TemporalExecution, TemporalTaskKind, TimeoutPolicy, WorkerSchedulingProfile,
+        load_manifest, AffinityPolicy, AttestationMode, DmaProtectionProfile, DriverAffinityPolicy,
+        DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec,
+        DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, HardwareDevice, HardwareDeviceKind,
+        Manifest, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, TemporalExecution,
+        TemporalTaskKind, TimeoutPolicy, WorkerSchedulingProfile,
     };
     use crate::temporal::TemporalTaskConfig;
     use std::path::PathBuf;
@@ -5937,19 +5952,22 @@ mod tests {
     }
 
     #[test]
-    fn tpm_only_attestation_requires_tpm_device() {
+    fn attestation_requires_real_device_and_cannot_promote_measurements() {
         let mut manifest = fixture_manifest();
-        manifest.hw.attestation.enabled = true;
-        manifest.hw.attestation.policy = AttestationPolicy::TpmOnly;
+        manifest.hw.attestation.mode = AttestationMode::Tpm2Quote;
         manifest.hw.devices.clear();
-        let err = manifest
+        let error = manifest.validate().expect_err("no isolated TPM");
+        assert!(error
+            .to_string()
+            .contains("requires an isolated TPM device"));
+        manifest.hw.attestation.mode = AttestationMode::MeasurementOnly;
+        manifest.hw.attestation.required = true;
+        let error = manifest
             .validate()
-            .expect_err("tpm-only policy without tpm device must fail");
-        assert!(
-            err.to_string()
-                .contains("hw.attestation.policy=tpm-only requires hw.devices[] kind=tpm"),
-            "unexpected error: {err}"
-        );
+            .expect_err("public hash is not signed evidence");
+        assert!(error
+            .to_string()
+            .contains("requires signed device evidence"));
     }
 }
 
@@ -6052,27 +6070,43 @@ pub enum HardwareDeviceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AttestationConfig {
-    pub enabled: bool,
-    pub policy: AttestationPolicy,
+    pub mode: AttestationMode,
+    pub required: bool,
     pub evidence_max_bytes: u16,
+    pub challenge_max_bytes: u16,
+    pub max_age_ms: u32,
+    pub trust_anchor_ref: Option<String>,
+    pub ticket_key_policy: TicketKeyPolicy,
 }
 
 impl Default for AttestationConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            policy: AttestationPolicy::TpmOrDice,
-            evidence_max_bytes: 256,
+            mode: AttestationMode::Disabled,
+            required: false,
+            evidence_max_bytes: 8192,
+            challenge_max_bytes: 256,
+            max_age_ms: 30_000,
+            trust_anchor_ref: None,
+            ticket_key_policy: TicketKeyPolicy::DevelopmentStatic,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AttestationPolicy {
-    TpmOnly,
-    TpmOrDice,
-    DiceOnly,
+#[serde(rename_all = "snake_case")]
+pub enum AttestationMode {
+    Disabled,
+    MeasurementOnly,
+    Tpm2Quote,
+    DiceEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketKeyPolicy {
+    DevelopmentStatic,
+    DeviceBound,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8243,12 +8277,14 @@ impl Default for ClientHeartbeatPolicy {
 #[serde(deny_unknown_fields, default)]
 pub struct ClientTracePolicy {
     pub max_bytes: u32,
+    pub max_duration_ms: u32,
 }
 
 impl Default for ClientTracePolicy {
     fn default() -> Self {
         Self {
             max_bytes: 1_048_576,
+            max_duration_ms: 60_000,
         }
     }
 }

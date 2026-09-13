@@ -824,17 +824,20 @@ pub struct HardwareDevice {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AttestationPolicy {
-    TpmOnly,
-    TpmOrDice,
-    DiceOnly,
+pub enum AttestationMode {
+    Disabled,
+    MeasurementOnly,
+    Tpm2Quote,
+    DiceEvidence,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct AttestationConfig {
-    pub enabled: bool,
-    pub policy: AttestationPolicy,
+    pub mode: AttestationMode,
+    pub required: bool,
     pub evidence_max_bytes: u16,
+    pub challenge_max_bytes: u16,
+    pub max_age_ms: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1053,9 +1056,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.18";
+pub const MANIFEST_SCHEMA: &str = "1.20";
 pub const MANIFEST_SHA256: &str =
-    "5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e";
+    "fabaa97fd061a454a03a9ff628e7d3173fe8f70cc90bb83d1f523cf6a05b76f4";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

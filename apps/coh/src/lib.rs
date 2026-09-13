@@ -7,6 +7,8 @@
 
 //! Shared helpers for the Cohesix host bridge CLI.
 
+/// Fresh challenge and offline signed-evidence verification.
+pub mod attestation;
 /// TCP console-backed helpers.
 pub mod console;
 /// Host environment doctor checks.
@@ -21,6 +23,8 @@ pub mod fleet;
 pub mod gpu;
 /// Secure9P-backed mount adapter.
 pub mod mount;
+/// Bounded, read-only inspection and comparison of live state and evidence packs.
+pub mod operator;
 /// PEFT/LoRA lifecycle helpers.
 pub mod peft;
 /// Manifest-derived policy loader.

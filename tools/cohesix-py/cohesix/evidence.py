@@ -19,6 +19,7 @@ from .audit import CohesixAudit
 from .backends import Backend
 from .errors import CohesixError
 from .worker import TargetProfileContract, WorkerObservation
+from .operator import redact_value
 
 EVIDENCE_META_SCHEMA = "cohesix-evidence-pack/meta-v1"
 EVIDENCE_SUMMARY_SCHEMA = "cohesix-evidence-pack/summary-v1"
@@ -788,7 +789,8 @@ def _redact_ticket_json_lines(payload: bytes) -> bytes:
                 value["ticket"] = "sha256:" + hashlib.sha256(
                     ticket.encode("utf-8")
                 ).hexdigest()
-        lines_out.append(json.dumps(value, separators=(",", ":")))
+        value = redact_value(value)
+        lines_out.append(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
     payload_out = "\n".join(lines_out)
     if payload_out:
         payload_out += "\n"
@@ -1019,8 +1021,13 @@ def _is_missing_error(exc: Exception) -> bool:
 
 
 def _safe_detail(exc: Exception) -> str:
-    detail = str(exc)
-    return detail if len(detail) <= 256 else detail[:256]
+    if _is_missing_error(exc):
+        return "not-found"
+    tokens = re.split(r"[^A-Za-z0-9]", str(exc))
+    for code in ("ELIMIT", "EPERM", "EBUSY", "EINVAL", "ETIMEDOUT"):
+        if code in tokens:
+            return f"capture-error:{code}"
+    return "capture-error"
 
 
 def _missing_item(path: str, saved_as: str) -> Dict[str, Any]:

@@ -5,10 +5,9 @@
 
 use crate::codegen::hash_bytes;
 use crate::ir::{
-    resolve_manifest_relative_path, AttestationPolicy, DmaProtectionProfile,
-    DriverRuntimeIrqTrigger, HardwareDeviceKind, HostProvider, HostTicketAction,
-    HostTicketLifecycleState, Manifest, NetworkBackendKind, Role, SidecarLink,
-    WorkerSchedulingProfile,
+    resolve_manifest_relative_path, AttestationMode, DmaProtectionProfile, DriverRuntimeIrqTrigger,
+    HardwareDeviceKind, HostProvider, HostTicketAction, HostTicketLifecycleState, Manifest,
+    NetworkBackendKind, Role, SidecarLink, WorkerSchedulingProfile,
 };
 use crate::resource_admission::{HandoffClass, SaturationPolicy};
 use crate::temporal::{SchedulerArchitecture, TemporalExecution, TemporalTaskKind, TimeoutPolicy};
@@ -1023,17 +1022,20 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
-    writeln!(mod_contents, "pub enum AttestationPolicy {{")?;
-    writeln!(mod_contents, "    TpmOnly,")?;
-    writeln!(mod_contents, "    TpmOrDice,")?;
-    writeln!(mod_contents, "    DiceOnly,")?;
+    writeln!(mod_contents, "pub enum AttestationMode {{")?;
+    writeln!(mod_contents, "    Disabled,")?;
+    writeln!(mod_contents, "    MeasurementOnly,")?;
+    writeln!(mod_contents, "    Tpm2Quote,")?;
+    writeln!(mod_contents, "    DiceEvidence,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct AttestationConfig {{")?;
-    writeln!(mod_contents, "    pub enabled: bool,")?;
-    writeln!(mod_contents, "    pub policy: AttestationPolicy,")?;
+    writeln!(mod_contents, "    pub mode: AttestationMode,")?;
+    writeln!(mod_contents, "    pub required: bool,")?;
     writeln!(mod_contents, "    pub evidence_max_bytes: u16,")?;
+    writeln!(mod_contents, "    pub challenge_max_bytes: u16,")?;
+    writeln!(mod_contents, "    pub max_age_ms: u32,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -1749,7 +1751,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, BadgeRange, CachePolicy, CapabilityRights, CasConfig, ConsoleNetworkServiceConfig, ControlPlaneConfig, CriticalHandoffConfig, CriticalTcbResource, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExecutableRoleAdmission, ExecutableRoleMix, ExportControlConfig, FaultRegistryAdmission, HandoffClass, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, KernelObjectBits, KernelObjectBudget, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, RoleMixCount, SaturationPolicy, ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TemporalAuthorityConfig, TemporalCoreAdmission, TemporalExecution, TemporalTaskConfig, TemporalTaskKind, TicketLimits, TicketSpec, TimeoutPolicy, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerResourceAdmissionConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile, WorkerTaskAbiConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationMode, AuditConfig, BadgeRange, CachePolicy, CapabilityRights, CasConfig, ConsoleNetworkServiceConfig, ControlPlaneConfig, CriticalHandoffConfig, CriticalTcbResource, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExecutableRoleAdmission, ExecutableRoleMix, ExportControlConfig, FaultRegistryAdmission, HandoffClass, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, KernelObjectBits, KernelObjectBudget, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, RoleMixCount, SaturationPolicy, ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TemporalAuthorityConfig, TemporalCoreAdmission, TemporalExecution, TemporalTaskConfig, TemporalTaskKind, TicketLimits, TicketSpec, TimeoutPolicy, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerResourceAdmissionConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile, WorkerTaskAbiConfig}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -2498,7 +2500,7 @@ pub fn emit_rust(
         .unwrap_or_else(|| "None".to_owned());
     writeln!(
         bootstrap_contents,
-        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, network: HardwareNetworkConfig {{ enabled: {}, backend: {}, mode: {}, interface: {}, static_ipv4: StaticIpv4Config {{ ip: {}, prefix_len: {}, gateway: {} }}, dhcp: DhcpPolicyConfig {{ discover_timeout_ms: {}, request_timeout_ms: {}, max_retries: {} }} }}, attestation: AttestationConfig {{ enabled: {}, policy: {}, evidence_max_bytes: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
+        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, network: HardwareNetworkConfig {{ enabled: {}, backend: {}, mode: {}, interface: {}, static_ipv4: StaticIpv4Config {{ ip: {}, prefix_len: {}, gateway: {} }}, dhcp: DhcpPolicyConfig {{ discover_timeout_ms: {}, request_timeout_ms: {}, max_retries: {} }} }}, attestation: AttestationConfig {{ mode: {}, required: {}, evidence_max_bytes: {}, challenge_max_bytes: {}, max_age_ms: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
         manifest.hw.secure_boot,
         manifest.hw.no_nic,
         manifest.hw.network.enabled,
@@ -2511,9 +2513,11 @@ pub fn emit_rust(
         manifest.hw.network.dhcp.discover_timeout_ms,
         manifest.hw.network.dhcp.request_timeout_ms,
         manifest.hw.network.dhcp.max_retries,
-        manifest.hw.attestation.enabled,
-        attestation_policy_to_rust(manifest.hw.attestation.policy),
+        attestation_mode_to_rust(manifest.hw.attestation.mode),
+        manifest.hw.attestation.required,
         manifest.hw.attestation.evidence_max_bytes,
+        manifest.hw.attestation.challenge_max_bytes,
+        manifest.hw.attestation.max_age_ms,
         manifest.hw.local_seat.enabled,
         manifest.hw.local_seat.required,
         escape_literal(manifest.hw.local_seat.keyboard_device.as_str()),
@@ -2998,19 +3002,21 @@ fn ticket_key_literal(secret: &str) -> Result<String> {
     Ok(literal)
 }
 
-fn attestation_policy_to_rust(policy: AttestationPolicy) -> &'static str {
-    match policy {
-        AttestationPolicy::TpmOnly => "AttestationPolicy::TpmOnly",
-        AttestationPolicy::TpmOrDice => "AttestationPolicy::TpmOrDice",
-        AttestationPolicy::DiceOnly => "AttestationPolicy::DiceOnly",
+fn attestation_mode_to_rust(mode: AttestationMode) -> &'static str {
+    match mode {
+        AttestationMode::Disabled => "AttestationMode::Disabled",
+        AttestationMode::MeasurementOnly => "AttestationMode::MeasurementOnly",
+        AttestationMode::Tpm2Quote => "AttestationMode::Tpm2Quote",
+        AttestationMode::DiceEvidence => "AttestationMode::DiceEvidence",
     }
 }
 
-fn attestation_policy_label(policy: AttestationPolicy) -> &'static str {
-    match policy {
-        AttestationPolicy::TpmOnly => "tpm-only",
-        AttestationPolicy::TpmOrDice => "tpm-or-dice",
-        AttestationPolicy::DiceOnly => "dice-only",
+fn attestation_mode_label(mode: AttestationMode) -> &'static str {
+    match mode {
+        AttestationMode::Disabled => "disabled",
+        AttestationMode::MeasurementOnly => "measurement_only",
+        AttestationMode::Tpm2Quote => "tpm2_quote",
+        AttestationMode::DiceEvidence => "dice_evidence",
     }
 }
 
@@ -3629,12 +3635,12 @@ fn build_audit_lines(
             manifest.hw.network.dhcp.max_retries
         ),
         format!(
-            "manifest.hw.attestation.enabled={}",
-            manifest.hw.attestation.enabled
+            "manifest.hw.attestation.required={}",
+            manifest.hw.attestation.required
         ),
         format!(
-            "manifest.hw.attestation.policy={}",
-            attestation_policy_label(manifest.hw.attestation.policy)
+            "manifest.hw.attestation.mode={}",
+            attestation_mode_label(manifest.hw.attestation.mode)
         ),
         format!(
             "manifest.hw.local_seat.enabled={}",
@@ -3664,20 +3670,14 @@ fn build_audit_lines(
         }
     }
 
-    if manifest.hw.attestation.enabled {
-        let evidence_seed = format!(
-            "{}:{}",
-            attestation_policy_label(manifest.hw.attestation.policy),
-            manifest_hash
-        );
-        lines.push(format!(
-            "attestation.bound_manifest_sha256={}",
-            manifest_hash
-        ));
-        lines.push(format!(
-            "attestation.evidence_sha256={}",
-            hash_bytes(evidence_seed.as_bytes())
-        ));
+    lines.push(format!(
+        "attestation.mode={}",
+        attestation_mode_label(manifest.hw.attestation.mode)
+    ));
+    lines.push("attestation.signed_evidence=unavailable".to_owned());
+    lines.push("attestation.ticket_keys=development_static".to_owned());
+    if manifest.hw.attestation.mode == AttestationMode::MeasurementOnly {
+        lines.push(format!("measurement.bound_manifest_sha256={manifest_hash}"));
     }
     if manifest.profile.name == "uefi-aarch64" {
         lines.push("manifest.profile.alias=uefi-aarch64->pi4-uboot-aarch64".to_owned());

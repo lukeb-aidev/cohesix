@@ -2450,6 +2450,13 @@ impl NineDoorBridge {
         if path == PROC_BOOT_PATH {
             return boot_lines_into(output);
         }
+        if path == "/proc/attest/capabilities" {
+            return cat_lines_from_text_into(crate::attest::CAPABILITIES, output);
+        }
+        if path == "/proc/attest/status" {
+            let status = crate::attest::status().map_err(|_| NineDoorBridgeError::BufferFull)?;
+            return cat_lines_from_text_into(status.as_str(), output);
+        }
         if path == PROC_TESTS_QUICK_PATH {
             return script_lines_into(SELFTEST_QUICK_SCRIPT, output);
         }
@@ -2593,6 +2600,7 @@ impl NineDoorBridge {
         }
         if path == "/proc" {
             push_list_entry(output, "boot")?;
+            push_list_entry(output, "attest")?;
             push_list_entry(output, "tests")?;
             push_list_entry(output, "lifecycle")?;
             if self.observe.proc_9p_session_enabled() {
@@ -2614,6 +2622,9 @@ impl NineDoorBridge {
                 push_list_entry(output, "lease")?;
             }
             return Ok(());
+        }
+        if path == "/proc/attest" {
+            return list_from_slice_into(&["capabilities", "status"], output);
         }
         if path == PROC_9P_ROOT_PATH {
             if !self.observe.proc_9p_session_enabled() {
@@ -12964,6 +12975,23 @@ mod tests {
             !output.iter().any(|line| line.as_str() == "lora"),
             "AI LoRA receipts must not create a root radio namespace"
         );
+    }
+
+    #[test]
+    fn attest_capabilities_report_unavailable_and_remain_readonly() {
+        let mut bridge = NineDoorBridge::new();
+        let entries = bridge.list("/proc/attest").expect("attestation directory");
+        assert_eq!(entries.as_slice(), ["capabilities", "status"]);
+        let caps = bridge
+            .cat("/proc/attest/capabilities")
+            .expect("attestation capabilities");
+        assert_eq!(caps.as_slice(), [crate::attest::CAPABILITIES]);
+        let status = bridge
+            .cat("/proc/attest/status")
+            .expect("attestation status");
+        assert!(status[0].contains("\"signed_evidence\":false"));
+        assert!(bridge.echo("/proc/attest/challenge", "{} ").is_err());
+        assert!(bridge.echo("/proc/attest/status", "PASS").is_err());
     }
 
     #[test]

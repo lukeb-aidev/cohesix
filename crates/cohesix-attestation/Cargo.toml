@@ -1,0 +1,21 @@
+# Author: Lukas Bower
+# Purpose: Share bounded TPM evidence parsing and host trust validation.
+# Copyright 2026 Lukas Bower
+[package]
+name = "cohesix-attestation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[features]
+default = ["verify"]
+verify = ["dep:webpki", "dep:pki-types"]
+
+[dependencies]
+serde = { version = "1.0.229", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
+sha2 = { workspace = true }
+hex = { workspace = true }
+webpki = { package = "rustls-webpki", version = "0.103.13", default-features = false, features = ["alloc", "ring"], optional = true }
+pki-types = { package = "rustls-pki-types", version = "1.15.1", default-features = false, features = ["alloc"], optional = true }

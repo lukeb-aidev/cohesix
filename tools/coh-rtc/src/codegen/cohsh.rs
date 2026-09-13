@@ -247,6 +247,12 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(contents, "[trace]").ok();
     writeln!(
         contents,
+        "max_duration_ms = {}",
+        manifest.client_policies.trace.max_duration_ms
+    )
+    .ok();
+    writeln!(
+        contents,
         "max_bytes = {}",
         manifest.client_policies.trace.max_bytes
     )
@@ -359,6 +365,12 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
         contents,
         "- `trace.max_bytes`: `{}`",
         manifest.client_policies.trace.max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `trace.max_duration_ms`: `{}`",
+        manifest.client_policies.trace.max_duration_ms
     )
     .ok();
     writeln!(contents).ok();
@@ -486,6 +498,12 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
         contents,
         "pub const COHSH_TRACE_MAX_BYTES: u32 = {};",
         manifest.client_policies.trace.max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_TRACE_MAX_DURATION_MS: u32 = {};",
+        manifest.client_policies.trace.max_duration_ms
     )
     .ok();
     contents
@@ -953,6 +971,12 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "- `trace.max_bytes`: `{}`",
         manifest.client_policies.trace.max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `trace.max_duration_ms`: `{}`",
+        manifest.client_policies.trace.max_duration_ms
     )
     .ok();
     writeln!(

@@ -126,7 +126,7 @@ is the authenticated console.
 | Upstream seL4 | Target kernel | Enforces objects, capabilities, address spaces, SMP+MCS scheduling contexts and budgets, Reply objects, timeout faults, notifications, IPC, interrupts, and kernel-generated platform truth. |
 | `root-task` | Target, `no_std` | Owns BootInfo/untyped allocation, CSpace/VSpace bootstrap, HAL admission, event pumping, serial/local-seat/HDMI handling, Queen policy, Worker model state, audit/evidence, and fault supervision. On QEMU it admits and maps VirtIO resources into `console-network-runtime`. On Pi it supervises GENET bootstrap, publishes the handoff generation, and pair-contains either peer on failure. It owns no steady-state MMIO, IRQ, DMA, smoltcp, TCP, authentication, packet copy, or packet-poll path after a direct backend becomes active. |
 | `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. The GENET child remains the sole GENET MMIO/DMA/IRQ and private-ring owner before and after its post-DHCP direct handoff. |
-| `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The selected schema-1.18 QEMU root constructor binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
+| `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The selected schema-1.20 QEMU root constructor binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
 | Executable Worker runtime and role/session model | Target children plus root/host projections | Root constructs suspended Heartbeat, GPU, and LoRA children from the compiler-owned image and authority inventory. Instances are passive and accept a donated SC only from their generated role executor. READY gates publication; control, receipts, faults, teardown, and recreation retain exact five-part identity. WorkerBus remains model-only. |
 | Host NineDoor library/fixture adapter | Host, `std` | Implements the Secure9P model used by host builds and in-process compatibility tests. It is not a packaged target transport or proof of a live host service. |
 | `cohsh`, `coh`, SwarmUI, gateway, FUSE, GPU and provider bridges | Host | Provide host clients/adapters and execute only integrations whose selected implementation and observed mode are live; they do not create a new target authority path. |
@@ -324,17 +324,17 @@ qualify Pi deadline behavior or network latency.
 
 ### 3.5 Current identity and attestation qualification
 
-When enabled, `apps/root-task/src/attest.rs` currently hashes public
-policy-label and manifest-fingerprint data, labels the result from
-configuration, and installs generated static ticket keys. It issues no TPM
-command, nonce-bound Quote, device-bound DICE derivation, signature or chain
-validation, measured-boot verification, or secret unsealing.
+Root-task reports public manifest measurements as `measurement_only`, with
+`development_static` ticket keys. Schema 1.20 removes automatic TPM/DICE
+fallback labels. Required evidence and signed modes without an admitted device
+provider fail before generated ticket registration. `/proc/attest/capabilities`
+and `/proc/attest/status` expose that state without claiming a signature.
 
-That output is deterministic `measurement_only` metadata. It does not establish
-acceptable attested production ticket authority or satisfy a TPM, DICE,
-`coh attest`, release, or production-use-case claim. Current code can still
-publish/use its generated static authority material; that is the reopened
-defect, not evidence of fail-closed attestation.
+The shared host TPM2 verifier validates the [signed evidence contract](ATTESTATION.md).
+The stock Pi 4 is excluded from positive signed-device acceptance by the
+2026-09-14 owner decision. Physical TPM/DICE issuance and device-bound ticket
+material remain the separate reopened Milestone 26 device task; the selected
+images do not claim attested-production admission.
 
 ## 4. Control-plane paths
 
@@ -528,3 +528,14 @@ those schemas or raise the evidence level of their source.
   [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md)
 - Manifest compiler: [`tools/coh-rtc`](../tools/coh-rtc)
 - Validation and acceptance: [TEST_PLAN.md](TEST_PLAN.md)
+
+## Milestone 27 operator interaction layer
+
+`apps/coh/src/operator.rs` owns bounded live and canonical-pack observations,
+exact diffs, and non-attested result classification. Existing evidence and
+timeline modules retain the pack layout and add source-linked case summaries.
+`cohsh-core` owns both legacy fixture and live-capture versions of the canonical
+trace container; `cohsh::trace_capture` owns passive recording, shared redaction,
+and offline retained reads reused by coh-status and SwarmUI. These host modules
+add no target listeners, namespace writers, device ownership, or policy bypass.
+The [operator contract](OPERATOR_EVIDENCE.md) defines their authority limits.

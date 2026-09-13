@@ -147,7 +147,7 @@ manual availability, profile selection, implementation, and target proof.
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
-| [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Next — 1.1.0-beta (Release A) |
+| [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | In Progress — 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Next — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Next — 1.1.0-beta (Release A) Jetson/Linux reference slice |
 | [27c](#27c) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Next — 1.1.0-beta (Release A) capsule core; full graph conditional |
@@ -6483,19 +6483,21 @@ The next planned releases target official Raspberry Pi 4 bare-metal boot (`U-Boo
 
 **Status:** Complete.
 
-**As-built attestation correction:** `apps/root-task/src/attest.rs` currently
-hashes the selected policy label and manifest fingerprint, labels that result
-`tpm` or `dice` from configuration, and then installs generated static ticket
-keys. It performs no TPM command, nonce-bound quote, device-bound DICE
-derivation, certificate/signature validation, secure-boot-chain measurement,
-or secret unsealing. The Pi profile also selects `tpm-or-dice` while declaring
-`secure_boot = false` and no TPM device. That output is useful reproducible
-measurement metadata only. It must be reported as `measurement_only`, never as
-attestation, and cannot satisfy the existing Milestone 26 attestation check or
-any downstream `coh attest`, ticket-sealing, release, or production-use-case
-claim. Planning this correction does not authorize edits to the parallel CYW43
-lane; implementation is sequenced after its exact-image surface is frozen and
-must re-prove the resulting root/image identity separately.
+**As-built attestation correction (2026-09-14):** Schema 1.20 replaces the
+public policy-hash TPM/DICE labels with explicit implementation modes. Root
+reports `measurement_only` and development ticket keys; required signed modes
+without a device provider fail before ticket registration. The shared host
+TPM2 quote/certificate verifier and versioned challenge/evidence/trust contract
+are implemented in [ATTESTATION.md](ATTESTATION.md). Device issuance and sealed
+or derived production ticket material remain the reopened task below.
+
+**Stock Pi 4 exception (Lukas Bower, 2026-09-14):** The current Pi has no onboard
+TPM or provisioned device-bound DICE chain. It is excluded from positive
+signed-device acceptance and explicitly selects optional measurement-only
+mode. This exception does not enable secure boot, attest static keys, waive
+ordinary Pi operator/trace validation, or qualify an added TPM module. The
+hardware-independent host verifier and its negative/cryptographic conformance
+gates remain required. No CYW43 behavior or historical proof is relabelled.
 
 **Why now (context):**  
 Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` validates and consumes immutable `seL4/build_UBOOT` artifacts, composes the new rootserver and wrapper only in disposable output, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the isolated runtime layout used by Milestone 26a/26b.
@@ -12962,6 +12964,12 @@ Cadence by milestone family:
 ## Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="27"></a>
 [Milestones](#Milestones)
 
+**Status (2026-09-14):** In Progress — activated by Lukas Bower after
+Milestone 26e completion. Implement the read-only operator utilities and the
+`m27-*` tasks below. Signed attestation remains conditional on the accepted
+`m26-device-identity-attestation-closure` evidence contract; absent signed
+evidence must produce a typed non-attested result, never a hash-based PASS.
+
 **Delivery posture:** Release A priority and the shared read-only foundation for
 the AI workflow and 27f showcase.
 
@@ -12976,7 +12984,15 @@ typed unavailable or unknown state and preserve the source evidence class.
 Mutating authority hardening remains Milestone 27a, not a hidden prerequisite
 inside Milestone 27.
 
-**As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs. `cohsh --record-trace` and `--replay-trace` currently hard-reject every transport except the in-process mock, so fixture replay is real but live canonical capture is not. Likewise, Milestone 27 may verify an attestation only after `m26-device-identity-attestation-closure` supplies signed, freshness-bound evidence; the current public-data measurement hash is not a positive fixture.
+**As-built alignment (2026-09-14):** The current implementation adds
+`coh inspect`, `coh trace`, `coh diff`, a fail-closed `coh attest`, and the thin
+`coh bundle` alias. Canonical packs include bounded inspect observations,
+optional host attachments and digests; timelines add scenario-aware case
+summaries. Canonical trace capture supports live TCP and REST, with shared
+offline consumers and preserved version-1 fixtures. See
+[the operator contract](OPERATOR_EVIDENCE.md). The shared TPM2 signature verifier and explicit proof classes are implemented;
+fresh target trace acceptance is tracked separately. Public measurements never
+produce attestation PASS.
 
 This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
 
@@ -12985,12 +13001,14 @@ Milestone 27 is a **convergence milestone**. It does not create a second trace f
 - the existing `coh evidence pack` / `coh evidence timeline` surface remains the canonical reproducibility pack;
 - this milestone fills the missing operator-facing commands and makes those existing foundations compose cleanly.
 
-**Planning status (2026-08-29):** Milestone 27 is selected for Release A after
-the active 26e acceptance gate. `m27-evidence-case-summary` remains scoped in
-the task breakdown below and is not yet implemented. Authoritative receipt
-validation and any verified-execution verdict remain owned by
-`m27b-authoritative-receipt-and-evidence-core`; read-only tooling must not
-synthesize them.
+**Implementation status (2026-09-14):** Host utilities, case synthesis,
+Python consumers, audit consistency coverage, and bounded latency coverage are
+implemented. Milestone status remains In Progress until required validation
+and `m27-attestation-verifier` close. The signed wire/trust contract is now
+implemented; optional-device availability remains explicit and the stock Pi
+positive-device requirement is excluded by the owner decision above.
+Authoritative receipt validation and verified-execution verdicts remain owned
+by `m27b-authoritative-receipt-and-evidence-core`.
 
 ---
 

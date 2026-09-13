@@ -5,7 +5,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.18`
+- `root_task.schema`: `1.20`
 - `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `64`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -216,9 +216,9 @@
 - `hw.network.dhcp.discover_timeout_ms`: `1000`
 - `hw.network.dhcp.request_timeout_ms`: `1000`
 - `hw.network.dhcp.max_retries`: `4`
-- `hw.attestation.enabled`: `false`
-- `hw.attestation.policy`: `tpm-or-dice`
-- `hw.attestation.evidence_max_bytes`: `256`
+- `hw.attestation.required`: `false`
+- `hw.attestation.mode`: `disabled`
+- `hw.attestation.evidence_max_bytes`: `8192`
 - `hw.local_seat.enabled`: `false`
 - `hw.local_seat.required`: `false`
 - `hw.local_seat.keyboard_device`: `usb-kbd0`
@@ -232,7 +232,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7`
+- `manifest.sha256`: `857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -291,4 +291,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7`)._
+_Generated from `configs/root_task.toml` (sha256: `857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677`)._

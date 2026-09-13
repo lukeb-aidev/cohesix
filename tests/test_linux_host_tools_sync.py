@@ -63,9 +63,7 @@ def test_remote_builder_exposes_build_and_archive_modes() -> None:
 def test_remote_builder_packages_compile_time_inputs() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
-    assert "git ls-files -z --cached" in source
-    assert "apps crates tools tests resources" in source
-    assert "tests resources configs/generated" in source
+    assert 'git --git-dir="$archive_git" archive --format=tar "$source_commit"' in source
     assert "rust-toolchain.toml" in source
     assert "does not match pinned" in source
     assert "toolchain_channel" in source
@@ -86,29 +84,43 @@ def test_transferred_archive_contains_both_gateway_compile_time_contracts(
         "scripts/rustc-wrapper.sh",
         "configs/generated/cohesix_python_qemu_smp_production.json",
         "configs/generated/cohesix_python_pi4_production.json",
+        "third_party/example/include/contract.h",
+        ".gitattributes",
     ]
     for relative in required:
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture\n")
+    (repo / ".gitattributes").write_text("third_party export-ignore\n")
     ignored = repo / "configs/generated/untracked-secret.json"
     ignored.write_text("must not enter the source transfer\n")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", *required], check=True)
-    source = SCRIPT.read_text()
-    start = source.index(
-        '  (\n    cd "$ROOT_DIR"', source.index('log "Packaging the exact clean')
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Fixture",
+         "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
     )
+    source = SCRIPT.read_text()
+    start = source.index('  local archive_git=', source.index('log "Packaging the exact clean'))
     end = source.index("\n  local source_sha256", start)
     archive = tmp_path / "source.tar.gz"
-    env = {**os.environ, "ROOT_DIR": str(repo), "source_tarball": str(archive)}
+    commit = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    env = {**os.environ, "ROOT_DIR": str(repo), "source_tarball": str(archive),
+           "temp_dir": str(tmp_path), "source_commit": commit}
     subprocess.run(
-        ["bash", "-euo", "pipefail", "-c", source[start:end]], env=env, check=True
+        ["bash", "-euo", "pipefail", "-c",
+         "archive_source() {\n" + source[start:end] + "\n}\narchive_source"],
+        env=env, check=True,
     )
     with tarfile.open(archive) as handle:
         names = set(handle.getnames())
     assert set(required) <= names
     assert "configs/generated/untracked-secret.json" not in names
+    assert (repo / ".gitattributes").read_text() == "third_party export-ignore\n"
+    assert not (repo / ".git/info/attributes").exists()
 
 
 def test_remote_builder_fails_before_ssh_when_locations_are_missing() -> None:

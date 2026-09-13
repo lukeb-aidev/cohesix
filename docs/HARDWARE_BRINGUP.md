@@ -1620,3 +1620,13 @@ Route the first failed proof layer rather than patching a later symptom:
 
 Keep failed evidence. A named, current-image blocker is more useful than a
 later successful boot with no causal record.
+
+## Signed-device evidence availability
+
+The [signed evidence contract](ATTESTATION.md) defines the schema-1.20
+implementation modes, bounded `/proc/attest` discovery, verifier-owned trust
+policy, TPM2 quote verification, retained pack records and the stock Pi 4
+positive-attestation exemption. Optional profiles report unavailable or
+measurement-only; development ticket keys never become attested production
+keys. `coh attest --trust-policy <file>` verifies signatures, and
+`--input <pack>` remains explicitly offline.

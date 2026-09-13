@@ -26,6 +26,8 @@ mod session_pool;
 pub mod ticket_mint;
 /// Trace-aware transport helpers for cohsh.
 pub mod trace;
+/// Bounded canonical live transcript capture and offline diagnostics.
+pub mod trace_capture;
 /// Compiler-owned Worker role/path projection and independent state rendering.
 pub mod worker;
 
@@ -287,6 +289,8 @@ impl Session {
 const ROOT_FID: u32 = 1;
 /// Manifest-derived Secure9P maximum message size.
 pub const SECURE9P_MSIZE: u32 = generated_client::SECURE9P_MSIZE;
+/// Compiler-derived maximum diagnostic trace artifact size.
+pub const TRACE_MAX_BYTES: u32 = generated_client::TRACE_MAX_BYTES;
 /// Manifest-derived Secure9P walk depth.
 pub const SECURE9P_WALK_DEPTH: u8 = generated_client::SECURE9P_WALK_DEPTH;
 /// Manifest-derived control path for queen control.

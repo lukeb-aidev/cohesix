@@ -1319,14 +1319,14 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
-            "- `hw.attestation.enabled`: `{}`",
-            manifest.hw.attestation.enabled
+            "- `hw.attestation.required`: `{}`",
+            manifest.hw.attestation.required
         )
         .ok();
         writeln!(
             schema_md,
-            "- `hw.attestation.policy`: `{}`",
-            format_attestation_policy(manifest.hw.attestation.policy)
+            "- `hw.attestation.mode`: `{}`",
+            format_attestation_mode(manifest.hw.attestation.mode)
         )
         .ok();
         writeln!(
@@ -2197,6 +2197,18 @@ impl DocFragments {
         writeln!(trace_policy_md, "- `trace.hash`: `sha256`").ok();
         writeln!(
             trace_policy_md,
+            "- `trace.capture.version`: `{}`",
+            cohsh_core::trace::TRACE_CAPTURE_VERSION
+        )
+        .ok();
+        writeln!(
+            trace_policy_md,
+            "- `trace.max_duration_ms`: `{}`",
+            manifest.client_policies.trace.max_duration_ms
+        )
+        .ok();
+        writeln!(
+            trace_policy_md,
             "- `trace.max_bytes`: `{}`",
             manifest.client_policies.trace.max_bytes
         )
@@ -2858,11 +2870,12 @@ fn format_network_interface_policy(policy: crate::ir::NetworkInterfacePolicy) ->
     }
 }
 
-fn format_attestation_policy(policy: crate::ir::AttestationPolicy) -> &'static str {
+fn format_attestation_mode(policy: crate::ir::AttestationMode) -> &'static str {
     match policy {
-        crate::ir::AttestationPolicy::TpmOnly => "tpm-only",
-        crate::ir::AttestationPolicy::TpmOrDice => "tpm-or-dice",
-        crate::ir::AttestationPolicy::DiceOnly => "dice-only",
+        crate::ir::AttestationMode::Disabled => "disabled",
+        crate::ir::AttestationMode::MeasurementOnly => "measurement_only",
+        crate::ir::AttestationMode::Tpm2Quote => "tpm2_quote",
+        crate::ir::AttestationMode::DiceEvidence => "dice_evidence",
     }
 }
 

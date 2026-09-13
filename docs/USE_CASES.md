@@ -282,3 +282,12 @@ If the answers are concrete, continue with the
 [BENCHMARKS.md](BENCHMARKS.md) for performance claims, and
 [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md) to keep build, flash, boot, network,
 console, and benchmark proof separate.
+
+## Milestone 27 incident and change review
+
+Operators can inspect current read-only state, compare retained packs, capture
+bounded TCP/REST traces, and generate source-linked case summaries for incident,
+change, maintenance, rollout, or federation review. The same canonical pack
+supports each scenario; no scenario upgrades a host observation into target,
+hardware, or execution proof. The [operator evidence contract](OPERATOR_EVIDENCE.md)
+defines unavailable and ambiguous stages and the signed-attestation prerequisite.

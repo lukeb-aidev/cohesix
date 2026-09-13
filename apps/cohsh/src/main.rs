@@ -10,8 +10,6 @@
 #[cfg(feature = "in-process")]
 use std::cell::RefCell;
 use std::env;
-#[cfg(feature = "in-process")]
-use std::fs;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
@@ -41,7 +39,6 @@ use cohsh::trace::{TraceAckMode, TraceShellTransport};
 use cohsh::NineDoorTransport;
 #[cfg(feature = "rest")]
 use cohsh::RestTransport;
-#[cfg(feature = "in-process")]
 use cohsh::SECURE9P_MSIZE;
 use cohsh::{
     default_policy_path, load_policy, validate_script, AutoAttach, PolicyOverrides, QemuTransport,
@@ -51,12 +48,11 @@ use cohsh::{
 use cohsh::{
     tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT,
 };
-#[cfg(feature = "in-process")]
 use cohsh_core::command::MAX_LINE_LEN;
+use cohsh_core::trace::TracePolicy;
 #[cfg(feature = "in-process")]
 use cohsh_core::trace::{
-    TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
-    TraceTransportRecorder,
+    TraceLogBuilder, TraceLogBuilderRef, TraceReplayTransport, TraceTransportRecorder,
 };
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -68,6 +64,20 @@ enum TransportKind {
     Tcp,
     #[cfg(feature = "rest")]
     Rest,
+}
+
+impl TransportKind {
+    fn capture_backend(self) -> Result<u8> {
+        match self {
+            #[cfg(feature = "tcp")]
+            Self::Tcp => Ok(1),
+            #[cfg(feature = "rest")]
+            Self::Rest => Ok(2),
+            _ => Err(anyhow!(
+                "live trace capture requires TCP or REST console transport"
+            )),
+        }
+    }
 }
 
 /// Cohesix shell command-line arguments.
@@ -89,10 +99,7 @@ struct Cli {
         conflicts_with = "ticket",
         conflicts_with_all = ["script", "check"]
     )]
-    #[cfg_attr(
-        feature = "in-process",
-        arg(conflicts_with_all = ["record_trace", "replay_trace"])
-    )]
+    #[arg(conflicts_with_all = ["record_trace", "replay_trace"])]
     mint_ticket: bool,
 
     /// Subject identity embedded in minted tickets (required for worker roles).
@@ -116,12 +123,23 @@ struct Cli {
     check: Option<PathBuf>,
 
     /// Record a Secure9P trace to the supplied path.
-    #[cfg(feature = "in-process")]
     #[arg(long, value_name = "FILE", conflicts_with = "replay_trace")]
     record_trace: Option<PathBuf>,
 
+    /// Expected target label for a live capture (hashed before persistence).
+    #[arg(long, requires = "record_trace")]
+    trace_target_id: Option<String>,
+    /// Expected boot/session label for a live capture (hashed before persistence).
+    #[arg(long, requires = "record_trace")]
+    trace_session_id: Option<String>,
+    /// Expected target resolved-manifest SHA-256; absence remains unknown.
+    #[arg(long, requires = "record_trace")]
+    trace_manifest_sha256: Option<String>,
+    /// Expected target image SHA-256; absence remains unknown.
+    #[arg(long, requires = "record_trace")]
+    trace_image_sha256: Option<String>,
+
     /// Replay a Secure9P trace from the supplied path.
-    #[cfg(feature = "in-process")]
     #[arg(long, value_name = "FILE", conflicts_with = "record_trace")]
     replay_trace: Option<PathBuf>,
 
@@ -627,19 +645,109 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "in-process")]
     let trace_enabled = cli.record_trace.is_some() || cli.replay_trace.is_some();
-    #[cfg(feature = "in-process")]
-    if trace_enabled && !matches!(cli.transport, TransportKind::Mock) {
-        return Err(anyhow!("trace record/replay requires --transport mock"));
-    }
-    #[cfg(feature = "in-process")]
     let trace_policy =
         TracePolicy::new(policy.trace.max_bytes, SECURE9P_MSIZE, MAX_LINE_LEN as u32);
+    if let Some(path) = &cli.replay_trace {
+        let trace = cohsh::trace_capture::read_trace(path, trace_policy)?;
+        if trace.capture.is_some() {
+            let lines = cohsh::trace_capture::replay_lines(
+                &trace,
+                &cohsh::trace_capture::policy_digest(trace_policy, policy.trace.max_duration_ms),
+            )?;
+            for line in lines {
+                println!("{line}");
+            }
+            anyhow::ensure!(
+                trace.capture.as_ref().is_some_and(|m| m.completion == 0),
+                "trace-capture-incomplete"
+            );
+            return Ok(());
+        }
+        #[cfg(not(feature = "in-process"))]
+        return Err(anyhow!(
+            "legacy fixture replay requires the in-process feature"
+        ));
+    }
+    #[cfg(feature = "in-process")]
+    let mock_transport = matches!(cli.transport, TransportKind::Mock);
+    #[cfg(not(feature = "in-process"))]
+    let mock_transport = false;
+    let live_capture = if cli.record_trace.is_some() && !mock_transport {
+        let backend = cli.transport.capture_backend()?;
+        let digest = |text: &Option<String>| -> Result<[u8; 32]> {
+            match text {
+                None => Ok([0; 32]),
+                Some(text) => {
+                    let bytes = hex::decode(text)
+                        .map_err(|_| anyhow!("trace identity must be SHA-256 hex"))?;
+                    bytes
+                        .try_into()
+                        .map_err(|_| anyhow!("trace identity must be 32 bytes"))
+                }
+            }
+        };
+        let metadata = cohsh_core::trace::CaptureMetadata {
+            backend,
+            completion: 0,
+            target_sha256: cli
+                .trace_target_id
+                .as_deref()
+                .map(cohsh::trace_capture::identity_digest)
+                .unwrap_or([0; 32]),
+            session_sha256: cli
+                .trace_session_id
+                .as_deref()
+                .map(cohsh::trace_capture::identity_digest)
+                .unwrap_or([0; 32]),
+            manifest_sha256: digest(&cli.trace_manifest_sha256)?,
+            image_sha256: digest(&cli.trace_image_sha256)?,
+            policy_sha256: cohsh::trace_capture::policy_digest(
+                trace_policy,
+                policy.trace.max_duration_ms,
+            ),
+            captured_unix_ms: u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis(),
+            )
+            .context("trace-capture-time")?,
+            max_duration_ms: policy.trace.max_duration_ms,
+        };
+        let mut secrets: Vec<String> = cli.ticket.iter().cloned().collect();
+        #[cfg(feature = "tcp")]
+        if let Some(value) = &cli.auth_token {
+            secrets.push(value.clone());
+        }
+        for name in [
+            "COHSH_AUTH_TOKEN",
+            "COH_AUTH_TOKEN",
+            "COH_REST_AUTH_TOKEN",
+            "COHSH_REST_AUTH_TOKEN",
+            "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+        ] {
+            if let Ok(value) = env::var(name) {
+                secrets.push(value);
+            }
+        }
+        #[cfg(feature = "rest")]
+        if let Some(value) = &cli.rest_auth_token {
+            secrets.push(value.clone());
+        }
+        Some(cohsh::trace_capture::Capture::new(
+            trace_policy,
+            metadata,
+            secrets,
+        )?)
+    } else {
+        None
+    };
+    let writer = cohsh::trace_capture::CaptureWriter::new(writer, live_capture.clone());
     #[cfg(feature = "in-process")]
     let mut trace_builder: Option<TraceLogBuilderRef> = None;
     #[cfg(feature = "in-process")]
-    let trace_transport: Option<TransportSelection> = if trace_enabled {
-        let server = build_mock_server(cli.mock_seed_gpu)?;
+    let trace_transport: Option<TransportSelection> = if trace_enabled && live_capture.is_none() {
         if cli.record_trace.is_some() {
+            let server = build_mock_server(cli.mock_seed_gpu)?;
             let builder = TraceLogBuilder::shared(trace_policy);
             trace_builder = Some(Rc::clone(&builder));
             let server_clone = server.clone();
@@ -660,9 +768,7 @@ fn main() -> Result<()> {
                 .replay_trace
                 .as_ref()
                 .context("trace replay path missing after trace selection")?;
-            let payload = fs::read(trace_path)
-                .with_context(|| format!("failed to read trace {}", trace_path.display()))?;
-            let trace = TraceLog::decode(&payload, trace_policy)?;
+            let trace = cohsh::trace_capture::read_trace(trace_path, trace_policy)?;
             let expected = trace.ack_lines;
             let frames = Rc::new(RefCell::new(Some(trace.frames)));
             let factory = Box::new(move || {
@@ -689,6 +795,24 @@ fn main() -> Result<()> {
     };
     #[cfg(not(feature = "in-process"))]
     let (transport, pool_factory) = build_regular_transport()?;
+    let (transport, pool_factory) = if let Some(capture) = &live_capture {
+        let transport = Box::new(cohsh::trace_capture::CaptureTransport::new(
+            transport,
+            capture.clone(),
+        )) as Box<dyn Transport>;
+        let factory = pool_factory.map(|factory| {
+            let capture = capture.clone();
+            Arc::new(move || {
+                Ok(Box::new(cohsh::trace_capture::CaptureTransport::new(
+                    factory.create()?,
+                    capture.clone(),
+                )) as Box<dyn Transport + Send>)
+            }) as Arc<dyn TransportFactory>
+        });
+        (transport, factory)
+    } else {
+        (transport, pool_factory)
+    };
     let mut shell = Shell::new(transport, writer);
     if let Some(factory) = pool_factory {
         let pool = SessionPool::new(
@@ -700,34 +824,52 @@ fn main() -> Result<()> {
     }
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
 
-    let run_result = if let Some(script_path) = cli.script {
-        if let Some(role_arg) = cli.role {
-            let role = Role::from(role_arg);
-            shell.attach(role, cli.ticket.as_deref())?;
+    let run_result = (|| {
+        if let Some(script_path) = cli.script {
+            if let Some(role_arg) = cli.role {
+                let role = Role::from(role_arg);
+                shell.attach(role, cli.ticket.as_deref())?;
+            } else {
+                shell.write_line("detached shell: run 'attach <role>' to connect")?;
+            }
+            let file = File::open(&script_path)
+                .with_context(|| format!("failed to open script {script_path:?}"))?;
+            shell.run_script(BufReader::new(file))
         } else {
-            shell.write_line("detached shell: run 'attach <role>' to connect")?;
+            let auto_role = cli.role.map(Role::from);
+            #[cfg(feature = "in-process")]
+            let auto_log = !matches!(cli.transport, TransportKind::Mock);
+            #[cfg(not(feature = "in-process"))]
+            let auto_log = true;
+            let auto_attach = auto_role.map(|role| AutoAttach {
+                role,
+                ticket: cli.ticket.clone(),
+                attempts: 0,
+                max_attempts: 1,
+                auto_log,
+            });
+            if auto_attach.is_none() {
+                shell.write_line("detached shell: run 'attach <role>' to connect")?;
+            }
+            shell.repl_with_autologin(auto_attach)
         }
-        let file = File::open(&script_path)
-            .with_context(|| format!("failed to open script {script_path:?}"))?;
-        shell.run_script(BufReader::new(file))
-    } else {
-        let auto_role = cli.role.map(Role::from);
-        #[cfg(feature = "in-process")]
-        let auto_log = !matches!(cli.transport, TransportKind::Mock);
-        #[cfg(not(feature = "in-process"))]
-        let auto_log = true;
-        let auto_attach = auto_role.map(|role| AutoAttach {
-            role,
-            ticket: cli.ticket.clone(),
-            attempts: 0,
-            max_attempts: 1,
-            auto_log,
-        });
-        if auto_attach.is_none() {
-            shell.write_line("detached shell: run 'attach <role>' to connect")?;
-        }
-        shell.repl_with_autologin(auto_attach)
-    };
+    })();
+
+    if let Some(capture) = live_capture {
+        let completion = capture
+            .lock()
+            .map_err(|_| anyhow!("trace recorder lock poisoned"))?
+            .finish(
+                cli.record_trace.as_ref().context("trace output path")?,
+                run_result.is_ok(),
+            )?;
+        run_result?;
+        anyhow::ensure!(
+            completion == 0,
+            "trace-capture-incomplete completion={completion}"
+        );
+        return Ok(());
+    }
 
     #[cfg(feature = "in-process")]
     if run_result.is_ok() {
@@ -735,7 +877,7 @@ fn main() -> Result<()> {
             let builder = trace_builder.as_ref().context("trace builder missing")?;
             let log = builder.borrow().snapshot();
             let payload = log.encode(trace_policy)?;
-            fs::write(&trace_path, payload)
+            cohsh::trace_capture::atomic_write(&trace_path, &payload)
                 .with_context(|| format!("failed to write trace {}", trace_path.display()))?;
         }
     }

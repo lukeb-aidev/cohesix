@@ -43,6 +43,37 @@ release-delivery requirements remain binding. The frozen-source canonical
 release Stage 05 artifact records the final execution verdict separately from this
 pre-execution findings register.
 
+## Milestone 27 review (2026-09-14)
+
+Schema 1.20 adds the compiler-owned live trace duration bound and refreshes
+host projections. Current pack-v1/timeline-v1 artifacts retain compatibility;
+case-v1 and attestation-result-v1 remain non-authoritative host records.
+`cargo test -p tests --test audit_ledgers` checks active exception/finding
+cross-references and production risk partition arithmetic. The existing
+findings, exception approvals, and risk ceilings were reviewed and remain
+unchanged; this change grants no new risk exception.
+
+The missing signed-evidence wire/trust contract is now implemented by
+`cohesix-attestation` and documented in [ATTESTATION.md](../ATTESTATION.md).
+The verifier accepts independently signed offline fixtures, rejects replay,
+wrong measurements/keys and malformed evidence, and preserves source/proof
+class. Root no longer labels public configuration hashes as TPM/DICE evidence.
+The owner excludes the stock Pi from positive signed-device acceptance;
+optional measurement-only mode cannot attest production ticket keys. Actual
+isolated TPM/DICE issuance and sealed/derived ticket admission remain the
+reopened M26 device task. M27 target/operator validation is still pending.
+
+The four stale release test assertions were corrected to their existing
+argument-driven and exact tracked-tree archive contracts. The archive test
+now exercises export-ignore handling while proving untracked secrets stay
+excluded and the source attributes remain unchanged. Those tests and the
+previously failing Pi compiler-provenance check pass. The pinned GNU compiler,
+seL4 Python environment, mkimage and a pristine canonical QEMU production build
+are restored. The previous five-failure staged attempt remains historical under
+`out/test-plan/m27-live-trace-qemu`; new qualification uses a fresh state root.
+No historical marker or risk ceiling has been changed. DD30's release-specific
+waiver does not grant M27 acceptance.
+
 ## Historical gate snapshots
 
 - Exact `2be878d8d`: QEMU Stages 01–04 PASS, Stage 05 FAIL on then-open DD26–29;

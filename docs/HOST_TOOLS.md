@@ -999,3 +999,30 @@ and changing content. GPU snapshot seeds initialize append logs once per
 generation; authorized append operations remain the control update path.
 Neither inventory nor an ACTIVE record proves host execution, TTL enforcement,
 revocation, or a target Worker completion.
+
+## Milestone 27 compatibility review
+
+The [operator commands](OPERATOR_EVIDENCE.md) extend `coh`, `cohsh`, shared
+`coh-status` replay, and SwarmUI trace loading. Python consumes canonical case
+and attestation-result artifacts and opaque trace references. Schema 1.19
+regenerates client defaults and both supported Python target profiles; the
+console wire ABI and REST endpoint contracts are unchanged.
+
+Reviewed surfaces requiring no implementation change: Hive Gateway request
+broker/authentication and REST projection, host-ticket-agent ticket lifecycle,
+gpu-bridge-host GPU execution, host-sidecar-bridge provider execution, cas-tool
+CAS bytes, and existing FUSE/telemetry host adapters. Their requests, response
+bounds, authority, and receipts are unchanged. Existing performance scripts
+consume the same console/REST grammar; M27 adds a separate host parsing latency
+measurement. Historical release bundles and trace-v1 fixtures retain their
+original identities and cannot qualify the new generated manifest.
+
+## Signed-device evidence availability
+
+The [signed evidence contract](ATTESTATION.md) defines the schema-1.20
+implementation modes, bounded `/proc/attest` discovery, verifier-owned trust
+policy, TPM2 quote verification, retained pack records and the stock Pi 4
+positive-attestation exemption. Optional profiles report unavailable or
+measurement-only; development ticket keys never become attested production
+keys. `coh attest --trust-policy <file>` verifies signatures, and
+`--input <pack>` remains explicitly offline.

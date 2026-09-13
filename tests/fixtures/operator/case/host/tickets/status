@@ -1,0 +1,1 @@
+{"action":"systemd.restart","id":"fixture-1","idempotency_key":"attempt-1","relay_correlation_id":"relay-1","relay_hop":1,"source_hive":"hive-a","state":"succeeded","target_hive":"hive-b"}

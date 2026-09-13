@@ -277,6 +277,16 @@ evidence_requirement = "consumer build checks"
 current_observed_mode = "build_contract"
 
 [[packages]]
+path = "crates/cohesix-attestation"
+class = "contract"
+owner = "attestation-verifier"
+production_reachable = true
+selection_source = "M27 signed evidence verification"
+package_disposition = "linked_host_library"
+evidence_requirement = "independent cryptographic fixtures and authenticated host integration"
+current_observed_mode = "tpm2_quote_verifier"
+
+[[packages]]
 path = "crates/cohesix-cas"
 class = "contract"
 owner = "cas-core"
@@ -1203,6 +1213,17 @@ evidence_requirement = "asset hash and authenticated gateway integration"
 current_observed_mode = "live_host_ui"
 
 [[tracked_rules]]
+id = "operator-evidence-fixtures"
+prefix = "tests/fixtures/operator/"
+class = "fixture"
+owner = "operator-tools"
+production_reachable = false
+selection_source = "Milestone 27 shared Rust and Python artifact fixtures"
+package_disposition = "release_test_fixture"
+evidence_requirement = "offline parser fixture; no target or attestation proof"
+current_observed_mode = "offline_operator_fixture"
+
+[[tracked_rules]]
 id = "release-cas-fixtures"
 prefix = "tests/fixtures/cas/"
 class = "fixture"
@@ -1553,6 +1574,8 @@ public_documents = [
   "docs/HOST_TOOLS.md",
   "docs/INTERFACES.md",
   "docs/NETWORK_CONFIG.md",
+  "docs/OPERATOR_EVIDENCE.md",
+  "docs/ATTESTATION.md",
   "docs/PYTHON_SUPPORT.md",
   "docs/QUICKSTART.md",
   "docs/ROLES_AND_SCHEDULING.md",
@@ -1613,6 +1636,7 @@ python_artifacts = [
   "tools/cohesix-py/cohesix/evidence.py",
   "tools/cohesix-py/cohesix/generated.py",
   "tools/cohesix-py/cohesix/integrations.py",
+  "tools/cohesix-py/cohesix/operator.py",
   "tools/cohesix-py/cohesix/orchestration.py",
   "tools/cohesix-py/cohesix/paths.py",
   "tools/cohesix-py/cohesix/playbook_cli.py",
@@ -1633,6 +1657,7 @@ python_artifacts = [
   "tools/cohesix-py/tests/test_examples_ci_siem.py",
   "tools/cohesix-py/tests/test_generated_contract.py",
   "tools/cohesix-py/tests/test_integrations.py",
+  "tools/cohesix-py/tests/test_operator.py",
   "tools/cohesix-py/tests/test_orchestration.py",
   "tools/cohesix-py/tests/test_parity.py",
   "tools/cohesix-py/tests/test_playbooks.py",
@@ -1708,6 +1733,20 @@ ui_assets = [
 ]
 
 support_files = [
+  "tests/fixtures/operator/case/case.json",
+  "tests/fixtures/operator/case/case.md",
+  "tests/fixtures/operator/case/host/tickets/spec",
+  "tests/fixtures/operator/case/host/tickets/status",
+  "tests/fixtures/operator/case/summary.json",
+  "tests/fixtures/operator/case/timeline.md",
+  "tests/fixtures/operator/case/timeline.ndjson",
+  "tests/fixtures/operator/contracts.json",
+  "tests/fixtures/operator/attestation/challenge.json",
+  "tests/fixtures/operator/attestation/evidence.json",
+  "tests/fixtures/operator/attestation/policy.json",
+  "tests/fixtures/operator/attestation/record.json",
+  "tests/fixtures/operator/attestation/result.json",
+
   "LICENSE.txt",
   "configs/host_integration_acceptance.toml",
   "scripts/worker_task_evidence.py",

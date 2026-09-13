@@ -13,6 +13,7 @@ description = "Cohesix status tool (host-side)"
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
 cohesix-worker-evidence = { workspace = true }
+cohesix-attestation = { workspace = true }
 cohsh = { path = "../cohsh" }
 cohsh-core = { workspace = true }
 

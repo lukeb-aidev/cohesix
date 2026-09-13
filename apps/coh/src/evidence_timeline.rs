@@ -7,11 +7,14 @@
 
 //! Offline timeline generator for evidence packs created by `coh evidence pack`.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+#[path = "evidence_case.rs"]
+mod case;
+pub use case::Scenario;
 
 const TIMELINE_SCHEMA: &str = "cohesix-evidence-pack/timeline-v1";
 
@@ -171,11 +174,22 @@ struct TimelineEvent {
 
 /// Generate `timeline.ndjson` and `timeline.md` in the supplied evidence pack directory.
 pub fn write_timeline(pack_dir: &Path) -> Result<TimelineSummary> {
+    write_timeline_with_scenario(pack_dir, Scenario::Generic)
+}
+
+/// Add a source-linked case review without changing the canonical timeline schema.
+pub fn write_timeline_with_scenario(
+    pack_dir: &Path,
+    scenario: Scenario,
+) -> Result<TimelineSummary> {
     let events = build_events(pack_dir)?;
+    let (case_json, case_markdown) = case::build(pack_dir, &events, scenario)?;
     let ndjson_path = pack_dir.join("timeline.ndjson");
     let markdown_path = pack_dir.join("timeline.md");
     write_ndjson(&ndjson_path, &events)?;
     write_markdown(&markdown_path, &events)?;
+    crate::operator::write_atomic(&pack_dir.join("case.json"), &case_json)?;
+    crate::operator::write_atomic(&pack_dir.join("case.md"), case_markdown.as_bytes())?;
     Ok(TimelineSummary {
         events: events.len(),
         ndjson_path,
@@ -184,10 +198,32 @@ pub fn write_timeline(pack_dir: &Path) -> Result<TimelineSummary> {
 }
 
 fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
+    let inventory = case::inventory(pack_dir)?;
+    let legacy = inventory.contains_key("summary.json");
+    let mut sources = std::collections::BTreeSet::new();
+    let mut total = 0usize;
+    for relative in [
+        "audit/journal",
+        "audit/decisions",
+        "host/tickets/spec",
+        "host/tickets/status",
+        "host/tickets/deadletter",
+        "proc/lease/active",
+    ] {
+        let path = crate::operator::confined_path(pack_dir, relative)?;
+        if path.is_file()
+            && (legacy || inventory.get(relative) == Some(&crate::operator::Availability::Observed))
+        {
+            let size = usize::try_from(path.metadata()?.len()).context("timeline-source-size")?;
+            total = total.checked_add(size).context("timeline-total-size")?;
+            anyhow::ensure!(total <= crate::operator::MAX_BYTES, "timeline-total-bound");
+            sources.insert(relative);
+        }
+    }
     let mut events = Vec::new();
 
     let journal_path = pack_dir.join("audit").join("journal");
-    if journal_path.is_file() {
+    if sources.contains("audit/journal") {
         for entry in parse_jsonl::<AuditJournalEntry>(&journal_path, "audit/journal")? {
             let ticket_identity =
                 parse_ticket_identity_from_payload(entry.path.as_str(), entry.payload.as_str());
@@ -241,7 +277,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
     }
 
     let decisions_path = pack_dir.join("audit").join("decisions");
-    if decisions_path.is_file() {
+    if sources.contains("audit/decisions") {
         for entry in parse_jsonl::<DecisionEntry>(&decisions_path, "audit/decisions")? {
             events.push(TimelineEvent {
                 schema: TIMELINE_SCHEMA,
@@ -274,7 +310,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
     }
 
     let host_ticket_spec = pack_dir.join("host").join("tickets").join("spec");
-    if host_ticket_spec.is_file() {
+    if sources.contains("host/tickets/spec") {
         for entry in parse_jsonl::<HostTicketSpecEntry>(&host_ticket_spec, "host/tickets/spec")? {
             events.push(TimelineEvent {
                 schema: TIMELINE_SCHEMA,
@@ -312,7 +348,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
     }
 
     let host_ticket_status = pack_dir.join("host").join("tickets").join("status");
-    if host_ticket_status.is_file() {
+    if sources.contains("host/tickets/status") {
         for entry in
             parse_jsonl::<HostTicketResultEntry>(&host_ticket_status, "host/tickets/status")?
         {
@@ -352,7 +388,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
     }
 
     let host_ticket_deadletter = pack_dir.join("host").join("tickets").join("deadletter");
-    if host_ticket_deadletter.is_file() {
+    if sources.contains("host/tickets/deadletter") {
         for entry in parse_jsonl::<HostTicketResultEntry>(
             &host_ticket_deadletter,
             "host/tickets/deadletter",
@@ -393,7 +429,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
     }
 
     let lease_active = pack_dir.join("proc").join("lease").join("active");
-    if lease_active.is_file() {
+    if sources.contains("proc/lease/active") {
         let entries = parse_lease_active(&lease_active)?;
         for entry in entries {
             events.push(TimelineEvent {
@@ -449,8 +485,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
 }
 
 fn parse_jsonl<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<Vec<T>> {
-    let payload =
-        fs::read(path).with_context(|| format!("read {label} from {}", path.display()))?;
+    let payload = crate::operator::read_bounded(path, crate::operator::MAX_BYTES)?;
     let text = std::str::from_utf8(&payload)
         .with_context(|| format!("{label} is not UTF-8 (path {})", path.display()))?;
     let mut out = Vec::new();
@@ -459,8 +494,11 @@ fn parse_jsonl<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result
         if trimmed.is_empty() {
             continue;
         }
-        let parsed: T = serde_json::from_str(trimmed)
+        let mut value: serde_json::Value = serde_json::from_str(trimmed)
             .with_context(|| format!("{label} line {} is not valid JSON", idx + 1))?;
+        crate::evidence::redact_sensitive_value(&mut value);
+        let parsed: T = serde_json::from_value(value)
+            .with_context(|| format!("{label} line {} has invalid fields", idx + 1))?;
         out.push(parsed);
     }
     Ok(out)
@@ -529,8 +567,7 @@ struct LeaseActiveEntry {
 }
 
 fn parse_lease_active(path: &Path) -> Result<Vec<LeaseActiveEntry>> {
-    let payload =
-        fs::read(path).with_context(|| format!("read proc/lease/active {}", path.display()))?;
+    let payload = crate::operator::read_bounded(path, crate::operator::MAX_BYTES)?;
     let text = std::str::from_utf8(&payload)
         .with_context(|| format!("proc/lease/active is not UTF-8 ({})", path.display()))?;
     let mut out = Vec::new();
@@ -639,12 +676,5 @@ fn write_markdown(path: &Path, events: &[TimelineEvent]) -> Result<()> {
 }
 
 fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create timeline dir {}", parent.display()))?;
-    }
-    let tmp = path.with_extension("partial");
-    fs::write(&tmp, payload).with_context(|| format!("write {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("commit {}", path.display()))?;
-    Ok(())
+    crate::operator::write_atomic(path, payload)
 }

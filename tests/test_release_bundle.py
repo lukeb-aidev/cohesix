@@ -302,7 +302,9 @@ def test_release_linux_builder_locations_are_argument_driven() -> None:
     assert "cohesix-linux-host-tools-build/v1" in source
     assert "archive_args+=(--force)" in source
     assert 'BUNDLE_DIR="$bundle_dir" python3 -' in source
-    assert 'Path("releases")' not in source
+    # Relative documentation links may name releases; the extraction destination
+    # must come from the selected bundle directory, including custom locations.
+    assert 'bundle = Path(os.environ["BUNDLE_DIR"])' in source
 
 
 @pytest.mark.parametrize(

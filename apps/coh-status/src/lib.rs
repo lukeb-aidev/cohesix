@@ -7,6 +7,9 @@
 
 //! Cohesix status tool crate surface.
 
+/// Canonical signed-device verifier, also available to SwarmUI consumers.
+pub use cohesix_attestation as attestation;
+
 use anyhow::{Context, Result};
 use cohesix_ticket::Role;
 use cohesix_worker_evidence::{parse_evidence, ValidatedEvidence};
@@ -26,6 +29,10 @@ impl TraceReplay {
     pub fn from_bytes(payload: &[u8], role: Role, ticket: Option<&str>) -> Result<Self> {
         let policy = trace_policy();
         let trace = TraceLog::decode(payload, policy).context("trace decode failed")?;
+        anyhow::ensure!(
+            trace.capture.is_none(),
+            "console captures require captured_namespace"
+        );
         let transport = TraceReplayTransport::new(trace.frames);
         let client = CohClient::connect(transport, role, ticket)?;
         Ok(Self { client })
@@ -35,6 +42,20 @@ impl TraceReplay {
     pub fn client(&mut self) -> &mut CohClient<TraceReplayTransport> {
         &mut self.client
     }
+}
+
+/// Present retained console observations through the shared read-only replay core.
+/// Source metadata and completeness remain available in the decoded canonical log.
+pub fn captured_namespace(payload: &[u8]) -> Result<cohsh::trace_capture::CapturedNamespace> {
+    let policy = trace_policy();
+    let trace = TraceLog::decode(payload, policy)?;
+    cohsh::trace_capture::CapturedNamespace::new(
+        &trace,
+        &cohsh::trace_capture::policy_digest(
+            policy,
+            CohshPolicy::from_generated().trace.max_duration_ms,
+        ),
+    )
 }
 
 /// Return the manifest-derived trace policy defaults.

@@ -3122,7 +3122,8 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     )
     assert "validate_tested_inputs" in release
     assert 'scripts/release_inputs.py' in release
-    assert '--artifact "$artifact" --result "$result"' in release
+    assert '--artifact "$artifact" ${result_args[@]+"${result_args[@]}"}' in release
+    assert 'result_args=(--result "$result")' in release
 
     for relative in entrypoints[2:]:
         source = (sel4_profile.ROOT / relative).read_text(encoding="utf-8")

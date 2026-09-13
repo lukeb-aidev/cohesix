@@ -31,7 +31,6 @@ const DEFAULT_LOG_RETENTION_LINES: usize = 2048;
 const DEFAULT_LOG_LINE_MAX_BYTES: usize = 256;
 const DEFAULT_LOG_MAX_BYTES: usize = DEFAULT_LOG_RETENTION_LINES * (DEFAULT_LOG_LINE_MAX_BYTES + 1);
 const DEFAULT_HOST_TICKET_MAX_BYTES: usize = 128 * 1024;
-const REDACTED_VALUE: &str = "<redacted>";
 
 /// Specification for exporting an evidence pack.
 #[derive(Debug, Clone)]
@@ -164,6 +163,52 @@ pub fn export_pack<C: CohAccess>(
             write_payload(&spec.out_dir, "/replay/status", &payload)?;
         }
 
+        // Add the same observations used by `inspect`, without replacing existing
+        // audit, lease or boot captures. Directory shapes live outside file paths.
+        let snapshot = crate::operator::inspect_live(client, "host-projection")?;
+        for observation in &snapshot.observations {
+            if items.iter().any(|item| item.path == observation.path) {
+                continue;
+            }
+            let directory = snapshot
+                .observations
+                .iter()
+                .any(|other| other.path.starts_with(&format!("{}/", observation.path)))
+                || matches!(
+                    observation.path.as_str(),
+                    "/proc/root"
+                        | "/proc/lifecycle"
+                        | "/proc/9p/session"
+                        | "/proc/pressure"
+                        | "/proc/schedule"
+                        | "/proc/lease"
+                        | "/proc/attest"
+                );
+            let relative = if directory {
+                format!("namespace{}", observation.path)
+            } else {
+                strip_leading_slash(&observation.path).to_owned()
+            };
+            let status = match observation.status {
+                crate::operator::Availability::Observed => "captured",
+                crate::operator::Availability::Missing => "missing",
+                crate::operator::Availability::Error => "error",
+                crate::operator::Availability::Unknown => "unknown",
+            };
+            if let Some(content) = &observation.content {
+                let saved = crate::operator::confined_path(&spec.out_dir, &relative)?;
+                crate::operator::write_atomic(&saved, content.as_bytes())?;
+            }
+            items.push(EvidenceItem {
+                path: observation.path.clone(),
+                saved_as: relative,
+                verb: if directory { "LS" } else { "CAT" }.to_owned(),
+                status: status.to_owned(),
+                bytes: observation.content.as_ref().map(String::len),
+                detail: observation.reason.clone(),
+            });
+        }
+
         if spec.with_telemetry {
             let telemetry_dir = spec.out_dir.join("telemetry");
             let pull_summary = telemetry::pull(client, policy, &telemetry_dir, audit);
@@ -233,13 +278,15 @@ pub fn export_pack<C: CohAccess>(
         items,
     };
     write_json(&spec.out_dir.join("summary.json"), &summary_json)?;
+    let digest = crate::operator::digest(&serde_json::to_vec(&summary_json)?);
 
     audit.push_line(format!(
-        "evidence pack saved={} captured={} missing={} errors={}",
+        "evidence pack saved={} captured={} missing={} errors={} inventory_sha256={}",
         spec.out_dir.display(),
         summary.captured,
         summary.missing,
-        summary.errors
+        summary.errors,
+        digest
     ));
 
     capture_result?;
@@ -249,7 +296,151 @@ pub fn export_pack<C: CohAccess>(
         summary.errors,
         spec.out_dir.display()
     );
+    attach_artifacts(&spec.out_dir, None, None, None, None, None)?;
     Ok(summary)
+}
+
+/// Extend the canonical pack with bounded host artifacts. Source hashes identify
+/// supplied files; they do not assert that those files ran on the observed target.
+pub fn attach_artifacts(
+    root: &Path,
+    manifest: Option<&Path>,
+    resolved: Option<&Path>,
+    serial: Option<&Path>,
+    trace: Option<&Path>,
+    attestation_record: Option<&Path>,
+) -> Result<()> {
+    let snapshot = crate::operator::inspect_pack(root)?;
+    write_json(
+        &root.join("attestation.json"),
+        &crate::operator::attest(&snapshot),
+    )?;
+    let mut refs = std::collections::BTreeMap::new();
+    let mut total = 0usize;
+    for (name, input, kind) in [
+        ("manifest.json", manifest, "source-manifest"),
+        ("resolved-manifest.json", resolved, "resolved-manifest"),
+        ("serial.txt", serial, "host-serial"),
+        ("capture.trace", trace, "captured-host-projection"),
+        (
+            "attestation-record.json",
+            attestation_record,
+            "retained-signed-record",
+        ),
+    ] {
+        let Some(input) = input else {
+            continue;
+        };
+        let bytes = crate::operator::read_bounded(input, crate::operator::MAX_BYTES)?;
+        total = total
+            .checked_add(bytes.len())
+            .context("attachment-total-bound")?;
+        anyhow::ensure!(
+            total <= crate::operator::MAX_BYTES,
+            "attachment-total-bound"
+        );
+        let payload = match kind {
+            "retained-signed-record" => {
+                let record = crate::attestation::Record::parse(&bytes)?;
+                serde_json::to_vec_pretty(&record)?
+            }
+            "source-manifest" => {
+                let text = std::str::from_utf8(&bytes).context("manifest-utf8")?;
+                let value: toml::Value = toml::from_str(text).context("manifest-toml")?;
+                let mut value = serde_json::to_value(value)?;
+                redact_sensitive_value(&mut value);
+                serde_json::to_vec_pretty(&value)?
+            }
+            "resolved-manifest" => {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&bytes).context("resolved-manifest-json")?;
+                redact_sensitive_value(&mut value);
+                serde_json::to_vec_pretty(&value)?
+            }
+            "host-serial" => {
+                let text = std::str::from_utf8(&bytes).context("serial-utf8")?;
+                text.lines()
+                    .filter_map(cohsh::trace_capture::redact_line)
+                    .map(|line| line + "\n")
+                    .collect::<String>()
+                    .into_bytes()
+            }
+            _ => {
+                let policy = cohsh_core::trace::TracePolicy::new(
+                    crate::operator::MAX_BYTES as u32,
+                    cohsh::SECURE9P_MSIZE,
+                    cohsh_core::MAX_LINE_LEN as u32,
+                );
+                let log = cohsh_core::trace::TraceLog::decode(&bytes, policy)?;
+                let expected = cohsh::trace_capture::policy_digest(
+                    policy,
+                    cohsh::CohshPolicy::from_generated().trace.max_duration_ms,
+                );
+                cohsh::trace_capture::replay_lines(&log, &expected)?;
+                bytes.clone()
+            }
+        };
+        let relative = format!("attachments/{name}");
+        crate::operator::write_atomic(&crate::operator::confined_path(root, &relative)?, &payload)?;
+        refs.insert(relative, serde_json::json!({"source_class":kind,"source_sha256":crate::operator::digest(&bytes),"sha256":crate::operator::digest(&payload),"bytes":payload.len(),"proof":"none"}));
+    }
+    // A call with no supplied host files preserves previously registered artifacts.
+    if !refs.is_empty() {
+        write_json(
+            &root.join("artifact_refs.json"),
+            &serde_json::json!({"schema":"cohesix-evidence-pack/artifact-refs-v1","items":refs}),
+        )?;
+    }
+    let summary: serde_json::Value = serde_json::from_slice(&crate::operator::read_bounded(
+        &root.join("summary.json"),
+        crate::operator::MAX_BYTES,
+    )?)?;
+    let mut checksums = std::collections::BTreeMap::new();
+    let mut paths: std::collections::BTreeSet<String> = [
+        "meta.json",
+        "bounds.json",
+        "summary.json",
+        "attestation.json",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    if let Some(items) = summary.get("items").and_then(|v| v.as_array()) {
+        for item in items {
+            if item["status"] == "captured" {
+                paths.insert(
+                    item["saved_as"]
+                        .as_str()
+                        .context("pack-captured-path")?
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    if root.join("artifact_refs.json").exists() {
+        let refs: serde_json::Value = serde_json::from_slice(&crate::operator::read_bounded(
+            &root.join("artifact_refs.json"),
+            crate::operator::MAX_BYTES,
+        )?)?;
+        paths.insert("artifact_refs.json".to_owned());
+        if let Some(items) = refs.get("items").and_then(|v| v.as_object()) {
+            paths.extend(items.keys().cloned());
+        }
+    }
+    for relative in paths {
+        let bytes = crate::operator::read_bounded(
+            &crate::operator::confined_path(root, &relative)?,
+            crate::operator::MAX_BYTES,
+        )?;
+        checksums.insert(relative, crate::operator::digest(&bytes));
+    }
+    let bytes = serde_json::to_vec_pretty(&checksums)?;
+    crate::operator::write_atomic(&root.join("checksums.json"), &bytes)?;
+    crate::operator::write_atomic(
+        &root.join("pack.sha256"),
+        format!("{}\n", crate::operator::digest(&bytes)).as_bytes(),
+    )?;
+    Ok(())
 }
 
 fn capture_proc_schedule<C: CohAccess>(
@@ -484,37 +675,12 @@ fn redact_host_ticket_json_lines(payload: &[u8]) -> Result<Vec<u8>> {
     Ok(out.into_bytes())
 }
 
-fn redact_sensitive_value(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, nested) in map.iter_mut() {
-                if sensitive_key(key.as_str()) {
-                    *nested = serde_json::Value::String(REDACTED_VALUE.to_owned());
-                } else {
-                    redact_sensitive_value(nested);
-                }
-            }
-        }
-        serde_json::Value::Array(list) => {
-            for nested in list {
-                redact_sensitive_value(nested);
-            }
-        }
-        _ => {}
-    }
+pub(crate) fn redact_sensitive_value(value: &mut serde_json::Value) {
+    cohsh::trace_capture::redact_value(value);
 }
 
-fn sensitive_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.contains("token")
-        || lower.contains("authorization")
-        || lower.contains("auth_token")
-        || lower == "auth_ref"
-        || lower == "auth"
-        || lower.contains("secret")
-        || lower.contains("password")
-        || lower.contains("signing_key")
-        || lower.contains("api_key")
+pub(crate) fn sensitive_key(key: &str) -> bool {
+    cohsh::trace_capture::sensitive_key(key)
 }
 
 fn hash_ticket(ticket: &str) -> String {
@@ -628,17 +794,12 @@ fn read_optional<C: CohAccess>(
 
 fn write_payload(out_dir: &Path, remote_path: &str, payload: &[u8]) -> Result<()> {
     let relative = strip_leading_slash(remote_path);
-    let path = out_dir.join(relative);
+    let path = crate::operator::confined_path(out_dir, relative)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create evidence pack dir {}", parent.display()))?;
     }
-    let tmp_path = path.with_extension("partial");
-    fs::write(&tmp_path, payload)
-        .with_context(|| format!("write evidence payload {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, &path)
-        .with_context(|| format!("commit evidence payload {}", path.display()))?;
-    Ok(())
+    crate::operator::write_atomic(&path, payload)
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -646,13 +807,8 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("create evidence pack dir {}", parent.display()))?;
     }
-    let tmp_path = path.with_extension("partial");
     let payload = serde_json::to_vec_pretty(value).context("serialize evidence json")?;
-    fs::write(&tmp_path, &payload)
-        .with_context(|| format!("write evidence json {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .with_context(|| format!("commit evidence json {}", path.display()))?;
-    Ok(())
+    crate::operator::write_atomic(path, &payload)
 }
 
 fn strip_leading_slash(path: &str) -> &str {
@@ -681,7 +837,7 @@ fn error_item(path: &str, saved_as: &str, verb: CaptureVerb, err: &anyhow::Error
     }
 }
 
-fn is_missing(err: &anyhow::Error) -> bool {
+pub(crate) fn is_missing(err: &anyhow::Error) -> bool {
     for cause in err.chain() {
         let msg = cause.to_string();
         if msg.contains("NotFound")
@@ -697,14 +853,22 @@ fn is_missing(err: &anyhow::Error) -> bool {
 }
 
 fn safe_detail(err: &anyhow::Error) -> String {
-    // Avoid leaking any sensitive payloads embedded in error strings by truncating
-    // to a conservative bound.
-    const MAX_DETAIL: usize = 256;
-    let text = err.to_string();
-    if text.len() <= MAX_DETAIL {
-        return text;
+    // Peer errors may embed credentials or secret-bearing command arguments.
+    // Retain a typed inventory failure; never persist their untrusted wording.
+    if is_missing(err) {
+        return "not-found".to_owned();
     }
-    text[..MAX_DETAIL].to_owned()
+    for code in ["ELIMIT", "EPERM", "EBUSY", "EINVAL", "ETIMEDOUT"] {
+        if err.chain().any(|cause| {
+            cause
+                .to_string()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|token| token == code)
+        }) {
+            return format!("capture-error:{code}");
+        }
+    }
+    "capture-error".to_owned()
 }
 
 /// Build a bounds snapshot matching `GET /v1/meta/bounds` for non-REST evidence exports.

@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "UEFI aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.18"
+schema = "1.20"
 
 [root_task.affinity]
 enabled = true
@@ -141,9 +141,12 @@ secure_boot = false
 no_nic = true
 
 [hw.attestation]
-enabled = true
-policy = "tpm-or-dice"
-evidence_max_bytes = 256
+mode = "measurement_only"
+required = false
+evidence_max_bytes = 8192
+challenge_max_bytes = 256
+max_age_ms = 30000
+ticket_key_policy = "development_static"
 
 [hw.local_seat]
 enabled = true

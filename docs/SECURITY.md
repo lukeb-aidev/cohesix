@@ -549,3 +549,23 @@ Current target status and proof boundaries are maintained in
 [Hardware bring-up](HARDWARE_BRINGUP.md) and the
 [Build plan](BUILD_PLAN.md). The NIST 800-53 crosswalk is an evidence index, not
 a certification; see [NIST mapping](SECURITY_NIST_800_53.md).
+
+## Milestone 27 operator evidence trust boundary
+
+The [operator evidence contract](OPERATOR_EVIDENCE.md) is host-side and
+read-only. Canonical trace digests bind retained bytes and redaction policy;
+they are integrity checks, not authenticated device signatures. Expected
+identity labels supplied by a caller remain non-attested. Replay permits only
+retained reads and rejects writes without opening a network connection.
+Pack and case readers enforce bounded regular files, confined paths, explicit
+inventory availability, and shared recursive secret-field redaction.
+
+The shared TPM2 verifier checks enrolled certificate chains, signatures,
+nonce/boot/artifact/PCR binding, time bounds and replay/reset data. Its policy
+comes from the verifier, never from target evidence. Offline PASS remains an
+explicit historical-signature result. The current Pi uses optional
+measurement-only mode; required or signed modes without an admitted provider
+are refused before generated development ticket registration. See
+[the signed-device contract](ATTESTATION.md) for the owner's stock-Pi exemption,
+trust enrollment, supported algorithms and unavailable device-runtime work.
+No Python projection, case outcome or trace label proves external execution.

@@ -1,258 +1,148 @@
+// Author: Lukas Bower
+// Purpose: Enforce honest attestation availability before publishing ticket authority.
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Evaluate manifest-driven device identity attestation policy.
-// Author: Lukas Bower
 
-//! Deterministic attestation policy evaluation.
-//!
-//! Milestone 26 requires boot-time attestation policy checks before tickets
-//! are published. This module intentionally provides a bounded, deterministic
-//! evaluation path that does not depend on host networking.
+//! Public manifest measurements never substitute for an admitted device issuer.
 
-use crate::generated::{self, AttestationPolicy, HardwareDeviceKind};
-use core::fmt::Write as _;
+use crate::generated::{self, AttestationMode};
 use heapless::String;
-use sha2::{Digest, Sha256};
 
-const SHA256_HEX_BYTES: usize = 64;
-
-/// Attestation back-end selected by policy/device availability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttestationMethod {
-    /// TPM-backed attestation path.
-    Tpm,
-    /// DICE fallback path.
-    Dice,
-}
-
-impl AttestationMethod {
-    /// Stable label used in audit lines.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Tpm => "tpm",
-            Self::Dice => "dice",
-        }
-    }
-}
-
-/// Deterministic attestation evidence snapshot.
+/// Public metadata carrying no device or ticket-key assurance.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttestationEvidence {
-    /// Runtime method selected from manifest policy.
-    pub method: AttestationMethod,
-    /// Manifest policy used during evaluation.
-    pub policy: AttestationPolicy,
-    /// Manifest fingerprint this evidence is bound to.
-    pub manifest_sha256: String<SHA256_HEX_BYTES>,
-    /// Evidence digest emitted to boot diagnostics.
-    pub evidence_sha256: String<SHA256_HEX_BYTES>,
+pub struct Measurement {
+    /// Selected resolved-manifest identity.
+    pub manifest_sha256: String<64>,
 }
 
-/// Attestation policy evaluation failure.
+/// Deterministic pre-authority policy failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttestationError {
-    /// Manifest fingerprint was not a canonical 64-byte lowercase/uppercase hex string.
+    /// Malformed public measurement.
     InvalidManifestHash,
-    /// Policy requires TPM but no TPM device declaration is present.
-    TpmUnavailable,
-    /// Internal bounded string formatting failed.
-    FormatOverflow,
+    /// Required signed evidence cannot be supplied.
+    RequiredEvidenceUnavailable,
+    /// A configured signing mode has no admitted isolated device issuer.
+    DeviceProviderUnavailable,
+    /// A bounded status cannot be encoded.
+    StatusOverflow,
 }
 
 impl AttestationError {
-    /// Stable error token for audited boot diagnostics.
-    #[must_use]
+    /// Stable failure token for emergency serial diagnostics.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidManifestHash => "invalid-manifest-hash",
-            Self::TpmUnavailable => "tpm-unavailable",
-            Self::FormatOverflow => "format-overflow",
+            Self::RequiredEvidenceUnavailable => "required-signed-evidence-unavailable",
+            Self::DeviceProviderUnavailable => "attestation-device-provider-unavailable",
+            Self::StatusOverflow => "attestation-status-bound",
         }
     }
 }
 
-/// Evaluate attestation policy from generated hardware config.
-///
-/// Returns:
-/// - `Ok(None)` when attestation is disabled.
-/// - `Ok(Some(_))` with deterministic evidence when enabled.
-/// - `Err(_)` when required policy guarantees cannot be satisfied.
+/// Fail required/signed modes before generated development ticket registration.
 pub fn evaluate(
     hardware: generated::HardwareConfig,
     manifest_sha256: &str,
-) -> Result<Option<AttestationEvidence>, AttestationError> {
+) -> Result<Option<Measurement>, AttestationError> {
     let config = hardware.attestation;
-    if !config.enabled {
-        return Ok(None);
+    if config.required {
+        return Err(AttestationError::RequiredEvidenceUnavailable);
     }
-    if !is_sha256_hex(manifest_sha256) {
-        return Err(AttestationError::InvalidManifestHash);
-    }
-
-    let has_tpm = hardware
-        .devices
-        .iter()
-        .any(|device| device.kind == HardwareDeviceKind::Tpm);
-    let method = match config.policy {
-        AttestationPolicy::TpmOnly => {
-            if !has_tpm {
-                return Err(AttestationError::TpmUnavailable);
-            }
-            AttestationMethod::Tpm
+    match config.mode {
+        AttestationMode::Disabled => Ok(None),
+        AttestationMode::Tpm2Quote | AttestationMode::DiceEvidence => {
+            Err(AttestationError::DeviceProviderUnavailable)
         }
-        AttestationPolicy::TpmOrDice => {
-            if has_tpm {
-                AttestationMethod::Tpm
-            } else {
-                AttestationMethod::Dice
+        AttestationMode::MeasurementOnly => {
+            if manifest_sha256.len() != 64
+                || !manifest_sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(AttestationError::InvalidManifestHash);
             }
+            let manifest_sha256 = String::try_from(manifest_sha256)
+                .map_err(|_| AttestationError::InvalidManifestHash)?;
+            Ok(Some(Measurement { manifest_sha256 }))
         }
-        AttestationPolicy::DiceOnly => AttestationMethod::Dice,
-    };
-
-    let mut seed = String::<96>::new();
-    write!(
-        &mut seed,
-        "{}:{}",
-        attestation_policy_label(config.policy),
-        manifest_sha256
-    )
-    .map_err(|_| AttestationError::FormatOverflow)?;
-    let digest = Sha256::digest(seed.as_bytes());
-
-    let mut manifest_hash = String::<SHA256_HEX_BYTES>::new();
-    manifest_hash
-        .push_str(manifest_sha256)
-        .map_err(|_| AttestationError::FormatOverflow)?;
-
-    let mut evidence_hash = String::<SHA256_HEX_BYTES>::new();
-    encode_hex(&digest, &mut evidence_hash)?;
-
-    Ok(Some(AttestationEvidence {
-        method,
-        policy: config.policy,
-        manifest_sha256: manifest_hash,
-        evidence_sha256: evidence_hash,
-    }))
-}
-
-fn encode_hex(bytes: &[u8], out: &mut String<SHA256_HEX_BYTES>) -> Result<(), AttestationError> {
-    for byte in bytes {
-        write!(out, "{byte:02x}").map_err(|_| AttestationError::FormatOverflow)?;
-    }
-    Ok(())
-}
-
-/// Stable policy label used in boot diagnostics.
-#[must_use]
-pub const fn attestation_policy_label(policy: AttestationPolicy) -> &'static str {
-    match policy {
-        AttestationPolicy::TpmOnly => "tpm-only",
-        AttestationPolicy::TpmOrDice => "tpm-or-dice",
-        AttestationPolicy::DiceOnly => "dice-only",
     }
 }
 
-fn is_sha256_hex(value: &str) -> bool {
-    value.len() == SHA256_HEX_BYTES && value.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit())
+/// Stable implementation mode; no automatic TPM/DICE fallback exists.
+pub const fn mode_label(mode: AttestationMode) -> &'static str {
+    match mode {
+        AttestationMode::Disabled => "disabled",
+        AttestationMode::MeasurementOnly => "measurement_only",
+        AttestationMode::Tpm2Quote => "tpm2_quote",
+        AttestationMode::DiceEvidence => "dice_evidence",
+    }
+}
+
+/// The selected runtime has no device issuer; discovery must make this explicit.
+pub const CAPABILITIES: &str = "{\"schema\":\"cohesix-attestation-capabilities/v1\",\"signed_evidence\":false,\"challenge\":false,\"reason\":\"device-provider-unavailable\"}";
+
+/// Bounded status never labels public measurements as a TPM/DICE signature.
+pub fn status() -> Result<String<256>, AttestationError> {
+    use core::fmt::Write as _;
+    let mut out = String::new();
+    write!(out, "{{\"schema\":\"cohesix-attestation-status/v1\",\"mode\":\"{}\",\"required\":{},\"signed_evidence\":false,\"ticket_keys\":\"development_static\"}}",
+        mode_label(generated::HARDWARE_CONFIG.attestation.mode),
+        generated::HARDWARE_CONFIG.attestation.required)
+        .map_err(|_| AttestationError::StatusOverflow)?;
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generated::{
-        AttestationConfig, DhcpPolicyConfig, HardwareConfig, HardwareNetworkConfig,
-        LocalSeatConfig, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, StaticIpv4Config,
-    };
+    const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[test]
-    fn disabled_attestation_returns_none() {
-        let hw = HardwareConfig {
-            secure_boot: false,
-            no_nic: false,
-            network: HardwareNetworkConfig {
-                enabled: false,
-                backend: NetworkBackendKind::Auto,
-                mode: NetworkMode::Off,
-                interface: NetworkInterfacePolicy::Wired,
-                static_ipv4: StaticIpv4Config {
-                    ip: [0, 0, 0, 0],
-                    prefix_len: 0,
-                    gateway: None,
-                },
-                dhcp: DhcpPolicyConfig {
-                    discover_timeout_ms: 1_000,
-                    request_timeout_ms: 1_000,
-                    max_retries: 4,
-                },
-            },
-            attestation: AttestationConfig {
-                enabled: false,
-                policy: AttestationPolicy::TpmOrDice,
-                evidence_max_bytes: 256,
-            },
-            local_seat: LocalSeatConfig {
-                enabled: false,
-                required: false,
-                keyboard_device: "kbd0",
-                display_device: "hdmi0",
-                line_bytes: 160,
-                buffer_lines: 128,
-            },
-            devices: &[],
-        };
-
-        let evidence = evaluate(
-            hw,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .expect("disabled attestation should not fail");
-        assert!(evidence.is_none());
+    fn measurements_cannot_satisfy_required_attestation() {
+        let mut hardware = generated::HARDWARE_CONFIG;
+        hardware.attestation.mode = AttestationMode::MeasurementOnly;
+        hardware.attestation.required = false;
+        assert_eq!(
+            evaluate(hardware, HASH).unwrap().unwrap().manifest_sha256,
+            HASH
+        );
+        hardware.attestation.required = true;
+        assert_eq!(
+            evaluate(hardware, HASH),
+            Err(AttestationError::RequiredEvidenceUnavailable)
+        );
     }
 
     #[test]
-    fn tpm_only_requires_declared_tpm() {
-        let hw = HardwareConfig {
-            secure_boot: false,
-            no_nic: false,
-            network: HardwareNetworkConfig {
-                enabled: false,
-                backend: NetworkBackendKind::Auto,
-                mode: NetworkMode::Off,
-                interface: NetworkInterfacePolicy::Wired,
-                static_ipv4: StaticIpv4Config {
-                    ip: [0, 0, 0, 0],
-                    prefix_len: 0,
-                    gateway: None,
-                },
-                dhcp: DhcpPolicyConfig {
-                    discover_timeout_ms: 1_000,
-                    request_timeout_ms: 1_000,
-                    max_retries: 4,
-                },
-            },
-            attestation: AttestationConfig {
-                enabled: true,
-                policy: AttestationPolicy::TpmOnly,
-                evidence_max_bytes: 256,
-            },
-            local_seat: LocalSeatConfig {
-                enabled: false,
-                required: false,
-                keyboard_device: "kbd0",
-                display_device: "hdmi0",
-                line_bytes: 160,
-                buffer_lines: 128,
-            },
-            devices: &[],
-        };
+    fn disabled_and_missing_device_modes_are_distinct() {
+        let mut hardware = generated::HARDWARE_CONFIG;
+        hardware.attestation.required = false;
+        hardware.attestation.mode = AttestationMode::Disabled;
+        assert_eq!(evaluate(hardware, HASH), Ok(None));
+        for mode in [AttestationMode::Tpm2Quote, AttestationMode::DiceEvidence] {
+            hardware.attestation.mode = mode;
+            assert_eq!(
+                evaluate(hardware, HASH),
+                Err(AttestationError::DeviceProviderUnavailable)
+            );
+        }
+    }
 
-        let err = evaluate(
-            hw,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .expect_err("tpm-only without TPM must fail");
-        assert_eq!(err, AttestationError::TpmUnavailable);
+    #[test]
+    fn measurement_input_is_canonical_and_bounded() {
+        let mut hardware = generated::HARDWARE_CONFIG;
+        hardware.attestation.required = false;
+        hardware.attestation.mode = AttestationMode::MeasurementOnly;
+        for hash in [
+            "",
+            "abc",
+            "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+        ] {
+            assert_eq!(
+                evaluate(hardware, hash),
+                Err(AttestationError::InvalidManifestHash)
+            );
+        }
     }
 }

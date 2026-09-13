@@ -741,3 +741,14 @@ available in 26e is not that every integration is finished. It is that an
 operator can make bounded decisions, expose only narrow authority, keep target
 and host claims separate, and reconstruct what happened after the live system
 is gone.
+
+## Review an incident, change, or maintenance case
+
+After collecting a canonical pack, run `coh evidence timeline --input DIR
+--scenario incident` (or `change`, `maintenance`, `rollout`, `federation`,
+`generic`). Review `case.md`, then follow its event hashes and paths into
+`timeline.ndjson` and retained sources. Use `coh inspect --input DIR --json`
+and `coh diff --left BEFORE --right DIR` for exact observations and changes.
+Missing decisions and contradictory results remain explicit. This workflow
+never proves external execution or replaces authoritative receipt validation.
+See [the bounded operator recipe and trace commands](OPERATOR_EVIDENCE.md).

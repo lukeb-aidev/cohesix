@@ -5775,11 +5775,8 @@ fn bootstrap<P: Platform>(
                 let mut line = heapless::String::<320>::new();
                 let _ = write!(
                     line,
-                    "[attestation] enabled policy={} method={} bound_manifest_sha256={} evidence_sha256={}",
-                    attest::attestation_policy_label(evidence.policy),
-                    evidence.method.as_str(),
-                    evidence.manifest_sha256,
-                    evidence.evidence_sha256
+                    "[attestation] mode=measurement_only signed_evidence=unavailable ticket_keys=development_static bound_manifest_sha256={}",
+                    evidence.manifest_sha256
                 );
                 emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
             }

@@ -1314,3 +1314,13 @@ it.
 Every new public path or record must be documented here, owned by manifest IR
 when it changes generated behavior, and covered by positive and negative
 fixtures before clients depend on it.
+
+## Signed-device evidence availability
+
+The [signed evidence contract](ATTESTATION.md) defines the schema-1.20
+implementation modes, bounded `/proc/attest` discovery, verifier-owned trust
+policy, TPM2 quote verification, retained pack records and the stock Pi 4
+positive-attestation exemption. Optional profiles report unavailable or
+measurement-only; development ticket keys never become attested production
+keys. `coh attest --trust-policy <file>` verifies signatures, and
+`--input <pack>` remains explicitly offline.

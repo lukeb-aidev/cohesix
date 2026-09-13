@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate trace encoding/decoding and tamper rejection.
 // Author: Lukas Bower
@@ -9,6 +9,7 @@ use cohsh_core::trace::{TraceError, TraceFrame, TraceLog, TracePolicy};
 fn trace_roundtrip() {
     let policy = TracePolicy::new(2048, 512, 128);
     let log = TraceLog {
+        capture: None,
         frames: vec![TraceFrame {
             request: vec![1, 2, 3, 4],
             response: vec![9, 8, 7],
@@ -24,6 +25,7 @@ fn trace_roundtrip() {
 fn trace_tamper_is_rejected() {
     let policy = TracePolicy::new(2048, 512, 128);
     let log = TraceLog {
+        capture: None,
         frames: vec![TraceFrame {
             request: vec![1, 2, 3, 4],
             response: vec![9, 8, 7],

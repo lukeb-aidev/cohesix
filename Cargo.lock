@@ -669,6 +669,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "cohesix-attestation",
  "cohesix-net-constants",
  "cohesix-rest",
  "cohesix-ticket",
@@ -677,6 +678,7 @@ dependencies = [
  "cohsh-core",
  "fs2",
  "fuser",
+ "getrandom 0.4.3",
  "gpu-bridge-host",
  "hex",
  "libc",
@@ -713,12 +715,25 @@ name = "coh-status"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cohesix-attestation",
  "cohesix-ticket",
  "cohesix-worker-evidence",
  "cohsh",
  "cohsh-core",
  "nine-door",
  "secure9p-codec",
+]
+
+[[package]]
+name = "cohesix-attestation"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
