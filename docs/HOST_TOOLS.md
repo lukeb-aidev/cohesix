@@ -492,11 +492,14 @@ the existing remote rebuild path additionally requires
 `--linux-host-tools-manifest`; every rebuilt binary must still match its accepted
 artifact, otherwise qualify the new build first. The independently callable
 `scripts/linux_host_tools_sync.sh build-tools` remains available for native
-host-tool preparation. Its source archive includes the complete tracked generated
-contract directory, including both Python target contracts, and the pinned
-`third_party/fuser` dependency selected by the workspace Cargo patch. Before native compilation, the compiler generates the KVM QEMU Python
-contract from the tracked manifest and seL4 profile. Builder provenance records
-its profile and hash so the embedded gateway contract matches the Linux guest.
+host-tool preparation. Its archive contains the complete clean Git tree,
+including the pinned `third_party/fuser` dependency. The remote builder verifies
+the archive hash and reconstructed Git tree, then regenerates all policies,
+Rust defaults and the Python projection for the profile-owned KVM timer.
+Builder provenance records the source tree, profile and Python contract hash.
+`--no-clean` retains the Cargo cache; the source directory is always replaced
+from the exact archive so deleted inputs cannot survive between builds.
+
 
 For the owner-approved 1.0.0-beta publication workflow, append
 `--qualified-source-root <clean-tested-checkout>` to reuse the exact binaries

@@ -258,21 +258,11 @@ build_tools() {
   local remote_build_info="${REMOTE_BUILD_DIR}/host-tools-build-info.env"
   local source_commit
   source_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+  local source_tree
+  source_tree="$(git -C "$ROOT_DIR" rev-parse 'HEAD^{tree}')"
 
-  log "Packaging the exact clean host-tool source set"
-  (
-    cd "$ROOT_DIR"
-    {
-      printf '%s\0' \
-        Cargo.toml \
-        Cargo.lock \
-        rust-toolchain.toml \
-        .cargo/config.toml \
-        scripts/rustc-wrapper.sh
-      git ls-files -z --cached apps crates tools tests resources configs/generated \
-        configs/sel4 configs/root_task.toml third_party/fuser
-    } | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -czf "$source_tarball"
-  )
+  log "Packaging the exact clean source tree for native contract generation"
+  git -C "$ROOT_DIR" archive --format=tar HEAD | gzip -n >"$source_tarball"
   local source_sha256
   source_sha256="$(sha256_file "$source_tarball")"
 
@@ -283,7 +273,7 @@ build_tools() {
   log "Building the exact Linux ARM64 host-tool set on ${HOST}"
   ssh "${SSH_OPTS[@]}" "$SSH_DESTINATION" bash -s -- \
     "$REMOTE_BUILD_DIR" "$REMOTE_CARGO" "$REMOTE_CARGO_HOME" \
-    "$MAX_GLIBC_VERSION" "$source_sha256" "$source_commit" "$CLEAN" <<'REMOTE_BUILD'
+    "$MAX_GLIBC_VERSION" "$source_sha256" "$source_commit" "$CLEAN" "$source_tree" <<'REMOTE_BUILD'
 set -euo pipefail
 
 build_root="$1"
@@ -293,6 +283,7 @@ max_glibc="$4"
 expected_source_sha="$5"
 source_commit="$6"
 clean="$7"
+source_tree="$8"
 source_tarball="${build_root}/cohesix-host-tools-source.tar.gz"
 source_dir="${build_root}/source"
 target_dir="${build_root}/target"
@@ -308,7 +299,7 @@ case "$(uname -m)" in
 esac
 [[ -x "$cargo_bin" ]] || { echo "remote cargo is not executable: $cargo_bin" >&2; exit 1; }
 [[ -x "$rustc_bin" ]] || { echo "remote rustc is not executable beside cargo: $rustc_bin" >&2; exit 1; }
-for command in awk file grep install python3 sed sha256sum sort strings tar; do
+for command in awk file git grep install python3 sed sha256sum sort strings tar; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "remote builder is missing required command: $command" >&2
     exit 1
@@ -321,9 +312,8 @@ actual_source_sha="$(sha256sum "$source_tarball" | awk '{print $1}')"
   exit 1
 }
 
-if [[ "$clean" -eq 1 ]]; then
-  rm -rf "$source_dir" "$target_dir" "$stage_dir"
-fi
+rm -rf "$source_dir" "$stage_dir"
+if [[ "$clean" -eq 1 ]]; then rm -rf "$target_dir"; fi
 mkdir -p "$source_dir" "$target_dir" "$stage_dir"
 mkdir -p "$cargo_home"
 rm -rf "${source_dir:?}"/* "${source_dir}"/.[!.]* "${source_dir}"/..?* 2>/dev/null || true
@@ -353,7 +343,25 @@ export CARGO_BUILD_JOBS=1
 export CARGO_TARGET_DIR="$target_dir"
 cd "$source_dir"
 
-# Linux host tools embed the same KVM Python contract as their selected guest.
+# The compiler's inventory needs the complete tracked source index. Recreate
+# it from the clean archive and verify its tree identity before generation.
+git init -q .
+git -c core.autocrlf=false -c core.filemode=true add --force --all
+[[ "$(git write-tree)" == "$source_tree" ]] || {
+  echo "native source index differs from the selected Git tree" >&2
+  exit 1
+}
+qemu_timer="$(python3 - <<'PY_TIMER'
+from pathlib import Path
+import tomllib
+profile = tomllib.loads(Path('configs/sel4/profiles.toml').read_text())
+print(profile['profiles']['qemu_smp_kvm_production']['timer_clock_hz'])
+PY_TIMER
+)"
+"$cargo_bin" run --locked -p coh-rtc --bin coh-rtc -- \
+  configs/root_task.toml --timer-clock-hz "$qemu_timer" \
+  --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
+# Linux tools embed the same generated policies and Python contract as the guest.
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc-python-profile -- \
   configs/root_task.toml --sel4-profiles configs/sel4/profiles.toml \
   --profile qemu_smp_kvm_production \
@@ -396,6 +404,7 @@ os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-unknown}")"
 {
   printf 'schema=cohesix-linux-host-tools-build/v1\n'
   printf 'source_commit=%s\n' "$source_commit"
+  printf 'source_tree=%s\n' "$source_tree"
   printf 'source_archive_sha256=%s\n' "$actual_source_sha"
   printf 'qemu_profile=qemu_smp_kvm_production\n'
   printf 'qemu_contract_sha256=%s\n' "$(sha256sum configs/generated/cohesix_python_qemu_smp_production.json | awk '{print $1}')"
