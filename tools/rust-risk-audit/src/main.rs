@@ -21,7 +21,7 @@ use syn::{
     TraitItem, TypeFnPtr, UseTree,
 };
 
-const SCANNER_VERSION: &str = "rust-risk-audit/v5";
+const SCANNER_VERSION: &str = "rust-risk-audit/v6";
 const HISTORICAL_BASELINE_COMMIT: &str = "cf8f9ee30";
 const HISTORICAL_BASELINE_FULL_COMMIT: &str = "cf8f9ee30b0431dfb79a203f38ba3c7e12c86490";
 const UNQUALIFIED_INCLUDE_ERROR: &str =
@@ -49,7 +49,10 @@ const LINKED_RUNTIME_HAL_CANONICAL_FILES: [&str; 4] = [
     "crates/pi4-driver-abi/src/lib.rs",
 ];
 const EXTERNAL_NON_RUST_TREES: [&str; 1] = ["crates/sel4-sys/upstream"];
-const SOURCE_SCOPE: &str = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, and external non-Rust trees contracted separately";
+const VENDORED_FUSER_PATH: &str = "third_party/fuser";
+const VENDORED_FUSER_SHA256: &str =
+    "3716332d54f07813b1ce1166d458b0be813ad524b1b9beffac5a04c5193226c6";
+const SOURCE_SCOPE: &str = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, external non-Rust trees, and vendored dependency trees contracted separately";
 const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 8] = [
     (
         "crates/sel4-sys/src/lib.rs",
@@ -1214,6 +1217,77 @@ fn validate_manifest_repo_path(
     Ok(canonical)
 }
 
+fn validate_vendored_tree(root: &Path, directory: &Path, expected: &str) -> Result<(), String> {
+    validate_no_symlink_ancestors(root, directory)?;
+    let mut pending = vec![directory.to_path_buf()];
+    let mut files = Vec::new();
+    let mut entries_seen = 0usize;
+    while let Some(parent) = pending.pop() {
+        let entries = fs::read_dir(&parent)
+            .map_err(|error| format!("unable to inspect vendored tree: {error}"))?;
+        for entry in entries {
+            let path = entry
+                .map_err(|error| format!("unable to inspect vendored entry: {error}"))?
+                .path();
+            entries_seen += 1;
+            if entries_seen > 256 {
+                return Err(String::from(
+                    "vendored tree exceeds its bounded entry inventory",
+                ));
+            }
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| format!("unable to inspect vendored file: {error}"))?;
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                files.push(path);
+            } else {
+                return Err(format!(
+                    "vendored tree contains a symlink or special file: {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    files.sort();
+    let mut digest = Sha256::new();
+    let mut total_bytes = 0u64;
+    for file in files {
+        let name = file
+            .strip_prefix(directory)
+            .map_err(|_| String::from("vendored file escaped its tree"))?
+            .to_str()
+            .ok_or("vendored file name is not UTF-8")?;
+        if name.contains('\\') {
+            return Err(String::from(
+                "vendored file name contains an ambiguous separator",
+            ));
+        }
+        let length = fs::metadata(&file)
+            .map_err(|error| format!("unable to inspect vendored size: {error}"))?
+            .len();
+        total_bytes = total_bytes.saturating_add(length);
+        if total_bytes > 4 * 1024 * 1024 {
+            return Err(String::from(
+                "vendored tree exceeds its bounded byte inventory",
+            ));
+        }
+        let bytes =
+            fs::read(&file).map_err(|error| format!("unable to read vendored file: {error}"))?;
+        digest.update(name.as_bytes());
+        digest.update([0]);
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    let actual = hex::encode(digest.finalize());
+    if actual != expected {
+        return Err(format!(
+            "vendored dependency tree digest mismatch: expected={expected} actual={actual}"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_dependency_table(
     root: &Path,
     package_root: &Path,
@@ -1237,6 +1311,18 @@ fn validate_dependency_table(
             ));
         }
         if let Some(path) = dependency.get("path").and_then(toml::Value::as_str) {
+            // This reviewed crates.io dependency is sealed byte-for-byte, including
+            // its build script and patch. No other path or dependency gains an
+            // exemption from first-party source discovery or risk ceilings.
+            if context == "Cargo patch crates-io"
+                && package_root == root
+                && name == "fuser"
+                && path == VENDORED_FUSER_PATH
+                && dependency.len() == 1
+            {
+                validate_vendored_tree(root, &root.join(path), VENDORED_FUSER_SHA256)?;
+                continue;
+            }
             validate_manifest_repo_path(
                 root,
                 package_root,
@@ -2356,6 +2442,7 @@ struct RiskMetadata {
     outside_linked_runtime_hal_historical_panic: usize,
     linked_runtime_hal_paths: Vec<String>,
     external_non_rust_trees: Vec<String>,
+    vendored_dependency_contracts: Vec<String>,
     out_dir_generator_contracts: Vec<String>,
     build_script_contracts: Vec<String>,
     build_script_input_contracts: Vec<String>,
@@ -2456,6 +2543,15 @@ fn validate_baseline(baseline: &RiskBaselines) -> Result<(), String> {
     if baseline.metadata.external_non_rust_trees != expected_external_trees {
         return Err(String::from(
             "risk baseline external_non_rust_trees do not match the scanner contract",
+        ));
+    }
+    if baseline.metadata.vendored_dependency_contracts
+        != vec![format!(
+            "fuser:{VENDORED_FUSER_PATH}:{VENDORED_FUSER_SHA256}"
+        )]
+    {
+        return Err(String::from(
+            "risk baseline vendored dependency contract must be exact",
         ));
     }
     let expected_out_dir_contracts: Vec<String> = OUT_DIR_INCLUDE_CONTRACTS
@@ -3071,9 +3167,10 @@ mod tests {
         audit_source, count_paths, count_source, count_tree, enforce_budgets,
         enforce_historical_replay_counts, eval_cfg_with_test_disabled, git_output,
         is_excluded_test_path, isolated_git_output, parse_baseline, validate_cargo_config,
-        validate_current_only_build_tool_contracts, validate_include_expression, validate_manifest,
-        validate_manifests, validate_path_redirect, verify_historical_attested_files, AuditMode,
-        CfgValue, RiskCounts, ACTIVE_GLOBAL_CEILING, ACTIVE_LINKED_RUNTIME_HAL_CEILING,
+        validate_current_only_build_tool_contracts, validate_dependency_table,
+        validate_include_expression, validate_manifest, validate_manifests, validate_path_redirect,
+        validate_vendored_tree, verify_historical_attested_files, AuditMode, CfgValue, RiskCounts,
+        ACTIVE_GLOBAL_CEILING, ACTIVE_LINKED_RUNTIME_HAL_CEILING,
         ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING, HISTORICAL_GLOBAL_COUNTS,
         HISTORICAL_LINKED_RUNTIME_HAL_COUNTS, HISTORICAL_OUTSIDE_LINKED_RUNTIME_HAL_COUNTS,
         LINKED_RUNTIME_HAL_PATHS,
@@ -3814,6 +3911,68 @@ mod tests {
         .expect("fixture symlink is creatable");
 
         assert!(validate_path_redirect(&repo.root, &repo.source(), "risky").is_err());
+    }
+
+    #[test]
+    fn vendored_tree_rejects_changed_added_and_removed_files() {
+        let repo = TempRepo::new();
+        let directory = repo.root.join("third_party/pinned");
+        fs::create_dir_all(&directory).expect("fixture directory");
+        let source = directory.join("lib.rs");
+        let bytes = b"pub fn pinned() {}\n";
+        // Independent SHA-256 fixture: UTF-8 path, NUL, little-endian
+        // eight-byte content length, then the exact content above.
+        let expected = "dd9656cbe51d4297dc680493f128e1036e1e26e2e6e3b3abc14b2a2bdfeab4df";
+        fs::write(&source, bytes).expect("fixture source");
+        validate_vendored_tree(&repo.root, &directory, expected).expect("exact fixture accepted");
+        fs::write(&source, b"pub fn altered() {}\n").expect("changed fixture");
+        assert!(validate_vendored_tree(&repo.root, &directory, expected).is_err());
+        fs::write(&source, bytes).expect("restore fixture");
+        let extra = directory.join("build.rs");
+        fs::write(&extra, b"fn main() {}\n").expect("unreviewed build script");
+        assert!(validate_vendored_tree(&repo.root, &directory, expected).is_err());
+        fs::remove_file(extra).expect("remove unreviewed source");
+        fs::remove_file(source).expect("remove reviewed source");
+        assert!(validate_vendored_tree(&repo.root, &directory, expected).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vendored_tree_rejects_symlinks_and_ambiguous_names() {
+        use std::os::unix::fs::symlink;
+        let repo = TempRepo::new();
+        let directory = repo.root.join("third_party/pinned");
+        fs::create_dir_all(&directory).expect("fixture directory");
+        symlink(repo.source(), directory.join("lib.rs")).expect("fixture symlink");
+        let error = validate_vendored_tree(&repo.root, &directory, "unused")
+            .expect_err("symlink rejected before hashing");
+        assert!(error.contains("symlink"));
+        fs::remove_file(directory.join("lib.rs")).expect("remove fixture symlink");
+        fs::write(directory.join("a\\b.rs"), b"pub fn hidden() {}\n")
+            .expect("ambiguous fixture name");
+        assert!(validate_vendored_tree(&repo.root, &directory, "unused")
+            .expect_err("ambiguous name rejected")
+            .contains("ambiguous separator"));
+    }
+
+    #[test]
+    fn vendored_dependency_admission_does_not_allow_aliases_or_new_paths() {
+        let repo = TempRepo::new();
+        for wire in [
+            "fuser = { path = 'third_party/other' }",
+            "alias = { path = 'third_party/fuser' }",
+            "fuser = { path = 'third_party/fuser', package = 'other' }",
+        ] {
+            let table: toml::value::Table = toml::from_str(wire).expect("fixture dependency");
+            let error = validate_dependency_table(
+                &repo.root,
+                &repo.root,
+                Some(&table),
+                "Cargo patch crates-io",
+            )
+            .expect_err("uncontracted dependency remains rejected");
+            assert!(error.contains("escapes audited"));
+        }
     }
 
     #[test]

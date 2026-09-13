@@ -46,7 +46,7 @@
 - `ticket_limits.max_scopes`: `8`
 - `ticket_limits.max_scope_path_len`: `128`
 - `ticket_limits.max_scope_rate_per_s`: `64`
-- `ticket_limits.bandwidth_bytes`: `131072`
+- `ticket_limits.bandwidth_bytes`: `8388608`
 - `ticket_limits.cursor_resumes`: `16`
 - `ticket_limits.cursor_advances`: `256`
 - `cas.enable`: `true`
@@ -232,7 +232,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`
+- `manifest.sha256`: `1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -291,4 +291,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc`)._
+_Generated from `configs/root_task.toml` (sha256: `1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7`)._

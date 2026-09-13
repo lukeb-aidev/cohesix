@@ -5756,6 +5756,7 @@ Inputs: apps/coh/src/mount.rs, fuser 0.18.0 owner-access contract, the exact Pi 
 Changes:
   - apps/coh/src/mount.rs — retain explicit Owner access and ordinary session cleanup, remove the incompatible AutoUnmount option, preserve the private-mount invariant in a focused regression, and use uncached reads so a zero-length metadata fallback cannot conceal live content or a backend refusal.
   - Cargo.toml, apps/coh/Cargo.toml, Cargo.lock, third_party/fuser — pin the unchanged fuser 0.18.0 runtime with a documented build-script patch selecting its existing libfuse3 adapter on macOS; preserve the macFUSE protocol ABI and default Linux mount implementation.
+  - tools/rust-risk-audit/src/main.rs and docs/audit/rust_risk_baseline.toml — seal the exact vendored dependency tree, reject drift and path redirection, and preserve every first-party risk ceiling.
   - docs/HOST_TOOLS.md — document host-user privacy, the macFUSE 5 library requirement, and normal/disconnected-mount cleanup.
   - Compatibility review: all coh mount backends share the corrected configuration. cohsh, hive-gateway, gpu-bridge-host, host-sidecar-bridge, host-ticket-agent, cas-tool, SwarmUI, tools/cohesix-py, and performance benchmark scripts keep their existing wire, policy, namespace, request-auth, and evidence contracts; no changes are required on those surfaces.
 Commands:
@@ -5869,7 +5870,7 @@ Deliverables:
 
 **Why now (buyability + integration):** Cohesix has a scale-capable, request-authenticated gateway path (25b–25d) and Python orchestration (25c). The highest leverage remaining adoption blocker is not new VM semantics; it is the absence of deterministic, auditor-friendly evidence artifacts and turnkey integration patterns that reuse existing control surfaces without introducing new protocols.
 
-**Status:** Reopened for `m25e-evidence-export-failure-retention`, discovered during the Milestone 26e release burn-in. Restoration is limited to retaining partial export summaries, returning failure when a required or optional capture errors, and routing long AuditFS JSON records through the existing bounded CAT chunk framing. Existing target quotas, read bounds, retained-log coverage, redaction and transport contracts remain unchanged.
+**Status:** Reopened for `m25e-evidence-export-failure-retention` and the separately user-authorized `m25e-session-evidence-byte-budget`, both discovered during the Milestone 26e release burn-in. The first restores partial-summary retention, nonzero capture failures and existing bounded CAT framing for long AuditFS JSON. The second raises the finite default session allowance to 8 MiB for full evidence capture and shared operator traffic. Per-read bounds, retained-log coverage, redaction, rate/cursor limits and transport contracts remain unchanged.
 
 ## Goal
 Deliver high-impact, low-risk adoption accelerators that remain host-side and strictly protocol-faithful:
@@ -5905,6 +5906,18 @@ Deliver high-impact, low-risk adoption accelerators that remain host-side and st
 
 ## Task Breakdown
 ```
+Title/ID: m25e-session-evidence-byte-budget
+Milestone: Milestone 25e — Evidence Packs + Integration Kits; discovered in Milestone 26e release burn-in
+Goal: Make a full retained-log evidence capture usable with ordinary shared operator traffic under a finite default session allowance.
+Inputs: Fresh-session Queen-log ELIMIT from exact Pi image c07fdd9c7ba3; explicit user instruction to increase the default byte budget.
+Changes:
+  - configs/root_task*.toml and tools/coh-rtc/src/ir.rs — set the default and manifest ceiling to 8388608 bytes (8 MiB); retain explicit smaller ticket quotas.
+  - coh-rtc outputs, selected native host profiles and installed Python wheel — regenerate all affected fingerprints and projected defaults.
+  - docs/SECURITY.md, docs/HOST_TOOLS.md and docs/OPERATOR_RECIPES.md — explain sizing, cumulative shared-session accounting and unchanged per-request/resource limits.
+Commands: cargo test -p coh-rtc; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; native host builds; fresh exact-image Pi raw entry and full evidence export.
+Checks: 8 MiB is finite and exceeds three worst-case retained logs plus 2 MiB operator traffic; smaller explicit ticket values survive parsing and existing quota refusal tests still pass. No rate, cursor, payload, role or namespace limit increases.
+Deliverables: regenerated contracts, configuration regression, native build identities, new frozen burn-in profile and live export evidence. No UEFI activation or release acceptance claim.
+
 Title/ID: m25e-evidence-export-failure-retention
 Milestone: Milestone 25e — Evidence Packs + Integration Kits; discovered in Milestone 26e release burn-in
 Goal: Preserve failed exports truthfully and restore bounded reads of legitimate long AuditFS records.

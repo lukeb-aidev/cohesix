@@ -7349,7 +7349,7 @@ impl Default for TicketLimits {
             max_scopes: 8,
             max_scope_path_len: 128,
             max_scope_rate_per_s: 64,
-            bandwidth_bytes: 131_072,
+            bandwidth_bytes: 8_388_608,
             cursor_resumes: 16,
             cursor_advances: 256,
         }

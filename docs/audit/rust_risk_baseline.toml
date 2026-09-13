@@ -21,8 +21,8 @@ expect = 240
 panic = 102
 
 [metadata]
-scanner = "rust-risk-audit/v5"
-source_scope = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, and external non-Rust trees contracted separately"
+scanner = "rust-risk-audit/v6"
+source_scope = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, external non-Rust trees, and vendored dependency trees contracted separately"
 historical_baseline_commit = "cf8f9ee30"
 historical_unsafe = 693
 historical_unwrap = 38
@@ -47,6 +47,7 @@ linked_runtime_hal_paths = [
   "crates/pi4-driver-abi/src",
 ]
 external_non_rust_trees = ["crates/sel4-sys/upstream"]
+vendored_dependency_contracts = ["fuser:third_party/fuser:3716332d54f07813b1ce1166d458b0be813ad524b1b9beffac5a04c5193226c6"]
 out_dir_generator_contracts = [
   "crates/sel4-sys/src/lib.rs:bindings.rs:crates/sel4-sys/build.rs:f4f8758ff681abf47e1f3498ee2d0318bf6ee86332befe5add7737cf1b279112:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
   "crates/sel4-sys/src/lib.rs:sel4_config_consts.rs:crates/sel4-sys/build.rs:f4f8758ff681abf47e1f3498ee2d0318bf6ee86332befe5add7737cf1b279112:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",

@@ -6,7 +6,7 @@
 DEFAULTS = {
     "contract_kind": "target-neutral-fallback",
     "manifest_sha256": None,
-    "generation_source_sha256": "00c9c09c8088389cc0082b3c26b9fe1da5b7659e0c19310e695790ea2e73d0cc",
+    "generation_source_sha256": "1867c3074ce307b67eea3b47580d2f4ce8e2f50efaa7a939587c0db53cefd3a7",
     "execution_proof": "none",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
@@ -21,7 +21,7 @@ DEFAULTS = {
         "max_scopes": 8,
         "max_scope_path_len": 128,
         "max_scope_rate_per_s": 64,
-        "bandwidth_bytes": 131072,
+        "bandwidth_bytes": 8388608,
         "cursor_resumes": 16,
         "cursor_advances": 256,
     },

@@ -26,3 +26,10 @@ All other crate files retain upstream content. Registry bookkeeping and the
 crate's standalone Cargo.lock are omitted; the Cohesix workspace lock is the
 build authority. Remove this patch when a pinned upstream version provides the
 same Mac selection and passes both native checks.
+
+The Rust risk audit admits this dependency only as the exact workspace
+crates.io patch at `third_party/fuser`. A sorted tree digest covers every file,
+including this provenance note, the complete patch and upstream build inputs.
+Added, removed or changed files, special files, symlinks and path redirection
+fail closed. Upstream runtime code stays an external dependency; first-party
+risk ceilings and source-path checks remain in force.

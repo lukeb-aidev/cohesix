@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "052dcd123c527e8151c2cca02688b3285dac978763a5641139441ef8beb3b67e";
+    "e56990d76d93616b04a5802eade2f9ba843ca5923667c3ab9da18e8aa211b620";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9113,7 +9113,7 @@ pub const TICKET_LIMITS: TicketLimits = TicketLimits {
     max_scopes: 8,
     max_scope_path_len: 128,
     max_scope_rate_per_s: 64,
-    bandwidth_bytes: 131072,
+    bandwidth_bytes: 8388608,
     cursor_resumes: 16,
     cursor_advances: 256,
 };
@@ -9796,7 +9796,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 55] = [
     "manifest.schema=1.18",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=0cd315649dfd0328c9d8bc44ff0bdcb431acfee3b22c60e5f37b791e748201d7",
+    "manifest.sha256=5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9845,8 +9845,8 @@ pub const INITIAL_AUDIT_LINES: [&str; 55] = [
     "manifest.hw.network.static_ipv4.ip=192.168.10.42",
     "manifest.hw.network.static_ipv4.prefix_len=24",
     "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
-    "attestation.bound_manifest_sha256=0cd315649dfd0328c9d8bc44ff0bdcb431acfee3b22c60e5f37b791e748201d7",
-    "attestation.evidence_sha256=c8f8f45453693f7a55b1aa0af4b47faa9cce5ada870ca87369a0c2d37deba51b",
+    "attestation.bound_manifest_sha256=5af7fec3ebdd4818545182e0a7e1761eeed55e9448ccd4c6384a07895219a00e",
+    "attestation.evidence_sha256=80d90924bf980af3b67ce2a48cefbc7e75e65ad548806df8b880eae2432bd78b",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

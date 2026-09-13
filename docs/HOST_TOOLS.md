@@ -56,6 +56,18 @@ interfaces, namespaces, quotas, workloads, report schemas and thresholds need
 no change. Boot-video retention affects the generated Pi boot script and its
 handoff check, with no host-tool API change.
 
+The default shared session allowance is 8 MiB. A complete retained Queen log
+can exceed the former 128 KiB allowance before any other operator reads.
+All gateway clients consume the same upstream ticket budget; 8 MiB permits
+several full captures and ordinary work while retaining a finite ceiling.
+The compatibility review covers cohsh, coh, hive-gateway, native SwarmUI,
+gpu-bridge-host, host-sidecar-bridge, host-ticket-agent, cas-tool, coh-status,
+sidecar-bus, console-ack-wire, the Python SDK and playbooks, and raw/REST and
+Worker pressure benchmarks. Regenerated host defaults, policy fingerprints,
+Python wheel and native target profiles change together. CLI grammar, REST
+framing, explicit ticket attenuation, benchmark workloads and acceptance
+thresholds require no changes. Libraries keep their owning API contracts.
+
 ## Generated integration truth
 
 Passive Heartbeat evidence compatibility: the shared host validator and Python
