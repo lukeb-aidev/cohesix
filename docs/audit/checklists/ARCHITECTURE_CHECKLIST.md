@@ -10,7 +10,9 @@
   ownership and the exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39` Pi ELF layout.
 - [x] Preserve focused review/test results for the critical-TCB IPC repair and
   ordinary target lifecycle; do not equate them with missing fault-path proof.
-- [ ] Complete DD27–30 machine evidence and the remaining release criteria.
+- [x] Independently verify fresh DD27 image integrity and DD29 firmware/USB evidence;
+  keyboard absence is explicitly human-attested by Lukas Bower.
+- [ ] Complete DD28 and DD30 machine evidence and the remaining release criteria.
 
 Reviewer and evidence: [current audit report](../AUDIT_REPORT_2026-09-13.md).
 Current overall decision remains **FAIL**. DD26 closure grants no physical

@@ -1,11 +1,11 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Bind the scoped DD26 closure and approved exception renewals to evidence while preserving outstanding Stage 05 blockers. -->
+<!-- Purpose: Bind scoped DD26, DD27 and DD29 closures and approved exception renewals to evidence while preserving outstanding Stage 05 blockers. -->
 <!-- Copyright 2026 Lukas Bower -->
 
 # Cohesix Audit Report (2026-09-13)
 
-Decision: **FAIL / release blocked**. DD26 is closed for its independently
-verified TLS storage/ABI defect. DD27–30 remain OPEN P1 findings. This report
+Decision: **FAIL / release blocked**. DD26, DD27 and DD29 are closed for their
+independently reviewed scoped defects. DD28 and DD30 remain OPEN P1 findings. This report
 records scoped evidence closure; it does not announce a new staged PASS.
 
 Scope: Milestone 26e
@@ -14,6 +14,8 @@ Scope: Milestone 26e
 DD26 artifact check is `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39`.
 The audit starts from clean `385d5fdc46c80d6fe1b590f4555ee3b0b0763954`, whose
 only change from that implementation is the cohsh Worker-script test fingerprint.
+The post-burn-in update below reviews final source `719043fad` and actual Pi
+implementation `61f7bcd1f`; it supersedes the earlier outstanding-proof snapshot.
 No runtime implementation changes are included in this audit update.
 
 ## Evidence root and DD26 closure
@@ -83,7 +85,7 @@ Stages 01–04 not be retraced unless absolutely necessary. No new full plan
 was launched after that instruction. Final canonical context validation remains
 required when the actual remaining blockers have been resolved.
 
-## Outstanding proof and delivery boundary
+## Earlier outstanding-proof snapshot (before completed burn-in repairs)
 
 DD27 requires fresh candidate root-text/console evidence. DD28 requires
 complete retained PCIe observations and WiFi/GENET boot/network proof. DD29
@@ -104,6 +106,101 @@ capability preflight and ordinary lifecycle PASS do not satisfy this gap.
 Fresh Pi acceptance, pressure/repeatability, SD delivery/readback and normal
 boot, extracted release-bundle verification, human review of new Rust, and
 promotion remain separate requirements. No merge, push or release occurred.
+These statements describe that earlier snapshot, not the post-burn-in state below.
+
+## Post-burn-in closure review
+
+Title/ID: `stage5-post-burn-in-evidence-closure`. Milestone and discovery task
+remain the M26e tasks named above. The goal is to close only findings whose
+missing evidence is now available, preserving completed Stages 01–04 and burn-in.
+The clean main source reviewed is
+`719043fadc26cf9ac5e826ea68c65d45b49b750f`. Its final change after tested Pi source
+`61f7bcd1f057277151b46e884339076a7e49bb59` affects only host evidence timeline
+parsing/tests and documentation; the reviewed Pi implementation is unchanged.
+
+The burn-in evidence root is
+`out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z` in the main checkout.
+`CURRENT.md`, `RUN_RECORD.md` and `REVIEW.md` record the completed focused
+repairs and previously uncovered tools. The original timed maintenance failure
+after 86 minutes and 43 jobs remains unchanged. Subsequent maintenance refusals,
+containment, QUIESCED, both FUSE remounts and resumed CUDA/PEFT work passed.
+No full burn-in or completed stage was repeated for this review. The Pi was
+last observed ONLINE with empty active leases; the earlier recovery requirement
+is superseded by the actual successful boot and workload evidence.
+
+### DD27: first-publication/address defect closed
+
+Independent automated reviewer `/root/review_tls_pcie_publication` recommends
+`CLOSED_VERIFIED` in
+`independent/dd27-burn-in-evidence-review-719043fad-01/review.json`, SHA-256
+`73676bd5c769532c4ef17ac530c9f8e19576cd5d32cba9c1753d602aac1b4c2b`.
+Its `verify_existing_evidence.py` independently extracts the sealed root ELF
+from the actual Pi image, SHA-256
+`5f3457c2a0798ec28bca7f7511b90e8eeb7eb628f43844823939d3661a9aacbf`, image ID
+`9643bd91cf1cb7a071d5d2525f2b58ca50695e70088b4b000dbf01b8f034c6cc`.
+All eight acquired root-text cuts match actual ELF FNV-1a32 `0x0001c885` and
+word34 `0x91002100` in order. The capture-time, pre-PCIe receipt is complete
+and no audit-capture failure is present. Image/RAM CRC, exact serial BUILD and
+the raw-result boot-log hash bind that boot; the host pack manifest is not
+misrepresented as a Pi image identity.
+
+The raw workload completed 1024 unpaced requests on one connection without
+retry/reconnect at 670.726 requests/s and p95 4.595 ms. Later authenticated
+Linux Gateway evidence exported 14 paths with zero missing/errors. The review
+rehashes existing pure checks and verifies the five publication/address/mapping
+functions are unchanged through final source. These records satisfy the scoped
+integrity and console criterion; no second-boot or instruction-cache claim is made.
+
+### DD29: firmware/USB defect and physical cases closed
+
+The same independent reviewer recommends `CLOSED_VERIFIED` in
+`independent/dd29-mixed-evidence-closure-review-719043fad-01/review.json`, SHA-256
+`2b2788b075ced4ac8e26fadd53977abea1deada8edf2b29625a899b85bcbe750`.
+Six relevant files are unchanged from the independently reviewed implementation
+through `61f7bcd1f` and `719043fad`. The acquired Queen log shows firmware
+notification, completion and the 20 ms hardware wait, complete proof, keyboard
+enumeration, first HID report and command readiness with no pending recovery.
+No typed physical key is inferred from those machine observations.
+
+Lukas Bower explicitly confirmed: “Keyboard absent has been tested and confirmed
+by me.” The exact statement is retained in
+`validation/post-burn-in-stage5-check-20260913T100408Z/keyboard-absent-human-attestation.json`.
+This is HUMAN-ATTESTED physical testing. Its image, test time and machine log
+are unspecified; none is invented. The finding requires present and absent
+physical cases without mandating a machine transcript for absence. The two
+stated evidence bases satisfy that scoped criterion. No repeat is required,
+and no same-image absence capture or full repeatability matrix is claimed.
+
+### Remaining blockers and retained checks
+
+DD28 remains OPEN: the complete `61f7bcd1f` GENET reset/firmware receipt and
+network work are available, but same-image WiFi boot/network proof is missing.
+DD30 remains OPEN: normal Worker lifecycle and maintenance policy refusals do
+not supply restricted critical-TCB kernel-error/fault/wake proof. The automated
+cybersecurity stop described above still supplies no execution evidence and
+was not retried. These are the remaining P1 blockers; keyboard absence and
+human Rust approval are resolved.
+
+`timeline-merge-checks/results.json` under the burn-in root records PASS for
+all eight required checks on `719043fad`: format, Clippy, workspace check/test,
+audit, deny advisories, generated consistency and Test Plan integrity.
+`human-review-signoff.json` records Lukas Bower's approval of all six burn-in
+fixes; earlier Stage 5 fixes were also approved. `publication-result.json`
+records their push to main through `719043fad`. The current user reconfirmed
+approval of all fixes. Approval and source publication are complete.
+
+The current focused assessment is
+`validation/post-burn-in-stage5-check-20260913T100408Z`. It retains the initial
+four-finding predicate result, the passing exception register check, current
+evidence hashes and the subsequent two-finding closure update. Only affected
+audit metadata, generated consistency, Test Plan integrity and diff/link checks
+are selected for this documentation update. Existing full-source checks are
+reused. No Stage 05 PASS marker or final release claim is emitted.
+
+Changes are confined to the findings register and its audit/checklist consumers.
+The complete host-tool suite, Python SDK, generated runtime interfaces and
+performance benchmark surfaces were reviewed for compatibility: no behavior,
+schema, ABI, workload or implementation changes are needed for this record update.
 
 ## Stage 05 predicate repair and audit-update checks
 

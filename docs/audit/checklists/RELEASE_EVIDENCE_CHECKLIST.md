@@ -14,15 +14,22 @@
 - [x] Close the DD26 storage/ABI defect with independent automated reviewer
   `/root/review_tls_pcie_publication`, exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39`
   source/image evidence and the references in the [current report](../AUDIT_REPORT_2026-09-13.md).
-- [ ] Close `DD-2026-0027` through `DD-2026-0030` with their required machine evidence.
+- [x] Close DD27 with independent `/root/review_tls_pcie_publication` review of
+  actual `61f7bcd1f` image bytes, eight retained integrity samples and console work.
+- [x] Close DD29 with that reviewer's unchanged-repair review, machine-observed
+  keyboard presence and Lukas Bower's explicit human-attested keyboard-absence test.
+  No machine trace, image identity or test timestamp is assigned to the attestation.
+- [ ] Close DD28 same-image WiFi proof and DD30 required QEMU/Pi fault/wake proof.
+- [x] Preserve all eight passing final-source checks at `719043fad` and completed
+  focused burn-in repair evidence without rerunning Stages 01–04 or burn-in.
 - [ ] Complete all applicable gates on the final frozen source and image set.
 - [ ] Verify physical Pi SD delivery/readback and required fresh boots.
 - [ ] Verify the extracted Mac, native Linux and Pi release bundles.
-- [ ] Record human review of the AI-assisted Rust before merging to main.
+- [x] Record Lukas Bower's approval of all fixes and publication through `719043fad`.
 
 Current decision: **FAIL / release blocked**. See [BLOCKERS.md](../BLOCKERS.md).
-The DD26 decision is an independent automated defect review, not human Rust
-sign-off or Pi boot acceptance. Existing Stages 01–04 retain their source
+The DD26/DD27/DD29 decisions close their scoped defects. Human Rust sign-off
+is recorded separately. Existing Stages 01–04 retain their source
 bindings; none has been copied or relabelled for a successor commit.
 The dated snapshots below describe their original runs only.
 

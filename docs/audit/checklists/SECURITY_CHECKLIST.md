@@ -9,8 +9,10 @@
 - [x] Preserve the exact `22e3d08ff` advisory/secret-scan results and their source scope.
 - [x] Record Lukas Bower's EX20–23 renewal through 2026-10-13 and the passing register check.
 - [x] Record independently verified DD26 storage/ABI closure and its exact artifact identity.
-- [ ] Complete DD27–30 proof; four P1 findings still block release.
-- [ ] Record human review of subsequent Rust before merge.
+- [x] Record independently verified DD27 integrity and DD29 firmware/USB closures,
+  preserving the human-attested basis of the keyboard-absence case.
+- [ ] Complete DD28 and DD30 proof; two P1 findings still block release.
+- [x] Record human approval of all fixes and passing final-source checks at `719043fad`.
 
 Evidence and independent reviewer: [current audit report](../AUDIT_REPORT_2026-09-13.md).
 An automated safety stop prevented the planned debugger error-path diagnostic;
