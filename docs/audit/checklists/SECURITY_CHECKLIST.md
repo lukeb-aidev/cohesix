@@ -4,6 +4,20 @@
 
 # Security Checklist
 
+## Stage 05 closure review (2026-09-13)
+
+- [x] Preserve the exact `22e3d08ff` advisory/secret-scan results and their source scope.
+- [x] Record Lukas Bower's EX20–23 renewal through 2026-10-13 and the passing register check.
+- [x] Record independently verified DD26 storage/ABI closure and its exact artifact identity.
+- [ ] Complete DD27–30 proof; four P1 findings still block release.
+- [ ] Record human review of subsequent Rust before merge.
+
+Evidence and independent reviewer: [current audit report](../AUDIT_REPORT_2026-09-13.md).
+An automated safety stop prevented the planned debugger error-path diagnostic;
+it was not retried and contributes no fault-injection or error/retry result.
+Current overall decision remains **FAIL**. The following February checklist
+retains its original scope.
+
 ## Run Metadata
 - Audit date: `2026-02-14`
 - Commit SHA: `22cd5017d060c3439b6f7fc4f70717f329134803`

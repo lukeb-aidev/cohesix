@@ -4,6 +4,19 @@
 
 # Architecture Conformance Checklist
 
+## Stage 05 closure review (2026-09-13)
+
+- [x] Independent automated review verifies DD26 typed TLS storage, accessor
+  ownership and the exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39` Pi ELF layout.
+- [x] Preserve focused review/test results for the critical-TCB IPC repair and
+  ordinary target lifecycle; do not equate them with missing fault-path proof.
+- [ ] Complete DD27–30 machine evidence and the remaining release criteria.
+
+Reviewer and evidence: [current audit report](../AUDIT_REPORT_2026-09-13.md).
+Current overall decision remains **FAIL**. DD26 closure grants no physical
+fault attribution, final-image boot acceptance or human merge sign-off.
+The following February checklist is historical.
+
 ## Run Metadata
 - Audit date: `2026-02-14`
 - Commit SHA: `22cd5017d060c3439b6f7fc4f70717f329134803`

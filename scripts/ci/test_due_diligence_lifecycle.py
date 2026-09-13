@@ -59,6 +59,52 @@ def finding_row(
 
 
 class DueDiligenceLifecycleTests(unittest.TestCase):
+    def run_findings_check(self, findings: str) -> subprocess.CompletedProcess[str]:
+        """Exercise the release blocker predicate with an isolated register."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            findings_path = root / "findings.csv"
+            findings_path.write_text(
+                "finding_id,severity,disposition,target_date\n" + findings
+            )
+            environment = os.environ.copy()
+            environment["DD_GATE_LOG_DIR"] = str(root / "gate-logs")
+            return subprocess.run(
+                ["bash", str(GATE), "--check-blocking-findings", str(findings_path)],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+    def test_open_p0_p1_block_regardless_of_remediation_date(self) -> None:
+        # DUE_DILIGENCE_PLAN section 10 forbids every unclosed P0/P1.
+        for severity in ("P0", "P1"):
+            for disposition in ("OPEN", "PENDING_VERIFY", "ACCEPTED_RISK"):
+                for target_date in ("", "0001-01-01", "9999-12-31", "invalid"):
+                    with self.subTest(
+                        severity=severity,
+                        disposition=disposition,
+                        target_date=target_date,
+                    ):
+                        result = self.run_findings_check(
+                            f"DD-A,{severity},{disposition},{target_date}\n"
+                        )
+                        self.assertEqual(result.returncode, 1, result.stdout)
+                        self.assertIn(
+                            f"DD-A ({severity}, {disposition})", result.stderr
+                        )
+
+    def test_verified_p0_p1_and_p2_use_their_separate_lifecycle_checks(self) -> None:
+        result = self.run_findings_check(
+            "DD-A,P0,CLOSED_VERIFIED,9999-12-31\n"
+            "DD-B,P1,CLOSED_VERIFIED,0001-01-01\n"
+            "DD-C,P2,ACCEPTED_RISK,\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "blocking findings gate passed\n")
+
     def run_check(
         self,
         findings: str,

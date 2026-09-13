@@ -4,18 +4,26 @@
 
 # Release Evidence Checklist
 
-## Release candidate 1.0.0-beta (2026-09-10)
+## Release candidate 1.0.0-beta (2026-09-13)
 
 - [x] Preserve the exact `2be878d8d` QEMU Stages 01–04 PASS and Stage 05 FAIL logs.
 - [x] Preserve completed native Jetson benchmarks and exact receipt/completion logs.
 - [x] Bind the TLS storage layout check to the staged `a5ef48045` Pi image.
-- [ ] Close `DD-2026-0026` through `DD-2026-0029` with their required evidence and independent review.
+- [x] Preserve exact `22e3d08ff` Stages 01–04 PASS and its original Stage 05 FAIL.
+- [x] Record approved EX20–23 renewal through 2026-10-13 and its passing register check.
+- [x] Close the DD26 storage/ABI defect with independent automated reviewer
+  `/root/review_tls_pcie_publication`, exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39`
+  source/image evidence and the references in the [current report](../AUDIT_REPORT_2026-09-13.md).
+- [ ] Close `DD-2026-0027` through `DD-2026-0030` with their required machine evidence.
 - [ ] Complete all applicable gates on the final frozen source and image set.
 - [ ] Verify physical Pi SD delivery/readback and required fresh boots.
 - [ ] Verify the extracted Mac, native Linux and Pi release bundles.
 - [ ] Record human review of the AI-assisted Rust before merging to main.
 
 Current decision: **FAIL / release blocked**. See [BLOCKERS.md](../BLOCKERS.md).
+The DD26 decision is an independent automated defect review, not human Rust
+sign-off or Pi boot acceptance. Existing Stages 01–04 retain their source
+bindings; none has been copied or relabelled for a successor commit.
 The dated snapshots below describe their original runs only.
 
 ## Historical Run Metadata

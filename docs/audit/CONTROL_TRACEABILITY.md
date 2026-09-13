@@ -4,6 +4,20 @@
 
 # Control-to-Evidence Traceability Register
 
+## Stage 05 closure update (2026-09-13)
+
+The [current audit report](AUDIT_REPORT_2026-09-13.md) supplies the exact evidence
+root, immutable report hashes, implementation identities and reviewer records.
+The historical registers below retain their original dates and claims.
+
+| Control | Evidence and identity | Status | Boundary |
+| --- | --- | --- | --- |
+| SI-2: DD26 TLS storage and ABI | Independent `/root/review_tls_pcie_publication` storage/accessor review and exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39` Pi image/ELF verification | `CLOSED_VERIFIED` | 16 bytes, alignment 16, no writable overlap; no historical fault attribution or new Pi execution claim |
+| RMF exception lifecycle | Approved EX20–23 renewal in `724580aa62a848a8356159b9a7f0f86d23993c78`, approval digest and register check in the report | `PASS` scoped renewal | Valid through 2026-10-13; no P1 waiver |
+| HAL integrity and lifecycle: DD27–29 | Independent source/emitted reviews plus preserved historical physical results | `GAP` | Current image needs complete dual-lane, integrity and keyboard-state machine records |
+| Critical-TCB IPC ownership: DD30 | `3746e659fc9a96b7d623e037ae7931f92ebd051c` repair, focused host/native and target lifecycle evidence | `GAP` | Required fault/wake proof remains incomplete; stopped debugger work supplies no error-path proof |
+| Staged acceptance and delivery | Exact `22e3d08ff` Stages 01–04 receipts remain preserved; successor focused results have their own source identities | `FAIL` release | No copied attestations, final Stage 05 PASS, SD delivery or release promotion |
+
 ## Run Metadata
 - Audit run date: `2026-02-14`
 - Registry maintenance date: `2026-07-16`

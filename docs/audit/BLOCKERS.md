@@ -4,29 +4,39 @@
 
 # Due Diligence Blockers
 
-## Current release candidate (2026-09-10)
+## Current release candidate (2026-09-13)
 
-Release readiness is **FAIL**. Exact `2be878d8d` passed QEMU Stages 01–04;
-Stage 05 stopped on the four open P1 findings below. `cargo audit` and
-`cargo deny check advisories` passed. Complete evidence is retained under
-`out/release-qualification/1.0.0-beta-8bc556850-20260909/canonical-2be878d8d-01/frozen-candidate`.
-Later source or hardware checks do not rewrite that failed run.
+Release readiness remains **FAIL**. The [current audit report](AUDIT_REPORT_2026-09-13.md)
+records scoped closure of `DD-2026-0026`, the approved EX20–23 renewal through
+2026-10-13, and the four remaining P1 findings. Exact `22e3d08ff` QEMU
+Stages 01–04 passed; their original Stage 05 failure is preserved. Subsequent
+focused checks retain their actual implementation and artifact identities.
+Stages 01–04 are not being rerun during this closure work, per user instruction.
 
 | Finding | Implemented repair | Closure still required |
 | --- | --- | --- |
-| `DD-2026-0026` | `1894029de` gives the TLS base real atomic storage. Exact staged `a5ef48045` loadable sections match the symbol-bearing ELF; its TLS object is 16 aligned bytes with no overlapping object. | Independent ABI/layout review; retain physical fault attribution separately. |
-| `DD-2026-0027` | `b8e293bc9` returns the new PCIe mapping after successful first publication and checks register addresses. | Independent review and exact-image Pi integrity/console evidence. |
-| `DD-2026-0028` | `d35fc94f0` releases the cold PCIe bridge before status/MSI access. | Independent review and complete exact-image Wi-Fi/GENET boot and network proof. |
-| `DD-2026-0029` | `db420f1c1` reloads VL805 firmware after cold reset and preserves USB failure reporting. | Independent review plus the required keyboard-present and keyboard-absent physical cases. |
+| `DD-2026-0027` | First-publication/address repair and independent pure review pass; two exact `25dc10813` GENET boots preserve all eight integrity samples and console proof. | Fresh integrity and console records for the repaired candidate image. Later image records cannot inherit the `25dc10813` samples. |
+| `DD-2026-0028` | Cold reset, firmware completion and ordered timer paths have independent source/emitted review. The boot-audit reserve repairs demonstrated WiFi log eviction. | Complete same-image WiFi/GENET boot, network and retained reset/status/MSI/endpoint/firmware records. |
+| `DD-2026-0029` | Firmware reload and bounded USB failure reporting have independent source review. | Required keyboard-present and keyboard-absent machine cases on the repaired implementation. Historical absence evidence and assumed human observations do not supply those machine states. |
+| `DD-2026-0030` | `3746e659f` repairs borrowed outputs, critical-TCB syscall storage and child IPC ownership. Focused Mac/native tests and independent source/emitted checks pass. | Required exact QEMU/Pi fault/wake evidence; the unexecuted debugger error-path diagnostic remains incomplete after an automated safety stop. |
 
-The exact ELF check is at
-`out/release-qualification/1.0.0-beta-8bc556850-20260909/audit-a5ef48045/tls-layout-review.json`.
-These findings remain `OPEN` in `findings.csv`; a repair commit or an isolated
-passing check does not close them. Final Pi acceptance, SD delivery/readback,
-release packaging and human Rust review also remain separate requirements.
+`DD-2026-0026` is `CLOSED_VERIFIED` for its storage/ABI defect: independent
+review of exact `8c050a0aaf7b8d0d074e9fb12fc91ef45ae60b39` verifies a single
+16-byte, 16-aligned TLS object at `0x924b00`, without writable-symbol overlap.
+The report binds that symbol to the staged image and records source/test
+evidence. Historical physical-fault attribution remains unproved; each later
+selected image still requires its own layout check.
+
+DD27–30 remain `OPEN`. Pi recovery requires a physical power-cycle to observed
+U-Boot; the latest passive UART intake received no bytes. Final Pi acceptance,
+SD delivery/readback, release packaging and human review of new Rust remain
+separate requirements. No target date, severity or acceptance threshold was
+relaxed.
 
 ## Historical gate snapshots
 
+- Exact `2be878d8d`: QEMU Stages 01–04 PASS, Stage 05 FAIL on then-open DD26–29;
+  `out/release-qualification/1.0.0-beta-8bc556850-20260909/canonical-2be878d8d-01/frozen-candidate`.
 - February baseline: `PASS`, `out/audit/gate/20260214T044955Z`.
 - M26d P2 exception closure: `PASS` for offline engineering scope,
   `out/test-plan/m26d-unsafe-remediation-qemu` and

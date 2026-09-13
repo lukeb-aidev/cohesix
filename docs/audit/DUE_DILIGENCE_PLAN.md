@@ -135,6 +135,13 @@ This procedure mirrors RMF intent (Prepare, Categorize, Select, Implement, Asses
 - Expire risk acceptances automatically unless renewed with evidence.
 
 ## 10. Release Decision Criteria
+
+Remediation `target_date` values schedule work; they never defer a P0/P1
+release blocker. Every P0/P1 must be `CLOSED_VERIFIED`. The focused command
+`bash scripts/ci/due_diligence_gate.sh --check-blocking-findings docs/audit/findings.csv`
+checks this predicate without executing other stages. It is not a complete
+Stage 05 verdict; closure metadata and exceptions have their separate checks.
+
 - `PASS`
 - All required gates pass.
 - No open `P0/P1`.

@@ -286,15 +286,15 @@ PY
 }
 
 check_blocking_findings() {
-  python3 <<'PY'
+  local findings_path="${1:-docs/audit/findings.csv}"
+  python3 - "$findings_path" <<'PY'
 import csv
-from datetime import date
 import pathlib
 import sys
 
-path = pathlib.Path("docs/audit/findings.csv")
+path = pathlib.Path(sys.argv[1])
 if not path.is_file():
-    print("missing docs/audit/findings.csv", file=sys.stderr)
+    print(f"missing {path}", file=sys.stderr)
     sys.exit(1)
 
 with path.open(newline="") as handle:
@@ -324,42 +324,20 @@ else:
     sys.exit(1)
 
 blocking = []
-deferred = []
-today = date.today()
-
-def parse_target_date(raw: str):
-    value = (raw or "").strip()
-    if not value:
-        return None
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        return None
 
 for row in reader:
     severity = row.get("severity", "").strip().upper()
     disposition = row.get(disposition_field, "").strip().upper()
     finding_id = row.get("finding_id", "UNKNOWN")
-    target_date = parse_target_date(row.get("target_date", ""))
-    if severity == "P0" and disposition != "CLOSED_VERIFIED":
+    # Remediation dates schedule work; they never authorize an open P0/P1.
+    if severity in {"P0", "P1"} and disposition != "CLOSED_VERIFIED":
         blocking.append((finding_id, severity, disposition))
-        continue
-    if severity == "P1" and disposition != "CLOSED_VERIFIED":
-        if target_date is not None and target_date > today:
-            deferred.append((finding_id, severity, disposition, target_date.isoformat()))
-        else:
-            blocking.append((finding_id, severity, disposition))
 
 if blocking:
     print("blocking findings remain open:", file=sys.stderr)
     for finding_id, severity, disposition in blocking:
         print(f"  - {finding_id} ({severity}, {disposition})", file=sys.stderr)
     sys.exit(1)
-
-if deferred:
-    print("deferred findings (target_date in future):")
-    for finding_id, severity, disposition, target_date in deferred:
-        print(f"  - {finding_id} ({severity}, {disposition}, target_date={target_date})")
 
 print("blocking findings gate passed")
 PY
@@ -894,6 +872,10 @@ PY
 }
 
 if [[ $# -gt 0 ]]; then
+  if [[ "$1" == "--check-blocking-findings" && $# -eq 2 ]]; then
+    check_blocking_findings "$2"
+    exit $?
+  fi
   if [[ "$1" == "--check-exceptions-register" && $# -eq 3 ]]; then
     check_exceptions_register "$2" "$3"
     exit $?
@@ -902,6 +884,7 @@ if [[ $# -gt 0 ]]; then
     dd_collect_all=1
   else
     printf "usage: %s [--collect-all]\n" "$0" >&2
+    printf "       %s --check-blocking-findings <findings.csv>\n" "$0" >&2
     printf "       %s --check-exceptions-register <findings.csv> <EXCEPTIONS.md>\n" "$0" >&2
     exit 2
   fi
