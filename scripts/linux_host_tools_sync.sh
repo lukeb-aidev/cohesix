@@ -269,7 +269,8 @@ build_tools() {
         rust-toolchain.toml \
         .cargo/config.toml \
         scripts/rustc-wrapper.sh
-      git ls-files -z --cached apps crates tools tests resources configs/generated third_party/fuser
+      git ls-files -z --cached apps crates tools tests resources configs/generated \
+        configs/sel4 configs/root_task.toml third_party/fuser
     } | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -czf "$source_tarball"
   )
   local source_sha256
@@ -352,6 +353,12 @@ export CARGO_BUILD_JOBS=1
 export CARGO_TARGET_DIR="$target_dir"
 cd "$source_dir"
 
+# Linux host tools embed the same KVM Python contract as their selected guest.
+"$cargo_bin" run --locked -p coh-rtc --bin coh-rtc-python-profile -- \
+  configs/root_task.toml --sel4-profiles configs/sel4/profiles.toml \
+  --profile qemu_smp_kvm_production \
+  --out configs/generated/cohesix_python_qemu_smp_production.json
+
 "$cargo_bin" build --locked --release -p gpu-bridge-host
 "$cargo_bin" build --locked --release -p cas-tool
 "$cargo_bin" build --locked --release -p hive-gateway
@@ -390,6 +397,8 @@ os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-unknown}")"
   printf 'schema=cohesix-linux-host-tools-build/v1\n'
   printf 'source_commit=%s\n' "$source_commit"
   printf 'source_archive_sha256=%s\n' "$actual_source_sha"
+  printf 'qemu_profile=qemu_smp_kvm_production\n'
+  printf 'qemu_contract_sha256=%s\n' "$(sha256sum configs/generated/cohesix_python_qemu_smp_production.json | awk '{print $1}')"
   printf 'architecture=%s\n' "$(uname -m)"
   printf 'os_id=%s\n' "$os_id"
   printf 'os_version=%s\n' "$os_version"

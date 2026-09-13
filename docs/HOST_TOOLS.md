@@ -494,7 +494,9 @@ artifact, otherwise qualify the new build first. The independently callable
 `scripts/linux_host_tools_sync.sh build-tools` remains available for native
 host-tool preparation. Its source archive includes the complete tracked generated
 contract directory, including both Python target contracts, and the pinned
-`third_party/fuser` dependency selected by the workspace Cargo patch.
+`third_party/fuser` dependency selected by the workspace Cargo patch. Before native compilation, the compiler generates the KVM QEMU Python
+contract from the tracked manifest and seL4 profile. Builder provenance records
+its profile and hash so the embedded gateway contract matches the Linux guest.
 
 For the owner-approved 1.0.0-beta publication workflow, append
 `--qualified-source-root <clean-tested-checkout>` to reuse the exact binaries
