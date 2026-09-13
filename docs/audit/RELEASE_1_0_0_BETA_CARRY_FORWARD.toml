@@ -1,0 +1,161 @@
+# Author: Lukas Bower
+# Purpose: Bind the explicit 1.0.0-beta evidence carry-forward and exact host-only DD30 successor to owner approval.
+# Copyright 2026 Lukas Bower
+# Expiry is a conservative administrative limit aligned to the existing release window.
+# Original stage/source identities and the unexecuted DD30 dynamic test remain unchanged.
+
+schema = "cohesix.release-carry-forward-policy/v1"
+release_id = "1.0.0-beta"
+scope_id = "stage1-4-carry-forward-and-dd30-host-model"
+status = "APPROVED_ACTIVE"
+risk_owner = "Lukas Bower"
+approved_by = "Lukas Bower"
+decision_date = "2026-09-13"
+expiration_date = "2026-10-13"
+base_commit = "aeaa8edb2fba51b82e530f9248e60180f51f23a9"
+prior_commit = "22e3d08ffb5d8ca2a5b3312ceb354f6395532219"
+prior_state = "/Users/lukasbower/cohesix-release-workspaces/1.0.0-beta-model-log/out/test-plan/stage5-closure-22e3d08ffb5d-01"
+proposal_path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/completion-20260913T102047Z/release-carry-forward-review/proposal.json"
+proposal_sha256 = "1d5c5b076cb98e86480b1696a19df8cdd552cae9490af585092ab46d5cfdd90b"
+approval_path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/completion-20260913T102047Z/release-carry-forward-review/owner-approval.json"
+approval_sha256 = "009fdb80aaf6be0206636bd5886337bcbc9d84101260a3521e7afaa44f2befc1"
+approval_quote = "Approved"
+independent_review_path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/completion-20260913T102047Z/independent-review/host-kernel-object-model-01/review.json"
+independent_review_sha256 = "31f84049561cabce88182450be0e977838eeb9adc17b7728701beeb6fd652cf2"
+
+allowed_closure_paths = [
+  "docs/BUILD_PLAN.md",
+  "docs/TEST_PLAN.md",
+  "docs/audit/AUDIT_REPORT_2026-09-13.md",
+  "docs/audit/BLOCKERS.md",
+  "docs/audit/CONTROL_TRACEABILITY.md",
+  "docs/audit/DUE_DILIGENCE_PLAN.md",
+  "docs/audit/EXCEPTIONS.md",
+  "docs/audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml",
+  "docs/audit/checklists/ARCHITECTURE_CHECKLIST.md",
+  "docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md",
+  "docs/audit/checklists/SECURITY_CHECKLIST.md",
+  "docs/audit/findings.csv",
+  "scripts/ci/release_stage5_acceptance.py",
+  "scripts/ci/test_release_stage5_acceptance.py",
+  "scripts/ci/due_diligence_lifecycle.py",
+  "scripts/ci/due_diligence_gate.sh",
+  "scripts/ci/test_plan_evidence.py",
+]
+
+prior_stage_refs = [
+  { stage = 1, ref_sha256 = "a276ed4880334790e82d3e7e81196cf1d46a0d6ffe5aa3862e6c12cad0dbe54e", context_digest = "3c85816faf5c4c1583283d6722a4eaef5487305321791ff76311570490ab413e" },
+  { stage = 2, ref_sha256 = "8e8d3ad90972383ebff58ba28fa603ebcc216dbb02786126dfadf0dc6c2149f7", context_digest = "aefb0f2516226e931d401a53353af2ddcaad7d68a7ddb4157cc8f54d8295c051" },
+  { stage = 3, ref_sha256 = "6539864d49544f0f59939f12e0513087391d7397e0dcb430dee7ae4a8ed217f5", context_digest = "13f534ec79bcc7ca0c94bfe26ad7317d1dacf85dd2f39dec9b7684bedc094dc9" },
+  { stage = 4, ref_sha256 = "65cff2471d1fb18c69980dadcbe731337c00ceb5c0b154593e297f19aaa2dd93", context_digest = "167a05319d6cd5a189d07fd67a11dc98f418fc0daecfe30532ba6a62b887bbd1" },
+]
+
+# Original verdicts remain intact, including the timed failure and DD30 gap.
+
+[[required_supplemental_evidence]]
+id = "dd26-review"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/independent/dd26-scoped-closure-recommendation-385d5fdc4-01/review.json"
+sha256 = "0195de2918cdd52fc33d07cb44a3a64d5ee6493c270c4335c5af48e36cb2357a"
+original_status = "CLOSED_VERIFIED for occupied bootstrap TLS storage, accessors, ABI and exact-image non-overlap"
+
+[[required_supplemental_evidence]]
+id = "dd27-review"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/independent/dd27-burn-in-evidence-review-719043fad-01/review.json"
+sha256 = "73676bd5c769532c4ef17ac530c9f8e19576cd5d32cba9c1753d602aac1b4c2b"
+original_status = "CLOSED_VERIFIED for scoped DD27 publication/address defect"
+
+[[required_supplemental_evidence]]
+id = "dd28-review"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/independent/dd28-dual-mode-evidence-review-6d7c16e4a-01/review.json"
+sha256 = "b23918dd37a5049a5006db8d1670f053dc5acf490cec20cb167d5ea61ff069f7"
+original_status = "CLOSED_VERIFIED for scoped DD-2026-0028 cold PCIe admission defect"
+
+[[required_supplemental_evidence]]
+id = "dd29-review"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/independent/dd29-mixed-evidence-closure-review-719043fad-01/review.json"
+sha256 = "2b2788b075ced4ac8e26fadd53977abea1deada8edf2b29625a899b85bcbe750"
+original_status = "CLOSED_VERIFIED for scoped DD29 firmware reload, failure visibility and required presence/absence cases, using mixed machine and human evidence"
+
+[[required_supplemental_evidence]]
+id = "dd30-review"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/independent/dd30-current-evidence-review-6d7c16e4a-01/review.json"
+sha256 = "97aa61923ad311221b7eb558f07a13474fba7cfc11c1825608165f728befb443"
+original_status = "PARTIAL: source/pure/emitted ownership proof and normal lifecycle progress supported; required fresh target fault/wake proof remains unestablished. DD30 remains OPEN."
+
+[[required_supplemental_evidence]]
+id = "native-base-tcp"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/validation/native-base-tcp-8c050a0aa-01/result.json"
+sha256 = "d6dbb522d4739f91544231d14896282da4cb0c28547d086f832cf9e241cfdb69"
+original_status = "PASS_IMPLEMENTATION_BASE_TCP"
+
+[[required_supplemental_evidence]]
+id = "keyboard-absent"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/validation/post-burn-in-stage5-check-20260913T100408Z/keyboard-absent-human-attestation.json"
+sha256 = "6febd60efeecd8d061b27487aac8a3876ff6cfa341222adcbaf28d758c62c5ce"
+original_status = "HUMAN_ATTESTED_PHYSICAL_TEST"
+
+[[required_supplemental_evidence]]
+id = "exception-renewal"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/continuation-20260912T212227Z/exception-renewal-approval.json"
+sha256 = "497578be08681f923979e6aa397c9a6be649fca6fb99cc10b23b6671a24e1159"
+original_status = "Approve renewal through 13 October"
+
+[[required_supplemental_evidence]]
+id = "qemu-worker-convergence"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/validation/qemu-worker-convergence-8c050a0aa-01/result.json"
+sha256 = "8240a8d29eb79f527a72e8ad669f8fd094db4c990a56349fe8e9fcf64b20b8bf"
+original_status = "exit_code=0; scoped convergence, no new staged acceptance"
+
+[[required_supplemental_evidence]]
+id = "burn-in-current"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/CURRENT.md"
+sha256 = "ac12846038981cc742b3955ae4807109c015f5f3f6d48de3646023e197711582"
+original_status = "Completed focused repairs; original timed FAIL and full-profile boundary retained"
+
+[[required_supplemental_evidence]]
+id = "burn-in-run-record"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/RUN_RECORD.md"
+sha256 = "8c0f97009461cbc1a13009a6597f796eb71d36adcaaabd59bb7f764005ec2853"
+original_status = "Original timed FAIL after 86 minutes and 43 jobs; focused repair evidence follows"
+
+[[required_supplemental_evidence]]
+id = "burn-in-review"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/REVIEW.md"
+sha256 = "a7ce2e1a7f52510035c7afc1c5564467e3d05838c156be0895c0df83bf143d3c"
+original_status = "Six reviewed fixes; original timed FAIL retained"
+
+[[required_supplemental_evidence]]
+id = "burn-in-timed-result"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/timed-04/final-analysis.json"
+sha256 = "9adb536d7828ded6348429b8e8db48610d47270fb230d6c7d8d4a86a02b14c80"
+original_status = "FAIL"
+
+[[required_supplemental_evidence]]
+id = "burn-in-focused-maintenance"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/focused-maintenance-validation.json"
+sha256 = "113aeae3c85137cc266643cb847903dd787974b4ca0430946ccffa094c4d7c4c"
+original_status = "PASS focused lifecycle refusal, containment, retained evidence, FUSE remount and resumed CUDA/PEFT job"
+
+[[required_supplemental_evidence]]
+id = "burn-in-host-checks"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/timeline-merge-checks/results.json"
+sha256 = "fd950994452143002d18f8c25d07a9be7fa876286f402a42086c990a93f5260d"
+original_status = "All eight recorded commands exit_code=0 on 719043fad"
+
+[[required_supplemental_evidence]]
+id = "burn-in-human-approval"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/human-review-signoff.json"
+sha256 = "79d61c427d0560a8573475e94380ce5e6a9f927cdb2ec0e7486508ffcffcd654"
+original_status = "Commit and push all fixes, you have my sign off"
+
+[[required_supplemental_evidence]]
+id = "burn-in-publication"
+path = "/Users/lukasbower/GitHub/cohesix/out/burn-in/20260913T002623Z/budget-8m-20260913T0637Z/publication-result.json"
+sha256 = "e2393f725394335a1e00778e2e805b9c1a0080469c7aa814e09e382455cf3816"
+original_status = "PASS committed, fast-forward merged and pushed to main"
+
+[[required_supplemental_evidence]]
+id = "failed-fresh-attempt"
+path = "/Users/lukasbower/GitHub/cohesix/out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/completion-20260913T102047Z/validation/qemu-stage5-closure-aeaa8edb2fba-01/result.json"
+sha256 = "8314d615f22a9c5fe4cb1b1d79ea7821e8494594f4b50015e612532fb232ac51"
+original_status = "FAIL exit_code=101; original aeaa8edb2 attempt preserved"

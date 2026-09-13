@@ -852,13 +852,16 @@ def verify_action(
         fail(f"catalog action digest mismatch: {action_path}")
 
 
-def verify_stage(
-    root: pathlib.Path,
+def verify_recorded_stage(
     state: pathlib.Path,
     stage: int,
     target: str | None,
 ) -> pathlib.Path:
-    """Fail closed unless active evidence is complete, current, and untampered."""
+    """Verify immutable evidence integrity, without current-source admission.
+
+    This cannot authorize normal stage reuse. The release-specific owner
+    decision validates its separately pinned policy before using this result.
+    """
 
     state = state.resolve()
     if target:
@@ -1061,18 +1064,33 @@ def verify_stage(
             selected_actions=selected_actions,
         )
 
+    return manifest_path
+
+
+def verify_stage(
+    root: pathlib.Path,
+    state: pathlib.Path,
+    stage: int,
+    target: str | None,
+) -> pathlib.Path:
+    """Fail closed unless active evidence is complete, current, and untampered."""
+
+    state = state.resolve()
+    manifest_path = verify_recorded_stage(state, stage, target)
+    manifest = load_json(manifest_path)
+    recorded_digest = manifest["inputs"]["context_digest"]
     current_context = capture_context(
         root,
         state,
         stage,
         target or str(manifest.get("target", "unknown")),
     )
-    if recorded_context.get("context_digest") != current_context.get(
+    if recorded_digest != current_context.get(
         "context_digest"
     ):
         fail(
             "stale stage attestation inputs: "
-            f"recorded={recorded_context.get('context_digest')} "
+            f"recorded={recorded_digest} "
             f"current={current_context.get('context_digest')}"
         )
     return manifest_path

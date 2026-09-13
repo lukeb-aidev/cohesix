@@ -18,9 +18,11 @@
 Evidence and independent reviewer: [current audit report](../AUDIT_REPORT_2026-09-13.md).
 An automated safety stop prevented the planned debugger error-path diagnostic;
 it was not retried and contributes no fault-injection or error/retry result.
-Final Stage 05 acceptance is determined by its current-source gate, including
-explicit DD30 residual-risk admission. The following February checklist retains
-its original scope.
+Final Stage 05 acceptance is determined by the dedicated release entry,
+including DD30 residual risk and the exact owner-approved source carry-forward.
+Both current advisory checks passed; the final immutable record owns their
+validated receipts and the remaining unique governance results. The following
+February checklist retains its original scope.
 
 ## Run Metadata
 - Audit date: `2026-02-14`

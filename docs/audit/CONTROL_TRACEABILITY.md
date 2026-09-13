@@ -63,3 +63,10 @@ The historical registers below retain their original dates and claims.
 | Test Assurance | Project Charter Regression Pack | Canonical staged Test Plan passes on all hardware-independent surfaces | QEMU Stages 01-05 + Pi offline Stages 01-02 | `out/test-plan/m26d-unsafe-remediation-qemu`, `out/test-plan/m26d-unsafe-remediation-pi4` | `68dd774d6ceb0706e162877f74766dd324572425` | `PASS` | Console, REST, due-diligence, and Pi host-side gates passed in clean detached worktrees. |
 | Governance | RMF Authorize/Monitor | No active P2 exception remains for the linked-runtime unsafe boundary | Findings + exceptions + release checklist | `docs/audit/findings.csv`, `docs/audit/EXCEPTIONS.md`, `docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md` | `68dd774d6ceb0706e162877f74766dd324572425` | `PASS` | EX16, EX17, and EX18 are closed after verified remediation. |
 | Hardware Acceptance | Milestone 26b/26d Pi proof | Exact image connects reliably on every eligible Pi 4 boot | Fresh serial, boot-paired pcap, and repeated-boot ledger | `REBOOT.md` | `68dd774d6ceb0706e162877f74766dd324572425` | `NOT_CLAIMED` | Hardware proof is unavailable while the operator is travelling; offline closure does not establish live Pi or repeated-boot WiFi success. |
+
+The subsequent release-owner decision in
+[RELEASE_1_0_0_BETA_CARRY_FORWARD.toml](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
+binds the authentic prior Stage 01–04 records, later scoped fix evidence and
+exact reviewed host-only DD30 successor. The dedicated release Stage 05 output
+is `PASS_WITH_RESIDUAL_RISK` only after its actual checks pass; ordinary staged
+source validation and release-bundle integrity remain unchanged.

@@ -7,6 +7,9 @@
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
 #   DD_RELEASE_ID             Explicit release context; only the validated DD30
 #                             waiver can admit 1.0.0-beta residual evidence risk.
+#   --release-carry-forward   Require the approved release-only policy and sealed
+#                             input; publish separate PASS_WITH_RESIDUAL_RISK.
+#                             This never creates ordinary stage markers.
 #   DD_COLLECT_ALL=1           Continue after failures to collect every diagnostic.
 #                                Default behavior is fail-fast.
 #   DD_SKIP_TEST_PLAN_CHECK=1  Mark test-plan hash check as incomplete (run still fails)
@@ -51,6 +54,8 @@ dd_reuse_staged_evidence_target="${DD_REUSE_STAGED_EVIDENCE_TARGET:-}"
 dd_regression_groups="${DD_REGRESSION_GROUPS:-${COHSH_BATCH_GROUPS:-all}}"
 test_plan_catalog="${repo_root}/scripts/ci/test_plan_catalog.py"
 dd_collect_all="${DD_COLLECT_ALL:-0}"
+dd_release_input=""
+dd_release_tool="${repo_root}/scripts/ci/release_stage5_acceptance.py"
 
 declare -a failures=()
 declare -a incomplete_steps=()
@@ -86,13 +91,34 @@ run_step() {
   printf "\n[dd-gate] START %s\n" "$name"
   printf "[dd-gate] CMD   %s\n" "$*"
   if "$@" >"$log_file" 2>&1; then
+    record_release_step "$name" 0 "$log_file" "$@"
     printf "[dd-gate] PASS  %s (log: %s)\n" "$name" "$log_file"
   else
+    local step_status=$?
+    record_release_step "$name" "$step_status" "$log_file" "$@"
     printf "[dd-gate] FAIL  %s (log: %s)\n" "$name" "$log_file"
     tail -n 40 "$log_file" >&2 || true
     failures+=("$name")
     stop_unless_collecting
   fi
+}
+
+record_release_step() {
+  [[ -n "${dd_release_input}" ]] || return 0
+  python3 - "${log_root}/release-checks.jsonl" "$@" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+output, name, status, log, *command = sys.argv[1:]
+with Path(output).open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({
+        "name": name, "exit_code": int(status), "command": command,
+        "log": {"path": str(Path(log).absolute()),
+                "sha256": hashlib.sha256(Path(log).read_bytes()).hexdigest()},
+    }) + "\n")
+PY
 }
 
 mark_incomplete_step() {
@@ -523,12 +549,25 @@ if [[ $# -gt 0 ]]; then
     check_exceptions_register "$2" "$3"
     exit $?
   fi
-  if [[ "$1" == "--collect-all" && $# -eq 1 ]]; then
+  if [[ "$1" == "--release-carry-forward" && $# -eq 2 ]]; then
+    dd_release_input="$2"
+  elif [[ "$1" == "--collect-all" && $# -eq 1 ]]; then
     dd_collect_all=1
   else
     printf "usage: %s [--collect-all]\n" "$0" >&2
     printf "       %s --check-blocking-findings <findings.csv> [EXCEPTIONS.md]\n" "$0" >&2
     printf "       %s --check-exceptions-register <findings.csv> <EXCEPTIONS.md>\n" "$0" >&2
+    printf "       %s --release-carry-forward <finalized-input.json>\n" "$0" >&2
+    exit 2
+  fi
+fi
+
+if [[ -n "${dd_release_input}" ]]; then
+  if [[ "${DD_RELEASE_ID:-}" != "1.0.0-beta" ||
+        -n "${dd_reuse_staged_evidence_from}${dd_reuse_regression_batch_from}" ||
+        "${DD_SKIP_CARGO_AUDIT:-0}${DD_SKIP_CARGO_DENY:-0}${DD_SKIP_TEST_PLAN_CHECK:-0}${DD_SKIP_REGRESSION_BATCH:-0}" != "0000" ||
+        -e "${log_root}" ]]; then
+    printf "release carry-forward requires explicit release, fresh logs, and no reuse/skip overrides\n" >&2
     exit 2
   fi
 fi
@@ -551,7 +590,12 @@ mkdir -p "$log_root"
 
 run_step "required-audit-assets" check_required_audit_assets
 staged_evidence_verified=0
-if [[ -n "${dd_reuse_staged_evidence_from}" ]]; then
+if [[ -n "${dd_release_input}" ]]; then
+  run_step "release-carry-forward-validation" \
+    python3 "${dd_release_tool}" validate --root "${repo_root}" \
+    --input "${dd_release_input}"
+  staged_evidence_verified=2
+elif [[ -n "${dd_reuse_staged_evidence_from}" ]]; then
   reuse_failure_count="${#failures[@]}"
   run_step \
     "staged-evidence-state" \
@@ -586,13 +630,17 @@ else
     "${repo_root}/scripts/ci/host_hermetic_gate.sh" \
     --common-only
 fi
-if [[ "${DD_SKIP_CARGO_AUDIT:-0}" == "1" ]]; then
+if [[ -n "${dd_release_input}" ]]; then
+  printf "\n[dd-gate] retained cargo audit/deny receipts and tool/lock bindings validated; checks not rerun\n"
+elif [[ "${DD_SKIP_CARGO_AUDIT:-0}" == "1" ]]; then
   mark_incomplete_step "cargo-audit" "DD_SKIP_CARGO_AUDIT=1"
 else
   run_step "cargo-audit-version" cargo audit --version
   run_step "cargo-audit" cargo audit
 fi
-if [[ "${DD_SKIP_CARGO_DENY:-0}" == "1" ]]; then
+if [[ -n "${dd_release_input}" ]]; then
+  : # Both advisory commands were verified together by the release input gate.
+elif [[ "${DD_SKIP_CARGO_DENY:-0}" == "1" ]]; then
   mark_incomplete_step "cargo-deny-advisories" "DD_SKIP_CARGO_DENY=1"
 else
   run_step "cargo-deny-version" cargo deny --version
@@ -601,7 +649,9 @@ fi
 if [[ "${DD_SKIP_TEST_PLAN_CHECK:-0}" == "1" ]]; then
   mark_incomplete_step "test-plan-hash-check" "DD_SKIP_TEST_PLAN_CHECK=1"
 fi
-if [[ "${staged_evidence_verified}" == "1" &&
+if [[ "${staged_evidence_verified}" == "2" ]]; then
+  printf "\n[dd-gate] regression evidence retained under owner decision; current-source staged gap remains accepted risk\n"
+elif [[ "${staged_evidence_verified}" == "1" &&
       -z "${dd_reuse_regression_batch_from}" ]]; then
   printf "\n[dd-gate] PASS  regression-batch (covered by verified Stage 03/04 attestations)\n"
 elif [[ -n "${dd_reuse_staged_evidence_from}" &&
@@ -631,6 +681,13 @@ run_step "release-guardrails-exceptions" check_exceptions_register
 run_step "hardcoded-secret-scan" scan_hardcoded_secrets
 
 if [[ ${#failures[@]} -eq 0 ]]; then
+  if [[ -n "${dd_release_input}" ]]; then
+    python3 "${dd_release_tool}" publish --root "${repo_root}" \
+      --input "${dd_release_input}" --log-root "${log_root}"
+    printf "\n[dd-gate] PASS_WITH_RESIDUAL_RISK release=1.0.0-beta\n"
+    printf "[dd-gate] LOG ROOT %s\n" "$log_root"
+    exit 0
+  fi
   printf "\n[dd-gate] ALL CHECKS PASSED\n"
   printf "[dd-gate] LOG ROOT %s\n" "$log_root"
   exit 0

@@ -953,6 +953,19 @@ historical and is never
 translated to v2; a changed context requires a fresh attempt through the
 normal fail-closed resume/import checks.
 
+The explicitly approved `1.0.0-beta` release is the sole carry-forward exception.
+[RELEASE_1_0_0_BETA_CARRY_FORWARD.toml](audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
+binds the owner's approval, the four authentic predecessor attestations and
+contexts, the reviewed host-only DD30 successor, closure-file scope and a fixed
+set of later evidence receipts with their original verdicts.
+`scripts/ci/release_stage5_acceptance.py` validates those immutable records and
+the exact clean successor input, then completes the unique release governance
+checks. It emits a separate `release-stage5-acceptance.json` with
+`PASS_WITH_RESIDUAL_RISK`; it never creates current-source Stage 01–04 markers.
+The ordinary runner retains the current-context checks below. This exception
+does not waive release-bundle source or content integrity, other target proof,
+performance thresholds, or any future source/release requirement.
+
 Compatibility `.done` files are not authority and are published only after the
 attestation verifies. Missing/malformed provenance, changed inputs, tampered
 logs/actions/artifacts, an iteration result, target mismatch, or a failed
@@ -3052,6 +3065,12 @@ this gate and the independently required M26e acceptance/reviewer gates pass may
 the candidate archives be published.
 
 ### Automated Stage 05 — Release governance and attestation
+- For the owner-approved `1.0.0-beta` carry-forward only, the dedicated
+  `scripts/ci/release_stage5_acceptance.py` entry point uses the bound prior
+  records and produces the separate release acceptance record described above.
+  Current advisory receipts may be reused within this same acceptance operation
+  only with exact successful commands, hashed logs, Cargo.lock and tool bindings;
+  this does not suppress the advisory refresh in an ordinary staged run.
 - `scripts/ci/test_plan_stage_05_due_diligence.sh`
 - In staged mode, `scripts/ci/due_diligence_gate.sh` verifies the
   source-bound Stage 01/02 attestations and Stage 03/04 target result manifests.

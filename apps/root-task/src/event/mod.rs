@@ -61764,6 +61764,12 @@ mod tests {
                 );
                 pump.poll();
                 outer_turns = outer_turns.saturating_add(1);
+                let admitted = usize::try_from(pump.metrics.net_cyw43_service_turns)
+                    .expect("bounded service-turn count");
+                assert!(
+                    outer_turns == admitted || outer_turns == admitted.saturating_add(1),
+                    "only the optional fresh-parent deadline fence may precede admitted service"
+                );
             }
             assert_eq!(
                 pump.linked_runtime_service_phase,

@@ -147,6 +147,15 @@ bounded expiry and protected implementation hashes in
 checks this predicate without executing other stages. It is not a complete
 Stage 05 verdict; closure metadata and exceptions have their separate checks.
 
+The owner's subsequent explicit approval also permits the exact Stage 01–04
+carry-forward and reviewed host-only successor in
+[RELEASE_1_0_0_BETA_CARRY_FORWARD.toml](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml).
+The dedicated release acceptance entry preserves every original identity and
+failure, validates the approved successor and unique governance, and emits
+`PASS_WITH_RESIDUAL_RISK` separately from ordinary staged markers. The missing
+complete current-source Stage 01–04 chain is disclosed residual evidence risk.
+It is not a generic resume override or permission to weaken bundle integrity.
+
 - `PASS`
 - All required gates pass.
 - No open `P0/P1`.
@@ -158,7 +167,8 @@ Stage 05 verdict; closure metadata and exceptions have their separate checks.
   narrow DD30 waiver when explicitly selected by `DD_RELEASE_ID=1.0.0-beta`.
 - DD30's missing dynamic fault/wake test remains unexecuted; waiver admission
   is a release-authority decision and never a target-test PASS.
-- All other P0/P1 and all current-source staged prerequisites remain binding.
+- All other P0/P1 and staged prerequisites remain binding outside the exact
+  owner-approved carry-forward above.
 
 - `FAIL`
 - Any open `P0/P1`.

@@ -7,8 +7,10 @@
 Finding decision for **1.0.0-beta: DD26–29 CLOSED_VERIFIED; DD30 P1 /
 ACCEPTED_RISK under the explicit release-owner waiver EX-2026-0030**. The
 DD30 dynamic fault/wake test remains unexecuted. The final Stage 05 verdict
-belongs to the canonical run on the final committed source, with the waiver
-explicitly selected and validated; this report does not substitute for that run.
+belongs to the dedicated release acceptance run on the final committed source,
+with both approved decisions explicitly selected and validated; this report
+does not substitute for that run. The approved carry-forward preserves the
+older Stage 01–04 identities and discloses the missing complete new-source chain.
 
 Scope: Milestone 26e
 `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, discovered during
@@ -19,8 +21,8 @@ only change from that implementation is the cohsh Worker-script test fingerprint
 The post-burn-in update reviews source `719043fad` and actual Pi implementation
 `61f7bcd1f`. The final finding review below adds fresh WiFi evidence on that same
 Pi image and the owner decision on reviewed source `6d7c16e4a`. These updates
-supersede the earlier outstanding-proof snapshots. No runtime implementation
-changes are included in this audit update.
+supersede the earlier outstanding-proof snapshots. The later host-only compatibility repair below changes no target runtime
+implementation.
 
 ## Evidence root and DD26 closure
 
@@ -85,9 +87,9 @@ None of these results relabels a predecessor attestation.
 The failed `8c050` broad-run attempt is also preserved. Its Worker-script
 fingerprint mismatch was corrected in `385d5fdc4`; all six focused catalogue
 tests passed in `validation/worker-script-catalog-01`. The user directed that
-Stages 01–04 not be retraced unless absolutely necessary. No new full plan
-was launched after that instruction. Final canonical context validation remains
-required when the actual remaining blockers have been resolved.
+Stages 01–04 not be retraced unless absolutely necessary. At this earlier
+snapshot no new full plan had been launched. The later failed attempt and
+explicit carry-forward approval are recorded below.
 
 ## Earlier outstanding-proof snapshot (before completed burn-in repairs)
 
@@ -291,13 +293,15 @@ EX-2026-0030 is specific to `1.0.0-beta` and
 is 2026-10-13, aligned to the current release qualification window; the owner
 did not supply an expiry date for this waiver. The validator requires the exact
 approval, matching finding and exception records, owner, release, dates and
-active status, and all ten protected production-file hashes at both the
-reviewed commit and current checkout. Explicit `DD_RELEASE_ID=1.0.0-beta` is
+active status, and all ten protected production-file hashes at the original
+reviewed commit. Current files must match those hashes or the exact separately
+approved host-only successor described below. Explicit `DD_RELEASE_ID=1.0.0-beta` is
 required for release admission. Missing, changed, withdrawn, expired or
 out-of-scope approval fails closed. P0 and every other unclosed P1 remain
-blocking; no runtime, severity, threshold or staged provenance rule is waived.
+blocking; this DD30 decision changes no runtime, severity or threshold. The
+separate carry-forward decision below owns the staged provenance exception.
 
-### Canonical current-source qualification
+### Earlier current-source qualification plan (superseded by owner approval below)
 
 The source-context audit is
 `independent/stage5-current-source-reuse-6d7c16e4a-01/review.json`, SHA-256
@@ -347,3 +351,85 @@ require no edits. The audit disposition vocabulary is unchanged. The new
 release-waiver record is consumed only by the canonical due-diligence gate.
 No Rust implementation is changed, and prior approved Rust/source checks
 remain preserved with their exact provenance.
+
+## Approved carry-forward and host-only compatibility repair
+
+Title/ID: `stage5-release-owner-carry-forward-host-model`. Milestone and discovery
+remain the active M26e restoration tasks stated above, with the explicit approved
+carry-forward task in BUILD_PLAN. Goal: complete release Stage 05 without
+repeating completed suites, preserving authentic predecessor identities and the
+reviewed exact host-only repair. Inputs are the four original `22e3d08ff`
+attestations, later scoped fix/target/burn-in receipts, source `aeaa8edb2`, the
+reviewed two-file patch and Lukas Bower's subsequent explicit approval.
+
+The fresh `aeaa8edb2` attempt completed workspace, UI, QEMU-feature and preceding
+host checks, then failed in the Pi host-feature suite. The first failure was
+`cyw43_supervisor_drives_production_pair_restart_one_operation_per_outer_turn`.
+The host `CallWithMRs` fixture echoes its request label; the repaired object
+wrapper interpreted the Suspend request label 11 as an error. The assertion
+panic left recovery state active and poisoned the module lock, producing a
+cascade and a later deadline-test loop whose guard counted only admitted turns.
+The initial standalone failure, isolated deadline/group controls, ordered
+predecessor diagnosis and process sample are retained under
+`completion-20260913T102047Z/checks`. The owned stalled host-test process was
+terminated; its original failed canonical attempt remains unchanged.
+
+Independent causal review is
+`independent/pi-feature-host-suspend-causal-review-aeaa8ed-01/review.json`, SHA-256
+`11d2e85c371437a519bea49768c7887199ac7c8ed35b9160835887d7b469c0e5`.
+The two-file repair changes only the typed host object model in `sel4.rs` and
+the deadline fixture in `event/mod.rs`. The four typed host operations use their
+existing models; unknown endpoint labels still echo. The target fast-register
+call is unchanged. The fixture enforces its existing admitted/outer-turn
+relationship on every iteration, retaining the 25 ms and 192-turn limits.
+No recovery condition is cleared merely to make a test pass.
+
+Independent source review
+`completion-20260913T102047Z/independent-review/host-kernel-object-model-01/review.json`,
+SHA-256 `31f84049561cabce88182450be0e977838eeb9adc17b7728701beeb6fd652cf2`,
+verifies the normalized target helper is identical and the event production
+prefix is byte-identical. Patch SHA-256 is
+`54c1ea4bc418b41400c450f47de8e354c3c21aa5e4181748602fb6bfdf85a738`.
+The previously failed Pi host-feature suite then passed all **2388 tests** with
+zero failures. The repaired crate's normal-profile Clippy, formatting and Rust
+risk gate passed. An additional noncanonical feature-Clippy exploration emitted
+487 diagnostics at unchanged sites; its failure is retained separately, and
+unrelated feature-lint cleanup was not added to the release task. No completed
+workspace or UI suite was repeated after the no-duplicate instruction.
+
+Lukas Bower approved the exact review packet and answered “Approved”. The
+immutable decision is
+`completion-20260913T102047Z/release-carry-forward-review/owner-approval.json`,
+SHA-256 `009fdb80aaf6be0206636bd5886337bcbc9d84101260a3521e7afaa44f2befc1`.
+The packet approves the Rust repair, release-only reuse of original Stage 01–04
+records plus later scoped fix evidence, and the exact DD30 successor binding.
+[RELEASE_1_0_0_BETA_CARRY_FORWARD.toml](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
+binds that decision, proposal, independent review, original attestation/context
+hashes, the closure-file scope and 18 named later evidence records. Their exact
+hashes and original verdicts are required, including the timed burn-in failure
+and DD30's partial proof; final review receipts cannot replace them. Its expiry is the conservative existing
+2026-10-13 administrative limit. The original DD30 decision and protected
+hashes remain intact; the single host-only successor is checked explicitly.
+
+The dedicated `scripts/ci/release_stage5_acceptance.py` path validates the
+immutable predecessor graph and exact clean final source, checks current unique
+governance, and emits `release-stage5-acceptance.json` with
+`PASS_WITH_RESIDUAL_RISK` only on actual success. It creates no replacement
+Stage 01–04 `.done` files and does not disable the ordinary current-context
+verifier. Current `cargo audit` and `cargo deny check advisories` both passed
+at 11:23 UTC; receipts under `completion-20260913T102047Z/unique-stage5-governance`
+retain their exact successful commands and logs for this same acceptance
+operation, with Cargo.lock and tool bindings required before reuse.
+
+The accepted residual risks are the unexecuted DD30 dynamic fault/wake test and
+the missing complete current-source Stage 01–04 chain. The original records,
+failed attempts and evidence authorities stay visible. Release-bundle source
+and content integrity, delivered media, other target proof and performance
+thresholds remain outside this waiver. A separate packaging task owns release
+artifacts and documentation; this closure does not relabel its inputs.
+
+Compatibility review covers the complete host-tool suite, Python SDK and
+performance harnesses: no public API, namespace, ABI, operator workflow,
+benchmark workload or result-schema change is needed. Only the host test model,
+test failure behavior and explicit release-governance workflow change. The
+compiler-owned outputs retain their authoritative generation procedure.

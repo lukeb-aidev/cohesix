@@ -16,8 +16,10 @@
   DD30 release-owner waiver without claiming that its dynamic test ran.
 
 Reviewer and evidence: [current audit report](../AUDIT_REPORT_2026-09-13.md).
-The current-source canonical gate owns the final Stage 05 decision. Scoped
-closures and DD30 owner acceptance grant no unobserved physical-test result.
+The dedicated release acceptance entry owns the final Stage 05 decision under
+[the approved carry-forward](../RELEASE_1_0_0_BETA_CARRY_FORWARD.toml). Scoped
+closures, the host-only successor and owner acceptance grant no unobserved
+physical-test result; ordinary source-context validation remains strict.
 The following February checklist is historical.
 
 ## Run Metadata

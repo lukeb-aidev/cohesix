@@ -2271,9 +2271,41 @@ fn call_kernel_object_with_fast_registers(
     // field fit the returned locals. The kernel may store a fifth lookup-error
     // word in this TCB's own retained bound IPC frame; these typed wrappers do
     // not expose it. The explicit-MR syscall never uses the shared userspace
-    // getter. seL4 validates the capability, object type and arguments.
+    // getter. seL4 validates the capability, object type and arguments. Host
+    // typed models use their own fixture IPC storage and receive scalar caps
+    // and words only; they never execute a kernel invocation.
     let reply = unsafe {
-        sel4_sys::seL4_CallWithMRs(service, info, &mut mr0, &mut mr1, &mut mr2, &mut mr3)
+        #[cfg(target_os = "none")]
+        {
+            sel4_sys::seL4_CallWithMRs(service, info, &mut mr0, &mut mr1, &mut mr2, &mut mr3)
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            // Host endpoint Call echoes its request tag; it cannot identify a
+            // kernel object from a label. Use the existing typed object models
+            // only at this object-only boundary, preserving endpoint semantics.
+            let error = if label == sel4_sys::invocation_label_TCBSuspend && length == 0 {
+                sel4_sys::seL4_TCB_Suspend(service)
+            } else if label == sel4_sys::invocation_label_CNodeDelete && length == 2 {
+                sel4_sys::seL4_CNode_Delete(service, mr0, mr1)
+            } else if label == sel4_sys::invocation_label_CNodeRevoke && length == 2 {
+                sel4_sys::seL4_CNode_Revoke(service, mr0, mr1)
+            } else {
+                #[cfg(sel4_config_kernel_mcs)]
+                if label == sel4_sys::invocation_label_SchedContextConsumed && length == 0 {
+                    let result = sel4_sys::seL4_SchedContext_Consumed(service);
+                    return (
+                        result.error as seL4_Error,
+                        [result.consumed as seL4_Word, 0, 0, 0],
+                    );
+                }
+                let reply = sel4_sys::seL4_CallWithMRs(
+                    service, info, &mut mr0, &mut mr1, &mut mr2, &mut mr3,
+                );
+                return (reply.label() as seL4_Error, [mr0, mr1, mr2, mr3]);
+            };
+            seL4_MessageInfo::new(error as seL4_Word, 0, 0, 0)
+        }
     };
     (reply.label() as seL4_Error, [mr0, mr1, mr2, mr3])
 }
@@ -7980,6 +8012,22 @@ impl Default for VSpaceTableTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "kernel", not(target_os = "none")))]
+    #[test]
+    fn typed_host_object_calls_preserve_success_without_changing_endpoint_echo() {
+        assert_eq!(suspend_tcb_bounded(0x44), Ok(()));
+        assert_eq!(cnode_delete_bounded(0x22, 0x33, 64), seL4_NoError);
+        assert_eq!(cnode_revoke(0x22, 0x33, 64), seL4_NoError);
+        #[cfg(sel4_config_kernel_mcs)]
+        assert_eq!(sched_context_consumed(0x55), Ok(0));
+
+        // An arbitrary endpoint label remains an echo in the host model; a
+        // successful typed object call must not make every Call return success.
+        let (label, words) = call_kernel_object_with_fast_registers(0x66, 0x123, Some([7, 9]));
+        assert_eq!(label, 0x123);
+        assert_eq!(words, [7, 9, 0, 0]);
+    }
 
     #[test]
     fn slot_allocator_preserves_future_service_anchors_across_frontier() {

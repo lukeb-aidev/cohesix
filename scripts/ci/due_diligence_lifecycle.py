@@ -191,7 +191,28 @@ def validate_waiver(
         if not source.is_file() or source.is_symlink():
             raise LifecycleError(f"missing regular protected IPC source: {relative}")
         if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
-            raise LifecycleError(f"protected IPC source changed: {relative}")
+            if relative != "apps/root-task/src/sel4.rs":
+                raise LifecycleError(f"protected IPC source changed: {relative}")
+            # This is a separate exact owner-approved host-only successor,
+            # never a refreshed version of the original 6d7 approval.
+            from release_stage5_acceptance import (
+                AcceptanceError,
+                validate_host_successor,
+            )
+
+            try:
+                successor = validate_host_successor(root, today=today)
+            except (AcceptanceError, OSError, ValueError,
+                    subprocess.CalledProcessError) as error:
+                raise LifecycleError(
+                    f"protected IPC source changed: {relative}; "
+                    f"host successor rejected: {error}"
+                ) from error
+            print(
+                "DD30 exact host-only successor validated (not target proof): "
+                f"approval_sha256={successor['approval_sha256']} "
+                f"original_source={WAIVER_SOURCE} dynamic_fault_wake=NOT_EXECUTED"
+            )
     if seen != PROTECTED_FILES:
         raise LifecycleError("incomplete protected IPC source coverage")
     return WaiverAdmission(hashlib.sha256(payload).hexdigest(), path)

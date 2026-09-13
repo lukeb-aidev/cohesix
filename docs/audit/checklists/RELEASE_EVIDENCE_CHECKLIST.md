@@ -24,15 +24,17 @@
   and the unexecuted dynamic fault/wake test; validate EX30 and protected source hashes.
 - [x] Preserve all eight passing final-source checks at `719043fad` and completed
   focused burn-in repair evidence without rerunning Stages 01–04 or burn-in.
-- Final frozen-source stage completion is recorded by the canonical state directory,
-  not by a pre-execution checkbox. Current-source Stages 01–04 are required because
-  the retained `22e3d08ff` chain fails the canonical source-context check.
+- Final frozen-source release completion is recorded by the acceptance artifact.
+  The owner explicitly approved the bound
+  predecessor-stage carry-forward and exact host-only repair; the dedicated
+  release record retains the accepted evidence risk and original identities.
 - [ ] Verify physical Pi SD delivery/readback and required fresh boots.
 - [ ] Verify the extracted Mac, native Linux and Pi release bundles.
 - [x] Record Lukas Bower's approval of all fixes and publication through `719043fad`.
 
 Finding decision: **verified closures plus explicit DD30 residual risk**. Final
-Stage 05 acceptance requires the canonical current-source execution result.
+Stage 05 acceptance requires the dedicated release acceptance result under
+[the approved carry-forward](../RELEASE_1_0_0_BETA_CARRY_FORWARD.toml).
 See [BLOCKERS.md](../BLOCKERS.md).
 The DD26–29 decisions close their scoped defects. Human Rust sign-off
 is recorded separately. Existing Stages 01–04 retain their source

@@ -11,7 +11,8 @@ The finding-level blockers are resolved for explicitly selected release
 `ACCEPTED_RISK` under Lukas Bower's release-specific decision. The
 [current audit report](AUDIT_REPORT_2026-09-13.md) binds the evidence and
 [DD30 waiver](DD30_RELEASE_WAIVER.toml). Final Stage 05 acceptance is determined
-by the current-source canonical gate, with the accepted residual risk recorded.
+by the dedicated release acceptance entry, with the explicitly approved
+carry-forward and residual risk recorded.
 No target fault test is represented as passed by that decision.
 
 | Finding | Disposition and evidence | Remaining boundary |
@@ -20,20 +21,26 @@ No target fault test is represented as passed by that decision.
 | `DD-2026-0027` | Actual `61f7bcd1f` ELF matches all eight acquired integrity cuts; raw console work and independent review pass. | Scoped publication/address defect closure. |
 | `DD-2026-0028` | Both exact `61f7bcd1f` RAM lanes retain ordered reset/waits/firmware completion and pass network work. WiFi also passes authenticated CAT/QUIT/EOF and serial liveness. | RAM-transfer timing does not establish ordinary boot timing, SD delivery or repeatability. |
 | `DD-2026-0029` | Independently reviewed firmware/USB repair, machine-observed presence and Lukas Bower's explicitly confirmed keyboard-absence test. | Absence is human-attested with unspecified image/time/log; no repeat is required. |
-| `DD-2026-0030` | Source/ABI/pure/emitted IPC repair review passes; Lukas Bower accepts the remaining dynamic fault/wake gap under `EX-2026-0030`. | Dynamic fault/wake testing remains unexecuted. Only matching `DD_RELEASE_ID=1.0.0-beta`, active approval and unchanged protected files admit this residual risk through 2026-10-13. |
+| `DD-2026-0030` | Source/ABI/pure/emitted IPC repair review passes; Lukas Bower accepts the remaining dynamic fault/wake gap under `EX-2026-0030`. | Dynamic fault/wake testing remains unexecuted. Only matching `DD_RELEASE_ID=1.0.0-beta`, active approval and original or explicitly approved successor file hashes admit this residual risk through 2026-10-13. |
 
-All implementation fixes are human-approved and published through `719043fad`.
+The original runtime fixes are human-approved and published through `719043fad`;
+the later host-only repair is independently reviewed and explicitly approved.
+The final acceptance record binds its published successor commit.
 The Pi's fresh WiFi boot uses the same actual `61f7bcd1f` image as the completed
 GENET burn-in. Completed burn-in and historical stage results remain preserved.
 The earlier Stage 01–04 chain is bound to `22e3d08ff`; the canonical verifier
-rejects its reuse for the later approved source. A fresh current-source chain
-is therefore required for final Stage 05 acceptance. No old marker is copied
-or relabelled, and no unrelated burn-in is repeated.
+rejects ordinary reuse for the later approved source. Lukas Bower explicitly
+approved release-only carry-forward of those original records plus later scoped
+fix evidence under [the bound policy](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml).
+No old marker is copied or relabelled. The failed fresh attempt is preserved;
+its host-only repair passed all 2388 affected Pi feature tests. Completed suites
+and burn-in are not repeated.
 
-The DD30 owner decision is the sole change to the earlier P1 acceptance rule.
+The DD30 owner decision is the sole change to the earlier P1 acceptance rule;
+the subsequent owner-approved carry-forward is the sole staged provenance exception.
 Other findings, severity, performance thresholds, target/source provenance and
 release-delivery requirements remain binding. The frozen-source canonical
-Stage 05 artifact records the final execution verdict separately from this
+release Stage 05 artifact records the final execution verdict separately from this
 pre-execution findings register.
 
 ## Historical gate snapshots
