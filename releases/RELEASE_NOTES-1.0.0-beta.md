@@ -1,146 +1,220 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Describe Cohesix 1.0.0-beta changes, upgrade requirements, and release evidence boundaries. -->
+<!-- Purpose: Introduce Cohesix 1.0.0-beta, explain its architectural advances and practical impact, and welcome contributors. -->
 <!-- Copyright 2026 Lukas Bower -->
 
 # Cohesix 1.0.0-beta Release Notes
 
 Date: 2026-09-13
 
-Status: Release Stage 5 accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588`.
-Distribution mode: fresh builds from one clean source commit, with tests omitted
-at the release owner's request. The rebuilt artifacts are marked `NOT_RUN`.
+**Cohesix 1.0.0-beta is here!** This is a major step forward from 0.9.0:
+a move to seL4 16 with explicit CPU budgets, a substantial redesign around
+isolated services and linked driver runtimes, 256 configured Workers, and a
+complete Raspberry Pi 4 SD-image distribution.
 
-## Changes since 0.9.0-beta
+The idea behind Cohesix stays simple: give an edge AI fleet a small, accountable
+control plane. A Queen coordinates narrowly scoped Workers, while GPU
+workloads continue in the host's native environment. Plan 9-inspired namespaces make
+control and telemetry accessible through files and paths; seL4 capabilities
+make authority explicit.
 
-The comparison baseline is tag `v0.9.0-beta` (`4d1b9f09f`). This release moves
-the target to seL4 16 and the Milestone 26e isolation architecture, adds a
-Raspberry Pi 4 distribution, and updates the host toolkit for real target
-Workers and the current generated contracts.
+This release brings that idea much further into a working operating system.
+You can explore it in QEMU, put it on a Pi, connect the host tools, and help
+shape what comes next. We want to build a community around that work—systems
+programmers, hardware enthusiasts, AI engineers, and people who enjoy making
+complex technology easier to use.
 
-### Kernel, services, and Workers
+## What changed since 0.9.0-beta
 
-- Upstream seL4 16.0.0 replaces the earlier kernel generation. Production QEMU
-  and Pi profiles use four cores with mixed-criticality scheduling (MCS).
-- Root control, fault handling, emergency service and supervisors have explicit
-  scheduling and capability bounds. NineDoor runs as a passive namespace child;
-  an isolated console-network child owns the authenticated TCP connection.
-- Both production profiles declare 256 passive Workers: one Heartbeat, 127 GPU,
-  and 128 LoRA instances, serviced through two bounded executor lanes. Worker
-  admission, retirement, replacement and receipts carry generation identities.
-  WorkerBus remains a model/session-only role.
-- IPC storage ownership, TLS layout, donated scheduling contexts, Reply
-  handling and terminal containment were repaired during qualification.
-  A partial serial or USB input line no longer excludes network service merely
-  because its unfinished text remains buffered.
+### MCS: CPU time becomes an explicit resource
 
-### Raspberry Pi 4
+Cohesix now uses **seL4 16.0.0 with four-core SMP and Mixed-Criticality
+Scheduling (MCS)** on its production QEMU and Pi profiles. SMP lets the system
+use multiple processor cores. MCS adds control over how much processor time
+an active task can consume.
 
-- The supported boot path is Pi firmware → U-Boot → seL4 → the Rust root task.
-  The new Pi archive contains a complete SD image and its boot identity.
-- Serial, display, USB, GENET Ethernet, SDIO and CYW43 Wi-Fi use
-  manifest-declared isolated driver runtimes admitted through HAL.
-- PCIe admission now requires complete link, endpoint and firmware proof.
-  Cold-reset VL805 firmware handling, ordered hardware waits, early mapping
-  publication, boot memory layout and stack bounds were corrected.
-- CYW43 processing retains ownership while shared receive records are being
-  published. GENET scheduling and response handling preserve bounded console
-  service and pending work across notifications and waits.
-- Early integrity and boot audit records survive ordinary log-ring eviction.
-  Build, media, RAM boot, ordinary SD boot and repeated-boot measurements remain
-  distinct evidence; one does not establish the others.
+A task's *scheduling context* describes its CPU budget and replenishment
+period. Priorities determine which eligible task runs; budgets constrain how
+much execution it receives. Cohesix gives control, emergency handling,
+supervision, drivers, and Worker executors explicit scheduling resources.
 
-### Host tools and Python
+MCS also supports *passive* services. A passive service runs on a scheduling
+context donated by its caller while it handles a request. Cohesix uses this
+for its NineDoor namespace service and executable Workers: the work consumes
+the calling task or executor's budget, with an explicit return of control.
 
-- The eight host executables remain `cas-tool`, `coh`, `cohsh`,
-  `gpu-bridge-host`, `hive-gateway`, `host-sidecar-bridge`, `host-ticket-agent`
-  and `swarmui`. CUDA, NVML, model execution and PEFT remain host-side.
-- SwarmUI and host discovery follow the generated shard topology and actual
-  Worker state. Live host/GPU data requires authenticated snapshots with
-  freshness and identity checks; absent providers remain unavailable.
-- Shared gateway sessions and REST deadlines now account for bounded broker
-  operation. Exact-authority pooled sessions avoid redundant target ATTACH
-  churn while changed authority still requires a real target attachment.
-- Native FUSE startup and mount options were repaired on macOS and Linux.
-  Evidence export handles large records and empty audit streams, retains
-  failed-export details, and reports structured AuditFS errors in timelines.
-- Maintenance accounts for active leases and terminal Worker containment,
-  allowing drain/resume to reflect the work that remains outstanding.
-- Host-ticket GPU/PEFT handling preserves real results, model commits and
-  generation-bound receipts. Systemd output keeps complete property records.
-- The target-neutral Python wheel ships with generated QEMU and Pi contracts,
-  typed Worker support, and operator/evidence examples. Its package version is
-  independent of the overall release version.
+**Why it matters:** CPU time joins memory and device access as a resource the
+architecture can account for. This gives Cohesix a stronger foundation for
+keeping control and recovery work serviceable alongside busy networking and
+Worker activity. Kernel budgets, queue limits, and bounded service loops make
+those scheduling decisions explicit and inspectable.
 
-### Distribution and evidence
+### Isolated, linked driver runtimes
 
-- Native host bundles carry separate QEMU guests: Mac HVF at 24 MHz and Linux
-  AArch64 KVM at 31.25 MHz. They are not interchangeable.
-- The release factory uses an exact compiler-owned file inventory, manifest
-  hashes, native artifact/result records and `BUILD_PROVENANCE.json`.
-- All three archives carry the maintained quickstart. The Pi archive requires
-  the matching Mac or Linux archive for CLI, Python and SwarmUI tools.
-- Raw framed TCP is available as the direct network performance measurement.
-  REST and host-model results remain separately identified.
-- The 0.9.0-beta distributions and release notes remain in `releases/`. Earlier
-  bundles are removed from the current tree and preserved at their original
-  Git tags. Current firmware, seL4 build inputs, fixtures and audit records
-  are retained.
+The Pi driver architecture has changed substantially. Serial, USB keyboard
+input, HDMI text output, GENET Ethernet, CYW43 Wi-Fi, SDIO, and PCIe service
+have runtime roles declared in the build manifest. Drivers execute as separate seL4 tasks
+with their own address spaces and explicitly granted resources. The hardware
+abstraction layer (HAL) sets up and grants those resources; each runtime owns its device's
+steady operation.
 
-## Downloads
+**Linked runtimes let drivers cooperate across those boundaries.** A link is
+a declared connection with bounded request and completion records, shared
+buffers, notifications, and explicit ownership. For example, the CYW43 runtime
+handles Wi-Fi firmware and protocol state, while the SDIO runtime owns the
+physical bus operations. Wi-Fi requests bus service through their generated
+link without acquiring direct access to the SDIO controller.
 
-| Archive | Contents |
+The Ethernet path applies the same principle to networking. After DHCP and a
+controlled handoff, the isolated GENET driver exchanges packets directly with
+the isolated console-network service. GENET owns the device, direct memory
+access (DMA), and interrupts; the console service owns TCP and transport authentication. Root
+coordinates and supervises them without relaying the steady packet path.
+
+**Why it matters:** device ownership is easier to understand, interfaces are
+bounded, and the central root task carries less driver and transport work.
+For contributors, there is a clear place to implement a driver, a declared
+set of resources it may use, and a versioned interface to the rest of the OS.
+See the [driver guide](../docs/DRIVERS.md) for the design patterns.
+
+### 256 Workers with supervised lifecycles
+
+Both production manifests configure **256 passive Worker instances**: one
+Heartbeat Worker, 127 GPU Workers, and 128 LoRA Workers. Two active executor
+lanes supply their CPU budgets and select work from bounded, fair queues.
+
+These are control-plane instances, not 256 GPU machines. Heartbeat, GPU lease,
+and LoRA lifecycle duties have separately packaged executable roles, while
+CUDA, NVML, training, inference, and PEFT continue to run on the host.
+
+Worker creation, readiness, retirement, replacement, and completion records
+(receipts) now carry explicit generation identities. An old completion cannot legitimately stand
+in for work performed by a replacement Worker.
+
+**Why it matters:** Cohesix can represent a larger hive while keeping execution
+and authority bounded. Operators and automation have a clearer account of
+which Worker handled a request and which lifecycle its result belongs to.
+
+### A complete Raspberry Pi 4 distribution
+
+The new Pi archive contains a compact, complete **MBR/FAT32 SD image**, its
+checksum, and boot identity metadata. The boot path is Pi firmware → U-Boot →
+seL4 → the Rust root task. The release quickstart walks through writing the
+image, reading it back, configuring networking, and connecting from a host.
+
+This release also includes substantial work on PCIe admission, VL805 USB
+firmware handling, boot memory and stack bounds, Wi-Fi ownership, and Ethernet
+response handling. Early boot and integrity records survive ordinary log-ring
+eviction, giving hardware investigations more useful context.
+
+**Why it matters:** trying Cohesix on physical hardware no longer starts with
+assembling a complete source build. A Pi, SD card, display, keyboard, and a
+matching host bundle provide an accessible starting point for exploration.
+
+### A more capable operator toolkit
+
+The existing host tools gain improvements that make a difference during
+ordinary use:
+
+- **SwarmUI and discovery follow the generated Worker topology and live state.**
+  Host and GPU snapshots include authentication, freshness, and identity
+  checks, so unavailable information stays visibly unavailable.
+- **Hive Gateway shares console access more efficiently.** Session pooling
+  avoids redundant attachments when authority is unchanged, and REST
+  deadlines account for the broker's bounded operation.
+- **An unfinished local command no longer excludes network service.** A
+  partially typed serial or USB keyboard command can wait for its operator
+  without preventing the system from servicing network requests.
+- **FUSE and evidence export handle more real-world cases.** Mac and Linux
+  mount startup, large records, empty audit streams, and failed exports have
+  received fixes, with clearer errors in evidence timelines.
+- **Maintenance follows outstanding work more accurately.** Drain and resume
+  account for active leases and terminal Worker containment. GPU/PEFT receipts
+  retain real results, model commits, and generation identities.
+- **Python makes the system easier to explore and automate.** The portable
+  wheel includes typed Worker support and operator/evidence examples, with
+  separate generated contracts for QEMU and Pi. Its package version remains
+  independent of the overall Cohesix release version.
+
+The eight host executables are `cohsh`, `coh`, `swarmui`, `hive-gateway`,
+`gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`, and `cas-tool`.
+Together with Python, they give contributors several ways into the project:
+interactive commands, a desktop view, automation, or host integrations.
+
+## Get started
+
+You do not need a GPU to explore the OS and its control surfaces in QEMU.
+Choose a native host bundle, then follow the [quickstart](../docs/QUICKSTART.md).
+For physical hardware, add the Pi archive and operate it with the same host
+toolkit.
+
+| Archive | Start here for |
 | --- | --- |
-| `Cohesix-1.0.0-beta-MacOS.tar.gz` | Apple Silicon host tools, Mac QEMU guest, Python wheel, configuration and guides |
-| `Cohesix-1.0.0-beta-linux.tar.gz` | Linux AArch64 host tools, native KVM guest, Python wheel, configuration and guides |
-| `Cohesix-1.0.0-beta-Pi4.tar.gz` | Raw SD image, SHA-256 sidecar, layout/boot identity metadata and guides |
+| [Cohesix-1.0.0-beta-MacOS.tar.gz](Cohesix-1.0.0-beta-MacOS.tar.gz) | Apple Silicon host tools, a Mac HVF QEMU guest, Python, configuration and guides |
+| [Cohesix-1.0.0-beta-linux.tar.gz](Cohesix-1.0.0-beta-linux.tar.gz) | Linux AArch64 host tools, a Linux KVM QEMU guest, Python, configuration and guides |
+| [Cohesix-1.0.0-beta-Pi4.tar.gz](Cohesix-1.0.0-beta-Pi4.tar.gz) | A complete Pi SD image, checksums, boot metadata and installation instructions |
 
-Each extracted directory has `VERSION.txt` and `MANIFEST.sha256`. The Pi image
-metadata records `minimum_target_bytes`; a larger card retains unused spare
-capacity. Linux GPU hosts require a compatible host CUDA/NVML stack. Jetson is
-one reference host, not a requirement for the host-tool interface.
+The Mac and Linux guests use different native timer profiles—24 MHz for Mac
+HVF and 31.25 MHz for Linux KVM. Keep each guest with its matching host bundle.
+Every archive includes a quickstart and `MANIFEST.sha256`. The Pi image fits
+any card meeting the metadata's `minimum_target_bytes`; larger cards retain
+unallocated spare capacity.
 
-## Upgrade from 0.9.0-beta
+Linux GPU integrations use the host's compatible CUDA/NVML stack. Jetson is
+one reference host; the wider contract is a Linux AArch64 NVIDIA host.
 
-1. Export evidence you need to retain before replacing a target image.
-2. Extract each 1.0.0-beta archive into a new directory and verify its manifest.
-3. Run the new host bundle's setup script and use its Python environment.
-4. Use the guest, host binaries and generated policies from the same bundle.
-   Review deployment-specific credentials, tickets and configuration against
-   the new generated contracts; do not overwrite them with the old defaults.
-5. For a Pi, install the new SD image using the bundled `QUICKSTART.md`, then
-   configure its network and authenticated host connection.
+### Upgrading from 0.9.0-beta
 
-## Known limitations and accepted risk
+1. Export any evidence you want to keep, and back up saved Pi network settings.
+2. Extract the new archives into fresh directories and verify their manifests.
+3. Run the matching host bundle's setup script and use its Python environment.
+4. Keep the guest, binaries, and generated policies together. Review your
+   credentials, tickets, and configuration against the new contracts before
+   carrying settings forward.
+5. Install the Pi image using the quickstart, then configure its network and
+   host connection. Writing the raw image replaces the whole card.
 
-- This remains a beta research operating system. seL4's verification does not
-  constitute formal verification of Cohesix userspace or its host tools.
-- One direct authenticated TCP owner is supported per target. Use Hive
-  Gateway for concurrent clients. Direct TCP is not encrypted; keep it on
-  loopback or carry it through an authenticated tunnel.
-- Worker counts describe admitted control-plane instances, not independent
-  GPU machines. No GPU execution runs inside Cohesix.
-- Cross-Queen replication and automatic in-VM leader election are absent.
-  Active/standby operation requires host fencing and controlled replay.
-- AWS/UEFI and the later integration roadmap are outside this release's
-  supported target scope.
-- DD26–29 are closed with their recorded scoped evidence. DD30 remains P1 /
-  `ACCEPTED_RISK` under `EX-2026-0030`: Lukas Bower accepts the remaining
-  dynamic fault/wake evidence gap specifically for 1.0.0-beta. That test is
-  unexecuted. The source-bound waiver expires on 2026-10-13 and does not waive
-  other release gates or change their results.
-- The owner separately approved carrying forward authentic Stage 1–4 evidence
-  from `22e3d08ff` together with later scoped fixes. The current source's Stage
-  1–4 suite was not rerun. Original source identities and failed attempts remain
-  unchanged; this decision does not waive bundle source or content integrity.
-- The original timed burn-in failed after 86 minutes and 43 jobs. Subsequent
-  focused maintenance, containment, FUSE and job-resumption repairs passed
-  their recorded checks; the full timed profile was not rerun.
+The 0.9.0-beta packages remain in `releases/` for comparison. Earlier releases
+remain available at their Git tags.
+
+Use Hive Gateway for concurrent clients. The direct console has one
+authenticated owner and no transport encryption; keep it on loopback or inside
+an authenticated tunnel. Automatic Queen failover and AWS/UEFI are outside
+this release's supported scope.
+
+## Help build the Cohesix community
+
+There is plenty to contribute without starting in kernel code. Try the
+quickstart and tell us where it gets confusing. Share a reproducible hardware
+observation, improve a Python example, make an operator workflow easier, or
+help explain the architecture to someone encountering seL4 for the first time.
+Rust and driver contributors can build on the explicit runtime and resource
+contracts introduced in this release.
+
+Start with [GitHub Issues](https://github.com/lukeb-aidev/cohesix/issues) for
+questions, reproducible bugs, and scoped design ideas. Include the release,
+host or board, and the smallest useful reproduction. The
+[contribution guide](../CONTRIBUTING.md) and [build plan](../docs/BUILD_PLAN.md)
+help turn an idea into a focused change. Report suspected vulnerabilities
+through the private process in [Security](../docs/SECURITY.md).
+
+Cohesix is Apache-2.0 licensed and maintained by Lukas Bower. If you are curious
+about capability-based operating systems, practical edge AI orchestration, or
+what a small OS can make possible, come explore it with us.
+
+## Beta and audit notes
+
+Cohesix remains a research beta; no formal verification of Cohesix or its
+selected SMP+MCS system is claimed. The [architecture](../docs/ARCHITECTURE.md)
+and [security guide](../docs/SECURITY.md) explain the hardware and trust boundaries.
+
+Release Stage 5 was accepted with residual risk. DD26–29 are closed; the
+remaining dynamic fault/wake evidence gap, DD30, has a release-specific waiver
+expiring on 2026-10-13. Acceptance carries forward original Stage 1–4 evidence
+and later scoped repairs. The original timed burn-in failed after 86 minutes
+and 43 jobs; focused repairs were checked, but the full timed run was not
+repeated. The fresh published builds are marked `NOT_RUN` at the owner's
+request; their archive contents, profiles, and hashes were verified.
 
 The [audit report](../docs/audit/AUDIT_REPORT_2026-09-13.md) and
 [carry-forward policy](../docs/audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
-record the release-owner decision and its limits.
-
-Qualification results remain bound to their original source, image, host and
-target. Publication metadata records documentation and packaging changes separately
-from the qualified runtime. Bundle assembly and hash verification establish
-packaging provenance, not a new target or performance PASS.
+contain the detailed evidence, accepted risks, and scope of those decisions.
