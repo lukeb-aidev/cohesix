@@ -406,8 +406,10 @@ access.
 ## Release factory
 
 Milestone 26e task `m26e-production-surface-truth-and-stub-retirement` owns
-this workflow. The next candidate is `Cohesix-1.0.0-beta`; the compiler inventory
-owns its version, notes and exact file sets. Historical releases are immutable.
+this workflow. The release target is `Cohesix-1.0.0-beta`; the compiler inventory
+owns its version, notes and exact file sets. The current `releases/` directory
+holds only the current distribution. Historical releases remain immutable at
+their original Git tags.
 Prepare the selected Linux AArch64 NVIDIA host in advance. Jetson is one reference
 builder; use its board-managed NVIDIA packages. Release scripts do not install
 system packages or infer host, user, NVMe, cargo or authentication paths.
@@ -493,6 +495,26 @@ artifact, otherwise qualify the new build first. The independently callable
 host-tool preparation. Its source archive includes the complete tracked generated
 contract directory, including both Python target contracts.
 
+For the owner-approved 1.0.0-beta publication workflow, append
+`--qualified-source-root <clean-tested-checkout>` to reuse the exact binaries
+and images from that checkout after documentation and obsolete-distribution
+cleanup. Both checkouts must be clean and the tested commit must be an ancestor
+of the publication commit. `scripts/release_publication.py` permits only the
+named release documents, factory code, output ignore rules, literal help text,
+old distribution removal, and the corresponding retired-document inventory
+update. Runtime source, policies, manifests, dependency locks, test/evidence
+machinery, release file selection and generated runtime contracts must match.
+Linux assembly requires `--linux-use-accepted-tools` in this mode.
+
+The factory retains original source/artifact/result identities and copies the
+qualified guest, tools and generated configurations byte-for-byte. An optional
+`publication` record in each host's `BUILD_PROVENANCE.json` and the Pi image
+metadata records both commits, both checkout digests, and the complete allowed
+file delta with before/after hashes. Qualification records are never rewritten.
+This mode runs no tests and grants no new staged, hardware or performance PASS.
+The owner requested this separation for release preparation on 2026-09-13;
+the standard same-checkout assembly path remains available.
+
 Each host bundle contains `BUILD_PROVENANCE.json` with source, accepted artifact
 and TCP-result identities, native profile/timer, and exact guest/tool/configuration hashes.
 The Pi bundle contains a compact raw MBR/FAT32 image, its SHA-256 sidecar and
@@ -507,6 +529,8 @@ first-boot network configuration and authenticated access from a host bundle.
 The factory relocates documentation links for that root location; it does not
 replace the Pi guide with separate embedded instructions. HARDWARE_BRINGUP.md
 is included for the referenced offline network-policy and diagnostic procedures.
+Release-note links resolve inside the archive. References to source-only
+documents resolve to the publication commit on GitHub.
 
 Run [TEST_PLAN Conditional G](TEST_PLAN.md#conditional-g--release-bundle-validation-macos-linux-and-pi4)
 after assembly. It boots the packaged QEMU launcher on each native host and

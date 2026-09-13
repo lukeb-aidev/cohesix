@@ -3,7 +3,7 @@
 <!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix quickstart
+# Cohesix 1.0.0-beta quickstart
 
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
 shell, gateway, Python client and desktop UI run on your Mac or Linux host.
@@ -13,6 +13,13 @@ shows how several clients can share one target through the gateway.
 ## Choose your download
 
 Use all files from the same release. For **1.0.0-beta**:
+
+When upgrading from 0.9.0-beta, extract into new directories and install the
+bundled Python wheel there. Keep each host's binaries, QEMU image and generated
+contracts together. Export existing evidence before replacing a target image;
+copying an old policy or generated configuration into the new bundle does not
+migrate it. The bundled Python distribution and individual tools have their
+own package versions; `VERSION.txt` identifies the overall release.
 
 | You want to… | Download | What it contains |
 | --- | --- | --- |

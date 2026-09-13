@@ -124,6 +124,7 @@ def inspect_bundle(bundle: Path, archive: Path) -> dict[str, Any]:
                 "SD image payload inventory differs from compiler selection"
             )
         commit = metadata["boot_identity"]["git_commit"]
+        publication = metadata.get("publication")
     else:
         provenance = evidence.read_json(bundle / "BUILD_PROVENANCE.json")
         host = "macos" if suffix == "MacOS" else "linux"
@@ -134,17 +135,33 @@ def inspect_bundle(bundle: Path, archive: Path) -> dict[str, Any]:
             raise ValueError("bundle has invalid native build provenance")
         required = set(release["host_tools"]) | (
             set(release["target_images"]) - {"image/gic-version.txt"}
-        )
+        ) | set(release.get("generated_configs", []))
         if set(provenance["files"]) != required:
             raise ValueError(
                 "build provenance does not cover every native tool and guest image"
             )
         verify_payload(bundle, provenance["files"])
         commit = provenance["source_commit"]
+        publication = provenance.get("publication")
+    publication_fields = {}
+    if publication is not None:
+        if (
+            publication.get("schema") != "cohesix-release-publication/v1"
+            or publication.get("qualified_source_commit") != commit
+            or publication.get("runtime_sources_unchanged") is not True
+            or publication.get("packaging_is_target_acceptance") is not False
+            or not re.fullmatch(r"[0-9a-f]{40}", publication.get("publication_commit", ""))
+        ):
+            raise ValueError("bundle has invalid publication-only provenance")
+        publication_fields = {
+            "publication_commit": publication["publication_commit"],
+            "publication_sha256": hashlib.sha256(evidence.canonical_bytes(publication)).hexdigest(),
+        }
     return {
         "bundle": bundle.name,
         "version": version,
         "source_commit": commit,
+        **publication_fields,
         "archive": file_record(archive),
         "manifest_sha256": hashes["MANIFEST.sha256"],
     }
@@ -503,6 +520,8 @@ def verify_release(args: argparse.Namespace) -> dict[str, Any]:
         qualifications.append({"kind": kind, **file_record(path)})
     if len({(row["version"], row["source_commit"]) for row in results}) != 1:
         raise ValueError("release results do not share a version and source commit")
+    if len({(row.get("publication_commit"), row.get("publication_sha256")) for row in results}) != 1:
+        raise ValueError("release results do not share publication provenance")
     current = subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -510,7 +529,7 @@ def verify_release(args: argparse.Namespace) -> dict[str, Any]:
         ROOT / "configs/generated/implementation_surface_inventory.json"
     )
     if (
-        results[0]["source_commit"] != current
+        results[0].get("publication_commit", results[0]["source_commit"]) != current
         or results[0]["version"] != inventory["release"]["version"]
     ):
         raise ValueError(
@@ -520,7 +539,10 @@ def verify_release(args: argparse.Namespace) -> dict[str, Any]:
         "kind": "release",
         "checks": ["macos", "linux", "pi4"],
         "version": results[0]["version"],
-        "source_commit": current,
+        "source_commit": results[0]["source_commit"],
+        **({"publication_commit": current,
+            "publication_sha256": results[0]["publication_sha256"]}
+           if "publication_commit" in results[0] else {}),
         "archives": [row["archive"] for row in results],
         "qualifications": qualifications,
     }

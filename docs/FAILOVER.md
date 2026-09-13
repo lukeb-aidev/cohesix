@@ -1,15 +1,15 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Define production failover and redundancy runbooks for Cohesix 0.9.0-beta using gateway and FUSE mounts. -->
+<!-- Purpose: Define production failover and redundancy runbooks for Cohesix 1.0.0-beta using gateway and FUSE mounts. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Failover and Redundancy (0.9.0-beta As-Built)
+# Cohesix Failover and Redundancy (1.0.0-beta As-Built)
 Author: Lukas Bower  
-Revision: February 19, 2026
+Revision: September 13, 2026
 
 ## 1) Scope and Verdict
-This document defines the production failover model for Cohesix `0.9.0-beta` using existing as-built surfaces only.
+This document describes the host-operated failover model for Cohesix `1.0.0-beta` using existing as-built surfaces only.
 
-**Verdict:** failover is supported in `0.9.0-beta` as **single-writer active/standby** with host-orchestrated cutover.  
+**Model:** **single-writer active/standby** with host-orchestrated cutover. The historical validation below applies to 0.9.0-beta and does not qualify a new 1.0.0-beta deployment.  
 **Not supported as-built:** active/active multi-queen writes to one logical hive.
 
 The model in this document keeps Cohesix semantics unchanged:
@@ -23,9 +23,9 @@ The model in this document keeps Cohesix semantics unchanged:
 2. One REST FUSE mount per gateway URL (`coh mount --rest-url` lock).
 3. Control files are append-only (`/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, `/gpu/bridge/ctl`).
 4. Audit and replay are file surfaces (`/audit/*`, `/replay/*`), not a replication subsystem.
-5. Built-in cross-queen state replication is not present in `0.9.0-beta`.
+5. Built-in cross-queen state replication is not present in `1.0.0-beta`.
 
-## 3) Production Pattern
+## 3) Deployment Pattern
 Use two independent hives:
 - `queen-a` (active)
 - `queen-b` (standby)
@@ -57,7 +57,7 @@ Use these controls together:
 4. WAL on host: persist pending control intents before write, replay only unapplied entries after cutover.
 
 ## 5) Required Inputs
-- Release bundle: `releases/Cohesix-0.9.0-beta-MacOS` and/or `releases/Cohesix-0.9.0-beta-linux`.
+- Release bundle: `releases/Cohesix-1.0.0-beta-MacOS` and/or `releases/Cohesix-1.0.0-beta-linux`.
 - Queen auth token (`COH_AUTH_TOKEN`).
 - Gateway request-auth token (`HIVE_GATEWAY_REQUEST_AUTH_TOKEN`).
 - FUSE runtime:
@@ -69,29 +69,29 @@ Example uses two local queens for validation; production hosts can be split acro
 
 ```bash
 # Queen A
-TCP_PORT=41337 UDP_PORT=41338 SMOKE_PORT=41339 ./releases/Cohesix-0.9.0-beta-MacOS/qemu/run.sh
+TCP_PORT=41337 UDP_PORT=41338 SMOKE_PORT=41339 ./releases/Cohesix-1.0.0-beta-MacOS/qemu/run.sh
 
 # Queen B
-TCP_PORT=42337 UDP_PORT=42338 SMOKE_PORT=42339 ./releases/Cohesix-0.9.0-beta-MacOS/qemu/run.sh
+TCP_PORT=42337 UDP_PORT=42338 SMOKE_PORT=42339 ./releases/Cohesix-1.0.0-beta-MacOS/qemu/run.sh
 ```
 
 ```bash
 # Gateway A
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=41337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" COH_ROLE=queen \
   HIVE_GATEWAY_BIND=127.0.0.1:48080 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
-  ./releases/Cohesix-0.9.0-beta-MacOS/bin/hive-gateway
+  ./releases/Cohesix-1.0.0-beta-MacOS/bin/hive-gateway
 
 # Gateway B
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=42337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" COH_ROLE=queen \
   HIVE_GATEWAY_BIND=127.0.0.1:48081 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
-  ./releases/Cohesix-0.9.0-beta-MacOS/bin/hive-gateway
+  ./releases/Cohesix-1.0.0-beta-MacOS/bin/hive-gateway
 ```
 
 ```bash
 # Mount both gateways
-./releases/Cohesix-0.9.0-beta-MacOS/bin/coh mount --rest-url http://127.0.0.1:48080 \
+./releases/Cohesix-1.0.0-beta-MacOS/bin/coh mount --rest-url http://127.0.0.1:48080 \
   --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --at /mnt/coh-a
-./releases/Cohesix-0.9.0-beta-MacOS/bin/coh mount --rest-url http://127.0.0.1:48081 \
+./releases/Cohesix-1.0.0-beta-MacOS/bin/coh mount --rest-url http://127.0.0.1:48081 \
   --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --at /mnt/coh-b
 
 # Publish stable active path
@@ -165,12 +165,12 @@ cat /mnt/coh-live/proc/pressure/cut
 
 Capture evidence:
 ```bash
-./releases/Cohesix-0.9.0-beta-MacOS/bin/coh evidence pack --rest-url http://127.0.0.1:48081 \
+./releases/Cohesix-1.0.0-beta-MacOS/bin/coh evidence pack --rest-url http://127.0.0.1:48081 \
   --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --out ./out/evidence/failover --with-telemetry
-./releases/Cohesix-0.9.0-beta-MacOS/bin/coh evidence timeline --in ./out/evidence/failover
+./releases/Cohesix-1.0.0-beta-MacOS/bin/coh evidence timeline --input ./out/evidence/failover
 ```
 
-## 11) Cross-Host Validation Matrix (Mac Queen A + Jetson Queen B, Latest)
+## 11) Historical Cross-Host Validation (0.9.0-beta)
 Validation date: **February 19, 2026**
 
 ### Topology under test
@@ -236,15 +236,15 @@ Lab notes:
 - Control-plane mutation checks in this run used REST `/v1/fs/echo` with request-auth.
 - On macOS in this run, append writes to control files through REST-backed FUSE mounts returned `EINVAL` (`fuse-write-check.rc`); reads were stable. Treat REST `/v1/fs/echo` as the validated mutation path for this topology in `0.9.0-beta`.
 
-## 12) Known Limits in 0.9.0-beta
+## 12) Limits Recorded in the 0.9.0-beta Validation
 1. No built-in cross-queen replication.
 2. Failover correctness depends on external fencing + idempotent replay.
 3. `coh mount --rest-url` enforces one mount per gateway URL on a host.
 4. Gateway backpressure (`429`) remains the dominant high-load limiter under aggressive traffic.
 5. In this cross-host lab on macOS, control-file appends through REST-backed FUSE mounts returned `EINVAL`; use REST `/v1/fs/echo` for control writes.
 
-## 13) Production Recommendation
-For production today:
+## 13) Operator Responsibilities
+For a deployment using this model:
 1. Run bounded hives (single writer per hive).
 2. Use active/standby queens per fault domain.
 3. Put strict automation discipline around `/mnt/coh-live`.
@@ -252,7 +252,7 @@ For production today:
 5. Collect evidence packs at each failover event for audit and postmortem.
 
 ## 14) Watchdog Ops Automation (Auto-Cutover)
-`0.9.0-beta` supports host-side watchdog automation without changing VM semantics.
+The retained host-side watchdog automates cutover without changing VM semantics. Its February validation below remains historical evidence.
 
 Script:
 - `scripts/failover_watchdog.py`
@@ -291,7 +291,7 @@ Options for production controls:
 - `--lock-file /var/run/cohesix-failover-watchdog.lock`
 - `--allow-failback` (disabled by default; keep manual failback unless strongly justified)
 
-### Watchdog Validation (Latest)
+### Historical Watchdog Validation (0.9.0-beta)
 Validation date: **February 19, 2026**
 
 Scenario:

@@ -52,6 +52,16 @@ successful command or test count is not a coverage argument.
   Shared source bytes do not make Mac/HVF and Linux/KVM builds, QEMU and Pi,
   Wi-Fi and GENET, or first-install and saved-policy boots interchangeable.
   Stage 05's current advisory checks still run on every acceptance refresh.
+- The owner-approved 1.0.0-beta publication mode in
+  [HOST_TOOLS.md](HOST_TOOLS.md#release-factory) separates documentation and
+  obsolete-distribution cleanup from an immutable tested source. The factory
+  checks the complete allowlisted delta and preserves exact tested binaries,
+  generated runtime contracts, source identities and passing records. Optional
+  publication metadata identifies the later packaging commit. This is reuse
+  for assembly only: no stage marker, target result or acceptance claim is
+  rebound to that publication commit, and the mode runs no tests. Changes to
+  runtime source, policy, manifests or evidence machinery still require their
+  applicable qualification and cannot enter this mode.
 - For release `1.0.0-beta`, Stage 05 may admit only the explicit DD30 owner
   decision in [DD30_RELEASE_WAIVER.toml](audit/DD30_RELEASE_WAIVER.toml), selected
   with `DD_RELEASE_ID=1.0.0-beta` and validated against the active exception and

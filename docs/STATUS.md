@@ -3,7 +3,7 @@
 <!-- Purpose: Summarize current Cohesix implementation and evidence status without duplicating planning or run history. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix Status
+# Cohesix 1.0.0-beta Status
 
 This page is the public snapshot of what the checked-in Cohesix source declares
 and what that declaration does—and does not—prove. It is intentionally short.
@@ -21,6 +21,16 @@ Milestone 26e is in progress with QEMU-first implementation and qualification.
 The selected QEMU and Raspberry Pi 4 manifests describe the intended SMP+MCS
 system, but neither a successful build nor a QEMU result can substitute for the
 separate fresh-Pi evidence required to complete the milestone.
+
+The 1.0.0-beta release consists of native Mac and Linux ARM64 host bundles and
+a separate Pi 4 SD-image bundle. The [release notes](../releases/RELEASE_NOTES-1.0.0-beta.md)
+describe changes since 0.9.0-beta. Historical packages remain at their Git tags.
+
+As of 13 September 2026, audit findings DD26–29 are `CLOSED_VERIFIED`. DD30
+remains P1 / `ACCEPTED_RISK` for this release under the owner's source-bound
+waiver; dynamic fault/wake testing remains unexecuted. The
+[audit report](audit/AUDIT_REPORT_2026-09-13.md) records the evidence and limits.
+Final staged qualification and bundle delivery are still in progress.
 
 ## Capability snapshot
 
@@ -48,6 +58,6 @@ separate fresh-Pi evidence required to complete the milestone.
 - For performance claims, follow [Benchmarking](BENCHMARKS.md) and retain the
   complete result artifact.
 
-This snapshot describes the repository on 25 August 2026. A change that alters
+This snapshot describes the repository on 13 September 2026. A change that alters
 one of these public capability boundaries must update this page in the same
 change.

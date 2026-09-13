@@ -141,8 +141,19 @@ def main() -> int:
     parser.add_argument("--source-digest", required=True)
     parser.add_argument("--host", choices=HOSTS, required=True)
     parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--publication-manifest", type=Path)
     args = parser.parse_args()
     try:
+        publication = None
+        if args.publication_manifest is not None:
+            publication = evidence.read_json(args.publication_manifest)
+            if (
+                publication.get("schema") != "cohesix-release-publication/v1"
+                or publication.get("qualified_source_digest") != args.source_digest
+                or publication.get("runtime_sources_unchanged") is not True
+                or publication.get("packaging_is_target_acceptance") is not False
+            ):
+                raise evidence.EvidenceError("invalid publication-only source binding")
         artifact = verified_inputs(
             args.artifact,
             args.result,
@@ -162,7 +173,8 @@ def main() -> int:
                 {
                     "schema": "cohesix-release-build-provenance/v1",
                     "host": args.host,
-                    "source_commit": subprocess.check_output(
+                    "source_commit": publication["qualified_source_commit"]
+                    if publication is not None else subprocess.check_output(
                         [
                             "git",
                             "-C",
@@ -179,6 +191,7 @@ def main() -> int:
                     "timer_clock_hz": artifact["sel4"]["timer_clock_hz"],
                     "files": records,
                     "packaging_is_target_acceptance": False,
+                    **({"publication": publication} if publication is not None else {}),
                 },
             )
     except (evidence.EvidenceError, OSError, ValueError, KeyError, TypeError) as error:

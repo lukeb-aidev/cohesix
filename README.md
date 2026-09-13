@@ -153,17 +153,23 @@ the existing host transport semantics and adds no target authority.
 
 ![SwarmUI replay showing Live Hive telemetry](docs/swarmui-replay.png)
 
-## Current project status
+## Cohesix 1.0.0-beta
 
-Milestone 26e and release **1.0.0-beta** are still in qualification. The selected
-profiles declare an SMP+MCS target with isolated root services, executable
-Heartbeat/GPU/LoRA Workers, and isolated physical drivers. Full promotion still
-requires separate exact-artifact QEMU and fresh-Pi evidence.
+**1.0.0-beta** brings seL4 16, four-core SMP+MCS scheduling, isolated root
+services and physical drivers, and 256 passive Heartbeat/GPU/LoRA Workers.
+It adds a Raspberry Pi 4 SD-image distribution alongside the native Mac and
+Linux ARM64 host bundles. See the [release notes](releases/RELEASE_NOTES-1.0.0-beta.md)
+for changes since 0.9.0-beta, upgrade guidance, and known limitations.
 
-The latest checked-in host bundles are **0.9.0-beta**. The planned **1.0.0-beta**
-Mac, Linux ARM64, and Pi 4 bundles have not been published; the Pi bundle will
-include the first complete SD-card image. Existing releases are snapshots of
-their own source and do not include all capabilities described by current main.
+Release qualification is in progress. The selected source, tested artifacts,
+and distributed images retain separate identities. DD30's remaining dynamic
+fault/wake evidence gap is accepted specifically for this beta; it is not a
+passed test. See the [audit report](docs/audit/AUDIT_REPORT_2026-09-13.md) for
+the scope of that decision.
+
+The current release directory is reserved for 1.0.0-beta. Superseded bundles
+and notes remain available from their original
+[Git tags](https://github.com/lukeb-aidev/cohesix/tags).
 
 See [Current status](docs/STATUS.md) for the capability and evidence snapshot,
 and the [Build Plan](docs/BUILD_PLAN.md) for the complete record of planned and
@@ -177,7 +183,7 @@ running them.
 
 ### Run a release bundle
 
-Choose the matching Mac or Linux ARM64 archive under [releases/](releases/)
+Choose the matching **1.0.0-beta** Mac or Linux ARM64 archive under [releases/](releases/)
 and follow its bundled `QUICKSTART.md` and release notes. After extraction, verify its
 `MANIFEST.sha256` before running tools: use `shasum -a 256 --check MANIFEST.sha256`
 on Mac or `sha256sum --check MANIFEST.sha256` on Linux. The common host-bundle
@@ -200,7 +206,7 @@ QEMU flow is:
    unset COHSH_AUTH_TOKEN
    ```
 
-The planned Pi 4 archive contains the SD image and documentation; it requires
+The `Cohesix-1.0.0-beta-Pi4.tar.gz` archive contains the SD image and documentation; it requires
 the matching host archive for CLI, Python, and SwarmUI tools. See the current
 [Quickstart](docs/QUICKSTART.md) for the three-bundle installation workflow.
 

@@ -5,7 +5,7 @@
 
 """Cohesix failover watchdog for active/standby mount cutover.
 
-This is ops automation for 0.9.0-beta active/standby deployments. It does not
+This is host automation for single-writer active/standby deployments. It does not
 introduce in-VM leader election or self-promotion. The watchdog probes both
 REST gateways, decides whether the active side is failed, and atomically flips
 the live symlink to the healthy standby mount when required.

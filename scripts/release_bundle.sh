@@ -39,6 +39,10 @@ LINUX_ARTIFACT=""
 LINUX_RESULT=""
 LINUX_USE_ACCEPTED_TOOLS=0
 SOURCE_DIGEST=""
+QUALIFIED_SOURCE_ROOT=""
+QUALIFIED_SOURCE_COMMIT=""
+PUBLICATION_RECORD=""
+PUBLICATION_ARGS=()
 MACOS_OUT_DIR=""
 LINUX_OUT_DIR=""
 IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
@@ -72,6 +76,7 @@ Release options:
   --linux-artifact <path>             Retained native Linux KVM artifact manifest
   --linux-result <path>               Passing TCP result for that exact artifact
   --linux-use-accepted-tools          Copy tested Linux tools without rebuilding them
+  --qualified-source-root <path>      Clean tested checkout for publication-only changes
 
 Remote Linux builder options (--host/--user/--release-dir/--max-glibc are
 required with --linux; build/output locations only when rebuilding tools):
@@ -96,6 +101,11 @@ Env overrides:
 
 Remote builder environment locations are never inferred from hostnames or users
 and have no embedded Jetson/NVMe defaults; they must be supplied as arguments.
+
+--qualified-source-root preserves the original tested source, guest, tools,
+generated contracts and Pi identity. It permits only the documented publication
+delta, records both commits, and rejects runtime changes. It runs no tests.
+With --linux it requires --linux-use-accepted-tools.
 
 --check-manifest validates the exact compiler-generated release input set and
 exits without creating, replacing, or deleting a release bundle.
@@ -146,6 +156,11 @@ while [[ $# -gt 0 ]]; do
     --linux-use-accepted-tools)
       LINUX_USE_ACCEPTED_TOOLS=1
       shift
+      ;;
+    --qualified-source-root)
+      [[ $# -ge 2 ]] || { echo "$1 requires a path" >&2; exit 1; }
+      QUALIFIED_SOURCE_ROOT="$2"
+      shift 2
       ;;
     --pi4-stage-dir)
       [[ $# -ge 2 ]] || { echo "--pi4-stage-dir requires a path" >&2; exit 1; }
@@ -521,7 +536,7 @@ validate_pi4_stage_identity() {
     fail "Pi 4 primary and fallback staged images differ"
 
   python3 - \
-    "$ROOT_DIR" \
+    "$QUALIFIED_SOURCE_COMMIT" \
     "$primary" \
     "$metadata" \
     "${ROOT_DIR}/scripts/pi4_image_identity.py" <<'PY'
@@ -530,18 +545,13 @@ import json
 import subprocess
 import sys
 
-root, image, metadata_path, verifier = map(Path, sys.argv[1:])
-head = subprocess.run(
-    ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
-    check=True,
-    capture_output=True,
-    text=True,
-).stdout.strip()
+head = sys.argv[1]
+image, metadata_path, verifier = map(Path, sys.argv[2:])
 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 if metadata.get("schema") != "cohesix-pi4-image-identity/v2":
     raise SystemExit("Pi 4 image identity schema is invalid")
 if metadata.get("git_commit") != head or metadata.get("source_tree_clean") is not True:
-    raise SystemExit("Pi 4 SD image is not bound to the current clean source commit")
+    raise SystemExit("Pi 4 SD image is not bound to the selected qualified source commit")
 observed = json.loads(
     subprocess.run(
         [sys.executable, str(verifier), "verify", "--image", str(image)],
@@ -673,7 +683,7 @@ validate_tested_inputs() {
     "--${host}-artifact and --${host}-result are required"
   python3 "${ROOT_DIR}/scripts/release_inputs.py" \
     --artifact "$artifact" --result "$result" \
-    --source-digest "$SOURCE_DIGEST" --host "$host"
+    --source-digest "$SOURCE_DIGEST" --host "$host" ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"}
 }
 
 require_file() {
@@ -757,6 +767,7 @@ prepare_bundle_quickstart() {
 import os
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 bundle = Path(os.environ["BUNDLE_DIR"])
 quickstart = bundle / "QUICKSTART.md"
@@ -784,6 +795,58 @@ for document in (bundle / "docs").glob("*.md"):
     text = document.read_text(encoding="utf-8")
     text = text.replace("](QUICKSTART.md", "](../QUICKSTART.md")
     document.write_text(text, encoding="utf-8")
+
+# Resolve relocated notes locally and send source-only references to the
+# publication commit. Every shipped local link remains usable after extraction.
+publication = os.environ.get("RELEASE_PUBLICATION_COMMIT")
+if publication is None:
+    raise SystemExit(0)
+repository = f"https://github.com/lukeb-aidev/cohesix/blob/{publication}/"
+for document in [bundle / "README.md", quickstart, *(bundle / "docs").glob("*.md")]:
+    relative = document.relative_to(bundle)
+    source_relative = Path("docs/QUICKSTART.md") if document == quickstart else relative
+
+    def resolve_link(match):
+        label, target = match.groups()
+        if target.startswith(("#", "https://", "http://", "mailto:")):
+            return match.group(0)
+        parsed = urlsplit(target)
+        candidate = (document.parent / parsed.path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(bundle.resolve()):
+            return match.group(0)
+        if Path(parsed.path).name == "RELEASE_NOTES-1.0.0-beta.md":
+            local = os.path.relpath(bundle / "RELEASE_NOTES.md", document.parent)
+            return f"[{label}]({local}{'#' + parsed.fragment if parsed.fragment else ''})"
+        source = Path(os.path.normpath(str(source_relative.parent / parsed.path))).as_posix()
+        if document == quickstart:
+            source = Path(os.path.normpath(parsed.path)).as_posix()
+        if source.startswith("../") or source.startswith("/"):
+            raise SystemExit(f"unconfined documentation link: {target}")
+        location = repository
+        if match.string[match.start() - 1:match.start()] == "!":
+            location = f"https://raw.githubusercontent.com/lukeb-aidev/cohesix/{publication}/"
+        elif parsed.path.endswith("/"):
+            location = repository.replace("/blob/", "/tree/")
+        return f"[{label}]({location}{source}{'#' + parsed.fragment if parsed.fragment else ''})"
+
+    document.write_text(
+        re.sub(r"\[([^]\n]+)\]\(([^)\s]+)\)", resolve_link, document.read_text()),
+        encoding="utf-8",
+    )
+    text = document.read_text(encoding="utf-8")
+
+    def resolve_image(match):
+        target = match.group(1)
+        if target.startswith(("https://", "http://", "data:")):
+            return match.group(0)
+        if (document.parent / target).is_file():
+            return match.group(0)
+        source = Path(os.path.normpath(str(source_relative.parent / target))).as_posix()
+        if source.startswith(("../", "/")):
+            raise SystemExit(f"unconfined documentation image: {target}")
+        return f'src="https://raw.githubusercontent.com/lukeb-aidev/cohesix/{publication}/{source}"'
+
+    document.write_text(re.sub(r'src="([^"\n]+)"', resolve_image, text), encoding="utf-8")
 PY_QUICKSTART
 }
 
@@ -936,7 +999,7 @@ bundle_release() {
   printf '3\n' > "${bundle_dir}/image/gic-version.txt"
   python3 "${ROOT_DIR}/scripts/release_inputs.py" \
     --artifact "$artifact" --result "$result" --host "$host" \
-    --source-digest "$SOURCE_DIGEST" --bundle "$bundle_dir"
+    --source-digest "$SOURCE_DIGEST" --bundle "$bundle_dir" ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"}
 
   cat <<'EOF' > "${bundle_dir}/qemu/run.sh"
 #!/usr/bin/env bash
@@ -1362,6 +1425,18 @@ bundle_pi4_release() {
     --output-image "${bundle_dir}/image/cohesix-pi4-sd.img" \
     --output-metadata "${bundle_dir}/image/cohesix-pi4-sd.json" \
     --output-sha256 "${bundle_dir}/image/cohesix-pi4-sd.img.sha256"
+  if [[ -n "$PUBLICATION_RECORD" ]]; then
+    python3 - "$PUBLICATION_RECORD" "${bundle_dir}/image/cohesix-pi4-sd.json" <<'PY_PUBLICATION'
+import json
+from pathlib import Path
+import sys
+
+publication, metadata = map(Path, sys.argv[1:])
+record = json.loads(metadata.read_text())
+record["publication"] = json.loads(publication.read_text())
+metadata.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+PY_PUBLICATION
+  fi
   printf '%s\n' "$RELEASE_VERSION" >"${bundle_dir}/VERSION.txt"
   prepare_bundle_quickstart "$bundle_dir"
   write_bundle_manifest "$bundle_dir" expected_pi4_bundle_files
@@ -1395,7 +1470,24 @@ MACOS_BUNDLE_NAME="${RELEASE_NAME}-MacOS"
 LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
 PI4_BUNDLE_NAME="${RELEASE_NAME}-Pi4"
 
-SOURCE_DIGEST="$(python3 "${ROOT_DIR}/scripts/ci/qemu_artifact.py" source-digest --repo-root "$ROOT_DIR")"
+QUALIFIED_SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+export RELEASE_PUBLICATION_COMMIT="$QUALIFIED_SOURCE_COMMIT"
+if [[ -n "$QUALIFIED_SOURCE_ROOT" ]]; then
+  if [[ "$LINUX_BUNDLE" -eq 1 && "$LINUX_USE_ACCEPTED_TOOLS" -ne 1 ]]; then
+    fail "publication-only Linux assembly requires --linux-use-accepted-tools"
+  fi
+  PUBLICATION_RECORD="$(mktemp -t cohesix-release-publication.XXXXXX)"
+  trap 'rm -f "$PUBLICATION_RECORD"' EXIT
+  SOURCE_DIGEST="$(python3 "${ROOT_DIR}/scripts/release_publication.py" \
+    --repo-root "$ROOT_DIR" --qualified-source-root "$QUALIFIED_SOURCE_ROOT" \
+    --output "$PUBLICATION_RECORD")"
+  QUALIFIED_SOURCE_COMMIT="$(python3 -c \
+    'import json,sys; print(json.load(open(sys.argv[1]))["qualified_source_commit"])' \
+    "$PUBLICATION_RECORD")"
+  PUBLICATION_ARGS=(--publication-manifest "$PUBLICATION_RECORD")
+else
+  SOURCE_DIGEST="$(python3 "${ROOT_DIR}/scripts/ci/qemu_artifact.py" source-digest --repo-root "$ROOT_DIR")"
+fi
 if [[ "$LINUX_ONLY" -ne 1 ]]; then
   MACOS_OUT_DIR="$(validate_tested_inputs macos "$MACOS_ARTIFACT" "$MACOS_RESULT")"
   OUT_DIR="$MACOS_OUT_DIR"

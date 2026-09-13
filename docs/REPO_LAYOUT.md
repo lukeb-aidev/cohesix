@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document the canonical Cohesix repository layout and app roster. -->
 <!-- Author: Lukas Bower -->
-# Repository Layout Blueprint
+# Repository Layout — 1.0.0-beta
 
 ```
 /AGENTS.md              ← Repo-wide working agreement
@@ -30,6 +30,8 @@
     root_task_resolved.json
     coh_policy.toml
     cohsh_policy.toml
+/releases/              ← Current 1.0.0-beta bundles and release notes
+/seL4/                  ← Required immutable prebuilt artifacts; upstream source is external
 /out/                   ← Ignored disposable build, staging, log, and run output
 /scripts/
   qemu-run.sh
@@ -52,7 +54,7 @@
     src/
       client.rs
       queen.rs
-  coh-status/             ← Deferred library/replay surface; standalone CLI is Milestone 29
+  coh-status/             ← Library/replay surface; no standalone release CLI
   root-task/
     README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/
@@ -66,6 +68,8 @@
   console-network-runtime/← Selected no_std target TCP console-network child
   worker-heart/
   worker-gpu/
+  worker-lora/
+  pi4-driver-runtime/
   gpu-bridge-host/       (host-only tools)
 /tests/
   integration/
@@ -75,27 +79,17 @@
 - **Docs-first**: Any new crate, script, or interface requires accompanying documentation under `/docs`.
 - **Role-labelled crates**: Worker crates encode their role in the crate name to simplify CI filtering.
 - **Host vs VM split**: Host-only tools live under `/apps/gpu-bridge-host` or `/tools/` and must never be packaged into the VM CPIO.
-- **CI expectations**: `/tests/integration` houses black-box tests that launch QEMU using mock assets; unit tests live beside their crates.
+- **Evidence ownership**: The staged [Test Plan](TEST_PLAN.md) selects host, QEMU, and physical Pi checks. Fixtures and host tests do not establish target acceptance.
 
-## Milestone 7 Developer Workflow
-- **Root task event pump**: Implementations replacing the legacy spin
-  loop must update `apps/root-task/README.md` alongside code changes and
-  document new handlers under `docs/ARCHITECTURE.md §10`. Tests live in
-  `apps/root-task/tests/` and are executed with
-  `cargo test -p root-task event_pump` and
-  `cargo test -p root-task console_auth`.
-- **Networking feature flag**: Networking remains behind
-  `--features net`. When modifying `apps/root-task/src/net`, run
-  `cargo check -p root-task --features net` and `cargo clippy -p
-  root-task --features net --tests`; record the commands in commit and PR
-  notes.
-- **Console transports**: `apps/cohsh/src/transport` houses serial,
-  mock, and TCP adapters. The TCP client introduced in Milestone 7c must
-  stay feature gated; update `docs/USERLAND_AND_CLI.md` whenever verbs or
-  flags change.
-- **Integration harness**: `tests/integration/qemu_tcp_console.rs`
-  exercises the Milestone 7 flow end-to-end. Use
-  `scripts/qemu-run.sh --console serial --tcp-port <port>` while running
-  the test to confirm QEMU boot logs advertise the expected
-  `event-pump` activation lines and that the TCP transport remains
-  responsive.
+## Build and release ownership
+
+[HOST_TOOLS.md](HOST_TOOLS.md#release-factory) describes the native Mac and Linux
+builds and `scripts/release_bundle.sh`. [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md)
+owns Pi image composition and media installation. The selected manifests and
+compiler-generated inventory determine each target and bundle's contents.
+
+Superseded distributions have been removed from the current tree. Their
+unchanged source, notes, and archives remain at the original Git tags. Retained
+kernel artifacts, firmware, pinned dependencies, test fixtures, and audit
+records still serve current build or evidence workflows; age alone does not
+make them disposable. Put temporary probes and local reports under `out/`.

@@ -5872,7 +5872,7 @@ def parse_args() -> argparse.Namespace:
     launch.add_argument(
         "--bundle",
         default=None,
-        help="Release bundle directory (e.g. releases/Cohesix-0.6.0-alpha-MacOS).",
+        help="Release bundle directory (e.g. releases/Cohesix-1.0.0-beta-MacOS).",
     )
     launch.add_argument(
         "--version",
