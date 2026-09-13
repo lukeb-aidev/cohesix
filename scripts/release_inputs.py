@@ -31,12 +31,14 @@ IMAGE_PATHS = {
 
 def verified_inputs(
     artifact_path: Path,
-    result_path: Path,
+    result_path: Path | None,
     source: str,
     host: str,
     expected_manifest_sha256: str | None = None,
+    *,
+    build_only: bool = False,
 ) -> dict[str, Any]:
-    """Require an immutable passing TCP result for this exact native artifact."""
+    """Verify native bytes and require TCP proof unless build-only is selected."""
 
     artifact = evidence.verify_artifact_document(
         artifact_path,
@@ -62,6 +64,16 @@ def verified_inputs(
         raise evidence.EvidenceError(
             f"{host} release artifact has the wrong production profile"
         )
+    if build_only:
+        if (
+            artifact.get("action_id") != "release.build-only"
+            or artifact.get("attempt_manifest") is not None
+            or result_path is not None
+        ):
+            raise evidence.EvidenceError("build-only inputs cannot claim a test attempt or result")
+        return artifact
+    if result_path is None:
+        raise evidence.EvidenceError("tested assembly requires a passing TCP result")
     result = evidence.read_json(result_path)
     root = result.get("evidence_root")
     if not isinstance(root, str) or Path(root).is_absolute():
@@ -137,7 +149,8 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path, required=True)
-    parser.add_argument("--result", type=Path, required=True)
+    parser.add_argument("--result", type=Path)
+    parser.add_argument("--build-only", action="store_true")
     parser.add_argument("--source-digest", required=True)
     parser.add_argument("--host", choices=HOSTS, required=True)
     parser.add_argument("--bundle", type=Path)
@@ -145,6 +158,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         publication = None
+        if args.build_only and args.publication_manifest is not None:
+            raise evidence.EvidenceError("build-only assembly requires the current source identity")
         if args.publication_manifest is not None:
             publication = evidence.read_json(args.publication_manifest)
             if (
@@ -162,6 +177,7 @@ def main() -> int:
             evidence.sha256_file(
                 Path(__file__).resolve().parents[1] / "configs/root_task.toml"
             ),
+            build_only=args.build_only,
         )
         records = payload_records(artifact)
         if args.bundle is None:
@@ -186,7 +202,9 @@ def main() -> int:
                     ).strip(),
                     "source_digest": args.source_digest,
                     "artifact_id": artifact["artifact_id"],
-                    "result_sha256": evidence.sha256_file(args.result),
+                    "result_sha256": None if args.build_only else evidence.sha256_file(args.result),
+                    "assembly_mode": "build-only" if args.build_only else "tested-artifacts",
+                    "test_status": "NOT_RUN" if args.build_only else "RECORDED_TCP_PASS",
                     "sel4_profile": artifact["sel4"]["profile"],
                     "timer_clock_hz": artifact["sel4"]["timer_clock_hz"],
                     "files": records,

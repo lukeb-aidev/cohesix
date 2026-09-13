@@ -1,0 +1,7 @@
+OK LS path=/gpu
+OK CAT path=/gpu/GPU-0/info
+OK CAT path=/gpu/GPU-1/info
+OK ECHO path=/queen/ctl bytes=94
+OK LS path=/queen/telemetry
+OK LS path=/queen/telemetry/device-1/seg
+OK CAT path=/queen/telemetry/device-1/seg/seg-000001

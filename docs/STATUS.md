@@ -24,7 +24,7 @@ separate fresh-Pi evidence required to complete the milestone.
 
 The 1.0.0-beta release consists of native Mac and Linux ARM64 host bundles and
 a separate Pi 4 SD-image bundle. The [release notes](../releases/RELEASE_NOTES-1.0.0-beta.md)
-describe changes since 0.9.0-beta. Historical packages remain at their Git tags.
+describe changes since 0.9.0-beta. The 0.9.0-beta packages remain in `releases/`; earlier packages remain at their Git tags.
 
 As of 13 September 2026, audit findings DD26–29 are `CLOSED_VERIFIED`. DD30
 remains P1 / `ACCEPTED_RISK` for this release under the owner's source-bound
@@ -34,8 +34,9 @@ Release Stage 5 is accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588`.
 The owner approved carrying forward the original Stage 1–4 records and later
 scoped fix evidence; the current source's Stage 1–4 suite was not rerun. The
 original timed burn-in failure remains recorded alongside its focused repairs.
-Bundle assembly and delivery remain pending, with source and content integrity
-requirements unchanged.
+The owner requested fresh release builds without additional tests. Bundle
+metadata records `NOT_RUN` for those artifacts while retaining exact source,
+native-profile and content integrity checks.
 
 ## Capability snapshot
 

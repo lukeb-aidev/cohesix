@@ -62,6 +62,13 @@ successful command or test count is not a coverage argument.
   rebound to that publication commit, and the mode runs no tests. Changes to
   runtime source, policy, manifests or evidence machinery still require their
   applicable qualification and cannot enter this mode.
+- The release owner's 2026-09-13 instruction to complete canonical release
+  builds without tests admits `release_bundle.sh --build-only`. It assembles
+  newly recorded `release.build-only` artifacts from one clean source; source,
+  native profiles, image identity, compiler inventory and content checks remain
+  mandatory. It accepts no transport result and records `NOT_RUN` in bundle
+  provenance. Existing Stage 5 acceptance and original source/image identities
+  remain separate. This assembly path grants no staged or target PASS.
 - For release `1.0.0-beta`, Stage 05 may admit only the explicit DD30 owner
   decision in [DD30_RELEASE_WAIVER.toml](audit/DD30_RELEASE_WAIVER.toml), selected
   with `DD_RELEASE_ID=1.0.0-beta` and validated against the active exception and

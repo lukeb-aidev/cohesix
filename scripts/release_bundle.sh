@@ -43,6 +43,8 @@ QUALIFIED_SOURCE_ROOT=""
 QUALIFIED_SOURCE_COMMIT=""
 PUBLICATION_RECORD=""
 PUBLICATION_ARGS=()
+BUILD_ONLY=0
+INPUT_MODE_ARGS=()
 MACOS_OUT_DIR=""
 LINUX_OUT_DIR=""
 IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
@@ -77,6 +79,7 @@ Release options:
   --linux-result <path>               Passing TCP result for that exact artifact
   --linux-use-accepted-tools          Copy tested Linux tools without rebuilding them
   --qualified-source-root <path>      Clean tested checkout for publication-only changes
+  --build-only                       Assemble fresh native builds without test results
 
 Remote Linux builder options (--host/--user/--release-dir/--max-glibc are
 required with --linux; build/output locations only when rebuilding tools):
@@ -106,6 +109,11 @@ and have no embedded Jetson/NVMe defaults; they must be supplied as arguments.
 generated contracts and Pi identity. It permits only the documented publication
 delta, records both commits, and rejects runtime changes. It runs no tests.
 With --linux it requires --linux-use-accepted-tools.
+
+--build-only uses current-source artifacts recorded with action release.build-only,
+omits TCP result arguments, and copies their native tools without rebuilding them.
+It preserves source, profile, inventory and byte checks; metadata records NOT_RUN.
+It cannot be combined with --qualified-source-root or confer target acceptance.
 
 --check-manifest validates the exact compiler-generated release input set and
 exits without creating, replacing, or deleting a release bundle.
@@ -155,6 +163,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --linux-use-accepted-tools)
       LINUX_USE_ACCEPTED_TOOLS=1
+      shift
+      ;;
+    --build-only)
+      BUILD_ONLY=1
+      LINUX_USE_ACCEPTED_TOOLS=1
+      INPUT_MODE_ARGS=(--build-only)
       shift
       ;;
     --qualified-source-root)
@@ -679,11 +693,18 @@ PY
 
 validate_tested_inputs() {
   local host="$1" artifact="$2" result="$3"
-  [[ -n "$artifact" && -n "$result" ]] || fail \
-    "--${host}-artifact and --${host}-result are required"
+  local result_args=()
+  [[ -n "$artifact" ]] || fail "--${host}-artifact is required"
+  if [[ "$BUILD_ONLY" -eq 1 ]]; then
+    [[ -z "$result" ]] || fail "--build-only cannot accept a TCP result"
+  else
+    [[ -n "$result" ]] || fail "--${host}-result is required"
+    result_args=(--result "$result")
+  fi
   python3 "${ROOT_DIR}/scripts/release_inputs.py" \
-    --artifact "$artifact" --result "$result" \
-    --source-digest "$SOURCE_DIGEST" --host "$host" ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"}
+    --artifact "$artifact" ${result_args[@]+"${result_args[@]}"} \
+    --source-digest "$SOURCE_DIGEST" --host "$host" \
+    ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"} ${INPUT_MODE_ARGS[@]+"${INPUT_MODE_ARGS[@]}"}
 }
 
 require_file() {
@@ -1003,9 +1024,12 @@ bundle_release() {
 
   # Each accepted artifact has already verified its own native GICv3 profile.
   printf '3\n' > "${bundle_dir}/image/gic-version.txt"
+  local result_args=()
+  if [[ -n "$result" ]]; then result_args=(--result "$result"); fi
   python3 "${ROOT_DIR}/scripts/release_inputs.py" \
-    --artifact "$artifact" --result "$result" --host "$host" \
-    --source-digest "$SOURCE_DIGEST" --bundle "$bundle_dir" ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"}
+    --artifact "$artifact" ${result_args[@]+"${result_args[@]}"} --host "$host" \
+    --source-digest "$SOURCE_DIGEST" --bundle "$bundle_dir" \
+    ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"} ${INPUT_MODE_ARGS[@]+"${INPUT_MODE_ARGS[@]}"}
 
   cat <<'EOF' > "${bundle_dir}/qemu/run.sh"
 #!/usr/bin/env bash
@@ -1443,6 +1467,21 @@ record["publication"] = json.loads(publication.read_text())
 metadata.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 PY_PUBLICATION
   fi
+  if [[ "$BUILD_ONLY" -eq 1 ]]; then
+    python3 - "${bundle_dir}/image/cohesix-pi4-sd.json" "$SOURCE_DIGEST" <<'PY_BUILD_ONLY'
+import json
+from pathlib import Path
+import sys
+
+metadata = Path(sys.argv[1])
+record = json.loads(metadata.read_text())
+record["assembly_mode"] = "build-only"
+record["source_digest"] = sys.argv[2]
+record["test_status"] = "NOT_RUN"
+record["packaging_is_target_acceptance"] = False
+metadata.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+PY_BUILD_ONLY
+  fi
   printf '%s\n' "$RELEASE_VERSION" >"${bundle_dir}/VERSION.txt"
   prepare_bundle_quickstart "$bundle_dir"
   write_bundle_manifest "$bundle_dir" expected_pi4_bundle_files
@@ -1478,6 +1517,9 @@ PI4_BUNDLE_NAME="${RELEASE_NAME}-Pi4"
 
 QUALIFIED_SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
 export RELEASE_PUBLICATION_COMMIT="$QUALIFIED_SOURCE_COMMIT"
+if [[ "$BUILD_ONLY" -eq 1 && -n "$QUALIFIED_SOURCE_ROOT" ]]; then
+  fail "--build-only cannot reuse a different qualified source identity"
+fi
 if [[ -n "$QUALIFIED_SOURCE_ROOT" ]]; then
   if [[ "$LINUX_BUNDLE" -eq 1 && "$LINUX_USE_ACCEPTED_TOOLS" -ne 1 ]]; then
     fail "publication-only Linux assembly requires --linux-use-accepted-tools"
@@ -1562,7 +1604,7 @@ if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
   fi
 fi
 if [[ "$CHECK_MANIFEST" -eq 1 ]]; then
-  echo "[release] Tested native artifacts and exact compiler-selected release inputs: PASS"
+  echo "[release] Native artifacts and exact compiler-selected release inputs verified (build-only=$BUILD_ONLY)"
   exit 0
 fi
 

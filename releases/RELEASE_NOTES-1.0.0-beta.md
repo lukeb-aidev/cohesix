@@ -7,7 +7,8 @@
 Date: 2026-09-13
 
 Status: Release Stage 5 accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588`.
-Bundle assembly and delivery remain pending.
+Distribution mode: fresh builds from one clean source commit, with tests omitted
+at the release owner's request. The rebuilt artifacts are marked `NOT_RUN`.
 
 ## Changes since 0.9.0-beta
 
@@ -80,9 +81,10 @@ Workers and the current generated contracts.
   the matching Mac or Linux archive for CLI, Python and SwarmUI tools.
 - Raw framed TCP is available as the direct network performance measurement.
   REST and host-model results remain separately identified.
-- Superseded bundles and release notes are removed from the current tree;
-  their original Git tags preserve them unchanged. Current firmware, seL4
-  build inputs, fixtures and audit records are retained.
+- The 0.9.0-beta distributions and release notes remain in `releases/`. Earlier
+  bundles are removed from the current tree and preserved at their original
+  Git tags. Current firmware, seL4 build inputs, fixtures and audit records
+  are retained.
 
 ## Downloads
 

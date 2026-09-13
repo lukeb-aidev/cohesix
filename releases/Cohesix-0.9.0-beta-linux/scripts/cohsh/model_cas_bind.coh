@@ -1,0 +1,48 @@
+# Author: Lukas Bower
+# Purpose: Upload a model bundle, bind into worker namespace, and assert read-only.
+attach queen
+EXPECT OK
+echo '{"id":"model-spawn","target":"/queen/ctl","decision":"approve"}' > /actions/queue
+EXPECT OK
+cat /actions/model-spawn/status
+EXPECT OK
+EXPECT SUBSTR queued
+spawn heartbeat ticks=1 ttl_s=30
+EXPECT OK
+cat /actions/model-spawn/status
+EXPECT OK
+EXPECT SUBSTR consumed
+
+echo WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+EXPECT OK
+echo WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+EXPECT OK
+echo schema-v1 > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/schema
+EXPECT OK
+echo sig-v1 > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/signature
+EXPECT OK
+
+ls /models
+EXPECT OK
+EXPECT SUBSTR entries=1
+cat /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+EXPECT OK
+EXPECT SUBSTR data=b64:V1dX
+
+echo '{"id":"model-bind","target":"/queen/ctl","decision":"approve"}' > /actions/queue
+EXPECT OK
+cat /actions/model-bind/status
+EXPECT OK
+EXPECT SUBSTR queued
+bind /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a /worker/worker-1/model
+EXPECT OK
+cat /actions/model-bind/status
+EXPECT OK
+EXPECT SUBSTR consumed
+cat /worker/worker-1/model/weights
+EXPECT OK
+EXPECT SUBSTR data=b64:V1dX
+
+echo WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+EXPECT ERR
+quit

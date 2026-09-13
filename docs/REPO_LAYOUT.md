@@ -88,8 +88,8 @@ builds and `scripts/release_bundle.sh`. [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.m
 owns Pi image composition and media installation. The selected manifests and
 compiler-generated inventory determine each target and bundle's contents.
 
-Superseded distributions have been removed from the current tree. Their
-unchanged source, notes, and archives remain at the original Git tags. Retained
+The current tree retains the 0.9.0-beta and 1.0.0-beta distributions. Earlier
+distributions remain unchanged at their original Git tags. Retained
 kernel artifacts, firmware, pinned dependencies, test fixtures, and audit
 records still serve current build or evidence workflows; age alone does not
 make them disposable. Put temporary probes and local reports under `out/`.

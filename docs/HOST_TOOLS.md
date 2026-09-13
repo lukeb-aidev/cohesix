@@ -515,8 +515,24 @@ This mode runs no tests and grants no new staged, hardware or performance PASS.
 The owner requested this separation for release preparation on 2026-09-13;
 the standard same-checkout assembly path remains available.
 
-Each host bundle contains `BUILD_PROVENANCE.json` with source, accepted artifact
-and TCP-result identities, native profile/timer, and exact guest/tool/configuration hashes.
+For a release-owner-directed build without tests, use `--build-only` with
+fresh native artifact manifests and omit `--macos-result` / `--linux-result`.
+Build guests using `scripts/cohesix-build-run.sh --no-run`, stage Pi files using
+`scripts/pi4-image-build.sh` without flash options, and build native Linux host
+tools using `scripts/linux_host_tools_sync.sh build-tools`. Record each guest
+and native tool set with `scripts/ci/qemu_artifact.py record`, action
+`release.build-only`, and the clean source digest; do not supply a test attempt.
+Both native records and the Pi image must identify the current source. This
+mode retains the compiler inventory, native profile, architecture, image and
+byte checks, copies the recorded tools, and never creates a TCP PASS result.
+It cannot be combined with `--qualified-source-root`.
+
+Each host bundle contains `BUILD_PROVENANCE.json` with source and artifact
+identities, native profile/timer, and exact guest/tool/configuration hashes.
+Tested assembly also records its TCP-result hash. Build-only assembly instead
+records `assembly_mode=build-only`, `test_status=NOT_RUN` and a null result hash;
+the Pi metadata records the same build-only status. These records do not extend
+the separate Stage 5 carry-forward acceptance to the rebuilt artifacts.
 The Pi bundle contains a compact raw MBR/FAT32 image, its SHA-256 sidecar and
 `cohesix-pi4-portable-sd-image/v2` metadata including the sealed boot identity.
 Image capacity derives from the payload. Any card at least `minimum_target_bytes`
