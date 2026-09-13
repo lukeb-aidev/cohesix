@@ -291,7 +291,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "converge_target_activity.coh:a013b830df74aec56efc723005c7391465fdefcdb219b9f75dc720b98f453404"
             .to_owned(),
-        "converge_worker.coh:93a947c051021ea88e56af66758e0aa7fd2de168adc66d2107e04a0209a3abf1"
+        "converge_worker.coh:a9f4037ae0a62bdf72fde0e809703a960f60e91e1bdc4e05c09b6ccb0444dd2a"
             .to_owned(),
         "host_absent.coh:f86f0aee6f7199034b7414d55788edbe2900ac8754f68296edf975816a7919df"
             .to_owned(),
