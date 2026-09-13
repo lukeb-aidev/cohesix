@@ -269,7 +269,7 @@ build_tools() {
         rust-toolchain.toml \
         .cargo/config.toml \
         scripts/rustc-wrapper.sh
-      git ls-files -z --cached apps crates tools tests resources configs/generated
+      git ls-files -z --cached apps crates tools tests resources configs/generated third_party/fuser
     } | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -czf "$source_tarball"
   )
   local source_sha256

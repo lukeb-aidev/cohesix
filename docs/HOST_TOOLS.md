@@ -493,7 +493,8 @@ the existing remote rebuild path additionally requires
 artifact, otherwise qualify the new build first. The independently callable
 `scripts/linux_host_tools_sync.sh build-tools` remains available for native
 host-tool preparation. Its source archive includes the complete tracked generated
-contract directory, including both Python target contracts.
+contract directory, including both Python target contracts, and the pinned
+`third_party/fuser` dependency selected by the workspace Cargo patch.
 
 For the owner-approved 1.0.0-beta publication workflow, append
 `--qualified-source-root <clean-tested-checkout>` to reuse the exact binaries
