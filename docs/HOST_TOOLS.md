@@ -575,9 +575,17 @@ The evidence-pack inventory, redaction behavior, missing-path semantics, and
 offline CI/SIEM contract are defined in
 [OPERATOR_RECIPES.md#evidence-packs-ci-and-siem](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
 
-`coh mount` remains in the foreground. Create the mount point first, keep the
+`coh mount` remains in the foreground and is private to the mounting host user.
+The macOS build requires macFUSE 5 with its `fuse3` pkg-config/library package;
+the pinned fuser mount-selection patch is documented in
+[third_party/fuser/COHESIX.md](../third_party/fuser/COHESIX.md).
+Reads fetch current remote data and errors even when cached metadata reports
+an empty file; a failed remote read must not become a successful empty read.
+Create the mount point first, keep the
 mount process in its own terminal, and use the host's normal FUSE unmount
-procedure before terminating it. Generated policy and doctor behavior are in
+procedure before terminating it. An orderly session exit also releases the
+mount; after an abrupt process loss, clear any disconnected mount with the same
+host unmount procedure. Generated policy and doctor behavior are in
 [snippets/coh_policy.md](snippets/coh_policy.md) and
 [snippets/coh_doctor_checks.md](snippets/coh_doctor_checks.md). Verified macOS,
 Linux, REST, and direct-mode mount procedures are in
@@ -892,3 +900,15 @@ The full, ordered example is in
 [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). Start there for a new live
 deployment; use [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) only after that
 topology is healthy.
+
+GPU refresh compatibility review: root and the in-process NineDoor model retain
+control logs across inventory refreshes from the same device/publisher epoch.
+`coh` (GPU, run, all mount transports), `cohsh`, `hive-gateway`,
+`gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `cas-tool`, SwarmUI,
+`tools/cohesix-py`, and raw/REST performance scripts were reviewed. Existing
+transport, snapshot schema, namespace, policy, role, and benchmark contracts
+remain unchanged. The mount now uses uncached reads to preserve remote errors
+and changing content. GPU snapshot seeds initialize append logs once per
+generation; authorized append operations remain the control update path.
+Neither inventory nor an ACTIVE record proves host execution, TTL enforcement,
+revocation, or a target Worker completion.

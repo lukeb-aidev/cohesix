@@ -3,6 +3,7 @@
 # Copyright 2026 Lukas Bower
 # SPDX-License-Identifier: Apache-2.0
 [workspace]
+exclude = ["third_party/fuser"]
 members = [
     "apps/cohesix-proto",
     "apps/console-ack-wire",
@@ -93,4 +94,5 @@ worker-task-abi = { path = "crates/worker-task-abi" }
 console-network-abi = { path = "crates/console-network-abi" }
 
 [patch.crates-io]
+fuser = { path = "third_party/fuser" }
 sel4-sys = { path = "crates/sel4-sys" }

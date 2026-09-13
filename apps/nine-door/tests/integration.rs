@@ -399,6 +399,44 @@ fn gpu_bridge_publish_installs_models_and_schema() {
 }
 
 #[test]
+fn gpu_inventory_refresh_preserves_control_until_generation_changes() {
+    let server = NineDoor::new();
+    let mut topology = gpu_bridge_host::GpuBridge::mock()
+        .serialise_namespace()
+        .expect("fixture inventory");
+    topology.identity.epoch = 7;
+    topology.identity.sequence = 1;
+    topology.identity.observed_unix_ms = 1;
+    server
+        .install_gpu_nodes(&topology)
+        .expect("initial inventory");
+    let mut queen = attach_queen(&server);
+    let lease_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "lease".to_owned()];
+    let status_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "status".to_owned()];
+    write_queen_command(
+        &mut queen,
+        "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":128,\"streams\":1,\"ttl_s\":30,\"priority\":0}}\n",
+    );
+    let lease = read_all(&mut queen, &lease_path);
+    assert!(lease.contains("\"state\":\"ACTIVE\""));
+    let status = read_all(&mut queen, &status_path);
+    topology.identity.sequence = 2;
+    server
+        .install_gpu_nodes(&topology)
+        .expect("inventory refresh");
+    assert_eq!(read_all(&mut queen, &lease_path), lease);
+    assert_eq!(read_all(&mut queen, &status_path), status);
+
+    topology.identity.epoch = 8;
+    topology.identity.sequence = 1;
+    server
+        .install_gpu_nodes(&topology)
+        .expect("new publisher generation");
+    assert!(read_all(&mut queen, &lease_path).is_empty());
+    assert!(read_all(&mut queen, &status_path).is_empty());
+}
+
+#[test]
 fn gpu_job_write_requires_utf8() {
     let server = NineDoor::new();
     server.register_ticket_secret(Role::WorkerGpu, "gpu-secret");

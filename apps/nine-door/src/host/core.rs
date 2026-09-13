@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken, TicketVerb};
-use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
+use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot, GpuSnapshotIdentity};
 use log::{debug, info, trace};
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
@@ -2299,6 +2299,7 @@ struct ControlPlane {
     default_budget: BudgetSpec,
     services: HashMap<String, Vec<String>>,
     gpu_nodes: HashSet<String>,
+    gpu_publisher: Option<GpuSnapshotIdentity>,
     active_leases: HashMap<String, String>,
     gpu_bridge: GpuBridgeReceiver,
     schedule: ScheduleState,
@@ -2349,6 +2350,7 @@ impl ControlPlane {
             default_budget: BudgetSpec::default_heartbeat(),
             services: HashMap::new(),
             gpu_nodes: HashSet::new(),
+            gpu_publisher: None,
             active_leases: HashMap::new(),
             gpu_bridge: GpuBridgeReceiver::new(GPU_BRIDGE_MAX_BYTES),
             schedule: ScheduleState::new(ScheduleControlConfig::default(), observe.proc_schedule),
@@ -2533,6 +2535,11 @@ impl ControlPlane {
     }
 
     fn install_gpu_nodes(&mut self, topology: &GpuNamespaceSnapshot) -> Result<(), NineDoorError> {
+        let preserve_control = self.gpu_publisher.as_ref().is_some_and(|current| {
+            current.source_id == topology.identity.source_id
+                && current.source_mode == topology.identity.source_mode
+                && current.epoch == topology.identity.epoch
+        });
         for node in &topology.nodes {
             self.namespace.set_gpu_node(
                 &node.id,
@@ -2540,12 +2547,15 @@ impl ControlPlane {
                 node.ctl_payload.as_bytes(),
                 node.lease_payload.as_bytes(),
                 node.status_payload.as_bytes(),
+                preserve_control && self.gpu_nodes.contains(&node.id),
             )?;
             self.gpu_nodes.insert(node.id.clone());
         }
         self.namespace.set_gpu_models(&topology.models)?;
         self.namespace
             .set_gpu_telemetry_schema(&topology.telemetry_schema)?;
+        self.gpu_nodes = topology.nodes.iter().map(|node| node.id.clone()).collect();
+        self.gpu_publisher = Some(topology.identity.clone());
         Ok(())
     }
 

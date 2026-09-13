@@ -2478,6 +2478,7 @@ impl Namespace {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_gpu_node(
         &mut self,
         gpu_id: &str,
@@ -2485,15 +2486,29 @@ impl Namespace {
         ctl: &[u8],
         lease: &[u8],
         status: &[u8],
+        preserve_control: bool,
     ) -> Result<(), NineDoorError> {
         let root = vec!["gpu".to_owned()];
         let base = vec!["gpu".to_owned(), gpu_id.to_owned()];
+        let mut info_path = base.clone();
+        info_path.push("info".to_owned());
+        let info_limit = info
+            .len()
+            .checked_add(1)
+            .and_then(|len| u32::try_from(len).ok())
+            .ok_or_else(|| NineDoorError::protocol(ErrorCode::TooBig, "GPU info is too large"))?;
+        let preserve_control = preserve_control
+            && self
+                .read(&info_path, 0, info_limit)
+                .is_ok_and(|current| current == info);
         self.ensure_dir(&root, gpu_id)?;
         self.set_read_only_file(&base, "info", info)?;
-        self.set_append_only_file(&base, "ctl", ctl)?;
-        self.set_append_only_file(&base, "lease", lease)?;
-        self.set_append_only_file(&base, "status", status)?;
-        self.set_append_only_file(&base, "job", b"")?;
+        if !preserve_control {
+            self.set_append_only_file(&base, "ctl", ctl)?;
+            self.set_append_only_file(&base, "lease", lease)?;
+            self.set_append_only_file(&base, "status", status)?;
+            self.set_append_only_file(&base, "job", b"")?;
+        }
         Ok(())
     }
 

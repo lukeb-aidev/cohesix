@@ -97,6 +97,14 @@ After the accepted TTL, it atomically withdraws the provider generation and
 returns to unavailable state. Concurrent publishers must be serialized because
 the bridge control path is single-writer.
 
+Within the same unexpired publisher epoch, refreshing an unchanged GPU id and
+info descriptor preserves its `ctl`, `lease`, and `status` append logs. The
+snapshot payloads seed those logs when the device generation is first installed;
+subsequent control changes use their authorized append paths. An absent device,
+changed descriptor, publisher source/mode/epoch change, or expired generation
+starts fresh logs. Inventory refresh is not a control-record reset or a lease
+renewal. The lease record still does not enforce hardware lifetime or revocation.
+
 `coh peft activate` and `coh peft rollback` commit the local registry, then use
 this snapshot channel to publish it. Their Rust library helpers, the ticket
 agent, and Python's `peft_activate`/`peft_rollback` report the host pointer

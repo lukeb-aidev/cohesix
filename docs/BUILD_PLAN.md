@@ -5709,7 +5709,7 @@ Deliverables:
 
 **Why now (gateway readiness at 1k scale):** `hive-gateway` now enforces request-auth at the REST edge for mutating paths. Any host tool that can route through REST must attach request-auth consistently or it becomes a brittle outlier in multi-tool, high-concurrency deployments.
 
-**Status:** Complete - request-auth parity is implemented across REST-capable host tools, `coh mount` REST correctness fixes are landed, request-auth regression coverage is in place, and TCP console auth deadline behavior has been reviewed/aligned for remote tunnel usage.
+**Status:** Reopened for `m25d-fuse-owner-mount-restoration`, discovered during the Milestone 26e release burn-in. Existing request-auth, namespace, and TCP authentication contracts remain in force; restoration is limited to the incompatible FUSE startup options, macFUSE mount API selection, and their native host validation.
 
 ## Goal
 Deliver request-auth parity across all REST-capable host tools so gateway mode is predictable, secure, and low-friction:
@@ -5749,6 +5749,24 @@ Deliver request-auth parity across all REST-capable host tools so gateway mode i
 
 ## Task Breakdown
 ```
+Title/ID: m25d-fuse-owner-mount-restoration
+Milestone: Reopened Milestone 25d — REST Request-Auth Parity Across Host Tools / owner-only FUSE startup restoration; discovered under Milestone 26e / m26e-host-integration-dependency-contract
+Goal: Restore native Mac and Linux FUSE startup without broadening host access or changing Cohesix namespace authority.
+Inputs: apps/coh/src/mount.rs, fuser 0.18.0 owner-access contract, the exact Pi GENET burn-in image, MacFUSE 5.3.3, Linux FUSE, and retained failed mount evidence.
+Changes:
+  - apps/coh/src/mount.rs — retain explicit Owner access and ordinary session cleanup, remove the incompatible AutoUnmount option, preserve the private-mount invariant in a focused regression, and use uncached reads so a zero-length metadata fallback cannot conceal live content or a backend refusal.
+  - Cargo.toml, apps/coh/Cargo.toml, Cargo.lock, third_party/fuser — pin the unchanged fuser 0.18.0 runtime with a documented build-script patch selecting its existing libfuse3 adapter on macOS; preserve the macFUSE protocol ABI and default Linux mount implementation.
+  - docs/HOST_TOOLS.md — document host-user privacy, the macFUSE 5 library requirement, and normal/disconnected-mount cleanup.
+  - Compatibility review: all coh mount backends share the corrected configuration. cohsh, hive-gateway, gpu-bridge-host, host-sidecar-bridge, host-ticket-agent, cas-tool, SwarmUI, tools/cohesix-py, and performance benchmark scripts keep their existing wire, policy, namespace, request-auth, and evidence contracts; no changes are required on those surfaces.
+Commands:
+  - cargo test --locked -p coh --features fuse
+  - cargo clippy --locked -p coh --features fuse --all-targets -- -D warnings
+  - cargo build --locked --release -p coh --features fuse,nvml
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks: focused host tests and exact native builds pass; both real host mounts read the Pi-backed namespace and unmount cleanly while owner-only access is retained. Failed pre-repair evidence remains distinct from the repaired diagnostic candidate and timed run.
+Deliverables: bounded FUSE repair, native Mac/Linux command and mount evidence, and compatibility review. Broader release qualification is unchanged.
+
 Title/ID: m25d-rest-auth-parity-host-tools
 Goal: Ensure every REST-capable host tool resolves and attaches gateway request-auth headers.
 Inputs: apps/coh/src/main.rs, apps/coh/src/rest.rs, apps/cas-tool/src/main.rs, apps/gpu-bridge-host/src/main.rs.
@@ -12628,6 +12646,21 @@ Commands:
   - scripts/check-generated.sh
 Checks: ring/control saturation, duplicate sequence, forged role/slot/epoch/supervisor-generation/cap-generation, two sequential same-role generations with a simultaneous second-live-slot refusal, coalesced notifications, durable-completion publish/signal races, READY timeout, construction failure at every phase, ordinary terminal fault, allowlisted timeout recovery, fault before READY/during IPC, attempted forbidden blocking send, dropped telemetry, late completion/receipt, kill/fault repetition, generation exhaustion, and repeated maximum-slot churn fail or recover deterministically with no orphan namespace state, cap, mapping, pending record/signal, Reply, SC, or executable TCB; PEFT export/import/activate/rollback receipts prove the exact host-ticket-result-to-supervisor-to-WorkerLora mapping without moving host work into the VM.
 Deliverables: Real transactional Heartbeat/GPU/LoRA tasks and complete per-instance 26e containment/reclamation; WorkerBus remains honestly model-only.
+
+Title/ID: m26e-gpu-refresh-control-retention
+Milestone: Milestone 26e — host integration / m26e-host-integration-dependency-contract; release burn-in defect restoration
+Goal: Keep admitted GPU control records readable during ordinary inventory refreshes from the same live publisher generation.
+Inputs: exact Pi GENET burn-in 8c050a0aaf7b image, continuous real Orin inventory, 30-second GPU lease lost after a six-second observation interval, and WorkerGpu READY records.
+Changes:
+  - apps/root-task/src/ninedoor.rs — preserve bounded ctl/lease/status append logs for an unchanged GPU identity within the same unexpired publisher epoch; withdrawal, changed device/source/epoch, expiry and stale-snapshot rejection remain fail-closed.
+  - apps/nine-door/src/host/{core.rs,namespace.rs} — preserve the corresponding host-model journal semantics without claiming target execution or provider freshness acceptance.
+  - docs/GPU_NODES.md and docs/HOST_TOOLS.md — describe inventory seeds versus appended control history and record complete host-tool, Python SDK and benchmark compatibility review.
+Commands:
+  - cargo test --locked -p nine-door --test integration gpu_inventory_refresh
+  - cargo test --locked -p root-task --lib --features driver-tests-pi4 gpu_snapshot
+  - exact-profile Pi release build, image-bound RAM boot, first raw GENET gate, live refresh/lease/Worker and FUSE checks
+Checks: successful same-generation refresh preserves control bytes; changed generation/device, withdrawal, expiry and rejected updates cannot retain or create stale authority. No new CUDA executor, lease enforcement claim, schema, namespace, unsafe code or performance threshold.
+Deliverables: material retention repair with focused host contracts and fresh Pi evidence before a revised timed attempt.
 
 Title/ID: m26e-host-integration-dependency-contract
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / generated host-integration and use-case dependency contract

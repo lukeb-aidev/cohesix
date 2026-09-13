@@ -6808,6 +6808,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:third_party/fuser/README.md",
+      "kind": "tracked_surface",
+      "path": "third_party/fuser/README.md",
+      "implementation_class": "contract",
+      "owner": "upstream-source",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "third-party source checkout; rule=third-party-readmes",
+      "package_disposition": "source_reference_only",
+      "evidence_requirement": "cannot replace Cohesix target evidence",
+      "current_observed_mode": "upstream_reference_document",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:third_party/raspberry-pi-firmware/v1.50/firmware/cyw43455-linux-capture/README.md",
       "kind": "tracked_surface",
       "path": "third_party/raspberry-pi-firmware/v1.50/firmware/cyw43455-linux-capture/README.md",

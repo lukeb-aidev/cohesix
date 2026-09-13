@@ -261,10 +261,10 @@ pub fn mock_mount(at: &Path, policy: &CohPolicy) -> Result<()> {
 #[cfg(any(feature = "fuse", target_os = "linux"))]
 fn fuse_config() -> fuser::Config {
     let mut config = fuser::Config::default();
-    config.mount_options = vec![
-        fuser::MountOption::FSName("coh".to_owned()),
-        fuser::MountOption::AutoUnmount,
-    ];
+    // Keep host access private. fuser rejects AutoUnmount with Owner access;
+    // explicit unmount and ordinary session-drop cleanup remain available.
+    config.acl = fuser::SessionACL::Owner;
+    config.mount_options = vec![fuser::MountOption::FSName("coh".to_owned())];
     config
 }
 
@@ -613,7 +613,12 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
             .lock()
             .expect("handle lock")
             .insert(handle, file_handle);
-        reply.opened(fuser::FileHandle(handle), fuser::FopenFlags::empty());
+        // Remote append streams have changing lengths. Always ask the server
+        // for bytes so a cached zero length cannot hide content or an error.
+        reply.opened(
+            fuser::FileHandle(handle),
+            fuser::FopenFlags::FOPEN_DIRECT_IO,
+        );
     }
 
     fn read(
@@ -1068,7 +1073,12 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
             .lock()
             .expect("handle lock")
             .insert(handle, file_handle);
-        reply.opened(fuser::FileHandle(handle), fuser::FopenFlags::empty());
+        // Preserve current remote content and errors even when metadata could
+        // not determine a length (for example, a write-only control file).
+        reply.opened(
+            fuser::FileHandle(handle),
+            fuser::FopenFlags::FOPEN_DIRECT_IO,
+        );
     }
 
     fn read(
@@ -1251,6 +1261,17 @@ impl InodeTable {
 #[cfg(all(test, any(feature = "fuse", target_os = "linux")))]
 mod access_fuse_tests {
     use super::*;
+
+    #[test]
+    fn private_mount_preserves_owner_access_and_valid_cleanup_options() {
+        let config = fuse_config();
+        assert_eq!(config.acl, fuser::SessionACL::Owner);
+        // Upstream requires broader access for AutoUnmount. A private mount
+        // must use ordinary session cleanup instead of enabling that option.
+        assert!(!config
+            .mount_options
+            .contains(&fuser::MountOption::AutoUnmount));
+    }
 
     #[derive(Debug, Clone)]
     enum DummyRead {

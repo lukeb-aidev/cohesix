@@ -5896,6 +5896,14 @@ impl GpuState {
         &mut self,
         snapshot: GpuBridgeSnapshot,
     ) -> Result<(), NineDoorBridgeError> {
+        self.apply_bridge_snapshot_at(snapshot, crate::hal::timebase().now_ms())
+    }
+
+    fn apply_bridge_snapshot_at(
+        &mut self,
+        mut snapshot: GpuBridgeSnapshot,
+        now_ms: u64,
+    ) -> Result<(), NineDoorBridgeError> {
         if let Some(current) = self.accepted_identity.as_ref() {
             if current.source_id == snapshot.identity.source_id
                 && (snapshot.identity.epoch < current.epoch
@@ -5916,11 +5924,30 @@ impl GpuState {
         if snapshot.telemetry_schema.len() > GPU_TELEMETRY_SCHEMA_MAX_BYTES {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
+        let same_live_publisher = self.accepted_identity.as_ref().is_some_and(|current| {
+            current.source_id == snapshot.identity.source_id
+                && current.source_mode == snapshot.identity.source_mode
+                && current.epoch == snapshot.identity.epoch
+                && self.expires_at_ms.is_some_and(|expires| now_ms < expires)
+        });
+        if same_live_publisher {
+            for next in &mut snapshot.entries {
+                if let Some(current) = self.entries.iter_mut().find(|current| {
+                    current.id == next.id && current.info_payload == next.info_payload
+                }) {
+                    // Inventory initializes these append logs once per device
+                    // generation. A refresh cannot erase admitted control work.
+                    // All fallible validation precedes these ownership moves.
+                    core::mem::swap(&mut next.ctl_log, &mut current.ctl_log);
+                    core::mem::swap(&mut next.lease_log, &mut current.lease_log);
+                    core::mem::swap(&mut next.status_log, &mut current.status_log);
+                }
+            }
+        }
         self.entries = snapshot.entries;
         self.models = snapshot.models;
         self.models_active_log = active_line.into_bytes();
         self.telemetry_schema = snapshot.telemetry_schema;
-        let now_ms = crate::hal::timebase().now_ms();
         self.expires_at_ms = Some(now_ms.saturating_add(snapshot.identity.ttl_ms));
         self.accepted_identity = Some(snapshot.identity);
         Ok(())
@@ -11506,6 +11533,77 @@ mod tests {
             .apply_bridge_snapshot(empty_gpu_snapshot(2, 100))
             .expect_err("replayed snapshot must fail");
         assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    fn gpu_snapshot_with_control_seeds(sequence: u64) -> GpuBridgeSnapshot {
+        let mut snapshot = empty_gpu_snapshot(sequence, 15_000);
+        snapshot.entries.push(GpuEntry {
+            id: "GPU-live".to_owned(),
+            info_payload: "{\"id\":\"GPU-live\"}".to_owned(),
+            ctl_log: b"control seed\n".to_vec(),
+            lease_log: Vec::new(),
+            status_log: Vec::new(),
+        });
+        snapshot
+    }
+
+    #[test]
+    fn gpu_snapshot_refresh_preserves_control_records() {
+        let mut gpu = GpuState::new(true);
+        gpu.apply_bridge_snapshot_at(gpu_snapshot_with_control_seeds(1), 100)
+            .expect("initial inventory");
+        let entry = gpu.entry_mut("GPU-live").expect("GPU exists");
+        entry.ctl_log.extend_from_slice(b"admitted command\n");
+        entry.lease_log.extend_from_slice(b"ACTIVE worker-1\n");
+        entry.status_log.extend_from_slice(b"START job-1\n");
+        let mut refresh = gpu_snapshot_with_control_seeds(2);
+        refresh.entries[0].lease_log = b"publisher seed\n".to_vec();
+        gpu.apply_bridge_snapshot_at(refresh, 6_100)
+            .expect("same live generation");
+        let entry = gpu.entry("GPU-live").expect("retained GPU");
+        assert_eq!(entry.ctl_log, b"control seed\nadmitted command\n");
+        assert_eq!(entry.lease_log, b"ACTIVE worker-1\n");
+        assert_eq!(entry.status_log, b"START job-1\n");
+        assert!(gpu
+            .apply_bridge_snapshot_at(gpu_snapshot_with_control_seeds(2), 6_101)
+            .is_err());
+        assert_eq!(
+            gpu.entry("GPU-live").unwrap().lease_log,
+            b"ACTIVE worker-1\n"
+        );
+    }
+
+    #[test]
+    fn gpu_snapshot_generation_boundaries_drop_control_records() {
+        for boundary in ["epoch", "source", "mode", "device", "expired", "removed"] {
+            let mut gpu = GpuState::new(true);
+            gpu.apply_bridge_snapshot_at(gpu_snapshot_with_control_seeds(1), 100)
+                .expect("initial inventory");
+            let entry = gpu.entry_mut("GPU-live").expect("GPU exists");
+            entry.lease_log.extend_from_slice(b"ACTIVE old-worker\n");
+            entry.status_log.extend_from_slice(b"START old-job\n");
+            let mut refresh = gpu_snapshot_with_control_seeds(2);
+            let mut now_ms = 200;
+            match boundary {
+                "epoch" => refresh.identity.epoch += 1,
+                "source" => refresh.identity.source_id = "replacement-host".to_owned(),
+                "mode" => refresh.identity.source_mode = "fixture".to_owned(),
+                "device" => refresh.entries[0].info_payload = "changed device".to_owned(),
+                "expired" => now_ms = 15_100,
+                "removed" => refresh.entries.clear(),
+                _ => unreachable!(),
+            }
+            gpu.apply_bridge_snapshot_at(refresh, now_ms)
+                .expect("new inventory boundary");
+            if boundary == "removed" {
+                assert!(gpu.entries.is_empty());
+            } else {
+                let entry = gpu.entry("GPU-live").expect("new GPU generation");
+                assert!(entry.lease_log.is_empty(), "{boundary}");
+                assert!(entry.status_log.is_empty(), "{boundary}");
+                assert_eq!(entry.ctl_log, b"control seed\n", "{boundary}");
+            }
+        }
     }
 
     #[test]
