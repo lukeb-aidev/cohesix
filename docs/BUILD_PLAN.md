@@ -146,7 +146,7 @@ manual availability, profile selection, implementation, and target proof.
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
-| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | In Progress — QEMU-first |
+| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Next — 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Next — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Next — 1.1.0-beta (Release A) Jetson/Linux reference slice |
@@ -9187,14 +9187,11 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 ## Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation <a id="26e"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress — QEMU-first implementation and qualification are
-active now that Milestone 26d is complete. Lightweight, non-claiming Pi 4
-checkpoints occur at the architectural boundaries required by
-`docs/TEST_PLAN.md`; they do not bypass the QEMU-first task order or qualify a
-release. Full Pi 4 qualification and fresh-hardware acceptance remain deferred
-until every required host and four-core QEMU task gate below passes. Milestone
-26e cannot close, and no Worker-runtime release acceptance may be emitted,
-until the later exact-image Pi 4 evidence also passes.
+**Status:** Complete — release-owner-approved closure for 1.0.0-beta on
+2026-09-14. The Stage 05 decision remains `PASS_WITH_RESIDUAL_RISK` under the
+approved [evidence carry-forward](audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
+and [DD30 release waiver](audit/DD30_RELEASE_WAIVER.toml), preserving the
+original source/target evidence identities and accepted residual risks.
 
 **Why now (userspace TCB reduction):** Milestone 26d establishes honest
 seL4 16 kernel/profile truth and records that NineDoor parsing, TCP/smoltcp,
@@ -19238,8 +19235,8 @@ After Milestone 28c:
 ## Milestone 29 — Bounded VM-Local Persistence: Spool Stores + Settings <a id="29"></a>
 [Milestones](#Milestones)
 
-**Status:** Conditional Release C edge-depth track. Milestone 26e is still in
-progress. M29 is not a Release A or Release B prerequisite. It may be activated
+**Status:** Conditional Release C edge-depth track. Milestone 26e is complete.
+M29 is not a Release A or Release B prerequisite. It may be activated
 for a selected profile only when an accepted user or resilience requirement
 shows that host-side durable run/evidence storage is insufficient. Any selected
 Pi persistence phase still waits for the exact QEMU/Pi SMP+MCS topology,
