@@ -10,6 +10,57 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 #[test]
+fn evidence_timeline_preserves_structured_and_legacy_audit_errors() -> Result<()> {
+    let temp = TempDir::new()?;
+    std::fs::create_dir(temp.path().join("audit"))?;
+    let records = [
+        serde_json::json!({"code": "Permission", "message": "EPERM"}),
+        serde_json::json!("legacy refusal"),
+        Value::Null,
+    ];
+    let journal = records
+        .into_iter()
+        .enumerate()
+        .map(|(index, error)| {
+            serde_json::json!({
+                "seq": index + 1, "kind": "host-control",
+                "path": "/queen/lifecycle/ctl", "payload": "drain",
+                "outcome": "err", "error": error, "role": "queen",
+                "ticket": "sha256:fixture"
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(temp.path().join("audit/journal"), journal)?;
+    let summary = write_timeline(temp.path())?;
+    let output = std::fs::read_to_string(summary.ndjson_path)?;
+    let events = output
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["error"], "Permission: EPERM");
+    assert_eq!(events[1]["error"], "legacy refusal");
+    assert!(events[2].get("error").is_none());
+    assert_eq!(events[0]["outcome"], "err");
+    Ok(())
+}
+
+#[test]
+fn evidence_timeline_rejects_malformed_structured_audit_error() -> Result<()> {
+    let temp = TempDir::new()?;
+    std::fs::create_dir(temp.path().join("audit"))?;
+    std::fs::write(
+        temp.path().join("audit/journal"),
+        r#"{"seq":1,"kind":"host-control","path":"/queen/lifecycle/ctl","payload":"drain","outcome":"err","error":{"code":1,"message":"EPERM"},"role":"queen","ticket":"sha256:fixture"}"#,
+    )?;
+    assert!(write_timeline(temp.path()).is_err());
+    assert!(!temp.path().join("timeline.ndjson").exists());
+    Ok(())
+}
+
+#[test]
 fn evidence_timeline_is_deterministic_for_fixed_pack() -> Result<()> {
     let temp = TempDir::new().expect("tempdir");
     let pack = temp.path();

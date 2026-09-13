@@ -5894,7 +5894,7 @@ Deliverables:
 
 **Why now (buyability + integration):** Cohesix has a scale-capable, request-authenticated gateway path (25b–25d) and Python orchestration (25c). The highest leverage remaining adoption blocker is not new VM semantics; it is the absence of deterministic, auditor-friendly evidence artifacts and turnkey integration patterns that reuse existing control surfaces without introducing new protocols.
 
-**Status:** Reopened for `m25e-evidence-export-failure-retention` and the separately user-authorized `m25e-session-evidence-byte-budget`, both discovered during the Milestone 26e release burn-in. The first restores partial-summary retention, nonzero capture failures and existing bounded CAT framing for long AuditFS JSON. The second raises the finite default session allowance to 8 MiB for full evidence capture and shared operator traffic. Per-read bounds, retained-log coverage, redaction, rate/cursor limits and transport contracts remain unchanged.
+**Status:** Reopened for `m25e-evidence-timeline-error-records`, `m25e-evidence-export-failure-retention` and the separately user-authorized `m25e-session-evidence-byte-budget`, discovered during the Milestone 26e release burn-in. Timeline restoration accepts emitted structured errors while retaining the existing output schema. Export restoration restores partial-summary retention, nonzero capture failures and existing bounded CAT framing for long AuditFS JSON. The budget task raises the finite default session allowance to 8 MiB for full evidence capture and shared operator traffic. Per-read bounds, retained-log coverage, redaction, rate/cursor limits and transport contracts remain unchanged.
 
 ## Goal
 Deliver high-impact, low-risk adoption accelerators that remain host-side and strictly protocol-faithful:
@@ -5941,6 +5941,22 @@ Changes:
 Commands: cargo test -p coh-rtc; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; native host builds; fresh exact-image Pi raw entry and full evidence export.
 Checks: 8 MiB is finite and exceeds three worst-case retained logs plus 2 MiB operator traffic; smaller explicit ticket values survive parsing and existing quota refusal tests still pass. No rate, cursor, payload, role or namespace limit increases.
 Deliverables: regenerated contracts, configuration regression, native build identities, new frozen burn-in profile and live export evidence. No UEFI activation or release acceptance claim.
+
+Title/ID: m25e-evidence-timeline-error-records
+Milestone: Reopened Milestone 25e — Evidence Packs + Integration Kits; discovered during Milestone 26e release burn-in maintenance revalidation
+Goal: Export a usable incident timeline when AuditFS includes correctly refused operations.
+Inputs: The captured Pi maintenance case contains error={code:Permission,message:EPERM}; the existing timeline reader only accepted string errors and rejected the pack.
+Changes:
+  - apps/coh/src/evidence_timeline.rs — accept canonical structured errors and legacy strings; normalize objects to the unchanged timeline-v1 error string while retaining the original pack.
+  - apps/coh/tests/evidence_timeline.rs — verify structured, legacy and null errors, retained refusal outcomes, and deterministic rejection of malformed objects.
+  - docs/HOST_TOOLS.md — document input compatibility and unchanged timeline output.
+Commands:
+  - cargo test -p coh --test evidence_timeline
+  - cargo build --release -p coh --features fuse,nvml
+  - coh evidence timeline --input <captured-maintenance-case>
+Checks: Native Mac and Linux readers consume the unchanged captured case, preserve all refusal events, and keep malformed input failing. The installed Python CI/SIEM consumers validate that same case without another target workload. All required repository checks pass before merge.
+Compatibility review: Reviewed cohsh, coh, Hive Gateway/REST, gpu-bridge-host, host-ticket-agent, host-sidecar-bridge, cas-tool, SwarmUI, cohesix-py, and raw/REST benchmark scripts. Only coh timeline and its documentation need changes; Python SIEM already preserves object-valued errors, and the library/CI consumer parse JSON generically. Target producers, generated contracts, timeline schema, other binaries, SDK wheel, benchmark inputs and report schemas remain unchanged. No Pi rebuild or full burn-in rerun is needed for this host-only reader repair.
+Deliverables: Bounded compatibility repair, focused tests, two native readers and offline validation of the original captured failure evidence.
 
 Title/ID: m25e-evidence-export-failure-retention
 Milestone: Milestone 25e — Evidence Packs + Integration Kits; discovered in Milestone 26e release burn-in

@@ -34,9 +34,25 @@ struct AuditJournalEntry {
     payload: String,
     outcome: String,
     #[serde(default)]
-    error: Option<String>,
+    error: Option<AuditError>,
     role: String,
     ticket: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum AuditError {
+    Message(String),
+    Structured { code: String, message: String },
+}
+
+impl AuditError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Message(message) => message,
+            Self::Structured { code, message } => format!("{code}: {message}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -183,7 +199,7 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 lease_seq: None,
                 path: Some(entry.path),
                 outcome: Some(entry.outcome),
-                error: entry.error,
+                error: entry.error.map(AuditError::into_message),
                 role: Some(entry.role),
                 ticket: Some(entry.ticket),
                 payload: Some(entry.payload),

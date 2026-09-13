@@ -593,6 +593,12 @@ The evidence-pack inventory, redaction behavior, missing-path semantics, and
 offline CI/SIEM contract are defined in
 [OPERATOR_RECIPES.md#evidence-packs-ci-and-siem](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
 
+Timeline import accepts AuditFS errors as either legacy strings or the emitted
+`{"code":"Permission","message":"EPERM"}` object. Structured errors become
+`code: message` in the existing timeline-v1 string field; the original object
+remains in the evidence pack. Null or absent errors remain absent in the timeline,
+and malformed error shapes fail import. Refused actions retain their `err` outcome.
+
 `coh mount` remains in the foreground and is private to the mounting host user.
 The macOS build requires macFUSE 5 with its `fuse3` pkg-config/library package;
 the pinned fuser mount-selection patch is documented in
