@@ -80,6 +80,161 @@ fn readonly_inspection_retains_unknown_capabilities_without_health_inference() -
     Ok(())
 }
 
+struct ProcInventory {
+    files: ReadOnly,
+    lease_ids: Vec<String>,
+    advertise_spool: bool,
+    deny_proc: bool,
+}
+
+impl CohAccess for ProcInventory {
+    fn list_dir(&mut self, path: &str, maximum: usize) -> Result<Vec<String>> {
+        match path {
+            "/proc" if self.deny_proc => Err(anyhow!("EPERM")),
+            "/proc" => {
+                let mut entries = vec!["boot".into(), "root".into(), "lease".into()];
+                if self.advertise_spool {
+                    entries.push("spool".into());
+                }
+                Ok(entries)
+            }
+            "/proc/lease" => Ok(vec!["by-id".into()]),
+            "/proc/lease/by-id" => Ok(self.lease_ids.clone()),
+            _ => self.files.list_dir(path, maximum),
+        }
+    }
+
+    fn read_file(&mut self, path: &str, maximum: usize) -> Result<Vec<u8>> {
+        if matches!(path, "/proc/lease/by-id" | "/proc/spool/status") {
+            return Err(anyhow!(
+                "CAT failed: ERR CAT reason=policy detail=invalid-path"
+            ));
+        }
+        self.files.read_file(path, maximum)
+    }
+
+    fn write_append(&mut self, _: &str, _: &[u8]) -> Result<usize> {
+        panic!("operator inventory attempted a write")
+    }
+}
+
+#[test]
+fn advertised_proc_inventory_preserves_empty_and_populated_lease_directories() -> Result<()> {
+    for lease_ids in [vec![], vec!["lease-3".to_owned()]] {
+        let mut files = source();
+        files.0.insert(
+            "/proc/lease/by-id/lease-3".into(),
+            b"id=lease-3 state=active\n".to_vec(),
+        );
+        let mut client = ProcInventory {
+            files,
+            lease_ids: lease_ids.clone(),
+            advertise_spool: false,
+            deny_proc: false,
+        };
+        let snapshot = operator::inspect_live(&mut client, "live-console")?;
+        let directory = snapshot
+            .observations
+            .iter()
+            .find(|item| item.path == "/proc/lease/by-id")
+            .expect("lease directory observation");
+        assert_eq!(directory.status, Availability::Observed);
+        assert_eq!(
+            directory.content.as_deref(),
+            Some(if lease_ids.is_empty() {
+                ""
+            } else {
+                "lease-3\n"
+            })
+        );
+        let spool = snapshot
+            .observations
+            .iter()
+            .find(|item| item.path == "/proc/spool/status")
+            .expect("optional spool observation");
+        assert_eq!(spool.status, Availability::Missing);
+        let output = TempDir::new()?;
+        let summary = coh::evidence::export_pack(
+            &mut client,
+            &coh::policy::CohPolicy::from_generated(),
+            &coh::evidence::build_local_bounds(),
+            &coh::evidence::EvidencePackSpec {
+                out_dir: output.path().to_owned(),
+                with_telemetry: false,
+            },
+            &mut CohAudit::new(),
+        )?;
+        assert_eq!(summary.errors, 0);
+        let inventory: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.path().join("summary.json"))?)?;
+        let saved_directory = inventory["items"]
+            .as_array()
+            .expect("inventory items")
+            .iter()
+            .find(|item| item["path"] == "/proc/lease/by-id")
+            .expect("saved lease directory");
+        assert_eq!(saved_directory["verb"], "LS");
+        assert_eq!(
+            saved_directory["saved_as"],
+            "namespace/proc/lease/by-id/.listing"
+        );
+        assert_eq!(
+            fs::read_to_string(output.path().join("namespace/proc/lease/by-id/.listing"))?,
+            directory
+                .content
+                .as_deref()
+                .expect("observed directory bytes")
+        );
+        assert!(operator::inspect_pack(output.path())?.violations.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn failed_parent_listing_or_advertised_node_preserves_read_errors() -> Result<()> {
+    for (deny_proc, advertise_spool) in [(true, false), (false, true)] {
+        let mut client = ProcInventory {
+            files: source(),
+            lease_ids: vec![],
+            advertise_spool,
+            deny_proc,
+        };
+        let snapshot = operator::inspect_live(&mut client, "live-console")?;
+        let spool = snapshot
+            .observations
+            .iter()
+            .find(|item| item.path == "/proc/spool/status")
+            .expect("spool observation");
+        assert_eq!(spool.status, Availability::Error);
+        assert_eq!(spool.reason.as_deref(), Some("source-read-error"));
+    }
+    Ok(())
+}
+
+#[test]
+fn proc_inventory_count_is_bounded_before_deduplication() {
+    struct Oversized;
+    impl CohAccess for Oversized {
+        fn list_dir(&mut self, _: &str, _: usize) -> Result<Vec<String>> {
+            // The documented inventory ceiling is 682 entries, even when
+            // every supplied component repeats and the byte bound fits.
+            Ok(vec!["leaf".to_owned(); 683])
+        }
+        fn read_file(&mut self, _: &str, _: usize) -> Result<Vec<u8>> {
+            Err(anyhow!("not found"))
+        }
+        fn write_append(&mut self, _: &str, _: &[u8]) -> Result<usize> {
+            panic!("oversized inventory attempted a write")
+        }
+    }
+    assert_eq!(
+        operator::inspect_live(&mut Oversized, "live-console")
+            .expect_err("oversized directory must be rejected")
+            .to_string(),
+        "namespace-artifact-count"
+    );
+}
+
 #[test]
 fn canonical_pack_inspect_diff_roundtrip_is_readonly() -> Result<()> {
     let temp = TempDir::new()?;

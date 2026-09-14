@@ -174,18 +174,11 @@ pub fn export_pack<C: CohAccess>(
                 .observations
                 .iter()
                 .any(|other| other.path.starts_with(&format!("{}/", observation.path)))
-                || matches!(
-                    observation.path.as_str(),
-                    "/proc/root"
-                        | "/proc/lifecycle"
-                        | "/proc/9p/session"
-                        | "/proc/pressure"
-                        | "/proc/schedule"
-                        | "/proc/lease"
-                        | "/proc/attest"
-                );
+                || crate::operator::is_namespace_directory(&observation.path);
             let relative = if directory {
-                format!("namespace{}", observation.path)
+                // Keep each listing in a leaf so nested directories cannot
+                // collide with their parent's retained listing bytes.
+                format!("namespace{}/.listing", observation.path)
             } else {
                 strip_leading_slash(&observation.path).to_owned()
             };

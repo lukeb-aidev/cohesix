@@ -26,6 +26,7 @@ pub const MAX_FILES: usize = crate::MAX_DIR_LIST_BYTES / cohsh_core::MAX_PATH_LE
 pub const SNAPSHOT_SCHEMA: &str = "cohesix-evidence-pack/inspect-v1";
 
 const ROOTS: &[&str] = &[
+    "/proc",
     "/proc/boot",
     "/proc/lifecycle",
     "/proc/root",
@@ -37,6 +38,22 @@ const ROOTS: &[&str] = &[
     "/proc/lease",
     "/policy/rules",
 ];
+
+/// As-built directory nodes must retain their kind even when they are empty.
+pub(crate) fn is_namespace_directory(path: &str) -> bool {
+    matches!(
+        path,
+        "/proc"
+            | "/proc/lifecycle"
+            | "/proc/root"
+            | "/proc/9p/session"
+            | "/proc/pressure"
+            | "/proc/attest"
+            | "/proc/schedule"
+            | "/proc/lease"
+            | "/proc/lease/by-id"
+    )
+}
 
 /// A source observation, including unavailable and unrecognised source states.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,25 +162,41 @@ pub fn inspect_live<C: CohAccess + ?Sized>(client: &mut C, source_class: &str) -
     let mut observations = BTreeMap::new();
     let mut pending: BTreeSet<String> = ROOTS.iter().map(|p| (*p).to_owned()).collect();
     let mut remaining = MAX_BYTES;
+    let mut proc_children: Option<BTreeSet<String>> = None;
     while let Some(path) = pending.pop_first() {
         ensure!(
             observations.len() + pending.len() < MAX_FILES,
             "namespace-artifact-count"
         );
         validate_namespace_path(&path)?;
-        let directory = matches!(
-            path.as_str(),
-            "/proc/lifecycle"
-                | "/proc/root"
-                | "/proc/9p/session"
-                | "/proc/pressure"
-                | "/proc/attest"
-                | "/proc/schedule"
-                | "/proc/lease"
-        );
+        // A successful parent listing establishes optional-source absence.
+        // A denied or failed listing cannot turn a subsequent read error into
+        // absence, and the listing does not expand the selected root set.
+        if let Some(name) = path
+            .strip_prefix("/proc/")
+            .and_then(|p| p.split('/').next())
+        {
+            if proc_children
+                .as_ref()
+                .is_some_and(|names| !names.contains(name))
+            {
+                observations.insert(
+                    path.clone(),
+                    Observation {
+                        path,
+                        status: Availability::Missing,
+                        content: None,
+                        reason: Some("source-missing".to_owned()),
+                    },
+                );
+                continue;
+            }
+        }
+        let directory = is_namespace_directory(&path);
         if directory {
             match client.list_dir(&path, remaining.min(crate::MAX_DIR_LIST_BYTES)) {
                 Ok(mut entries) => {
+                    ensure!(entries.len() <= MAX_FILES, "namespace-artifact-count");
                     entries.sort();
                     entries.dedup();
                     let mut shape = String::new();
@@ -179,11 +212,16 @@ pub fn inspect_live<C: CohAccess + ?Sized>(client: &mut C, source_class: &str) -
                             pending.len() + observations.len() < MAX_FILES,
                             "namespace-artifact-count"
                         );
-                        pending.insert(child);
+                        if path != "/proc" {
+                            pending.insert(child);
+                        }
                         shape.push_str(&name);
                         shape.push('\n');
                     }
                     consume(&mut remaining, shape.len())?;
+                    if path == "/proc" {
+                        proc_children = Some(shape.lines().map(str::to_owned).collect());
+                    }
                     observations.insert(path.clone(), observed(&path, shape.as_bytes())?);
                 }
                 Err(error) => {

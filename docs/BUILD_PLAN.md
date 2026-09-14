@@ -13234,6 +13234,18 @@ After Milestone 27:
 
 ## Task Breakdown
 ```
+Title/ID: m27-live-operator-closure
+Milestone: Milestone 27 — Operator Utilities / live inspect and evidence-pack composition
+Status: In Progress
+Goal: Close fresh-Pi-discovered host collection defects without weakening missing/error or proof classifications.
+Changes:
+  - apps/coh/src/operator.rs + evidence.rs — use the bounded advertised /proc inventory for optional-root absence, preserve lease-ID directory semantics when empty, and retain nested directory listings in separate .listing leaves.
+  - apps/coh/tests/operator.rs — exercise empty/populated lease directories, absent optional roots, refused parent listings, advertised-node read failures, and pack round trips.
+  - docs/OPERATOR_EVIDENCE.md — document inventory-based availability and backward-readable listing storage.
+Checks: Fresh Pi TCP/REST capture composes with complete packs and byte-stable offline inspection/replay; actual read failures remain incomplete exports; old inventory-selected paths remain readable.
+Compatibility: Complete host-tool suite, Python SDK and benchmarks reviewed; inventory-based consumers need no schema or workload change. No target namespace, driver, scheduling, wire grammar or authority change.
+Deliverables: Host collector correction and separate exact-image live evidence.
+
 Title/ID: m27-build-evidence-blockers
 Milestone: Milestone 27 — Operator Utilities / restoration of build and evidence prerequisites; discovery in m27-attestation-verifier, restoring the exact-source invariant of m26e-worker-target-evidence-promotion
 Status: In Progress

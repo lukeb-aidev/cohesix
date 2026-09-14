@@ -1013,6 +1013,14 @@ into logged shell command strings.
 | `qemu` | 01-05 | Stage 03 builds one immutable artifact per unique manifest, content-binding all eight packaged host executables (`cas-tool`, `coh`, `cohsh`, `gpu-bridge-host`, `hive-gateway`, `host-sidecar-bridge`, `host-ticket-agent`, and `swarmui`), then uses a fresh boot for every regression group. Stage 04 reuses the validated default artifact but starts another fresh boot. Result manifests bind source, profile, manifest, image, scripts, boot identity, counts, and log hashes. |
 | `pi4` | 01-05 | Stage 03 requires `COHSH_TCP_HOST` or `COHSH_HOST` plus `TP_PI4_TARGET_EVIDENCE_FILE`; Stage 04 requires an existing gateway URL and evidence binding that gateway to the same boot/image. These stages yield only `pi4-transport`. `TP_PI4_HARDWARE_EVIDENCE_FILE`, when required, must validate the stronger hardware bundle and is never synthesized by the runner. |
 
+Declare the Pi TCP host, external gateway URL, client/policy overrides and
+external broker response-timeout settings before Stage 02, and preserve them
+through Stages 03–05. These selectors are part of target-stage input identity;
+introducing them only when a later stage needs them correctly invalidates the
+earlier context. The boot/image-bound target-evidence file may be supplied
+after the fresh image has booted. Keep the gateway stopped during direct TCP
+testing, then start it with those declared settings for Stage 04.
+
 A Pi Stage 03 run refuses loopback unless `TP_PI4_ALLOW_LOOPBACK=1` records an
 intentional tunnel. A Pi Stage 04 run without an existing gateway fails rather
 than creating misleading local-QEMU evidence.

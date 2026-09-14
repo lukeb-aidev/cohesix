@@ -34,6 +34,11 @@ unreadable captured files, malformed bounded inputs, and impossible known field
 values produce a nonzero exit. Optional absence alone does not. JSON and text
 carry the same observations, without a healthy/unhealthy label.
 
+The bounded `/proc` listing establishes which optional roots are advertised;
+an absent root is recorded as missing without issuing an invalid file read.
+A failed listing or a failed read of an advertised node remains an error.
+`/proc/lease/by-id` is a directory, including when it contains no active leases.
+
 `diff --left SOURCE --right SOURCE` accepts directories (optionally `pack:`),
 `tcp://host:port`, or HTTP(S) gateway URLs. It emits ordered exact field changes
 as JSON; missing values remain absent and object keys use JSON-pointer escaping.
@@ -50,6 +55,9 @@ byte counts, source classes, hashes, and `proof=none`. The pack adds an
 prints the final pack digest. This digest detects byte changes when compared
 with a trusted copy; it is not a signature. Captured inventory files and
 attachments are never inferred from arbitrary neighboring files.
+Directory listings are inventory-addressed leaves at
+`namespace/<source-path>/.listing`, so parent and child directories can both
+be retained. Readers continue to accept older inventory-selected listing paths.
 
 Inputs reuse compiler-owned diagnostic limits: currently 1 MiB per aggregate
 inspection and attachment input, with 682 inventory entries derived from the

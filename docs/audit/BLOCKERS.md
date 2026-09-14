@@ -87,6 +87,25 @@ accepted authenticated reads, and UART `help` returned the root prompt.
 That discovery proves access to the older schema-1.18 running image, not a
 fresh M27 image boot.
 
+The subsequent clean `5cb112d24` run passes the complete Stage 01 suite and Pi
+Stage 02. Its image `558f2ea36a007ea72f0f07c2f2cfba99c096bafff3fe66533c84b8757bcbca63`
+passed a fresh GENET RAM boot with exact BUILD, pre/post-reset artifact CRCs and
+the passive settling interval. No SD write or packet-capture proof is claimed.
+QEMU Stages 01–04 pass with the validated 10.1.0 binary. Stage 05 fails solely
+at the DD30 register guard: the truthful attestation log change alters the
+protected `kernel.rs` hash. The original waiver is unchanged; M27 has no
+accepted-risk extension. The native Linux ARM64 build of all eight host tools
+also passes for that exact source.
+
+Fresh Pi collection found two host defects: reading the lease-ID directory as
+a file and probing an unadvertised optional spool root. The correction uses
+the bounded `/proc` inventory, preserves empty-directory semantics, and stores
+nested listings in separate `.listing` leaves. Its focused tests pass, and a
+separately identified candidate host binary passes TCP and REST pack/inspect/
+diff/replay composition against that retained Pi boot and a fresh QEMU boot
+of its sealed default artifact. This candidate evidence
+does not replace a complete staged chain for the final corrected source.
+
 ## Historical gate snapshots
 
 - Exact `2be878d8d`: QEMU Stages 01–04 PASS, Stage 05 FAIL on then-open DD26–29;
