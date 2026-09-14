@@ -71,6 +71,14 @@ def bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     bundle = tmp_path / "Cohesix-1.0.0-beta-MacOS"
     bundle.mkdir()
     (bundle / "VERSION.txt").write_text("1.0.0-beta\n")
+    key_paths = [
+        "resources/keys/cas_verification_key.hex",
+        "configs/generated/cas_verification_key.hex",
+    ]
+    for relative in key_paths:
+        key_path = bundle / relative
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_text("11" * 32 + "\n", encoding="ascii")
     (bundle / "BUILD_PROVENANCE.json").write_text(
         json.dumps(
             {
@@ -81,7 +89,7 @@ def bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             }
         )
     )
-    names = ["VERSION.txt", "BUILD_PROVENANCE.json"]
+    names = ["VERSION.txt", "BUILD_PROVENANCE.json", *key_paths]
     (bundle / "MANIFEST.sha256").write_text(
         "".join(f"{qualify.digest(bundle / name)}  {name}\n" for name in names)
     )
