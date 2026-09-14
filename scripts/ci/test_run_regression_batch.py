@@ -734,6 +734,7 @@ def test_prepare_only_builds_shared_base_manifest_once_and_restores_generated(
     environment.update(
         {
             "COHESIX_BUILD_RUN_BIN": str(fake_build),
+            "COHSH_BATCH_TARGET": "qemu",
             "COHSH_BATCH_GROUPS": "base,base-telemetry,base-shard",
             "COHSH_BATCH_PREPARE_ONLY": "1",
             "COHSH_LOG_ROOT": str(archive),
@@ -751,6 +752,7 @@ def test_prepare_only_builds_shared_base_manifest_once_and_restores_generated(
             "COHESIX_SEL4_PROFILE": "qemu_smp_production",
             "SEL4_BUILD_DIR": str(sel4),
             "TEST_PLAN_SOURCE_DIGEST": "sha256:" + ("a" * 64),
+            "TEST_PLAN_ACTION_ID": "qemu.tcp-regression",
             "TMPDIR": str(tmp_path),
         }
     )

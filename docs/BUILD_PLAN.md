@@ -13240,6 +13240,7 @@ Status: In Progress
 Goal: Restore canonical test and image-build prerequisites without relaxing source integrity, evidence bounds or target acceptance.
 Changes:
   - tests/test_linux_host_tools_sync.py, tests/test_release_bundle.py, tests/test_sel4_profile.py — exercise the existing exact tracked-tree archive and argument-driven packaging contracts; preserve export-ignore coverage and secret exclusion.
+  - scripts/ci/test_run_regression_batch.py — explicitly select the QEMU fixture target and action so common-stage execution under Pi does not inherit physical transport requirements.
   - scripts/worker_task_evidence.py + tests/test_worker_task_evidence.py — stream every git-visible regular source file in at most 1 MiB reads, including shipped images larger than the evidence parser's 64 MiB allocation bound; retain exact extent, metadata, path-set and repeated-content checks. This restoration does not reopen M26e runtime or physical behavior.
   - toolchain and selected build outputs — restore pinned compiler/Python/mkimage and the pristine canonical QEMU profile through documented setup.
   - scripts/ci/test_plan_target_root_check.sh + focused workflow tests — route Pi Stage 02 through the canonical clean-source Pi builder, compare its retained resolved manifest to the compiler-selected Pi identity, and verify exact staged image/source binding. Preserve QEMU identity rejection and all physical acceptance requirements.
