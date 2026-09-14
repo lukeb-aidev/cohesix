@@ -9,6 +9,14 @@ the Raspberry Pi 4 U-Boot path. It keeps image construction, media state, boot
 identity, device readiness, remote control, and performance as independent
 proof layers.
 
+An explicitly enabled non-release `debug-input` shell may use `hexdump <addr>
+<len>` only for 1–256 bytes within HAL's root executable code span. The ELF
+symbols `__text_start` and `__driver_task_text_start` identify its inclusive
+start and exclusive end. Other memory, overflowing ranges and oversized lengths
+are refused before reading; requests are never silently truncated. Each admitted
+or refused memory range produces a bounded serial audit line. Release features
+disable this command regardless of the bring-up setting.
+
 Implementation details belong in [DRIVERS.md](DRIVERS.md), boot-marker semantics
 in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 [TEST_PLAN.md](TEST_PLAN.md), and performance methodology in

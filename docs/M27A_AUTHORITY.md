@@ -142,7 +142,10 @@ mutable deployment key file as a substitute for the retained compiler artifact.
 The GPU console frame bound defaults to 8192 bytes including its four-byte header; an
 invalid peer length is rejected before allocation. Arbitrary root-console
 `hexdump` is disabled by the generated default and rejected in production policy.
-An explicit non-release bring-up profile may enable it and owns the supplied address risk.
+An explicit non-release bring-up profile may enable reads of 1–256 bytes only
+within the HAL-classified immutable root code span. Reads of rodata, mutable
+state, device mappings, crossing ranges or overflowing addresses are refused
+before dereference. Bounded serial audit lines record admission and refusal.
 
 Production failover and federation remain disabled in the single-host Release A
 profile. The existing optional-hook failover watchdog is development tooling;

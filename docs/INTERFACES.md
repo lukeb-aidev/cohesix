@@ -19,6 +19,15 @@ WAL records. Writer ownership is checked independently of admission freshness;
 27a does not issue admission decisions. [M27a authority](M27A_AUTHORITY.md)
 defines the bounds and migration contract.
 
+The emergency bring-up `hexdump` command is unavailable in release profiles.
+When explicitly enabled outside release, HAL restricts it to 1–256 bytes in the
+immutable root executable code span. Refusals are `ERR EPERM
+memory-diagnostics-disabled`, `ERR ELIMIT memory-diagnostics-length`, or `ERR
+EPERM memory-diagnostics-unclassified`; extra arguments return `ERR EINVAL
+memory-diagnostics-arguments`. A bounded `[audit] memory-read` serial line records
+admission or range refusal. Normal console grammar and TCP/REST framing are
+unchanged by this early-shell contract.
+
 
 This document is the index and human-authored contract for Cohesix external
 interfaces: transport selection, target console framing, namespace paths,

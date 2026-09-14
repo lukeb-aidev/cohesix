@@ -344,6 +344,27 @@ secret-registration and debug-memory changes. Fresh human Rust review and an
 explicit applicable DD30 disposition remain required before merge. The dynamic
 fault/wake test remains unexecuted; no static check or policy refusal replaces it.
 
+Candidate D `a761eec4662f6def20b5b3272acde79efd3f1fb7` adds only the REST
+runner secret/context correction and documentation. Its 16 focused REST tests
+pass natively on Linux in `native-candidate-d-tests-80.log`; attempt 78 used the
+wrong virtual-environment path and remains failed. Pi build 77 passes. The fresh
+RAM boot and first raw sample in the Pi checkout's `out/m27a/pi4-d-initial-81`
+pass with 64/64 requests, one connection and no retries/reconnects. Its initial
+transport-record command then refuses an incorrect gateway hostname field;
+`pi4-d-initial-81.log` remains failed and grants no staged acceptance.
+
+Final review of `m27a-console-debug-memory-gate` finds an incomplete bring-up
+boundary: release refusal was implemented, but explicit non-release diagnostics
+still trusted arbitrary addresses. HAL now classifies only the immutable root
+code RX span; the console rejects oversized, unclassified and overflowing reads
+before dereference and emits bounded serial audit lines. The existing volatile
+read stays within that admitted range. Four deterministic bounds/policy tests,
+root Clippy, generated consistency and Test Plan integrity pass in
+`diagnostic-range-{tests,clippy}-83.log`, `check-generated-84.log` and
+`check-test-plan-84.log`. `diagnostic-range-risk-83.log` confirms no increase in
+non-test unsafe, unwrap, expect or panic counts. Exact target builds and the
+refreshed candidate's staged qualification remain required.
+
 ## Outstanding acceptance
 
 Required remaining evidence is the complete applicable Test Plan, final exact

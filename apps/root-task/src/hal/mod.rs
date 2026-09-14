@@ -181,6 +181,8 @@ pub(crate) fn poll_early_hdmi_boot_progress_after_cutover() -> bool {
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
+#[cfg(any(feature = "kernel", test))]
+pub(crate) mod diagnostic;
 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 /// Generation-revocable construction and transport for the isolated TCP console service.

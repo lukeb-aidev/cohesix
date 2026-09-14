@@ -2200,8 +2200,6 @@ fn emit_pi4_uefi_no_dtb_hint<P: Platform>(console: &mut DebugConsole<'_, P>) {
     );
 }
 
-const MAX_HEXDUMP_LEN: usize = 256;
-
 /// Minimal blocking console loop used during early bring-up.
 pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
     let mut console = Console::new(uart);
@@ -2242,6 +2240,10 @@ pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
                     || cfg!(feature = "release-qemu")
                     || cfg!(feature = "release-pi4")
                 {
+                    let _ = writeln!(
+                        console,
+                        "[audit] memory-read outcome=denied reason=disabled"
+                    );
                     let _ = writeln!(console, "ERR EPERM memory-diagnostics-disabled");
                     continue;
                 }
@@ -2253,7 +2255,7 @@ pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
                     let _ = writeln!(console, "usage: hexdump <addr> <len>");
                     continue;
                 };
-                let Some(mut addr) = parse_hex(addr_str) else {
+                let Some(addr) = parse_hex(addr_str) else {
                     let _ = writeln!(console, "invalid address");
                     continue;
                 };
@@ -2261,24 +2263,30 @@ pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
                     let _ = writeln!(console, "invalid length");
                     continue;
                 };
-                let len = len_raw.min(MAX_HEXDUMP_LEN);
-                if len == 0 {
-                    let _ = writeln!(console, "length must be > 0");
+                if parts.next().is_some() {
+                    let _ = writeln!(console, "ERR EINVAL memory-diagnostics-arguments");
                     continue;
                 }
-                if addr.checked_add(len).is_none() {
-                    let _ = writeln!(console, "address overflow");
-                    continue;
-                }
+                let range = match crate::hal::diagnostic::console_read(addr, len_raw) {
+                    Ok(range) => range,
+                    Err(error) => {
+                        let _ = writeln!(console, "[audit] memory-read address=0x{addr:x} length={len_raw} outcome=denied");
+                        let _ = writeln!(console, "{}", error.terminal());
+                        continue;
+                    }
+                };
+                let _ = writeln!(console, "[audit] memory-read class=root-code address=0x{addr:x} length={len_raw} outcome=admitted");
+                let mut addr = range.start;
+                let len = range.end - range.start;
 
                 let mut remaining = len;
                 while remaining > 0 {
                     let line_len = remaining.min(16);
                     let mut bytes = [0u8; 16];
                     for (index, slot) in bytes.iter_mut().take(line_len).enumerate() {
-                        // SAFETY: This emergency bring-up path requires a manifest with
-                        // debug_memory explicitly enabled. Its operator supplies a mapped
-                        // readable address; production manifests reject this diagnostic.
+                        // SAFETY: HAL admitted the complete range within the immutable
+                        // root RX code PT_LOAD. The loop reads only that mapped range;
+                        // no device, mutable state or rodata address can pass admission.
                         unsafe {
                             *slot = ptr::read_volatile((addr + index) as *const u8);
                         }

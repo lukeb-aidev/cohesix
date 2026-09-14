@@ -51,6 +51,16 @@ security posture of the current tree.
 
 ## Operator diagnostic authority
 
+The emergency `debug-input` console's `hexdump` requires the manifest's explicit
+`authority.debug_memory` permission and is always disabled by either release
+feature. HAL admits only 1–256 bytes wholly within the root executable code
+span, from `__text_start` to `__driver_task_text_start` in the initial RX mapping.
+It excludes rodata credentials, mutable state, embedded runtime archives and
+device mappings. Checked range arithmetic precedes every dereference. Admission
+and refusal produce bounded serial audit lines; this early shell does not claim
+a persistent NineDoor audit journal. The ordinary production console has no
+arbitrary memory command.
+
 `bi`, `caps mcs`, and `smp mcs` are bounded projections on an already admitted
 operator surface. Printed slots, badges, and generations are identifiers, not
 transferred authority. The live registry is copied with a non-blocking lock and
