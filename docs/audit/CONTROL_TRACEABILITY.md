@@ -4,7 +4,7 @@
 
 # Control-to-Evidence Traceability Register
 
-## Stage 05 closure update (2026-09-13)
+## Stage 05 closure and DD30 retirement update (2026-09-14)
 
 The [current audit report](AUDIT_REPORT_2026-09-13.md) supplies the exact evidence
 root, immutable report hashes, implementation identities and reviewer records.
@@ -17,7 +17,7 @@ The historical registers below retain their original dates and claims.
 | HAL publication integrity: DD27 | Independent actual `61f7bcd1f` image/ELF review, eight acquired integrity cuts and successful console work | `CLOSED_VERIFIED` | Relevant source unchanged at `719043fad`; one boot does not prove repeatability |
 | HAL cold reset: DD28 | Independent exact `61f7bcd1f` dual-mode reset/firmware/network review; WiFi complete CAT and serial liveness | `CLOSED_VERIFIED` | MSI/endpoint completion is supported by observed complete proof plus reviewed fail-closed source; ordinary boot timing and repeatability stay separate |
 | VL805 firmware and USB reporting: DD29 | Independent unchanged-repair review, machine-observed `61f7bcd1f` keyboard presence and explicit Lukas Bower keyboard-absence attestation | `CLOSED_VERIFIED` | Absence is human-attested with unspecified image/time/log; no same-image absence capture is claimed |
-| Critical-TCB IPC ownership: DD30 | Repaired source/ABI/pure/emitted ownership proof and explicit Lukas Bower decision in `DD30_RELEASE_WAIVER.toml` / EX30 | `ACCEPTED_RISK` for selected `1.0.0-beta` | Dynamic fault/wake proof remains unexecuted; unchanged protected files and active bounded approval required; severity remains P1 |
+| Critical-TCB IPC ownership: DD30 | Recorded source/ABI/pure/emitted repair review and permanent owner decision in [DD30 retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement) | P1 / `RETIRED_ACCEPTED_GAP`; EX30 `RETIRED` | Dynamic fault/wake remains UNEXECUTED; preserve IPC regression coverage and ordinary review of changed contracts; no recurring approval or expiry |
 | Human review and source publication | Lukas Bower approved all fixes; final eight source checks and publication receipt bind `719043fad` | `PASS` scoped source delivery | Approval and source checks do not replace missing target proof |
 | Staged acceptance and delivery | Exact `22e3d08ff` receipts remain preserved but fail current-source reuse; canonical current-source stage artifacts determine acceptance | Current gate owns verdict | No copied attestations; DD30 admission records residual risk and supplies no target-test PASS; delivery remains separately evidenced |
 

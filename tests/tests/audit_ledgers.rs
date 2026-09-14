@@ -29,12 +29,10 @@ fn active_exceptions_reference_current_findings_and_never_close_accepted_risk() 
             *status, "CLOSED_VERIFIED",
             "active exception for {id} contradicts closure"
         );
-        if *severity == "P1" {
-            assert_eq!(id, "DD-2026-0030");
-            assert_eq!(*status, "ACCEPTED_RISK");
-            assert!(row.contains("release=1.0.0-beta"));
-            assert!(include_str!("../../docs/audit/BLOCKERS.md").contains(id));
-        }
+        assert!(
+            !matches!(*severity, "P0" | "P1"),
+            "active exceptions cannot accept {severity} finding {id}; DD30 is retired"
+        );
     }
     assert!(!exceptions.lines().any(|line| line.trim() == "None"));
 }

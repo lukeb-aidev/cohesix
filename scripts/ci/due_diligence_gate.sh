@@ -5,9 +5,10 @@
 #
 # Environment:
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
-#   DD_MILESTONE_ID           Explicit owner decision (27 or 27a); exclusive with release.
-#   DD_RELEASE_ID             Explicit release context; only the validated DD30
-#                             waiver can admit 1.0.0-beta residual evidence risk.
+#   DD_RELEASE_ID             Select the separate historical release carry-forward.
+#   --check-rust-review       Check an exact historical Rust review (27 or 27a),
+#                             independently of finding retirement and expiry.
+#   DD_MILESTONE_ID           Obsolete; no longer selects finding acceptance.
 #   --release-carry-forward   Require the approved release-only policy and sealed
 #                             input; publish separate PASS_WITH_RESIDUAL_RISK.
 #                             This never creates ordinary stage markers.
@@ -321,9 +322,7 @@ check_blocking_findings() {
     --mode blockers \
     --root "${repo_root}" \
     --findings "${findings_path}" \
-    --exceptions "${exceptions_path}" \
-    --release "${DD_RELEASE_ID:-}" \
-    --milestone "${DD_MILESTONE_ID:-}"
+    --exceptions "${exceptions_path}"
 }
 
 check_exceptions_register() {
@@ -333,9 +332,7 @@ check_exceptions_register() {
     --mode register \
     --root "${repo_root}" \
     --findings "${findings_path}" \
-    --exceptions "${exceptions_path}" \
-    --release "${DD_RELEASE_ID:-}" \
-    --milestone "${DD_MILESTONE_ID:-}"
+    --exceptions "${exceptions_path}"
 }
 
 check_reused_regression_batch() {
@@ -545,6 +542,11 @@ PY
 }
 
 if [[ $# -gt 0 ]]; then
+  if [[ "$1" == "--check-rust-review" && $# -eq 2 ]]; then
+    python3 "${repo_root}/scripts/ci/due_diligence_lifecycle.py" \
+      --mode rust-review --root "${repo_root}" --milestone "$2"
+    exit $?
+  fi
   if [[ "$1" == "--check-blocking-findings" && ( $# -eq 2 || $# -eq 3 ) ]]; then
     check_blocking_findings "$2" "${3:-docs/audit/EXCEPTIONS.md}"
     exit $?
@@ -559,6 +561,7 @@ if [[ $# -gt 0 ]]; then
     dd_collect_all=1
   else
     printf "usage: %s [--collect-all]\n" "$0" >&2
+    printf "       %s --check-rust-review <27|27a>\n" "$0" >&2
     printf "       %s --check-blocking-findings <findings.csv> [EXCEPTIONS.md]\n" "$0" >&2
     printf "       %s --check-exceptions-register <findings.csv> <EXCEPTIONS.md>\n" "$0" >&2
     printf "       %s --release-carry-forward <finalized-input.json>\n" "$0" >&2

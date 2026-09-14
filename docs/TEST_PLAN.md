@@ -93,25 +93,19 @@ successful command or test count is not a coverage argument.
   mandatory. It accepts no transport result and records `NOT_RUN` in bundle
   provenance. Existing Stage 5 acceptance and original source/image identities
   remain separate. This assembly path grants no staged or target PASS.
-- For release `1.0.0-beta`, Stage 05 may admit only the explicit DD30 owner
-  decision in [DD30_RELEASE_WAIVER.toml](audit/DD30_RELEASE_WAIVER.toml), selected
-  with `DD_RELEASE_ID=1.0.0-beta` and validated against the active exception and
-  protected implementation hashes. The missing dynamic fault/wake test remains
-  unexecuted and contributes no target/component PASS. This release-specific
-  residual risk does not relax any other finding, target evidence, source
-  binding, staged prerequisite or current advisory check.
-- For Milestone 27, select `DD_MILESTONE_ID=27` for Stage 05 and its focused
-  governance checks. The separate [owner approval](audit/DD30_M27_APPROVAL.toml)
-  binds exact reviewed implementation and protected hashes, retains DD30 as
-  P1 / ACCEPTED_RISK through 2026-10-13, and records Rust sign-off. The dynamic
-  fault/wake test remains UNEXECUTED. Do not combine release and milestone
-  selection; this decision grants no other finding or staged-evidence waiver.
-- For Milestone 27a, the separate [candidate-F owner review](audit/DD30_M27A_APPROVAL.toml)
-  records Lukas Bower's 2026-09-14 “Sign off” response for the exact Rust
-  implementation and M27a DD30 disposition. `DD_MILESTONE_ID=27a` selects this
-  source-bound approval; DD30 remains P1 / ACCEPTED_RISK through 2026-10-13 and
-  dynamic fault/wake remains UNEXECUTED. It cannot authorize changed
-  implementation or another milestone.
+- DD30's recurring acceptance requirement was permanently retired by Lukas
+  Bower on 2026-09-14. [DD30 retirement decision](audit/AUDIT_REPORT_2026-09-13.md#dd30-retirement) records the
+  repaired historical finding as P1 / `RETIRED_ACCEPTED_GAP`, with dynamic
+  fault/wake still UNEXECUTED. Stage 05 checks its retirement record without
+  milestone/release selection, whole-file hashes or expiry. `DD_MILESTONE_ID`
+  is obsolete. No other finding, target evidence or staged prerequisite is
+  waived; a demonstrated IPC regression follows the ordinary finding lifecycle.
+- Human Rust review remains separate. The historical [M27](audit/DD30_M27_APPROVAL.toml)
+  and [M27a](audit/DD30_M27A_APPROVAL.toml) approvals can be checked explicitly
+  with `scripts/ci/due_diligence_gate.sh --check-rust-review 27|27a`. The check
+  binds review to the original implementation and ignores historical DD30
+  expiry. Future implementation requires its own normal review, with no new
+  DD30 approval record. A finding preflight alone establishes no Rust sign-off.
 - For this M27a completion run, the owner's later instruction is: “Only run
   tests required to mark this milestone ‘Complete’, not the full suite”.
   [M27A_COMPLETION_EVIDENCE.md](audit/M27A_COMPLETION_EVIDENCE.md) maps the
@@ -3400,8 +3394,9 @@ staged target plan with fresh provenance before making those claims.
 
 `audit_ledgers` checks active exception/finding cross-references and baseline
 partition arithmetic before 27a/27d closure; `rust_risk_gate.sh` remains the
-production source-count authority. M27 uses its separate owner approval above;
-the historical release waiver alone cannot admit M27. Bounded latency measurements follow [BENCHMARKS.md](BENCHMARKS.md).
+production source-count authority. DD30's permanent retirement and the independent
+historical Rust-review check are documented above. Bounded latency measurements
+follow [BENCHMARKS.md](BENCHMARKS.md).
 The shared attestation suite checks certificate/signature, nonce/replay, PCR,
 artifact identity, trust revocation/expiry and malformed-input failures. The
 stock Pi exemption applies only to positive signed-device acceptance. Fresh

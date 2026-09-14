@@ -4,6 +4,10 @@
 
 # Cohesix Audit Report (2026-09-13)
 
+The subsequent [14 September DD30 retirement](AUDIT_REPORT_2026-09-13.md#dd30-retirement) supersedes
+this report's recurring DD30 approval and expiry requirements. The following
+release decisions and test results retain their original scope and dates.
+
 Finding decision for **1.0.0-beta: DD26–29 CLOSED_VERIFIED; DD30 P1 /
 ACCEPTED_RISK under the explicit release-owner waiver EX-2026-0030**. The
 DD30 dynamic fault/wake test remains unexecuted. The final Stage 05 verdict
@@ -433,3 +437,83 @@ performance harnesses: no public API, namespace, ABI, operator workflow,
 benchmark workload or result-schema change is needed. Only the host test model,
 test failure behavior and explicit release-governance workflow change. The
 compiler-owned outputs retain their authoritative generation procedure.
+
+<a id="dd30-retirement"></a>
+
+## DD30 retirement decision (2026-09-14)
+
+Lukas Bower approved the recommendation to retire DD30's recurring milestone
+and release approvals by stating: “Proceed with your recommendation”. The
+recommendation explicitly retained the repaired defect's history and the
+unexecuted dynamic fault/wake test, removed DD30 expiry and source-fingerprint
+renewals, and preserved ordinary IPC review and regression coverage. The later
+instruction “Let’s not rely on a gdb test, disregard” withdrew the proposed gap
+test. This decision requires no new target test.
+
+`DD-2026-0030` retains severity `P1` and now has terminal disposition
+`RETIRED_ACCEPTED_GAP`. `EX-2026-0030` is `RETIRED`, with no expiry. This is an
+owner-approved retirement of the repaired historical finding with an accepted
+verification gap; it is not `CLOSED_VERIFIED`. Its `commit_sha` identifies the
+repair, `closed_date` records this retirement decision, and `closure_evidence`
+points here. Dynamic fault/wake remains **UNEXECUTED**. No historical test,
+attestation, failed run or milestone task is changed by this decision.
+
+### Preserved history and controls
+
+The M26e Stage 05 review under `m26e-mcs-smp-target-acceptance` discovered the
+defect; `m26e-driver-runtime-mcs-port-and-cyw43-coexistence` owned its repair.
+Commit [`3746e659f`](https://github.com/lukeb-aidev/cohesix/commit/3746e659fc9a96b7d623e037ae7931f92ebd051c)
+recorded and repaired notification/error writes through root's shared IPC
+pointer and safe wrappers accepting unchecked output storage.
+[ROLES_AND_SCHEDULING.md](../ROLES_AND_SCHEDULING.md) retains the caller-owned
+storage and borrowed-output contracts. Existing `sel4-sys` storage regressions
+and root-task MCS fault-lane tests remain required when those contracts change.
+
+The [13 September audit](AUDIT_REPORT_2026-09-13.md#dd30-owner-accepts-the-unexecuted-dynamic-test)
+records the source, ABI, pure-test and emitted-code reviews and missing target
+proof. The original [release waiver](DD30_RELEASE_WAIVER.toml),
+[M27 approval](DD30_M27_APPROVAL.toml), and
+[M27a approval](DD30_M27A_APPROVAL.toml) remain unchanged historical records.
+Their DD30 expiry and whole-file hashes no longer govern future acceptance.
+This supersedes their DD30 renewal conditions and earlier DD30 blocker wording,
+including the historical build-plan requirement for fault/wake evidence before
+verified closure. It grants retirement with an accepted gap, not that closure.
+
+Ordinary review still applies to IPC ownership changes. A demonstrated
+regression uses the normal `OPEN` finding lifecycle; retirement cannot admit an
+open defect. Other P0/P1 findings cannot use this disposition. General Rust
+review, risk-ratchet exceptions, target evidence and staged qualification remain
+required by their owning policies. The separate release-only
+[Stage 01–04 carry-forward](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml) retains its
+original scope, source bindings and expiry.
+
+### Focused governance checks
+
+```sh
+python3 -m unittest discover -s scripts/ci -p test_due_diligence_lifecycle.py
+cargo test -p tests --test audit_ledgers
+scripts/ci/due_diligence_gate.sh --check-blocking-findings docs/audit/findings.csv docs/audit/EXCEPTIONS.md
+scripts/ci/due_diligence_gate.sh --check-exceptions-register docs/audit/findings.csv docs/audit/EXCEPTIONS.md
+scripts/ci/due_diligence_gate.sh --check-rust-review 27a
+scripts/check-generated.sh
+```
+
+Finding checks need no milestone or release selection. `DD_MILESTONE_ID` is
+obsolete. The explicit `--check-rust-review 27|27a` command independently checks
+the corresponding historical Rust approval against its reviewed implementation;
+it neither expires with DD30 nor approves new source. Future Rust reviews follow
+the normal contribution workflow and need no DD30 approval file. Passing a
+finding preflight alone never establishes human Rust review or Stage 05 PASS.
+
+The lifecycle tests cover retirement beyond the old expiry, source changes
+without renewed DD30 approval, retained gap reporting, malformed/missing
+retirement records, rejection of other P0/P1 findings and reopened DD30, and
+separate Rust-review source validation. These are governance tests, not target
+fault/wake evidence. Existing waiver-window tests are superseded because the
+owner has retired that policy; generic exception tests remain.
+
+Compatibility review: the host-tool suite (`coh`, `cohsh`, Hive Gateway,
+SwarmUI, host-ticket-agent, gpu-bridge-host and CAS tools), Python SDK, compiler
+manifests and benchmark workloads need no changes. Their runtime interfaces,
+source/target provenance and report schemas are unchanged. Historical release
+acceptance keeps `dd30_dynamic_fault_wake=NOT_EXECUTED`.

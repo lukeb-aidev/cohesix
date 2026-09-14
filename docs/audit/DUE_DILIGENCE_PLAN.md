@@ -132,20 +132,27 @@ This procedure mirrors RMF intent (Prepare, Categorize, Select, Implement, Asses
 7. Monitor
 - Re-run the due-diligence gate on every release candidate and significant control-plane change.
 - Track recurring finding classes; trigger corrective action for repeat defects.
-- Expire risk acceptances automatically unless renewed with evidence.
+- Expire active risk exceptions automatically unless renewed with evidence;
+  historical DD30 retirement follows [DD30 retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement).
 
 ## 10. Release Decision Criteria
 
 Remediation `target_date` values schedule work; they never defer a P0/P1
-release blocker. Every P0/P1 must be `CLOSED_VERIFIED`, except the explicitly
-selected `1.0.0-beta` or separately approved Milestone 27 DD30 decision documented in
-[EXCEPTIONS.md](EXCEPTIONS.md). That single P1 stays `ACCEPTED_RISK`; it is
-admitted only after matching the approved active exception, owner decision,
-bounded expiry and protected implementation hashes in
-[DD30_RELEASE_WAIVER.toml](DD30_RELEASE_WAIVER.toml). The focused command
+release blocker. Every P0/P1 must be `CLOSED_VERIFIED`, except DD30's permanent
+owner-approved `RETIRED_ACCEPTED_GAP` disposition in
+[DD30 retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement). The repaired defect retains P1 severity
+and its unexecuted dynamic test. The retirement requires a matching EX30
+`RETIRED` record; it has no expiry, source-fingerprint renewal or milestone
+selection. Other findings cannot use this disposition, and an open regression
+is blocking. Active P2 exceptions retain their owner and expiry requirements.
+
+The focused command
 `bash scripts/ci/due_diligence_gate.sh --check-blocking-findings docs/audit/findings.csv`
-checks this predicate without executing other stages. It is not a complete
-Stage 05 verdict; closure metadata and exceptions have their separate checks.
+checks the blocker predicate and any retirement record without executing other
+stages. It is not a complete Stage 05 verdict; general closure metadata and
+exceptions retain their separate checks. Historical Rust review is independent:
+`--check-rust-review 27|27a` validates its original source, while new work follows
+the normal review workflow. Retired DD30 approvals cannot sign off new Rust.
 
 The owner's subsequent explicit approval also permits the exact Stage 01–04
 carry-forward and reviewed host-only successor in
@@ -164,10 +171,9 @@ It is not a generic resume override or permission to weaken bundle integrity.
 - `PASS_WITH_RESIDUAL_RISK`
 - No open `P0/P1`.
 - Only time-bounded accepted `P2` with explicit owner and expiration, plus the
-  narrow DD30 decision when explicitly selected by `DD_RELEASE_ID=1.0.0-beta`
-  or `DD_MILESTONE_ID=27`, with the corresponding exact reviewed source record.
-- DD30's missing dynamic fault/wake test remains unexecuted; waiver admission
-  is a release-authority decision and never a target-test PASS.
+  permanently retired DD30 historical verification gap.
+- DD30's dynamic fault/wake test remains unexecuted; retirement never supplies
+  a target-test PASS or verified dynamic closure.
 - All other P0/P1 and staged prerequisites remain binding outside the exact
   owner-approved carry-forward above.
 

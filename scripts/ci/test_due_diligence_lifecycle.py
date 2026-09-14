@@ -7,7 +7,6 @@ from __future__ import annotations
 import contextlib
 import csv
 from datetime import date
-import hashlib
 import io
 import json
 import os
@@ -598,111 +597,37 @@ class DueDiligenceLifecycleTests(unittest.TestCase):
         self.assertIn("publish-root", stage_source)
 
 
-class ReleaseOwnerWaiverTests(unittest.TestCase):
-    """Exercise the approved record contract without target or real-time input."""
-
-    # The authorization covers these ten production files from the reviewed IPC
-    # repair. This fixture is independent of the validator's protected-file set.
-    protected_paths = (
-        "apps/root-task/src/console/mod.rs",
-        "apps/root-task/src/hal/console_network.rs",
-        "apps/root-task/src/hal/critical_tcb.rs",
-        "apps/root-task/src/hal/driver_task.rs",
-        "apps/root-task/src/hal/mod.rs",
-        "apps/root-task/src/hal/worker_task.rs",
-        "apps/root-task/src/kernel.rs",
-        "apps/root-task/src/sel4.rs",
-        "apps/root-task/src/sel4/syscall.rs",
-        "crates/sel4-sys/src/lib.rs",
-    )
+class RetiredEvidenceGapTests(unittest.TestCase):
+    """Owner-approved retirement preserves the gap without recurring approval."""
 
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
         self.audit = self.root / "docs/audit"
         self.audit.mkdir(parents=True)
-        self.record_path = self.audit / "DD30_RELEASE_WAIVER.toml"
-        self.record = {
-            "schema": "cohesix.release-evidence-waiver/v1",
-            "exception_id": "EX-2026-0030",
-            "finding_id": "DD-2026-0030",
-            "release_id": "1.0.0-beta",
-            "scope_id": "dd30-restricted-ipc-dynamic-fault-wake",
-            "severity": "P1",
-            "disposition": "ACCEPTED_RISK",
-            "status": "APPROVED_ACTIVE",
-            "risk_owner": "Lukas Bower",
-            "approved_by": "Lukas Bower",
-            "decision_date": "2026-09-13",
-            "expiration_date": "2026-10-13",
-            "reviewed_source_commit": (
-                "6d7c16e4a0f5d89c32a4fa0f815c2bfe6babc065"
-            ),
-            "approval_quote": (
-                "There is no debugger, dd30 was a one-off issue. "
-                "Mark it as a pass, we are ready for release"
-            ),
-            "protected_files": [],
-        }
-        for relative in self.protected_paths:
-            path = self.root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"// reviewed fixture IPC ownership\n")
-            self.record["protected_files"].append({
-                "path": relative,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            })
-        approved_bytes = b"// reviewed fixture IPC ownership\n"
-        git_reader = mock.patch.object(
-            lifecycle, "reviewed_source_bytes", return_value=approved_bytes
+        self.record = self.audit / "AUDIT_REPORT_2026-09-13.md"
+        self.record.write_text(
+            '<a id="dd30-retirement"></a>\n'
+            "Owner retires DD30; dynamic fault/wake is UNEXECUTED.\n"
         )
-        git_reader.start()
-        self.addCleanup(git_reader.stop)
         self.finding = {
-            "finding_id": "DD-2026-0030",
-            "severity": "P1",
-            "disposition": "ACCEPTED_RISK",
-            "commit_sha": "",
-            "closed_date": "",
-            "closure_evidence": "",
-            "risk_owner": "Lukas Bower",
-            "risk_expiration": "2026-10-13",
-        }
-        self.exception = {
-            "exception_id": "EX-2026-0030",
-            "finding_id": "DD-2026-0030",
-            "severity": "P1",
-            "scope": (
-                "release=1.0.0-beta; "
-                "scope=dd30-restricted-ipc-dynamic-fault-wake"
+            "finding_id": "DD-2026-0030", "severity": "P1",
+            "disposition": "RETIRED_ACCEPTED_GAP",
+            "commit_sha": "3746e659fc9a96b7d623e037ae7931f92ebd051c",
+            "closed_date": "2026-09-14",
+            "closure_evidence": (
+                "docs/audit/AUDIT_REPORT_2026-09-13.md#dd30-retirement"
             ),
-            "risk_owner": "Lukas Bower",
-            "approved_by": "Lukas Bower",
-            "decision_date": "2026-09-13",
-            "expiration_date": "2026-10-13",
-            "status": "APPROVED_ACTIVE",
+            "risk_owner": "Lukas Bower", "risk_expiration": "",
         }
-        self.write_record()
-
-    def write_record(self) -> None:
-        """Write the independently declared, comment-capable record fixture."""
-        lines = [
-            f"{key} = {json.dumps(value)}"
-            for key, value in self.record.items()
-            if key != "protected_files"
+        self.exception = [
+            "EX-2026-0030", "DD-2026-0030", "P1",
+            "dd30-restricted-ipc-dynamic-fault-wake",
+            "Owner accepts the unexecuted evidence gap.",
+            "Preserve the repair and regression coverage.",
+            "Lukas Bower", "Lukas Bower", "2026-09-14", "N/A", "RETIRED",
         ]
-        for entry in self.record["protected_files"]:
-            lines.append("[[protected_files]]")
-            lines.extend(
-                f"{key} = {json.dumps(value)}" for key, value in entry.items()
-            )
-        self.record_path.write_text("\n".join(lines) + "\n")
-
-    def validate(self, today: date = date(2026, 9, 14)) -> object:
-        return lifecycle.validate_waiver(
-            self.root, self.finding, self.exception, today=today
-        )
 
     def write_registers(self, extra_finding: dict[str, str] | None = None) -> None:
         with (self.audit / "findings.csv").open("w", newline="") as handle:
@@ -711,371 +636,188 @@ class ReleaseOwnerWaiverTests(unittest.TestCase):
             writer.writerow(self.finding)
             if extra_finding:
                 writer.writerow(extra_finding)
-        exception = self.exception
-        cells = [
-            exception["exception_id"], exception["finding_id"],
-            exception["severity"], exception["scope"],
-            "Owner accepts the unexecuted dynamic evidence gap only.",
-            "Reviewed source and existing evidence remain required.",
-            exception["risk_owner"], exception["approved_by"],
-            exception["decision_date"], exception["expiration_date"],
-            exception["status"],
-        ]
         (self.audit / "EXCEPTIONS.md").write_text(
-            EXCEPTIONS_HEADER + "| " + " | ".join(cells) + " |\n"
+            EXCEPTIONS_HEADER + "| " + " | ".join(self.exception) + " |\n"
         )
 
-    def run_mode(
-        self, mode: str, release: str = "", milestone: str = "",
-    ) -> tuple[int, str, str]:
-        """Inject only the test clock; production has no date override."""
-        class FixedDate(date):
-            @classmethod
-            def today(cls) -> date:
-                return cls(2026, 9, 14)
+    def validate(self, today: date = date(2099, 1, 1)) -> list[str] | None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return lifecycle.validate_register(
+                self.audit / "findings.csv", self.audit / "EXCEPTIONS.md",
+                self.root, today=today,
+            )
 
-        argv = [
-            "due_diligence_lifecycle.py", "--mode", mode,
-            "--root", str(self.root),
+    def test_retirement_has_no_expiry_or_source_binding(self) -> None:
+        self.write_registers()
+        path = self.root / "apps/root-task/src/kernel.rs"
+        path.parent.mkdir(parents=True)
+        # No Git database, reviewed file set or old waiver is needed for retirement.
+        for source in ("first", "unrelated successor"):
+            path.write_text(source)
+            for today in (date(2026, 9, 14), date(2026, 10, 14), date(2099, 1, 1)):
+                with self.subTest(source=source, today=today):
+                    result = self.validate(today)
+                    self.assertIsNotNone(result)
+                    self.assertEqual(len(result), 1)
+                    self.assertIn("dynamic_fault_wake=NOT_EXECUTED", result[0])
+                    self.assertNotIn("CLOSED_VERIFIED", result[0])
+
+    def test_retirement_metadata_cannot_be_repurposed(self) -> None:
+        for key, value in {
+            "finding_id": "DD-OTHER", "severity": "P2",
+            "disposition": "CLOSED_VERIFIED", "commit_sha": "b" * 40,
+            "closed_date": "2026-09-15", "closure_evidence": "missing.md",
+            "risk_owner": "Someone else", "risk_expiration": "2099-01-01",
+        }.items():
+            with self.subTest(key=key):
+                old = self.finding[key]
+                self.finding[key] = value
+                self.write_registers()
+                self.assertIsNone(self.validate())
+                self.finding[key] = old
+        for index, value in {
+            0: "EX-OTHER", 1: "DD-OTHER", 2: "P0", 3: "another gap",
+            4: "", 5: "", 6: "other", 7: "other", 8: "2026-09-15",
+            9: "2026-10-13", 10: "APPROVED_ACTIVE",
+        }.items():
+            with self.subTest(column=index):
+                old = self.exception[index]
+                self.exception[index] = value
+                self.write_registers()
+                self.assertIsNone(self.validate())
+                self.exception[index] = old
+
+    def test_retirement_requires_record_and_matching_register(self) -> None:
+        self.write_registers()
+        self.record.unlink()
+        self.assertIsNone(self.validate())
+        self.record.symlink_to(self.audit / "EXCEPTIONS.md")
+        self.assertIsNone(self.validate())
+        self.record.unlink()
+        self.record.write_text(" ")
+        self.assertIsNone(self.validate())
+        (self.audit / "EXCEPTIONS.md").write_text(EXCEPTIONS_HEADER)
+        self.assertIsNone(self.validate())
+
+    def test_other_p0_p1_and_reopened_dd30_still_block(self) -> None:
+        for severity in ("P0", "P1"):
+            for disposition in ("OPEN", "ACCEPTED_RISK", "RETIRED_ACCEPTED_GAP"):
+                self.write_registers({
+                    **self.finding, "finding_id": "DD-OTHER",
+                    "severity": severity, "disposition": disposition,
+                })
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertIsNone(lifecycle.check_blocking_findings(
+                        self.audit / "findings.csv"
+                    ))
+        self.finding["disposition"] = "OPEN"
+        self.write_registers()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertIsNone(lifecycle.check_blocking_findings(self.audit / "findings.csv"))
+        self.assertIsNone(self.validate())
+
+    def test_cli_needs_no_milestone_or_release_and_discloses_gap(self) -> None:
+        self.write_registers()
+        for mode in ("blockers", "register"):
+            result = subprocess.run([
+                "python3", str(REPO_ROOT / "scripts/ci/due_diligence_lifecycle.py"),
+                "--mode", mode, "--root", str(self.root),
+                "--findings", str(self.audit / "findings.csv"),
+                "--exceptions", str(self.audit / "EXCEPTIONS.md"),
+            ], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("dynamic_fault_wake=NOT_EXECUTED", result.stdout)
+        self.exception[7] = "unapproved"
+        self.write_registers()
+        result = subprocess.run([
+            "python3", str(REPO_ROOT / "scripts/ci/due_diligence_lifecycle.py"),
+            "--mode", "blockers", "--root", str(self.root),
             "--findings", str(self.audit / "findings.csv"),
             "--exceptions", str(self.audit / "EXCEPTIONS.md"),
-            "--release", release, "--milestone", milestone,
-        ]
-        stdout, stderr = io.StringIO(), io.StringIO()
-        with (
-            mock.patch.object(lifecycle, "date", FixedDate),
-            mock.patch("sys.argv", argv),
-            contextlib.redirect_stdout(stdout),
-            contextlib.redirect_stderr(stderr),
+        ], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 1)
+
+
+class RustReviewTests(unittest.TestCase):
+    """Historical Rust consent remains source-bound, independently of DD30."""
+
+    def test_approval_identity_and_source_are_required(self) -> None:
+        for milestone, name, source, quote in (
+            ("27", "DD30_M27_APPROVAL.toml",
+             "7c3b82abbaf938f82f958dc40886d24fcf1c9f01",
+             "Consider DD30 and Rust review signed off"),
+            ("27a", "DD30_M27A_APPROVAL.toml",
+             "58140c1a5c79124a8dd7a4ff4bd547a52c8bd362", "Sign off"),
         ):
-            code = lifecycle.main()
-        return code, stdout.getvalue(), stderr.getvalue()
-
-    def test_authorization_window_is_inclusive_and_fails_outside_it(self) -> None:
-        for today in (date(2026, 9, 13), date(2026, 10, 13)):
-            with self.subTest(today=today):
-                admission = self.validate(today)
-                self.assertEqual(
-                    admission.sha256,
-                    hashlib.sha256(self.record_path.read_bytes()).hexdigest(),
-                )
-        for today in (date(2026, 9, 12), date(2026, 10, 14)):
-            with self.subTest(today=today):
-                with self.assertRaises(lifecycle.LifecycleError):
-                    self.validate(today)
-        self.record["expiration_date"] = "2026-10-14"
-        self.write_record()
-        with self.assertRaisesRegex(
-            lifecycle.LifecycleError, "release-specific bound"
-        ):
-            self.validate()
-
-    def test_record_identity_and_approval_cannot_be_repurposed(self) -> None:
-        changes = {
-            "schema": "cohesix.release-evidence-waiver/v2",
-            "exception_id": "EX-2026-0029",
-            "finding_id": "DD-2026-0029",
-            "release_id": "1.0.1-beta",
-            "scope_id": "all-dynamic-tests",
-            "severity": "P0",
-            "disposition": "CLOSED_VERIFIED",
-            "status": "PROPOSED",
-            "risk_owner": "another owner",
-            "approved_by": "another approver",
-            "reviewed_source_commit": "a" * 40,
-            "approval_quote": "All future releases approved",
-            "decision_date": "2026-09-14",
-        }
-        for field, value in changes.items():
-            original = self.record[field]
-            with self.subTest(field=field):
-                self.record[field] = value
-                self.write_record()
-                with self.assertRaises(lifecycle.LifecycleError):
-                    self.validate()
-            self.record[field] = original
-        self.record["extra_allowance"] = True
-        self.write_record()
-        with self.assertRaises(lifecycle.LifecycleError):
-            self.validate()
-
-    def test_register_metadata_must_match_the_approved_record(self) -> None:
-        for row in (self.finding, self.exception):
-            for field in row:
-                if field in {"commit_sha", "closed_date", "closure_evidence"}:
-                    continue
-                original = row[field]
-                with self.subTest(row=row is self.finding, field=field):
-                    row[field] = "mismatch"
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                record_path = root / "docs/audit" / name
+                record_path.parent.mkdir(parents=True)
+                record = {
+                    "schema": "cohesix.milestone-evidence-waiver/v1",
+                    "milestone_id": milestone, "rust_review": "APPROVED",
+                    "status": "APPROVED_ACTIVE", "approved_by": "Lukas Bower",
+                    "decision_date": "2026-09-14", "reviewed_source_commit": source,
+                    "approval_quote": quote,
+                    # An old DD30 expiry does not expire review of unchanged code.
+                    "expiration_date": "2000-01-01",
+                }
+                def write_record() -> None:
+                    record_path.write_text("\n".join(
+                        f"{key} = {json.dumps(value)}" for key, value in record.items()
+                    ))
+                write_record()
+                with mock.patch.object(lifecycle, "validate_reviewed_source") as check:
+                    lifecycle.validate_rust_review(root, milestone)
+                    check.assert_called_once_with(root, source)
+                    for key in ("rust_review", "status", "approved_by", "decision_date",
+                                "reviewed_source_commit", "approval_quote", "milestone_id"):
+                        old = record[key]
+                        record[key] = "unapproved"
+                        write_record()
+                        with self.assertRaises(lifecycle.LifecycleError):
+                            lifecycle.validate_rust_review(root, milestone)
+                        record[key] = old
+                    write_record()
+                    check.side_effect = lifecycle.LifecycleError("source changed")
+                    with self.assertRaisesRegex(lifecycle.LifecycleError, "source changed"):
+                        lifecycle.validate_rust_review(root, milestone)
+                    record_path.unlink()
                     with self.assertRaises(lifecycle.LifecycleError):
-                        self.validate()
-                row[field] = original
+                        lifecycle.validate_rust_review(root, milestone)
+                    with self.assertRaises(lifecycle.LifecycleError):
+                        lifecycle.validate_rust_review(root, "28")
 
-    def test_every_protected_file_remains_bound(self) -> None:
-        for relative in self.protected_paths:
-            path = self.root / relative
-            original = path.read_bytes()
-            with self.subTest(path=relative):
-                path.write_bytes(original + b"// changed\n")
-                with self.assertRaisesRegex(
-                    lifecycle.LifecycleError, "protected IPC source changed"
-                ):
-                    self.validate()
-                path.unlink()
-                with self.assertRaises(lifecycle.LifecycleError):
-                    self.validate()
-            path.write_bytes(original)
-        entries = self.record["protected_files"]
-        original = entries[-1]
-        for replacement in (
-            entries[0],
-            {"path": "../unreviewed.rs", "sha256": "a" * 64},
-            {"path": original["path"], "sha256": "bad"},
-        ):
-            with self.subTest(replacement=replacement):
-                entries[-1] = replacement
-                self.write_record()
-                with self.assertRaises(lifecycle.LifecycleError):
-                    self.validate()
-        entries.pop()
-        self.write_record()
-        with self.assertRaises(lifecycle.LifecycleError):
-            self.validate()
-
-    def test_record_validation_does_not_silently_admit_a_release(self) -> None:
-        self.write_registers()
-        code, stdout, stderr = self.run_mode("register")
-        self.assertEqual(code, 0, stderr)
-        self.assertIn("validated (not release admission)", stdout)
-        self.assertNotIn("waiver admitted:", stdout)
-        for release in ("", "1.0.1-beta"):
-            with self.subTest(release=release):
-                code, stdout, stderr = self.run_mode("blockers", release)
-                self.assertEqual(code, 1, stdout)
-                self.assertIn("requires explicit DD_RELEASE_ID", stderr)
-                self.assertNotIn("waiver admitted:", stdout)
-        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
-        self.assertEqual(code, 0, stderr)
-        self.assertIn("waiver admitted:", stdout)
-        self.assertIn("dynamic_fault_wake=NOT_EXECUTED", stdout)
-        self.assertIn("scope=dd30-restricted-ipc-dynamic-fault-wake", stdout)
-        self.assertIn(
-            hashlib.sha256(self.record_path.read_bytes()).hexdigest(), stdout
-        )
-
-    def test_unapproved_or_mismatched_registers_block_release(self) -> None:
-        for status in ("PROPOSED", "REVOKED", "EXPIRED", "CLOSED"):
-            with self.subTest(status=status):
-                self.exception["status"] = status
-                self.write_registers()
-                code, stdout, _ = self.run_mode("blockers", "1.0.0-beta")
-                self.assertEqual(code, 1, stdout)
-                self.assertNotIn("waiver admitted:", stdout)
-        self.exception["status"] = "APPROVED_ACTIVE"
-        for field in ("exception_id", "finding_id", "scope", "approved_by"):
-            original = self.exception[field]
-            with self.subTest(field=field):
-                self.exception[field] = "mismatch"
-                self.write_registers()
-                code, stdout, _ = self.run_mode("blockers", "1.0.0-beta")
-                self.assertEqual(code, 1, stdout)
-            self.exception[field] = original
-
-    def test_unrelated_p0_p1_still_block_and_no_waiver_is_admitted(self) -> None:
-        for severity in ("P0", "P1"):
-            for disposition in ("OPEN", "PENDING_VERIFY", "ACCEPTED_RISK"):
-                with self.subTest(severity=severity, disposition=disposition):
-                    self.write_registers({
-                        **self.finding,
-                        "finding_id": "DD-OTHER",
-                        "severity": severity,
-                        "disposition": disposition,
-                    })
-                    code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
-                    self.assertEqual(code, 1, stdout)
-                    self.assertIn("DD-OTHER", stderr)
-                    self.assertNotIn("waiver admitted:", stdout)
-        for severity in ("P0", "P2", "P3"):
-            with self.subTest(dd30_severity=severity):
-                self.finding["severity"] = severity
-                self.exception["severity"] = severity
-                self.write_registers()
-                code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
-                self.assertEqual(code, 1, stdout)
-                self.assertIn(f"DD-2026-0030 ({severity}, ACCEPTED_RISK)", stderr)
-                code, stdout, stderr = self.run_mode("register")
-                self.assertEqual(code, 1, stdout)
-                self.assertIn("cannot change P1 severity", stderr)
-        self.finding.update(finding_id="DD-OTHER", severity="P2")
-        self.exception.update(finding_id="DD-OTHER", severity="P2")
-        self.write_registers()
-        code, stdout, stderr = self.run_mode("register")
-        self.assertEqual(code, 1, stdout)
-        self.assertIn("reserved for DD-2026-0030 severity P1", stderr)
-
-    def test_missing_waiver_and_modified_implementation_fail_admission(self) -> None:
-        self.write_registers()
-        self.record_path.unlink()
-        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
-        self.assertEqual(code, 1, stdout)
-        self.assertIn("missing regular release waiver", stderr)
-        self.write_record()
-        (self.root / self.protected_paths[0]).write_bytes(b"changed")
-        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
-        self.assertEqual(code, 1, stdout)
-        self.assertIn("protected IPC source changed", stderr)
-        self.assertNotIn("waiver admitted:", stdout)
-        self.record["protected_files"][0]["sha256"] = hashlib.sha256(
-            b"changed"
-        ).hexdigest()
-        self.write_record()
-        code, stdout, stderr = self.run_mode("blockers", "1.0.0-beta")
-        self.assertEqual(code, 1, stdout)
-        self.assertIn("protected IPC digest differs from approval", stderr)
-        self.assertNotIn("waiver admitted:", stdout)
-
-
-class MilestoneOwnerWaiverTests(unittest.TestCase):
-    """M27 extends one finding without refreshing historical release approval."""
-
-    milestone = "27"
-    record_name = "DD30_M27_APPROVAL.toml"
-    reviewed_source = "7c3b82abbaf938f82f958dc40886d24fcf1c9f01"
-    approval_quote = "Consider DD30 and Rust review signed off"
-    source_validator = "validate_m27_source"
-
-    def setUp(self) -> None:
-        self.fixture = ReleaseOwnerWaiverTests()
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.fixture.record_path = self.fixture.audit / self.record_name
-        self.fixture.record.update({
-            "schema": "cohesix.milestone-evidence-waiver/v1",
-            "milestone_id": self.milestone, "rust_review": "APPROVED",
-            "decision_date": "2026-09-14",
-            "reviewed_source_commit": self.reviewed_source,
-            "approval_quote": self.approval_quote,
-        })
-        del self.fixture.record["release_id"]
-        self.fixture.write_record()
-        patcher = mock.patch.object(lifecycle, self.source_validator)
-        self.source_check = patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def validate(self, today: date = date(2026, 9, 14)) -> object:
-        return lifecycle.validate_waiver(
-            self.fixture.root, self.fixture.finding, self.fixture.exception,
-            today=today, milestone=self.milestone,
-        )
-
-    def test_exact_review_is_separately_admitted_and_time_bounded(self) -> None:
-        for today in (date(2026, 9, 14), date(2026, 10, 13)):
-            admission = self.validate(today)
-            self.assertEqual(admission.milestone, self.milestone)
-            self.assertIn(f"DD_MILESTONE_ID={self.milestone}", admission.describe(admitted=True))
-            self.assertIn("dynamic_fault_wake=NOT_EXECUTED",
-                          admission.describe(admitted=True))
-        self.source_check.assert_called_with(self.fixture.root)
-        for today in (date(2026, 9, 13), date(2026, 10, 14)):
-            with self.assertRaises(lifecycle.LifecycleError):
-                self.validate(today)
-
-    def test_identity_review_and_scope_cannot_be_repurposed(self) -> None:
-        for key, value in {
-            "milestone_id": "28", "rust_review": "PENDING",
-            "reviewed_source_commit": "a" * 40, "approval_quote": "Approved",
-            "status": "REVOKED", "expiration_date": "2026-10-14",
-            "severity": "P2", "disposition": "CLOSED_VERIFIED",
-        }.items():
-            original = self.fixture.record[key]
-            with self.subTest(key=key):
-                self.fixture.record[key] = value
-                self.fixture.write_record()
-                with self.assertRaises(lifecycle.LifecycleError):
-                    self.validate()
-            self.fixture.record[key] = original
-        self.fixture.write_record()
-        self.source_check.side_effect = lifecycle.LifecycleError("changed review")
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "changed review"):
-            self.validate()
-
-    def test_m27_has_no_unreviewed_protected_source_successor(self) -> None:
-        for relative in self.fixture.protected_paths:
-            path = self.fixture.root / relative
-            old = path.read_bytes()
-            with self.subTest(path=relative):
-                path.write_bytes(b"unreviewed successor")
-                with self.assertRaisesRegex(lifecycle.LifecycleError,
-                                            "protected IPC source changed"):
-                    self.validate()
-            path.write_bytes(old)
-
-    def test_cli_requires_one_explicit_context_and_retains_other_blockers(self) -> None:
-        self.fixture.write_registers()
-        code, output, error = self.fixture.run_mode("blockers", milestone=self.milestone)
-        self.assertEqual(code, 0, error)
-        self.assertIn(f"DD_MILESTONE_ID={self.milestone}", output)
-        code, output, error = self.fixture.run_mode("register", milestone=self.milestone)
-        self.assertEqual(code, 0, error)
-        self.assertNotIn("waiver admitted:", output)
-        code, _, error = self.fixture.run_mode("blockers", "1.0.0-beta", self.milestone)
-        self.assertEqual(code, 1)
-        self.assertIn("select exactly one", error)
-        self.fixture.write_registers({
-            **self.fixture.finding, "finding_id": "DD-OTHER",
-            "severity": "P1", "disposition": "OPEN",
-        })
-        code, output, error = self.fixture.run_mode("blockers", milestone=self.milestone)
-        self.assertEqual(code, 1, output)
-        self.assertIn("DD-OTHER", error)
-
-    def test_missing_record_and_unrelated_finding_remain_blocking(self) -> None:
-        self.fixture.record_path.unlink()
-        with self.assertRaises(lifecycle.LifecycleError):
-            self.validate()
-        self.fixture.write_record()
-        self.fixture.finding["finding_id"] = "DD-OTHER"
-        with self.assertRaises(lifecycle.LifecycleError):
-            self.validate()
-
-
-class M27aOwnerWaiverTests(MilestoneOwnerWaiverTests):
-    """The actual M27a decision has its own immutable source and review quote."""
-
-    milestone = "27a"
-    record_name = "DD30_M27A_APPROVAL.toml"
-    reviewed_source = "58140c1a5c79124a8dd7a4ff4bd547a52c8bd362"
-    approval_quote = "Sign off"
-    source_validator = "validate_m27a_source"
-
-
-class MilestoneSourceBindingTests(unittest.TestCase):
     def test_review_checks_changed_deleted_and_added_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "apps/example.rs"
             path.parent.mkdir()
             path.write_text("// reviewed source\n")
+
             def git(*arguments: str) -> str:
                 return subprocess.check_output(
                     ["git", "-C", str(root), *arguments], text=True,
                 ).strip()
+
             git("init", "-q")
             git("add", ".")
             git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
                 "commit", "-qm", "reviewed")
-            with mock.patch.object(lifecycle, "M27_SOURCE", git("rev-parse", "HEAD")):
-                lifecycle.validate_m27_source(root)
-                path.write_text("// changed\n")
-                with self.assertRaises(lifecycle.LifecycleError):
-                    lifecycle.validate_m27_source(root)
-                path.unlink()
-                with self.assertRaises(lifecycle.LifecycleError):
-                    lifecycle.validate_m27_source(root)
-                git("restore", "apps/example.rs")
-                (path.parent / "new.rs").write_text("// unreviewed\n")
-                with self.assertRaises(lifecycle.LifecycleError):
-                    lifecycle.validate_m27_source(root)
+            source = git("rev-parse", "HEAD")
+            lifecycle.validate_reviewed_source(root, source)
+            path.write_text("// changed\n")
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.validate_reviewed_source(root, source)
+            path.unlink()
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.validate_reviewed_source(root, source)
+            git("restore", "apps/example.rs")
+            (path.parent / "new.rs").write_text("// unreviewed\n")
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.validate_reviewed_source(root, source)
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.validate_reviewed_source(root, "0" * 40)
 
 
 if __name__ == "__main__":

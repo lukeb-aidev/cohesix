@@ -1,16 +1,14 @@
 # Author: Lukas Bower
-# Purpose: Validate finding lifecycles and separately selected DD30 owner decisions.
+# Purpose: Validate audit lifecycles while preserving the retired DD30 evidence gap.
 # Copyright 2026 Lukas Bower
 
-"""Keep verified remediation distinct from a scoped release-owner decision."""
+"""Keep verified remediation, active risk exceptions and accepted gaps distinct."""
 
 from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import dataclass
 from datetime import date
-import hashlib
 import pathlib
 import re
 import subprocess
@@ -18,282 +16,114 @@ import sys
 import tomllib
 
 
-WAIVER_FINDING = "DD-2026-0030"
-WAIVER_EXCEPTION = "EX-2026-0030"
-WAIVER_RELEASE = "1.0.0-beta"
-WAIVER_SCOPE = "dd30-restricted-ipc-dynamic-fault-wake"
-WAIVER_RECORD = pathlib.Path("docs/audit/DD30_RELEASE_WAIVER.toml")
-WAIVER_APPROVAL = (
-    "There is no debugger, dd30 was a one-off issue. "
-    "Mark it as a pass, we are ready for release"
-)
-WAIVER_SOURCE = "6d7c16e4a0f5d89c32a4fa0f815c2bfe6babc065"
-M27_RECORD = pathlib.Path("docs/audit/DD30_M27_APPROVAL.toml")
-M27_SOURCE = "7c3b82abbaf938f82f958dc40886d24fcf1c9f01"
-M27_APPROVAL = "Consider DD30 and Rust review signed off"
-M27A_RECORD = pathlib.Path("docs/audit/DD30_M27A_APPROVAL.toml")
-M27A_SOURCE = "58140c1a5c79124a8dd7a4ff4bd547a52c8bd362"
-M27A_APPROVAL = "Sign off"
-REVIEW_PATHS = ("apps", "crates", "tools", "configs", "Cargo.toml", "Cargo.lock")
-PROTECTED_FILES = frozenset({
-    "apps/root-task/src/console/mod.rs",
-    "apps/root-task/src/hal/console_network.rs",
-    "apps/root-task/src/hal/critical_tcb.rs",
-    "apps/root-task/src/hal/driver_task.rs",
-    "apps/root-task/src/hal/mod.rs",
-    "apps/root-task/src/hal/worker_task.rs",
-    "apps/root-task/src/kernel.rs",
-    "apps/root-task/src/sel4.rs",
-    "apps/root-task/src/sel4/syscall.rs",
-    "crates/sel4-sys/src/lib.rs",
-})
+RETIRED_FINDING = "DD-2026-0030"
+RETIRED_EXCEPTION = "EX-2026-0030"
+RETIREMENT_RECORD = pathlib.Path("docs/audit/AUDIT_REPORT_2026-09-13.md")
+RETIREMENT_DISPOSITION = "RETIRED_ACCEPTED_GAP"
+RETIREMENT_REFERENCE = f"{RETIREMENT_RECORD}#dd30-retirement"
 
 
 class LifecycleError(ValueError):
-    """A lifecycle record cannot authorize its requested disposition."""
+    """An audit record does not support its requested disposition."""
 
 
-@dataclass(frozen=True)
-class WaiverAdmission:
-    """Content binding for an owner decision; never a target-test result."""
-
-    sha256: str
-    path: pathlib.Path
-    milestone: str = ""
-
-    def describe(self, *, admitted: bool) -> str:
-        action = "admitted" if admitted else "validated (not release admission)"
-        selection = (f"DD_MILESTONE_ID={self.milestone}" if self.milestone else
-                     f"DD_RELEASE_ID={WAIVER_RELEASE}")
-        return (
-            f"release-owner evidence waiver {action}: "
-            f"{selection} finding={WAIVER_FINDING} "
-            f"exception={WAIVER_EXCEPTION} scope={WAIVER_SCOPE} "
-            f"sha256={self.sha256} record={self.path} "
-            "dynamic_fault_wake=NOT_EXECUTED"
-        )
-
-
-def reviewed_source_bytes(
-    root: pathlib.Path, relative: str, commit: str = WAIVER_SOURCE,
-) -> bytes:
-    """Resolve the approval's immutable Git object, never the working tree."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "show", f"{commit}:{relative}"],
-            check=True,
-            capture_output=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise LifecycleError(
-            f"cannot resolve reviewed IPC source: {relative} at {commit}"
-        ) from error
-    return result.stdout
-
-
-def validate_m27_source(root: pathlib.Path) -> None:
-    """Keep the original M27 reviewed implementation binding unchanged."""
-    validate_reviewed_source(root, M27_SOURCE, "M27")
-
-
-def validate_m27a_source(root: pathlib.Path) -> None:
-    """Bind the separately approved M27a implementation to candidate F."""
-    validate_reviewed_source(root, M27A_SOURCE, "M27a")
-
-
-def validate_reviewed_source(
-    root: pathlib.Path, source: str, label: str,
-) -> None:
-    """Bind human review to all reviewed host, target, manifest and SDK sources."""
-    try:
-        changed = subprocess.run(
-            ["git", "-C", str(root), "diff", "--exit-code", source,
-             "--", *REVIEW_PATHS], capture_output=True, check=False,
-        )
-        untracked = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--others",
-             "--exclude-standard", "--", *REVIEW_PATHS],
-            capture_output=True, check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise LifecycleError(f"cannot resolve {label} reviewed source") from error
-    if changed.returncode != 0 or untracked.stdout:
-        raise LifecycleError(f"{label} reviewed implementation changed")
-
-
-def validate_waiver(
+def validate_retirement(
     root: pathlib.Path,
     finding: dict[str, str],
     exception: dict[str, str],
-    *,
-    today: date,
-    milestone: str = "",
-) -> WaiverAdmission:
-    """Check the explicitly selected owner decision with an injected date.
+) -> str:
+    """Validate the recorded owner decision, without source or expiry gates.
 
-    The CLI supplies the actual date. No environment or CLI option can replace
-    it. Register validity alone does not select release acceptance.
+    This terminal disposition belongs only to DD30's repaired defect and
+    unexecuted dynamic test. A reopened defect must use the ordinary lifecycle.
     """
-    if milestone not in {"", "27", "27a"}:
-        raise LifecycleError("unsupported DD30 milestone selection")
-    if milestone == "27a":
-        approval_path, approval_source, approval_quote = (
-            M27A_RECORD, M27A_SOURCE, M27A_APPROVAL
-        )
-    elif milestone:
-        approval_path, approval_source, approval_quote = (
-            M27_RECORD, M27_SOURCE, M27_APPROVAL
-        )
-    else:
-        approval_path, approval_source, approval_quote = (
-            WAIVER_RECORD, WAIVER_SOURCE, WAIVER_APPROVAL
-        )
-    path = root / approval_path
-    if not path.is_file() or path.is_symlink():
-        raise LifecycleError(f"missing regular release waiver record: {path}")
-    payload = path.read_bytes()
-    try:
-        record = tomllib.loads(payload.decode("utf-8"))
-    except (UnicodeError, tomllib.TOMLDecodeError) as error:
-        raise LifecycleError(f"invalid release waiver record: {error}") from error
-    required = {
-        "schema", "exception_id", "finding_id", "release_id", "scope_id",
-        "severity", "disposition", "status", "risk_owner", "approved_by",
-        "decision_date", "expiration_date", "reviewed_source_commit",
-        "approval_quote", "protected_files",
-    }
-    if milestone:
-        required.remove("release_id")
-        required.update({"milestone_id", "rust_review"})
-    if set(record) != required:
-        raise LifecycleError("release waiver record has missing or unknown fields")
     expected = {
-        "schema": "cohesix.release-evidence-waiver/v1",
-        "exception_id": WAIVER_EXCEPTION,
-        "finding_id": WAIVER_FINDING,
-        "release_id": WAIVER_RELEASE,
-        "scope_id": WAIVER_SCOPE,
+        "finding_id": RETIRED_FINDING,
         "severity": "P1",
-        "disposition": "ACCEPTED_RISK",
-        "status": "APPROVED_ACTIVE",
+        "disposition": RETIREMENT_DISPOSITION,
+        "commit_sha": "3746e659fc9a96b7d623e037ae7931f92ebd051c",
+        "closed_date": "2026-09-14",
+        "closure_evidence": RETIREMENT_REFERENCE,
+        "risk_owner": "Lukas Bower",
+        "risk_expiration": "",
+    }
+    for field, value in expected.items():
+        if finding.get(field, "").strip() != value:
+            raise LifecycleError(f"retirement finding {field} mismatch")
+    for field, value in {
+        "exception_id": RETIRED_EXCEPTION,
+        "finding_id": RETIRED_FINDING,
+        "severity": "P1",
+        "scope": "dd30-restricted-ipc-dynamic-fault-wake",
         "risk_owner": "Lukas Bower",
         "approved_by": "Lukas Bower",
-        "reviewed_source_commit": WAIVER_SOURCE,
-        "approval_quote": WAIVER_APPROVAL,
-    }
-    if milestone:
-        expected.pop("release_id")
-        expected.update({
-            "schema": "cohesix.milestone-evidence-waiver/v1",
-            "milestone_id": milestone,
-            "reviewed_source_commit": approval_source,
-            "approval_quote": approval_quote,
-            "rust_review": "APPROVED",
-        })
-    for field, value in expected.items():
-        if record[field] != value:
-            raise LifecycleError(f"release waiver {field} does not match approval")
-    for field in ("decision_date", "expiration_date"):
-        if not isinstance(record[field], str):
-            raise LifecycleError(f"release waiver {field} must be an ISO date string")
-    try:
-        decision = date.fromisoformat(record["decision_date"])
-        expiration = date.fromisoformat(record["expiration_date"])
-    except ValueError as error:
-        raise LifecycleError("release waiver has an invalid date") from error
-    if decision != date(2026, 9, 14 if milestone else 13):
-        raise LifecycleError("release waiver decision date does not match approval")
-    if not decision <= expiration <= date(2026, 10, 13):
-        raise LifecycleError(
-            "release waiver expiration exceeds its release-specific bound"
-        )
-    if today < decision:
-        raise LifecycleError("release waiver decision is not yet effective")
-    if today > expiration:
-        raise LifecycleError(f"release waiver expired on {expiration.isoformat()}")
-    required_finding = {
-        "finding_id": WAIVER_FINDING,
-        "severity": "P1",
-        "disposition": "ACCEPTED_RISK",
-        "risk_owner": record["risk_owner"],
-        "risk_expiration": record["expiration_date"],
-    }
-    for field, value in required_finding.items():
-        if finding.get(field, "").strip() != value:
-            raise LifecycleError(f"release waiver finding {field} mismatch")
-    required_exception = {
-        "exception_id": WAIVER_EXCEPTION,
-        "finding_id": WAIVER_FINDING,
-        "severity": "P1",
-        "scope": f"release={WAIVER_RELEASE}; scope={WAIVER_SCOPE}",
-        "risk_owner": record["risk_owner"],
-        "approved_by": record["approved_by"],
-        # Preserve the original exception row; the separate M27 record extends it.
-        "decision_date": "2026-09-13",
-        "expiration_date": record["expiration_date"],
-        "status": "APPROVED_ACTIVE",
-    }
-    for field, value in required_exception.items():
+        "decision_date": "2026-09-14",
+        "expiration_date": "N/A",
+        "status": "RETIRED",
+    }.items():
         if exception.get(field) != value:
-            raise LifecycleError(f"release waiver exception {field} mismatch")
-    if milestone == "27a":
-        validate_m27a_source(root)
-    elif milestone:
-        validate_m27_source(root)
-    files = record["protected_files"]
-    if not isinstance(files, list) or len(files) != len(PROTECTED_FILES):
-        raise LifecycleError("release waiver requires exactly the protected IPC files")
-    seen: set[str] = set()
-    for entry in files:
-        if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
-            raise LifecycleError("invalid protected IPC file record")
-        relative = entry["path"]
-        digest = entry["sha256"]
-        if not isinstance(relative, str) or relative not in PROTECTED_FILES:
-            raise LifecycleError("unknown protected IPC path")
-        if relative in seen:
-            raise LifecycleError("duplicate protected IPC path")
-        seen.add(relative)
-        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-            raise LifecycleError("invalid protected IPC digest")
-        reviewed_bytes = (
-            reviewed_source_bytes(root, relative, approval_source) if milestone
-            else reviewed_source_bytes(root, relative)
-        )
-        reviewed = hashlib.sha256(reviewed_bytes).hexdigest()
-        if digest != reviewed:
-            raise LifecycleError(
-                f"protected IPC digest differs from approval: {relative}"
-            )
-        source = root / relative
-        if not source.is_file() or source.is_symlink():
-            raise LifecycleError(f"missing regular protected IPC source: {relative}")
-        if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
-            if milestone or relative != "apps/root-task/src/sel4.rs":
-                raise LifecycleError(f"protected IPC source changed: {relative}")
-            # This is a separate exact owner-approved host-only successor,
-            # never a refreshed version of the original 6d7 approval.
-            from release_stage5_acceptance import (
-                AcceptanceError,
-                validate_host_successor,
-            )
+            raise LifecycleError(f"retirement exception {field} mismatch")
+    record = root / RETIREMENT_RECORD
+    if (not record.is_file() or record.is_symlink()
+            or '<a id="dd30-retirement"></a>' not in record.read_text()):
+        raise LifecycleError(f"missing regular retirement record: {record}")
+    return (
+        f"historical finding retired: {RETIRED_FINDING} "
+        f"(P1, {RETIREMENT_DISPOSITION}); "
+        f"dynamic_fault_wake=NOT_EXECUTED; record={RETIREMENT_REFERENCE}"
+    )
 
-            try:
-                successor = validate_host_successor(root, today=today)
-            except (AcceptanceError, OSError, ValueError,
-                    subprocess.CalledProcessError) as error:
-                raise LifecycleError(
-                    f"protected IPC source changed: {relative}; "
-                    f"host successor rejected: {error}"
-                ) from error
-            print(
-                "DD30 exact host-only successor validated (not target proof): "
-                f"approval_sha256={successor['approval_sha256']} "
-                f"original_source={WAIVER_SOURCE} dynamic_fault_wake=NOT_EXECUTED"
-            )
-    if seen != PROTECTED_FILES:
-        raise LifecycleError("incomplete protected IPC source coverage")
-    return WaiverAdmission(hashlib.sha256(payload).hexdigest(), path, milestone)
+
+def validate_rust_review(root: pathlib.Path, milestone: str) -> None:
+    """Check an explicitly selected historical Rust review independently of DD30.
+
+    Archived approval files retain their original DD30 dates and hashes. Only
+    the review identity and reviewed implementation govern this source check.
+    Future reviews use their own normal contribution workflow.
+    """
+    reviews = {
+        "27": (
+            "DD30_M27_APPROVAL.toml",
+            "7c3b82abbaf938f82f958dc40886d24fcf1c9f01",
+            "Consider DD30 and Rust review signed off",
+        ),
+        "27a": (
+            "DD30_M27A_APPROVAL.toml",
+            "58140c1a5c79124a8dd7a4ff4bd547a52c8bd362", "Sign off",
+        ),
+    }
+    if milestone not in reviews:
+        raise LifecycleError("no recorded Rust review for the selected milestone")
+    name, source, quote = reviews[milestone]
+    path = root / "docs/audit" / name
+    if not path.is_file() or path.is_symlink():
+        raise LifecycleError(f"missing regular Rust review record: {path}")
+    record = tomllib.loads(path.read_text())
+    for key, value in {
+        "schema": "cohesix.milestone-evidence-waiver/v1",
+        "milestone_id": milestone, "rust_review": "APPROVED",
+        "status": "APPROVED_ACTIVE", "approved_by": "Lukas Bower",
+        "decision_date": "2026-09-14", "reviewed_source_commit": source,
+        "approval_quote": quote,
+    }.items():
+        if record.get(key) != value:
+            raise LifecycleError(f"Rust review {key} does not match approval")
+    validate_reviewed_source(root, source)
+
+
+def validate_reviewed_source(root: pathlib.Path, source: str) -> None:
+    """Reject changed, missing or new implementation outside the human review."""
+    paths = ("apps", "crates", "tools", "configs", "Cargo.toml", "Cargo.lock")
+    changed = subprocess.run(
+        ["git", "-C", str(root), "diff", "--exit-code", source, "--", *paths],
+        capture_output=True, check=False,
+    )
+    untracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard",
+         "--", *paths], capture_output=True, check=True,
+    )
+    if changed.returncode != 0 or untracked.stdout:
+        raise LifecycleError("Rust reviewed implementation changed or is unavailable")
 
 
 def validate_register(
@@ -302,9 +132,8 @@ def validate_register(
     root: pathlib.Path,
     *,
     today: date,
-    milestone: str = "",
-) -> list[WaiverAdmission] | None:
-    """Validate every finding/exception lifecycle before any waiver admission."""
+) -> list[str] | None:
+    """Validate active exceptions and historical retirement records separately."""
     if not findings_path.is_file():
         print(f"missing {findings_path}", file=sys.stderr)
         return None
@@ -404,6 +233,7 @@ def validate_register(
         "PENDING_VERIFY",
         "CLOSED_VERIFIED",
         "ACCEPTED_RISK",
+        RETIREMENT_DISPOSITION,
     }
     allowed_finding_severities = {"P0", "P1", "P2", "P3"}
     for line_number, row in enumerate(reader, start=2):
@@ -428,8 +258,13 @@ def validate_register(
             )
         if severity not in allowed_finding_severities:
             errors.append(f"{finding_id}: unknown severity '{severity or '<empty>'}'")
-        if finding_id == WAIVER_FINDING and severity != "P1":
-            errors.append(f"{finding_id}: the release waiver cannot change P1 severity")
+        if finding_id == RETIRED_FINDING and severity != "P1":
+            errors.append(f"{finding_id}: retirement cannot change P1 severity")
+        if (disposition == RETIREMENT_DISPOSITION
+                and finding_id != RETIRED_FINDING):
+            errors.append(
+                f"{finding_id}: {RETIREMENT_DISPOSITION} is reserved for DD30"
+            )
         if disposition == "CLOSED_VERIFIED" and severity in {"P0", "P1", "P2"}:
             commit_sha = row.get("commit_sha", "").strip()
             closed_date = row.get("closed_date", "").strip()
@@ -511,9 +346,12 @@ def validate_register(
     table_rows = data_rows
 
     active_exception_findings = set()
-    admissions: list[WaiverAdmission] = []
+    retirements: list[str] = []
+    retired_findings: set[str] = set()
     exception_ids = set()
-    allowed_statuses = {"PROPOSED", "APPROVED_ACTIVE", "EXPIRED", "REVOKED", "CLOSED"}
+    allowed_statuses = {
+        "PROPOSED", "APPROVED_ACTIVE", "EXPIRED", "REVOKED", "CLOSED", "RETIRED",
+    }
     for cells in table_rows:
         first = cells[0]
 
@@ -538,11 +376,11 @@ def validate_register(
             errors.append(f"{exception_id}: duplicate exception ID")
             continue
         exception_ids.add(exception_id)
-        if exception_id == WAIVER_EXCEPTION and (
-            related_finding != WAIVER_FINDING or severity != "P1"
+        if exception_id == RETIRED_EXCEPTION and (
+            related_finding != RETIRED_FINDING or severity != "P1"
         ):
             errors.append(
-                f"{exception_id}: reserved for {WAIVER_FINDING} severity P1"
+                f"{exception_id}: reserved for {RETIRED_FINDING} severity P1"
             )
 
         finding = findings.get(related_finding)
@@ -556,6 +394,23 @@ def validate_register(
                 f"{exception_id}: severity {severity or '<empty>'} does not match "
                 f"{related_finding} severity {finding['severity'] or '<empty>'}"
             )
+
+        if status == "RETIRED":
+            if finding is None:
+                continue
+            try:
+                if not rationale or not controls:
+                    raise LifecycleError("retirement requires rationale and controls")
+                retirements.append(validate_retirement(root, finding, {
+                    "exception_id": exception_id, "finding_id": related_finding,
+                    "severity": severity, "scope": scope, "risk_owner": risk_owner,
+                    "approved_by": approved_by, "decision_date": decision,
+                    "expiration_date": expiration, "status": status,
+                }))
+                retired_findings.add(related_finding)
+            except LifecycleError as error:
+                errors.append(f"{exception_id}: {error}")
+            continue
 
         for label, value in [
             ("scope", scope),
@@ -599,37 +454,10 @@ def validate_register(
             else:
                 active_exception_findings.add(related_finding)
             if severity in {"P0", "P1"}:
-                if (
-                    exception_id == WAIVER_EXCEPTION
-                    and related_finding == WAIVER_FINDING
-                    and severity == "P1"
-                    and finding is not None
-                ):
-                    try:
-                        admissions.append(validate_waiver(
-                            root,
-                            finding,
-                            {
-                                "exception_id": exception_id,
-                                "finding_id": related_finding,
-                                "severity": severity,
-                                "scope": scope,
-                                "risk_owner": risk_owner,
-                                "approved_by": approved_by,
-                                "decision_date": decision,
-                                "expiration_date": expiration,
-                                "status": status,
-                            },
-                            today=today,
-                            milestone=milestone,
-                        ))
-                    except LifecycleError as error:
-                        errors.append(f"{exception_id}: {error}")
-                else:
-                    errors.append(
-                        f"{exception_id}: {severity} findings cannot be accepted "
-                        "as residual risk"
-                    )
+                errors.append(
+                    f"{exception_id}: {severity} findings cannot be accepted "
+                    "as residual risk"
+                )
             if finding is not None and finding["disposition"] != "ACCEPTED_RISK":
                 errors.append(
                     f"{exception_id}: APPROVED_ACTIVE requires {related_finding} "
@@ -648,6 +476,12 @@ def validate_register(
                 )
 
     for finding_id, finding in findings.items():
+        if (finding["disposition"] == RETIREMENT_DISPOSITION
+                and finding_id not in retired_findings):
+            errors.append(
+                f"{finding_id}: {RETIREMENT_DISPOSITION} requires a matching "
+                "RETIRED exception"
+            )
         if (
             finding["disposition"] == "ACCEPTED_RISK"
             and finding_id not in active_exception_findings
@@ -663,14 +497,14 @@ def validate_register(
             print(f"  - {error}", file=sys.stderr)
         return None
 
-    return admissions
+    return retirements
 
 
 def check_blocking_findings(path: pathlib.Path) -> bool | None:
-    """Return whether the sole scoped waiver needs full validation.
+    """Return whether DD30's retirement needs register validation.
 
     None is failure; False is an ordinary passing blocker predicate. True
-    requires the shared register validator plus explicit release selection.
+    requires the recorded retirement, never a release or milestone selection.
     """
     if not path.is_file():
         print(f"missing {path}", file=sys.stderr)
@@ -709,23 +543,23 @@ def check_blocking_findings(path: pathlib.Path) -> bool | None:
         return None
 
     blocking = []
-    waiver_requested = False
+    retirement_requested = False
 
     for row in reader:
         severity = row.get("severity", "").strip().upper()
         disposition = row.get(disposition_field, "").strip().upper()
         finding_id = row.get("finding_id", "UNKNOWN")
-        if finding_id == WAIVER_FINDING and severity != "P1":
+        if finding_id == RETIRED_FINDING and severity != "P1":
             blocking.append((finding_id, severity, disposition))
             continue
         # Remediation dates schedule work; they never authorize an open P0/P1.
         if severity in {"P0", "P1"} and disposition != "CLOSED_VERIFIED":
             if (
-                finding_id == WAIVER_FINDING
+                finding_id == RETIRED_FINDING
                 and severity == "P1"
-                and disposition == "ACCEPTED_RISK"
+                and disposition == RETIREMENT_DISPOSITION
             ):
-                waiver_requested = True
+                retirement_requested = True
             else:
                 blocking.append((finding_id, severity, disposition))
 
@@ -735,21 +569,28 @@ def check_blocking_findings(path: pathlib.Path) -> bool | None:
             print(f"  - {finding_id} ({severity}, {disposition})", file=sys.stderr)
         return None
 
-    return waiver_requested
+    return retirement_requested
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("blockers", "register"), required=True)
+    parser.add_argument(
+        "--mode", choices=("blockers", "register", "rust-review"), required=True,
+    )
     parser.add_argument("--root", type=pathlib.Path, required=True)
-    parser.add_argument("--findings", type=pathlib.Path, required=True)
-    parser.add_argument("--exceptions", type=pathlib.Path, required=True)
-    parser.add_argument("--release", default="")
-    parser.add_argument("--milestone", default="", choices=("", "27", "27a"))
+    parser.add_argument("--findings", type=pathlib.Path)
+    parser.add_argument("--exceptions", type=pathlib.Path)
+    parser.add_argument("--milestone", default="")
     args = parser.parse_args()
     try:
-        if args.release and args.milestone:
-            raise LifecycleError("select exactly one DD30 qualification context")
+        if args.mode == "rust-review":
+            validate_rust_review(args.root, args.milestone)
+            print(f"Rust review source check passed: milestone={args.milestone}")
+            return 0
+        if args.milestone:
+            raise LifecycleError("milestone selection applies only to rust-review")
+        if args.findings is None or args.exceptions is None:
+            raise LifecycleError("finding and exception registers are required")
         if args.mode == "blockers":
             requested = check_blocking_findings(args.findings)
             if requested is None:
@@ -757,31 +598,23 @@ def main() -> int:
             if not requested:
                 print("blocking findings gate passed")
                 return 0
-        admissions = validate_register(
+        retirements = validate_register(
             args.findings, args.exceptions, args.root, today=date.today(),
-            milestone=args.milestone
         )
-        if admissions is None:
+        if retirements is None:
             return 1
+        if args.mode == "blockers" and len(retirements) != 1:
+            print("DD30 requires one validated retirement record", file=sys.stderr)
+            return 1
+        for retirement in retirements:
+            print(retirement)
         if args.mode == "blockers":
-            if len(admissions) != 1:
-                print("DD30 requires one validated release waiver", file=sys.stderr)
-                return 1
-            if not args.milestone and args.release != WAIVER_RELEASE:
-                print(
-                    f"blocking finding {WAIVER_FINDING} (P1, ACCEPTED_RISK): "
-                    f"requires explicit DD_RELEASE_ID={WAIVER_RELEASE}",
-                    file=sys.stderr,
-                )
-                return 1
-            print(admissions[0].describe(admitted=True))
             print("blocking findings gate passed")
         else:
-            for admission in admissions:
-                print(admission.describe(admitted=False))
             print("exceptions register gate passed")
         return 0
-    except (LifecycleError, OSError) as error:
+    except (LifecycleError, OSError, tomllib.TOMLDecodeError,
+            subprocess.CalledProcessError) as error:
         print(f"due-diligence lifecycle validation failed: {error}", file=sys.stderr)
         return 1
 

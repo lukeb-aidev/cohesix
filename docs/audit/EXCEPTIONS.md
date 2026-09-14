@@ -5,63 +5,34 @@
 # Due Diligence Exceptions Register
 
 ## Exception Policy
-- `P0` findings cannot be accepted as residual risk for release. `P1` findings
-  remain blocking except for the explicit release-owner DD30 decision below.
-- Any exception must reference a finding ID in `docs/audit/findings.csv`.
-- Every exception must include: risk owner, approving authority, compensating controls, decision date, and expiration date.
-- Exceptions expire automatically; expired exceptions force decision state `FAIL` until renewed or remediated.
+- `P0` findings cannot be accepted as residual risk. Unclosed `P1` findings
+  remain blocking. DD30 alone has the terminal owner-approved disposition
+  `RETIRED_ACCEPTED_GAP`, documented in [DD30 retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement).
+- Active exceptions reference a finding and retain risk owner, approving
+  authority, compensating controls, decision date and expiration date.
+- Active exceptions expire automatically; expired exceptions force `FAIL`
+  until renewed or remediated. DD30's retired entry uses `N/A` for expiry and
+  cannot be used to accept another finding or an open regression.
 
-Lukas Bower explicitly accepted DD30's remaining dynamic fault/wake evidence gap
-for `1.0.0-beta` on 2026-09-13 after confirming that no physical debugger is
-available. [DD30_RELEASE_WAIVER.toml](DD30_RELEASE_WAIVER.toml) retains his exact
-statement and the hashes of the ten reviewed production files. Its 2026-10-13
-expiry is a conservative administrative limit aligned with this qualification
-window; the user did not supply that date for DD30. The finding stays `P1` /
-`ACCEPTED_RISK`, and the dynamic test stays unexecuted. Only an explicitly selected
-`DD_RELEASE_ID=1.0.0-beta` gate may admit this matching active waiver. Missing,
-expired, revoked, mismatched or changed-source decisions fail closed. This is
-not a general permission to accept P1 defects, alter source provenance or waive
-another release requirement.
+On 2026-09-14 Lukas Bower approved permanent retirement of DD30's recurring
+milestone/release approvals, whole-file source bindings and expiry. DD30 retains
+P1 severity and the unexecuted dynamic fault/wake test. Its repaired historical
+finding is `RETIRED_ACCEPTED_GAP`, and EX30 is `RETIRED`. Ordinary IPC review,
+regression coverage and other audit/target requirements remain in force.
 
-The owner subsequently approved the exact host-only repair and predecessor
-stage carry-forward in
-[RELEASE_1_0_0_BETA_CARRY_FORWARD.toml](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml).
-This preserves the original DD30 decision and nine unchanged protected files,
-while binding `sel4.rs` to the independently reviewed exact successor bytes.
-The target fast-register implementation is unchanged; no general host-code
-exemption is granted. The separate release entry validates the original four
-attestations and the exact final source before unique governance acceptance.
-Old source identities and the missing complete current-source staged chain
-remain visible, and ordinary resume stays strict. The same conservative
-2026-10-13 administrative bound applies; no future source or release is admitted.
+The original [release waiver](DD30_RELEASE_WAIVER.toml),
+[M27 approval](DD30_M27_APPROVAL.toml), and
+[M27a approval](DD30_M27A_APPROVAL.toml) retain their exact decisions, source
+identities and historical dates. Those DD30 renewal conditions are superseded
+by the [retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement). Human Rust review remains
+independent: `due_diligence_gate.sh --check-rust-review 27|27a` checks a selected
+historical review against its source, without applying DD30 expiry. New code
+still requires its own review through the normal contribution workflow.
 
-On 2026-09-14 Lukas Bower answered the exact M27 review request with
-“Consider DD30 and Rust review signed off”.
-[DD30_M27_APPROVAL.toml](DD30_M27_APPROVAL.toml) separately binds that decision
-to reviewed implementation `7c3b82abbaf938f82f958dc40886d24fcf1c9f01`, all ten
-protected file hashes, and the unchanged 2026-10-13 expiry. It extends this
-same exception to explicitly selected `DD_MILESTONE_ID=27`; it does not replace
-the original release record or exception decision date. The protected kernel
-change only corrects the attestation boot message. Human Rust review is approved;
-DD30 remains P1 / ACCEPTED_RISK and dynamic fault/wake remains UNEXECUTED.
-
-On 2026-09-14 Lukas Bower answered the separate candidate-F M27a Rust-review
-and DD30 disposition request with “Sign off”.
-[DD30_M27A_APPROVAL.toml](DD30_M27A_APPROVAL.toml) binds that decision to
-`58140c1a5c79124a8dd7a4ff4bd547a52c8bd362`, all reviewed implementation and
-the ten protected hashes, with the unchanged 2026-10-13 administrative expiry.
-Explicit `DD_MILESTONE_ID=27a` selects this decision. It does not refresh either
-older approval or mark the dynamic fault/wake test executed. DD30 remains
-P1 / ACCEPTED_RISK. The bounded memory-read QEMU diagnostic is a separate test.
-
-Changed host, target, SDK or manifest implementation, missing approval, conflicting
-release/milestone selection, revoked approval or expiry fails closed. No other
-finding or target prerequisite is waived by this DD30/Rust decision.
-
-The subsequent [M27 completion decision](M27_COMPLETION_EVIDENCE.md) separately
-accepts the disclosed unexecuted final Pi boot/operator/Stages 03–05 for milestone
-status only. It does not amend this register, the DD30 approval or its expiry,
-and supplies no physical target PASS.
+The separate [release Stage 01–04 carry-forward](RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
+and [M27 completion decision](M27_COMPLETION_EVIDENCE.md) retain their original
+scopes and disclosed missing evidence. DD30 retirement grants no target PASS
+or broader release carry-forward.
 
 ## Register
 | Exception ID | Related Finding | Severity | Scope | Rationale | Compensating Controls | Risk Owner | Approved By | Decision Date | Expiration Date | Status |
@@ -75,7 +46,7 @@ and supplies no physical target PASS.
 | `EX-2026-0023` | `DD-2026-0023` | `P2` | Milestone 26e MCS ABI, critical TCB, service/Worker constructors and linked-driver standard-fault boundary; historical deltas are distinct from later `EX-2026-0024`/`EX-2026-0025` additions | seL4 SC/SchedControl, explicit Reply, timeout, receive, retype, mapping, IPC-buffer and child-page operations cross raw kernel or pointer boundaries. Existing safe adapters constrain callers but do not remove those operations. Impossible MCS misuse must fail closed rather than continue with ambiguous authority. | The 2026-08-11 approval expired on 2026-09-11. Current scope was inspected at clean `22e3d08ffb5d8ca2a5b3312ceb354f6395532219`; this scope refresh is not approval or verified remediation. The original decision recorded a measured addition of 71 production unsafe constructs, three precise expects and six fail-closed panics; these are historical deltas, not current whole-file totals. The frozen Rust snapshot committed as `22e3d08ff` passed the canonical scanner at global unsafe/unwrap/expect/panic `827/38/242/102`, linked HAL `173/0/2/0`, and outside `654/38/240/102`, within the unchanged baseline. That establishes count consistency only. Retain local `SAFETY:` invariants and typed capability/error adapters; validate selected seL4 16 headers, invocation shapes, object/refill sizes and per-core admission. Keep children suspended through exact registry/receiver admission, W^X image binding, single-owner HAL access, generation-bound publication, one Reply association and complete teardown before reuse. Panic and impossible host/MCS syscall states remain fail-closed. Later device/passive additions remain scoped by `EX-2026-0024`/`EX-2026-0025`; separately reviewed TLS, PCIe and ordered-timer fixes are not blanket clearance for this historical delta. Exact-source host contracts, selected-profile AArch64 builds and image bindings, independent unsafe-boundary review, and applicable QEMU/Pi lifecycle, fault, pressure and repeatability evidence remain mandatory. No P0/P1 finding or incomplete release gate is accepted by this P2 exception. Renewal was approved by Lukas Bower on 2026-09-13 through 2026-10-13; the unchanged validation and P0/P1 conditions remain mandatory. Decision evidence: `out/release-qualification/1.0.0-beta-8bc556850-20260909/continuation-a45a3d9cc-20260910T083610Z/stage5-closure-20260910T124827Z/continuation-20260912T212227Z/exception-renewal-approval.json`. | `mcs-runtime-owner` | `Lukas Bower` | `2026-09-13` | `2026-10-13` | `APPROVED_ACTIVE` |
 | `EX-2026-0024` | `DD-2026-0024` | `P2` | Milestone 26e QEMU child-owned VirtIO data plane and passive-Worker kernel boundary | Exclusive VirtIO MMIO, coherent DMA descriptors, seL4 IRQ acknowledgement, standard-fault transfer, and passive MCS ReplyRecv cannot be expressed in safe Rust. | Thirteen measured net production unsafe constructs are restricted to fixed QEMU VirtIO MMIO/DMA/IRQ access, root's terminal device reset, and the shared passive-Worker Call/Reply boundary. Every block has a local `SAFETY:` invariant. Compiler admission fixes the single device owner, MMIO/IRQ cap, two queues, and 16 RX plus 16 TX pages; ABI validation, exact Reply ownership, typed terminal faults, focused tests, the full workspace gate, and clean Mac HVF plus Jetson KVM medium/high pressure are mandatory. This does not qualify any Pi physical network driver or Pi hardware behavior. | `console-network-owner` | `Lukas Bower` | `2026-08-25` | `2026-09-25` | `APPROVED_ACTIVE` |
 | `EX-2026-0025` | `DD-2026-0025` | `P2` | Milestone 26e Pi 4 child-owned direct GENET CPU data plane | Cacheable cross-address-space atomic shared pages, root-only initialization and stable observation, sealed descriptor reads, and terminal fault transfer cannot be expressed in safe Rust. | Twenty measured net production unsafe constructs are restricted to seven console shared-page atomic sites, one sealed-layout volatile read, nine GENET driver access/fault sites, two root-only suspended-child initialization aliases, and one root stable diagnostic view over the already-declared CPU-only control page. Every block has a local `SAFETY:` invariant. The compiler derives this mode only for exact `bcmgenet-v5`; the 32 pages carry no physical or device authority; fixed SPSC roles use generation-bound sequence-last Acquire/Release publication and bounded cursor validation; the diagnostic reader requires two equal nonzero commits and the exact generation and grants no packet or IRQ authority; legacy root mediation remains until exact READY and cannot reopen afterward; reciprocal notifications and paired containment fence both children. Focused ABI/runtime/root tests, workspace and Rust-risk gates, the selected Pi AArch64 build, exact clean-image verification, and fresh Pi correctness/performance evidence remain mandatory. Build or host evidence is not Pi acceptance. | `console-network-owner` | `Lukas Bower` | `2026-08-27` | `2026-09-27` | `APPROVED_ACTIVE` |
-| `EX-2026-0030` | `DD-2026-0030` | `P1` | release=1.0.0-beta; scope=dd30-restricted-ipc-dynamic-fault-wake | Lukas Bower explicitly accepts the remaining dynamic fault/wake evidence gap after the repaired IPC ownership contract passed source, ABI, pure-test and emitted-code review. No debugger is connected. The target fault test remains unexecuted. | Exact original approval and ten protected production-file hashes in `docs/audit/DD30_RELEASE_WAIVER.toml`, with only the explicit approved host-only successor and stage carry-forward in `docs/audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml`; unchanged finding severity; explicit release selection; matching register/owner/date/status; automatic expiry; all other findings, source bindings and staged checks remain required. Static error-output ownership is verified; no normal shutdown or policy refusal is relabelled as a kernel fault. | `Lukas Bower` | `Lukas Bower` | `2026-09-13` | `2026-10-13` | `APPROVED_ACTIVE` |
+| `EX-2026-0030` | `DD-2026-0030` | `P1` | dd30-restricted-ipc-dynamic-fault-wake | Lukas Bower permanently accepts the remaining dynamic fault/wake verification gap after the recorded IPC repair and source/ABI/pure/emitted review; see [DD30 retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement). | Preserve the repair and regression coverage; dynamic fault/wake remains UNEXECUTED; ordinary IPC review and new-defect lifecycle still apply; no other finding or target proof is waived. | Lukas Bower | Lukas Bower | 2026-09-14 | N/A | RETIRED |
 
 ## Lifecycle States
 - `PROPOSED`: Captured but not approved.

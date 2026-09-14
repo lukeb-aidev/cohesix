@@ -4,7 +4,15 @@
 
 # Due Diligence Blockers
 
-## Current release candidate (2026-09-13)
+## Current DD30 disposition (2026-09-14)
+
+DD30 is permanently retired as P1 / `RETIRED_ACCEPTED_GAP` by Lukas Bower's
+explicit approval. [DD30 retirement decision](AUDIT_REPORT_2026-09-13.md#dd30-retirement) supersedes the earlier
+DD30 approval, expiry and source-fingerprint requirements below. The repaired
+historical finding and unexecuted dynamic test remain recorded. Other blockers,
+ordinary Rust review and the separate release carry-forward policy are unchanged.
+
+## Historical release candidate decision (2026-09-13)
 
 The finding-level blockers are resolved for explicitly selected release
 `1.0.0-beta`: DD26–29 are `CLOSED_VERIFIED`, and DD30 remains `P1` /
@@ -52,9 +60,9 @@ The final-image Pi boot, live operator checks and Stages 03–05 remain unexecut
 after failed serial recovery. They no longer block this approved milestone
 status; they remain missing physical qualification evidence. See the
 [completion record](M27_COMPLETION_EVIDENCE.md) for the exact decision, source,
-artifact hashes and retained failures. DD30 remains P1 / ACCEPTED_RISK with
-dynamic fault/wake UNEXECUTED and expiry 2026-10-13. No finding is promoted to
-CLOSED_VERIFIED by the completion decision.
+artifact hashes and retained failures. At completion DD30 was P1 / ACCEPTED_RISK;
+its subsequent permanent retirement is recorded above. Dynamic fault/wake remains
+UNEXECUTED. Neither decision promotes the finding to CLOSED_VERIFIED.
 
 ### Historical M27 convergence observations
 
@@ -144,7 +152,7 @@ runtime predicate, fixture-data order, or acceptance marker was relaxed.
 - M26d P2 exception closure: `PASS` for offline engineering scope,
   `out/test-plan/m26d-unsafe-remediation-qemu` and
   `out/test-plan/m26d-unsafe-remediation-pi4`.
-- Historical blocking rule: any P0/P1 finding outside `CLOSED_VERIFIED` blocked release. The current DD30-only owner waiver is documented above.
+- Historical blocking rule: any P0/P1 finding outside `CLOSED_VERIFIED` blocked release. The subsequent DD30 retirement is documented above.
 
 ## Closed In This Run (2026-02-14)
 - `DD-2026-0001`, `DD-2026-0002`, `DD-2026-0003`, `DD-2026-0007`, `DD-2026-0009`, `DD-2026-0010`, `DD-2026-0013`, `DD-2026-0014`, `DD-2026-0015`.
