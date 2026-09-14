@@ -5158,7 +5158,8 @@ fn bootstrap<P: Platform>(
         }
     }
 
-    #[cfg(not(feature = "debug-input"))]
+    // A supported early debug shell diverges above. When it is unavailable,
+    // retain the normal serial/runtime bootstrap and its declared owner.
     {
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && crate::serial::serial_driver_task_runtime_attached()

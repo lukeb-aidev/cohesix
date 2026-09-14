@@ -365,6 +365,33 @@ root Clippy, generated consistency and Test Plan integrity pass in
 non-test unsafe, unwrap, expect or panic counts. Exact target builds and the
 refreshed candidate's staged qualification remain required.
 
+Candidate E `1d4745c32881dbb04ae53d135bdc30f457825106` passes the Pi image
+build and fresh RAM boot with 64/64 raw requests, one connection and no retries
+or reconnects. Its initial transport record is in the Pi checkout's
+`out/m27a/pi4-e-initial-85/target-evidence.json`; the corrected gateway host is
+the local gateway endpoint, `127.0.0.1`. Four native Linux bounds tests and root
+Clippy pass in `native-candidate-e-tests-86.log`. E's dependency audit and
+advisory checks pass under the existing policy in
+`candidate-e-cargo-{audit,deny}-91.log`.
+
+The non-release QEMU `debug-input` build first exposes an existing incomplete
+bootstrap branch: normal bootstrap was compiled out even when the early debug
+shell was unavailable. The supported early shell diverges; unavailable cases
+now retain normal serial/runtime bootstrap and its declared owner. Build 88
+retains the original type errors. Build 92 passes with that correction, but its
+background TCP launch does not deliver UART stdin; that attempt is stopped
+without a memory-read result. The canonical direct launch of the same immutable
+artifact passes all six live console cases in
+`out/m27a/qemu-diagnostic-range-95/result.json`: permitted bytes exactly match
+the ELF, and unclassified, crossing, oversized, overflowing and extra-argument
+requests are refused. Range admission/refusal audit lines are observed. The
+code span is `[0, 0x164000)`. This is a non-release QEMU diagnostic, not staged
+acceptance or the unrelated DD30 dynamic fault/wake test. The bootstrap
+correction requires the final candidate and refreshed applicable stages.
+E's complete common Stage 01 passes in `candidate-e-stage1-87.log`; generated
+consistency and Test Plan integrity pass after the correction in
+`check-generated-96.log` and `check-test-plan-96.log`.
+
 ## Outstanding acceptance
 
 Required remaining evidence is the complete applicable Test Plan, final exact
