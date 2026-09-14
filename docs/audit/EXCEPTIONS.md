@@ -44,6 +44,16 @@ same exception to explicitly selected `DD_MILESTONE_ID=27`; it does not replace
 the original release record or exception decision date. The protected kernel
 change only corrects the attestation boot message. Human Rust review is approved;
 DD30 remains P1 / ACCEPTED_RISK and dynamic fault/wake remains UNEXECUTED.
+
+On 2026-09-14 Lukas Bower answered the separate candidate-F M27a Rust-review
+and DD30 disposition request with “Sign off”.
+[DD30_M27A_APPROVAL.toml](DD30_M27A_APPROVAL.toml) binds that decision to
+`58140c1a5c79124a8dd7a4ff4bd547a52c8bd362`, all reviewed implementation and
+the ten protected hashes, with the unchanged 2026-10-13 administrative expiry.
+Explicit `DD_MILESTONE_ID=27a` selects this decision. It does not refresh either
+older approval or mark the dynamic fault/wake test executed. DD30 remains
+P1 / ACCEPTED_RISK. The bounded memory-read QEMU diagnostic is a separate test.
+
 Changed host, target, SDK or manifest implementation, missing approval, conflicting
 release/milestone selection, revoked approval or expiry fails closed. No other
 finding or target prerequisite is waived by this DD30/Rust decision.

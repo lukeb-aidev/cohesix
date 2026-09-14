@@ -106,7 +106,7 @@ owned by their specific contracts.
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
-| [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | In Progress — 1.1.0-beta (Release A) authority floor |
+| [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Next — 1.1.0-beta (Release A) Jetson/Linux reference slice |
 | [27c](#27c) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Next — 1.1.0-beta (Release A) capsule core; full graph conditional |
 | [27d](#27d) | Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT | Next — 1.1.0-beta (Release A) flagship workflow |
@@ -12705,9 +12705,13 @@ admission is not authorized by Milestone 27e.
 ## Milestone 27a — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="27a"></a>
 [Milestones](#Milestones)
 
-**Status (2026-09-14):** In Progress — implementation and qualification
-authorized by Lukas Bower. Completion requires the definition of done below;
-the Milestone 27 completion approval does not waive any 27a requirement.
+**Status (2026-09-14):** Complete — implementation and focused current
+host/QEMU/Pi checks pass. Lukas Bower approved closure without the missing M26d
+status-baseline JSON and comparison; that comparison remains NOT_PERFORMED.
+The [qualification record](audit/M27A_COMPLETION_EVIDENCE.md) binds this scoped
+completion decision, candidate-F Rust sign-off, the separate DD30 accepted risk
+and each observed result. This decision grants no performance-equivalence claim
+or staged target PASS.
 
 **Delivery posture:** Release A authority floor. Delegated identity, strict
 idempotency, durable execution recovery, production secrets, audit/replay, and
@@ -12723,7 +12727,7 @@ rather than deterministic writer fencing in the control-plane path.
 
 This milestone closes those gaps using existing as-built mechanisms (`hive-gateway`, `cohsh-core` ticket claims, `/host/tickets/*`, relay WAL, manifest compiler) without introducing new VM protocols or relaxing single-writer semantics.
 
-**As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 27a hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing. Because the current upstream console session still authenticates as the gateway role/ticket, 27a must also distinguish **gateway-enforced caller delegation** from any future **VM-verified caller identity** claim.
+**As-built alignment note:** Mutating REST requests now require request authentication and a MAC-validated caller ticket. The gateway intersects caller role, scope, mount, expiry and quotas with its configured upstream authority and retains bounded quota state. The upstream console still authenticates as the gateway principal, so this is **gateway-enforced caller delegation**; no **VM-verified caller identity** is claimed. Strict Queen intent identities reserve bounded dedupe entries before effects, retain duplicate terminal results, and reject changed envelopes or non-current writer epochs. Host execution and relay journals preserve durable dedupe and writer fences. The Release A production profile requires strict intents, secret references and bounded audit/replay, disables legacy Queen control and memory diagnostics, and keeps production failover/federation and future VM authority gates disabled. Completion follows the evidence requirements and scoped owner decision below.
 
 **Sequencing note:** Milestone 27a closes the host/gateway authority floor required by the Milestone 27b coexistence gate, Milestone 28a per-intent admission, and Milestones 27d, 28c, and 30b. Milestone 26e owns complete live Worker and baseline linked-driver cap authority and basic containment; a persistence-enabled Milestone 29 profile must also have accepted its `driver-storage` bundle under that same contract. Production Worker ticket/lease ledger binding, complete driver-inventory projection for every selected accepted runtime, and structured worker/driver quarantine evidence are split into Milestone 28b so the host actuation floor can ship without bundling that production ledger work into the same atomic gate.
 
@@ -12916,6 +12920,7 @@ Implementation requirements:
 - Add a targeted gateway benchmark for read-only REST status, delegated mutating REST writes, duplicate-idempotency refusals, and stale-writer refusals.
 - Report p50/p95 latency, error/refusal counts, broker queue depth, backpressure responses, delegated-ticket cache behavior, and audit-line emission cost.
 - Compare against the accepted 26d rolling baseline for equivalent REST status reads and against a pre-27a local gateway authority baseline for write-path overhead.
+- Scoped completion decision (2026-09-14): Lukas Bower accepted M26d and waived recovery of its missing status-baseline JSON and the equivalent comparison for M27a closure. Record the comparison as NOT_PERFORMED; retain the measured pre-27a gateway comparison and its regressions. This exception does not establish equivalent performance or waive a future milestone's benchmark requirements.
 - This is a gateway/auth microbenchmark only. It must not be counted as fresh Pi hardware throughput proof unless the benchmark exposes a runtime-path regression that requires a full same-harness rerun.
 
 ---

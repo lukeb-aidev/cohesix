@@ -4,9 +4,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Milestone 27a implementation and qualification record
 
-Status: **In Progress**. Owner authorization: Lukas Bower, 14 September 2026.
-Base: `b848b5cbb` on `main`. This record does not inherit M27 qualification gaps
-or Rust approval. No M27a target acceptance or publication is claimed yet.
+Status: **Complete**. Owner approval: Lukas Bower, 14 September 2026.
+Implementation baseline: `b848b5cbb`; pre-publication main was
+`13020a33dba0832e2297fe119fedf6d302704bdc`. Reviewed candidate F is
+`58140c1a5c79124a8dd7a4ff4bd547a52c8bd362`. Its separate owner review is
+recorded below. Publication preserves candidate F in the commit ancestry;
+completion documentation does not rebind its qualification artifacts.
 
 Title/ID: `m27a-authority-hardening`
 Milestone: [Milestone 27a — Authority Hardening: Delegated REST Identity, Fenced
@@ -19,19 +22,19 @@ profiles, existing v2 execution journal, exact pre-change gateway binary at
 
 ## Scoped task coverage
 
-| Task | Implementation and remaining qualification |
+| Task | Implementation and qualification disposition |
 | --- | --- |
-| `m27a-rest-delegated-identity` | MAC validation, role/mount/write-scope intersection, finite budgets, issuer rotation and bounded cache pass host tests. HTTP probe passes. Target-backed projection pending. |
-| `m27a-queen-ctl-idempotency` | Shared bounded reservation, stable duplicate terminal, changed-envelope refusal, explicit legacy compatibility and versioned introspection. Host tests pass; target qualification pending. |
+| `m27a-rest-delegated-identity` | MAC validation, role/mount/write-scope intersection, finite budgets, issuer rotation and bounded cache pass host tests. Final QEMU and Pi live REST refusal, concurrent caller quota and audit checks pass (107/112). |
+| `m27a-queen-ctl-idempotency` | Shared bounded reservation, stable duplicate terminal, changed-envelope refusal, explicit legacy compatibility and versioned introspection pass host tests. Final production QEMU and Pi strict/dedupe/stale checks pass (101/114). |
 | `m27a-failover-epoch-fencing` | Local/relay stale rejection, durable epoch floors and crash-safe cutover state tests pass. Release A excludes production failover/federation; no multi-host qualification claimed. |
-| `m27a-production-secret-profile` | Shared references, pre-connect placeholder refusal, production profile generator, compiler-bound public key and exact release inventory. Compiler/release negative tests pass; assembled production image validation pending. |
-| `m27a-audit-replay-production-default` | Production generator requires bounded audit/replay and evidence captures authority/dedupe. Target surface qualification pending. |
+| `m27a-production-secret-profile` | Shared references, pre-connect placeholder refusal, production profile generator, compiler-bound public key and exact release inventory pass compiler/release negative tests. Final production QEMU and Pi images compile (101/106); both final payload scans pass (111). No new release assembly is claimed. |
+| `m27a-audit-replay-production-default` | Production generator requires bounded audit/replay. Final QEMU and Pi read audit/replay (101/114) and export epoch/dedupe with the shipped coh client (107/121). |
 | `m27a-host-ticket-validation-replay` | Generated provider field contracts, validated operands, bounded v1/v2 journals, durable terminal replay and interrupted-execution deadletter. Crash/writeback and relay recovery tests pass. |
 | `m27a-python-authority-contract-parity` | Shared generated policy/provider contracts, delegated mutation headers, strict intents, epoch/correlation and bounded responses. Python suite passes. |
 | `m27a-gpu-bridge-auth-frame-caps` | Selected secret sources fail closed; generated frame length checked before allocation. Focused tests pass. |
-| `m27a-console-debug-memory-gate` | Diagnostics default off and release features independently deny arbitrary memory reads. Earlier QEMU target compilation passed; current image/runtime checks pending. |
+| `m27a-console-debug-memory-gate` | Diagnostics default off; release features independently deny memory reads. Four pure range tests and six live non-release QEMU cases pass (83/95), as do final production QEMU upper/lowercase refusals (107). |
 | `m27a-deferred-vm-authority-gates` | Compiler rejects unaccepted VM identity, 28b ledger/quarantine, AI actuation and production failover claims. Existing accepted task/driver authority remains distinct. |
-| `m27a-gateway-authority-performance` | Current/pre-27a host-model comparison passes without retries. Accepted equivalent 26d status comparison remains unlocated. |
+| `m27a-gateway-authority-performance` | Current/pre-27a host-model comparison passes without retries; measured latency regressions are retained. Equivalent 26d status comparison is NOT_PERFORMED because its artifact is missing, accepted for M27a closure by the owner decision below. |
 
 Optional admission correlation is retained in strict intents, host tickets,
 execution journals, receipts, audit and evidence: `admission_id`, `intent_hash`,
@@ -392,14 +395,167 @@ E's complete common Stage 01 passes in `candidate-e-stage1-87.log`; generated
 consistency and Test Plan integrity pass after the correction in
 `check-generated-96.log` and `check-test-plan-96.log`.
 
-## Outstanding acceptance
+Candidate F's exact compatibility Pi image passes the fresh RAM boot, CRC
+checks across reset, passive settle and first raw sample (64/64, one connection,
+zero retries/reconnects) in `pi4-f-initial-100.log`. Its source-bound transport
+record is in the Pi checkout's `out/m27a/pi4-f-initial-97/`. The final production
+QEMU image also passes strict-intent, dedupe, stale-epoch, legacy-command and
+audit/replay observations in the QEMU checkout's
+`out/m27a/qemu-f-production-101/authority/result.json`. These are focused M27a
+target observations, not a complete staged chain. The direct compatibility pack
+and production REST/memory/evidence observations remain pending.
 
-Required remaining evidence is the complete applicable Test Plan, final exact
-host/target builds, production runtime surfaces, the equivalent 26d status
-comparison, final security/audit checks and human Rust reviewer sign-off.
+Final generated consistency, Test Plan integrity and diff whitespace checks
+pass in `check-generated-103.log`, `check-test-plan-103.log` and
+`diff-check-103.log`. The first QEMU-checkout Pi production build stops before
+compilation because its repository mkimage executable is absent (attempt 105).
+The exact already-built canonical mkimage is copied and byte-compared; attempt
+106 retains the subsequent build independently.
+
+The final production Pi image build 106 passes at clean candidate F with
+image SHA-256 `2b2b23161c4d6eff614a3d5992fca91a627d87fa3cbecc4af265498876d283ae`.
+The image is retained in the QEMU checkout's
+`out/m27a/pi4-f-production-106-sd/`; its fresh physical boot remains pending.
+The same immutable production QEMU artifact passes the remaining live REST and
+memory checks in `out/m27a/qemu-f-rest-107/rest/result.json`: uppercase/lowercase
+memory commands are refused, missing delegation and wrong scope return 403,
+two concurrent callers each admit one write and independently exhaust their
+one-operation quota with 429, and the refusal audit lines are retained.
+The shipped `coh evidence pack` command captures production epoch and dedupe
+state. The Python REST client reads live state with one attempt. These
+observations use one gateway console owner and record zero reconnects.
+
+The final Pi compatibility pack passes all 17 scripts with zero failures in
+`out/m27a/pi4-f-tcp-104.log`. Each of the telemetry, shard, gated and base groups
+has a fresh candidate-F boot, paired captures and a first raw sample. The
+canonical transport aggregate is retained in the Pi checkout at
+`out/m27a/pi4-f-tcp-104/transport-results/stage-03.json`; it binds source
+`sha256:35971ac6bd068e0ab1e50570a3f4828ac25195cd85f2cb634e3cbb85df546952`.
+The direct action did not create a full staged-chain acceptance marker.
+
+On the same final base boot, Pi REST observations pass six delegated-identity,
+scope and independent quota cases, core compatibility 3/3, parity 1/1 and Python
+live state reads in `out/m27a/pi4-f-rest-112/result.json` in the Pi checkout.
+The gateway remains the sole TCP owner and records zero reconnects. Both final
+production artifact payload scans pass in `production-payload-scan-111.json`;
+this checks selected policy and streamed private-fixture/canary/symlink exclusion,
+without claiming a new release assembly.
+
+The final QEMU compatibility pack also passes all 19 entries: the fixed
+seven-case response matrix and all 18 selected `.coh` scripts. Its four
+source-bound transport results and aggregate are in the QEMU checkout's
+`out/m27a/qemu-f-tcp-108/transport-results/`; `qemu-f-tcp-108.log` retains the
+command output. Both checkouts restore their generated outputs after the pack.
+The three Mac clients used for the final Pi production observation compile
+against that exact production Pi manifest at clean candidate F in
+`out/m27a/pi4-f-production-clients-113/` in the Pi checkout; their binaries,
+policies and hashes are retained and canonical generated outputs restored.
+
+The final production Pi boot passes exact BUILD and CRC checks across reset,
+passive settle, and 64/64 first raw requests on one connection without retries
+or reconnects. The strict-intent, stable duplicate, changed-envelope, stale-epoch,
+legacy/SPAWN/KILL refusal, memory-command refusal, complete fresh/duplicate audit
+and replay observations pass in the Pi checkout's
+`out/m27a/pi4-f-production-114/authority/result.json`. All six live REST authority
+cases and three Python state reads also pass before evidence export.
+
+That export initially fails its policy fingerprint check: the temporary client
+collector retained canonical `configs/generated` policy files, while its compiler
+command wrote the production TOML policies under `out/`. The executable is correct;
+the policy copies are stale. Attempt 114 remains FAIL as an aggregate. Collection
+attempt 119 also remains failed after assuming an incorrect public-key output
+path. Corrected collection 120 retains the actual compiler policy outputs and
+verifies the already-correct compiler public key; every client binary hash is
+unchanged. Only the failed export is repeated, on the same physical boot.
+`out/m27a/pi4-f-evidence-121/result.json` passes and the shipped `coh evidence
+pack` captures epoch 7 with one dedupe entry and one duplicate. No boot or passing
+operation suite is repeated. The native Linux collector used the same shorthand
+compiler command; its original generated production policy files are likewise
+retained separately in `out/m27a/merlin2-production-policies-123/`, preserving
+original candidate A compilation/probe identities without rebuilding or retesting.
+
+Continuous paired captures run from 08:12:22 to 10:44:50 UTC. Both tcpdump children
+exit zero and report zero kernel drops (en0: 887758 captured packets; en8: 601532).
+The supervisor receives the requested interrupt and completes its finally block;
+its KeyboardInterrupt exit is retained. `out/m27a/pi4-capture-seal-124.json` binds
+the closed pcap files, logs, ownership and shutdown record with SHA-256 hashes.
+The final physical production image remains running; all task-owned serial,
+TCP client and gateway processes are closed.
+
+`scoped-metadata-review-116.log` passes current-year author/purpose metadata on
+changed human-authored comment-capable files and all 27 new local Markdown file
+links. Baseline recovery checked repository/sibling outputs, Merlin2, GitHub
+Actions artifacts, Spotlight and retained local worktrees. Historical commit
+`29a6c034b` retains the narrative and filenames, but the referenced M26d status
+JSON is absent. `out/m27a/missing-baseline-118.json` records this evidence gap;
+the owner subsequently accepted its absence for M27a closure. The pre-27a
+host-model report is not substituted for it.
+
+## Owner review and focused completion scope
+
+Lukas Bower answered “Sign off” to the explicit candidate-F Rust review and
+M27a-specific DD30 disposition request on 14 September 2026. The request bound
+source `58140c1a5c79124a8dd7a4ff4bd547a52c8bd362` and the retained full patch
+`out/m27a/candidate-f-review.patch`. The separate
+[approval record](DD30_M27A_APPROVAL.toml) binds every reviewed implementation
+path and ten protected IPC source hashes. DD30 remains P1 / ACCEPTED_RISK,
+expires on 13 October 2026, and its dynamic fault/wake test is UNEXECUTED.
+No static or functional observation is relabeled as that test.
+
+The focused lifecycle suite passes 48 tests and 125 subtests in
+`out/m27a/approval-lifecycle-tests-99.log`. The actual
+`DD_MILESTONE_ID=27a` blocking-findings and exceptions-register preflights pass
+in `m27a-blocking-preflight-99.log` and `m27a-exceptions-preflight-99.log`.
+The original release and M27 approvals remain separately selected.
+
+The owner's later instruction is: “Only run tests required to mark this
+milestone ‘Complete’, not the full suite”. Candidate F's common Stage 01 run
+was interrupted with exit 143 accordingly; its partial results are retained
+in `candidate-f-stage1-97.log` and do not constitute Stage 01 PASS. Earlier
+completed common suites remain evidence at their original candidate identities.
+Completed validation follows the M27a definition of done and focused scope recorded
+in [TEST_PLAN.md](../TEST_PLAN.md); no final-source full five-stage chain or
+replacement staged markers are claimed.
+
+The final actual DD30 blocking-findings and exception-register preflights,
+Test Plan integrity and diff whitespace checks pass in
+`final-blocking-preflight-125.log`, `final-exceptions-preflight-125.log`,
+`check-test-plan-125.log` and `diff-check-125.log`. The reviewed implementation
+still matches candidate F exactly. `out/m27a/final-review-126.patch` retains the
+full patch before the final completion decision, when main was still at
+`13020a33dba0832e2297fe119fedf6d302704bdc`.
+
+## Completion decision
+
+On 14 September 2026, Lukas Bower explicitly directed:
+
+> Not sure where the json went, 26d is approved and you don’t need it. Finish the milestone, mark Complete, commit and push
+
+This decision accepts M26d and closes M27a without recovering the missing M26d
+status-baseline JSON or performing its equivalent status comparison. The
+comparison remains **NOT_PERFORMED**. It is a scoped milestone-status exception,
+separate from Rust sign-off and the DD30 decision; it does not establish
+performance equivalence, replace target proof, create staged PASS markers or
+waive another milestone's benchmark requirements. The pre-27a host-model
+comparison and its measured status/write latency regressions remain recorded.
+
+M27a is **Complete** using the retained host contracts, exact builds, TCP/REST
+compatibility, production authority observations, scoped security and generated
+checks, together with the explicit owner dispositions above. The approved
+implementation remains byte-identical to candidate F. The completion commit
+updates BUILD_PLAN, STATUS and the owning evidence/benchmark documents together.
 Production failover/federation remains disabled in the single-Jetson Release A
 profile. No physical failover or future VM authority qualification is claimed.
 
-BUILD_PLAN and STATUS may become Complete only after their definition of done
-and applicable repository acceptance gates are satisfied. Commit and push are
-authorized after that closure; no M27a change has been committed to main or pushed.
+Final publication checks pass after recording the owner decision:
+
+| Command | Retained output |
+| --- | --- |
+| `scripts/check-generated.sh` | `out/m27a/check-generated-final-128.log` |
+| `scripts/ci/check_test_plan.sh` | `out/m27a/check-test-plan-final-128.log` |
+| `DD_MILESTONE_ID=27a scripts/ci/due_diligence_gate.sh --check-blocking-findings docs/audit/findings.csv docs/audit/EXCEPTIONS.md` | `out/m27a/blocking-preflight-final-128.log` |
+| `DD_MILESTONE_ID=27a scripts/ci/due_diligence_gate.sh --check-exceptions-register docs/audit/findings.csv docs/audit/EXCEPTIONS.md` | `out/m27a/exceptions-preflight-final-128.log` |
+
+The final whitespace, documentation-link and reviewed-source comparisons also
+pass. No full workspace suite or additional target run is performed for this
+publication step.

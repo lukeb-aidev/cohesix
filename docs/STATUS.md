@@ -17,11 +17,15 @@ interchangeable.
 
 ## Current development state
 
-Milestone [27a](BUILD_PLAN.md#27a) is **In Progress**, authorized on
+Milestone [27a](BUILD_PLAN.md#27a) is **Complete**, approved on
 14 September 2026. Delegated REST identity, strict Queen intent replay,
-host execution recovery, production secrets, and target qualification are
-being implemented. The [27a task record](audit/M27A_COMPLETION_EVIDENCE.md)
-keeps qualification separate from the preceding milestone's approvals.
+host execution recovery and production-secret enforcement are implemented.
+Focused host, QEMU and Pi authority/compatibility checks pass. The
+[27a task record](audit/M27A_COMPLETION_EVIDENCE.md) records the owner's approval
+to close without the missing M26d status-baseline comparison, candidate-F Rust
+sign-off and the separate DD30 accepted risk. The comparison and dynamic
+fault/wake test remain unexecuted; no performance equivalence or complete
+final-source five-stage chain is claimed.
 
 Milestones [26e](BUILD_PLAN.md#26e) and [27](BUILD_PLAN.md#27) are Complete
 under their recorded owner approvals. On 14 September 2026, Lukas Bower

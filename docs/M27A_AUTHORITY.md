@@ -4,7 +4,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Milestone 27a authority contract
 
-Implementation and qualification are **In Progress**. Acceptance is recorded in
+Authority hardening is implemented and Milestone 27a is **Complete** under the
+2026-09-14 owner decision. Evidence, Rust sign-off, DD30 accepted risk and the
+approved absence of the M26d status-baseline comparison are recorded in
 [audit/M27A_COMPLETION_EVIDENCE.md](audit/M27A_COMPLETION_EVIDENCE.md).
 
 ## Caller delegation

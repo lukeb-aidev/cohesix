@@ -106,6 +106,26 @@ successful command or test count is not a coverage argument.
   P1 / ACCEPTED_RISK through 2026-10-13, and records Rust sign-off. The dynamic
   fault/wake test remains UNEXECUTED. Do not combine release and milestone
   selection; this decision grants no other finding or staged-evidence waiver.
+- For Milestone 27a, the separate [candidate-F owner review](audit/DD30_M27A_APPROVAL.toml)
+  records Lukas Bower's 2026-09-14 “Sign off” response for the exact Rust
+  implementation and M27a DD30 disposition. `DD_MILESTONE_ID=27a` selects this
+  source-bound approval; DD30 remains P1 / ACCEPTED_RISK through 2026-10-13 and
+  dynamic fault/wake remains UNEXECUTED. It cannot authorize changed
+  implementation or another milestone.
+- For this M27a completion run, the owner's later instruction is: “Only run
+  tests required to mark this milestone ‘Complete’, not the full suite”.
+  [M27A_COMPLETION_EVIDENCE.md](audit/M27A_COMPLETION_EVIDENCE.md) maps the
+  milestone's individual definition-of-done checks to exact retained evidence
+  and focused validation. Earlier complete suites retain their source
+  identities; the interrupted candidate-F common run is not a staged PASS.
+  This run does not claim a complete final-source five-stage chain or create
+  replacement markers. Required M27a contracts, target observations, compatibility
+  regression outputs, the pre-27a gateway benchmark comparison and security checks
+  remain required. The separate 2026-09-14
+  [completion decision](audit/M27A_COMPLETION_EVIDENCE.md#completion-decision)
+  accepts M26d without its missing status-baseline JSON and waives that comparison
+  for M27a closure only. The comparison remains NOT_PERFORMED; this decision
+  creates no performance-equivalence claim, target PASS or runner bypass.
 - The separate 2026-09-14 [M27 completion decision](audit/M27_COMPLETION_EVIDENCE.md)
   permits marking Milestone 27 Complete using the disclosed final-source QEMU
   Stages 01–05, live TCP/REST operator checks and Pi Stages 01–02. The final-image

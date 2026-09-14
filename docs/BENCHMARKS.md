@@ -29,6 +29,14 @@ comparison separately; missing or unlike-target evidence cannot establish that
 comparison. Classify any material regression before downstream authority users
 depend on it.
 
+For M27a completion only, Lukas Bower's 2026-09-14
+[owner decision](audit/M27A_COMPLETION_EVIDENCE.md#completion-decision) accepts
+M26d without recovering the missing JSON or performing that comparison. Its
+status remains NOT_PERFORMED. The retained pre-27a host-model comparison reports
+status/write p95 regressions of 0.273/1.118 ms with no retries, reconnects or
+backpressure. Milestone closure grants no performance-equivalence or target
+throughput claim and does not change future benchmark requirements.
+
 Mutating REST harness workloads require request authentication and
 `COH_REST_TICKET`. The request token may be an explicit `env:NAME` or absolute
 `file:` reference and is resolved for each operation. Missing delegation or an

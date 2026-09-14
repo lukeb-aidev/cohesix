@@ -5,7 +5,7 @@
 #
 # Environment:
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
-#   DD_MILESTONE_ID           Explicit M27 owner decision (27); exclusive with release.
+#   DD_MILESTONE_ID           Explicit owner decision (27 or 27a); exclusive with release.
 #   DD_RELEASE_ID             Explicit release context; only the validated DD30
 #                             waiver can admit 1.0.0-beta residual evidence risk.
 #   --release-carry-forward   Require the approved release-only policy and sealed

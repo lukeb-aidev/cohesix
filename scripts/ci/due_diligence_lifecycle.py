@@ -31,6 +31,9 @@ WAIVER_SOURCE = "6d7c16e4a0f5d89c32a4fa0f815c2bfe6babc065"
 M27_RECORD = pathlib.Path("docs/audit/DD30_M27_APPROVAL.toml")
 M27_SOURCE = "7c3b82abbaf938f82f958dc40886d24fcf1c9f01"
 M27_APPROVAL = "Consider DD30 and Rust review signed off"
+M27A_RECORD = pathlib.Path("docs/audit/DD30_M27A_APPROVAL.toml")
+M27A_SOURCE = "58140c1a5c79124a8dd7a4ff4bd547a52c8bd362"
+M27A_APPROVAL = "Sign off"
 REVIEW_PATHS = ("apps", "crates", "tools", "configs", "Cargo.toml", "Cargo.lock")
 PROTECTED_FILES = frozenset({
     "apps/root-task/src/console/mod.rs",
@@ -60,7 +63,7 @@ class WaiverAdmission:
 
     def describe(self, *, admitted: bool) -> str:
         action = "admitted" if admitted else "validated (not release admission)"
-        selection = ("DD_MILESTONE_ID=27" if self.milestone else
+        selection = (f"DD_MILESTONE_ID={self.milestone}" if self.milestone else
                      f"DD_RELEASE_ID={WAIVER_RELEASE}")
         return (
             f"release-owner evidence waiver {action}: "
@@ -89,10 +92,22 @@ def reviewed_source_bytes(
 
 
 def validate_m27_source(root: pathlib.Path) -> None:
+    """Keep the original M27 reviewed implementation binding unchanged."""
+    validate_reviewed_source(root, M27_SOURCE, "M27")
+
+
+def validate_m27a_source(root: pathlib.Path) -> None:
+    """Bind the separately approved M27a implementation to candidate F."""
+    validate_reviewed_source(root, M27A_SOURCE, "M27a")
+
+
+def validate_reviewed_source(
+    root: pathlib.Path, source: str, label: str,
+) -> None:
     """Bind human review to all reviewed host, target, manifest and SDK sources."""
     try:
         changed = subprocess.run(
-            ["git", "-C", str(root), "diff", "--exit-code", M27_SOURCE,
+            ["git", "-C", str(root), "diff", "--exit-code", source,
              "--", *REVIEW_PATHS], capture_output=True, check=False,
         )
         untracked = subprocess.run(
@@ -101,9 +116,9 @@ def validate_m27_source(root: pathlib.Path) -> None:
             capture_output=True, check=True,
         )
     except (OSError, subprocess.CalledProcessError) as error:
-        raise LifecycleError("cannot resolve M27 reviewed source") from error
+        raise LifecycleError(f"cannot resolve {label} reviewed source") from error
     if changed.returncode != 0 or untracked.stdout:
-        raise LifecycleError("M27 reviewed implementation changed")
+        raise LifecycleError(f"{label} reviewed implementation changed")
 
 
 def validate_waiver(
@@ -119,9 +134,21 @@ def validate_waiver(
     The CLI supplies the actual date. No environment or CLI option can replace
     it. Register validity alone does not select release acceptance.
     """
-    if milestone not in {"", "27"}:
+    if milestone not in {"", "27", "27a"}:
         raise LifecycleError("unsupported DD30 milestone selection")
-    path = root / (M27_RECORD if milestone else WAIVER_RECORD)
+    if milestone == "27a":
+        approval_path, approval_source, approval_quote = (
+            M27A_RECORD, M27A_SOURCE, M27A_APPROVAL
+        )
+    elif milestone:
+        approval_path, approval_source, approval_quote = (
+            M27_RECORD, M27_SOURCE, M27_APPROVAL
+        )
+    else:
+        approval_path, approval_source, approval_quote = (
+            WAIVER_RECORD, WAIVER_SOURCE, WAIVER_APPROVAL
+        )
+    path = root / approval_path
     if not path.is_file() or path.is_symlink():
         raise LifecycleError(f"missing regular release waiver record: {path}")
     payload = path.read_bytes()
@@ -158,9 +185,9 @@ def validate_waiver(
         expected.pop("release_id")
         expected.update({
             "schema": "cohesix.milestone-evidence-waiver/v1",
-            "milestone_id": "27",
-            "reviewed_source_commit": M27_SOURCE,
-            "approval_quote": M27_APPROVAL,
+            "milestone_id": milestone,
+            "reviewed_source_commit": approval_source,
+            "approval_quote": approval_quote,
             "rust_review": "APPROVED",
         })
     for field, value in expected.items():
@@ -209,7 +236,9 @@ def validate_waiver(
     for field, value in required_exception.items():
         if exception.get(field) != value:
             raise LifecycleError(f"release waiver exception {field} mismatch")
-    if milestone:
+    if milestone == "27a":
+        validate_m27a_source(root)
+    elif milestone:
         validate_m27_source(root)
     files = record["protected_files"]
     if not isinstance(files, list) or len(files) != len(PROTECTED_FILES):
@@ -228,7 +257,7 @@ def validate_waiver(
         if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise LifecycleError("invalid protected IPC digest")
         reviewed_bytes = (
-            reviewed_source_bytes(root, relative, M27_SOURCE) if milestone
+            reviewed_source_bytes(root, relative, approval_source) if milestone
             else reviewed_source_bytes(root, relative)
         )
         reviewed = hashlib.sha256(reviewed_bytes).hexdigest()
@@ -716,7 +745,7 @@ def main() -> int:
     parser.add_argument("--findings", type=pathlib.Path, required=True)
     parser.add_argument("--exceptions", type=pathlib.Path, required=True)
     parser.add_argument("--release", default="")
-    parser.add_argument("--milestone", default="", choices=("", "27"))
+    parser.add_argument("--milestone", default="", choices=("", "27", "27a"))
     args = parser.parse_args()
     try:
         if args.release and args.milestone:
