@@ -17,10 +17,22 @@ interchangeable.
 
 ## Current development state
 
-Milestone 26e is in progress with QEMU-first implementation and qualification.
-The selected QEMU and Raspberry Pi 4 manifests describe the intended SMP+MCS
-system, but neither a successful build nor a QEMU result can substitute for the
-separate fresh-Pi evidence required to complete the milestone.
+Milestones [26e](BUILD_PLAN.md#26e) and [27](BUILD_PLAN.md#27) are Complete
+under their recorded owner approvals. On 14 September 2026, Lukas Bower
+approved M27 closure at tested source `b54bdd2fc`: QEMU Stages 01–05 and live
+TCP/REST operator checks pass; Pi Stages 01–02 pass. The final-image Pi boot,
+live operator checks and Stages 03–05 remain unexecuted because serial recovery
+failed. The [M27 completion record](audit/M27_COMPLETION_EVIDENCE.md) retains
+the exact evidence and accepted gaps. This milestone decision does not establish
+full physical qualification or activate the next milestone.
+
+M27 delivers read-only inspect/diff utilities, canonical live trace capture and
+offline replay, evidence case summaries, a thin bundle alias, and a shared
+signed-evidence verifier. Stock Pi positive signed-device acceptance is excluded
+by owner approval; unavailable and measurement-only evidence remain non-attested.
+Human Rust review is approved. DD30 remains P1 / `ACCEPTED_RISK` under the
+separate [M27 approval](audit/DD30_M27_APPROVAL.toml) through 13 October 2026;
+dynamic fault/wake testing remains unexecuted.
 
 The 1.0.0-beta release consists of native Mac and Linux ARM64 host bundles and
 a separate Pi 4 SD-image bundle. The [release notes](../releases/RELEASE_NOTES-1.0.0-beta.md)
@@ -47,7 +59,7 @@ native-profile and content integrity checks.
 | Workers | Passive `worker-heartbeat`, `worker-gpu`, and `worker-lora` instances use two bounded executor lanes; QEMU and Pi each declare 1/127/128 instances. `worker-bus` remains model/session-only. | Target-qualified QEMU evidence covers the selected 256-Worker population and receipt path; the Pi configuration still requires separate fresh physical evidence. |
 | Physical drivers | Pi 4 serial, display, USB, GENET, SDIO, and CYW43 paths use manifest-declared isolated runtimes admitted through HAL. | Board evidence from another source tree or image does not qualify a newly composed image. |
 | QEMU | `aarch64/virt` with GICv3 is the reference target on macOS HVF and AArch64 Linux KVM. | Target-qualified evidence applies only to the exact VM artifacts and proof lanes exercised; see the [Milestone 26e result record](BUILD_PLAN.md#26e). It is not Pi 4 hardware proof. |
-| Raspberry Pi 4 | Pi firmware → U-Boot → seL4 binary image → root task is the supported hardware boot path. | Current 26e Pi build, flash/readback, boot, coexistence, network, and full-system acceptance require one fresh exact-image evidence chain. |
+| Raspberry Pi 4 | Pi firmware → U-Boot → seL4 binary image → root task is the supported hardware boot path. | M27 final-source common checks and image build pass. Fresh final-image boot, live operator and transport/governance acceptance remain unexecuted under the explicit completion approval. |
 | Host tools | `cohsh`, `coh`, Hive Gateway, SwarmUI, Python, GPU, sidecar, ticket, CAS, and evidence tools run beside the target on macOS or Linux. | Host, mock, fixture, and package success cannot create target Worker, driver, or use-case acceptance. |
 | GPU and AI execution | GPU drivers, CUDA/NVML, model training, inference, PEFT execution, and deployment-specific automation remain host-side. | Cohesix records bounded authority, lifecycle, telemetry, and receipts; it does not execute GPU workloads in the VM. |
 | AWS/UEFI | Planned only. | No current Cohesix AWS target or production-use claim. |
@@ -64,6 +76,6 @@ native-profile and content integrity checks.
 - For performance claims, follow [Benchmarking](BENCHMARKS.md) and retain the
   complete result artifact.
 
-This snapshot describes the repository on 13 September 2026. A change that alters
+This snapshot describes the repository on 14 September 2026. A change that alters
 one of these public capability boundaries must update this page in the same
 change.

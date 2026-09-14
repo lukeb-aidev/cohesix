@@ -12964,11 +12964,19 @@ Cadence by milestone family:
 ## Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="27"></a>
 [Milestones](#Milestones)
 
-**Status (2026-09-14):** In Progress — activated by Lukas Bower after
-Milestone 26e completion. Implement the read-only operator utilities and the
-`m27-*` tasks below. Signed attestation remains conditional on the accepted
-`m26-device-identity-attestation-closure` evidence contract; absent signed
-evidence must produce a typed non-attested result, never a hash-based PASS.
+**Status (2026-09-14):** Complete — Lukas Bower explicitly approved closure on
+the disclosed evidence: QEMU Stages 01–05 and live TCP/REST operator checks
+pass; Pi Stages 01–02 pass, while the final-image Pi boot, live operator checks,
+and Stages 03–05 remain unexecuted following failed serial recovery. The
+[completion record](audit/M27_COMPLETION_EVIDENCE.md) binds tested source
+`b54bdd2fcff97fe35c5e3a61faa4d5a761b2a1ac`, evidence hashes, and the exact
+decision. This closes the `m27-*` tasks without asserting full Pi qualification
+or activating downstream milestones. DD30 remains P1 / ACCEPTED_RISK under
+its separate approval; dynamic fault/wake remains UNEXECUTED. The stock Pi's
+positive signed-device requirement is excluded by the earlier owner decision.
+Absent signed evidence still produces a typed non-attested result, never a
+hash-based PASS; device-bound issuance remains the conditional reopened
+`m26-device-identity-attestation-closure` task.
 
 **Delivery posture:** Release A priority and the shared read-only foundation for
 the AI workflow and 27f showcase.
@@ -12990,9 +12998,10 @@ inside Milestone 27.
 optional host attachments and digests; timelines add scenario-aware case
 summaries. Canonical trace capture supports live TCP and REST, with shared
 offline consumers and preserved version-1 fixtures. See
-[the operator contract](OPERATOR_EVIDENCE.md). The shared TPM2 signature verifier and explicit proof classes are implemented;
-fresh target trace acceptance is tracked separately. Public measurements never
-produce attestation PASS.
+[the operator contract](OPERATOR_EVIDENCE.md). The shared TPM2 signature verifier
+and explicit proof classes are implemented. Final-source QEMU trace acceptance
+passes; final-source Pi trace acceptance remains unexecuted under the completion
+decision. Public measurements never produce attestation PASS.
 
 This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
 
@@ -13003,10 +13012,10 @@ Milestone 27 is a **convergence milestone**. It does not create a second trace f
 
 **Implementation status (2026-09-14):** Host utilities, case synthesis,
 Python consumers, audit consistency coverage, and bounded latency coverage are
-implemented. Milestone status remains In Progress until required validation
-and `m27-attestation-verifier` close. The signed wire/trust contract is now
-implemented; optional-device availability remains explicit and the stock Pi
-positive-device requirement is excluded by the owner decision above.
+complete on the approved basis above. The signed wire/trust contract and
+`m27-attestation-verifier` are implemented and pass the shared cryptographic
+fixtures; optional-device availability remains explicit. Offline signature
+fixtures and QEMU success do not establish a live signed-device result.
 Authoritative receipt validation and verified-execution verdicts remain owned
 by `m27b-authoritative-receipt-and-evidence-core`.
 
@@ -13233,19 +13242,26 @@ After Milestone 27:
 6. Refresh audit ledgers from the current repo state and generated outputs before 27a/27d hardening work cites blocker or exception state.
 
 ## Task Breakdown
+
+The M27 task statuses below share the explicit completion decision above.
+Their checks describe the preserved contracts; physical checks listed as
+unexecuted in the completion record were accepted as remaining evidence gaps,
+not relabelled PASS.
+
 ```
 Title/ID: m27-owner-review-closure
 Milestone: Milestone 27 — Operator Utilities / exact owner approval and due-diligence closure
-Status: In Progress
-Goal: Apply Lukas Bower's 2026-09-14 DD30 and Rust sign-off to the exact reviewed M27 implementation without altering historical approvals or target results.
-Inputs: Reviewed 7c3b82abbaf938f82f958dc40886d24fcf1c9f01; owner statement "Consider DD30 and Rust review signed off".
-Changes: Separate DD30_M27_APPROVAL.toml; explicitly selected DD_MILESTONE_ID=27 lifecycle validation; negative approval/source/expiry checks; reconciled Test Plan and audit policy.
-Checks: Exact protected and complete host/target/SDK/manifest implementation binding; unchanged P1/ACCEPTED_RISK and 2026-10-13 expiry; dynamic fault/wake remains UNEXECUTED; all other gates remain required.
-Deliverables: Durable human review and residual-risk decision, focused governance evidence, remaining staged target checks.
+Status: Complete — approved evidence basis recorded above
+Goal: Record Lukas Bower's DD30/Rust sign-off and subsequent milestone completion approval without altering historical approvals or target results.
+Inputs: Reviewed 7c3b82abbaf938f82f958dc40886d24fcf1c9f01; tested b54bdd2fcff97fe35c5e3a61faa4d5a761b2a1ac; both exact owner statements in docs/audit/M27_COMPLETION_EVIDENCE.md.
+Changes: Separate DD30_M27_APPROVAL.toml; explicitly selected DD_MILESTONE_ID=27 lifecycle validation; negative approval/source/expiry checks; completion record and reconciled Build Plan, status, Test Plan and audit documentation.
+Commands: scripts/check-generated.sh (includes scripts/ci/check_test_plan.sh); git diff --check; scoped documentation link, header and retained evidence hash checks.
+Checks: Exact protected and complete host/target/SDK/manifest implementation binding; unchanged P1/ACCEPTED_RISK and 2026-10-13 expiry; dynamic fault/wake remains UNEXECUTED; final Pi boot/operator/Stages03–05 remain unexecuted under the separate completion approval.
+Deliverables: Durable human review, residual-risk and completion decisions; passing QEMU evidence and explicitly unexecuted Pi checks bound to their original source.
 
 Title/ID: m27-pi-regression-isolation
 Milestone: Milestone 27 — Operator Utilities / physical regression prerequisite restoration
-Status: In Progress
+Status: Complete — approved evidence basis recorded above
 Goal: Preserve exact append-stream assertions and fresh-boot Worker isolation across the complete physical TCP matrix.
 Discovery: The exact 9a5eb97f1 Pi image passed 14 of 17 scripts; the append test inspected an ACK preview, and later groups inherited a live heartbeat slot and boot-local Worker IDs.
 Changes:
@@ -13253,11 +13269,11 @@ Changes:
   - scripts/ci/pi4_regression_boot.py + TCP/Stage03 runners — invoke an explicitly configured, bounded external boot collector for each selected Pi group; verify fresh boot IDs and unchanged source/image/host/gateway bindings; retain each group's evidence and finish on base for existing Stage04 continuity.
 Checks: Missing, reordered or repeated append records fail; boot-hook failure, stale boot identity and changed image/source fail; all four groups retain distinct exact-image boot records and the complete 17-script matrix remains required.
 Compatibility: No target/runtime/Worker/console grammar change. Host suite, Python SDK, REST and benchmark consumers retain their contracts; only canonical test collection and evidence composition change.
-Deliverables: Deterministic workflow tests, preserved failed Pi attempt, fresh complete target evidence.
+Deliverables: Deterministic workflow tests, passing final-source QEMU matrix, preserved failed Pi attempt and owner-approved closure with final-source Pi execution unexecuted.
 
 Title/ID: m27-live-operator-closure
 Milestone: Milestone 27 — Operator Utilities / live inspect and evidence-pack composition
-Status: In Progress
+Status: Complete — approved evidence basis recorded above
 Goal: Close fresh-Pi-discovered host collection defects without weakening missing/error or proof classifications.
 Changes:
   - apps/coh/src/operator.rs + evidence.rs — use the bounded advertised /proc inventory for optional-root absence, preserve lease-ID directory semantics when empty, and retain nested directory listings in separate .listing leaves.
@@ -13269,7 +13285,7 @@ Deliverables: Host collector correction and separate exact-image live evidence.
 
 Title/ID: m27-build-evidence-blockers
 Milestone: Milestone 27 — Operator Utilities / restoration of build and evidence prerequisites; discovery in m27-attestation-verifier, restoring the exact-source invariant of m26e-worker-target-evidence-promotion
-Status: In Progress
+Status: Complete — approved evidence basis recorded above
 Goal: Restore canonical test and image-build prerequisites without relaxing source integrity, evidence bounds or target acceptance.
 Changes:
   - tests/test_linux_host_tools_sync.py, tests/test_release_bundle.py, tests/test_sel4_profile.py — exercise the existing exact tracked-tree archive and argument-driven packaging contracts; preserve export-ignore coverage and secret exclusion.
@@ -13284,6 +13300,7 @@ Deliverables: Restored provenance/build workflows and fresh command evidence, se
 
 Title/ID: m27-evidence-case-summary
 Milestone: Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / reviewer-friendly evidence case summary
+Status: Complete — approved evidence basis recorded above
 Goal: Extend the canonical offline evidence workflow with a deterministic scenario-aware case summary that reconstructs observed request, admission/refusal, state/lease/lifecycle, host-result, and receipt/dead-letter links while declaring missing, errored, unknown, and ambiguous evidence without asserting target, hardware, health, or external-execution proof.
 Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, apps/coh/src/main.rs, apps/coh/tests/evidence_pack.rs, apps/coh/tests/evidence_timeline.rs, tools/cohesix-py/examples/ci_evidence_pack.py, tools/cohesix-py/tests/test_examples_ci_siem.py, docs/USE_CASES.md, docs/OPERATOR_WALKTHROUGH.md, docs/OPERATOR_RECIPES.md, docs/HOST_TOOLS.md, docs/TEST_PLAN.md, current evidence-pack, audit, host-ticket, lease, lifecycle, and federation schemas.
 Changes:
@@ -13298,6 +13315,7 @@ Deliverables: Additive `case.json` and `case.md` in the canonical evidence pack,
 
 Title/ID: m27-live-trace-capture
 Milestone: Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / live canonical trace capture
+Status: Complete — approved evidence basis recorded above
 Goal: Make the existing bounded trace format record real TCP and REST/console-projection sessions while keeping replay offline, deterministic, and non-mutating.
 Inputs: apps/cohsh/src/{main.rs,trace.rs,transport/**}, crates/cohsh-core/src/trace.rs, apps/coh/src/**, apps/hive-gateway/**, existing trace fixtures/policy, docs/USERLAND_AND_CLI.md, docs/SECURITY.md, docs/TEST_PLAN.md.
 Changes:
@@ -13311,6 +13329,7 @@ Deliverables: One canonical trace recorder usable on real transports and one hon
 
 Title/ID: m27-attestation-verifier
 Milestone: Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / signed attestation verification
+Status: Complete — approved evidence basis recorded above
 Goal: Implement `coh attest` as a real verifier of the Milestone 26 device-bound evidence contract rather than a manifest-hash comparison.
 Inputs: accepted `m26-device-identity-attestation-closure` schema/evidence, apps/coh/**, shared evidence/attestation parser crate, trust-anchor inputs, QEMU vTPM and Pi hardware/device-root fixtures, docs/SECURITY.md, docs/TEST_PLAN.md.
 Changes:
@@ -13323,6 +13342,7 @@ Deliverables: Shared cryptographic verifier reused by evidence packs, SwarmUI, a
 
 Title/ID: m27-python-evidence-contract-parity
 Milestone: Milestone 27 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / Python evidence contract parity
+Status: Complete — approved evidence basis recorded above
 Goal: Keep the non-authoritative Python SDK compatible with the canonical evidence-pack, timeline, redaction, trace-reference, and attestation-result contracts established by Milestone 27.
 Inputs: `m27-live-trace-capture`, `m27-attestation-verifier`, apps/coh evidence/attestation fixtures, canonical trace and legacy offline fixtures, generated evidence schemas and bounds, tools/cohesix-py/cohesix/{client.py,evidence.py}, tools/cohesix-py/tests/{test_evidence_receipts.py,test_examples_ci_siem.py}, docs/PYTHON_SUPPORT.md, docs/TEST_PLAN.md.
 Changes:
@@ -13335,6 +13355,7 @@ Checks: Rust and Python agree on canonical fixture bytes, ordering, classificati
 Deliverables: One evidence-pack/timeline/attestation-result contract shared by Rust producers and Python consumers.
 
 Title/ID: m27-audit-ledger-refresh
+Status: Complete — approved evidence basis recorded above
 Goal: Refresh audit blockers, exceptions, findings, and risk baselines so later hardening milestones cite current state.
 Inputs: docs/audit/, scripts/check-generated.sh, docs/BUILD_PLAN.md, current evidence-pack schema.
 Changes:
@@ -13347,6 +13368,7 @@ Checks: Blockers, exceptions, findings, and risk baseline agree; stale audit sna
 Deliverables: Current, internally consistent audit ledgers for authority hardening and host-side AI milestones.
 
 Title/ID: m27-readonly-command-latency
+Status: Complete — approved evidence basis recorded above
 Goal: Add bounded latency coverage for read-only operator utilities without treating Milestone 27 as a full runtime benchmark gate.
 Inputs: apps/coh, tests/fixtures/traces/, representative evidence packs, docs/TEST_PLAN.md, docs/BENCHMARKS.md.
 Changes:

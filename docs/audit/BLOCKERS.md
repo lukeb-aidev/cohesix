@@ -43,7 +43,24 @@ release-delivery requirements remain binding. The frozen-source canonical
 release Stage 05 artifact records the final execution verdict separately from this
 pre-execution findings register.
 
-## Milestone 27 review (2026-09-14)
+## Milestone 27 completion (2026-09-14)
+
+Milestone 27 is **Complete** by Lukas Bower's explicit approval on the disclosed
+evidence. At tested source `b54bdd2fcff97fe35c5e3a61faa4d5a761b2a1ac`, QEMU
+Stages 01–05 and live TCP/REST operator checks pass, and Pi Stages 01–02 pass.
+The final-image Pi boot, live operator checks and Stages 03–05 remain unexecuted
+after failed serial recovery. They no longer block this approved milestone
+status; they remain missing physical qualification evidence. See the
+[completion record](M27_COMPLETION_EVIDENCE.md) for the exact decision, source,
+artifact hashes and retained failures. DD30 remains P1 / ACCEPTED_RISK with
+dynamic fault/wake UNEXECUTED and expiry 2026-10-13. No finding is promoted to
+CLOSED_VERIFIED by the completion decision.
+
+### Historical M27 convergence observations
+
+The following observations retain the state at each earlier source. Subsequent
+approval and final-source evidence above supersede their milestone-blocking
+status without changing failed or unexecuted results.
 
 Schema 1.20 adds the compiler-owned live trace duration bound and refreshes
 host projections. Current pack-v1/timeline-v1 artifacts retain compatibility;
@@ -160,5 +177,7 @@ Lukas Bower explicitly signed off DD30 and the reviewed M27 Rust implementation.
 The separate [M27 approval](DD30_M27_APPROVAL.toml) preserves the historical
 release approval, DD30 P1 / ACCEPTED_RISK, the unexecuted dynamic fault/wake test,
 and 2026-10-13 expiry. `DD_MILESTONE_ID=27` selects only this exact implementation.
-Remaining target and staged checks are still required; this decision alone does
-not mark Milestone 27 Complete or produce signed-device proof.
+That DD30/Rust decision alone supplied no milestone completion or signed-device
+proof. The subsequent, separate completion approval is recorded above and in
+[M27_COMPLETION_EVIDENCE.md](M27_COMPLETION_EVIDENCE.md); its unexecuted Pi
+checks remain separate from the DD30 risk approval.

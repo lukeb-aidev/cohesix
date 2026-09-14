@@ -46,7 +46,12 @@ change only corrects the attestation boot message. Human Rust review is approved
 DD30 remains P1 / ACCEPTED_RISK and dynamic fault/wake remains UNEXECUTED.
 Changed host, target, SDK or manifest implementation, missing approval, conflicting
 release/milestone selection, revoked approval or expiry fails closed. No other
-finding or target prerequisite is waived.
+finding or target prerequisite is waived by this DD30/Rust decision.
+
+The subsequent [M27 completion decision](M27_COMPLETION_EVIDENCE.md) separately
+accepts the disclosed unexecuted final Pi boot/operator/Stages 03–05 for milestone
+status only. It does not amend this register, the DD30 approval or its expiry,
+and supplies no physical target PASS.
 
 ## Register
 | Exception ID | Related Finding | Severity | Scope | Rationale | Compensating Controls | Risk Owner | Approved By | Decision Date | Expiration Date | Status |

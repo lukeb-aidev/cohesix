@@ -82,6 +82,13 @@ successful command or test count is not a coverage argument.
   P1 / ACCEPTED_RISK through 2026-10-13, and records Rust sign-off. The dynamic
   fault/wake test remains UNEXECUTED. Do not combine release and milestone
   selection; this decision grants no other finding or staged-evidence waiver.
+- The separate 2026-09-14 [M27 completion decision](audit/M27_COMPLETION_EVIDENCE.md)
+  permits marking Milestone 27 Complete using the disclosed final-source QEMU
+  Stages 01–05, live TCP/REST operator checks and Pi Stages 01–02. The final-image
+  Pi boot, live operator checks and Stages 03–05 remain unexecuted. This is a
+  one-time milestone-status approval, not Pi staged acceptance: it creates no
+  PASS, marker, or source rebind, and adds no runner bypass. Future target claims
+  retain the complete applicable staged requirements and exact provenance.
 - Review all affected host tools, `tools/cohesix-py`, generated contracts,
   benchmark workloads/report schemas, fixtures, and docs in the same change.
   Record reviewed surfaces requiring no change. Use [HOST_TOOLS.md](HOST_TOOLS.md)
@@ -3349,9 +3356,10 @@ production source-count authority. M27 uses its separate owner approval above;
 the historical release waiver alone cannot admit M27. Bounded latency measurements follow [BENCHMARKS.md](BENCHMARKS.md).
 The shared attestation suite checks certificate/signature, nonce/replay, PCR,
 artifact identity, trust revocation/expiry and malformed-input failures. The
-stock Pi exemption applies only to positive signed-device acceptance; fresh
-Pi operator/trace checks still apply. Selected images without an issuer must
-advertise unavailable and receive no challenge. Device-bound production
+stock Pi exemption applies only to positive signed-device acceptance. Fresh
+Pi operator/trace checks still govern physical claims; the separate completion
+decision above records them as unexecuted for M27 closure. Selected images
+without an issuer must advertise unavailable and receive no challenge. Device-bound production
 authority remains the reopened Milestone 26 task. See
 [the signed evidence contract](ATTESTATION.md).
 
