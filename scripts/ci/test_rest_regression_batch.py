@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 import stat
 import subprocess
 import time
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,10 +35,13 @@ STAGE4_CONTEXT_ENV_NAMES = (
     "COHSH_REST_RESPONSE_TIMEOUT_MS",
     "COHSH_REST_URL",
     "COH_REST_URL",
+    "COH_REST_TICKET",
     "HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS",
     "HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS",
+    "HIVE_GATEWAY_DELEGATION_KEY_REF",
     "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
     "HIVE_GATEWAY_URL",
+    "TP_STAGE4_DELEGATION_SECRET",
     "TP_STAGE4_FUSE_COH_BIN",
     "TP_STAGE4_FUSE_MOUNT_DIR",
     "TP_STAGE4_FUSE_MOUNT_LOG",
@@ -283,6 +289,9 @@ def test_stage4_restores_runner_owned_environment_before_final_context() -> None
         "export COH_REST_URL=http://127.0.0.1:64120\n"
         "export HIVE_GATEWAY_URL=http://127.0.0.1:64120\n"
         "export HIVE_GATEWAY_REQUEST_AUTH_TOKEN=runner-secret\n"
+        "export COH_REST_TICKET=runner-ticket\n"
+        "export HIVE_GATEWAY_DELEGATION_KEY_REF=env:TP_STAGE4_DELEGATION_SECRET\n"
+        "export TP_STAGE4_DELEGATION_SECRET=runner-issuer-secret\n"
         "export TP_STAGE4_FUSE_COH_BIN=/runner/coh\n"
         "stage4_restore_context_environment\n"
         "printf '%s\\n' \"${COHESIX_GATEWAY_URL}\"\n"
@@ -290,6 +299,8 @@ def test_stage4_restores_runner_owned_environment_before_final_context() -> None
         "COH_REST_URL HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS "
         "HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS "
         "HIVE_GATEWAY_REQUEST_AUTH_TOKEN HIVE_GATEWAY_URL "
+        "COH_REST_TICKET HIVE_GATEWAY_DELEGATION_KEY_REF "
+        "TP_STAGE4_DELEGATION_SECRET "
         "TP_STAGE4_FUSE_COH_BIN TP_STAGE4_FUSE_MOUNT_DIR "
         "TP_STAGE4_FUSE_MOUNT_LOG; do\n"
         "  [[ -z \"${!name+x}\" ]] || exit 91\n"
@@ -317,6 +328,30 @@ def test_stage4_restores_runner_owned_environment_before_final_context() -> None
     assert (
         "stage4_restore_context_environment\ntp_stage_complete 4" in source
     )
+
+
+def test_stage4_delegation_secret_is_excluded_from_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ephemeral issuer must not become a retained environment selector."""
+
+    spec = importlib.util.spec_from_file_location(
+        "stage4_test_evidence", REPO_ROOT / "scripts/ci/test_plan_evidence.py"
+    )
+    assert spec is not None and spec.loader is not None
+    evidence = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(evidence)
+    monkeypatch.setenv("TP_STAGE4_DELEGATION_SECRET", "private-test-issuer")
+    monkeypatch.setenv(
+        "HIVE_GATEWAY_DELEGATION_KEY_REF", "env:TP_STAGE4_DELEGATION_SECRET"
+    )
+    selected = evidence.selected_environment("target", 4)
+    assert "TP_STAGE4_DELEGATION_SECRET" not in selected
+    assert "private-test-issuer" not in selected.values()
+    assert "private-test-issuer" in evidence.environment_secret_values()
+    source = STAGE4_SCRIPT.read_text(encoding="utf-8")
+    assert "export HIVE_GATEWAY_DELEGATION_KEY_REF=env:TP_STAGE4_DELEGATION_SECRET" in source
+    assert "TP_STAGE4_DELEGATION_KEY=" not in source
 
 
 def test_stage4_term_ignoring_process_is_killed_within_bound(

@@ -312,6 +312,32 @@ Candidate `cargo audit` and
 `cargo deny check advisories` pass under the existing advisory policy in
 `out/m27a/candidate-cargo-{audit,deny}-38.log`.
 
+Candidate C is `d00eaad4bc1e3bc709de04c3ed4529a90fda6b95`, tree
+`8496c4c5713947af981407f13fa90b90ab4ec7bf`. Its new fixture compiler passes five
+native Linux tests in `native-candidate-c-tests-72.log`. The provisioned telemetry
+fixture passes on the physical B compatibility image, including expiry,
+scope/quota refusals, Worker readiness, ring wraparound and clean QUIT
+(`pi-fixture-convergence-72.log`, `pi-fixture-output-check-73.log`). That is
+C-host/B-image convergence, not C target acceptance. C's initial Pi rebuild
+fails on the qualification manifest's obsolete checkout path; the path is
+corrected in the ignored local manifest and rebuild 74 retains the new result.
+C's complete common Stage 01 passes in `candidate-c-stage1-71.log`, including
+Python suites/examples and the unchanged Rust risk ceilings. Pi build 74 also
+passes and seals its source-bound image; it is not booted before the REST runner
+correction below.
+
+Pre-execution review of the local REST stage finds that its temporary delegation
+issuer name was not secret-classified by the evidence recorder and that the
+issuer reference was omitted from context restoration. The issuer now uses
+`TP_STAGE4_DELEGATION_SECRET`; the reference, delegated ticket and issuer variable
+join the existing exact inherited-environment restoration contract. Focused
+tests verify exclusion/redaction and restoration before either finalization
+path. No Stage 04 with the faulty local issuer setup was executed. This is part
+of `m27a-production-secret-profile` and requires a new candidate identity.
+All 16 focused REST runner tests, generated consistency and Test Plan integrity
+pass in `rest-stage4-context-tests-76.log`, `check-generated-76.log` and
+`check-test-plan-76.log`.
+
 The DD30 preflight still refuses the changed protected `kernel.rs` fingerprint.
 The existing approval is scoped to Milestone 27 and does not approve 27a's
 secret-registration and debug-memory changes. Fresh human Rust review and an

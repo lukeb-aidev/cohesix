@@ -107,10 +107,13 @@ readonly stage4_context_environment_names=(
   COHSH_REST_RESPONSE_TIMEOUT_MS
   COHSH_REST_URL
   COH_REST_URL
+  COH_REST_TICKET
   HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS
   HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS
+  HIVE_GATEWAY_DELEGATION_KEY_REF
   HIVE_GATEWAY_REQUEST_AUTH_TOKEN
   HIVE_GATEWAY_URL
+  TP_STAGE4_DELEGATION_SECRET
   TP_STAGE4_FUSE_COH_BIN
   TP_STAGE4_FUSE_MOUNT_DIR
   TP_STAGE4_FUSE_MOUNT_LOG
@@ -806,9 +809,9 @@ if [[ -z "${gateway_url}" ]]; then
   # This isolated local gateway receives one finite test caller. The private
   # issuer stays in its environment and is never included in the command log.
   if [[ -z "${HIVE_GATEWAY_DELEGATION_KEY_REF:-}" ]]; then
-    TP_STAGE4_DELEGATION_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-    export TP_STAGE4_DELEGATION_KEY
-    export HIVE_GATEWAY_DELEGATION_KEY_REF=env:TP_STAGE4_DELEGATION_KEY
+    TP_STAGE4_DELEGATION_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    export TP_STAGE4_DELEGATION_SECRET
+    export HIVE_GATEWAY_DELEGATION_KEY_REF=env:TP_STAGE4_DELEGATION_SECRET
   fi
   COH_REST_TICKET="$("${cohsh_bin}" --mint-ticket --role queen \
     --ticket-subject stage4-operator --ticket-secret "${HIVE_GATEWAY_DELEGATION_KEY_REF}" \

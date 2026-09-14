@@ -1910,6 +1910,10 @@ the same canonical Python 3.11+ selection as Stage 01.
   `test_stage4_restores_runner_owned_environment_before_final_context` covers
   both finalization paths and the existing timeout composition. Runner-local
   child configuration must not become an input-context change.
+  The local delegated issuer uses a secret-classified environment name, so its
+  value is excluded from evidence selectors and redacted from retained output.
+  Restore the inherited issuer reference, delegated ticket and private issuer
+  variable alongside the endpoint settings before either finalization path.
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot, ingest, and root reachability): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/root_cut_basic.coh`. This is also the default selection for `REST_regression_batch.sh`. `session_pool.coh` remains a TCP check because REST batches only host ticket results. `host_absent.coh` remains under TCP because its entry-count assertion uses a console-specific ACK detail.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
