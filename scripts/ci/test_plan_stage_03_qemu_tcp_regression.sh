@@ -56,7 +56,7 @@ if [[ "${target}" == "pi4" && -z "${target_evidence_input}" ]]; then
   exit 1
 fi
 if [[ "${target}" == "pi4" ]]; then
-  target_evidence="${stage3_root}/target-evidence.json"
+  target_evidence="${stage3_root}/initial-target-evidence.json"
   tp_run_cmd \
     "copy-pi4-stage3-target-evidence" \
     "${artifact_helper}" \
@@ -85,6 +85,14 @@ if [[ -n "${target_evidence}" ]]; then
 fi
 
 tp_run_catalog_action "${action_id}"
+
+if [[ "${target}" == "pi4" ]]; then
+  tp_run_cmd \
+    "copy-pi4-final-stage3-target-evidence" \
+    "${artifact_helper}" copy-evidence \
+    --source "${result_root}/final-target-evidence.json" \
+    --output "${stage3_root}/target-evidence.json"
+fi
 
 catalog_digest="sha256:$(
   python3 "${TEST_PLAN_ROOT}/scripts/ci/test_plan_catalog.py" \

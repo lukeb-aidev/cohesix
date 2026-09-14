@@ -11,50 +11,13 @@
 # Note: set COHSH_BATCH_GROUPS=base,base-telemetry,base-shard,gated to run a subset.
 # ** Note: typical end-to-end runtime is ~25 minutes; plan for >= 30 minutes to avoid repeated retries.
 #
-# Operator note for live Pi final reboot proof:
-# The Pi 4 batch uses TCP while Cohesix is running, but the final reboot/fresh-boot
-# proof crosses a reset and the U-Boot menu. Use the active minicom UART capture
-# for that section instead of trying to drive the Terminal UI. macOS may deny
-# scripted Terminal keystrokes; direct writes to /dev/cu.usbserial-* still reach
-# the same UART and minicom continues to capture the evidence.
-#
-# Repeatable flow:
-#   1. Identify the active minicom session and capture log:
-#        ps -ax -o pid=,tty=,command= | rg '[m]inicom'
-#        lsof -p <minicom-pid> | rg 'pi4-serial|usbserial'
-#      Use the lsof output as the source of truth for both the serial device and
-#      the log file; for example:
-#        serial_dev=/dev/cu.usbserial-0001
-#        capture_log=/Users/lukasbower/pi4-serial-YYYYMMDD-HHMMSS.log
-#      Ignore stale or zero-byte ~/pi4-serial-*.log files.
-#   2. Prove the serial injection lane before resetting:
-#        python3 -c 'import os, sys; fd=os.open(sys.argv[1], os.O_WRONLY | os.O_NOCTTY); os.write(fd, b"smp activity\r"); os.close(fd)' "$serial_dev"
-#      Then grep the same capture log for a new "smp activity" block with
-#      "OK SMP mode=activity" and, for Genet, "backend=bcmgenet-v5" plus the
-#      expected DHCP lease.
-#   3. Request reboot over authenticated cohsh while TCP is still up:
-#        tmp_script="$(mktemp /tmp/coh-reboot.XXXXXX.coh)"
-#        printf 'reboot\n' > "$tmp_script"
-#        "${COHSH_BIN:-target/debug/cohsh}" --transport tcp --tcp-host "$COHSH_TCP_HOST" --tcp-port "${COHSH_TCP_PORT:-31337}" --auth-token "$COHSH_AUTH_TOKEN" --role queen --script "$tmp_script"
-#        rc=$?; rm -f "$tmp_script"; test "$rc" -eq 0
-#      Expected console evidence is "OK REBOOT detail=scheduled" followed by a
-#      reset in the minicom log.
-#   4. When U-Boot reaches the menu, press Enter over the UART device:
-#        python3 -c 'import os, sys; fd=os.open(sys.argv[1], os.O_WRONLY | os.O_NOCTTY); os.write(fd, b"\r"); os.close(fd)' "$serial_dev"
-#      If U-Boot reports "boot marker diagnostics", that is expected; pressing
-#      Enter should continue the normal boot from the interactive menu.
-#   5. Wait for fresh Cohesix proof in the same capture log: DHCP bound,
-#      root prompt, then a new clean "smp activity" block. If USB/local-seat
-#      boot chatter interleaves with a partial command, send a blank line,
-#      retry "smp activity" after owner-state ready, and only count the full
-#      block ending in "OK SMP mode=activity".
-#   6. For scripts that require clean boot-local state, run one selected group
-#      per fresh boot, for example:
-#        COHSH_BATCH_TARGET=pi4 COHSH_BATCH_GROUPS=base ...
-#        <reboot using the UART flow above>
-#        COHSH_BATCH_TARGET=pi4 COHSH_BATCH_GROUPS=base-telemetry ...
-#      The default remains the full sequence for QEMU parity and quick live
-#      smoke runs; selected groups make the fresh-boot proof repeatable.
+# Pi groups require fresh boot-local Worker state. Multi-group Pi runs select
+# an operator-owned executable through COHSH_PI4_BOOT_COLLECTOR. The bounded
+# collector contract, exact-image receipts and Stage 04 base-boot continuity
+# are documented in docs/TEST_PLAN.md (Automated Stage 03).
+# A single selected group may use an existing fresh boot for diagnostics;
+# it never constitutes the complete staged matrix. Keep one UART owner and
+# the gateway stopped while the collector resets the target.
 
 set -euo pipefail
 
@@ -1448,6 +1411,12 @@ run_batch() {
             cp "$coh_log" "${archive_root}/${script_name}.out.log" || true
             return 1
         fi
+        if ! python3 "$PROJECT_ROOT/scripts/ci/cohsh_regression_output.py" \
+            --script "$script" --log "$coh_log" >>"$coh_log" 2>&1; then
+            echo "FAIL: cohsh stream ${script}" >&2
+            cp "$coh_log" "${archive_root}/${script_name}.out.log"
+            return 1
+        fi
 
         cp "$qemu_log" "${archive_root}/${script_name}.qemu.log"
         cp "$coh_log" "${archive_root}/${script_name}.out.log"
@@ -1567,7 +1536,9 @@ run_live_group() {
 
         pi_total=$((pi_total + 1))
         printf "=== Running %s/%s ===\n" "$name" "$script" | tee -a "$SUMMARY_LOG"
-        if run_cohsh "$script" > "$coh_log" 2>&1; then
+        if run_cohsh "$script" > "$coh_log" 2>&1 \
+            && python3 "$PROJECT_ROOT/scripts/ci/cohsh_regression_output.py" \
+                --script "$script" --log "$coh_log" >>"$coh_log" 2>&1; then
             pi_pass=$((pi_pass + 1))
             printf "PASS %s/%s\n" "$name" "$script" | tee -a "$SUMMARY_LOG"
         else
@@ -1651,6 +1622,24 @@ write_transport_aggregate() {
 }
 
 run_pi4_batch() {
+    local selected_groups=()
+    local group
+    # Base runs last so Stage 04 continues on its exact boot. Each group has
+    # the same fresh-state boundary already used by the QEMU launcher.
+    for group in base-telemetry base-shard gated base; do
+        if group_selected "$group"; then
+            selected_groups+=("$group")
+        fi
+    done
+    local collector="${COHSH_PI4_BOOT_COLLECTOR:-}"
+    if (( ${#selected_groups[@]} > 1 )) && [[ -z "$collector" ]]; then
+        echo "Pi multi-group regression requires COHSH_PI4_BOOT_COLLECTOR for fresh exact-image boots" >&2
+        return 1
+    fi
+    if [[ -n "$collector" && ( ! -x "$collector" || -z "$TARGET_EVIDENCE_FILE" ) ]]; then
+        echo "Pi boot collector requires an executable file and initial target evidence" >&2
+        return 1
+    fi
     reset_scoped_directory "$ARCHIVE_ROOT"
     SUMMARY_LOG="${ARCHIVE_ROOT}/summary.log"
     : > "$SUMMARY_LOG"
@@ -1658,75 +1647,59 @@ run_pi4_batch() {
     LIFECYCLE_TOUCH_SCRIPT="${ARCHIVE_ROOT}/lifecycle_touch.coh"
     write_lifecycle_resume_script "$LIFECYCLE_RESUME_SCRIPT"
     write_lifecycle_touch_script "$LIFECYCLE_TOUCH_SCRIPT"
-
     COHSH_RUN_TCP_HOST="$TCP_HOST"
     COHSH_RUN_TCP_PORT="$TCP_PORT"
     ensure_live_cohsh_bin
-
-    printf "INFO target=pi4 tcp=%s:%s log_root=%s\n" "$TCP_HOST" "$TCP_PORT" "$ARCHIVE_ROOT" | tee -a "$SUMMARY_LOG"
-    if ! wait_port_ready "$TCP_HOST" "$TCP_PORT" "$PORT_TIMEOUT" 0; then
-        printf "FAIL: TCP console not reachable on %s:%s within %ss\n" "$TCP_HOST" "$TCP_PORT" "$PORT_TIMEOUT" | tee -a "$SUMMARY_LOG" >&2
-        return 1
-    fi
-    printf "INFO: TCP console reachable on %s:%s\n" "$TCP_HOST" "$TCP_PORT" | tee -a "$SUMMARY_LOG"
-
-    if ! wait_auth_ready "$TCP_HOST" "$TCP_PORT" "$COHSH_AUTH_TOKEN" "$AUTH_READY_TIMEOUT" 0; then
-        printf "FAIL: TCP console auth endpoint not ready on %s:%s within %ss\n" "$TCP_HOST" "$TCP_PORT" "$AUTH_READY_TIMEOUT" | tee -a "$SUMMARY_LOG" >&2
-        return 1
-    fi
-    printf "INFO: TCP auth handshake is responsive\n" | tee -a "$SUMMARY_LOG"
-
     pi_pass=0
     pi_fail=0
     pi_total=0
-    if group_selected "base"; then
-        if ! run_live_group "base" "${BASE_SCRIPTS[@]}"; then
+    local group_evidence=()
+    local seen_evidence=(--seen-evidence "$TARGET_EVIDENCE_FILE")
+    for group in "${selected_groups[@]}"; do
+        if [[ -n "$collector" ]]; then
+            TARGET_EVIDENCE_FILE="$(
+                python3 "$PROJECT_ROOT/scripts/ci/pi4_regression_boot.py" \
+                    --collector "$collector" --group "$group" \
+                    --prior-evidence "$TARGET_EVIDENCE_FILE" \
+                    --source-digest "$TEST_SOURCE_DIGEST" \
+                    --out "${ARCHIVE_ROOT}/boots/${group}" "${seen_evidence[@]}"
+            )" || return 1
+            seen_evidence+=(--seen-evidence "$TARGET_EVIDENCE_FILE")
+        fi
+        group_evidence+=("$TARGET_EVIDENCE_FILE")
+        printf "INFO target=pi4 group=%s tcp=%s:%s evidence=%s\n" \
+            "$group" "$TCP_HOST" "$TCP_PORT" "$TARGET_EVIDENCE_FILE" | tee -a "$SUMMARY_LOG"
+        wait_port_ready "$TCP_HOST" "$TCP_PORT" "$PORT_TIMEOUT" 0 || return 1
+        wait_auth_ready "$TCP_HOST" "$TCP_PORT" "$COHSH_AUTH_TOKEN" "$AUTH_READY_TIMEOUT" 0 || return 1
+        case "$group" in
+            base) run_live_group "$group" "${BASE_SCRIPTS[@]}" || return 1 ;;
+            base-telemetry) run_live_group "$group" "${BASE_TELEMETRY_SCRIPTS[@]}" || return 1 ;;
+            base-shard) run_live_group "$group" "${BASE_SHARD_SCRIPTS[@]}" || return 1 ;;
+            gated) run_live_group "$group" "${GATED_SCRIPTS[@]}" || return 1 ;;
+        esac
+        # Preserve the first failed group instead of resetting away its state.
+        if (( pi_fail > 0 )); then
             return 1
         fi
-    else
-        log_skip_group "base"
-    fi
-    if group_selected "base-telemetry"; then
-        if ! run_live_group "base-telemetry" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
-            return 1
-        fi
-    else
-        log_skip_group "base-telemetry"
-    fi
-    if group_selected "base-shard"; then
-        if ! run_live_group "base-shard" "${BASE_SHARD_SCRIPTS[@]}"; then
-            return 1
-        fi
-    else
-        log_skip_group "base-shard"
-    fi
-    if group_selected "gated"; then
-        if ! run_live_group "gated" "${GATED_SCRIPTS[@]}"; then
-            return 1
-        fi
-    else
-        log_skip_group "gated"
-    fi
-
-    # Fresh-boot proof after this point is intentionally UART/operator-driven;
-    # TCP disappears during reset. Follow the top-of-file minicom notes.
+    done
     printf "RESULT pass=%s fail=%s total=%s log_root=%s\n" "$pi_pass" "$pi_fail" "$pi_total" "$ARCHIVE_ROOT" | tee -a "$SUMMARY_LOG"
-    if (( pi_fail > 0 )); then
-        return 1
-    fi
-    if group_selected "base"; then
-        write_pi4_result "base" "${BASE_SCRIPTS[@]}"
-    fi
-    if group_selected "base-telemetry"; then
-        write_pi4_result "base-telemetry" "${BASE_TELEMETRY_SCRIPTS[@]}"
-    fi
-    if group_selected "base-shard"; then
-        write_pi4_result "base-shard" "${BASE_SHARD_SCRIPTS[@]}"
-    fi
-    if group_selected "gated"; then
-        write_pi4_result "gated" "${GATED_SCRIPTS[@]}"
-    fi
+    # All logs are now immutable. Bind each result to its own collected boot.
+    local index
+    for ((index = 0; index < ${#selected_groups[@]}; index += 1)); do
+        group="${selected_groups[$index]}"
+        TARGET_EVIDENCE_FILE="${group_evidence[$index]}"
+        case "$group" in
+            base) write_pi4_result "$group" "${BASE_SCRIPTS[@]}" ;;
+            base-telemetry) write_pi4_result "$group" "${BASE_TELEMETRY_SCRIPTS[@]}" ;;
+            base-shard) write_pi4_result "$group" "${BASE_SHARD_SCRIPTS[@]}" ;;
+            gated) write_pi4_result "$group" "${GATED_SCRIPTS[@]}" ;;
+        esac
+    done
     write_transport_aggregate "pi4" "pi4-transport"
+    if [[ -n "$TARGET_EVIDENCE_FILE" ]]; then
+        "$QEMU_ARTIFACT_HELPER" copy-evidence --source "$TARGET_EVIDENCE_FILE" \
+            --output "${TRANSPORT_RESULT_ROOT}/final-target-evidence.json"
+    fi
     return 0
 }
 

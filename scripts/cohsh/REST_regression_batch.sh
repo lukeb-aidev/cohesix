@@ -126,7 +126,9 @@ run_one() {
   COHSH_REST_URL="${GATEWAY_URL}" \
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${GATEWAY_AUTH_TOKEN}" \
     "${COHSH_BIN}" --transport rest --script "${SCRIPT_ROOT}/${script}" \
-    >"${log_path}" 2>&1
+    >"${log_path}" 2>&1 || return "$?"
+  python3 "${ROOT_DIR}/scripts/ci/cohsh_regression_output.py" \
+    --script "${script}" --log "${log_path}" >>"${log_path}" 2>&1
 }
 
 if [[ "${#JOB_LIST[@]}" -eq 0 ]]; then

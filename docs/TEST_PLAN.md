@@ -1011,7 +1011,7 @@ into logged shell command strings.
 | Target | Stages | Required target-specific evidence |
 | --- | --- | --- |
 | `qemu` | 01-05 | Stage 03 builds one immutable artifact per unique manifest, content-binding all eight packaged host executables (`cas-tool`, `coh`, `cohsh`, `gpu-bridge-host`, `hive-gateway`, `host-sidecar-bridge`, `host-ticket-agent`, and `swarmui`), then uses a fresh boot for every regression group. Stage 04 reuses the validated default artifact but starts another fresh boot. Result manifests bind source, profile, manifest, image, scripts, boot identity, counts, and log hashes. |
-| `pi4` | 01-05 | Stage 03 requires `COHSH_TCP_HOST` or `COHSH_HOST` plus `TP_PI4_TARGET_EVIDENCE_FILE`; Stage 04 requires an existing gateway URL and evidence binding that gateway to the same boot/image. These stages yield only `pi4-transport`. `TP_PI4_HARDWARE_EVIDENCE_FILE`, when required, must validate the stronger hardware bundle and is never synthesized by the runner. |
+| `pi4` | 01-05 | Stage 03 requires the Pi TCP endpoint, initial target evidence and `COHSH_PI4_BOOT_COLLECTOR`; it retains a fresh boot of the exact image for each group. Stage 04 requires an existing gateway bound to the final base-group boot/image. These stages yield only `pi4-transport`. `TP_PI4_HARDWARE_EVIDENCE_FILE`, when required, must validate the stronger hardware bundle and is never synthesized by the runner. |
 
 Declare the Pi TCP host, external gateway URL, client/policy overrides and
 external broker response-timeout settings before Stage 02, and preserve them
@@ -1326,7 +1326,37 @@ cannot be repaired by a passing compile or a historical transcript.
   for the legacy root-stack UART string `audit tcp.conn.close`. Authentication
   by the next workload on that same boot proves listener restoration without a
   reconnect retry. Pi/live retains its lifecycle resume and per-script ledger.
-- Pi 4 hardware bring-up uses the same official runner against an already-booted TCP console: `COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi4-ip> COHSH_TCP_PORT=31337 scripts/cohsh/run_regression_batch.sh`. Pi mode archives a full per-script ledger, runs lifecycle resume before/after groups and scripts, continues after failures by default, and writes a unique `out/regression-logs/pi4-full-<utc>/summary.log` unless `COHSH_LOG_ROOT` is set.
+- Pi 4 uses the same official runner with `COHSH_BATCH_TARGET=pi4`,
+  `COHSH_TCP_HOST=<pi4-ip>` and `COHSH_TCP_PORT=31337`. A multi-group run also
+  requires `COHSH_PI4_BOOT_COLLECTOR=<absolute-executable>`: Worker slots and
+  IDs are boot-local, so every group needs a fresh boot of the same exact image.
+  Declare that selector before Stage 02 and retain it through Stage 05.
+  The runner executes `base-telemetry`, `base-shard`, `gated`, then `base`,
+  preserving the existing Stage 04 requirement to continue on the base boot.
+  It retains lifecycle resume and the per-script ledger, and stops before
+  another boot if a group fails. A single selected group may use an existing
+  fresh boot for focused diagnosis; it cannot produce full Stage 03 PASS.
+  `COHSH_LOG_ROOT` selects the evidence directory; the default remains
+  `out/regression-logs/pi4-full-<utc>`.
+- The operator-owned collector is invoked without shell evaluation with
+  `--group <name> --out <new-group-directory> --prior-evidence <json>` and
+  `--source-digest sha256:<digest>`. It must boot the selected image, retain
+  exact BUILD/image/serial and any RAM or media verification receipts in that
+  directory, and write `target-evidence.json` through `qemu_artifact.py
+  record-pi4-evidence`. `pi4_regression_boot.py` limits each invocation to
+  600 seconds, terminates its owned process group, records the executable hash
+  and outcome, and rejects source/image/host/gateway changes or any reused boot
+  ID. It never supplies reboot, flash, sudo, serial ownership or hardware-proof
+  authority on its own. Each group result binds its own immutable receipt;
+  the complete aggregate still requires all 17 scripts. The final base receipt
+  is published for Stage 04 continuity. Do not keep a serial reader or gateway
+  open across collector calls unless that collector explicitly owns it.
+- The `9p_batch.coh` fixture asserts append admission, successful CAT and
+  oversized-write refusal. TCP and REST batch runners additionally invoke
+  `cohsh_regression_output.py`, which requires exactly `batch-1`, `batch-2`,
+  `batch-3` in that order in the completed CAT data stream. Boot/audit records
+  may interleave. The bounded ACK preview cannot satisfy this assertion;
+  running the `.coh` file alone is not the complete append-order gate.
 - Before the staged Pi 4 transport run, create its source/boot/image/endpoint
   binding and pass the result as `TEST_PLAN_TARGET_EVIDENCE_FILE`:
   ```sh
@@ -1343,6 +1373,9 @@ cannot be repaired by a passing compile or a historical transcript.
   recorded separately. This caller-declared record prevents accidental target
   switching during Stages 03/04; it cannot independently detect a reboot or
   backend replacement and is transport evidence, not Pi hardware acceptance.
+  The initial record selects the image; per-group collectors supply fresh
+  records. Stage 04 uses the final immutable base receipt, so omit an obsolete
+  initial `TEST_PLAN_TARGET_EVIDENCE_FILE` override when starting Stage 04.
 - Stage 03 archives per-script logs under the stage state dir (for example `out/test-plan/<run-id>/qemu-regression-logs/`).
 - Manual runs of `scripts/cohsh/run_regression_batch.sh` default to `out/regression-logs/` unless `COHSH_LOG_ROOT` is set.
 - Focused Stage 03 iteration may use `COHSH_BATCH_GROUPS=base`,

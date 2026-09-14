@@ -13234,6 +13234,18 @@ After Milestone 27:
 
 ## Task Breakdown
 ```
+Title/ID: m27-pi-regression-isolation
+Milestone: Milestone 27 — Operator Utilities / physical regression prerequisite restoration
+Status: In Progress
+Goal: Preserve exact append-stream assertions and fresh-boot Worker isolation across the complete physical TCP matrix.
+Discovery: The exact 9a5eb97f1 Pi image passed 14 of 17 scripts; the append test inspected an ACK preview, and later groups inherited a live heartbeat slot and boot-local Worker IDs.
+Changes:
+  - scripts/cohsh/9p_batch.coh + TCP/REST batch runners — validate ordered appended records in the completed CAT data stream, independently of bounded ACK previews and interleaved audit records.
+  - scripts/ci/pi4_regression_boot.py + TCP/Stage03 runners — invoke an explicitly configured, bounded external boot collector for each selected Pi group; verify fresh boot IDs and unchanged source/image/host/gateway bindings; retain each group's evidence and finish on base for existing Stage04 continuity.
+Checks: Missing, reordered or repeated append records fail; boot-hook failure, stale boot identity and changed image/source fail; all four groups retain distinct exact-image boot records and the complete 17-script matrix remains required.
+Compatibility: No target/runtime/Worker/console grammar change. Host suite, Python SDK, REST and benchmark consumers retain their contracts; only canonical test collection and evidence composition change.
+Deliverables: Deterministic workflow tests, preserved failed Pi attempt, fresh complete target evidence.
+
 Title/ID: m27-live-operator-closure
 Milestone: Milestone 27 — Operator Utilities / live inspect and evidence-pack composition
 Status: In Progress

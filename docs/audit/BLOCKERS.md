@@ -106,6 +106,19 @@ diff/replay composition against that retained Pi boot and a fresh QEMU boot
 of its sealed default artifact. This candidate evidence
 does not replace a complete staged chain for the final corrected source.
 
+Final collector source `9a5eb97f1` passes the complete common Stage 01,
+both target Stage 02 builds, and the native Linux ARM64 eight-tool build and
+offline operator checks. Linux/Mac inspection of the same retained Pi pack is
+byte-identical. Its fresh Pi image
+`a41349f35bdbd27b34ca2af2347089b7b967c699809fd965bb89703a6c274d72`
+passes exact GENET RAM boot and settling. Stage 03 then passes 14/17 scripts:
+the append fixture inspects a bounded ACK preview instead of returned data,
+and later groups inherit a heartbeat slot and boot-local Worker IDs. The
+`m27-pi-regression-isolation` repair verifies exact streamed append records and
+requires separately bound fresh boots per group. Its workflow tests pass;
+fresh target qualification of that repair remains required. No DD30 waiver,
+runtime predicate, fixture-data order, or acceptance marker was relaxed.
+
 ## Historical gate snapshots
 
 - Exact `2be878d8d`: QEMU Stages 01–04 PASS, Stage 05 FAIL on then-open DD26–29;

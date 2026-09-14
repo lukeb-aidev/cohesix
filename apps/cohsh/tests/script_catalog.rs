@@ -279,7 +279,7 @@ fn script_token_stream_is_stable() {
         hashes.insert(hash);
     }
     let expected = BTreeSet::from([
-        "9p_batch.coh:e9bb34b9eb3c59c3122321f2ca9069bc5343eaae4d6764da27d699f84fa1d8fa"
+        "9p_batch.coh:ee1d2935117cabdac8accb99c94d77283f4c8b2b571c77042ab5b4e14dcba406"
             .to_owned(),
         "boot_v0.coh:8cead851b286c62cde383098a2da802c78d7d324d792ed43bad880ed8cbea3e4"
             .to_owned(),

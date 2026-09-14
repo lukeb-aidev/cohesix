@@ -65,6 +65,7 @@ Environment pass-through:
   TEST_PLAN_STATE_DIR
   COHESIX_GATEWAY_URL / HIVE_GATEWAY_URL / COHSH_REST_URL / COH_REST_URL
   COHSH_BATCH_TARGET / COHSH_TCP_HOST / COHSH_TCP_PORT
+  COHSH_PI4_BOOT_COLLECTOR (fresh exact-image boot collector for each Pi group)
   TP_STAGE4_GATEWAY_BIND / TP_STAGE4_QEMU_TCP_PORT
   TP_HOST_JOBS / TP_UI_WORKERS / TP_ALLOW_OVERSUBSCRIBE
   TEST_PLAN_ITERATION
@@ -77,7 +78,8 @@ Environment pass-through:
 Target contract:
   - qemu supports stages 1-5, including self-contained QEMU Stage 03/04 evidence.
   - pi4 supports stages 1-5, but Stage 03 requires COHSH_TCP_HOST or COHSH_HOST
-    for a live Pi 4 TCP console, and Stage 04 requires COHESIX_GATEWAY_URL or an
+    for a live Pi 4 TCP console plus COHSH_PI4_BOOT_COLLECTOR for fresh group
+    boots, and Stage 04 requires COHESIX_GATEWAY_URL or an
     equivalent existing REST gateway URL so the stage cannot start local QEMU.
   - The state dir records target.env and stage_XX.<target>.done markers.
   - A target-qualified PASS requires stage_01.<target>.done through
