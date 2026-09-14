@@ -76,6 +76,12 @@ successful command or test count is not a coverage argument.
   unexecuted and contributes no target/component PASS. This release-specific
   residual risk does not relax any other finding, target evidence, source
   binding, staged prerequisite or current advisory check.
+- For Milestone 27, select `DD_MILESTONE_ID=27` for Stage 05 and its focused
+  governance checks. The separate [owner approval](audit/DD30_M27_APPROVAL.toml)
+  binds exact reviewed implementation and protected hashes, retains DD30 as
+  P1 / ACCEPTED_RISK through 2026-10-13, and records Rust sign-off. The dynamic
+  fault/wake test remains UNEXECUTED. Do not combine release and milestone
+  selection; this decision grants no other finding or staged-evidence waiver.
 - Review all affected host tools, `tools/cohesix-py`, generated contracts,
   benchmark workloads/report schemas, fixtures, and docs in the same change.
   Record reviewed surfaces requiring no change. Use [HOST_TOOLS.md](HOST_TOOLS.md)
@@ -3339,8 +3345,8 @@ staged target plan with fresh provenance before making those claims.
 
 `audit_ledgers` checks active exception/finding cross-references and baseline
 partition arithmetic before 27a/27d closure; `rust_risk_gate.sh` remains the
-production source-count authority. DD30's release-specific waiver is not M27
-acceptance. Bounded latency measurements follow [BENCHMARKS.md](BENCHMARKS.md).
+production source-count authority. M27 uses its separate owner approval above;
+the historical release waiver alone cannot admit M27. Bounded latency measurements follow [BENCHMARKS.md](BENCHMARKS.md).
 The shared attestation suite checks certificate/signature, nonce/replay, PCR,
 artifact identity, trust revocation/expiry and malformed-input failures. The
 stock Pi exemption applies only to positive signed-device acceptance; fresh

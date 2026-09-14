@@ -1,0 +1,60 @@
+# Author: Lukas Bower
+# Purpose: Bind the M27 DD30 acceptance and Rust sign-off to the exact reviewed implementation.
+# Copyright 2026 Lukas Bower
+# The dynamic fault/wake test remains UNEXECUTED; this does not grant target proof.
+
+schema = "cohesix.milestone-evidence-waiver/v1"
+exception_id = "EX-2026-0030"
+finding_id = "DD-2026-0030"
+scope_id = "dd30-restricted-ipc-dynamic-fault-wake"
+severity = "P1"
+disposition = "ACCEPTED_RISK"
+status = "APPROVED_ACTIVE"
+risk_owner = "Lukas Bower"
+approved_by = "Lukas Bower"
+decision_date = "2026-09-14"
+expiration_date = "2026-10-13"
+reviewed_source_commit = "7c3b82abbaf938f82f958dc40886d24fcf1c9f01"
+approval_quote = "Consider DD30 and Rust review signed off"
+milestone_id = "27"
+rust_review = "APPROVED"
+
+[[protected_files]]
+path = "apps/root-task/src/console/mod.rs"
+sha256 = "cad5c5120cc29ddcbfa5122185ed084cbed0237c06854931fac09ad097dfaccb"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/console_network.rs"
+sha256 = "7497b4f921b812f2c57656040b27ee5cacd62536dd78a067b1d00ef9b43bca13"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/critical_tcb.rs"
+sha256 = "1ce148a8e25898f7b6b377a85276b8b697116bf89fc740f1d3b39126badc2eaf"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/driver_task.rs"
+sha256 = "aca999e4ec1b4f46900a825723b5aab230b3fb28e2dca50e5c354721e5ef8f1d"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/mod.rs"
+sha256 = "b78b000991051ebf2851c94babc738f1480a636f64611d17fbab7a2f4264d1a2"
+
+[[protected_files]]
+path = "apps/root-task/src/hal/worker_task.rs"
+sha256 = "1395a287729b54865e4bf4095bdb316740bf54b134a46817bb2715361a919ae7"
+
+[[protected_files]]
+path = "apps/root-task/src/kernel.rs"
+sha256 = "0620a6f85d9518a588aaa2bdcf3d5ba9c330674895c3969199b9e05ee749cf84"
+
+[[protected_files]]
+path = "apps/root-task/src/sel4.rs"
+sha256 = "d006cb0fd0da25f27751a96d49bf227e862000d6b98e3d6971e318cfa56010da"
+
+[[protected_files]]
+path = "apps/root-task/src/sel4/syscall.rs"
+sha256 = "fc5577944d86451a740ee92d1e96d03544fe7bc4bbd191005351699634e37e8c"
+
+[[protected_files]]
+path = "crates/sel4-sys/src/lib.rs"
+sha256 = "c593f33cb4198575e798965f847c85a8705fd515b156a19fd5907ddafa492b7e"

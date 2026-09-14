@@ -35,6 +35,19 @@ Old source identities and the missing complete current-source staged chain
 remain visible, and ordinary resume stays strict. The same conservative
 2026-10-13 administrative bound applies; no future source or release is admitted.
 
+On 2026-09-14 Lukas Bower answered the exact M27 review request with
+“Consider DD30 and Rust review signed off”.
+[DD30_M27_APPROVAL.toml](DD30_M27_APPROVAL.toml) separately binds that decision
+to reviewed implementation `7c3b82abbaf938f82f958dc40886d24fcf1c9f01`, all ten
+protected file hashes, and the unchanged 2026-10-13 expiry. It extends this
+same exception to explicitly selected `DD_MILESTONE_ID=27`; it does not replace
+the original release record or exception decision date. The protected kernel
+change only corrects the attestation boot message. Human Rust review is approved;
+DD30 remains P1 / ACCEPTED_RISK and dynamic fault/wake remains UNEXECUTED.
+Changed host, target, SDK or manifest implementation, missing approval, conflicting
+release/milestone selection, revoked approval or expiry fails closed. No other
+finding or target prerequisite is waived.
+
 ## Register
 | Exception ID | Related Finding | Severity | Scope | Rationale | Compensating Controls | Risk Owner | Approved By | Decision Date | Expiration Date | Status |
 |---|---|---|---|---|---|---|---|---|---|---|

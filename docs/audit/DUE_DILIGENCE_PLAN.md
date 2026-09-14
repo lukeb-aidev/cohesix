@@ -138,7 +138,7 @@ This procedure mirrors RMF intent (Prepare, Categorize, Select, Implement, Asses
 
 Remediation `target_date` values schedule work; they never defer a P0/P1
 release blocker. Every P0/P1 must be `CLOSED_VERIFIED`, except the explicitly
-selected `1.0.0-beta` DD30 owner waiver documented in
+selected `1.0.0-beta` or separately approved Milestone 27 DD30 decision documented in
 [EXCEPTIONS.md](EXCEPTIONS.md). That single P1 stays `ACCEPTED_RISK`; it is
 admitted only after matching the approved active exception, owner decision,
 bounded expiry and protected implementation hashes in
@@ -164,7 +164,8 @@ It is not a generic resume override or permission to weaken bundle integrity.
 - `PASS_WITH_RESIDUAL_RISK`
 - No open `P0/P1`.
 - Only time-bounded accepted `P2` with explicit owner and expiration, plus the
-  narrow DD30 waiver when explicitly selected by `DD_RELEASE_ID=1.0.0-beta`.
+  narrow DD30 decision when explicitly selected by `DD_RELEASE_ID=1.0.0-beta`
+  or `DD_MILESTONE_ID=27`, with the corresponding exact reviewed source record.
 - DD30's missing dynamic fault/wake test remains unexecuted; waiver admission
   is a release-authority decision and never a target-test PASS.
 - All other P0/P1 and staged prerequisites remain binding outside the exact

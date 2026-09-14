@@ -5,6 +5,7 @@
 #
 # Environment:
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
+#   DD_MILESTONE_ID           Explicit M27 owner decision (27); exclusive with release.
 #   DD_RELEASE_ID             Explicit release context; only the validated DD30
 #                             waiver can admit 1.0.0-beta residual evidence risk.
 #   --release-carry-forward   Require the approved release-only policy and sealed
@@ -321,7 +322,8 @@ check_blocking_findings() {
     --root "${repo_root}" \
     --findings "${findings_path}" \
     --exceptions "${exceptions_path}" \
-    --release "${DD_RELEASE_ID:-}"
+    --release "${DD_RELEASE_ID:-}" \
+    --milestone "${DD_MILESTONE_ID:-}"
 }
 
 check_exceptions_register() {
@@ -331,7 +333,9 @@ check_exceptions_register() {
     --mode register \
     --root "${repo_root}" \
     --findings "${findings_path}" \
-    --exceptions "${exceptions_path}"
+    --exceptions "${exceptions_path}" \
+    --release "${DD_RELEASE_ID:-}" \
+    --milestone "${DD_MILESTONE_ID:-}"
 }
 
 check_reused_regression_batch() {

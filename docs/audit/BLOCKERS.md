@@ -153,3 +153,12 @@ A verified blocker may be removed only when:
 The release-specific DD30 acceptance follows the separate explicit owner-waiver
 contract in [EXCEPTIONS.md](EXCEPTIONS.md); it does not change the finding to
 `CLOSED_VERIFIED` or supply missing target execution.
+
+## M27 owner decision — 2026-09-14
+
+Lukas Bower explicitly signed off DD30 and the reviewed M27 Rust implementation.
+The separate [M27 approval](DD30_M27_APPROVAL.toml) preserves the historical
+release approval, DD30 P1 / ACCEPTED_RISK, the unexecuted dynamic fault/wake test,
+and 2026-10-13 expiry. `DD_MILESTONE_ID=27` selects only this exact implementation.
+Remaining target and staged checks are still required; this decision alone does
+not mark Milestone 27 Complete or produce signed-device proof.

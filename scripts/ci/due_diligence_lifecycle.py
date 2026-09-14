@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Validate finding lifecycles and the scoped DD30 release waiver.
+# Purpose: Validate finding lifecycles and separately selected DD30 owner decisions.
 # Copyright 2026 Lukas Bower
 
 """Keep verified remediation distinct from a scoped release-owner decision."""
@@ -28,6 +28,10 @@ WAIVER_APPROVAL = (
     "Mark it as a pass, we are ready for release"
 )
 WAIVER_SOURCE = "6d7c16e4a0f5d89c32a4fa0f815c2bfe6babc065"
+M27_RECORD = pathlib.Path("docs/audit/DD30_M27_APPROVAL.toml")
+M27_SOURCE = "7c3b82abbaf938f82f958dc40886d24fcf1c9f01"
+M27_APPROVAL = "Consider DD30 and Rust review signed off"
+REVIEW_PATHS = ("apps", "crates", "tools", "configs", "Cargo.toml", "Cargo.lock")
 PROTECTED_FILES = frozenset({
     "apps/root-task/src/console/mod.rs",
     "apps/root-task/src/hal/console_network.rs",
@@ -52,31 +56,54 @@ class WaiverAdmission:
 
     sha256: str
     path: pathlib.Path
+    milestone: str = ""
 
     def describe(self, *, admitted: bool) -> str:
         action = "admitted" if admitted else "validated (not release admission)"
+        selection = ("DD_MILESTONE_ID=27" if self.milestone else
+                     f"DD_RELEASE_ID={WAIVER_RELEASE}")
         return (
             f"release-owner evidence waiver {action}: "
-            f"DD_RELEASE_ID={WAIVER_RELEASE} finding={WAIVER_FINDING} "
+            f"{selection} finding={WAIVER_FINDING} "
             f"exception={WAIVER_EXCEPTION} scope={WAIVER_SCOPE} "
             f"sha256={self.sha256} record={self.path} "
             "dynamic_fault_wake=NOT_EXECUTED"
         )
 
 
-def reviewed_source_bytes(root: pathlib.Path, relative: str) -> bytes:
+def reviewed_source_bytes(
+    root: pathlib.Path, relative: str, commit: str = WAIVER_SOURCE,
+) -> bytes:
     """Resolve the approval's immutable Git object, never the working tree."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "show", f"{WAIVER_SOURCE}:{relative}"],
+            ["git", "-C", str(root), "show", f"{commit}:{relative}"],
             check=True,
             capture_output=True,
         )
     except (OSError, subprocess.CalledProcessError) as error:
         raise LifecycleError(
-            f"cannot resolve reviewed IPC source: {relative} at {WAIVER_SOURCE}"
+            f"cannot resolve reviewed IPC source: {relative} at {commit}"
         ) from error
     return result.stdout
+
+
+def validate_m27_source(root: pathlib.Path) -> None:
+    """Bind human review to all reviewed host, target, manifest and SDK sources."""
+    try:
+        changed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--exit-code", M27_SOURCE,
+             "--", *REVIEW_PATHS], capture_output=True, check=False,
+        )
+        untracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--others",
+             "--exclude-standard", "--", *REVIEW_PATHS],
+            capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise LifecycleError("cannot resolve M27 reviewed source") from error
+    if changed.returncode != 0 or untracked.stdout:
+        raise LifecycleError("M27 reviewed implementation changed")
 
 
 def validate_waiver(
@@ -85,13 +112,16 @@ def validate_waiver(
     exception: dict[str, str],
     *,
     today: date,
+    milestone: str = "",
 ) -> WaiverAdmission:
-    """Check the one approved waiver with an injected evaluation date.
+    """Check the explicitly selected owner decision with an injected date.
 
     The CLI supplies the actual date. No environment or CLI option can replace
     it. Register validity alone does not select release acceptance.
     """
-    path = root / WAIVER_RECORD
+    if milestone not in {"", "27"}:
+        raise LifecycleError("unsupported DD30 milestone selection")
+    path = root / (M27_RECORD if milestone else WAIVER_RECORD)
     if not path.is_file() or path.is_symlink():
         raise LifecycleError(f"missing regular release waiver record: {path}")
     payload = path.read_bytes()
@@ -105,6 +135,9 @@ def validate_waiver(
         "decision_date", "expiration_date", "reviewed_source_commit",
         "approval_quote", "protected_files",
     }
+    if milestone:
+        required.remove("release_id")
+        required.update({"milestone_id", "rust_review"})
     if set(record) != required:
         raise LifecycleError("release waiver record has missing or unknown fields")
     expected = {
@@ -121,6 +154,15 @@ def validate_waiver(
         "reviewed_source_commit": WAIVER_SOURCE,
         "approval_quote": WAIVER_APPROVAL,
     }
+    if milestone:
+        expected.pop("release_id")
+        expected.update({
+            "schema": "cohesix.milestone-evidence-waiver/v1",
+            "milestone_id": "27",
+            "reviewed_source_commit": M27_SOURCE,
+            "approval_quote": M27_APPROVAL,
+            "rust_review": "APPROVED",
+        })
     for field, value in expected.items():
         if record[field] != value:
             raise LifecycleError(f"release waiver {field} does not match approval")
@@ -132,7 +174,7 @@ def validate_waiver(
         expiration = date.fromisoformat(record["expiration_date"])
     except ValueError as error:
         raise LifecycleError("release waiver has an invalid date") from error
-    if decision != date(2026, 9, 13):
+    if decision != date(2026, 9, 14 if milestone else 13):
         raise LifecycleError("release waiver decision date does not match approval")
     if not decision <= expiration <= date(2026, 10, 13):
         raise LifecycleError(
@@ -159,13 +201,16 @@ def validate_waiver(
         "scope": f"release={WAIVER_RELEASE}; scope={WAIVER_SCOPE}",
         "risk_owner": record["risk_owner"],
         "approved_by": record["approved_by"],
-        "decision_date": record["decision_date"],
+        # Preserve the original exception row; the separate M27 record extends it.
+        "decision_date": "2026-09-13",
         "expiration_date": record["expiration_date"],
         "status": "APPROVED_ACTIVE",
     }
     for field, value in required_exception.items():
         if exception.get(field) != value:
             raise LifecycleError(f"release waiver exception {field} mismatch")
+    if milestone:
+        validate_m27_source(root)
     files = record["protected_files"]
     if not isinstance(files, list) or len(files) != len(PROTECTED_FILES):
         raise LifecycleError("release waiver requires exactly the protected IPC files")
@@ -182,7 +227,11 @@ def validate_waiver(
         seen.add(relative)
         if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise LifecycleError("invalid protected IPC digest")
-        reviewed = hashlib.sha256(reviewed_source_bytes(root, relative)).hexdigest()
+        reviewed_bytes = (
+            reviewed_source_bytes(root, relative, M27_SOURCE) if milestone
+            else reviewed_source_bytes(root, relative)
+        )
+        reviewed = hashlib.sha256(reviewed_bytes).hexdigest()
         if digest != reviewed:
             raise LifecycleError(
                 f"protected IPC digest differs from approval: {relative}"
@@ -191,7 +240,7 @@ def validate_waiver(
         if not source.is_file() or source.is_symlink():
             raise LifecycleError(f"missing regular protected IPC source: {relative}")
         if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
-            if relative != "apps/root-task/src/sel4.rs":
+            if milestone or relative != "apps/root-task/src/sel4.rs":
                 raise LifecycleError(f"protected IPC source changed: {relative}")
             # This is a separate exact owner-approved host-only successor,
             # never a refreshed version of the original 6d7 approval.
@@ -215,7 +264,7 @@ def validate_waiver(
             )
     if seen != PROTECTED_FILES:
         raise LifecycleError("incomplete protected IPC source coverage")
-    return WaiverAdmission(hashlib.sha256(payload).hexdigest(), path)
+    return WaiverAdmission(hashlib.sha256(payload).hexdigest(), path, milestone)
 
 
 def validate_register(
@@ -224,6 +273,7 @@ def validate_register(
     root: pathlib.Path,
     *,
     today: date,
+    milestone: str = "",
 ) -> list[WaiverAdmission] | None:
     """Validate every finding/exception lifecycle before any waiver admission."""
     if not findings_path.is_file():
@@ -542,6 +592,7 @@ def validate_register(
                                 "status": status,
                             },
                             today=today,
+                            milestone=milestone,
                         ))
                     except LifecycleError as error:
                         errors.append(f"{exception_id}: {error}")
@@ -665,8 +716,11 @@ def main() -> int:
     parser.add_argument("--findings", type=pathlib.Path, required=True)
     parser.add_argument("--exceptions", type=pathlib.Path, required=True)
     parser.add_argument("--release", default="")
+    parser.add_argument("--milestone", default="", choices=("", "27"))
     args = parser.parse_args()
     try:
+        if args.release and args.milestone:
+            raise LifecycleError("select exactly one DD30 qualification context")
         if args.mode == "blockers":
             requested = check_blocking_findings(args.findings)
             if requested is None:
@@ -675,7 +729,8 @@ def main() -> int:
                 print("blocking findings gate passed")
                 return 0
         admissions = validate_register(
-            args.findings, args.exceptions, args.root, today=date.today()
+            args.findings, args.exceptions, args.root, today=date.today(),
+            milestone=args.milestone
         )
         if admissions is None:
             return 1
@@ -683,7 +738,7 @@ def main() -> int:
             if len(admissions) != 1:
                 print("DD30 requires one validated release waiver", file=sys.stderr)
                 return 1
-            if args.release != WAIVER_RELEASE:
+            if not args.milestone and args.release != WAIVER_RELEASE:
                 print(
                     f"blocking finding {WAIVER_FINDING} (P1, ACCEPTED_RISK): "
                     f"requires explicit DD_RELEASE_ID={WAIVER_RELEASE}",

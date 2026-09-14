@@ -13234,6 +13234,15 @@ After Milestone 27:
 
 ## Task Breakdown
 ```
+Title/ID: m27-owner-review-closure
+Milestone: Milestone 27 — Operator Utilities / exact owner approval and due-diligence closure
+Status: In Progress
+Goal: Apply Lukas Bower's 2026-09-14 DD30 and Rust sign-off to the exact reviewed M27 implementation without altering historical approvals or target results.
+Inputs: Reviewed 7c3b82abbaf938f82f958dc40886d24fcf1c9f01; owner statement "Consider DD30 and Rust review signed off".
+Changes: Separate DD30_M27_APPROVAL.toml; explicitly selected DD_MILESTONE_ID=27 lifecycle validation; negative approval/source/expiry checks; reconciled Test Plan and audit policy.
+Checks: Exact protected and complete host/target/SDK/manifest implementation binding; unchanged P1/ACCEPTED_RISK and 2026-10-13 expiry; dynamic fault/wake remains UNEXECUTED; all other gates remain required.
+Deliverables: Durable human review and residual-risk decision, focused governance evidence, remaining staged target checks.
+
 Title/ID: m27-pi-regression-isolation
 Milestone: Milestone 27 — Operator Utilities / physical regression prerequisite restoration
 Status: In Progress
