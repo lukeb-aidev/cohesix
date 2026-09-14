@@ -16,7 +16,7 @@ architecture, interface, security, and testing contracts.
 
 ### Manifest enablement and global disable
 
-The following are planned compiler-owned settings, not current manifest syntax:
+Planned compiler-owned settings; not current manifest syntax:
 
 ```toml
 [gateway.agent_protocols]
@@ -29,181 +29,160 @@ enabled = false
 enabled = false
 ```
 
-- Effective MCP enablement is `gateway.agent_protocols.enabled &&
-  gateway.mcp.enabled`; A2A uses the same master switch and its own flag.
-  Missing settings resolve to false. Master false dominates retained child
-  settings; both false, MCP-only, A2A-only, and both enabled are supported.
-- CLI/environment/config overrides may narrow this generated ceiling only.
-  Direct stdio launch, remote requests, mount options, discovery, negotiation,
-  and agent tools cannot enable a manifest-disabled protocol. An invalid or
-  mismatched selected generated policy fails closed before protocol startup.
-- A disabled protocol registers no handlers, protocol-only listeners, public
-  or extended Agent Cards, catalog endpoints, streams, subscriptions, or push
-  callbacks and starts no protocol background work. Its credentials are not
-  resolved solely for that protocol. A dedicated disabled stdio invocation
-  exits with a bounded diagnostic on stderr before accepting protocol input.
-  Existing REST routes and independent host tools retain their own enablement.
-- Record effective flags and manifest fingerprint in bounded gateway/doctor
-  diagnostics. Reject attempts to override disabled settings deterministically;
-  HTTP requests to absent routes cannot activate an adapter or alternate path.
-- Apply a changed manifest through the supported configuration/restart lifecycle.
-  Do not claim hot reload unless implemented and tested. On disable transition,
-  stop new protocol admission and terminate protocol streams/callback workers.
-  Already accepted tickets retain the underlying executor's durable lifecycle;
-  disabling a transport neither cancels nor replays their side effects. Use
-  separately authorized cancellation or grant revocation and existing status
-  surfaces to manage that work. A2A-only operation never depends on MCP being on.
-- Bump the manifest schema when these fields are implemented, regenerate all
-  selected profiles and consumers, and validate schema even for disabled
-  configuration. Dependency readiness checks apply to effective enablement;
-  disabling both protocols must not require installing their optional services.
+- Effective MCP is `gateway.agent_protocols.enabled && gateway.mcp.enabled`;
+  A2A uses the master and its own flag. Missing settings are false; master false
+  dominates retained true child flags. Support both-disabled, MCP-only,
+  A2A-only, and both-enabled profiles.
+- CLI/environment/config overrides may only narrow this ceiling. Stdio, remote
+  requests, mount options, discovery, negotiation, and tools cannot enable a
+  disabled protocol. Invalid or mismatched generated policy fails closed before
+  startup; absent HTTP routes cannot activate alternate paths.
+- Disabled protocols register no handlers, protocol-only listeners, public or
+  extended Agent Cards, catalogs, streams, subscriptions, or push callbacks;
+  start no background work; and resolve no credentials solely for that protocol.
+  Disabled stdio exits with bounded stderr diagnostics before reading protocol
+  input. REST and independent host tools retain their own enablement.
+- Bounded gateway/doctor diagnostics report effective flags and manifest
+  fingerprint; widening attempts fail deterministically.
+- Apply changes through the supported configuration/restart lifecycle; hot
+  reload requires implementation and tests. Disable stops new admission and
+  protocol streams/callback workers. Accepted tickets retain their executor's
+  durable lifecycle: transport disable neither cancels nor replays effects.
+  Manage them through existing status surfaces and separately authorized
+  cancellation or revocation. A2A-only never depends on MCP.
+- On implementation, bump the manifest schema and regenerate every selected
+  profile/consumer. Validate disabled configurations too; readiness checks apply
+  to effective enablement, so disabled protocols need no optional services.
 
 ### Complete function and use-case coverage
 
-- Extend the 27b registry projection to inventory every supported gateway
-  operation: metadata and bounds, namespace reads and admitted append/batch
-  writes, Queen/Worker lifecycle and scheduling controls, GPU leases, AI/PEFT
-  lifecycle, provider actions, policy/approval and administrative operations,
-  cancellation/recovery, and audit/evidence/replay wherever already supported.
-  Each entry retains its owning contract and selected-profile maturity.
-  Future or disabled functions are recorded as such without inventing support.
-- Every admitted entry has an MCP tool/resource mapping and an A2A
-  operation/skill mapping when that protocol is enabled. Many operations may
-  compose into a typed A2A skill; semantic parity does not require one endpoint
-  per tool. Schema/docs endpoints may map to native metadata or linked
-  resources. The ledger records any native protocol limitation, an equivalent
-  in-protocol composition where possible, and the owning rationale/evidence.
-  Unmapped admitted functionality blocks coverage acceptance. Exclusions cannot
-  be justified solely by a demo catalog, a human-only preference, or write risk.
-- Generic append, batch, and host-ticket tools validate the exact underlying
-  action and target against the same generated schema, policy, and admission
-  as named tools. No raw-write wrapper bypasses a missing action policy.
-- Keep full implementation coverage separate from caller-visible discovery.
-  Apply 27b visibility rules before constructing payloads; tools and skills are
-  filtered by current identity, grants, deployment readiness, and supported
-  protocol capabilities. Safe unavailable/authorization-needed explanations
-  must not reveal another subject's resources or privileged policy details.
-- Registry coverage includes end-to-end use cases, not only action names:
-  discover/inspect, acquire capacity, execute/observe, evaluate/canary/promote,
-  cancel/resume/rollback, bounded service remediation, and evidence/replay.
-  Include every supported use-case row and its applicable stages; do not
-  require optional inference or semantic dependencies for unrelated controls.
+- Extend the 27b registry to inventory every supported gateway operation:
+  metadata/bounds, namespace reads and admitted append/batch writes,
+  Queen/Worker lifecycle/scheduling, GPU leases, AI/PEFT lifecycle, providers,
+  policy/approval/administration, cancellation/recovery, audit/evidence/replay.
+  Retain owner contracts and selected-profile maturity, including future and
+  disabled entries without inventing support.
+- Map every admitted entry through each enabled protocol: MCP tools/resources
+  and A2A operations/skills. Typed skills may compose actions; metadata/schema
+  endpoints may use native metadata or linked resources. Record native limits,
+  equivalent in-protocol compositions where possible, and rationale/evidence.
+  Unmapped admitted functions block acceptance; a demo catalog, human-only
+  preference, or write risk cannot justify exclusion.
+- Generic append/batch/ticket tools enforce the same generated action/target
+  schema, policy, and admission as named tools; raw writes cannot bypass policy.
+- Separate implementation coverage from discovery. Apply 27b visibility before
+  payload construction, filtering by identity, grants, deployment readiness,
+  and protocol capability. Unavailable/authorization-needed explanations cannot
+  disclose other subjects' resources or privileged policy details.
+- Cover every supported use-case row and stage: discover/inspect, acquire
+  capacity, execute/observe, evaluate/canary/promote, cancel/resume/rollback,
+  bounded service remediation, and evidence/replay. Unrelated controls do not
+  acquire optional inference or semantic dependencies.
 
 ### Standing authorization and per-action admission
 
-- Reuse 27a delegated identity, 27b action policy, 27d durable run state, and
-  28a admission for an explicit standing authorization bound to a subject,
-  workflow/run, action set, targets, policy version, expiry, and revocation
-  state. Bounds include resource/cost ceilings where applicable, cumulative
-  operations, concurrency, retry/cooldown limits, and delegation depth.
-  Subdelegation can only attenuate the original authority. Credentials travel
-  through authenticated transport/configuration, never model-visible arguments.
-- The shared authority/run owners enforce budgets across MCP, A2A, REST, child
-  agents, reconnects, and process recovery; protocol-local counters cannot
-  multiply a run's budget. Refuse autonomy claims where durable accounting,
-  fact freshness, revocation, or executor enforcement is unavailable.
-  Every mutating transport serving that workflow, including generic writes,
-  must bind the same run identity; omitting it cannot recover an unmetered path.
-- Standing permission is a ceiling, not a reusable 28a decision. Each concrete
-  side effect requires a fresh applicable decision and state-bound grant,
-  exact idempotency identity, fencing, and a receipt. Revalidate state and
-  authority on resume, delayed dispatch, escalation, and subdelegation.
-- Existing one-shot approval requirements remain in force until their owning
-  policy explicitly supports bounded standing authorization. The selected
-  policy determines automatic admission, required human approval, or refusal.
-  Prompts and client-side confirmation never grant authority. Server-side
-  denial remains effective even if a client suppresses all confirmation UI.
-- Administrative functions may be projected under separately delegated
-  administrative authority. Ordinary workflow grants cannot widen their own
-  scopes, change admission policy, mint credentials, disable auditing, enable
-  protocols, or approve their own escalation. Missing authority produces a
-  typed explanation and authorized escalation/resume path, never a fallback.
-- Distinguish request acceptance, execution, confirmed outcome, cancellation
-  requested, cancellation confirmed, and unknown outcome. Cancellation is not
-  rollback. Ambiguous execution requires reconciliation under the existing
-  WAL/receipt contract; a disconnect never authorizes blind resubmission.
-- Document where enforcement resides: gateway-attributed callers remain
-  gateway-enforced unless target verification is separately proven. Host
-  executor custody and bypass assumptions remain visible; protocol conformance
-  and seL4 isolation cannot establish an external effect's correctness alone.
+- Shared 27a identity, 27b policy, 27d run state, and 28a admission bind standing
+  authority to subject, workflow/run, actions, targets, policy version, expiry,
+  and revocation. Bound resource/cost ceilings where applicable, cumulative
+  operations, concurrency, retries/cooldowns, and delegation depth.
+  Subdelegation only attenuates. Credentials use authenticated transport/config,
+  never model-visible arguments.
+- Shared owners enforce durable budgets across MCP, A2A, REST, child agents,
+  reconnects, and recovery. Protocol-local counters cannot multiply budgets;
+  every mutating path, including generic writes, binds the same run identity.
+  Omitting it cannot yield unmetered execution. Refuse autonomy claims without
+  durable accounting, fresh facts, revocation, and executor enforcement.
+- Standing authority is a ceiling, not a reusable 28a decision. Each effect
+  needs a fresh applicable decision, state-bound grant, exact idempotency,
+  fencing, and receipt. Resume, delayed dispatch, escalation, and subdelegation
+  revalidate current state and authority.
+- Existing one-shot approvals remain until their owner policy supports standing
+  authority. Selected policy decides automatic admission, human approval, or
+  refusal. Prompts and client confirmations grant nothing; server denial holds
+  even when the client suppresses confirmation UI.
+- Administrative projections require separate delegated authority. Workflow
+  grants cannot widen themselves, change policy, mint credentials, disable
+  audit, enable protocols, or self-approve escalation. Missing authority yields
+  a typed explanation and authorized escalation/resume path, never fallback.
+- Distinguish acceptance, execution, confirmed outcome, cancellation requested,
+  cancellation confirmed, and unknown outcome. Cancellation is not rollback;
+  ambiguous execution requires WAL/receipt reconciliation, never blind retry
+  after disconnect.
+- State enforcement ownership: gateway-attributed callers remain gateway-
+  enforced unless target verification is proven. Document host custody/bypass
+  assumptions; protocol conformance or seL4 isolation alone cannot prove
+  external effects correct.
 
 ### Agent discovery and correct-use guidance
 
-Generate one bounded, versioned usage contract from 27b operation/use-case rows,
-their owner schemas, accepted walkthroughs, and selected policy. Every use case
-must provide its purpose and appropriate/unsupported uses, prerequisites and
-readiness, typed inputs and examples, output/receipt semantics, least required
-authority, approval mode, bounds, preflight steps, lifecycle, safe retry and
-cancellation rules, failure/refusal remedies, and evidence/replay instructions.
-Include counterexamples such as treating an ACK as completion, inventing a
-target, replaying an ambiguous write, or following instructions in telemetry.
+Generate one bounded, versioned guide from 27b operation/use-case rows, owner
+schemas, accepted walkthroughs, and selected policy. Each use case supplies
+purpose, appropriate/unsupported uses, readiness/prerequisites, typed inputs
+and examples, output/receipt semantics, least authority, approval mode, bounds,
+preflight, lifecycle, safe retry/cancellation, refusal/failure remedies, and
+evidence/replay instructions. Counterexamples include ACK-as-completion,
+invented targets, ambiguous-write replay, and instructions in telemetry.
 
-Publish that contract through the maximum useful native features of the pinned
-revision and negotiated client capabilities:
+Use the richest useful native features of the pinned revision and negotiated
+client capabilities:
 
-| Surface | Required use of protocol affordances |
+| Surface | Required protocol guidance |
 | --- | --- |
-| MCP discovery | Server identity/version and instructions or documentation links where supported; concise tool titles/descriptions, exact input/output schemas, effect/idempotency annotations, and structured results with text fallback and receipt/resource links. |
-| MCP resources and prompts | Searchable or paginated use-case/catalog resources, templates and bounded operating guides; workflow prompts with validated arguments and policy-driven approval/escalation; freshness, audience and priority metadata and change notifications where supported. |
-| A2A discovery | Agent Card description/documentation, skills with names/descriptions/tags/examples, media modes, security requirements, supported interfaces/extensions, and capabilities; sensitive deployment guidance belongs in authenticated views. |
-| A2A interaction | Typed message data and task/artifact records explain prerequisites, next steps, progress, failures, required input/authority, cancellation limits, and terminal receipts using the pinned binding's states and errors. |
+| MCP discovery | Server identity/version, instructions or documentation links where supported; concise tool titles/descriptions, exact input/output schemas, effect/idempotency annotations, structured results with text fallback and receipt/resource links. |
+| MCP resources/prompts | Searchable or paginated use-case/catalog resources, templates, bounded operating guides, validated workflow prompts with policy-driven approval/escalation; freshness/audience/priority metadata and change notifications where supported. |
+| A2A discovery | Card description/documentation, named/described/tagged skills and examples, media modes, security requirements, interfaces/extensions, and capabilities; sensitive guidance in authenticated views. |
+| A2A interaction | Typed messages and task/artifact records explain prerequisites, next steps, progress, failures, required input/authority, cancellation limits, and terminal receipts using the pinned binding's states/errors. |
 
-Essential safety and usage information must be available in tool/skill
-descriptions and results: a client may not expose MCP prompts or resources to
-its model. Provide bounded read-only help/catalog tools and an A2A guidance
-skill/message path so such clients can obtain the same contract. Core workflows
-must remain usable without proprietary extensions; use native fields first,
-negotiated extensions only where justified, and linked structured guidance for
-details the wire format cannot express. Record used, unsupported, and disabled
-affordances in a revision/client capability matrix with conformance evidence.
-Evaluate argument completion, progress/status, durable task support, resource
-subscriptions, and input/authorization elicitation where the pinned protocol
-offers them; implement those that improve admitted workflows within configured
-bounds. Missing client support must yield a tested discovery/status/input
-fallback. Client callbacks cannot acquire extra authority or disclose secrets.
-Use progressive discovery and bounded pagination rather than unbounded prompt
-injection of the entire catalog. No runtime fetch of remote documentation is
-required for the packaged core guide.
+Put essential usage/security guidance in tool/skill descriptions and results.
+Provide bounded read-only help/catalog tools for MCP clients without model-visible
+prompts/resources, and an independent A2A guidance skill/message path. Core
+workflows require no proprietary extensions: prefer native fields, justify
+negotiated extensions, and link structured detail beyond the wire format.
 
-Guidance, schemas, examples, prompts, Agent Cards, and annotations are descriptive
-and never authoritative instructions to bypass validation. Bind guides to the
-selected manifest, registry/policy/schema versions, visibility, and freshness;
-invalidate caches on identity/policy changes and refuse stale authority. Keep
-credentials, private targets, raw prompts, and unredacted evidence out of public
-metadata. Validate examples against real schemas and exercise them through
-ordinary clients. Clients must be able to determine the correct sequence and
-handle refusal using only published protocol guidance; this is a tested
-usability contract, not a claim that every model will follow instructions.
+Record used, unsupported, and disabled affordances plus conformance in a
+revision/client capability matrix. Evaluate argument completion, progress/status,
+durable tasks, subscriptions, and input/authorization elicitation where offered;
+implement useful features within bounds and test discovery/status/input fallbacks
+for limited clients. Callbacks cannot acquire authority or disclose secrets.
+Use progressive, bounded/paginated discovery; the packaged core guide needs no
+remote-documentation fetch.
 
-Protocol references for implementation-time revision selection:
+Guides, schemas, examples, prompts, Cards, and annotations are descriptive, never
+authority to bypass validation. Bind them to manifest, registry/policy/schema
+versions, visibility, and freshness; invalidate caches on identity/policy changes
+and refuse stale authority. Exclude credentials, private targets, raw prompts,
+and unredacted evidence from public metadata. Validate examples against owner
+schemas and test ordinary-client completion/refusal using published guidance
+alone; this proves usability, not universal model compliance.
+
+Implementation-time revision references:
 [MCP tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools),
 [MCP resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources),
 [MCP prompts](https://modelcontextprotocol.io/specification/2025-11-25/server/prompts),
 and [A2A specification](https://a2a-protocol.org/latest/specification/).
-These references describe available affordances across revisions; they do not
-select a mixed wire contract. Pin and validate one complete revision per
-protocol, recording supported features and client limitations before acceptance.
+They describe affordances across revisions, not a mixed wire contract. Pin and
+validate one complete revision per protocol, recording features and client limits.
 
 **Non-Goals (Explicit)**
-- No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
-- No new console verbs, no new 9P verbs, no ACK/ERR/END grammar changes, and no hidden RPC behind MCP tool names.
-- No direct execution of `systemctl`, `docker`, `kubectl`, CUDA/NVML, PEFT, or NeMo provider APIs from the MCP server. Side effects go through delegated REST and/or `/host/tickets/spec`.
-- No OpenAI-compatible endpoint, inference proxy, provider call, or model-output
-  tool execution inside MCP/A2A. Inference submissions map to accepted 27d
-  `infer.run` admission and the 27e gateway; model-produced tool calls remain
-  inert data until separately validated and authorized.
-- No duplicate semantic graph, vector index, capsule planner, prompt archive, or
-  inference receipt schema in `hive-gateway`; 28c consumes accepted 27c and
-  27e libraries and immutable refs.
-- No MCP tool that bypasses role-scoped tickets, policy approval, writer-epoch fencing, host-ticket allowlists, or evidence exports.
-- No MCP/A2A-local policy evaluator, fact-authority classifier, grant minter, or
-  admission cache transferable across intents. Protocol metadata and model
-  text remain untrusted intent inputs.
-- No model-controlled prompt or MCP client metadata is trusted as authorization. Tool descriptions, prompts, and annotations are documentation only.
-- No CUDA/NVML, PEFT, NeMo, Kubernetes, systemd, or Docker code enters the VM TCB.
-- No implicit translation from arbitrary FUSE writes into MCP `tools/call`. Write-capable Cohesix mounts continue to use existing console/REST `ECHO` semantics and the existing append-only control files.
-- No in-VM A2A endpoint, no A2A-specific root-task queue, no A2A peer mesh, no opaque inter-agent mailbox, and no direct A2A-to-provider execution path.
-- No A2A push notification callback is accepted without SSRF-safe URL validation, explicit allowlist policy, per-task auth material, bounded retry policy, and audit evidence.
+- No in-VM MCP/A2A endpoint, listener, filesystem root, parser, or queue; no
+  A2A peer mesh or opaque inter-agent mailbox. CUDA/NVML, PEFT, NeMo,
+  Kubernetes, systemd, and Docker remain outside the VM TCB.
+- No new console/9P verbs, ACK/ERR/END changes, or hidden RPC. Side effects use
+  delegated REST and/or `/host/tickets/spec`, preserving role scope, policy
+  approval, fencing, allowlists, and evidence. Protocols cannot directly invoke
+  `systemctl`, `docker`, `kubectl`, CUDA/NVML, PEFT, or NeMo APIs.
+- No inference endpoint/proxy/provider calls or model-output tool execution.
+  Submissions use admitted 27d `infer.run` and the 27e gateway; returned tool
+  calls remain inert until separately validated and authorized.
+- No duplicate semantic graph, vector index, capsule planner, prompt archive,
+  or inference receipt schema; reuse accepted 27c/27e libraries and immutable refs.
+- No protocol-local policy evaluator, fact-authority classifier, grant minter,
+  or admission cache transferable across intents. Model text and client metadata
+  remain untrusted; descriptions, prompts, and annotations grant no authority.
+- No arbitrary FUSE-write translation to MCP `tools/call`. Write-capable mounts
+  retain console/REST `ECHO` and existing append-only control files.
+- No A2A push callback without SSRF-safe URL validation, explicit allowlists,
+  per-task auth, bounded retries, and audit evidence.
 
 **Deliverables**
 
@@ -689,8 +668,9 @@ changes use documentation, metadata, and generated-consistency checks.
   evidence, Worker tier, external-executor requirement, or availability state
   drifts between protocols.
 - MCP/A2A discovery and execution respect the selected use-case row. Missing live dependencies yield omission or typed unavailable/refused results, and protocol success never changes the row's maturity classification.
-- No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
-- No A2A skill directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
+- Neither MCP tools nor A2A skills directly invoke host executors, shell
+  commands, CUDA/NVML, PEFT filesystem mutation, NeMo, `systemctl`, `docker`,
+  or `kubectl` outside existing Cohesix adapters.
 - No MCP tool or A2A skill calls an inference provider directly, reimplements
   the OpenAI-compatible surface, or executes model-produced tool calls; an
   inference submission is admitted through 27d and observed through a verified
