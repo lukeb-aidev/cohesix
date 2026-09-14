@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,7 +45,9 @@ def test_target_root_check_preserves_exact_profile_and_binding_contract() -> Non
         "COHESIX_CONSOLE_NETWORK_RUNTIME_IMAGE",
         "COHESIX_NINEDOOR_RUNTIME_IMAGE",
         "COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD",
-        "COHESIX_PI4_WIFI_FIRMWARE_DIR",
+        "scripts/pi4-image-build.sh",
+        "selected-image-binding.json",
+        "cohesix-root-task-resolved.json",
     ):
         assert required in source
     assert source.index("coh-rtc-python-profile") < source.index(
@@ -264,7 +267,7 @@ def _run_target_root_fixture(
     return result, log_lines
 
 
-def test_pi4_manifest_mismatch_stops_before_target_component_build(
+def test_qemu_manifest_mismatch_stops_before_target_component_build(
     tmp_path: Path,
 ) -> None:
     repo_root, script, state_dir, fake_bin = _write_target_root_fixture(tmp_path)
@@ -274,21 +277,17 @@ def test_pi4_manifest_mismatch_stops_before_target_component_build(
         script,
         state_dir,
         fake_bin,
-        target="pi4",
+        target="qemu",
         selected_manifest_sha="b" * 64,
     )
 
     assert result.returncode != 0
-    assert "does not match selected pi4 manifest" in result.stderr
+    assert "does not match selected qemu manifest" in result.stderr
     assert cargo_log == ["run"]
 
 
 @pytest.mark.parametrize("target,network_feature,configs", [
     ("qemu", "console-network-runtime/direct-virtio", []),
-    ("pi4", "console-network-runtime/direct-genet", [
-        "profile.release.package.console-network-runtime.opt-level=3",
-        "profile.release.package.smoltcp.opt-level=3",
-    ]),
 ])
 def test_matching_manifest_selects_production_network_component(
     tmp_path: Path,
@@ -314,3 +313,104 @@ def test_matching_manifest_selects_production_network_component(
     assert arguments[arguments.index("--features") + 1] == network_feature
     assert [arguments[i + 1] for i, value in enumerate(arguments)
             if value == "--config"] == configs
+
+
+PI_RESOLVED = b'{"selected":"pi4-production"}\n'
+
+
+def _install_pi_builder_fixture(repo_root: Path, fake_bin: Path, case: str) -> None:
+    """Provide compiler/stager outputs without simulating target execution."""
+    config = {"case": case, "resolved": PI_RESOLVED.decode()}
+    (repo_root / "pi-builder-case.json").write_text(json.dumps(config))
+    builder = repo_root / "scripts/pi4-image-build.sh"
+    builder.write_text("""#!/usr/bin/env python3
+# Author: Lukas Bower
+# Purpose: Supply exact stager outputs for host workflow contract tests.
+# Copyright 2026 Lukas Bower
+import json
+from pathlib import Path
+import sys
+root = Path(__file__).resolve().parents[1]
+case = json.loads((root / 'pi-builder-case.json').read_text())
+args = dict(zip(sys.argv[1::2], sys.argv[2::2], strict=True))
+(root / 'pi-builder-args.json').write_text(json.dumps(args))
+if case['case'] == 'build-failed':
+    raise SystemExit(77)
+stage = Path(args['--stage-dir'])
+stage.mkdir(parents=True)
+(stage / 'cohesix-root-task-resolved.json').write_text(case['resolved'])
+(stage / 'cohesix-image-arm-bcm2711').write_bytes(b'fixture-only')
+identity = {'schema': 'cohesix-pi4-image-identity/v2', 'git_commit': 'd' * 40,
+            'source_tree_clean': True, 'image_id': '1' * 64,
+            'image_sha256': '2' * 64, 'size_bytes': 12,
+            'build_marker_sha256': '3' * 64}
+(root / 'verified-image-fixture.json').write_text(json.dumps(identity))
+if case['case'] == 'dirty':
+    identity['source_tree_clean'] = False
+if case['case'] == 'wrong-source':
+    identity['git_commit'] = 'e' * 40
+if case['case'] == 'wrong-image':
+    identity['image_sha256'] = '4' * 64
+if case['case'] == 'wrong-schema':
+    identity['schema'] = 'legacy'
+(stage / 'pi4-image-identity.json').write_text(json.dumps(identity))
+""")
+    builder.chmod(0o755)
+    verifier = repo_root / "scripts/pi4_image_identity.py"
+    verifier.write_text("""# Author: Lukas Bower
+# Purpose: Return a controlled independent image-verifier fixture.
+# Copyright 2026 Lukas Bower
+from pathlib import Path
+import sys
+assert sys.argv[1:3] == ['verify', '--image']
+print((Path(__file__).resolve().parents[1] / 'verified-image-fixture.json').read_text())
+""")
+    git = fake_bin / "git"
+    git.write_text("#!/usr/bin/env python3\n# Author: Lukas Bower\n"
+                   "# Purpose: Supply the controlled current commit for a host fixture.\n"
+                   "# Copyright 2026 Lukas Bower\nimport sys\n"
+                   "assert sys.argv[1:] == ['rev-parse', 'HEAD']\nprint('d' * 40)\n")
+    git.chmod(0o755)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["valid", "build-failed", "wrong-manifest", "dirty", "wrong-source",
+     "wrong-image", "wrong-schema"],
+)
+def test_pi_stage_uses_selected_build_and_rejects_bad_binding(
+    tmp_path: Path, case: str,
+) -> None:
+    """The QEMU default module cannot be a Pi build oracle; exact staged truth can."""
+    repo_root, script, state_dir, fake_bin = _write_target_root_fixture(tmp_path)
+    _install_pi_builder_fixture(repo_root, fake_bin, case)
+    selected = hashlib.sha256(PI_RESOLVED).hexdigest()
+    if case == "wrong-manifest":
+        selected = "b" * 64
+    result, cargo_log = _run_target_root_fixture(
+        repo_root, script, state_dir, fake_bin, target="pi4",
+        selected_manifest_sha=selected,
+    )
+    assert cargo_log == ["run"]
+    arguments = json.loads((repo_root / "pi-builder-args.json").read_text())
+    assert arguments["--manifest"] == str(
+        repo_root / "configs/root_task_pi4_uboot_aarch64.toml"
+    )
+    assert arguments["--sel4-build-dir"] == str(repo_root / "seL4/build_UBOOT")
+    assert arguments["--root-task-features"] == "release-pi4"
+    assert set(arguments) == {
+        "--manifest", "--sel4-build-dir", "--root-task-features", "--stage-dir",
+    }
+    if case == "valid":
+        assert result.returncode == 0, result.stderr
+        binding_path = (
+            Path(arguments["--stage-dir"]).parent / "selected-image-binding.json"
+        )
+        binding = json.loads(binding_path.read_text())
+        assert binding["manifest_sha256"] == selected
+        assert binding["proof"] == "build-only"
+        assert binding["source_commit"] == "d" * 40
+        assert "PASS target=pi4" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert "PASS target=pi4" not in result.stdout

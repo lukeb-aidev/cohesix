@@ -917,6 +917,16 @@ the selected provisioned-target profile and release checks. Stage 05 verifies
 the immutable Stage 01-04 attestations and runs only unique release governance.
 Direct `scripts/ci/due_diligence_gate.sh` execution remains exhaustive.
 
+Pi Stage 02 uses the canonical `pi4-image-build.sh` workflow from a clean source
+commit. That builder generates the selected Pi contract, compiles its exact
+release components, seals the image, and restores the default QEMU generated
+files. The stage independently compares the retained Pi resolved-manifest hash
+to the compiler's selected Pi projection and checks the staged source/image
+identity against the verified image. A build failure or mismatched binding
+cannot pass. The default QEMU generated module is not a Pi build oracle.
+The resulting `selected-image-binding.json` is build evidence only; fresh Pi
+transport and hardware evidence retain their separate requirements.
+
 ## Claim tiers and PASS terminology
 
 Never report an unqualified “Test Plan PASS.” Report the exact claim tier(s):

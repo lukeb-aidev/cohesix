@@ -540,10 +540,10 @@ stage = 2
 tier = "pi4-transport"
 scope = "provisioned-target"
 targets = ["pi4"]
-description = "Fail closed unless the selected Pi 4 manifest matches the compiled generated root-task identity, then build fresh isolated components and compile the exact 54 MHz release feature set."
+description = "Build the exact 54 MHz Pi release profile through the canonical clean-source image builder, verify its retained selected-manifest and source/image bindings, and restore default QEMU generated artifacts."
 command = "scripts/ci/test_plan_target_root_check.sh --target pi4 --sel4-build \"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" --profile pi4_production --features release-pi4 --timer-clock-hz 54000000"
 timeout_seconds = 1800
-trigger_paths = ["apps/root-task/**", "apps/console-network-runtime/**", "apps/nine-door-runtime/**", "apps/pi4-driver-runtime/**", "apps/worker-*/**", "crates/console-network-abi/**", "crates/pi4-driver-abi/**", "crates/secure9p-transport/**", "crates/worker-task-abi/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "configs/driver_runtime_classic_comparator.toml", "scripts/ci/test_plan_target_root_check.sh", "scripts/driver_runtime_manifest.py", "scripts/worker_image_manifest.py", "tools/coh-rtc/**", "seL4/build_UBOOT/**", "Cargo.lock"]
+trigger_paths = ["apps/root-task/**", "apps/console-network-runtime/**", "apps/nine-door-runtime/**", "apps/pi4-driver-runtime/**", "apps/worker-*/**", "crates/console-network-abi/**", "crates/pi4-driver-abi/**", "crates/secure9p-transport/**", "crates/worker-task-abi/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "configs/driver_runtime_classic_comparator.toml", "scripts/ci/test_plan_target_root_check.sh", "scripts/pi4-image-build.sh", "scripts/pi4_image_identity.py", "scripts/pi4_prebuilt_composition.py", "scripts/worker_task_evidence.py", "scripts/driver_runtime_manifest.py", "scripts/worker_image_manifest.py", "tools/coh-rtc/**", "seL4/build_UBOOT/**", "Cargo.lock"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
 

@@ -50,11 +50,6 @@ case "${target}:${profile}:${features}:${timer_clock_hz}" in
     expected_sel4="${repo_root}/seL4/build_UBOOT"
     selected_manifest="${repo_root}/configs/root_task_pi4_uboot_aarch64.toml"
     projection_profile="pi4_production"
-    component_args=(
-      --features "console-network-runtime/direct-genet"
-      --config 'profile.release.package.console-network-runtime.opt-level=3'
-      --config 'profile.release.package.smoltcp.opt-level=3'
-    )
     ;;
   *)
     fail "target/profile/features/timer tuple is not canonical"
@@ -130,6 +125,57 @@ print(f"{selected_sha} {match.group(1)}")
 PY
 ) || fail "selected target manifest identity could not be verified"
 read -r selected_manifest_sha compiled_manifest_sha <<<"${projection_identity}"
+if [[ "${target}" == "pi4" ]]; then
+  # The repository's default generated module belongs to QEMU. The canonical
+  # Pi builder generates the selected Pi contract, builds its exact components,
+  # seals their source/image identity, and restores all default generated files.
+  pi4_stage="${output_dir}/pi4-sd"
+  "${repo_root}/scripts/pi4-image-build.sh" \
+    --manifest "${selected_manifest}" \
+    --sel4-build-dir "${sel4_build}" \
+    --root-task-features "${features}" \
+    --stage-dir "${pi4_stage}"
+  python3 "${repo_root}/scripts/pi4_image_identity.py" verify \
+    --image "${pi4_stage}/cohesix-image-arm-bcm2711" \
+    >"${output_dir}/verified-image.json"
+  python3 - "${selected_projection}" \
+    "${pi4_stage}/cohesix-root-task-resolved.json" \
+    "${pi4_stage}/pi4-image-identity.json" \
+    "${output_dir}/verified-image.json" "$(git rev-parse HEAD)" \
+    >"${output_dir}/selected-image-binding.json" <<'PYBIND'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+projection_path, resolved_path, metadata_path, verified_path = map(
+    Path, sys.argv[1:5]
+)
+projection = json.loads(projection_path.read_text(encoding="utf-8"))
+metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+verified = json.loads(verified_path.read_text(encoding="utf-8"))
+resolved_sha = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
+if resolved_sha != projection["manifest_sha256"]:
+    raise SystemExit("staged Pi root contract does not match selected pi4 manifest")
+if metadata.get("schema") != "cohesix-pi4-image-identity/v2":
+    raise SystemExit("staged Pi image identity has an unexpected schema")
+if (metadata.get("git_commit") != sys.argv[5]
+        or metadata.get("source_tree_clean") is not True):
+    raise SystemExit("staged Pi image is not bound to the exact clean source")
+for field in ("image_id", "image_sha256", "size_bytes", "build_marker_sha256"):
+    if field not in verified or metadata.get(field) != verified[field]:
+        raise SystemExit(f"staged Pi identity differs from verified image: {field}")
+print(json.dumps({"schema": "cohesix-target-root-binding/v1", "target": "pi4",
+                  "profile": "pi4_production", "manifest_sha256": resolved_sha,
+                  "source_commit": sys.argv[5], "image_id": verified["image_id"],
+                  "image_sha256": verified["image_sha256"],
+                  "proof": "build-only"}, sort_keys=True))
+PYBIND
+  printf 'target-root-check: PASS target=%s profile=%s timer_clock_hz=%s manifest_sha256=%s output=%s\n' \
+    "${target}" "${profile}" "${timer_clock_hz}" "${selected_manifest_sha}" "${output_dir}"
+  exit 0
+fi
+
 [[ "${selected_manifest_sha}" == "${compiled_manifest_sha}" ]] ||
   fail "generated root-task projection does not match selected ${target} manifest (selected=${selected_manifest_sha} compiled=${compiled_manifest_sha})"
 
@@ -175,9 +221,6 @@ root_env=(
   "COHESIX_NINEDOOR_RUNTIME_IMAGE=${artifact_dir}/nine-door-runtime"
   "COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD=${driver_archive}"
 )
-if [[ "${target}" == "pi4" ]]; then
-  root_env+=("COHESIX_PI4_WIFI_FIRMWARE_DIR=${repo_root}/third_party/raspberry-pi-firmware/v1.50/firmware/cyw43455-linux-capture")
-fi
 env "${root_env[@]}" cargo check --locked -p root-task \
   --target "${target_triple}" \
   --no-default-features \

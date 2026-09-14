@@ -74,6 +74,19 @@ are restored. The previous five-failure staged attempt remains historical under
 No historical marker or risk ceiling has been changed. DD30's release-specific
 waiver does not grant M27 acceptance.
 
+The exact `20c07df72` continuation passes QEMU Stages 01 and 02, including
+2,454 Python tests and 138 subtests (one skip). Stage 03 built both variants but
+Homebrew QEMU 11.0.3 aborted in HVF initialization before seL4 started. The
+validated external QEMU 10.1.0 executable retains its recorded hash and valid
+signature and passes the canonical four-core startup smoke; fresh target
+acceptance remains required. Pi Stage 02 now invokes the canonical Pi image
+builder and verifies its retained selected-manifest/source/image binding;
+124 focused workflow/catalog/image tests pass. The initial passive/empty-line
+Pi serial observations contained no bytes; the retained WiFi address then
+accepted authenticated reads, and UART `help` returned the root prompt.
+That discovery proves access to the older schema-1.18 running image, not a
+fresh M27 image boot.
+
 ## Historical gate snapshots
 
 - Exact `2be878d8d`: QEMU Stages 01–04 PASS, Stage 05 FAIL on then-open DD26–29;

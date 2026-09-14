@@ -44,8 +44,26 @@ the pinned Rust toolchain and components, verifies and extracts the official Arm
 GNU archive, recreates the dedicated hash-locked seL4 Python environment, and
 builds `mkimage` from the verified official DENX U-Boot archive. It also creates
 the separate repository `.venv` for host tests and the Cohesix Python client.
-It verifies `qemu-system-aarch64` and HVF; it does not build seL4 or download
-target artifacts.
+It checks `qemu-system-aarch64` and advertised HVF availability; it does not
+establish compatibility with the Cohesix guest, build seL4, or download target
+artifacts. On macOS 26.6.2, Homebrew QEMU 11.0.3 aborts before guest execution
+for the canonical Cortex-A57/four-core/GICv3 HVF envelope. The previously
+validated QEMU 10.1.0 HVF/GIC state-sync build remains the selected host runtime.
+For an existing external installation, select its executable explicitly:
+
+```bash
+export QEMU_BIN="$HOME/cohesix/qemu/bin/qemu-system-aarch64"
+"$QEMU_BIN" --version
+shasum -a 256 "$QEMU_BIN"
+codesign --verify --strict "$QEMU_BIN"
+```
+
+Compare the executable against its retained `BUILD-IDENTITY.txt`; the validated
+macOS 26.6.2 build has SHA-256
+`a0471828f464116c51c1d29ebae12a2a0fc713b4edec5c52e81bd5388040135a`.
+The regression runner honors `QEMU_BIN` and binds the actual executable in each
+launch artifact. A version or accelerator listing is not boot evidence, and
+TCG cannot replace the canonical HVF acceptance lane.
 
 Verify the result:
 
