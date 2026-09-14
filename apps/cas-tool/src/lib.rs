@@ -158,12 +158,21 @@ pub fn validate_manifest_capacity(
     Ok(())
 }
 
-/// Load an Ed25519 signing key from a hex file.
+/// Load a bounded Ed25519 hex key from an explicit env/file reference or a
+/// compatibility file path. A selected unavailable source never falls back.
 pub fn load_signing_key(path: &Path) -> Result<[u8; 32]> {
-    let contents =
-        fs::read(path).with_context(|| format!("read signing key {}", path.display()))?;
-    let text = std::str::from_utf8(&contents)
-        .with_context(|| format!("signing key {} is not utf-8", path.display()))?;
+    let source = path.to_str().context("signing key source must be UTF-8")?;
+    let reference = if source.starts_with("env:") || source.starts_with("file:") {
+        source.to_owned()
+    } else {
+        format!(
+            "file:{}",
+            path.canonicalize()?
+                .to_str()
+                .context("signing key path must be UTF-8")?
+        )
+    };
+    let text = cohesix_authority::secret::resolve_reference(&reference)?;
     let raw = hex::decode(text.trim())
         .map_err(|err| anyhow::anyhow!("signing key {} must be hex: {err}", path.display()))?;
     if raw.len() != 32 {

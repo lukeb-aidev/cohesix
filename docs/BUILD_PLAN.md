@@ -106,7 +106,7 @@ owned by their specific contracts.
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
-| [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Next — 1.1.0-beta (Release A) authority floor |
+| [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | In Progress — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Next — 1.1.0-beta (Release A) Jetson/Linux reference slice |
 | [27c](#27c) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Next — 1.1.0-beta (Release A) capsule core; full graph conditional |
 | [27d](#27d) | Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT | Next — 1.1.0-beta (Release A) flagship workflow |
@@ -12704,6 +12704,10 @@ admission is not authorized by Milestone 27e.
 
 ## Milestone 27a — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="27a"></a>
 [Milestones](#Milestones)
+
+**Status (2026-09-14):** In Progress — implementation and qualification
+authorized by Lukas Bower. Completion requires the definition of done below;
+the Milestone 27 completion approval does not waive any 27a requirement.
 
 **Delivery posture:** Release A authority floor. Delegated identity, strict
 idempotency, durable execution recovery, production secrets, audit/replay, and

@@ -10,6 +10,7 @@ default-run = "coh-rtc"
 
 [dependencies]
 anyhow = { workspace = true }
+cohesix-authority = { workspace = true, features = ["std"] }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

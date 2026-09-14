@@ -76,7 +76,7 @@ def test_tcp_backend_auth_close_without_response_maps_to_rejection() -> None:
             TcpBackend(
                 host="127.0.0.1",
                 port=port,
-                auth_token="bootstrap",
+                auth_token="tcp-auth-fixture",
                 role="queen",
                 ticket=None,
                 timeout_s=0.2,
@@ -102,7 +102,7 @@ def test_tcp_backend_auth_error_line_is_preserved() -> None:
             TcpBackend(
                 host="127.0.0.1",
                 port=port,
-                auth_token="bootstrap",
+                auth_token="tcp-auth-fixture",
                 role="queen",
                 ticket=None,
                 timeout_s=0.2,
@@ -130,7 +130,7 @@ def test_tcp_backend_auth_reset_without_response_maps_to_rejection() -> None:
             TcpBackend(
                 host="127.0.0.1",
                 port=port,
-                auth_token="bootstrap",
+                auth_token="tcp-auth-fixture",
                 role="queen",
                 ticket=None,
                 timeout_s=0.2,

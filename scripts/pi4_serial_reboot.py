@@ -16,7 +16,6 @@ import stat
 import subprocess
 import sys
 import time
-import tomllib
 from collections.abc import Iterable
 
 try:
@@ -31,6 +30,9 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import pi4_image_identity  # noqa: E402
+
+sys.path.insert(0, str(SCRIPT_DIR.parent / "tools/cohesix-py"))
+from cohesix.auth import resolve_manifest_auth_token  # noqa: E402
 
 
 DEFAULT_PORT = "/dev/cu.usbserial-0001"
@@ -602,32 +604,11 @@ def regular_file_sha256(path: pathlib.Path) -> str:
 
 
 def load_queen_console_token(manifest: pathlib.Path) -> str:
-    """Load the sole usable Queen TCP secret from one exact TOML manifest."""
-
+    """Resolve the sole Queen source from the exact bounded selected manifest."""
     try:
-        with manifest.open("rb") as stream:
-            document = tomllib.load(stream)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise RuntimeError("unable to parse nettest peer ticket manifest") from exc
-    tickets = document.get("tickets")
-    if not isinstance(tickets, list):
-        raise RuntimeError("nettest peer manifest tickets must be a list")
-    matches = [
-        ticket.get("secret")
-        for ticket in tickets
-        if isinstance(ticket, dict) and ticket.get("role") == "queen"
-    ]
-    if len(matches) != 1 or not isinstance(matches[0], str):
-        raise RuntimeError("nettest peer manifest must declare exactly one Queen secret")
-    secret = matches[0]
-    if (
-        not secret
-        or secret.strip() != secret
-        or any(ord(character) < 0x21 or ord(character) == 0x7F for character in secret)
-        or secret == "changeme"
-    ):
-        raise RuntimeError("nettest peer manifest Queen secret is unusable")
-    return secret
+        return resolve_manifest_auth_token(manifest)
+    except (OSError, ValueError) as error:
+        raise RuntimeError("nettest peer requires exactly one Queen secret source that is usable") from error
 
 
 def prepare_nettest_peer(

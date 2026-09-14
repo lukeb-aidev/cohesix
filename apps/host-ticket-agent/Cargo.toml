@@ -9,6 +9,8 @@ license = "MIT"
 publish = false
 
 [dependencies]
+cohesix-rest = { path = "../../crates/cohesix-rest" }
+cohesix-authority = { workspace = true, features = ["std"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 coh = { path = "../coh" }

@@ -177,7 +177,7 @@ output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(
     json.dumps(
         {
-            "schema": "cohesix-python-profile/v1",
+            "schema": "cohesix-python-profile/v2",
             "target": sys.argv[2],
             "target_profile": sys.argv[3],
             "manifest_sha256": sys.argv[4],

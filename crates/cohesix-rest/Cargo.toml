@@ -10,6 +10,9 @@ publish = false
 description = "Cohesix hive-gateway REST client"
 
 [dependencies]
+cohesix-authority = { workspace = true, features = ["std"] }
+cohesix-ticket = { workspace = true }
+cohsh-core = { workspace = true }
 anyhow = { workspace = true }
 cohesix-net-constants = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

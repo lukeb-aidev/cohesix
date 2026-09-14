@@ -3,9 +3,12 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### Root-task manifest schema (generated)
+- Authority identity: `gateway_enforced`; VM-verified caller identity: `false`.
+- Authority policy: `AuthorityPolicy { production: false, delegated_rest: true, vm_verified_delegation: false, delegated_ticket_entries: 256, delegated_ticket_max_ttl_s: 3600, strict_queen_intents: true, legacy_queen_ctl: true, queen_dedupe_entries: 64, queen_intent_max_bytes: 2048, writer_epoch: 1, writer_epoch_required: false, execution_wal_required: true, gpu_frame_max_bytes: 8192, debug_memory: false, production_worker_ledger: false, production_driver_ledger: false, structured_quarantine: false, host_ai: false, production_failover: false }`
+- Host tickets confer host authority; model/session roles confer no VM authority. Accepted task/driver bundles retain their owning milestone evidence. Production Worker/driver ledgers and structured quarantine require Milestone 28b.
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.20`
+- `root_task.schema`: `1.21`
 - `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `64`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -232,7 +235,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677`
+- `manifest.sha256`: `91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -291,4 +294,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677`)._
+_Generated from `configs/root_task.toml` (sha256: `91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53`)._

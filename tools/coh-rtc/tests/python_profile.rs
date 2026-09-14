@@ -48,7 +48,7 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
     let (qemu_bytes, qemu) = render("root_task.toml", "qemu_smp_production", "qemu");
     let (pi_bytes, pi) = render("root_task_pi4_uboot_aarch64.toml", "pi4_production", "pi4");
 
-    assert_eq!(qemu["schema"], "cohesix-python-profile/v1");
+    assert_eq!(qemu["schema"], "cohesix-python-profile/v2");
     assert_eq!(qemu["target"], "qemu");
     assert_eq!(pi["target"], "pi4");
     assert_ne!(qemu["manifest_sha256"], pi["manifest_sha256"]);

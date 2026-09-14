@@ -18,6 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .auth import resolve_secret
 from .defaults import DEFAULTS
 from .errors import CohesixError
 from .paths import MAX_PATH_LEN, join_root, validate_path
@@ -28,6 +29,9 @@ _SECURE9P = DEFAULTS.get("secure9p", {})
 MAX_LINE_LEN = int(_CONSOLE.get("max_line_len", 256))
 MAX_ECHO_LEN = int(_CONSOLE.get("max_echo_len", 128))
 MAX_FRAME_LEN = int(_SECURE9P.get("msize", 8192))
+CAT_CHUNK_MAX_COUNT = int(_CONSOLE["cat_chunk_max_count"])
+CAT_CHUNK_MAX_WIRE_BYTES = int(_CONSOLE["cat_chunk_max_wire_bytes"])
+CAT_REASSEMBLED_MAX_BYTES = int(_CONSOLE["cat_reassembled_max_bytes"])
 REQUEST_AUTH_ENV_KEYS = (
     "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
     "COHSH_REST_AUTH_TOKEN",
@@ -148,7 +152,8 @@ class TcpBackend(Backend):
     ) -> None:
         self.host = host
         self.port = port
-        self.auth_token = auth_token
+        self.auth_source = auth_token
+        self.auth_token = resolve_secret(auth_token)
         self.role = normalize_role(role)
         self.ticket = normalize_ticket(self.role, ticket, queen_validate=True)
         self.timeout_s = timeout_s
@@ -169,6 +174,7 @@ class TcpBackend(Backend):
                 self._sock = None
 
     def _connect(self) -> None:
+        self.auth_token = resolve_secret(self.auth_source)
         self.close()
         sock = socket.create_connection((self.host, self.port), timeout=self.timeout_s)
         sock.settimeout(self.timeout_s)
@@ -263,7 +269,7 @@ class TcpBackend(Backend):
             if response == "END":
                 if not lines and summary_line is not None:
                     lines.append(summary_line)
-                return lines
+                return _reassemble_cat_chunks(lines) if verb in ("CAT", "TAIL") else lines
             lines.append(response)
 
     def list_dir(self, path: str) -> List[str]:
@@ -307,6 +313,68 @@ class TcpBackend(Backend):
                 raise CohesixError(response)
 
 
+def _reassemble_cat_chunks(lines: List[str]) -> List[str]:
+    """Verify ordered C1 groups before exposing logical CAT/TAIL records."""
+    def parse(line: str) -> tuple[int, int, str, str]:
+        fields = line.split(":", 4)
+        if len(line.encode("utf-8")) > CAT_CHUNK_MAX_WIRE_BYTES or len(fields) != 5:
+            raise CohesixError("invalid CAT chunk wire bound/header")
+        version, seq, count, digest, payload = fields
+        if (version != "C1" or len(seq) != 4 or len(count) != 4 or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in seq + count + digest)):
+            raise CohesixError("invalid CAT chunk canonical header")
+        sequence, total = int(seq, 16), int(count, 16)
+        if not 1 <= total <= CAT_CHUNK_MAX_COUNT or sequence >= total or not payload:
+            raise CohesixError("invalid CAT chunk sequence/count/payload")
+        return sequence, total, digest, payload
+
+    output: List[str] = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].startswith("C1:"):
+            output.append(lines[index])
+            index += 1
+            continue
+        sequence, count, digest, _ = parse(lines[index])
+        if sequence != 0 or index + count > len(lines):
+            raise CohesixError("partial or replayed CAT chunk group")
+        chunks: List[str] = []
+        size = 0
+        for expected in range(count):
+            seq, total, checksum, payload = parse(lines[index + expected])
+            if (seq, total, checksum) != (expected, count, digest):
+                raise CohesixError("CAT chunk sequence/count/digest mismatch")
+            size += len(payload.encode("utf-8"))
+            if size > CAT_REASSEMBLED_MAX_BYTES:
+                raise CohesixError("CAT chunk record exceeds byte bound")
+            chunks.append(payload)
+        record = "".join(chunks)
+        if hashlib.sha256(record.encode("utf-8")).hexdigest() != digest:
+            raise CohesixError("CAT chunk digest mismatch")
+        output.append(record)
+        index += count
+    return output
+
+
+MAX_REST_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+def _read_bounded_rest_response(response) -> bytes:
+    """Refuse excessive advertised sizes before reading or decoding JSON."""
+    length = response.headers.get("Content-Length")
+    if length is not None:
+        try:
+            length = int(length)
+        except (ValueError, TypeError) as exc:
+            raise CohesixError("invalid REST response length") from exc
+        if length < 0 or length > MAX_REST_RESPONSE_BYTES:
+            raise CohesixError("REST response exceeds byte bound")
+    payload = response.read(MAX_REST_RESPONSE_BYTES + 1)
+    if len(payload) > MAX_REST_RESPONSE_BYTES:
+        raise CohesixError("REST response exceeds byte bound")
+    return payload
+
+
 class RestBackend(Backend):
     """REST backend using the hive-gateway JSON API."""
 
@@ -318,10 +386,12 @@ class RestBackend(Backend):
         max_attempts: Optional[int] = None,
         backoff_ms: Optional[int] = None,
         backoff_ceiling_ms: Optional[int] = None,
+        delegated_ticket: Optional[str] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self.request_auth_token = _resolve_request_auth_token(request_auth_token)
+        self.delegated_ticket = delegated_ticket if delegated_ticket is not None else os.environ.get("COH_REST_TICKET")
         self.max_attempts = max(1, int(max_attempts or REST_DEFAULT_MAX_ATTEMPTS))
         self.backoff_ms = max(
             0,
@@ -445,6 +515,17 @@ class RestBackend(Backend):
         query: Optional[dict] = None,
         body: Optional[dict] = None,
     ) -> bytes:
+        request_auth = resolve_secret(self.request_auth_token) if self.request_auth_token is not None else None
+        mutating = method not in {"GET", "HEAD", "OPTIONS"}
+        if mutating:
+            try:
+                if self.request_auth_token is None:
+                    raise ValueError("request auth required")
+                if not self.delegated_ticket:
+                    raise ValueError("delegated ticket required")
+                normalize_ticket("queen", self.delegated_ticket, queen_validate=True)
+            except ValueError as exc:
+                raise CohesixError(f"EPERM {exc}") from exc
         url = f"{self.base_url}{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
@@ -454,23 +535,25 @@ class RestBackend(Backend):
         for attempt in range(self.max_attempts):
             req = urllib.request.Request(url, data=data, method=method)
             req.add_header("Accept", "application/json")
-            if self.request_auth_token:
-                req.add_header("Authorization", f"Bearer {self.request_auth_token}")
-                req.add_header("x-cohesix-auth", self.request_auth_token)
+            if request_auth:
+                req.add_header("Authorization", f"Bearer {request_auth}")
+                req.add_header("x-cohesix-auth", request_auth)
+            if mutating:
+                req.add_header("x-cohesix-ticket", self.delegated_ticket)
             if body is not None:
                 req.add_header("Content-Type", "application/json")
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                    return resp.read()
+                    return _read_bounded_rest_response(resp)
             except urllib.error.HTTPError as exc:
-                payload = exc.read()
-                if self._should_retry_http(exc, attempt):
+                payload = _read_bounded_rest_response(exc)
+                if not mutating and self._should_retry_http(exc, attempt):
                     self._sleep_backoff(attempt, exc)
                     continue
                 self._raise_rest_error(method, path, payload, exc)
                 raise AssertionError("unreachable")
             except urllib.error.URLError as exc:
-                if self._should_retry_url(exc, attempt):
+                if not mutating and self._should_retry_url(exc, attempt):
                     self._sleep_backoff(attempt, None)
                     continue
                 raise CohesixError(f"REST connection failed: {exc}") from exc

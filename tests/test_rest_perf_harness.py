@@ -42,6 +42,53 @@ sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
 
 
+@pytest.mark.parametrize("token,ticket", [(None, None), ("live-gateway-key", None),
+                                         ("bootstrap", "bad"), ("live-gateway-key", "bad")])
+def test_mutating_rest_auth_fails_before_network(monkeypatch, token, ticket):
+    """Local preflight cannot send unauthenticated benchmark mutations."""
+    def unexpected_request(*args, **kwargs):
+        pytest.fail("invalid authority reached the network")
+
+    monkeypatch.setattr(rest_perf.urllib.request, "urlopen", unexpected_request)
+    client = rest_perf.RestClient("http://127.0.0.1:8080", 1.0, token, ticket or "")
+    with pytest.raises(Exception, match="auth|ticket|placeholder"):
+        client.post_json("/v1/fs/echo", {"path": "/queen/ctl", "line": "test"})
+
+
+def test_benchmark_mutation_sends_delegation_and_refreshes_secret_file(monkeypatch, tmp_path):
+    """Header parity and rotation are checked without granting this unsigned fixture authority."""
+    ticket = "cohesix-ticket-010000" + "00" * 12 + "." + "00" * 32
+    secret_file = tmp_path / "gateway-key"
+    secret_file.write_text("first-gateway-key")
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{}'
+
+    def capture(request, **kwargs):
+        requests.append(dict((key.lower(), value) for key, value in request.header_items()))
+        return Response()
+
+    monkeypatch.setattr(rest_perf.urllib.request, "urlopen", capture)
+    client = rest_perf.RestClient("http://127.0.0.1:8080", 1.0, f"file:{secret_file}", ticket)
+    client.post_json("/v1/fs/echo", {})
+    secret_file.write_text("second-gateway-key")
+    client.post_json("/v1/fs/echo", {})
+    assert [item["x-cohesix-auth"] for item in requests] == ["first-gateway-key", "second-gateway-key"]
+    assert all(item["x-cohesix-ticket"] == ticket for item in requests)
+    secret_file.unlink()
+    with pytest.raises(ValueError, match="unavailable"):
+        client.post_json("/v1/fs/echo", {})
+    assert len(requests) == 2
+
+
 @pytest.mark.parametrize("failure", [None, "gpu", "lora", "emergency"])
 def test_executable_liveness_is_independent_of_aggregate_read_error_budget(failure):
     """One missing Worker completion remains fatal among many successful reads."""
@@ -665,7 +712,8 @@ def test_rest_client_retains_target_refusal_from_http_200(monkeypatch) -> None:
         return Response()
 
     monkeypatch.setattr(rest_perf.urllib.request, "urlopen", accept_request)
-    client = rest_perf.RestClient("http://127.0.0.1:8080", 1.0)
+    ticket = "cohesix-ticket-010000" + "00" * 12 + "." + "00" * 32
+    client = rest_perf.RestClient("http://127.0.0.1:8080", 1.0, "live-gateway-key", ticket)
 
     response = client.echo("/queen/schedule/ctl", "{}")
 
@@ -4802,16 +4850,16 @@ def test_m26e_qemu_pressure_derives_exact_manifest_queen_token(
     token_parser = next(
         block
         for block in embedded_python_blocks(pressure_runner_source())
-        if "manifest Queen ticket input" in block
+        if "from cohesix.auth import resolve_manifest_auth_token" in block
     )
     toml_manifest = tmp_path / "root_task.toml"
     toml_manifest.write_text(
-        '[[tickets]]\nrole = "queen"\nsecret = "bootstrap"\n',
+        '[[tickets]]\nrole = "queen"\nsecret = "qualified-test-key"\n',
         encoding="utf-8",
     )
     json_manifest = tmp_path / "root_task_resolved.json"
     json_manifest.write_text(
-        json.dumps({"tickets": [{"role": "queen", "secret": "bootstrap"}]}),
+        json.dumps({"tickets": [{"role": "queen", "secret": "qualified-test-key"}]}),
         encoding="utf-8",
     )
 
@@ -4822,13 +4870,14 @@ def test_m26e_qemu_pressure_derives_exact_manifest_queen_token(
         completed = subprocess.run(
             [sys.executable, "-", str(manifest), format_name],
             input=token_parser,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "tools/cohesix-py")},
             check=False,
             capture_output=True,
             text=True,
             timeout=10,
         )
         assert completed.returncode == 0, completed.stderr
-        assert completed.stdout == "bootstrap\n"
+        assert completed.stdout == "qualified-test-key\n"
 
     toml_manifest.write_text(
         '[[tickets]]\nrole = "queen"\nsecret = "one"\n'
@@ -4838,13 +4887,14 @@ def test_m26e_qemu_pressure_derives_exact_manifest_queen_token(
     duplicate = subprocess.run(
         [sys.executable, "-", str(toml_manifest), "toml"],
         input=token_parser,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "tools/cohesix-py")},
         check=False,
         capture_output=True,
         text=True,
         timeout=10,
     )
     assert duplicate.returncode != 0
-    assert "exactly one Queen ticket secret" in duplicate.stderr
+    assert "exactly one Queen credential" in duplicate.stderr
 
 
 def test_m26e_qemu_pressure_secret_scan_is_context_aware(
@@ -7044,3 +7094,19 @@ def test_executable_state_serializes_three_exemplars_after_full_census(
         rest_perf.capture_executable_state(
             object(), state, require_accepted_identity=True
         )
+
+
+@pytest.mark.parametrize("token", ["bootstrap", "file:relative", "env:"])
+def test_raw_invalid_credentials_are_refused_before_any_connection(monkeypatch, tmp_path, token):
+    def refuse_connection(*_args, **_kwargs):
+        pytest.fail("invalid credentials reached the network")
+    monkeypatch.setattr(rest_perf.socket, "create_connection", refuse_connection)
+    args = SimpleNamespace(
+        benchmark_target="pi4", benchmark_transport="genet", tcp_host="127.0.0.1",
+        tcp_port=31337, raw_requests=1, timeout=1, auth_token=token,
+        raw_ticket="", logger=SimpleNamespace(path=str(tmp_path / "raw.log"), log=lambda _: None),
+    )
+    assert rest_perf.run_raw(args) == 1
+    report = json.loads((tmp_path / "raw.raw-summary.json").read_text())
+    assert report["phase"] == "credential-preflight"
+    assert report["connection_attempts"] == report["requests_completed"] == 0

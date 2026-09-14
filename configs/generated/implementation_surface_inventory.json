@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "c05e7bc4248d6f3a2b7fba7e1797d3687eac694eb41e22a385447a68c01198d3",
+  "source_sha256": "41a8f54ab99ce24f962d22eacff1e31de44e8f6e02600e536a93dee0a7f0c109",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -241,6 +241,20 @@
           "evidence_eligible": true
         },
         {
+          "id": "cargo-target:coh-rtc:bin:coh-rtc-authority-profile",
+          "kind": "cargo_target",
+          "path": "tools/coh-rtc#bin:coh-rtc-authority-profile",
+          "implementation_class": "production_live",
+          "owner": "manifest-compiler",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "generated-artifact drift guard",
+          "package_disposition": "build_host_tool",
+          "evidence_requirement": "compiler tests and generated drift guard",
+          "current_observed_mode": "live_manifest_compiler",
+          "evidence_eligible": true
+        },
+        {
           "id": "cargo-target:coh-rtc:bin:coh-rtc-python-profile",
           "kind": "cargo_target",
           "path": "tools/coh-rtc#bin:coh-rtc-python-profile",
@@ -360,6 +374,67 @@
           "package_disposition": "feature_only",
           "evidence_requirement": "independent cryptographic fixtures and authenticated host integration",
           "current_observed_mode": "tpm2_quote_verifier",
+          "evidence_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "workspace:cohesix-authority",
+      "kind": "workspace_member",
+      "name": "cohesix-authority",
+      "path": "crates/cohesix-authority",
+      "implementation_class": "contract",
+      "owner": "ticket-authority",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "M27a generated authority policy and host/target dependency graph",
+      "package_disposition": "linked_library",
+      "evidence_requirement": "strict envelope, quota, replay tests and consuming target/host integration",
+      "current_observed_mode": "host_gateway_authority_contract",
+      "evidence_eligible": false,
+      "targets": [
+        {
+          "id": "cargo-target:cohesix-authority:lib:cohesix_authority",
+          "kind": "cargo_target",
+          "path": "crates/cohesix-authority#lib:cohesix_authority",
+          "implementation_class": "contract",
+          "owner": "ticket-authority",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "M27a generated authority policy and host/target dependency graph",
+          "package_disposition": "linked_library",
+          "evidence_requirement": "strict envelope, quota, replay tests and consuming target/host integration",
+          "current_observed_mode": "host_gateway_authority_contract",
+          "evidence_eligible": false
+        }
+      ],
+      "features": [
+        {
+          "id": "cargo-feature:cohesix-authority:default",
+          "kind": "cargo_feature",
+          "path": "crates/cohesix-authority#feature:default",
+          "implementation_class": "contract",
+          "owner": "ticket-authority",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "M27a generated authority policy and host/target dependency graph; Cargo feature `default`",
+          "package_disposition": "feature_only",
+          "evidence_requirement": "strict envelope, quota, replay tests and consuming target/host integration",
+          "current_observed_mode": "host_gateway_authority_contract",
+          "evidence_eligible": false
+        },
+        {
+          "id": "cargo-feature:cohesix-authority:std",
+          "kind": "cargo_feature",
+          "path": "crates/cohesix-authority#feature:std",
+          "implementation_class": "contract",
+          "owner": "ticket-authority",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "M27a generated authority policy and host/target dependency graph; Cargo feature `std`",
+          "package_disposition": "feature_only",
+          "evidence_requirement": "strict envelope, quota, replay tests and consuming target/host integration",
+          "current_observed_mode": "host_gateway_authority_contract",
           "evidence_eligible": false
         }
       ]
@@ -4615,6 +4690,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/M27A_AUTHORITY.md",
+      "kind": "tracked_surface",
+      "path": "docs/M27A_AUTHORITY.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/M28C_AGENT_PROTOCOLS.md",
       "kind": "tracked_surface",
       "path": "docs/M28C_AGENT_PROTOCOLS.md",
@@ -5290,6 +5379,20 @@
       "id": "tracked:docs/audit/M26D_SEL4_16_PROVENANCE.md",
       "kind": "tracked_surface",
       "path": "docs/audit/M26D_SEL4_16_PROVENANCE.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:docs/audit/M27A_COMPLETION_EVIDENCE.md",
+      "kind": "tracked_surface",
+      "path": "docs/audit/M27A_COMPLETION_EVIDENCE.md",
       "implementation_class": "contract",
       "owner": "documentation",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -7317,6 +7420,20 @@
       "evidence_eligible": true
     },
     {
+      "id": "tracked:tools/cohesix-py/cohesix/authority.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/cohesix/authority.py",
+      "implementation_class": "production_live",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "Python package manifest; rule=cohesix-python-library",
+      "package_disposition": "release_python_library",
+      "evidence_requirement": "authenticated host integration and typed receipts",
+      "current_observed_mode": "live_host_adapter",
+      "evidence_eligible": true
+    },
+    {
       "id": "tracked:tools/cohesix-py/cohesix/backends.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/cohesix/backends.py",
@@ -7653,6 +7770,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:tools/cohesix-py/tests/test_authority.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_authority.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "release_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:tools/cohesix-py/tests/test_evidence_receipts.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_evidence_receipts.py",
@@ -7935,6 +8066,7 @@
       "u-boot.bin"
     ],
     "generated_configs": [
+      "configs/generated/cas_verification_key.hex",
       "configs/generated/cas_manifest_template.json",
       "configs/generated/cas_manifest_template.json.sha256",
       "configs/generated/coh_policy.toml",
@@ -7968,7 +8100,8 @@
       "docs/SECURITY.md",
       "docs/USERLAND_AND_CLI.md",
       "docs/USE_CASES.md",
-      "docs/WORKER_TICKETS.md"
+      "docs/WORKER_TICKETS.md",
+      "docs/M27A_AUTHORITY.md"
     ],
     "host_assets": [
       "docs/COHESIX_LOGO.png",
@@ -8013,6 +8146,7 @@
       "tools/cohesix-py/cohesix/__init__.py",
       "tools/cohesix-py/cohesix/audit.py",
       "tools/cohesix-py/cohesix/auth.py",
+      "tools/cohesix-py/cohesix/authority.py",
       "tools/cohesix-py/cohesix/backends.py",
       "tools/cohesix-py/cohesix/client.py",
       "tools/cohesix-py/cohesix/defaults.py",
@@ -8037,6 +8171,7 @@
       "tools/cohesix-py/examples/use_case_playbook.py",
       "tools/cohesix-py/pyproject.toml",
       "tools/cohesix-py/tests/test_auth.py",
+      "tools/cohesix-py/tests/test_authority.py",
       "tools/cohesix-py/tests/test_evidence_receipts.py",
       "tools/cohesix-py/tests/test_examples_ci_siem.py",
       "tools/cohesix-py/tests/test_generated_contract.py",
@@ -8180,6 +8315,7 @@
       "cas/max_chunks_v1.txt.sha256",
       "configs/generated/cas_manifest_template.json",
       "configs/generated/cas_manifest_template.json.sha256",
+      "configs/generated/cas_verification_key.hex",
       "configs/generated/coh_policy.toml",
       "configs/generated/coh_policy.toml.sha256",
       "configs/generated/cohesix_python_pi4_production.json",
@@ -8202,6 +8338,7 @@
       "docs/HARDWARE_BRINGUP.md",
       "docs/HOST_TOOLS.md",
       "docs/INTERFACES.md",
+      "docs/M27A_AUTHORITY.md",
       "docs/NETWORK_CONFIG.md",
       "docs/OPERATOR_EVIDENCE.md",
       "docs/PYTHON_SUPPORT.md",
@@ -8221,6 +8358,7 @@
       "python/cohesix-py/cohesix/__init__.py",
       "python/cohesix-py/cohesix/audit.py",
       "python/cohesix-py/cohesix/auth.py",
+      "python/cohesix-py/cohesix/authority.py",
       "python/cohesix-py/cohesix/backends.py",
       "python/cohesix-py/cohesix/client.py",
       "python/cohesix-py/cohesix/defaults.py",
@@ -8245,6 +8383,7 @@
       "python/cohesix-py/examples/use_case_playbook.py",
       "python/cohesix-py/pyproject.toml",
       "python/cohesix-py/tests/test_auth.py",
+      "python/cohesix-py/tests/test_authority.py",
       "python/cohesix-py/tests/test_evidence_receipts.py",
       "python/cohesix-py/tests/test_examples_ci_siem.py",
       "python/cohesix-py/tests/test_generated_contract.py",
@@ -8379,6 +8518,7 @@
       "docs/HARDWARE_BRINGUP.md",
       "docs/HOST_TOOLS.md",
       "docs/INTERFACES.md",
+      "docs/M27A_AUTHORITY.md",
       "docs/NETWORK_CONFIG.md",
       "docs/OPERATOR_EVIDENCE.md",
       "docs/PYTHON_SUPPORT.md",
@@ -8654,6 +8794,20 @@
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
         "selection_source": "compiler-generated exact release manifest; exact release source `configs/generated/cas_manifest_template.json.sha256`",
+        "package_disposition": "generated_release_contract",
+        "evidence_requirement": "exact file-set and SHA-256 validation",
+        "current_observed_mode": "generated_contract",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:configs/generated/cas_verification_key.hex",
+        "kind": "generated_config",
+        "path": "configs/generated/cas_verification_key.hex",
+        "implementation_class": "contract",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "compiler-generated exact release manifest; exact release source `configs/generated/cas_verification_key.hex`",
         "package_disposition": "generated_release_contract",
         "evidence_requirement": "exact file-set and SHA-256 validation",
         "current_observed_mode": "generated_contract",
@@ -8968,6 +9122,20 @@
         "evidence_eligible": false
       },
       {
+        "id": "release-asset:docs/M27A_AUTHORITY.md",
+        "kind": "public_document",
+        "path": "docs/M27A_AUTHORITY.md",
+        "implementation_class": "contract",
+        "owner": "documentation",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "tracked current documentation; rule=current-docs; exact release source `docs/M27A_AUTHORITY.md`",
+        "package_disposition": "selected_release_subset_or_source_only",
+        "evidence_requirement": "docs-as-built drift review",
+        "current_observed_mode": "documentation_or_generated_claim",
+        "evidence_eligible": false
+      },
+      {
         "id": "release-asset:docs/NETWORK_CONFIG.md",
         "kind": "public_document",
         "path": "docs/NETWORK_CONFIG.md",
@@ -9270,6 +9438,20 @@
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": true,
         "selection_source": "Python package manifest; rule=cohesix-python-library; exact release source `tools/cohesix-py/cohesix/auth.py`",
+        "package_disposition": "release_python_library",
+        "evidence_requirement": "authenticated host integration and typed receipts",
+        "current_observed_mode": "live_host_adapter",
+        "evidence_eligible": true
+      },
+      {
+        "id": "release-asset:python/cohesix-py/cohesix/authority.py",
+        "kind": "python_artifact",
+        "path": "python/cohesix-py/cohesix/authority.py",
+        "implementation_class": "production_live",
+        "owner": "python-client",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": true,
+        "selection_source": "Python package manifest; rule=cohesix-python-library; exact release source `tools/cohesix-py/cohesix/authority.py`",
         "package_disposition": "release_python_library",
         "evidence_requirement": "authenticated host integration and typed receipts",
         "current_observed_mode": "live_host_adapter",
@@ -9606,6 +9788,20 @@
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
         "selection_source": "explicit package test directory; rule=cohesix-python-tests; exact release source `tools/cohesix-py/tests/test_auth.py`",
+        "package_disposition": "release_test_fixture",
+        "evidence_requirement": "fixture only; cannot satisfy target evidence",
+        "current_observed_mode": "python_test_fixture",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:python/cohesix-py/tests/test_authority.py",
+        "kind": "python_artifact",
+        "path": "python/cohesix-py/tests/test_authority.py",
+        "implementation_class": "fixture",
+        "owner": "python-client",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "explicit package test directory; rule=cohesix-python-tests; exact release source `tools/cohesix-py/tests/test_authority.py`",
         "package_disposition": "release_test_fixture",
         "evidence_requirement": "fixture only; cannot satisfy target evidence",
         "current_observed_mode": "python_test_fixture",

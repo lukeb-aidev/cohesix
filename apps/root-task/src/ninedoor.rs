@@ -374,6 +374,7 @@ const SELFTEST_SMP_SCRIPT: &str = include_str!(concat!(
 /// Root-owned NineDoor policy and mutation bridge behind the typed parser boundary.
 #[derive(Debug)]
 pub struct NineDoorBridge {
+    queen_dedupe: cohesix_authority::IntentDedupe<Result<(), NineDoorBridgeError>>,
     namespace_service: NamespaceServiceBoundary,
     #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
     target_service: Option<NineDoorServiceRuntime>,
@@ -409,7 +410,7 @@ pub struct NineDoorBridge {
 }
 
 /// Errors surfaced by [`NineDoorBridge`] operations.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NineDoorBridgeError {
     /// Command was not recognised by the shim bridge.
     Unsupported(&'static str),
@@ -818,6 +819,9 @@ impl NineDoorBridge {
             binds: HeaplessVec::new(),
             retired_session_binds: HeaplessVec::new(),
             authority: AuthorityQueue::new(AUTHORITY_QUEUE_MAX),
+            queen_dedupe: cohesix_authority::IntentDedupe::new(
+                generated::AUTHORITY_POLICY.queen_dedupe_entries as usize,
+            ),
             host,
             gpu,
             sidecars: SidecarState::new(),
@@ -1608,6 +1612,9 @@ impl NineDoorBridge {
         payload: &str,
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
+        if !generated::AUTHORITY_POLICY.legacy_queen_ctl {
+            return Err(NineDoorBridgeError::Permission);
+        }
         let prepared = self.prepare_namespace(NamespaceOpcode::Spawn, "", payload)?;
         let payload = prepared.payload();
         let mut message = HeaplessString::<128>::new();
@@ -1640,6 +1647,9 @@ impl NineDoorBridge {
         identifier: &str,
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
+        if !generated::AUTHORITY_POLICY.legacy_queen_ctl {
+            return Err(NineDoorBridgeError::Permission);
+        }
         let prepared = self.prepare_namespace(NamespaceOpcode::Kill, "", identifier)?;
         let identifier = prepared.payload();
         let mut message = HeaplessString::<128>::new();
@@ -1913,7 +1923,16 @@ impl NineDoorBridge {
             })?;
             return Ok(EchoOutcome::Appended);
         }
+        if path == cohesix_authority::QUEEN_INTENT_PATH {
+            self.with_authority(AuthorityOp::QueenCtl, |bridge| {
+                bridge.handle_queen_intent(payload)
+            })?;
+            return Ok(EchoOutcome::Appended);
+        }
         if path == QUEEN_CTL_PATH {
+            if !generated::AUTHORITY_POLICY.legacy_queen_ctl {
+                return Err(NineDoorBridgeError::Permission);
+            }
             self.with_authority(AuthorityOp::QueenCtl, |bridge| {
                 let role = bridge.role_label();
                 let ticket = String::from(bridge.ticket_label());
@@ -2196,6 +2215,19 @@ impl NineDoorBridge {
         let path = prepared.path();
         output.clear();
         let segments = split_path_segments(path);
+        if path == "/proc/authority" {
+            let snapshot = generated::AUTHORITY_POLICY
+                .snapshot_bytes()
+                .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            return lines_from_bytes_into(&snapshot, output);
+        }
+        if path == cohesix_authority::QUEEN_DEDUPE_PATH {
+            let snapshot = self
+                .queen_dedupe
+                .snapshot_lines()
+                .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            return lines_from_bytes_into(&snapshot, output);
+        }
         if path == LOG_PATH {
             log_buffer::snapshot_lines_into(output);
             return Ok(());
@@ -2599,6 +2631,8 @@ impl NineDoorBridge {
             return Ok(());
         }
         if path == "/proc" {
+            push_list_entry(output, "authority")?;
+            push_list_entry(output, "queen")?;
             push_list_entry(output, "boot")?;
             push_list_entry(output, "attest")?;
             push_list_entry(output, "tests")?;
@@ -2625,6 +2659,12 @@ impl NineDoorBridge {
         }
         if path == "/proc/attest" {
             return list_from_slice_into(&["capabilities", "status"], output);
+        }
+        if path == "/proc/queen" {
+            return list_from_slice_into(&["dedupe"], output);
+        }
+        if path == "/queen/intents" {
+            return list_from_slice_into(&["ctl"], output);
         }
         if path == PROC_9P_ROOT_PATH {
             if !self.observe.proc_9p_session_enabled() {
@@ -2692,6 +2732,7 @@ impl NineDoorBridge {
             return Ok(());
         }
         if path == "/queen" {
+            push_list_entry(output, "intents")?;
             push_list_entry(output, "ctl")?;
             push_list_entry(output, "lifecycle")?;
             if self.schedule.enabled() {
@@ -3042,6 +3083,68 @@ impl NineDoorBridge {
                 self.mount_namespace(service, at)
             }
         }
+    }
+
+    fn handle_queen_intent(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        use cohesix_authority::{AuthorityError, QueenIntent, Reservation};
+        let policy = generated::AUTHORITY_POLICY;
+        if !policy.strict_queen_intents || !self.is_queen() {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        let map_error = |error| match error {
+            AuthorityError::Limit | AuthorityError::InFlight => NineDoorBridgeError::BufferFull,
+            _ => NineDoorBridgeError::Permission,
+        };
+        let intent = QueenIntent::parse(payload.as_bytes(), policy.queen_intent_max_bytes as usize)
+            .map_err(map_error)?;
+        if (policy.writer_epoch_required || intent.writer_epoch.is_some())
+            && intent.writer_epoch != Some(policy.writer_epoch)
+        {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        self.audit.ensure_control_capacity(
+            cohesix_authority::QUEEN_INTENT_PATH,
+            payload,
+            self.role_label(),
+            self.ticket_label(),
+        )?;
+        let reservation = self.queen_dedupe.reserve(&intent).map_err(map_error)?;
+        let (result, duplicate) = match reservation {
+            Reservation::Duplicate(result) => (result, true),
+            Reservation::Fresh => {
+                let result = match self.apply_policy_gate(QUEEN_CTL_PATH) {
+                    Ok(PolicyGateDecision::Allowed(_)) => self.handle_queen_ctl(&intent.cmd),
+                    Ok(PolicyGateDecision::Denied(_)) => Err(NineDoorBridgeError::Permission),
+                    Err(error) => Err(error),
+                };
+                // Preserve the terminal outcome before audit publication: a
+                // full audit sink cannot make a successful operation fresh.
+                self.queen_dedupe
+                    .finish(&intent, result.clone(), result.is_ok())
+                    .map_err(map_error)?;
+                (result, false)
+            }
+        };
+        if self.audit.enabled {
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            self.audit.record_control(
+                cohesix_authority::QUEEN_INTENT_PATH,
+                payload,
+                ControlOutcome::from_result(&result).with_dedupe(duplicate),
+                role,
+                &ticket,
+            )?;
+        }
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "queen-intent id={} dedupe={}",
+            intent.id,
+            if duplicate { "duplicate" } else { "fresh" }
+        );
+        log_buffer::append_log_line(line.as_str());
+        result
     }
 
     fn spawn_gpu_from_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
@@ -4895,6 +4998,12 @@ struct QuarantineEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostTicketV2RawSpec {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    admission: Option<cohesix_authority::AdmissionCorrelation>,
     schema: String,
     id: String,
     idempotency_key: String,
@@ -4914,6 +5023,12 @@ struct HostTicketV2RawSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostTicketV2AdmittedSpec {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    admission: Option<cohesix_authority::AdmissionCorrelation>,
     schema: String,
     id: String,
     idempotency_key: String,
@@ -4936,6 +5051,12 @@ struct HostTicketV2AdmittedSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostTicketV2Result {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    admission: Option<cohesix_authority::AdmissionCorrelation>,
     schema: String,
     id: String,
     idempotency_key: String,
@@ -7949,23 +8070,44 @@ impl AuditState {
         Ok(())
     }
 
-    fn record_control(
-        &mut self,
+    // Preflight the exact successful terminal before any side effect. Use the
+    // widest sequence so a later decimal-width change cannot invalidate admission.
+    fn ensure_control_capacity(
+        &self,
         path: &str,
         payload: &str,
-        outcome: ControlOutcome,
         role: &str,
         ticket: &str,
     ) -> Result<(), NineDoorBridgeError> {
-        if !self.enabled {
-            return Ok(());
+        if self.enabled {
+            let bytes = Self::control_record(
+                u64::MAX,
+                path,
+                payload,
+                &ControlOutcome::ok().with_dedupe(true),
+                role,
+                ticket,
+            )?;
+            if bytes.len() > self.journal.capacity {
+                return Err(NineDoorBridgeError::BufferFull);
+            }
         }
+        Ok(())
+    }
+
+    fn control_record(
+        seq: u64,
+        path: &str,
+        payload: &str,
+        outcome: &ControlOutcome,
+        role: &str,
+        ticket: &str,
+    ) -> Result<Vec<u8>, NineDoorBridgeError> {
         let kind = if path == QUEEN_CTL_PATH {
             "queen-ctl"
         } else {
             "host-control"
         };
-        let seq = self.next_sequence();
         let path_label = escape_json_string(normalize_path(path).as_str());
         let mut line = String::new();
         let payload = escape_json_string(payload);
@@ -7991,9 +8133,28 @@ impl AuditState {
             )
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
         }
+        if let Some(dedupe) = outcome.dedupe {
+            write!(line, ",\"dedupe\":\"{dedupe}\"")
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
         write!(line, ",\"role\":\"{}\",\"ticket\":\"{}\"}}", role, ticket)
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
-        let bytes = ensure_line_terminated(line.as_bytes());
+        Ok(ensure_line_terminated(line.as_bytes()))
+    }
+
+    fn record_control(
+        &mut self,
+        path: &str,
+        payload: &str,
+        outcome: ControlOutcome,
+        role: &str,
+        ticket: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let bytes =
+            Self::control_record(self.next_sequence(), path, payload, &outcome, role, ticket)?;
         let replay_entry = Some(ReplayEntry::new(bytes.len() as u64, outcome.ack_line()));
         let outcome = self.append_journal_bytes(bytes, replay_entry)?;
         if outcome.dropped_bytes > 0 {
@@ -8246,6 +8407,7 @@ impl AuditState {
 struct ControlOutcome {
     status: ControlStatus,
     error: Option<ControlError>,
+    dedupe: Option<&'static str>,
 }
 
 impl ControlOutcome {
@@ -8253,6 +8415,7 @@ impl ControlOutcome {
         Self {
             status: ControlStatus::Ok,
             error: None,
+            dedupe: None,
         }
     }
 
@@ -8263,7 +8426,13 @@ impl ControlOutcome {
                 code,
                 message: message.into(),
             }),
+            dedupe: None,
         }
+    }
+
+    fn with_dedupe(mut self, duplicate: bool) -> Self {
+        self.dedupe = Some(if duplicate { "duplicate" } else { "fresh" });
+        self
     }
 
     fn from_result(result: &Result<(), NineDoorBridgeError>) -> Self {
@@ -8885,6 +9054,16 @@ fn parse_host_ticket_v2_spec(
 ) -> Result<HostTicketV2RawSpec, NineDoorBridgeError> {
     let spec: HostTicketV2RawSpec =
         serde_json::from_str(line).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    if (generated::AUTHORITY_POLICY.writer_epoch_required || spec.writer_epoch.is_some())
+        && spec.writer_epoch != Some(generated::AUTHORITY_POLICY.writer_epoch)
+    {
+        return Err(NineDoorBridgeError::Permission);
+    }
+    if let Some(admission) = &spec.admission {
+        admission
+            .validate()
+            .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    }
     if spec.schema != HOST_TICKET_V2_REQUEST_SCHEMA
         || !host.accepted_request_schema(spec.schema.as_str())
         || spec.receipt_mode != "worker"
@@ -9096,6 +9275,8 @@ fn admit_host_ticket_v2_spec(
     let resolved_worker_slot =
         u16::try_from(binding.identity.slot).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
     Ok(HostTicketV2AdmittedSpec {
+        writer_epoch: raw.writer_epoch,
+        admission: raw.admission,
         schema: raw.schema,
         id: raw.id,
         idempotency_key: raw.idempotency_key,
@@ -9132,6 +9313,8 @@ fn validate_result_binding(
         || result.resolved_worker_slot != admitted.resolved_worker_slot
         || result.resolved_lease_epoch != admitted.resolved_lease_epoch
         || result.admission_sequence != admitted.admission_sequence
+        || result.writer_epoch != admitted.writer_epoch
+        || result.admission != admitted.admission
     {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
@@ -9361,6 +9544,10 @@ fn build_host_ticket_worker_control(
 
 #[derive(Serialize)]
 struct HostTicketV2CanonicalResult<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    writer_epoch: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission: Option<&'a cohesix_authority::AdmissionCorrelation>,
     schema: &'a str,
     id: &'a str,
     idempotency_key: &'a str,
@@ -9384,6 +9571,8 @@ fn canonical_host_ticket_v2_result_bytes(
     result: &HostTicketV2Result,
 ) -> Result<Vec<u8>, NineDoorBridgeError> {
     serde_json::to_vec(&HostTicketV2CanonicalResult {
+        writer_epoch: result.writer_epoch,
+        admission: result.admission.as_ref(),
         schema: result.schema.as_str(),
         id: result.id.as_str(),
         idempotency_key: result.idempotency_key.as_str(),
@@ -9485,6 +9674,9 @@ fn cat_wire_line_count(text: &str) -> Result<usize, NineDoorBridgeError> {
 }
 
 fn cat_chunk_count(line: &str) -> Result<usize, NineDoorBridgeError> {
+    if line.len() > cohsh_core::wire::CAT_CHUNK_REASSEMBLED_MAX_BYTES {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
     let mut count = 0usize;
     let mut start = 0usize;
     while start < line.len() {
@@ -11519,6 +11711,8 @@ mod tests {
         message: Option<&str>,
     ) -> HostTicketV2Result {
         let mut result = HostTicketV2Result {
+            writer_epoch: admitted.writer_epoch,
+            admission: admitted.admission.clone(),
             schema: HOST_TICKET_V2_RESULT_SCHEMA.to_owned(),
             id: admitted.id.clone(),
             idempotency_key: admitted.idempotency_key.clone(),
@@ -12031,6 +12225,53 @@ mod tests {
                 .expect("torn-down disposition"),
             HostTicketV2TerminalDisposition::Stale
         );
+    }
+
+    #[test]
+    fn audit_chunk_record_ceiling_preserves_fixed_frame_inventory() {
+        assert_eq!(cat_chunk_count(&"x".repeat(8192)), Ok(47));
+        assert_eq!(
+            cat_chunk_count(&"x".repeat(8193)),
+            Err(NineDoorBridgeError::BufferFull),
+        );
+    }
+
+    #[test]
+    fn strict_intent_audit_labels_preserve_the_full_payload() {
+        let payload = r#"{"schema":"queen-intent/v1","id":"audit-one"}"#;
+        for (duplicate, expected) in [(false, "fresh"), (true, "duplicate")] {
+            let encoded = AuditState::control_record(
+                1,
+                cohesix_authority::QUEEN_INTENT_PATH,
+                payload,
+                &ControlOutcome::ok().with_dedupe(duplicate),
+                "queen",
+                "none",
+            )
+            .expect("bounded audit record");
+            let record: serde_json::Value = serde_json::from_slice(&encoded).expect("audit JSON");
+            assert_eq!(record["dedupe"], expected);
+            assert_eq!(record["payload"], payload);
+            assert_eq!(record["outcome"], "ok");
+        }
+    }
+
+    #[test]
+    fn strict_intent_requires_auditable_terminal_before_worker_creation() {
+        let mut bridge = NineDoorBridge::new();
+        bridge.attached = true;
+        bridge.session_role = Some(SessionRoleLabel::Queen);
+        bridge.audit.enabled = true;
+        bridge.audit.journal = BoundedLog::new(64);
+        let payload = r#"{"schema":"queen-intent/v1","id":"audit-bound","idempotency_key":"one","issued_unix_ms":1,"cmd":"{\"spawn\":\"heartbeat\",\"ticks\":3}"}"#;
+        let before = bridge.workers.len();
+        assert_eq!(
+            bridge.handle_queen_intent(payload),
+            Err(NineDoorBridgeError::BufferFull)
+        );
+        assert_eq!(bridge.workers.len(), before);
+        assert_eq!(bridge.queen_dedupe.snapshot().entries, 0);
+        assert!(bridge.audit.journal_snapshot().is_empty());
     }
 
     #[test]

@@ -436,6 +436,19 @@ impl NineDoor {
         core.register_service(service, target)
     }
 
+    /// Install the selected manifest authority before admitting any sessions.
+    pub fn configure_authority(
+        &self,
+        policy: cohesix_authority::policy::AuthorityPolicy,
+    ) -> Result<(), NineDoorError> {
+        self.inner
+            .lock()
+            .map_err(|_| {
+                NineDoorError::protocol(ErrorCode::Permission, "authority state lock poisoned")
+            })?
+            .configure_authority(policy)
+    }
+
     /// Register a shared secret used to validate attach tickets for the role.
     pub fn register_ticket_secret(&self, role: Role, secret: &str) {
         let mut core = self.inner.lock().expect("poisoned nine-door lock");

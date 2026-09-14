@@ -38,7 +38,6 @@ use std::time::{Duration, Instant};
 use cohesix_ticket::{Role, TicketClaims};
 use cohsh::client::{CohClient, TailEvent};
 use cohsh::queen;
-use cohsh::transport::tcp::is_insecure_placeholder_token;
 #[cfg(feature = "rest")]
 use cohsh::RestTransport as CohshRestTransport;
 use cohsh::{
@@ -1751,16 +1750,8 @@ impl SwarmUiConsoleBackend<CohshTcpTransport> {
             .with_retry_policy(policy.retry)
             .with_heartbeat_interval(Duration::from_millis(policy.heartbeat.interval_ms))
             .with_auth_token(auth_token.as_str())
-            .allow_insecure_placeholder_token(true)
             .with_tcp_debug(tcp_debug_enabled());
-        let mut backend = Self::with_transport(config, transport);
-        if is_insecure_placeholder_token(auth_token.as_str()) {
-            backend.transport_warning = Some(
-                "WARN ATTACH reason=tcp auth token uses insecure placeholder token; set a real secret"
-                    .to_owned(),
-            );
-        }
-        backend
+        Self::with_transport(config, transport)
     }
 }
 

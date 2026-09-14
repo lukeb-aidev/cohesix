@@ -1,0 +1,18 @@
+# Author: Lukas Bower
+# Purpose: Share bounded authority envelopes and replay invariants across host and target paths.
+# Copyright 2026 Lukas Bower
+[package]
+name = "cohesix-authority"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[features]
+default = []
+std = []
+
+[dependencies]
+serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
+sha2 = { workspace = true }

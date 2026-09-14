@@ -221,6 +221,7 @@ allowed_exact = {
     "apps/cohsh/src/generated/policy.rs",
     "apps/swarmui/src/generated.rs",
     "configs/generated/cas_manifest_template.json",
+    "configs/generated/cas_verification_key.hex",
     "configs/generated/coh_policy.toml",
     "configs/generated/coh_policy.toml.sha256",
     "configs/generated/cohsh_policy.toml",

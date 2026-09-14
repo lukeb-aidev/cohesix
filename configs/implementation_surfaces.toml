@@ -297,6 +297,16 @@ evidence_requirement = "CAS tests plus consuming host integration"
 current_observed_mode = "cas_contract_and_validation"
 
 [[packages]]
+path = "crates/cohesix-authority"
+class = "contract"
+owner = "ticket-authority"
+production_reachable = true
+selection_source = "M27a generated authority policy and host/target dependency graph"
+package_disposition = "linked_library"
+evidence_requirement = "strict envelope, quota, replay tests and consuming target/host integration"
+current_observed_mode = "host_gateway_authority_contract"
+
+[[packages]]
 path = "crates/cohesix-rest"
 class = "contract"
 owner = "host-rest-adapter"
@@ -1550,6 +1560,7 @@ pi4_stage_files = [
   "u-boot.bin",
 ]
 generated_configs = [
+  "configs/generated/cas_verification_key.hex",
   "configs/generated/cas_manifest_template.json",
   "configs/generated/cas_manifest_template.json.sha256",
   "configs/generated/coh_policy.toml",
@@ -1584,6 +1595,7 @@ public_documents = [
   "docs/USERLAND_AND_CLI.md",
   "docs/USE_CASES.md",
   "docs/WORKER_TICKETS.md",
+  "docs/M27A_AUTHORITY.md",
 ]
 host_assets = [
   "docs/COHESIX_LOGO.png",
@@ -1629,6 +1641,7 @@ python_artifacts = [
   "tools/cohesix-py/cohesix/__init__.py",
   "tools/cohesix-py/cohesix/audit.py",
   "tools/cohesix-py/cohesix/auth.py",
+  "tools/cohesix-py/cohesix/authority.py",
   "tools/cohesix-py/cohesix/backends.py",
   "tools/cohesix-py/cohesix/client.py",
   "tools/cohesix-py/cohesix/defaults.py",
@@ -1653,6 +1666,7 @@ python_artifacts = [
   "tools/cohesix-py/examples/use_case_playbook.py",
   "tools/cohesix-py/pyproject.toml",
   "tools/cohesix-py/tests/test_auth.py",
+  "tools/cohesix-py/tests/test_authority.py",
   "tools/cohesix-py/tests/test_evidence_receipts.py",
   "tools/cohesix-py/tests/test_examples_ci_siem.py",
   "tools/cohesix-py/tests/test_generated_contract.py",

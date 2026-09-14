@@ -4,6 +4,16 @@
 <!-- Author: Lukas Bower -->
 # GPU Nodes and Host Acceleration
 
+Live GPU bridge publication rejects missing, malformed or placeholder
+credentials before connecting. Console frames include their four-byte length
+header and are bounded by generated `authority.gpu_frame_max_bytes` (default
+8,192 bytes) before payload allocation. The shared REST client streams JSON
+under a 10 MiB response-body cap, including error responses. REST publication
+also requires the delegated ticket header; use the bridge's `--ticket` or
+`COH_REST_TICKET` with request auth. [M27a authority](M27A_AUTHORITY.md)
+describes secret resolution and rotation.
+
+
 Cohesix keeps GPU discovery, drivers, CUDA/NVML, model storage, and workload
 execution outside the VM trusted computing base. The VM receives only bounded,
 manifest-authorized control records and host-published descriptions.

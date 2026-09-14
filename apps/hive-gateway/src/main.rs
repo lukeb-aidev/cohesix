@@ -7,6 +7,7 @@
 
 //! Host-only REST gateway projecting Cohesix console/file semantics.
 
+mod auth;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
@@ -77,6 +78,7 @@ const HOST_TICKET_STATUS_PATH: &str = "/host/tickets/status";
 const HOST_TICKET_DEADLETTER_PATH: &str = "/host/tickets/deadletter";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
 const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
+#[cfg(test)]
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 2_000;
 // Exact Worker receipt state changes inside the guest after the host status
@@ -203,6 +205,9 @@ struct Cli {
     /// Per-request REST auth token for mutating paths (`Authorization: Bearer` or `x-cohesix-auth`).
     #[arg(long)]
     request_auth_token: Option<String>,
+    /// Delegated-ticket issuer key source (env:NAME or file:/absolute/path).
+    #[arg(long)]
+    delegation_key_ref: Option<String>,
     /// Allow non-loopback bind addresses (risk: exposes write-capable gateway over network).
     #[arg(long, default_value_t = false)]
     allow_non_loopback_bind: bool,
@@ -261,6 +266,7 @@ struct GatewayInner {
     role: Role,
     ticket: Option<String>,
     request_auth_token: String,
+    delegation: Mutex<auth::Delegation>,
     status: Mutex<GatewayStatus>,
     shutdown: Arc<AtomicBool>,
     broker_timeouts: BrokerTimeouts,
@@ -871,6 +877,7 @@ fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<Share
 
 #[derive(Debug, Clone, Serialize)]
 struct GatewayStatusResponse {
+    authority: Option<cohesix_authority::policy::DelegationStatus>,
     connected: bool,
     target_host: String,
     target_port: u16,
@@ -1271,7 +1278,9 @@ struct GatewayResponse {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"))
+                .add_directive("hive_gateway::authority=info".parse()?),
         )
         .init();
 
@@ -1281,6 +1290,7 @@ async fn main() -> Result<()> {
         info!("hive-gateway mock transport enabled");
     }
 
+    let delegation = config.delegation()?;
     let policy = apply_policy_overrides(CohshPolicy::from_generated(), &config)?;
     info!(
         "hive-gateway session pool control={} telemetry={}",
@@ -1318,6 +1328,7 @@ async fn main() -> Result<()> {
             role: config.role,
             ticket: config.ticket.clone(),
             request_auth_token: config.request_auth_token.clone(),
+            delegation: Mutex::new(delegation),
             status: Mutex::new(GatewayStatus::default()),
             shutdown,
             broker_timeouts: config.broker_timeouts,
@@ -1385,6 +1396,7 @@ struct GatewayConfig {
     worker_runtime_profile: WorkerRuntimeProfile,
     auth_token: String,
     request_auth_token: String,
+    delegation_key_ref: Option<String>,
     role: Role,
     ticket: Option<String>,
     pool_control_sessions: Option<u16>,
@@ -1541,6 +1553,9 @@ impl GatewayConfig {
             worker_runtime_profile: cli.worker_runtime_profile,
             auth_token,
             request_auth_token,
+            delegation_key_ref: cli
+                .delegation_key_ref
+                .or_else(|| env::var("HIVE_GATEWAY_DELEGATION_KEY_REF").ok()),
             role,
             ticket,
             pool_control_sessions,
@@ -1558,6 +1573,34 @@ impl GatewayConfig {
             target_session,
         })
     }
+
+    fn delegation(&self) -> Result<auth::Delegation> {
+        let policy = generated_authority_policy()?;
+        let key = self
+            .delegation_key_ref
+            .as_deref()
+            .map(cohesix_authority::secret::resolve_reference)
+            .transpose()?
+            .map(|secret| cohesix_ticket::TicketKey::from_secret(&secret));
+        let ceiling = self
+            .ticket
+            .as_deref()
+            .map(cohesix_ticket::TicketToken::decode_unverified)
+            .transpose()?;
+        auth::Delegation::new(key, policy, self.role, ceiling, authority_now_ms()?)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+fn generated_authority_policy() -> Result<cohesix_authority::policy::AuthorityPolicy> {
+    #[derive(Deserialize)]
+    struct GeneratedAuthority {
+        authority: cohesix_authority::policy::AuthorityPolicy,
+    }
+    let generated: GeneratedAuthority = serde_json::from_str(include_str!(
+        "../../../configs/generated/root_task_resolved.json"
+    ))?;
+    Ok(generated.authority)
 }
 
 fn env_flag(key: &str) -> bool {
@@ -1996,11 +2039,6 @@ fn resolve_secret(cli_value: Option<&str>, env_keys: &[&str]) -> Option<String> 
     None
 }
 
-fn allow_insecure_console_auth() -> bool {
-    env_flag("HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH")
-        || env_flag("COHESIX_ALLOW_INSECURE_CONSOLE_AUTH")
-}
-
 fn normalize_required_secret(label: &str, value: Option<String>, mock: bool) -> Result<String> {
     let secret = value.unwrap_or_default();
     let trimmed = secret.trim();
@@ -2013,16 +2051,11 @@ fn normalize_required_secret(label: &str, value: Option<String>, mock: bool) -> 
     if trimmed.is_empty() {
         anyhow::bail!("{label} must be configured in non-mock mode");
     }
-    if trimmed == INSECURE_PLACEHOLDER_TOKEN {
-        if label == "tcp auth token" && allow_insecure_console_auth() {
-            warn!(
-                "allowing insecure TCP auth token placeholder because HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH is set"
-            );
-            return Ok(trimmed.to_owned());
-        }
-        anyhow::bail!("{label} uses insecure placeholder token; set a real secret");
+    if cohesix_authority::is_placeholder(trimmed) {
+        anyhow::bail!("{label} uses insecure placeholder token");
     }
-    Ok(trimmed.to_owned())
+    cohesix_authority::secret::resolve_value(trimmed)
+        .map_err(|err| anyhow::anyhow!("{label}: {err}"))
 }
 
 fn enforce_bind_exposure(addr: SocketAddr, allow_non_loopback: bool) -> Result<()> {
@@ -2059,6 +2092,7 @@ fn apply_policy_overrides(policy: CohshPolicy, config: &GatewayConfig) -> Result
 fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<SharedPool> {
     if config.mock {
         let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+        server.configure_authority(generated_authority_policy()?)?;
         let factory: Arc<dyn TransportFactory> = Arc::new(move || {
             Ok(Box::new(NineDoorTransport::new(server.clone()))
                 as Box<dyn cohsh::Transport + Send>)
@@ -2493,7 +2527,7 @@ fn dispatch_broker_command_batch(
             }
         }
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
             for response in responses {
                 let _ = response
                     .response_tx
@@ -2599,7 +2633,7 @@ fn dispatch_broker_read_batch(pool: &SharedPool, metrics: &BrokerMetrics, batch:
             }
         }
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
             for response_tx in response_txs {
                 let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
             }
@@ -3280,6 +3314,12 @@ impl AppState {
             state.imported.clone()
         };
         GatewayStatusResponse {
+            authority: self
+                .inner
+                .delegation
+                .lock()
+                .ok()
+                .map(|state| state.snapshot()),
             connected: status.connected,
             target_host: self.inner.target_host.clone(),
             target_port: self.inner.target_port,
@@ -3291,6 +3331,17 @@ impl AppState {
             reconnects: status.reconnects,
             connects: status.connects,
             broker: self.inner.broker.snapshot(),
+        }
+    }
+
+    fn record_delegation(&self, identity: &str, path: &str, action: &str, result: &str) {
+        let start = Instant::now();
+        let path = &path[..path.floor_char_boundary(255)];
+        let result = &result[..result.floor_char_boundary(192)];
+        tracing::info!(target: "hive_gateway::authority", event = "delegated-write", identity_class = "gateway_enforced", delegated_ticket_hash = identity, gateway_credential_class = "configured_upstream", path, action, upstream_result = result);
+        let elapsed = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        if let Ok(mut authority) = self.inner.delegation.lock() {
+            authority.record_audit(elapsed);
         }
     }
 
@@ -3542,10 +3593,29 @@ async fn fs_echo(
     Json(payload): Json<EchoRequest>,
 ) -> axum::response::Response {
     if let Err(err) = validate_request_auth(&headers, state.request_auth_token()) {
+        state.record_delegation(
+            "unverified",
+            &payload.path,
+            "ECHO",
+            "not-issued: request-auth",
+        );
         return response_err("ECHO", payload.path.as_str(), err, StatusCode::UNAUTHORIZED)
             .into_response();
     }
-    handle_echo(state, payload).await.into_response()
+    let identity = match authorize_delegated(
+        &state,
+        &headers,
+        &payload.path,
+        payload.line.as_ref().map_or(0, String::len),
+        1,
+    ) {
+        Ok(identity) => identity,
+        Err(err) => {
+            state.record_delegation(&delegated_header_hash(&headers), &payload.path, "ECHO", err);
+            return delegation_refusal("ECHO", &payload.path, err);
+        }
+    };
+    handle_echo(state, payload, identity).await.into_response()
 }
 
 async fn fs_echo_batch(
@@ -3554,6 +3624,12 @@ async fn fs_echo_batch(
     Json(payload): Json<EchoBatchRequest>,
 ) -> axum::response::Response {
     if let Err(err) = validate_request_auth(&headers, state.request_auth_token()) {
+        state.record_delegation(
+            "unverified",
+            &payload.path,
+            "ECHO_BATCH",
+            "not-issued: request-auth",
+        );
         return response_err(
             "ECHO_BATCH",
             payload.path.as_str(),
@@ -3562,7 +3638,107 @@ async fn fs_echo_batch(
         )
         .into_response();
     }
-    handle_echo_batch(state, payload).await.into_response()
+    let bytes = match payload
+        .lines
+        .iter()
+        .try_fold(0usize, |total, line| total.checked_add(line.len()))
+    {
+        Some(bytes) => bytes,
+        None => return delegation_refusal("ECHO_BATCH", &payload.path, "ELIMIT batch-size"),
+    };
+    let identity =
+        match authorize_delegated(&state, &headers, &payload.path, bytes, payload.lines.len()) {
+            Ok(identity) => identity,
+            Err(err) => {
+                state.record_delegation(
+                    &delegated_header_hash(&headers),
+                    &payload.path,
+                    "ECHO_BATCH",
+                    err,
+                );
+                return delegation_refusal("ECHO_BATCH", &payload.path, err);
+            }
+        };
+    handle_echo_batch(state, payload, identity)
+        .await
+        .into_response()
+}
+
+fn authority_now_ms() -> Result<u64> {
+    Ok(u64::try_from(
+        SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?)
+}
+
+fn authorize_delegated(
+    state: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+    bytes: usize,
+    operations: usize,
+) -> Result<String, &'static str> {
+    let token = if headers.get_all(auth::TICKET_HEADER).iter().count() == 1 {
+        headers
+            .get(auth::TICKET_HEADER)
+            .and_then(|value| value.to_str().ok())
+    } else {
+        None
+    };
+    state
+        .inner
+        .delegation
+        .lock()
+        .map_err(|_| "EPERM authority-state-unavailable")?
+        .authorize(
+            token,
+            path,
+            bytes,
+            operations,
+            authority_now_ms().map_err(|_| "EPERM authority-clock-unavailable")?,
+        )
+}
+
+fn delegated_header_hash(headers: &HeaderMap) -> String {
+    use sha2::{Digest, Sha256};
+    match headers.get(auth::TICKET_HEADER) {
+        Some(value) if value.as_bytes().len() <= cohsh_core::MAX_TICKET_LEN => {
+            hex::encode(Sha256::digest(value.as_bytes()))
+        }
+        _ => "absent-or-oversized".to_owned(),
+    }
+}
+
+fn delegated_validation_error(
+    state: &AppState,
+    identity: &str,
+    verb: &'static str,
+    path: &str,
+    error: impl ToString,
+    status: StatusCode,
+) -> (StatusCode, Json<GatewayResponse>) {
+    state.record_delegation(identity, path, verb, "not-issued: invalid-payload");
+    response_err(verb, path, error, status)
+}
+
+fn delegation_refusal(
+    verb: &'static str,
+    path: &str,
+    error: &'static str,
+) -> axum::response::Response {
+    tracing::warn!(
+        event = "delegated-write",
+        identity_class = "gateway_enforced",
+        path,
+        result = error
+    );
+    let status = if error.starts_with("ELIMIT") {
+        StatusCode::TOO_MANY_REQUESTS
+    } else {
+        StatusCode::FORBIDDEN
+    };
+    response_err(verb, path, error, status).into_response()
 }
 
 async fn handle_list(state: AppState, path: String) -> impl axum::response::IntoResponse {
@@ -3734,23 +3910,52 @@ fn bounded_joined_line_bytes(lines: &[String], max_bytes: usize) -> Option<usize
     Some(bytes)
 }
 
-async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::response::IntoResponse {
+async fn handle_echo(
+    state: AppState,
+    payload: EchoRequest,
+    identity: String,
+) -> impl axum::response::IntoResponse {
     let verb = "ECHO";
     if let Err(err) = validate_path(&payload.path) {
-        return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
+        return delegated_validation_error(
+            &state,
+            &identity,
+            verb,
+            &payload.path,
+            err,
+            StatusCode::BAD_REQUEST,
+        );
     }
     if let Err(err) = validate_control_enabled(&payload.path, &state.bounds()) {
-        return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
+        return delegated_validation_error(
+            &state,
+            &identity,
+            verb,
+            &payload.path,
+            err,
+            StatusCode::BAD_REQUEST,
+        );
     }
     let raw_line = payload.line.unwrap_or_default();
     let raw_len = raw_line.len();
     let trimmed = match normalise_payload(&raw_line, &payload.path) {
         Ok(value) => value,
-        Err(err) => return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST),
+        Err(err) => {
+            return delegated_validation_error(
+                &state,
+                &identity,
+                verb,
+                &payload.path,
+                err,
+                StatusCode::BAD_REQUEST,
+            )
+        }
     };
     if let Some(limit) = max_ctl_bytes(&payload.path, &state.bounds()) {
         if trimmed.len() > limit {
-            return response_err(
+            return delegated_validation_error(
+                &state,
+                &identity,
                 verb,
                 &payload.path,
                 format!("payload exceeds ctl_max_bytes {limit}"),
@@ -3760,7 +3965,18 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
     }
     let path = payload.path.clone();
     let payload_bytes = trimmed.as_bytes().to_vec();
+    let audit_state = state.clone();
     let result = tokio::task::spawn_blocking(move || state.write(&path, &payload_bytes)).await;
+    audit_state.record_delegation(
+        &identity,
+        &payload.path,
+        "ECHO",
+        match &result {
+            Ok(Ok(_)) => "ACK",
+            Ok(Err(error)) if confirmed_upstream_refusal(error) => "ERR",
+            _ => "unconfirmed",
+        },
+    );
     match result {
         Ok(Ok(lines)) => response_ok(verb, payload.path, lines, Some(raw_len)),
         Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
@@ -3776,16 +3992,33 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
 async fn handle_echo_batch(
     state: AppState,
     payload: EchoBatchRequest,
+    identity: String,
 ) -> impl axum::response::IntoResponse {
     let verb = "ECHO_BATCH";
     if let Err(err) = validate_path(&payload.path) {
-        return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
+        return delegated_validation_error(
+            &state,
+            &identity,
+            verb,
+            &payload.path,
+            err,
+            StatusCode::BAD_REQUEST,
+        );
     }
     if let Err(err) = validate_control_enabled(&payload.path, &state.bounds()) {
-        return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
+        return delegated_validation_error(
+            &state,
+            &identity,
+            verb,
+            &payload.path,
+            err,
+            StatusCode::BAD_REQUEST,
+        );
     }
     if !is_host_ticket_result_path(payload.path.as_str()) {
-        return response_err(
+        return delegated_validation_error(
+            &state,
+            &identity,
             verb,
             &payload.path,
             "batch writes are limited to append-only host ticket result paths",
@@ -3793,7 +4026,9 @@ async fn handle_echo_batch(
         );
     }
     if payload.lines.is_empty() || payload.lines.len() > TRANSPORT_COMMAND_BATCH_MAX {
-        return response_err(
+        return delegated_validation_error(
+            &state,
+            &identity,
             verb,
             &payload.path,
             format!(
@@ -3809,7 +4044,9 @@ async fn handle_echo_batch(
         raw_bytes = match raw_bytes.checked_add(line.len()) {
             Some(bytes) => bytes,
             None => {
-                return response_err(
+                return delegated_validation_error(
+                    &state,
+                    &identity,
                     verb,
                     &payload.path,
                     "batch byte count overflow",
@@ -3819,11 +4056,22 @@ async fn handle_echo_batch(
         };
         let trimmed = match normalise_payload(line, &payload.path) {
             Ok(value) => value,
-            Err(err) => return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST),
+            Err(err) => {
+                return delegated_validation_error(
+                    &state,
+                    &identity,
+                    verb,
+                    &payload.path,
+                    err,
+                    StatusCode::BAD_REQUEST,
+                )
+            }
         };
         if let Some(limit) = max_ctl_bytes(&payload.path, &state.bounds()) {
             if trimmed.len() > limit {
-                return response_err(
+                return delegated_validation_error(
+                    &state,
+                    &identity,
                     verb,
                     &payload.path,
                     format!("payload exceeds ctl_max_bytes {limit}"),
@@ -3834,7 +4082,18 @@ async fn handle_echo_batch(
         payloads.push(trimmed.into_bytes());
     }
     let path = payload.path.clone();
+    let audit_state = state.clone();
     let result = tokio::task::spawn_blocking(move || state.write_batch(&path, payloads)).await;
+    audit_state.record_delegation(
+        &identity,
+        &payload.path,
+        "ECHO_BATCH",
+        match &result {
+            Ok(Ok(_)) => "ACK",
+            Ok(Err(error)) if confirmed_upstream_refusal(error) => "ERR",
+            _ => "unconfirmed",
+        },
+    );
     match result {
         Ok(Ok(())) => response_ok(verb, payload.path, Vec::new(), Some(raw_bytes)),
         Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
@@ -4260,12 +4519,34 @@ fn extract_ack_error(message: &str) -> Option<&str> {
     Some(message[offset..].trim())
 }
 
+fn confirmed_upstream_refusal(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<nine_door::NineDoorError>()
+            .is_some_and(|error| matches!(error, nine_door::NineDoorError::Protocol { .. }))
+            || extract_ack_error(&cause.to_string()).is_some()
+    })
+}
+
 fn response_transport_err(
     verb: &'static str,
     path: &str,
     err: anyhow::Error,
 ) -> (StatusCode, Json<GatewayResponse>) {
-    let message = err.to_string();
+    let summary = err.to_string();
+    let message = if summary.starts_with("ERR ") {
+        summary
+    } else {
+        format!("{err:#}")
+    };
+    if path == cohesix_authority::QUEEN_INTENT_PATH {
+        if message.contains("ELIMIT") {
+            return response_err(verb, path, message, StatusCode::TOO_MANY_REQUESTS);
+        }
+        if message.contains("EPERM") {
+            return response_err(verb, path, message, StatusCode::FORBIDDEN);
+        }
+    }
     if message.contains("gateway backpressure") {
         return response_err(verb, path, message, StatusCode::TOO_MANY_REQUESTS);
     }
@@ -4745,6 +5026,22 @@ mod tests {
         let ack = extract_ack_error(message).expect("ack");
         assert!(ack.starts_with("ERR ECHO"));
         assert!(ack.contains("reason=policy"));
+    }
+
+    #[test]
+    fn strict_authority_refusal_retains_nested_error_and_http_class() {
+        for detail in ["EPERM idempotency-conflict", "EPERM stale-writer"] {
+            let error = anyhow::Error::new(nine_door::NineDoorError::Protocol {
+                code: secure9p_codec::ErrorCode::Permission,
+                message: detail.into(),
+            })
+            .context("failed to write /queen/intents/ctl");
+            assert!(confirmed_upstream_refusal(&error));
+            let (status, body) = response_transport_err("ECHO", "/queen/intents/ctl", error);
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert!(body.0.error.expect("protocol error").contains(detail));
+        }
+        assert!(!confirmed_upstream_refusal(&anyhow!("gateway timeout")));
     }
 
     #[test]
@@ -5830,6 +6127,7 @@ mod tests {
             worker_runtime_profile: WorkerRuntimeProfile::QemuSmpProduction,
             auth_token: "token".to_owned(),
             request_auth_token: "request-token".to_owned(),
+            delegation_key_ref: None,
             role: Role::Queen,
             ticket: None,
             pool_control_sessions: Some(3),
@@ -5885,6 +6183,44 @@ mod tests {
         assert!(validate_tcp_target_port(0).is_err());
     }
 
+    #[tokio::test]
+    async fn every_mutation_rejects_missing_or_invalid_delegation_before_broker() {
+        for ticket in [None, Some("cohesix-ticket-invalid")] {
+            let state = disconnected_cached_state();
+            let mut headers = HeaderMap::new();
+            headers.insert("x-cohesix-auth", "request-token".parse().expect("header"));
+            if let Some(ticket) = ticket {
+                headers.insert(auth::TICKET_HEADER, ticket.parse().expect("header"));
+            }
+            let response = fs_echo(
+                State(state.clone()),
+                headers.clone(),
+                Json(EchoRequest {
+                    path: "/queen/ctl".into(),
+                    line: Some("{}".into()),
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let response = fs_echo_batch(
+                State(state.clone()),
+                headers,
+                Json(EchoBatchRequest {
+                    path: "/host/tickets/status".into(),
+                    lines: vec!["{}".into()],
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                state.inner.broker.control_requests.load(Ordering::Relaxed),
+                0
+            );
+        }
+    }
+
     fn disconnected_cached_state() -> AppState {
         let (execution_tx, _execution_rx) = mpsc::sync_channel(0);
         let (control_tx, _control_rx) = mpsc::sync_channel(0);
@@ -5905,6 +6241,16 @@ mod tests {
                 role: Role::Queen,
                 ticket: None,
                 request_auth_token: "request-token".to_owned(),
+                delegation: Mutex::new(
+                    auth::Delegation::new(
+                        None,
+                        cohesix_authority::policy::AuthorityPolicy::default(),
+                        Role::Queen,
+                        None,
+                        0,
+                    )
+                    .expect("fixture delegation"),
+                ),
                 status: Mutex::new(GatewayStatus {
                     connected: false,
                     last_error: Some("offline".to_owned()),

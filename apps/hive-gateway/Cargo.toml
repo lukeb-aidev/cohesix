@@ -10,12 +10,16 @@ license = "MIT"
 
 [dependencies]
 anyhow = { workspace = true }
+cohesix-authority = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
+hex = { workspace = true }
 clap = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-ticket = { workspace = true }
 cohesix-worker-evidence = { workspace = true }
 cohsh = { path = "../cohsh", features = ["tcp"] }
 cohsh-core = { workspace = true }
+secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door" }
 serde = { workspace = true }
 serde_json = { workspace = true }

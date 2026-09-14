@@ -2238,6 +2238,13 @@ pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
                 let _ = writeln!(console, "{}", rest);
             }
             "hexdump" => {
+                if !crate::generated::AUTHORITY_POLICY.debug_memory
+                    || cfg!(feature = "release-qemu")
+                    || cfg!(feature = "release-pi4")
+                {
+                    let _ = writeln!(console, "ERR EPERM memory-diagnostics-disabled");
+                    continue;
+                }
                 let Some(addr_str) = parts.next() else {
                     let _ = writeln!(console, "usage: hexdump <addr> <len>");
                     continue;
@@ -2269,6 +2276,9 @@ pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
                     let line_len = remaining.min(16);
                     let mut bytes = [0u8; 16];
                     for (index, slot) in bytes.iter_mut().take(line_len).enumerate() {
+                        // SAFETY: This emergency bring-up path requires a manifest with
+                        // debug_memory explicitly enabled. Its operator supplies a mapped
+                        // readable address; production manifests reject this diagnostic.
                         unsafe {
                             *slot = ptr::read_volatile((addr + index) as *const u8);
                         }
@@ -5804,7 +5814,25 @@ fn bootstrap<P: Platform>(
                 "[manifest] ticket register role={role_label} source=generated"
             );
             boot_log::force_uart_line(begin_line.as_str());
-            if let Err(err) = tickets.register_key(spec.role, spec.key) {
+            let key = match spec.key {
+                Some(key) => key,
+                None => {
+                    let secret = spec.secret.trim();
+                    if secret.is_empty()
+                        || secret.len() > 4096
+                        || cohesix_authority::is_placeholder(secret)
+                        || secret
+                            .bytes()
+                            .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+                    {
+                        return Err(BootError::Fatal(
+                            "provisioned ticket secret unavailable or malformed".into(),
+                        ));
+                    }
+                    cohesix_ticket::TicketKey::from_secret(secret)
+                }
+            };
+            if let Err(err) = tickets.register_key(spec.role, key) {
                 let mut fail_line = heapless::String::<128>::new();
                 let _ = write!(
                     fail_line,

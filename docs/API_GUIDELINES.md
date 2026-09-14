@@ -4,6 +4,17 @@
 <!-- Author: Lukas Bower -->
 # Cohesix API Guidelines
 
+Mutating gateway REST requests require both gateway request authentication and
+`x-cohesix-ticket` containing a MAC-verified delegated capability ticket.
+The gateway applies caller role, subject, write scopes, finite TTL, operation,
+rate and byte quotas beneath its configured upstream authority. Missing or
+invalid delegation returns HTTP 403 with `EPERM`; exhausted authority returns
+HTTP 429 with `ELIMIT`. Both `/v1/fs/echo` and `/v1/fs/echo-batch` enforce this
+contract. Read-only compatibility routes retain the configured gateway role.
+See [M27a authority and migration](M27A_AUTHORITY.md) for strict intents,
+credential sources, generated policy, and the gateway-enforced identity class.
+
+
 `hive-gateway` is a host-only HTTP projection of the existing Cohesix console
 and file operations. It does not add an in-target HTTP server, a new control
 protocol, or per-request target identities.

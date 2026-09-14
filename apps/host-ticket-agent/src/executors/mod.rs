@@ -91,6 +91,7 @@ pub fn execute_action(
     spec: &HostTicketSpec,
     config: &ExecutorConfig,
 ) -> Result<String> {
+    crate::provider::validate(spec)?;
     if spec.schema == crate::HOST_TICKET_V2_SCHEMA {
         crate::claim::validate_v2_action_args(spec)?;
     }

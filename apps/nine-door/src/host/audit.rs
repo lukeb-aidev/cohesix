@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Maintain AuditFS journal/decisions state and replayable control entries.
 // Author: Lukas Bower
@@ -185,14 +185,41 @@ impl AuditStore {
         Ok(append)
     }
 
-    pub fn record_control(
-        &mut self,
+    /// Require room for the full successful terminal before strict intent dispatch.
+    pub fn ensure_control_capacity(
+        &self,
         path: &str,
         payload: &[u8],
-        outcome: ControlOutcome,
         role: Option<&str>,
         ticket: Option<&str>,
-    ) -> Result<AuditAppendOutcome, NineDoorError> {
+    ) -> Result<(), NineDoorError> {
+        if self.enabled() {
+            let bytes = Self::control_record(
+                u64::MAX,
+                path,
+                payload,
+                &ControlOutcome::ok().with_dedupe(true),
+                role,
+                ticket,
+            )?;
+            if bytes.len() > self.journal.capacity {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::TooBig,
+                    "ELIMIT strict intent terminal exceeds audit capacity",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn control_record(
+        seq: u64,
+        path: &str,
+        payload: &[u8],
+        outcome: &ControlOutcome,
+        role: Option<&str>,
+        ticket: Option<&str>,
+    ) -> Result<Vec<u8>, NineDoorError> {
         let kind = if path == "/queen/ctl" {
             "queen-ctl"
         } else if path == "/queen/lifecycle/ctl" {
@@ -202,16 +229,29 @@ impl AuditStore {
         };
         let payload_text = String::from_utf8_lossy(payload);
         let entry = AuditJournalEntry {
-            seq: self.next_sequence(),
+            seq,
             kind,
             path,
             payload: payload_text.as_ref(),
             outcome: outcome.status_label(),
             error: outcome.error_detail(),
+            dedupe: outcome.dedupe,
             role: role.unwrap_or("none"),
             ticket: ticket.unwrap_or("none"),
         };
-        let bytes = encode_json_line(&entry)?;
+        encode_json_line(&entry)
+    }
+
+    pub fn record_control(
+        &mut self,
+        path: &str,
+        payload: &[u8],
+        outcome: ControlOutcome,
+        role: Option<&str>,
+        ticket: Option<&str>,
+    ) -> Result<AuditAppendOutcome, NineDoorError> {
+        let bytes =
+            Self::control_record(self.next_sequence(), path, payload, &outcome, role, ticket)?;
         let replay_entry = Some(ReplayEntry::new(bytes.len() as u64, outcome.ack_line()));
         let append = self.append_journal(u64::MAX, &bytes, replay_entry)?;
         Ok(append)
@@ -409,6 +449,7 @@ impl AuditStore {
 pub struct ControlOutcome {
     status: ControlStatus,
     error: Option<ControlError>,
+    dedupe: Option<&'static str>,
 }
 
 impl ControlOutcome {
@@ -416,6 +457,7 @@ impl ControlOutcome {
         Self {
             status: ControlStatus::Ok,
             error: None,
+            dedupe: None,
         }
     }
 
@@ -426,7 +468,14 @@ impl ControlOutcome {
                 code,
                 message: message.into(),
             }),
+            dedupe: None,
         }
+    }
+
+    /// Bind the retained strict-intent outcome to its replay decision.
+    pub fn with_dedupe(mut self, duplicate: bool) -> Self {
+        self.dedupe = Some(if duplicate { "duplicate" } else { "fresh" });
+        self
     }
 
     pub fn from_error(error: &NineDoorError) -> Self {
@@ -496,6 +545,8 @@ struct AuditJournalEntry<'a> {
     outcome: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<AuditErrorDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dedupe: Option<&'a str>,
     role: &'a str,
     ticket: &'a str,
 }

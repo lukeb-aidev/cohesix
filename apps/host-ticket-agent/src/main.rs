@@ -106,6 +106,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let mut manifest = HostTicketManifest::from_resolved_manifest(&args.manifest)?;
+    println!("host-ticket-agent authority: writer_epoch={} epoch_required={} execution_wal={} identity=gateway_enforced",
+        manifest.authority.writer_epoch, manifest.authority.writer_epoch_required, manifest.authority.execution_wal_required);
     if let Some(mount) = args.mount.as_deref() {
         manifest = manifest.with_mount_path(mount)?;
     }

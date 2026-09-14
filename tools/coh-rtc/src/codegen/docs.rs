@@ -11,6 +11,68 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
+/// Replace only uniquely delimited generated blocks, after validating all inputs.
+pub fn embed_snippets(document: &Path, snippets: &[(&str, &Path)]) -> Result<()> {
+    let mut contents = fs::read_to_string(document)?;
+    for (marker, path) in snippets {
+        let snippet = fs::read_to_string(path)?;
+        contents = replace_snippet(&contents, marker, &snippet)?;
+    }
+    fs::write(document, contents)?;
+    Ok(())
+}
+
+fn replace_snippet(document: &str, marker: &str, snippet: &str) -> Result<String> {
+    let start = format!("<!-- coh-rtc:{marker}:start -->");
+    let end = format!("<!-- coh-rtc:{marker}:end -->");
+    anyhow::ensure!(
+        document.matches(&start).count() == 1 && document.matches(&end).count() == 1,
+        "generated block {marker} must have exactly one marker pair"
+    );
+    let begin = document.find(&start).context("missing start marker")? + start.len();
+    let finish = document.find(&end).context("missing end marker")?;
+    anyhow::ensure!(
+        begin <= finish,
+        "generated block {marker} has reversed markers"
+    );
+    let mut body = snippet.trim_start();
+    while body.starts_with("<!--") {
+        let close = body.find("-->").context("unterminated snippet metadata")?;
+        body = body[close + 3..].trim_start();
+    }
+    Ok(format!(
+        "{}\n{}\n{}",
+        &document[..begin],
+        body.trim_end(),
+        &document[finish..]
+    ))
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    use super::replace_snippet;
+
+    #[test]
+    fn generated_replacement_preserves_surrounding_prose_and_strips_metadata() {
+        let input = "Before\n<!-- coh-rtc:x:start -->\nold\n<!-- coh-rtc:x:end -->\nAfter";
+        assert_eq!(
+            replace_snippet(input, "x", "<!-- Author: Lukas Bower -->\n\nnew\n").unwrap(),
+            "Before\n<!-- coh-rtc:x:start -->\nnew\n<!-- coh-rtc:x:end -->\nAfter"
+        );
+    }
+
+    #[test]
+    fn ambiguous_or_reversed_markers_are_refused() {
+        for input in [
+            "",
+            "<!-- coh-rtc:x:end --><!-- coh-rtc:x:start -->",
+            "<!-- coh-rtc:x:start --><!-- coh-rtc:x:start --><!-- coh-rtc:x:end -->",
+        ] {
+            assert!(replace_snippet(input, "x", "new").is_err());
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DocFragments {
     pub schema_md: String,
@@ -37,6 +99,13 @@ impl DocFragments {
     ) -> Self {
         let mut schema_md = String::new();
         writeln!(schema_md, "### Root-task manifest schema (generated)").ok();
+        writeln!(
+            schema_md,
+            "- Authority identity: `gateway_enforced`; VM-verified caller identity: `false`."
+        )
+        .ok();
+        writeln!(schema_md, "- Authority policy: `{:?}`", manifest.authority).ok();
+        writeln!(schema_md, "- Host tickets confer host authority; model/session roles confer no VM authority. Accepted task/driver bundles retain their owning milestone evidence. Production Worker/driver ledgers and structured quarantine require Milestone 28b.").ok();
         writeln!(schema_md, "- `meta.author`: `{}`", manifest.meta.author).ok();
         writeln!(schema_md, "- `meta.purpose`: `{}`", manifest.meta.purpose).ok();
         writeln!(

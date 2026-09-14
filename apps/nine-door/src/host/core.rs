@@ -457,6 +457,26 @@ impl ServerCore {
             .set_lora_export_job(job_id, telemetry, base_model, policy)
     }
 
+    pub(crate) fn configure_authority(
+        &mut self,
+        policy: cohesix_authority::policy::AuthorityPolicy,
+    ) -> Result<(), NineDoorError> {
+        if !self.sessions.is_empty()
+            || policy.queen_dedupe_entries == 0
+            || policy.queen_dedupe_entries > 256
+        {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "authority must be configured before sessions",
+            ));
+        }
+        self.control.namespace.set_authority_snapshot(policy)?;
+        self.control.authority_policy = policy;
+        self.control.queen_dedupe =
+            cohesix_authority::IntentDedupe::new(policy.queen_dedupe_entries as usize);
+        Ok(())
+    }
+
     pub(crate) fn register_ticket_secret(&mut self, role: Role, secret: &str) {
         self.ticket_keys
             .insert(role, TicketKey::from_secret(secret));
@@ -1625,7 +1645,7 @@ impl ServerCore {
             return Err(err);
         }
         self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
-        if policy_enabled {
+        if policy_enabled && path.as_slice() != ["queen", "intents", "ctl"] {
             let decision = self.control.consume_policy_gate(&path)?;
             match decision {
                 PolicyGateDecision::Allowed(allowance) => {
@@ -1788,10 +1808,20 @@ impl ServerCore {
                 return Ok(ResponseBody::Write { count });
             }
         }
-        if is_queen_ctl_path(&path) {
-            let events = self
-                .control
-                .process_queen_write(data, role, ticket.as_deref())?;
+        if is_queen_ctl_path(&path) || is_queen_intent_path(&path) {
+            let events = if is_queen_intent_path(&path) {
+                self.control
+                    .process_queen_intent(data, role, ticket.as_deref())?
+            } else {
+                if !self.control.authority_policy.legacy_queen_ctl {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        "EPERM legacy-queen-ctl-disabled",
+                    ));
+                }
+                self.control
+                    .process_queen_write(data, role, ticket.as_deref())?
+            };
             let role = state.role();
             let worker_id_owned = state.worker_id().map(|id| id.to_owned());
             let worker_id = worker_id_owned.as_deref();
@@ -2293,6 +2323,8 @@ impl GpuBridgeReceiver {
 }
 
 struct ControlPlane {
+    queen_dedupe: cohesix_authority::IntentDedupe<Result<(), (ErrorCode, String)>>,
+    authority_policy: cohesix_authority::policy::AuthorityPolicy,
     namespace: Namespace,
     workers: HashMap<String, WorkerRecord>,
     next_worker_id: u64,
@@ -2346,6 +2378,8 @@ impl ControlPlane {
                 replay_namespace,
             ),
             workers: HashMap::new(),
+            queen_dedupe: cohesix_authority::IntentDedupe::new(64),
+            authority_policy: cohesix_authority::policy::AuthorityPolicy::default(),
             next_worker_id: 1,
             default_budget: BudgetSpec::default_heartbeat(),
             services: HashMap::new(),
@@ -2744,6 +2778,126 @@ impl ControlPlane {
             )?;
         }
         Ok(events)
+    }
+
+    fn authorize_strict_queen(
+        &mut self,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if !self.policy_enabled() {
+            return Ok(());
+        }
+        let path = vec!["queen".to_owned(), "ctl".to_owned()];
+        match self.consume_policy_gate(&path)? {
+            PolicyGateDecision::Allowed(allowance) => {
+                if matches!(allowance, PolicyGateAllowance::Action { .. }) {
+                    self.record_policy_gate_audit(&path, &allowance, role, ticket)?;
+                }
+                if self.audit_enabled() {
+                    self.record_decision_gate(&path, &allowance, role, ticket)?;
+                }
+                Ok(())
+            }
+            PolicyGateDecision::Denied(denial) => {
+                self.record_policy_gate_denial(&path, &denial, role, ticket)?;
+                if self.audit_enabled() {
+                    self.record_decision_gate_denial(&path, &denial, role, ticket)?;
+                }
+                Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"))
+            }
+        }
+    }
+
+    fn process_queen_intent(
+        &mut self,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<Vec<QueenEvent>, NineDoorError> {
+        use cohesix_authority::{QueenIntent, Reservation};
+        if role != Some(Role::Queen) || !self.authority_policy.strict_queen_intents {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "EPERM strict-queen-role",
+            ));
+        }
+        let refusal = |err: cohesix_authority::AuthorityError| {
+            NineDoorError::protocol(
+                match err {
+                    cohesix_authority::AuthorityError::Limit => ErrorCode::TooBig,
+                    cohesix_authority::AuthorityError::InFlight => ErrorCode::Busy,
+                    _ => ErrorCode::Permission,
+                },
+                err.to_string(),
+            )
+        };
+        let intent =
+            QueenIntent::parse(data, self.authority_policy.queen_intent_max_bytes as usize)
+                .map_err(refusal)?;
+        if (self.authority_policy.writer_epoch_required || intent.writer_epoch.is_some())
+            && intent.writer_epoch != Some(self.authority_policy.writer_epoch)
+        {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "EPERM stale-writer",
+            ));
+        }
+        self.audit.ensure_control_capacity(
+            cohesix_authority::QUEEN_INTENT_PATH,
+            data,
+            role.map(role_label),
+            ticket,
+        )?;
+        let (result, duplicate) = match self.queen_dedupe.reserve(&intent).map_err(refusal)? {
+            Reservation::Duplicate(result) => (
+                result
+                    .map(|()| Vec::new())
+                    .map_err(|(code, message)| NineDoorError::protocol(code, message)),
+                true,
+            ),
+            Reservation::Fresh => {
+                let result = self
+                    .authorize_strict_queen(role, ticket)
+                    .and_then(|()| self.process_queen_write(intent.cmd.as_bytes(), role, ticket));
+                let retained = match &result {
+                    Ok(_) => Ok(()),
+                    Err(NineDoorError::Protocol { code, message }) => Err((*code, message.clone())),
+                    Err(err) => Err((ErrorCode::Invalid, err.to_string())),
+                };
+                self.queen_dedupe
+                    .finish(&intent, retained, result.is_ok())
+                    .map_err(refusal)?;
+                (result, false)
+            }
+        };
+        let snapshot = self
+            .queen_dedupe
+            .snapshot_lines()
+            .map_err(|err| NineDoorError::protocol(ErrorCode::Invalid, err.to_string()))?;
+        self.namespace.set_queen_dedupe(&snapshot)?;
+        let outcome = match &result {
+            Ok(_) => ControlOutcome::ok(),
+            Err(err) => ControlOutcome::from_error(err),
+        };
+        self.record_control_audit(
+            &["queen".to_owned(), "intents".to_owned(), "ctl".to_owned()],
+            data,
+            outcome.with_dedupe(duplicate),
+            role,
+            ticket,
+        )?;
+        self.log_event(
+            "queen",
+            TraceLevel::Info,
+            None,
+            &format!(
+                "queen-intent id={} dedupe={}",
+                intent.id,
+                if duplicate { "duplicate" } else { "fresh" }
+            ),
+        )?;
+        result
     }
 
     fn process_schedule_ctl_write(
@@ -4725,6 +4879,10 @@ fn is_queen_ctl_path(path: &[String]) -> bool {
     matches!(path, [first, second] if first == "queen" && second == "ctl")
 }
 
+fn is_queen_intent_path(path: &[String]) -> bool {
+    matches!(path, [queen, intents, ctl] if queen == "queen" && intents == "intents" && ctl == "ctl")
+}
+
 fn is_queen_lifecycle_ctl_path(path: &[String]) -> bool {
     matches!(path, [first, second, third] if first == "queen" && second == "lifecycle" && third == "ctl")
 }
@@ -5020,6 +5178,108 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[test]
+    fn strict_intent_cannot_create_worker_without_room_for_terminal_audit() {
+        let server = NineDoor::new_with_host_policy_audit_config(
+            HostNamespaceConfig::disabled(),
+            PolicyConfig::disabled(),
+            super::super::audit::AuditConfig::enabled(
+                super::super::audit::AuditLimits {
+                    journal_max_bytes: 64,
+                    ..Default::default()
+                },
+                super::super::audit::ReplayConfig::disabled(),
+            ),
+        );
+        let mut queen = attach_queen(&server);
+        queen
+            .walk(1, 2, &["queen".into(), "intents".into(), "ctl".into()])
+            .expect("strict path");
+        queen
+            .open(2, OpenMode::write_append())
+            .expect("strict append");
+        let payload = br#"{"schema":"queen-intent/v1","id":"audit-bound","idempotency_key":"one","issued_unix_ms":1,"cmd":"{\"spawn\":\"heartbeat\",\"ticks\":3}"}"#;
+        assert!(queen
+            .write(2, payload)
+            .expect_err("audit bound")
+            .to_string()
+            .contains("audit capacity"));
+        assert!(queen
+            .walk(1, 3, &worker_telemetry_path("worker-1"))
+            .is_err());
+    }
+
+    #[test]
+    fn strict_queen_retry_has_one_effect_and_stable_outcome() {
+        let server = NineDoor::new_with_host_policy_audit_config(
+            HostNamespaceConfig::disabled(),
+            PolicyConfig::disabled(),
+            super::super::audit::AuditConfig::enabled(
+                Default::default(),
+                super::super::audit::ReplayConfig::disabled(),
+            ),
+        );
+        let policy = cohesix_authority::policy::AuthorityPolicy {
+            writer_epoch: 3,
+            writer_epoch_required: true,
+            legacy_queen_ctl: false,
+            ..Default::default()
+        };
+        server
+            .configure_authority(policy)
+            .expect("configure before clients");
+        let mut queen = attach_queen(&server);
+        queen
+            .walk(1, 2, &["queen".into(), "intents".into(), "ctl".into()])
+            .expect("strict path");
+        queen
+            .open(2, OpenMode::write_append())
+            .expect("strict append");
+        let payload = br#"{"schema":"queen-intent/v1","id":"spawn-one","idempotency_key":"retry-one","issued_unix_ms":1,"writer_epoch":3,"cmd":"{\"spawn\":\"heartbeat\",\"ticks\":3}"}"#;
+        queen.write(2, payload).expect("first accepted");
+        queen.write(2, payload).expect("duplicate accepted");
+        queen
+            .walk(1, 6, &["audit".into(), "journal".into()])
+            .expect("audit path");
+        queen.open(6, OpenMode::read_only()).expect("audit read");
+        let journal = queen.read(6, 0, 8192).expect("complete terminals");
+        let records: Vec<serde_json::Value> = std::str::from_utf8(&journal)
+            .expect("audit utf8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("audit JSON"))
+            .filter(|row: &serde_json::Value| row["path"] == "/queen/intents/ctl")
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["dedupe"], "fresh");
+        assert_eq!(records[1]["dedupe"], "duplicate");
+        assert_eq!(records[0]["payload"], records[1]["payload"]);
+        queen
+            .walk(1, 3, &worker_telemetry_path("worker-1"))
+            .expect("one Worker");
+        assert!(queen
+            .walk(1, 4, &worker_telemetry_path("worker-2"))
+            .is_err());
+        let changed = String::from_utf8(payload.to_vec())
+            .expect("utf8")
+            .replace("\"writer_epoch\":3", "\"writer_epoch\":2");
+        assert!(queen
+            .write(2, changed.as_bytes())
+            .expect_err("stale")
+            .to_string()
+            .contains("stale-writer"));
+        queen
+            .walk(1, 5, &["queen".into(), "ctl".into()])
+            .expect("legacy declared");
+        queen
+            .open(5, OpenMode::write_append())
+            .expect("open legacy");
+        assert!(queen
+            .write(5, br#"{"spawn":"heartbeat"}"#)
+            .expect_err("production legacy refusal")
+            .to_string()
+            .contains("legacy-queen-ctl-disabled"));
+    }
 
     #[test]
     fn queen_spawn_creates_worker_directory() {

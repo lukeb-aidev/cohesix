@@ -79,6 +79,9 @@ fn main() -> Result<()> {
             #[cfg(feature = "rest")]
             {
                 let mut client = GatewayClient::new(rest_url);
+                if let Some(ticket) = &args.ticket {
+                    client = client.with_delegated_ticket(ticket);
+                }
                 if let Some(token) = resolve_rest_auth_token(args.rest_auth_token.as_deref())
                     .context("resolve REST authentication token")?
                 {
@@ -133,56 +136,44 @@ fn main() -> Result<()> {
 
 fn resolve_auth_token(cli_token: Option<&str>) -> Result<String> {
     if let Some(token) = cli_token {
-        let trimmed = token.trim();
-        if !trimmed.is_empty() {
-            return validated_auth_token(trimmed);
-        }
+        return validated_auth_token(token);
     }
-    if let Ok(value) = std::env::var("COH_AUTH_TOKEN") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return validated_auth_token(trimmed);
-        }
-    }
-    if let Ok(value) = std::env::var("COHSH_AUTH_TOKEN") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return validated_auth_token(trimmed);
+    for name in ["COH_AUTH_TOKEN_REF", "COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"] {
+        match std::env::var(name) {
+            Ok(value) => return validated_auth_token(&value),
+            Err(std::env::VarError::NotPresent) => continue,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(anyhow!("selected live authentication source is not UTF-8"));
+            }
         }
     }
     Err(anyhow!(
-        "live publish requires --auth-token, COH_AUTH_TOKEN, or COHSH_AUTH_TOKEN"
+        "live publish requires --auth-token, COH_AUTH_TOKEN_REF, COH_AUTH_TOKEN, or COHSH_AUTH_TOKEN"
     ))
 }
 
 fn validated_auth_token(value: &str) -> Result<String> {
-    if value.eq_ignore_ascii_case(&["change", "me"].concat())
-        || value.eq_ignore_ascii_case("placeholder")
-    {
-        return Err(anyhow!(
-            "live publish rejects placeholder authentication tokens"
-        ));
+    if value.starts_with("env:") || value.starts_with("file:") {
+        return Ok(cohesix_authority::secret::resolve_reference(value)?);
     }
-    Ok(value.to_owned())
+    Ok(cohesix_authority::secret::validate_value(value)?)
 }
 
 #[cfg(feature = "rest")]
 fn resolve_rest_auth_token(cli_value: Option<&str>) -> Result<Option<String>> {
     if let Some(value) = cli_value {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return validated_auth_token(trimmed).map(Some);
-        }
+        return validated_auth_token(value).map(Some);
     }
     for key in [
         "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
         "COHSH_REST_AUTH_TOKEN",
         "COH_REST_AUTH_TOKEN",
     ] {
-        if let Ok(value) = std::env::var(key) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return validated_auth_token(trimmed).map(Some);
+        match std::env::var(key) {
+            Ok(value) => return validated_auth_token(&value).map(Some),
+            Err(std::env::VarError::NotPresent) => continue,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(anyhow!("selected REST authentication source is not UTF-8"));
             }
         }
     }
@@ -191,14 +182,27 @@ fn resolve_rest_auth_token(cli_value: Option<&str>) -> Result<Option<String>> {
 
 struct ConsoleClient {
     stream: TcpStream,
+    frame_max_bytes: usize,
 }
 
 impl ConsoleClient {
     fn connect(host: &str, port: u16, auth_token: &str, ticket: Option<&str>) -> Result<Self> {
+        let auth_token = validated_auth_token(auth_token)?;
+        #[derive(serde::Deserialize)]
+        struct Generated {
+            authority: cohesix_authority::policy::AuthorityPolicy,
+        }
+        let generated: Generated = serde_json::from_str(include_str!(
+            "../../../configs/generated/root_task_resolved.json"
+        ))?;
+        let frame_max_bytes = generated.authority.gpu_frame_max_bytes as usize;
         let stream = TcpStream::connect((host, port)).with_context(|| format!("{host}:{port}"))?;
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        let mut client = Self { stream };
+        let mut client = Self {
+            stream,
+            frame_max_bytes,
+        };
         client.send_line(&format!("AUTH {auth_token}"))?;
         client.wait_ack("AUTH")?;
         let ticket = ticket.unwrap_or("");
@@ -220,6 +224,7 @@ impl ConsoleClient {
             .len()
             .checked_add(4)
             .ok_or_else(|| anyhow!("console frame length overflow"))?;
+        validate_frame_length(total_len, self.frame_max_bytes)?;
         let len_bytes = (total_len as u32).to_le_bytes();
         self.stream.write_all(&len_bytes)?;
         self.stream.write_all(line.as_bytes())?;
@@ -234,9 +239,7 @@ impl ConsoleClient {
             Err(err) => return Err(err.into()),
         }
         let total_len = u32::from_le_bytes(len_buf) as usize;
-        if total_len < 4 {
-            return Err(anyhow!("invalid frame length {total_len}"));
-        }
+        validate_frame_length(total_len, self.frame_max_bytes)?;
         let payload_len = total_len.saturating_sub(4);
         let mut payload = vec![0u8; payload_len];
         self.stream.read_exact(&mut payload)?;
@@ -271,8 +274,25 @@ impl ConsoleClient {
     }
 }
 
+fn validate_frame_length(total_len: usize, maximum: usize) -> Result<()> {
+    if !(256..=8192).contains(&maximum) || !(4..=maximum).contains(&total_len) {
+        return Err(anyhow!(
+            "invalid console frame length {total_len}; permitted 4..={maximum}"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn peer_length_is_bounded_before_payload_allocation() {
+        for length in [0, 3, 8193, u32::MAX as usize] {
+            assert!(super::validate_frame_length(length, 8192).is_err());
+        }
+        assert!(super::validate_frame_length(4, 8192).is_ok());
+        assert!(super::validate_frame_length(8192, 8192).is_ok());
+    }
     use super::*;
 
     #[test]
@@ -281,6 +301,15 @@ mod tests {
             resolve_auth_token(Some("real-secret")).expect("valid token"),
             "real-secret"
         );
+    }
+
+    #[test]
+    fn invalid_selected_source_never_falls_back() {
+        for value in ["", " ", "env:", "file:relative"] {
+            assert!(resolve_auth_token(Some(value)).is_err());
+            #[cfg(feature = "rest")]
+            assert!(resolve_rest_auth_token(Some(value)).is_err());
+        }
     }
 
     #[test]

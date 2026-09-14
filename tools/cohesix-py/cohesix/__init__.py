@@ -4,6 +4,7 @@
 
 """Cohesix Python client package."""
 
+from .authority import AdmissionCorrelation, QueenIntent
 from .audit import CohesixAudit
 from .backends import FilesystemBackend, MockBackend, RestBackend, TcpBackend
 from .client import CohesixClient
@@ -56,6 +57,8 @@ from .worker import (
 )
 
 __all__ = [
+    "AdmissionCorrelation",
+    "QueenIntent",
     "ApprovalRequest",
     "CohesixOrchestrator",
     "CohesixAudit",

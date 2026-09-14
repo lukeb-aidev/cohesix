@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Host-side ticket minting helper for cohsh and SwarmUI.
 // Author: Lukas Bower
@@ -9,7 +9,9 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
-use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
+use cohesix_ticket::{
+    BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketScope, TicketVerb,
+};
 use cohsh_core::{parse_role, RoleParseMode};
 use serde::Deserialize;
 
@@ -22,7 +24,9 @@ struct TicketConfig {
 #[derive(Debug, Deserialize)]
 struct TicketEntry {
     role: String,
+    #[serde(default)]
     secret: String,
+    secret_ref: Option<String>,
 }
 
 /// Parameters required to mint a capability ticket.
@@ -34,6 +38,8 @@ pub struct TicketMintRequest {
     pub subject: Option<String>,
     /// Budget limits to embed in the ticket.
     pub budget: BudgetSpec,
+    /// Explicit delegated mutation scopes; empty retains legacy attach semantics.
+    pub scopes: Vec<TicketScope>,
 }
 
 impl TicketMintRequest {
@@ -45,7 +51,39 @@ impl TicketMintRequest {
             role,
             subject,
             budget,
+            scopes: Vec::new(),
         })
+    }
+    /// Require a finite scoped caller ticket suitable for REST delegation.
+    pub fn with_delegated_write_scope(
+        mut self,
+        path: &str,
+        ttl_s: u64,
+        operations: u64,
+    ) -> Result<Self> {
+        let subject = self
+            .subject
+            .as_deref()
+            .ok_or_else(|| anyhow!("delegated ticket requires subject"))?;
+        cohesix_authority::validate_id(subject).map_err(|error| anyhow!("{error}"))?;
+        if !path.starts_with('/')
+            || path.len() > cohsh_core::MAX_PATH_LEN
+            || (path != "/"
+                && path.split('/').skip(1).any(|part| {
+                    part.is_empty()
+                        || part == "."
+                        || part == ".."
+                        || part.bytes().any(|byte| byte.is_ascii_control())
+                }))
+            || ttl_s == 0
+            || ttl_s > 86400
+            || operations == 0
+        {
+            return Err(anyhow!("invalid delegated scope, TTL or operations"));
+        }
+        self.scopes = vec![TicketScope::new(path, TicketVerb::Write, 0)];
+        self.budget = self.budget.with_ttl(Some(ttl_s)).with_ops(Some(operations));
+        Ok(self)
     }
 }
 
@@ -68,14 +106,28 @@ pub fn mint_ticket_from_secret(request: &TicketMintRequest, secret: &str) -> Res
         request.budget,
         request.subject.clone(),
         MountSpec::empty(),
-        unix_time_ms(),
-    );
+        unix_time_ms()?,
+    )
+    .with_scopes(request.scopes.clone());
+    let resolved;
+    let secret = if secret.starts_with("env:") || secret.starts_with("file:") {
+        resolved = cohesix_authority::secret::resolve_reference(secret)?;
+        resolved.as_str()
+    } else {
+        secret
+    };
     let token = TicketIssuer::new(secret)
         .issue(claims)
         .map_err(|err| anyhow!("failed to issue ticket: {err:?}"))?;
-    token
+    let encoded = token
         .encode()
-        .map_err(|err| anyhow!("failed to encode ticket: {err:?}"))
+        .map_err(|err| anyhow!("failed to encode ticket: {err:?}"))?;
+    if encoded.len() > cohsh_core::MAX_TICKET_LEN {
+        return Err(anyhow!(
+            "ticket exceeds transport ticket byte bound; shorten subject/scope"
+        ));
+    }
+    Ok(encoded)
 }
 
 /// Mint a ticket using the role secret from the provided root_task.toml.
@@ -92,7 +144,13 @@ fn load_ticket_secret(config_path: &Path, role: Role) -> Result<String> {
     for entry in config.tickets {
         let parsed = parse_role(entry.role.as_str(), RoleParseMode::Strict);
         if parsed == Some(role) {
-            return Ok(entry.secret);
+            return match entry.secret_ref {
+                Some(reference) if entry.secret.is_empty() => {
+                    cohesix_authority::secret::resolve_reference(&reference).map_err(Into::into)
+                }
+                Some(_) => Err(anyhow!("ticket secret sources are ambiguous")),
+                None => Ok(entry.secret),
+            };
         }
     }
     Err(anyhow!(
@@ -120,9 +178,6 @@ fn role_requires_subject(role: Role) -> bool {
     )
 }
 
-fn unix_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+fn unix_time_ms() -> Result<u64> {
+    u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()).map_err(Into::into)
 }

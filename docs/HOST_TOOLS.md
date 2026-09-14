@@ -4,6 +4,16 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Host Tools
 
+M27a requires delegated tickets on every mutating REST route used by this
+suite, including `coh`, `cohsh`, `host-ticket-agent`, GPU/sidecar bridges,
+SwarmUI and Python clients. Configure request auth and `COH_REST_TICKET` (or the
+client's explicit ticket binding). `cohsh --mint-ticket` supports bounded
+`--ticket-write-scope`, `--ticket-ttl-s` and `--ticket-ops`; ticket signing keys
+may be explicit `env:`/`file:` references. `cas-tool pack --signing-key` accepts
+the same reference syntax, with `COH_CAS_SIGNING_KEY_REF` as the environment
+default. See [M27a migration and release errata](M27A_AUTHORITY.md).
+
+
 The in-process `cohsh` transport, including Hive Gateway `--mock`, defaults
 `TAIL /log/queen.log` to the newest 64 records, matching the operational target.
 Explicit requests retain the existing 1..256 line bound; CAT still reads the
@@ -376,7 +386,7 @@ The two incoming TCP arrows are alternatives, not concurrent paths.
 | Mode | Console owner | Safe clients | Important constraint |
 | --- | --- | --- | --- |
 | Direct TCP | One direct tool | Only that process | A continuous publisher holds the console; stop it before starting another direct client. |
-| Gateway | `hive-gateway` | Multiple REST-capable tools | Writes require gateway request authentication and still use the gateway's upstream role/ticket. |
+| Gateway | `hive-gateway` | Multiple REST-capable tools | Writes require request authentication and a delegated caller ticket constrained by the gateway's upstream authority. |
 | In-memory mock | The selected Rust executable | That process only | State is not shared across executables and is not live-system evidence. |
 | Python `MockBackend` | A local filesystem root | Processes selecting the same root | State can persist and be shared locally, but it is not live-system evidence. |
 | Mounted filesystem | `coh mount` over direct TCP or REST | Filesystem consumers | The mount is foreground; only one REST mount lock is allowed per gateway URL. |
@@ -391,12 +401,15 @@ Do not start a direct `cohsh` session while a direct `--watch` or
 | TCP console authentication | `COH_AUTH_TOKEN` or tool-specific equivalent | Access to the target console listener |
 | Upstream attach | Gateway/direct-tool role plus optional capability ticket | Target namespace identity, scope, budget, and subject |
 | Gateway request authentication | `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, or tool-specific equivalent | Permission to call the host HTTP write edge |
+| REST caller delegation | `COH_REST_TICKET` / `x-cohesix-ticket`; gateway issuer key reference | Caller role, subject, mount/write scopes and quotas enforced at the gateway |
 | Target policy and lifecycle | Manifest rules and current target state | Whether the requested operation is allowed now |
 
-Gateway request authentication is not delegated target identity. Every REST client
-inherits the role and optional ticket with which the gateway attached upstream.
-The target remains authoritative for ticket, policy, lifecycle, path, and quota
-checks.
+The gateway verifies each mutating caller's delegated ticket and intersects its
+claims with the configured upstream role/ticket. It serializes admitted writes
+over the existing console session. The target sees that upstream principal and
+remains authoritative for its policy, lifecycle, path and quota checks; caller
+delegation is gateway-enforced, not VM-verified. See
+[M27A_AUTHORITY.md](M27A_AUTHORITY.md) for the versioned mutation contract.
 
 Keep the gateway bound to loopback unless an explicitly secured deployment
 requires otherwise. The console and gateway do not provide transport-layer TLS;
@@ -609,7 +622,9 @@ wire form `C1:<seq4hex>:<count4hex>:<full_sha256>:<utf8_payload>`. Sequence and
 count are four lowercase hexadecimal digits, sequence starts at zero and is
 contiguous, count is in `1..=64`, every wire line remains at most 256 bytes,
 and every chunk repeats the full lowercase SHA-256 of the reconstructed line.
-The reconstructed line is bounded to 2,048 bytes. `cohsh` reassembles this
+Under manifest schema 1.21 the reconstructed line is bounded to 8,192 bytes so
+a complete authority audit record remains readable. The ECHO limit remains
+2,048 bytes. `cohsh` and the Python TCP backend reassemble this
 format before returning `CAT` output and rejects partial, reordered, replayed,
 mixed-digest, oversized, or noncanonical groups. This does not add a verb,
 path, authority, or larger global console-output queue.
@@ -967,6 +982,9 @@ backend rules are owned by [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md).
 | `COH_ROLE`, `COH_TICKET` | Gateway and selected tools | Upstream role and optional ticket |
 | `COH_REST_URL`, `COHSH_REST_URL`, `HIVE_GATEWAY_URL` | REST-capable clients | Gateway base URL |
 | `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN` | Gateway and REST clients | HTTP mutation authentication |
+| `COH_REST_TICKET` | REST-capable CLI tools, publishers, SwarmUI and Python | Delegated caller ticket required for mutations |
+| `HIVE_GATEWAY_DELEGATION_KEY_REF` | Gateway | Explicit `env:NAME` or absolute `file:` issuer-key source |
+| `COH_AUTH_TOKEN_REF` | `cohsh`, GPU bridge and Python | Explicit TCP credential reference selected before compatibility token variables |
 
 Not every executable accepts every alias; its `--help` and the tool-specific
 sections above are authoritative. Prefer deployment-scoped environment files or
@@ -978,7 +996,7 @@ file.
 Before adding a tool to a live topology:
 
 1. Confirm whether it uses direct TCP, REST, a mount, or only local files.
-2. Confirm the gateway's upstream role/ticket is sufficient for any REST write.
+2. Confirm the delegated caller ticket and gateway upstream role/ticket both permit every REST write.
 3. Confirm the active manifest exposes the required path and feature gate.
 4. Use `/v1/meta/bounds` or generated client policy for request sizing.
 5. Check [FAILURE_MODES.md](FAILURE_MODES.md) before retrying a failed mutation.

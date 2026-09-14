@@ -1,10 +1,31 @@
 {
+  "authority": {
+    "production": false,
+    "delegated_rest": true,
+    "vm_verified_delegation": false,
+    "delegated_ticket_entries": 256,
+    "delegated_ticket_max_ttl_s": 3600,
+    "strict_queen_intents": true,
+    "legacy_queen_ctl": true,
+    "queen_dedupe_entries": 64,
+    "queen_intent_max_bytes": 2048,
+    "writer_epoch": 1,
+    "writer_epoch_required": false,
+    "execution_wal_required": true,
+    "gpu_frame_max_bytes": 8192,
+    "debug_memory": false,
+    "production_worker_ledger": false,
+    "production_driver_ledger": false,
+    "structured_quarantine": false,
+    "host_ai": false,
+    "production_failover": false
+  },
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.20",
+    "schema": "1.21",
     "affinity": {
       "enabled": true,
       "max_cores": 4,

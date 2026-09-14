@@ -750,7 +750,16 @@ pub trait Transport {
                 ReadBatchRequest::Read { path } => self.read(session, path),
                 ReadBatchRequest::List { path } => self.list(session, path),
             })
-            .map(|result| result.map_err(|error| error.to_string()))
+            .map(|result| {
+                result.map_err(|error| {
+                    let summary = error.to_string();
+                    if summary.starts_with("ERR ") {
+                        summary
+                    } else {
+                        format!("{error:#}")
+                    }
+                })
+            })
             .collect();
         Ok(outcomes)
     }
@@ -783,7 +792,16 @@ pub trait Transport {
                     result.map(|()| TransportBatchResponse::Written { acknowledgements })
                 }
             })
-            .map(|result| result.map_err(|error| error.to_string()))
+            .map(|result| {
+                result.map_err(|error| {
+                    let summary = error.to_string();
+                    if summary.starts_with("ERR ") {
+                        summary
+                    } else {
+                        format!("{error:#}")
+                    }
+                })
+            })
             .collect();
         Ok(outcomes)
     }
@@ -992,7 +1010,12 @@ impl NineDoorTransport {
             _ => false,
         };
         let err = anyhow::Error::new(err);
-        if capacity_refusal {
+        if path == cohesix_authority::QUEEN_INTENT_PATH {
+            let detail = err.to_string();
+            err.context(format!(
+                "ERR {verb} reason=authority path={path} error={detail}"
+            ))
+        } else if capacity_refusal {
             err.context(format!(
                 "ERR {verb} reason=quota detail=buffer-full path={path} error=buffer full"
             ))

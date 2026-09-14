@@ -683,6 +683,8 @@ fi
 run_step "release-guardrails-findings" check_blocking_findings
 run_step "release-guardrails-exceptions" check_exceptions_register
 run_step "hardcoded-secret-scan" scan_hardcoded_secrets
+run_step "authority-profile-floor" python3 scripts/authority_release_gate.py \
+  --manifest configs/generated/root_task_resolved.json --allow-development
 
 if [[ ${#failures[@]} -eq 0 ]]; then
   if [[ -n "${dd_release_input}" ]]; then

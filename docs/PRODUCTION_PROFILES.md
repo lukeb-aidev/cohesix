@@ -4,6 +4,16 @@
 
 # Production profiles and capacity
 
+The production kernel/capacity profiles below are distinct from a provisioned
+production authority deployment. The checked-in source manifests retain explicit
+development ticket literals for fixture compatibility; live clients reject those
+placeholders. [M27A_AUTHORITY.md](M27A_AUTHORITY.md) defines the Release A compiler
+profile with secret references, strict Queen intents, writer fencing and required
+audit/replay. Select its generated TOML throughout the build and release workflow.
+A production seL4 kernel alone does not establish production credential hygiene,
+provider conformance, failover qualification or audit acceptance.
+
+
 The selected inputs are `configs/root_task.toml` with `qemu_smp_production`
 and `configs/root_task_pi4_uboot_aarch64.toml` with `pi4_production`.
 The Pi image builder defaults to the immutable `seL4/build_UBOOT` production

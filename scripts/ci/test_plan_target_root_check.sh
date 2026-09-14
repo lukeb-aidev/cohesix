@@ -102,7 +102,7 @@ expected_target = sys.argv[3]
 expected_profile = sys.argv[4]
 
 projection = json.loads(projection_path.read_text(encoding="utf-8"))
-if projection.get("schema") != "cohesix-python-profile/v1":
+if projection.get("schema") != "cohesix-python-profile/v2":
     raise SystemExit("selected target projection has an unexpected schema")
 if projection.get("target") != expected_target:
     raise SystemExit("selected target projection has an unexpected target")

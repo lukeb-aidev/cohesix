@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RELEASES_DIR="${ROOT_DIR}/releases"
+RELEASE_AUTHORITY_MANIFEST="${ROOT_DIR}/configs/root_task.toml"
 
 RELEASE_NAME=""
 RELEASE_VERSION=""
@@ -67,6 +68,7 @@ Linux artifact byte-for-byte. Prefer --linux-use-accepted-tools after native
 build/test qualification. Use --linux-only to omit macOS and Pi4 output.
 
 Release options:
+  --release-manifest <path>          Provisioned production source manifest for selected artifacts
   --name <name>                       Required when creating bundles
   --version <version>                 Defaults to the compiler inventory version
   --force                             Replace the selected output bundle(s)
@@ -229,6 +231,11 @@ while [[ $# -gt 0 ]]; do
     --linux-host-tools-manifest)
       [[ $# -ge 2 ]] || { echo "--linux-host-tools-manifest requires a path" >&2; exit 1; }
       LINUX_HOST_TOOLS_MANIFEST="$2"
+      shift 2
+      ;;
+    --release-manifest)
+      [[ $# -ge 2 ]] || { echo "--release-manifest requires a path" >&2; exit 1; }
+      RELEASE_AUTHORITY_MANIFEST="$2"
       shift 2
       ;;
     --check-manifest)
@@ -702,6 +709,7 @@ validate_tested_inputs() {
     result_args=(--result "$result")
   fi
   python3 "${ROOT_DIR}/scripts/release_inputs.py" \
+    --release-manifest "$RELEASE_AUTHORITY_MANIFEST" \
     --artifact "$artifact" ${result_args[@]+"${result_args[@]}"} \
     --source-digest "$SOURCE_DIGEST" --host "$host" \
     ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"} ${INPUT_MODE_ARGS[@]+"${INPUT_MODE_ARGS[@]}"}
@@ -956,7 +964,11 @@ bundle_release() {
     cp -p "${OUT_DIR}/release-configs/${selected_path}" "${bundle_dir}/${selected_path}"
   done < <(release_inventory_values generated_configs)
   while IFS= read -r selected_path; do
-    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+    if [[ "$selected_path" == "resources/keys/cas_verification_key.hex" ]]; then
+      cp -p "${OUT_DIR}/release-configs/configs/generated/cas_verification_key.hex" "${bundle_dir}/${selected_path}"
+    else
+      cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+    fi
   done < <(release_inventory_values host_assets)
 
   while IFS= read -r selected_path; do
@@ -1027,6 +1039,7 @@ bundle_release() {
   local result_args=()
   if [[ -n "$result" ]]; then result_args=(--result "$result"); fi
   python3 "${ROOT_DIR}/scripts/release_inputs.py" \
+    --release-manifest "$RELEASE_AUTHORITY_MANIFEST" \
     --artifact "$artifact" ${result_args[@]+"${result_args[@]}"} --host "$host" \
     --source-digest "$SOURCE_DIGEST" --bundle "$bundle_dir" \
     ${PUBLICATION_ARGS[@]+"${PUBLICATION_ARGS[@]}"} ${INPUT_MODE_ARGS[@]+"${INPUT_MODE_ARGS[@]}"}

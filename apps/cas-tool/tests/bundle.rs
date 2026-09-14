@@ -268,3 +268,23 @@ fn delta_bundle_hashes_with_base() {
     assert_eq!(digest.as_slice(), delta_bundle.manifest.payload_sha256);
     assert!(delta_bundle.manifest.delta.is_some());
 }
+
+#[test]
+fn file_reference_rotation_loads_only_the_selected_key() {
+    use cas_tool::load_signing_key;
+    let directory = tempfile::tempdir().expect("temporary key directory");
+    let key = directory.path().join("signing-key.hex");
+    let reference = std::path::PathBuf::from(format!("file:{}", key.display()));
+    std::fs::write(&key, hex::encode([17u8; 32])).expect("first fixture key");
+    assert_eq!(load_signing_key(&reference).expect("first key"), [17u8; 32]);
+    std::fs::write(&key, hex::encode([34u8; 32])).expect("rotated fixture key");
+    assert_eq!(
+        load_signing_key(&reference).expect("rotated key"),
+        [34u8; 32]
+    );
+    std::fs::remove_file(&key).expect("remove key");
+    assert!(
+        load_signing_key(&reference).is_err(),
+        "missing selected key cannot use cached bytes"
+    );
+}

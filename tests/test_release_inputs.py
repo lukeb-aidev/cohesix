@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import release_inputs as release  # noqa: E402
+from test_authority_release_gate import production_manifest
 
 
 def fixture_module():
@@ -45,9 +46,11 @@ def accepted_inputs(
     helper = release.evidence
     monkeypatch.setattr(helper.platform, "system", lambda: "Darwin")
     inputs = support.create_artifact_inputs(tmp_path)
+    inputs["resolved"].write_text(json.dumps(production_manifest()))
     generated = tmp_path / "generated"
     generated.mkdir()
     configs = {
+        "cas_verification_key.hex": b"11" * 32 + b"\n",
         "root_task_resolved.json": inputs["resolved"].read_bytes(),
         "cohsh_policy.toml": inputs["policy"].read_bytes(),
         "cohesix_python_qemu_smp_production.json": json.dumps({
@@ -228,6 +231,8 @@ def test_packaged_payload_cannot_be_rebuilt_after_acceptance(accepted, tmp_path)
     for destination in records:
         if destination.startswith("configs/"):
             origin = f"release-configs/{destination}"
+        elif destination == "resources/keys/cas_verification_key.hex":
+            origin = "release-configs/configs/generated/cas_verification_key.hex"
         else:
             origin = release.IMAGE_PATHS.get(
                 destination, f"host-tools/{Path(destination).name}"

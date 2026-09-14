@@ -7,9 +7,9 @@ use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 
 pub(crate) const CAT_CHUNK_PREFIX: &str = "C1:";
-pub(crate) const CAT_CHUNK_MAX_WIRE_BYTES: usize = 256;
-pub(crate) const CAT_CHUNK_MAX_COUNT: usize = 64;
-pub(crate) const CAT_CHUNK_REASSEMBLED_MAX_BYTES: usize = 2048;
+use cohsh_core::wire::{
+    CAT_CHUNK_MAX_COUNT, CAT_CHUNK_MAX_WIRE_BYTES, CAT_CHUNK_REASSEMBLED_MAX_BYTES,
+};
 
 struct Chunk<'a> {
     sequence: usize,
@@ -167,6 +167,17 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn complete_audit_record_fits_without_enlarging_wire_frames() {
+        let record = format!("{{\"payload\":\"{}\"}}", "x".repeat(8178));
+        assert_eq!(record.len(), 8192);
+        assert_eq!(
+            reassemble_cat_chunks(frames(&record, 176)).expect("bounded audit record"),
+            vec![record]
+        );
+        assert!(reassemble_cat_chunks(frames(&"x".repeat(8193), 176)).is_err());
     }
 
     #[test]

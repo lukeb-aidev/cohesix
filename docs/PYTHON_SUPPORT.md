@@ -4,6 +4,15 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Python Support
 
+The M27a SDK adds `QueenIntent` and `AdmissionCorrelation`, delegated REST
+write credentials, strict-intent and writer-epoch validation, and bounded
+authority/dedupe snapshots in evidence packs. Generated
+`cohesix-python-profile/v2` adds selected authority policy; v1 contracts must be
+regenerated. Neither Python objects nor profile metadata constitute a VM
+admission grant. Missing production epoch/delegation fails before mutation,
+and REST writes have no automatic retry. See [M27a authority](M27A_AUTHORITY.md).
+
+
 The `cohesix` Python package is a host-side, non-authoritative client for the
 existing Cohesix file and console contracts. It validates inputs, applies
 generated bounds, and offers typed helpers; it does not add protocol verbs,
@@ -243,7 +252,7 @@ regular, non-symlink compiler output:
 - `configs/generated/cohesix_python_pi4_production.json` for
   `pi4_production`.
 
-Both use `cohesix-python-profile/v1`, but each binds its own resolved-manifest
+Both use `cohesix-python-profile/v2`, but each binds its own resolved-manifest
 hash. They are generated independently; one target contract must never be
 copied, renamed, or inferred from the other. A parsed in-memory mapping is
 useful for validation tests but is marked `source="mapping"` and does not

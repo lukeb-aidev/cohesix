@@ -126,6 +126,7 @@ ffi_shim = [
 [dependencies]
 aes = { version = "0.9.2", default-features = false }
 cohesix-ticket = { workspace = true }
+cohesix-authority = { workspace = true }
 cohesix-proto = { workspace = true }
 embedded-io = { version = "0.7.1", default-features = false }
 nb = "1.1.0"
@@ -430,6 +431,7 @@ name = "schedule"
 path = "tests/schedule.rs"
 
 [build-dependencies]
+cohesix-authority = { workspace = true, features = ["std"] }
 cargo-build-directive = { workspace = true }
 regex = "1.13.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

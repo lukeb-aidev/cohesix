@@ -178,3 +178,20 @@ def test_matrix_preserves_complete_body_first_responses_on_one_connection() -> N
         "PASS QUIT body_frames=0 ack=OK_QUIT close=EOF",
         "PASS TCP_MATRIX same_connection=yes handshakes=2 commands=6",
     ]
+
+
+def test_matrix_resolves_selected_reference_without_fallback(monkeypatch, tmp_path):
+    module = runpy.run_path(str(SCRIPT))
+    secret = tmp_path / "console-key"
+    secret.write_text("matrix-private-one\n")
+    monkeypatch.setenv("COH_AUTH_TOKEN_REF", f"file:{secret}")
+    monkeypatch.setenv("COHSH_AUTH_TOKEN", "different-fallback")
+    assert module["load_auth_token"]() == "matrix-private-one"
+    secret.write_text("matrix-private-two\n")
+    assert module["load_auth_token"]() == "matrix-private-two"
+    secret.unlink()
+    with pytest.raises(module["MatrixError"], match="invalid or unavailable"):
+        module["load_auth_token"]()
+    monkeypatch.setenv("COH_AUTH_TOKEN_REF", "bootstrap")
+    with pytest.raises(module["MatrixError"], match="invalid or unavailable"):
+        module["load_auth_token"]()

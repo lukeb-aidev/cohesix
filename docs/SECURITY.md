@@ -5,6 +5,18 @@
 
 # Security
 
+The M27a host authority floor combines MAC-verified REST delegation, bounded
+caller quota retention, strict Queen idempotency, and durable host executor
+recovery. It is `gateway_enforced`, not evidence of VM-verified REST caller
+identity. Release A requires provisioned `env:`/`file:` ticket secrets, a public
+CAS verification key distinct from the published fixture, enabled bounded
+audit/replay, and disabled arbitrary-memory diagnostics. The release assembler
+rejects development authority profiles and scans selected payloads for renamed
+private fixture keys and secret canaries. [M27a authority](M27A_AUTHORITY.md)
+records production gates and the separate, still-deferred 28b ledger/quarantine
+claims.
+
+
 Cohesix is a pre-production research operating system. Its design reduces and
 makes authority visible; it does not make the complete system formally verified
 or suitable for unattended production use. seL4's machine-checked proofs apply

@@ -638,7 +638,8 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
             }
         };
         let rest_auth_token = resolve_rest_auth_token(args.connect.rest_auth_token.as_deref());
-        let client = RestSession::connect(rest_url.as_str(), rest_auth_token);
+        let client = RestSession::connect(rest_url.as_str(), rest_auth_token)
+            .with_optional_delegated_ticket(ticket);
         audit.push_ack(cohsh_core::wire::AckStatus::Ok, "MOUNT", Some("mode=rest"));
         emit_audit(audit);
         return mount::mount_rest(client, policy, &args.at);
@@ -1413,10 +1414,9 @@ fn connect_access(
             return Err(anyhow!("rest transport supports queen role only"));
         }
         let rest_auth_token = resolve_rest_auth_token(args.rest_auth_token.as_deref());
-        return Ok(AccessHandle::Rest(RestSession::connect(
-            rest_url,
-            rest_auth_token,
-        )));
+        return Ok(AccessHandle::Rest(
+            RestSession::connect(rest_url, rest_auth_token).with_optional_delegated_ticket(ticket),
+        ));
     }
     let console = connect_console(args, policy, role, ticket)?;
     Ok(AccessHandle::Console(console))

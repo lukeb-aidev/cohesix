@@ -114,6 +114,18 @@ struct Cli {
     #[arg(long, requires = "mint_ticket")]
     ticket_secret: Option<String>,
 
+    /// Delegated REST mutation prefix; requires a subject identity.
+    #[arg(long, requires = "mint_ticket")]
+    ticket_write_scope: Option<String>,
+
+    /// Delegated ticket lifetime in seconds (1..86400).
+    #[arg(long, requires = "ticket_write_scope", default_value_t = 60)]
+    ticket_ttl_s: u64,
+
+    /// Total operations permitted by a delegated ticket.
+    #[arg(long, requires = "ticket_write_scope", default_value_t = 1024)]
+    ticket_ops: u64,
+
     /// Execute commands from a script file instead of starting an interactive shell.
     #[arg(long)]
     script: Option<PathBuf>,
@@ -415,46 +427,19 @@ fn build_rest_transport(
 }
 
 #[cfg(feature = "tcp")]
-const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
-
-#[cfg(feature = "tcp")]
 fn resolve_tcp_auth_token(cli_value: Option<&str>) -> Result<String> {
-    if let Some(value) = cli_value {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
-                return Err(anyhow!(
-                    "tcp auth token uses insecure placeholder token; set --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
-                ));
-            }
-            return Ok(trimmed.to_owned());
-        }
+    let selected = cli_value
+        .map(str::to_owned)
+        .or_else(|| env::var("COH_AUTH_TOKEN_REF").ok())
+        .or_else(|| env::var("COH_AUTH_TOKEN").ok())
+        .or_else(|| env::var("COHSH_AUTH_TOKEN").ok())
+        .ok_or_else(|| anyhow!("tcp auth token must be configured"))?;
+    if selected.starts_with("env:") || selected.starts_with("file:") {
+        cohesix_authority::secret::resolve_reference(&selected)?;
+        Ok(selected)
+    } else {
+        cohesix_authority::secret::validate_value(&selected).map_err(anyhow::Error::from)
     }
-    if let Ok(value) = env::var("COHSH_AUTH_TOKEN") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
-                return Err(anyhow!(
-                    "tcp auth token uses insecure placeholder token; set --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
-                ));
-            }
-            return Ok(trimmed.to_owned());
-        }
-    }
-    if let Ok(value) = env::var("COH_AUTH_TOKEN") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
-                return Err(anyhow!(
-                    "tcp auth token uses insecure placeholder token; set --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
-                ));
-            }
-            return Ok(trimmed.to_owned());
-        }
-    }
-    Err(anyhow!(
-        "tcp auth token must be configured with --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
-    ))
 }
 
 #[cfg(feature = "in-process")]
@@ -490,6 +475,11 @@ fn main() -> Result<()> {
         let role = Role::from(role_arg);
         let request =
             cohsh::ticket_mint::TicketMintRequest::new(role, cli.ticket_subject.as_deref(), None)?;
+        let request = if let Some(scope) = cli.ticket_write_scope.as_deref() {
+            request.with_delegated_write_scope(scope, cli.ticket_ttl_s, cli.ticket_ops)?
+        } else {
+            request
+        };
         let token = if let Some(secret) = resolve_ticket_secret(cli.ticket_secret)? {
             cohsh::ticket_mint::mint_ticket_from_secret(&request, secret.as_str())?
         } else {

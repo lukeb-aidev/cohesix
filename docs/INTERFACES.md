@@ -5,6 +5,21 @@
 
 # External Interfaces
 
+Schema 1.21 adds the generated authority policy and secret references.
+`/queen/intents/ctl` accepts `queen-intent/v1`: required `schema`, `id`,
+`idempotency_key`, `issued_unix_ms`, and `cmd` (the existing Queen command as a
+JSON string). `/queen/ctl` retains its existing raw JSON in compatibility
+profiles; provisioned production profiles disable it and the console
+`SPAWN`/`KILL` shortcuts. Strict terminal audit records carry `dedupe` as `fresh`
+or `duplicate`, with the complete envelope and outcome. `/proc/authority` exposes
+the selected identity class and writer fence; `/proc/queen/dedupe` is bounded
+NDJSON with retained result hashes. Optional `writer_epoch` and `admission`
+correlation are preserved in strict intents and host-ticket/v1/v2 receipts and
+WAL records. Writer ownership is checked independently of admission freshness;
+27a does not issue admission decisions. [M27a authority](M27A_AUTHORITY.md)
+defines the bounds and migration contract.
+
+
 This document is the index and human-authored contract for Cohesix external
 interfaces: transport selection, target console framing, namespace paths,
 control files, and non-generated record schemas. It links to generated snippets
@@ -1086,7 +1101,11 @@ or changing payload identity.
 Audit journal and decision `CAT` reads preserve each complete JSONL record.
 Records longer than the existing 256-byte console line use the existing ordered,
 digest-bound `C1:` frames; shared TCP clients reconstruct the original JSON
-before exposing it to other host tools. The fixed 64-frame response capacity,
+before exposing it to other host tools. Manifest schema 1.21 raises the logical
+record limit to 8192 bytes for complete authority audit records; each wire frame
+remains at most 256 bytes and command limits are unchanged. Python consumes the
+same compiler-generated bounds and verifies sequence, count and SHA-256.
+The fixed 64-frame response capacity,
 AuditFS retention sizes and ticket byte quotas still apply. An over-capacity
 snapshot is refused explicitly; it is never truncated into a successful export.
 

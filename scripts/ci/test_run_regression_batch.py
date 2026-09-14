@@ -60,6 +60,7 @@ def run_auth_probe(payload: bytes, *, declared_extra: int = 0) -> int:
     result = subprocess.run(
         [sys.executable, "-", "127.0.0.1", str(port[0]), "fixture-token"],
         input=auth_probe_source(),
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "tools/cohesix-py")},
         text=True,
         check=False,
         capture_output=True,
@@ -736,6 +737,7 @@ def test_prepare_only_builds_shared_base_manifest_once_and_restores_generated(
             "COHESIX_BUILD_RUN_BIN": str(fake_build),
             "COHSH_BATCH_TARGET": "qemu",
             "COHSH_BATCH_GROUPS": "base,base-telemetry,base-shard",
+            "COHSH_AUTH_TOKEN": "fixture-live-key",
             "COHSH_BATCH_PREPARE_ONLY": "1",
             "COHSH_LOG_ROOT": str(archive),
             "COHSH_QEMU_ARTIFACT_ROOT": str(artifact_root),

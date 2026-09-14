@@ -183,45 +183,11 @@ PY
 }
 
 queen_console_token() {
-    local manifest=$1
-    local format=$2
-    python3 - "$manifest" "$format" <<'PY'
-import json
-from pathlib import Path
-import stat
+    local manifest_path="$1"
+    PYTHONPATH="${REPO_ROOT}/tools/cohesix-py${PYTHONPATH:+:$PYTHONPATH}" python3 - "$manifest_path" "${2:-toml}" <<'PY'
 import sys
-import tomllib
-
-manifest = Path(sys.argv[1])
-format_name = sys.argv[2]
-info = manifest.lstat()
-if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-    raise SystemExit("manifest Queen ticket input is not a regular non-symlink file")
-if format_name == "toml":
-    document = tomllib.loads(manifest.read_text(encoding="utf-8"))
-elif format_name == "json":
-    document = json.loads(manifest.read_text(encoding="utf-8"))
-else:
-    raise SystemExit(f"unsupported manifest format: {format_name}")
-tickets = document.get("tickets")
-if not isinstance(tickets, list):
-    raise SystemExit("manifest tickets must be a list")
-matches = [
-    ticket.get("secret")
-    for ticket in tickets
-    if isinstance(ticket, dict) and ticket.get("role") == "queen"
-]
-if len(matches) != 1 or not isinstance(matches[0], str):
-    raise SystemExit("manifest must declare exactly one Queen ticket secret")
-secret = matches[0]
-if (
-    not secret
-    or secret.strip() != secret
-    or any(ord(character) < 0x21 or ord(character) == 0x7F for character in secret)
-    or secret == "changeme"
-):
-    raise SystemExit("manifest Queen ticket secret is unusable")
-print(secret)
+from cohesix.auth import resolve_manifest_auth_token
+print(resolve_manifest_auth_token(sys.argv[1], sys.argv[2]))
 PY
 }
 
@@ -243,7 +209,7 @@ COMPILER_DIR="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-non
 COMPILER_ARCHIVE="out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
 QEMU_BIN="/opt/homebrew/bin/qemu-system-aarch64"
 GDB_BIN="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gdb"
-SOURCE_MANIFEST="$REPO_ROOT/configs/root_task.toml"
+SOURCE_MANIFEST="${COH_RTC_MANIFEST:-$REPO_ROOT/configs/root_task.toml}"
 RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 JOBS=10
 CHECK_ONLY=0

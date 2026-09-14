@@ -874,6 +874,24 @@ fn validate_generated_manifest() -> io::Result<()> {
     let manifest_hash = repo_root.join("configs/generated/root_task_resolved.json.sha256");
     let cli_script = repo_root.join("scripts/cohsh/boot_v0.coh");
     let doc_snippet = repo_root.join("docs/snippets/root_task_manifest.md");
+    let selected: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_out)?).map_err(io::Error::other)?;
+    if let Some(tickets) = selected
+        .get("tickets")
+        .and_then(serde_json::Value::as_array)
+    {
+        for ticket in tickets {
+            if let Some(reference) = ticket.get("secret_ref").and_then(serde_json::Value::as_str) {
+                if let Some(name) = reference.strip_prefix("env:") {
+                    emit_cargo_directive(format!("cargo:rerun-if-env-changed={name}"));
+                } else if let Some(path) = reference.strip_prefix("file:") {
+                    emit_cargo_directive(format!("cargo:rerun-if-changed={path}"));
+                }
+                cohesix_authority::secret::resolve_reference(reference)
+                    .map_err(io::Error::other)?;
+            }
+        }
+    }
 
     for path in [
         &manifest_path,

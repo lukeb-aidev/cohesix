@@ -5,6 +5,17 @@
 
 # Cohesix Host REST API
 
+The M27a mutation contract requires gateway request auth plus the delegated
+`x-cohesix-ticket` header. A request-auth token alone does not authorize a write.
+Rust `GatewayClient::with_delegated_ticket` and Python
+`RestBackend(..., delegated_ticket=...)` bind the caller; `COH_REST_TICKET` is
+the explicit process-level default. Delegation is enforced by the gateway;
+the single upstream console retains its configured identity. `/v1/meta/status`
+includes bounded authority cache, refusal, writer-epoch and audit-emission
+counters. See [M27a authority](M27A_AUTHORITY.md) and the updated
+[OpenAPI contract](../resources/openapi/hive-gateway.yaml).
+
+
 `hive-gateway` is a host-only HTTP projection of existing Cohesix console and
 file operations. It is not an in-target server and does not create a separate
 authority path.

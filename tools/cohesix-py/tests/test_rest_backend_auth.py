@@ -19,12 +19,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cohesix.backends import RestBackend  # noqa: E402
 
+# Deliberately unsigned parser fixture: only the real gateway verifies the MAC.
+PARSER_TICKET = "cohesix-ticket-010000" + "00" * 12 + "." + "00" * 32
+
 
 @dataclass
 class AuthCapture:
     expected_token: str
     authorization_values: list[str] = field(default_factory=list)
     request_auth_values: list[str] = field(default_factory=list)
+    delegated_values: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -137,6 +141,7 @@ def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, A
             data = json.loads(payload.decode("utf-8"))
             path = str(data.get("path") or "")
             line = str(data.get("line") or "")
+            capture.delegated_values.append(self.headers.get("x-cohesix-ticket", ""))
             if not self._validate_auth("ECHO", path):
                 return
             self._send_ok("ECHO", path, lines=[], bytes_written=len(line.encode("utf-8")))
@@ -255,7 +260,7 @@ def _start_retry_server(
 def test_rest_backend_sends_explicit_request_auth_headers() -> None:
     server, base_url, capture = _start_auth_server(expected_token="explicit-token")
     try:
-        backend = RestBackend(base_url, request_auth_token="explicit-token")
+        backend = RestBackend(base_url, request_auth_token="explicit-token", delegated_ticket=PARSER_TICKET)
         entries = backend.list_dir("/")
         payload = backend.read_file("/log/queen.log", 4096)
         written = backend.write_append("/queen/ctl", b'{"op":"noop"}')
@@ -268,6 +273,7 @@ def test_rest_backend_sends_explicit_request_auth_headers() -> None:
     assert written == len('{"op":"noop"}'.encode("utf-8"))
     assert capture.authorization_values == ["Bearer explicit-token"] * 3
     assert capture.request_auth_values == ["explicit-token"] * 3
+    assert capture.delegated_values == [PARSER_TICKET]
 
 
 def test_rest_backend_uses_env_request_auth_header() -> None:
@@ -323,3 +329,18 @@ def test_rest_backend_retries_transient_http_failures() -> None:
 
     assert entries == ["gpu", "proc"]
     assert capture.requests == 2
+
+
+def test_advertised_oversize_response_is_rejected_without_reading_body():
+    import pytest
+    from cohesix.backends import _read_bounded_rest_response
+    from cohesix.errors import CohesixError
+
+    class Peer:
+        headers = {"Content-Length": "4294967295"}
+
+        def read(self, _size):
+            raise AssertionError("oversized peer body must not be read")
+
+    with pytest.raises(CohesixError, match="byte bound"):
+        _read_bounded_rest_response(Peer())

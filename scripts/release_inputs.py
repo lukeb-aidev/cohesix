@@ -15,6 +15,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "ci"))
 import qemu_artifact as evidence  # noqa: E402
+import authority_release_gate as authority
 
 HOSTS = {
     "macos": ("Darwin", "qemu_smp_production", 24_000_000),
@@ -64,6 +65,9 @@ def verified_inputs(
         raise evidence.EvidenceError(
             f"{host} release artifact has the wrong production profile"
         )
+    authority.validate_policy(authority.read_manifest(
+        Path(artifact["_resolved_artifact_root"]) / "release-configs/configs/generated/root_task_resolved.json"
+    ))
     if build_only:
         if (
             artifact.get("action_id") != "release.build-only"
@@ -116,6 +120,10 @@ def payload_records(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 f"release configuration is not bound to the tested artifact: {path}"
             )
         mappings[path.removeprefix("release-configs/")] = path
+    key_record = "release-configs/configs/generated/cas_verification_key.hex"
+    if key_record not in by_path:
+        raise evidence.EvidenceError("release lacks compiler-bound public verification material")
+    mappings["resources/keys/cas_verification_key.hex"] = key_record
     profile = evidence.read_json(
         root / "release-configs/configs/generated/cohesix_python_qemu_smp_production.json"
     )
@@ -142,6 +150,8 @@ def verify_payload(bundle: Path, records: dict[str, dict[str, Any]]) -> None:
 
     for relative, record in records.items():
         evidence.verify_file_record(bundle, {"path": relative, **record})
+    authority.verify_release_public_key(bundle)
+    authority.scan_bundle(bundle)
 
 
 def main() -> int:
@@ -149,6 +159,8 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path, required=True)
+    parser.add_argument("--release-manifest", type=Path,
+                        default=Path(__file__).resolve().parents[1] / "configs/root_task.toml")
     parser.add_argument("--result", type=Path)
     parser.add_argument("--build-only", action="store_true")
     parser.add_argument("--source-digest", required=True)
@@ -174,9 +186,7 @@ def main() -> int:
             args.result,
             args.source_digest,
             args.host,
-            evidence.sha256_file(
-                Path(__file__).resolve().parents[1] / "configs/root_task.toml"
-            ),
+            evidence.sha256_file(args.release_manifest),
             build_only=args.build_only,
         )
         records = payload_records(artifact)

@@ -7,9 +7,34 @@
 QEMU/Pi comparisons use the paired release kernels and common production
 manifest contract in [PRODUCTION_PROFILES.md](PRODUCTION_PROFILES.md).
 Retained Pi diagnostic-kernel results are a distinct baseline. Use
-`scripts/rest_perf_harness.py` for every benchmark; concurrent HTTP TAIL
+`scripts/rest_perf_harness.py` for target throughput benchmarks; concurrent HTTP TAIL
 submission does not imply concurrent target commands. Report full-batch means
 separately from per-request latency and retain each selected manifest identity.
+
+Milestone 27a uses `scripts/ci/gateway_perf_probe.sh --scenario
+delegated-rest-authority --state-dir out/bench/m27a-gateway-authority` for the
+separate host gateway authority microbenchmark. Supply `--baseline-gateway`
+with the retained pre-change binary and `--gateway`/`--cohsh` with current
+binaries compiled from a selected manifest with `authority.writer_epoch >= 2`.
+The probe reads the compiled current epoch from gateway status and submits the
+immediately preceding epoch for its stale-writer scenario. A future-epoch
+refusal or invalid epoch zero cannot substitute for that measurement.
+The probe records every status read, strict delegated write, exact
+duplicate acknowledgement, idempotency conflict, stale-epoch refusal and missing
+delegation refusal. Measured operations never retry. Reports retain p50/p95,
+exact expected and observed HTTP status, broker queue counters, bounded ticket
+cache state and audit emission time. A host-model result proves no target
+throughput or Worker behavior. Retain the equivalent accepted 26d status-read
+comparison separately; missing or unlike-target evidence cannot establish that
+comparison. Classify any material regression before downstream authority users
+depend on it.
+
+Mutating REST harness workloads require request authentication and
+`COH_REST_TICKET`. The request token may be an explicit `env:NAME` or absolute
+`file:` reference and is resolved for each operation. Missing delegation or an
+invalid selected credential fails before networking. Read-only workloads retain
+their existing request-auth posture. These rules do not alter raw TCP sampling,
+throughput thresholds or retry accounting.
 
 Use `--mode raw --raw-requests 64` for the raw framed console TCP baseline,
 with `--tcp-host`, `--benchmark-target`, `--benchmark-transport`, and `--timeout 10`.

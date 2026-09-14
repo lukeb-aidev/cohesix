@@ -18,6 +18,7 @@ secure9p-transport = { workspace = true }
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohesix-authority = { workspace = true }
 cohesix-proto = { workspace = true }
 secure9p-codec = { workspace = true }
 secure9p-core = { workspace = true }

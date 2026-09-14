@@ -131,6 +131,12 @@ const DEFAULT_HOST_TICKET_LIFECYCLE: &[&str] = &[
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostTicketSpecLine {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    admission: Option<cohesix_authority::AdmissionCorrelation>,
     schema: String,
     id: String,
     idempotency_key: String,
@@ -154,6 +160,12 @@ struct HostTicketSpecLine {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostTicketResultLine {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    admission: Option<cohesix_authority::AdmissionCorrelation>,
     schema: String,
     id: String,
     idempotency_key: String,
@@ -357,6 +369,7 @@ impl HostTicketPolicy {
         }
         validate_ticket_identifier("id", &parsed.id)?;
         validate_ticket_identifier("idempotency_key", &parsed.idempotency_key)?;
+        validate_authority_correlation(parsed.writer_epoch, parsed.admission.as_ref())?;
         if !self.action_allowlist.contains(parsed.action.as_str()) {
             return Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -404,6 +417,7 @@ impl HostTicketPolicy {
         }
         validate_ticket_identifier("id", &parsed.id)?;
         validate_ticket_identifier("idempotency_key", &parsed.idempotency_key)?;
+        validate_authority_correlation(parsed.writer_epoch, parsed.admission.as_ref())?;
         if !self.action_allowlist.contains(parsed.action.as_str()) {
             return Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -438,6 +452,24 @@ impl HostTicketPolicy {
 enum TicketLineKind {
     Spec,
     Result,
+}
+
+fn validate_authority_correlation(
+    writer_epoch: Option<u64>,
+    admission: Option<&cohesix_authority::AdmissionCorrelation>,
+) -> Result<(), NineDoorError> {
+    if writer_epoch == Some(0) {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "writer_epoch must be nonzero",
+        ));
+    }
+    if let Some(admission) = admission {
+        admission
+            .validate()
+            .map_err(|error| NineDoorError::protocol(ErrorCode::Invalid, error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn validate_ticket_identifier(label: &str, value: &str) -> Result<(), NineDoorError> {
@@ -1812,8 +1844,8 @@ impl Namespace {
 
         self.ensure_dir(&[], "queen").expect("create /queen");
         let queen_path = vec!["queen".to_owned()];
-        self.ensure_append_only_file(&queen_path, "ctl", b"")
-            .expect("create /queen/ctl");
+        self.bootstrap_queen_authority()
+            .expect("empty namespace admits the fixed Queen authority nodes");
         self.ensure_dir(&queen_path, "lifecycle")
             .expect("create /queen/lifecycle");
         let lifecycle_root = vec!["queen".to_owned(), "lifecycle".to_owned()];
@@ -1995,6 +2027,41 @@ impl Namespace {
             }
         }
         Ok(())
+    }
+
+    fn bootstrap_queen_authority(&mut self) -> Result<(), NineDoorError> {
+        let queen = vec!["queen".to_owned()];
+        self.ensure_append_only_file(&queen, "ctl", b"")?;
+        self.ensure_dir(&queen, "intents")?;
+        self.ensure_append_only_file(&["queen".to_owned(), "intents".to_owned()], "ctl", b"")?;
+        let authority = cohesix_authority::policy::AuthorityPolicy::default()
+            .snapshot_bytes()
+            .map_err(|err| NineDoorError::protocol(ErrorCode::Invalid, err.to_string()))?;
+        self.ensure_read_only_file(&["proc".to_owned()], "authority", &authority)?;
+        self.ensure_dir(&["proc".to_owned()], "queen")?;
+        let snapshot = cohesix_authority::IntentDedupe::<()>::new(64)
+            .snapshot_lines()
+            .map_err(|err| NineDoorError::protocol(ErrorCode::Invalid, err.to_string()))?;
+        self.ensure_read_only_file(
+            &["proc".to_owned(), "queen".to_owned()],
+            "dedupe",
+            &snapshot,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn set_authority_snapshot(
+        &mut self,
+        policy: cohesix_authority::policy::AuthorityPolicy,
+    ) -> Result<(), NineDoorError> {
+        let payload = policy
+            .snapshot_bytes()
+            .map_err(|err| NineDoorError::protocol(ErrorCode::Invalid, err.to_string()))?;
+        self.set_read_only_file(&["proc".to_owned()], "authority", &payload)
+    }
+
+    pub(crate) fn set_queen_dedupe(&mut self, payload: &[u8]) -> Result<(), NineDoorError> {
+        self.set_read_only_file(&["proc".to_owned(), "queen".to_owned()], "dedupe", payload)
     }
 
     fn bootstrap_sidecars(&mut self) -> Result<(), NineDoorError> {

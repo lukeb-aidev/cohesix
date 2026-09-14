@@ -14,8 +14,30 @@ mod bootstrap;
 pub struct TicketSpec {
     pub role: Role,
     pub secret: &'static str,
-    pub key: TicketKey,
+    pub key: Option<TicketKey>,
 }
+pub const AUTHORITY_POLICY: cohesix_authority::policy::AuthorityPolicy =
+    cohesix_authority::policy::AuthorityPolicy {
+        production: false,
+        delegated_rest: true,
+        vm_verified_delegation: false,
+        delegated_ticket_entries: 256,
+        delegated_ticket_max_ttl_s: 3600,
+        strict_queen_intents: true,
+        legacy_queen_ctl: true,
+        queen_dedupe_entries: 64,
+        queen_intent_max_bytes: 2048,
+        writer_epoch: 1,
+        writer_epoch_required: false,
+        execution_wal_required: true,
+        gpu_frame_max_bytes: 8192,
+        debug_memory: false,
+        production_worker_ledger: false,
+        production_driver_ledger: false,
+        structured_quarantine: false,
+        host_ai: false,
+        production_failover: false,
+    };
 
 #[derive(Clone, Copy, Debug)]
 pub struct NamespaceMount {
@@ -1056,9 +1078,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.20";
+pub const MANIFEST_SCHEMA: &str = "1.21";
 pub const MANIFEST_SHA256: &str =
-    "857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677";
+    "91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

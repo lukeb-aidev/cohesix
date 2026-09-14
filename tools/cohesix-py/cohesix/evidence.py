@@ -405,6 +405,11 @@ def export_evidence_pack(
         audit=audit,
     )
 
+    for path in ("/proc/authority", "/proc/queen/dedupe"):
+        payload = _read_optional(backend, path, 64 * 1024, "CAT", items, audit=audit)
+        if payload is not None:
+            _write_payload_atomic(out_dir, path, payload)
+
     _capture_audit(backend, out_dir, items, audit)
 
     replay_payload = _read_optional(

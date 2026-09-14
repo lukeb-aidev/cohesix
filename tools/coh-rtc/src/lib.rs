@@ -1,8 +1,9 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Expose coh-rtc manifest compilation helpers for tests and the CLI.
 // Author: Lukas Bower
 
+pub mod authority;
 pub mod codegen;
 pub mod host_integration;
 pub mod implementation_surface;

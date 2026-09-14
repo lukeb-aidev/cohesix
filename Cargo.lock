@@ -481,6 +481,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.0",
  "clap",
+ "cohesix-authority",
  "cohesix-cas",
  "cohesix-rest",
  "cohesix-ticket",
@@ -698,6 +699,7 @@ dependencies = [
  "anyhow",
  "ciborium",
  "clap",
+ "cohesix-authority",
  "cohesix-cas",
  "cohesix-ticket",
  "cohsh-core",
@@ -737,6 +739,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cohesix-authority"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "cohesix-cas"
 version = "0.1.0"
 
@@ -753,7 +764,10 @@ name = "cohesix-rest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cohesix-authority",
  "cohesix-net-constants",
+ "cohesix-ticket",
+ "cohsh-core",
  "serde",
  "serde_json",
  "ureq",
@@ -788,6 +802,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.23.0",
  "clap",
+ "cohesix-authority",
  "cohesix-net-constants",
  "cohesix-proto",
  "cohesix-rest",
@@ -1968,6 +1983,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.0",
  "clap",
+ "cohesix-authority",
  "cohesix-rest",
  "cohsh-core",
  "hex",
@@ -2099,14 +2115,18 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "cohesix-authority",
  "cohesix-net-constants",
  "cohesix-ticket",
  "cohesix-worker-evidence",
  "cohsh",
  "cohsh-core",
+ "hex",
  "nine-door",
+ "secure9p-codec",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "tokio",
  "tracing",
@@ -2139,6 +2159,8 @@ dependencies = [
  "anyhow",
  "clap",
  "coh",
+ "cohesix-authority",
+ "cohesix-rest",
  "cohesix-ticket",
  "cohsh",
  "cohsh-core",
@@ -2851,6 +2873,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.0",
+ "cohesix-authority",
  "cohesix-cas",
  "cohesix-proto",
  "cohesix-ticket",
@@ -3681,6 +3704,7 @@ dependencies = [
  "base64 0.23.0",
  "cargo-build-directive",
  "chrono",
+ "cohesix-authority",
  "cohesix-cas",
  "cohesix-net-constants",
  "cohesix-proto",

@@ -26,6 +26,8 @@ use crate::executors::ExecutorConfig;
 pub mod claim;
 /// Ticket action executors.
 pub mod executors;
+/// Provider-specific structural validation prior to side effects.
+pub mod provider;
 /// Federated cross-hive relay worker.
 pub mod relay;
 /// Status receipt helpers.
@@ -83,6 +85,12 @@ pub enum ReceiptMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostTicketSpec {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<cohesix_authority::AdmissionCorrelation>,
     /// Request schema.
     pub schema: String,
     /// Stable ticket id.
@@ -148,6 +156,8 @@ impl Default for HostTicketSpec {
     fn default() -> Self {
         Self {
             schema: HOST_TICKET_V1_SCHEMA.to_owned(),
+            writer_epoch: None,
+            admission: None,
             id: String::new(),
             idempotency_key: String::new(),
             action: String::new(),
@@ -176,6 +186,12 @@ impl Default for HostTicketSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostTicketResult {
+    /// Writer ownership fence, distinct from admission state freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_epoch: Option<u64>,
+    /// Optional future decision correlation; this record does not issue admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<cohesix_authority::AdmissionCorrelation>,
     /// Result schema.
     pub schema: String,
     /// Stable ticket id.
@@ -239,6 +255,8 @@ pub struct HostTicketResult {
 /// Manifest-driven ticket configuration for the host agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostTicketManifest {
+    /// Compiler-owned host/gateway authority policy.
+    pub authority: cohesix_authority::policy::AuthorityPolicy,
     /// Whether the ticket surface is enabled.
     pub enabled: bool,
     /// Host mount path (for example `/host`).
@@ -266,6 +284,7 @@ pub struct HostTicketManifest {
 impl Default for HostTicketManifest {
     fn default() -> Self {
         Self {
+            authority: cohesix_authority::policy::AuthorityPolicy::default(),
             enabled: false,
             mount_path: "/host".to_owned(),
             request_schema: HOST_TICKET_V1_SCHEMA.to_owned(),
@@ -516,6 +535,7 @@ impl HostTicketManifest {
 
         Ok(Self {
             enabled,
+            authority: manifest.authority,
             mount_path,
             request_schema,
             result_schema,
@@ -1000,6 +1020,10 @@ where
     cursor.raw_next_spec_index = cursor.raw_next_spec_index.min(raw_specs.len());
     cursor.snapshot_next_spec_index = cursor.snapshot_next_spec_index.min(admitted_specs.len());
     let mut journal = wal::ExecutionJournal::load(journal_path)?;
+    journal.bind_writer_epoch(journal_path, manifest.authority.writer_epoch)?;
+    let compatibility_path = journal_path.with_extension("compat.json");
+    let mut compatibility =
+        wal::CompatibilityJournal::load(&compatibility_path, manifest.authority.writer_epoch)?;
     cursor.snapshot_last_admission_sequence = cursor
         .snapshot_last_admission_sequence
         .max(journal.completed_through_admission_sequence());
@@ -1025,6 +1049,8 @@ where
                 &mut terminal,
                 &mut summary,
                 &mut executor,
+                &compatibility_path,
+                &mut compatibility,
             )?;
             cursor.raw_next_spec_index = cursor.raw_next_spec_index.saturating_add(1);
             save_cursor_state(cursor_path, cursor)?;
@@ -1167,96 +1193,123 @@ fn process_v1_spec<F>(
     terminal: &mut HashSet<TicketKey>,
     summary: &mut ProcessSummary,
     executor: &mut F,
+    journal_path: &Path,
+    journal: &mut wal::CompatibilityJournal,
 ) -> Result<()>
 where
     F: FnMut(&mut dyn Transport, &Session, &HostTicketSpec, &ExecutorConfig) -> Result<String>,
 {
     summary.seen = summary.seen.saturating_add(1);
-    if let Some(target_hive) = spec.target_hive.as_deref() {
-        if target_hive != manifest.federation.local_hive {
-            summary.skipped_remote_target = summary.skipped_remote_target.saturating_add(1);
-            return Ok(());
-        }
+    if spec
+        .target_hive
+        .as_deref()
+        .is_some_and(|hive| hive != manifest.federation.local_hive)
+    {
+        summary.skipped_remote_target = summary.skipped_remote_target.saturating_add(1);
+        return Ok(());
     }
     let key = TicketKey::new(&spec.id, &spec.idempotency_key);
-    if terminal.contains(&key) {
+    let mut entry = journal.prepare(spec)?;
+    if entry.terminal {
         summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
         return Ok(());
     }
-    if is_expired(spec, now_unix_ms) {
-        append_result(
-            transport,
-            session,
-            manifest,
-            spec,
-            "expired",
-            Some("ticket expired before execution"),
-            manifest.deadletter_path().as_str(),
-        )?;
-        summary.expired = summary.expired.saturating_add(1);
-        terminal.insert(key);
-        return Ok(());
-    }
-    if !manifest.action_allowlist.contains(&spec.action) {
-        append_result(
-            transport,
-            session,
-            manifest,
-            spec,
-            "failed",
-            Some("ticket action is not in generated allowlist"),
-            manifest.deadletter_path().as_str(),
-        )?;
-        summary.failed = summary.failed.saturating_add(1);
-        terminal.insert(key);
-        return Ok(());
-    }
-    append_result(
-        transport,
-        session,
-        manifest,
-        spec,
-        "claimed",
-        Some("claimed by host-ticket-agent compatibility executor"),
-        manifest.status_path().as_str(),
-    )?;
-    append_result(
-        transport,
-        session,
-        manifest,
-        spec,
-        "running",
-        Some("compatibility executor started"),
-        manifest.status_path().as_str(),
-    )?;
-    match executor(transport, session, spec, executor_config) {
-        Ok(message) => {
-            append_result(
-                transport,
-                session,
-                manifest,
-                spec,
-                "succeeded",
-                Some(message.as_str()),
-                manifest.status_path().as_str(),
-            )?;
-            summary.succeeded = summary.succeeded.saturating_add(1);
-        }
-        Err(err) => {
-            let detail = bounded_detail(err.as_ref(), 192);
-            append_result(
-                transport,
-                session,
-                manifest,
-                spec,
+    journal.store(journal_path, entry.clone())?;
+    if entry.result.is_none() {
+        let (state, detail) = if entry.executing {
+            (
                 "failed",
-                Some(detail.as_str()),
-                manifest.deadletter_path().as_str(),
+                "replay-ambiguous: prior execution may have committed; execution not repeated"
+                    .to_owned(),
+            )
+        } else if terminal.contains(&key) {
+            (
+                "failed",
+                "replay-unverified: pre-journal terminal record retained; execution not repeated"
+                    .to_owned(),
+            )
+        } else if let Err(error) = validate_writer_epoch(manifest, spec) {
+            ("failed", error.to_string())
+        } else if is_expired(spec, now_unix_ms) {
+            ("expired", "ticket expired before execution".to_owned())
+        } else if !manifest.action_allowlist.contains(&spec.action) {
+            (
+                "failed",
+                "ticket action is not in generated allowlist".to_owned(),
+            )
+        } else if let Err(error) = provider::validate(spec) {
+            ("failed", error.to_string())
+        } else {
+            append_result(
+                transport,
+                session,
+                manifest,
+                spec,
+                "claimed",
+                Some("claimed by durable compatibility executor"),
+                &manifest.status_path(),
             )?;
-            summary.failed = summary.failed.saturating_add(1);
-        }
+            append_result(
+                transport,
+                session,
+                manifest,
+                spec,
+                "running",
+                Some("compatibility executor starting"),
+                &manifest.status_path(),
+            )?;
+            entry.executing = true;
+            journal.store(journal_path, entry.clone())?;
+            match executor(transport, session, spec, executor_config) {
+                Ok(detail) => ("succeeded", detail),
+                Err(error) => ("failed", bounded_detail(error.as_ref(), 192)),
+            }
+        };
+        let path = if state == "succeeded" {
+            manifest.status_path()
+        } else {
+            manifest.deadletter_path()
+        };
+        let line = status::build_result_line(
+            spec,
+            manifest.result_schema_for(&spec.schema)?,
+            state,
+            Some(&detail),
+            effective_result_line_limit(spec, manifest.max_line_bytes),
+        )?;
+        entry.executing = true;
+        entry.result = Some((path, line));
+        journal.store(journal_path, entry.clone())?;
     }
+    let (path, line) = entry
+        .result
+        .as_ref()
+        .ok_or_else(|| anyhow!("durable compatibility result missing"))?;
+    if *path != manifest.status_path() && *path != manifest.deadletter_path() {
+        return Err(anyhow!(
+            "journal result path is outside selected ticket result authority"
+        ));
+    }
+    status::append_result_line(transport, session, path, line)?;
+    let result: HostTicketResult = serde_json::from_str(line)?;
+    match result.state.as_str() {
+        "succeeded" => summary.succeeded = summary.succeeded.saturating_add(1),
+        "expired" => summary.expired = summary.expired.saturating_add(1),
+        _ => summary.failed = summary.failed.saturating_add(1),
+    }
+    entry.terminal = true;
+    journal.store(journal_path, entry)?;
     terminal.insert(key);
+    Ok(())
+}
+
+/// Check writer ownership independently of admission state/resource freshness.
+pub fn validate_writer_epoch(manifest: &HostTicketManifest, spec: &HostTicketSpec) -> Result<()> {
+    if (manifest.authority.writer_epoch_required || spec.writer_epoch.is_some())
+        && spec.writer_epoch != Some(manifest.authority.writer_epoch)
+    {
+        return Err(anyhow!("EPERM stale-writer"));
+    }
     Ok(())
 }
 
@@ -1397,7 +1450,13 @@ where
             ],
             manifest.status_path().as_str(),
         )?;
-        let result = if is_expired(spec, now_unix_ms) {
+        let result = if let Err(error) = validate_writer_epoch(manifest, spec) {
+            wal::JournalProviderResult {
+                outcome: wal::JournalProviderOutcome::Stale,
+                message: error.to_string(),
+                reconciled: false,
+            }
+        } else if is_expired(spec, now_unix_ms) {
             wal::JournalProviderResult {
                 outcome: wal::JournalProviderOutcome::Stale,
                 message: "ticket expired before provider execution".to_owned(),
@@ -1509,7 +1568,7 @@ fn build_v2_provider_result_line(
         manifest.result_schema_for(spec.schema.as_str())?,
         state,
         Some(provider_result.message.as_str()),
-        effective_result_line_limit(spec.schema.as_str(), manifest.max_line_bytes),
+        effective_result_line_limit(spec, manifest.max_line_bytes),
     )?;
     Ok((path, line))
 }
@@ -1532,7 +1591,7 @@ fn append_result(
     message: Option<&str>,
     path: &str,
 ) -> Result<()> {
-    let line_limit = effective_result_line_limit(spec.schema.as_str(), manifest.max_line_bytes);
+    let line_limit = effective_result_line_limit(spec, manifest.max_line_bytes);
     let line = status::build_result_line(
         spec,
         manifest.result_schema_for(spec.schema.as_str())?,
@@ -1551,7 +1610,7 @@ fn append_result_batch(
     records: &[(&str, Option<&str>)],
     path: &str,
 ) -> Result<()> {
-    let line_limit = effective_result_line_limit(spec.schema.as_str(), manifest.max_line_bytes);
+    let line_limit = effective_result_line_limit(spec, manifest.max_line_bytes);
     let lines = records
         .iter()
         .map(|(state, message)| {
@@ -1567,8 +1626,11 @@ fn append_result_batch(
     status::append_result_lines(transport, session, path, lines.as_slice())
 }
 
-fn effective_result_line_limit(request_schema: &str, max_line_bytes: u32) -> u32 {
-    if request_schema == HOST_TICKET_V2_SCHEMA {
+fn effective_result_line_limit(spec: &HostTicketSpec, max_line_bytes: u32) -> u32 {
+    if spec.schema == HOST_TICKET_V2_SCHEMA
+        || spec.writer_epoch.is_some()
+        || spec.admission.is_some()
+    {
         max_line_bytes.min(MAX_ECHO_LEN as u32)
     } else {
         max_line_bytes.min(HOST_TICKET_V1_ECHO_COMPAT_MAX_BYTES)
@@ -1651,6 +1713,8 @@ fn validate_result_binding(spec: &HostTicketSpec, result: &HostTicketResult) -> 
         || result.resolved_worker_slot != spec.resolved_worker_slot
         || result.resolved_lease_epoch != spec.resolved_lease_epoch
         || result.admission_sequence != spec.admission_sequence
+        || result.writer_epoch != spec.writer_epoch
+        || result.admission != spec.admission
     {
         return Err(anyhow!(
             "terminal version-2 result does not echo the root-admitted Worker binding"
@@ -1935,6 +1999,8 @@ fn bounded_provider_message(message: &str) -> String {
 #[derive(Debug, Deserialize, Default)]
 struct ResolvedManifest {
     #[serde(default)]
+    authority: cohesix_authority::policy::AuthorityPolicy,
+    #[serde(default)]
     ecosystem: ResolvedEcosystem,
 }
 
@@ -2168,6 +2234,116 @@ mod tests {
     }
 
     #[test]
+    fn v1_receipt_writeback_failure_never_reexecutes_the_provider() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let cursor = temp.path().join("cursor.json");
+        let manifest = HostTicketManifest {
+            enabled: true,
+            action_allowlist: vec!["systemd.restart".into()],
+            ..Default::default()
+        };
+        let spec = r#"{"schema":"host-ticket/v1","id":"restart-one","idempotency_key":"retry-one","action":"systemd.restart","args":{"unit":"cohesix.service"}}"#;
+        let files = BTreeMap::from([
+            (manifest.spec_path(), vec![spec.into()]),
+            (manifest.status_path(), vec![]),
+            (manifest.deadletter_path(), vec![]),
+        ]);
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+            fail_after_terminal_write_once: true,
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let mut executions = 0;
+        let first = process_tickets_once_with_executor(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &ExecutorConfig::default(),
+            1000,
+            |_, _, _, _| {
+                executions += 1;
+                Ok("provider-committed".into())
+            },
+        );
+        assert!(
+            first.is_err(),
+            "status publication failed after provider success"
+        );
+        let second = process_tickets_once_with_executor(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &ExecutorConfig::default(),
+            1001,
+            |_, _, _, _| {
+                executions += 1;
+                Ok("must-not-run".into())
+            },
+        )
+        .expect("restart publishes the recorded receipt");
+        assert_eq!(executions, 1);
+        assert_eq!(second.succeeded, 1);
+        let lines = &transport.files[&manifest.status_path()];
+        let receipts: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("succeeded"))
+            .collect();
+        assert_eq!(
+            receipts.len(),
+            2,
+            "ambiguous first delivery is replayed exactly"
+        );
+        assert_eq!(receipts[0], receipts[1]);
+    }
+
+    #[test]
+    fn stale_epoch_and_invalid_provider_fields_do_not_dispatch() {
+        for (epoch, args) in [
+            (2, serde_json::json!({"unit":"cohesix.service"})),
+            (3, serde_json::json!({"unit":"-root"})),
+            (
+                3,
+                serde_json::json!({"unit":"cohesix.service", "extra":true}),
+            ),
+        ] {
+            let temp = tempfile::TempDir::new().expect("temp");
+            let mut manifest = HostTicketManifest {
+                enabled: true,
+                action_allowlist: vec!["systemd.restart".into()],
+                ..Default::default()
+            };
+            manifest.authority.writer_epoch = 3;
+            manifest.authority.writer_epoch_required = true;
+            let spec = serde_json::json!({"schema":"host-ticket/v1", "id":"negative", "idempotency_key":"once", "writer_epoch":epoch, "action":"systemd.restart", "args":args});
+            let files = BTreeMap::from([
+                (manifest.spec_path(), vec![spec.to_string()]),
+                (manifest.status_path(), vec![]),
+                (manifest.deadletter_path(), vec![]),
+            ]);
+            let mut transport = FakeTransport {
+                files,
+                max_write_line_len: None,
+                fail_after_terminal_write_once: false,
+            };
+            let result = process_tickets_once_with_executor(
+                &mut transport,
+                &Session::new(1.into(), Role::Queen),
+                &manifest,
+                &temp.path().join("cursor.json"),
+                &ExecutorConfig::default(),
+                1000,
+                |_, _, _, _| panic!("refused authority cannot invoke executor"),
+            )
+            .expect("deterministic refusal");
+            assert_eq!(result.failed, 1);
+            assert_eq!(transport.files[&manifest.deadletter_path()].len(), 1);
+        }
+    }
+
+    #[test]
     fn process_once_is_cursor_and_terminal_safe() {
         let temp = tempfile::TempDir::new().unwrap_or_else(|err| unreachable!("temp dir: {err}"));
         let cursor = temp.path().join("cursor.json");
@@ -2199,8 +2375,8 @@ mod tests {
         files.insert(
             manifest.spec_path(),
             vec![
-                "{\"schema\":\"host-ticket/v1\",\"id\":\"t1\",\"idempotency_key\":\"k1\",\"action\":\"systemd.restart\"}".to_owned(),
-                "{\"schema\":\"host-ticket/v1\",\"id\":\"t1\",\"idempotency_key\":\"k1\",\"action\":\"systemd.restart\"}".to_owned(),
+                "{\"schema\":\"host-ticket/v1\",\"id\":\"t1\",\"idempotency_key\":\"k1\",\"action\":\"systemd.restart\",\"args\":{\"unit\":\"cohesix.service\"}}".to_owned(),
+                "{\"schema\":\"host-ticket/v1\",\"id\":\"t1\",\"idempotency_key\":\"k1\",\"action\":\"systemd.restart\",\"args\":{\"unit\":\"cohesix.service\"}}".to_owned(),
             ],
         );
         files.insert(manifest.status_path(), Vec::new());
@@ -2355,7 +2531,7 @@ mod tests {
         files.insert(
             manifest.spec_path(),
             vec![
-                "{\"schema\":\"host-ticket/v1\",\"id\":\"fed-ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.stop\",\"source_hive\":\"hive-a\",\"target_hive\":\"hive-b\",\"relay_hop\":2,\"relay_correlation_id\":\"fed-ticket-1:idem-1:hive-a:hive-b\"}".to_owned(),
+                "{\"schema\":\"host-ticket/v1\",\"id\":\"fed-ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.stop\",\"args\":{\"unit\":\"cohesix.service\"},\"source_hive\":\"hive-a\",\"target_hive\":\"hive-b\",\"relay_hop\":2,\"relay_correlation_id\":\"fed-ticket-1:idem-1:hive-a:hive-b\"}".to_owned(),
             ],
         );
         files.insert(manifest.status_path(), Vec::new());

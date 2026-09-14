@@ -9,7 +9,8 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true }
+cohesix-authority = { workspace = true, features = ["std"] }
+clap = { workspace = true, features = ["env"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }

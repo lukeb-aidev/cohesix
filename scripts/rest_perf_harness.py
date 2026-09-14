@@ -50,6 +50,12 @@ try:
 except ImportError:  # Direct script execution.
     from lib import worker_log as worker_logs
 
+# The harness and shipped SDK share the authority wire contract. This source
+# workflow uses the checkout's SDK so a separately installed version cannot drift.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools/cohesix-py"))
+from cohesix.auth import resolve_secret  # noqa: E402
+from cohesix.ticket import normalize_ticket  # noqa: E402
+
 DEFAULT_REST_URL = "http://127.0.0.1:8080"
 DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
@@ -794,12 +800,16 @@ class RestClient:
     """Minimal REST client for hive-gateway."""
 
     def __init__(
-        self, rest_url: str, timeout: float, request_auth_token: Optional[str] = None
+        self, rest_url: str, timeout: float, request_auth_token: Optional[str] = None,
+        delegated_ticket: Optional[str] = None,
     ):
         self.rest_url = normalize_rest_url(rest_url)
         self.timeout = timeout
         token = (request_auth_token or "").strip()
         self.request_auth_token = token if token else None
+        self.delegated_ticket = (
+            delegated_ticket if delegated_ticket is not None else os.environ.get("COH_REST_TICKET")
+        )
 
     def get_json(self, path: str, params: Optional[Dict[str, str]] = None) -> dict:
         url = self._build_url(path, params)
@@ -811,11 +821,16 @@ class RestClient:
             raise RestError(f"URL error for {url}: {exc}") from exc
 
     def post_json(self, path: str, payload: dict) -> dict:
+        headers = self.request_auth_headers()
+        if not headers or not self.delegated_ticket:
+            raise RestError("mutating REST requires request auth and a delegated ticket")
+        normalize_ticket("queen", self.delegated_ticket, queen_validate=True)
         url = self._build_url(path, None)
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(url, data=data, method="POST")
         request.add_header("Content-Type", "application/json")
-        for key, value in self.request_auth_headers().items():
+        request.add_header("x-cohesix-ticket", self.delegated_ticket)
+        for key, value in headers.items():
             request.add_header(key, value)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -857,9 +872,10 @@ class RestClient:
     def request_auth_headers(self) -> Dict[str, str]:
         if self.request_auth_token is None:
             return {}
+        token = resolve_secret(self.request_auth_token)
         return {
-            "Authorization": f"Bearer {self.request_auth_token}",
-            "x-cohesix-auth": self.request_auth_token,
+            "Authorization": f"Bearer {token}",
+            "x-cohesix-auth": token,
         }
 
     def _build_url(self, path: str, params: Optional[Dict[str, str]]) -> str:
@@ -6187,7 +6203,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     env_tcp_token = (
-        os.environ.get("COH_AUTH_TOKEN")
+        os.environ.get("COH_AUTH_TOKEN_REF")
+        or os.environ.get("COH_AUTH_TOKEN")
         or os.environ.get("COHSH_AUTH_TOKEN")
         or ""
     ).strip()
@@ -6503,9 +6520,7 @@ def wait_for_port(host: str, port: int, timeout_s: float) -> None:
 
 def validate_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> None:
     """Validate raw TCP auth handshake against the VM console."""
-    token = token.strip()
-    if not token:
-        raise TimeoutError("TCP auth token is required for handshake preflight")
+    token = resolve_secret(token)
     payload = f"AUTH {token}".encode("utf-8")
     frame = (len(payload) + 4).to_bytes(4, "little") + payload
     deadline = time.monotonic() + timeout_s
@@ -10196,7 +10211,7 @@ def run_raw(args: argparse.Namespace) -> int:
         "proof_class": "none", "target": args.benchmark_target,
         "transport": args.benchmark_transport, "host": args.tcp_host,
         "port": args.tcp_port, "requests_expected": args.raw_requests,
-        "requests_completed": 0, "connection_attempts": 1,
+        "requests_completed": 0, "connection_attempts": 0,
         "application_retries": 0, "reconnects": 0, "tcp_nodelay": True,
         "throughput_interval": "connect-through-QUIT-EOF",
         "latency_interval": "PING-send-to-terminal-OK-PING",
@@ -10214,8 +10229,14 @@ def run_raw(args: argparse.Namespace) -> int:
         "started_utc": datetime.now(timezone.utc).isoformat(),
         "samples_ms": [], "phase": "connect", "result": "fail",
     }
-    started = time.perf_counter_ns()
+    started: Optional[int] = None
+    resolved_auth = ""
     try:
+        report["phase"] = "credential-preflight"
+        resolved_auth = resolve_secret(args.auth_token)
+        report["phase"] = "connect"
+        report["connection_attempts"] = 1
+        started = time.perf_counter_ns()
         with socket.create_connection((args.tcp_host, args.tcp_port), args.timeout) as stream:
             stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             stream.settimeout(args.timeout)
@@ -10226,7 +10247,7 @@ def run_raw(args: argparse.Namespace) -> int:
                     raise ValueError("unexpected raw protocol response in " + report["phase"])
 
             report["phase"] = "AUTH"
-            raw_send_frame(stream, "AUTH " + args.auth_token)
+            raw_send_frame(stream, "AUTH " + resolved_auth)
             response = raw_receive_frame(stream, args.timeout)
             if response == "OK AUTH detail=present-token":
                 expect("OK AUTH")
@@ -10259,9 +10280,12 @@ def run_raw(args: argparse.Namespace) -> int:
             report.update(result="pass", phase="complete")
     except (OSError, EOFError, ValueError) as exc:
         report["error_type"] = type(exc).__name__
-        report["error"] = str(exc).replace(args.auth_token, "<redacted>").replace(
-            args.raw_ticket, "<redacted>")
-    elapsed = (time.perf_counter_ns() - started) / 1e9
+        detail = str(exc)
+        for secret in (args.auth_token, resolved_auth, args.raw_ticket):
+            if secret:
+                detail = detail.replace(secret, "<redacted>")
+        report["error"] = detail
+    elapsed = (time.perf_counter_ns() - started) / 1e9 if started is not None else 0.0
     report.update(
         ended_utc=datetime.now(timezone.utc).isoformat(), elapsed_s=elapsed,
         requests_per_s=report["requests_completed"] / elapsed if elapsed > 0 else 0,

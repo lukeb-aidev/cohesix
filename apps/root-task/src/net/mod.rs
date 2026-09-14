@@ -619,7 +619,7 @@ pub fn console_auth_token() -> &'static str {
     {
         for ticket in crate::generated::ticket_inventory() {
             if ticket.role == Role::Queen {
-                return ticket.secret;
+                return ticket.secret.trim();
             }
         }
         AUTH_TOKEN_FALLBACK

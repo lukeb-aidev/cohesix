@@ -145,8 +145,8 @@ QEMU_GATED_FIXTURE_SCRIPTS=(
     "cas_roundtrip.coh"
 )
 
-BASE_MANIFEST="${PROJECT_ROOT}/configs/root_task.toml"
-GATED_MANIFEST="${PROJECT_ROOT}/configs/root_task_regression.toml"
+BASE_MANIFEST="${COHSH_BASE_MANIFEST:-${PROJECT_ROOT}/configs/root_task.toml}"
+GATED_MANIFEST="${COHSH_GATED_MANIFEST:-${PROJECT_ROOT}/configs/root_task_regression.toml}"
 READY_MARKER="[mark] root-console.start.ok"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
@@ -257,6 +257,7 @@ fi
 GENERATED_OUTPUT_PATHS=(
     "apps/root-task/src/generated"
     "configs/generated/root_task_resolved.json"
+    "configs/generated/cas_verification_key.hex"
     "configs/generated/root_task_resolved.json.sha256"
     "configs/generated/root_task_topology.json"
     "configs/generated/cohesix_python_qemu_smp_production.json"
@@ -802,35 +803,14 @@ selected_script_count() {
 
 resolve_manifest_auth_token() {
     local manifest_path="$1"
-    python3 - "$manifest_path" <<'PY'
-import pathlib
+    PYTHONPATH="${PROJECT_ROOT}/tools/cohesix-py${PYTHONPATH:+:$PYTHONPATH}" python3 - "$manifest_path" "toml" <<'PY'
 import sys
-
-manifest = pathlib.Path(sys.argv[1])
-if not manifest.is_file():
-    print("bootstrap")
-    raise SystemExit(0)
-
-try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    print("bootstrap")
-    raise SystemExit(0)
-
-data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-tickets = data.get("tickets", [])
-for ticket in tickets:
-    if str(ticket.get("role", "")).strip() == "queen":
-        secret = str(ticket.get("secret", "")).strip()
-        if secret:
-            print(secret)
-            raise SystemExit(0)
-print("bootstrap")
+from cohesix.auth import resolve_manifest_auth_token
+print(resolve_manifest_auth_token(sys.argv[1], sys.argv[2]))
 PY
 }
 
-DEFAULT_MANIFEST_AUTH_TOKEN="$(resolve_manifest_auth_token "${BASE_MANIFEST}")"
-COHSH_AUTH_TOKEN="${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-${DEFAULT_MANIFEST_AUTH_TOKEN}}}"
+COHSH_AUTH_TOKEN="${COH_AUTH_TOKEN_REF:-${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-$(resolve_manifest_auth_token "${BASE_MANIFEST}")}}}"
 
 is_local_tcp_host() {
     case "$1" in
@@ -953,14 +933,15 @@ check_auth_ready() {
     local host="$1"
     local port="$2"
     local token="$3"
-    python3 - "$host" "$port" "$token" <<'PY'
+    PYTHONPATH="${PROJECT_ROOT}/tools/cohesix-py${PYTHONPATH:+:$PYTHONPATH}" python3 - "$host" "$port" "$token" <<'PY'
 import socket
 import sys
+from cohesix.auth import resolve_secret
 
 host = sys.argv[1]
 port = int(sys.argv[2])
 token = sys.argv[3]
-payload = f"AUTH {token}".encode()
+payload = f"AUTH {resolve_secret(token)}".encode()
 frame_len = len(payload) + 4
 frame = frame_len.to_bytes(4, "little") + payload
 try:

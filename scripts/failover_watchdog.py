@@ -16,6 +16,11 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import math
+import secrets
+import selectors
+import signal
+import tempfile
 import os
 import pathlib
 import subprocess
@@ -25,7 +30,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -232,6 +237,213 @@ def run_hook(
     subprocess.run(command, shell=True, check=True)
 
 
+
+CUTOVER_SCHEMA = "writer-cutover/v1"
+CUTOVER_MAX_BYTES = 16384
+CUTOVER_ACTIONS = ("pause", "fence", "promote", "resume", "stop")
+
+
+def sync_directory(path: pathlib.Path) -> None:
+    """Persist a rename/unlink before claiming its transition completed."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_cutover_state(path: pathlib.Path, state: dict[str, Any]) -> None:
+    """Replace one bounded transaction record with file and directory sync."""
+    payload = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > CUTOVER_MAX_BYTES:
+        raise RuntimeError("cutover journal exceeds byte bound")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".cutover-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def validate_hook_receipt(request: dict[str, Any], receipt: Any) -> None:
+    """Only a uniquely correlated terminal result can complete a boundary."""
+    if (not isinstance(receipt, dict) or receipt.get("terminal") is not True
+            or receipt.get("verified") is not True or receipt != {
+        **request, "status": "succeeded", "terminal": True,
+        "verified": True,
+    }):
+        raise RuntimeError("missing, ambiguous, or unverified cutover receipt")
+
+
+def production_hook(argv: list[str], request: dict[str, Any], timeout: float) -> dict[str, Any]:
+    """Run a configured argv hook with bounded output, deadline, and no shell.
+
+    Hooks must enforce request identity and attest only after observing the
+    requested external fence/promotion. Exit status alone is not evidence.
+    """
+    process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, start_new_session=True)
+    deadline = time.monotonic() + timeout
+    try:
+        if process.stdin is None or process.stdout is None:
+            raise RuntimeError("cutover hook pipes unavailable")
+        process.stdin.write(json.dumps(request).encode() + b"\n")
+        process.stdin.close()
+        payload = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise RuntimeError("cutover hook timed out")
+                chunk = os.read(process.stdout.fileno(), min(4096, CUTOVER_MAX_BYTES + 1 - len(payload)))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+                if len(payload) > CUTOVER_MAX_BYTES:
+                    raise RuntimeError("cutover receipt exceeds byte bound")
+        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        if process.returncode != 0:
+            raise RuntimeError("cutover hook failed")
+        receipt = json.loads(payload)
+        validate_hook_receipt(request, receipt)
+        return receipt
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        if process.stdout is not None:
+            process.stdout.close()
+
+
+
+class CutoverTransaction:
+    """Durable single-writer transaction; an interrupted step never resumes FX.
+
+    Restart recovery removes routing and invokes the idempotent stop-both hook.
+    It never retries an ambiguous promote or assumes the previous writer died.
+    The caller must hold the deployment-wide watchdog lock for this journal.
+    """
+
+    def __init__(self, path: pathlib.Path, live_link: pathlib.Path,
+                 hook: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
+        self.path, self.live_link, self.hook = path, live_link, hook
+        try:
+            with path.open("rb") as source:
+                payload = source.read(CUTOVER_MAX_BYTES + 1)
+        except FileNotFoundError:
+            self.state: dict[str, Any] = {"schema": CUTOVER_SCHEMA, "phase": "idle",
+                                          "writer_epoch": 0, "receipts": {}}
+            return
+        if len(payload) > CUTOVER_MAX_BYTES:
+            raise RuntimeError("cutover journal exceeds byte bound")
+        self.state = json.loads(payload)
+        epoch = self.state.get("writer_epoch")
+        if (self.state.get("schema") != CUTOVER_SCHEMA or type(epoch) is not int
+                or not 0 <= epoch <= 2**64 - 1
+                or self.state.get("phase") not in {"idle", "prepared", "pause", "fence",
+                    "promote", "routing", "resume", "complete", "stopped", "stop-unverified"}
+                or not isinstance(self.state.get("receipts"), dict)):
+            raise RuntimeError("invalid cutover journal")
+        if self.state["phase"] != "idle":
+            if (self.state.get("src") not in {"a", "b"}
+                    or self.state.get("dst") != other_side(self.state["src"])
+                    or not isinstance(self.state.get("id"), str)
+                    or len(self.state["id"]) != 32
+                    or any(c not in "0123456789abcdef" for c in self.state["id"])):
+                raise RuntimeError("invalid cutover identity")
+            for action, receipt in self.state["receipts"].items():
+                if action not in CUTOVER_ACTIONS:
+                    raise RuntimeError("invalid cutover receipt action")
+                validate_hook_receipt(self.request(action), receipt)
+
+    def save(self, phase: str) -> None:
+        """Persist the next boundary before invoking its side effect."""
+        self.state["phase"] = phase
+        durable_cutover_state(self.path, self.state)
+
+    def request(self, action: str) -> dict[str, Any]:
+        """Bind every provider receipt to this exact transaction and epoch."""
+        return {key: self.state[key] for key in ("schema", "id", "src", "dst", "writer_epoch")} | {"action": action}
+
+    def step(self, action: str) -> None:
+        """Require and persist a terminal provider receipt before proceeding."""
+        self.save(action)
+        request = self.request(action)
+        receipt = self.hook(action, request)
+        validate_hook_receipt(request, receipt)
+        self.state["receipts"][action] = receipt
+        self.save(action)
+
+    def stop(self) -> None:
+        """Attempt the physical stop even when journal or route storage fails."""
+        storage_error = None
+        try:
+            self.save("stop-unverified")
+        except OSError as error:
+            storage_error = error
+        try:
+            if self.live_link.is_symlink():
+                self.live_link.unlink()
+                sync_directory(self.live_link.parent)
+            elif self.live_link.exists():
+                raise OSError("live routing path is not a symlink")
+        except OSError as error:
+            storage_error = error
+        request = self.request("stop")
+        receipt = self.hook("stop", request)
+        validate_hook_receipt(request, receipt)
+        self.state["receipts"]["stop"] = receipt
+        self.save("stopped")
+        if storage_error is not None:
+            raise RuntimeError("writers stopped but routing/journal recovery needs operator attention") from storage_error
+
+    def recover(self) -> bool:
+        """Return false after interrupted work is stopped; never auto-promote."""
+        phase = self.state["phase"]
+        if phase in {"idle", "complete"}:
+            return True
+        if phase != "stopped":
+            self.stop()
+        return False
+
+    def cutover(self, src: str, dst: str, epoch: int, target: pathlib.Path,
+                health: Callable[[], bool], identity: str, source: pathlib.Path) -> None:
+        """Fence, promote, verify, route, and resume in durable order."""
+        if (self.state["phase"] not in {"idle", "complete", "stopped"}
+                or src not in {"a", "b"} or dst != other_side(src)
+                or type(epoch) is not int or not self.state["writer_epoch"] < epoch <= 2**64 - 1
+                or len(identity) != 32 or any(c not in "0123456789abcdef" for c in identity)):
+            raise RuntimeError("invalid cutover identity, epoch, or recovery state")
+        if (not self.live_link.is_symlink() or canonical_path(self.live_link) != canonical_path(source)
+                or canonical_path(source) == canonical_path(target) or not target.is_dir()):
+            raise RuntimeError("active routing must identify the old writer")
+        self.state = {"schema": CUTOVER_SCHEMA, "id": identity, "src": src,
+                      "dst": dst, "writer_epoch": epoch, "receipts": {}}
+        self.save("prepared")
+        try:
+            self.step("pause")
+            self.step("fence")
+            self.step("promote")
+            if not health():
+                raise RuntimeError("promoted writer failed pre-routing health")
+            self.save("routing")
+            flip_live_link(self.live_link, target, False)
+            sync_directory(self.live_link.parent)
+            if not health():
+                raise RuntimeError("promoted writer failed post-cutover health")
+            self.step("resume")
+            self.save("complete")
+        except Exception:
+            self.stop()
+            raise
+
 def other_side(side: str) -> str:
     """Return opposite side label."""
     return "b" if side == "a" else "a"
@@ -287,7 +499,7 @@ def positive_int(value: str) -> int:
 def non_negative_float(value: str) -> float:
     """Parse non-negative float CLI values."""
     parsed = float(value)
-    if parsed < 0:
+    if not math.isfinite(parsed) or parsed < 0:
         raise argparse.ArgumentTypeError("must be >= 0")
     return parsed
 
@@ -401,6 +613,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not change symlink or run hooks; log planned actions only.",
     )
+    parser.add_argument("--production", action="store_true", help="Require durable fenced cutover with terminal hook receipts.")
+    parser.add_argument("--writer-epoch", type=positive_int, help="Explicitly promoted epoch; must exceed the durable floor.")
+    parser.add_argument("--cutover-state", type=pathlib.Path, help="Durable production cutover journal.")
+    for action in CUTOVER_ACTIONS:
+        parser.add_argument(f"--{action}-hook-json", help="Required production hook argv encoded as a JSON array.")
     return parser.parse_args()
 
 
@@ -419,6 +636,21 @@ def main() -> int:
     """Program entry point."""
     args = parse_args()
     token = args.rest_auth_token if args.rest_auth_token else None
+    production_hooks: dict[str, list[str]] = {}
+    if args.production:
+        if (args.writer_epoch is None or args.writer_epoch > 2**64 - 1
+                or args.cutover_state is None or not args.cutover_state.is_absolute()
+                or args.request_timeout_sec <= 0 or args.skip_root_reachable_check):
+            raise RuntimeError("production requires explicit epoch, absolute journal, and bounded full health checks")
+        for action in CUTOVER_ACTIONS:
+            raw = getattr(args, f"{action}_hook_json")
+            argv = json.loads(raw) if raw else None
+            if (not isinstance(argv, list) or not 1 <= len(argv) <= 32
+                    or any(not isinstance(value, str) or not value or len(value) > 1024
+                           or any(ord(char) < 32 for char in value) for value in argv)
+                    or not pathlib.Path(argv[0]).is_absolute()):
+                raise RuntimeError(f"production requires bounded absolute argv hook: {action}")
+            production_hooks[action] = argv
 
     endpoint_a = Endpoint(
         name="a",
@@ -452,6 +684,15 @@ def main() -> int:
     )
 
     try:
+        transaction = None
+        if args.production:
+            transaction = CutoverTransaction(
+                args.cutover_state, live_link,
+                lambda action, request: production_hook(production_hooks[action], request, args.request_timeout_sec),
+            )
+            if not args.dry_run and not transaction.recover():
+                emit("stopped", reason="interrupted-cutover-requires-operator-recovery")
+                return 2
         while True:
             loop += 1
             probe_a = probe_endpoint(
@@ -518,6 +759,30 @@ def main() -> int:
                     )
                 else:
                     try:
+                        if transaction is not None:
+                            if active_side is None:
+                                raise RuntimeError("production cannot bootstrap an unknown old writer")
+                            if args.dry_run:
+                                emit("cutover-dry-run", writer_epoch=args.writer_epoch,
+                                     src_side=src_side, dst_side=target_side)
+                                return 0
+                            target_endpoint = endpoint_a if target_side == "a" else endpoint_b
+                            source_endpoint = endpoint_a if src_side == "a" else endpoint_b
+
+                            def promoted_health() -> bool:
+                                result = probe_endpoint(target_endpoint, token, args.request_timeout_sec, True)
+                                if not result.ok:
+                                    return False
+                                status = http_json("GET", f"{target_endpoint.rest_url}/v1/meta/status", token,
+                                                   args.request_timeout_sec)
+                                return status.get("authority", {}).get("writer_epoch") == args.writer_epoch
+
+                            transaction.cutover(src_side, target_side, args.writer_epoch, target_mount,
+                                                promoted_health, secrets.token_hex(16), source_endpoint.mount_path)
+                            emit("cutover", src_side=src_side, dst_side=target_side,
+                                 writer_epoch=args.writer_epoch, transaction=transaction.state["id"])
+                            # A second promotion requires an explicit new epoch and invocation.
+                            return 0
                         run_hook(
                             hook_name="relay-pause",
                             command_template=args.relay_pause_cmd,
@@ -567,6 +832,8 @@ def main() -> int:
                             dst_side=target_side,
                             error=str(exc),
                         )
+                        if args.production:
+                            return 2
 
             if args.once:
                 break

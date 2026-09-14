@@ -5,6 +5,17 @@
 
 # Cohesix Architecture
 
+Schema 1.21 adds a bounded root-owned Queen intent dedupe table without
+moving physical drivers or adding a VM listener. The host gateway verifies
+per-request capabilities and serializes admitted writes over its existing
+console session. `/proc/authority` reports `gateway_enforced` delegation;
+selected kernel production profiles and provisioned authority production
+profiles remain separate selections. Host-ticket writer fencing and provider
+execution WAL run on the host. The shared `cohesix-authority` crate is
+`no_std` on target and carries correlation only, not 28a admission evaluation.
+See [M27a authority](M27A_AUTHORITY.md).
+
+
 This document owns the system-level view of Cohesix: trust boundaries, runtime
 components, principal control and data flows, and the selected direction for
 seL4 task and temporal isolation. Exact namespace contracts belong in

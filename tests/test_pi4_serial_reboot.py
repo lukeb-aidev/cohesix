@@ -3157,3 +3157,17 @@ def test_wifi_backs_out_of_nested_setup_pages_to_saved_root_menu(
     pi4_serial_reboot.select_lane(controller, "wifi", snapshot)
 
     assert controller.sent == ["0", "0", "0", "1"]
+
+
+def test_peer_secret_reference_rotation_has_no_environment_fallback(tmp_path, monkeypatch):
+    manifest = tmp_path / "pi.toml"
+    key = tmp_path / "queen-key"
+    manifest.write_text(f'[[tickets]]\nrole = "queen"\nsecret_ref = "file:{key}"\n')
+    key.write_text("private-peer-one\n")
+    monkeypatch.setenv("COH_AUTH_TOKEN", "unused-fallback")
+    assert pi4_serial_reboot.load_queen_console_token(manifest) == "private-peer-one"
+    key.write_text("private-peer-two\n")
+    assert pi4_serial_reboot.load_queen_console_token(manifest) == "private-peer-two"
+    key.unlink()
+    with pytest.raises(RuntimeError, match="Queen secret source"):
+        pi4_serial_reboot.load_queen_console_token(manifest)

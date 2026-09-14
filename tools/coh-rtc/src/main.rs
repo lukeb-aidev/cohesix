@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: CLI entry point for the Cohesix root-task compiler.
 // Author: Lukas Bower
@@ -38,6 +38,9 @@ struct Args {
     /// profile. Omit only when the manifest value is already target-exact.
     #[arg(long)]
     timer_clock_hz: Option<u64>,
+    /// Refresh generated blocks in the selected operator guide after generation.
+    #[arg(long)]
+    embed_userland_doc: Option<PathBuf>,
     /// Output path for the CAS manifest template JSON.
     #[arg(long, default_value_os_t = default_cas_manifest_template_path())]
     cas_manifest_template: PathBuf,
@@ -174,12 +177,29 @@ fn main() -> Result<()> {
         swarmui_defaults_doc_out: args.swarmui_defaults_doc,
     };
     let output = compile_with_timer_clock_hz(&options, args.timer_clock_hz)?;
+    if let Some(path) = args.embed_userland_doc {
+        coh_rtc::codegen::embed_snippets(
+            &path,
+            &[
+                ("cohsh-policy", &options.cohsh_policy_doc_out),
+                ("cohsh-client", &options.cohsh_client_doc_out),
+                ("cohsh-grammar", &options.cohsh_grammar_doc_out),
+                ("cohsh-ticket-policy", &options.cohsh_ticket_policy_doc_out),
+                ("ticket-quotas", &options.ticket_quotas_snippet_out),
+                ("coh-policy", &options.coh_policy_doc_out),
+                ("coh-doctor", &options.coh_doctor_doc_out),
+                ("cohesix-py", &options.cohesix_py_doc_out),
+                ("swarmui-defaults", &options.swarmui_defaults_doc_out),
+            ],
+        )?;
+    }
     let surface_output = coh_rtc::implementation_surface::compile_inventory(
         &args.implementation_surfaces,
         &args.implementation_surface_inventory,
     )?;
-    let repo_root = args
-        .manifest
+    // Governance belongs to the compiler checkout even when a provisioned input
+    // manifest lives in an operator-owned directory outside configs/.
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
         .unwrap_or_else(|| std::path::Path::new("."));

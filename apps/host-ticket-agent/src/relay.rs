@@ -8,8 +8,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use cohesix_ticket::Role;
-use cohsh::{RestTransport, Session, Transport};
+use cohsh::{Session, Transport};
 
 use crate::claim;
 use crate::claim::TicketKey;
@@ -46,27 +45,20 @@ pub trait RelaySender {
 pub struct RestRelaySender;
 
 impl RelaySender for RestRelaySender {
-    fn forward(
-        &mut self,
-        peer: &HostFederationPeer,
-        payload: &str,
-        _timeout_ms: u32,
-    ) -> Result<()> {
-        let auth = std::env::var(peer.auth_ref.as_str())
-            .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
-        let mut transport = RestTransport::new(peer.rest_url.as_str(), auth);
-        let session = transport
-            .attach(Role::Queen, None)
-            .with_context(|| format!("attach relay session for {}", peer.name))?;
-        let mut bytes = payload.as_bytes().to_vec();
-        bytes.push(b'\n');
-        let write = transport
-            .write(&session, "/host/tickets/spec", bytes.as_slice())
-            .with_context(|| format!("forward ticket to {}", peer.rest_url));
-        let _ = transport.quit(&session);
-        write
+    fn forward(&mut self, peer: &HostFederationPeer, payload: &str, timeout_ms: u32) -> Result<()> {
+        let reference = if peer.auth_ref.starts_with("env:") || peer.auth_ref.starts_with("file:") {
+            peer.auth_ref.clone()
+        } else {
+            format!("env:{}", peer.auth_ref)
+        };
+        let auth = cohesix_authority::secret::resolve_reference(&reference)?;
+        let client = cohesix_rest::GatewayClient::new(peer.rest_url.as_str())
+            .with_request_auth_token(auth)
+            .with_operation_deadline(std::time::Duration::from_millis(u64::from(timeout_ms)))?;
+        client
+            .echo("/host/tickets/spec", payload)
+            .with_context(|| format!("forward ticket to {}", peer.rest_url))?;
+        Ok(())
     }
 }
 
@@ -94,6 +86,7 @@ pub fn relay_once_with_sender<S: RelaySender>(
         return Ok(summary);
     }
 
+    let _fence = crate::wal::AgentFence::acquire(&wal_path.with_extension("lock"))?;
     let spec_path = manifest.spec_path();
     let status_path = manifest.status_path();
     let deadletter_path = manifest.deadletter_path();
@@ -124,9 +117,10 @@ pub fn relay_once_with_sender<S: RelaySender>(
         manifest.max_line_bytes,
     )?;
     results.append(&mut deadletters);
-    let terminal = claim::terminal_keys(&results);
+    let mut terminal = claim::terminal_keys(&results);
 
     let mut wal = RelayWal::load(wal_path)?;
+    wal.bind_writer_epoch(wal_path, manifest.authority.writer_epoch)?;
     let peers = manifest
         .federation
         .peers
@@ -176,6 +170,20 @@ pub fn relay_once_with_sender<S: RelaySender>(
             continue;
         }
 
+        if let Err(error) = crate::validate_writer_epoch(manifest, &spec) {
+            crate::append_result(
+                transport,
+                session,
+                manifest,
+                &spec,
+                "failed",
+                Some(&error.to_string()),
+                &manifest.deadletter_path(),
+            )?;
+            terminal.insert(TicketKey::new(&spec.id, &spec.idempotency_key));
+            summary.remote_write_failures = summary.remote_write_failures.saturating_add(1);
+            continue;
+        }
         if !peers.contains_key(target_hive.as_str()) {
             summary.remote_write_failures = summary.remote_write_failures.saturating_add(1);
             continue;
@@ -200,7 +208,30 @@ pub fn relay_once_with_sender<S: RelaySender>(
         pending_bytes = pending_bytes.saturating_add(payload_bytes);
     }
 
+    // Persist pending delivery identity before contacting a remote authority.
+    wal.enforce_limits(
+        manifest.federation.wal_max_entries as usize,
+        manifest.federation.wal_max_bytes as usize,
+    )?;
+    wal.save(wal_path)?;
     for entry in wal.pending_entries() {
+        let spec: HostTicketSpec =
+            serde_json::from_str(&entry.payload).context("decode pending relay authority")?;
+        if let Err(error) = crate::validate_writer_epoch(manifest, &spec) {
+            wal.mark_rejected(&entry.key, &error.to_string());
+            wal.save(wal_path)?;
+            crate::append_result(
+                transport,
+                session,
+                manifest,
+                &spec,
+                "failed",
+                Some(&error.to_string()),
+                &manifest.deadletter_path(),
+            )?;
+            summary.remote_write_failures = summary.remote_write_failures.saturating_add(1);
+            continue;
+        }
         let Some(peer) = peers.get(entry.target_hive.as_str()).copied() else {
             wal.mark_failed(entry.key.as_str(), "missing peer in federation inventory");
             summary.remote_write_failures = summary.remote_write_failures.saturating_add(1);
@@ -226,7 +257,7 @@ pub fn relay_once_with_sender<S: RelaySender>(
     wal.enforce_limits(
         manifest.federation.wal_max_entries as usize,
         manifest.federation.wal_max_bytes as usize,
-    );
+    )?;
     wal.save(wal_path)?;
     summary.queue_depth = wal.pending_count();
     Ok(summary)
@@ -263,6 +294,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(test)]
     use cohesix_ticket::Role;
 
     #[derive(Debug, Default)]
@@ -364,6 +396,39 @@ mod tests {
             },
             ..HostTicketManifest::default()
         }
+    }
+
+    #[test]
+    fn relay_rejects_stale_epoch_without_remote_dispatch_and_persists_owner_floor() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let wal = temp.path().join("relay.json");
+        let mut manifest = sample_manifest();
+        manifest.authority.writer_epoch = 3;
+        manifest.authority.writer_epoch_required = true;
+        let payload = r#"{"schema":"host-ticket/v1","id":"old","idempotency_key":"once","writer_epoch":2,"action":"systemd.restart","args":{"unit":"cohesix.service"},"source_hive":"hive-a","target_hive":"hive-b"}"#;
+        let files = BTreeMap::from([
+            (manifest.spec_path(), vec![payload.into()]),
+            (manifest.status_path(), vec![]),
+            (manifest.deadletter_path(), vec![]),
+        ]);
+        let mut transport = FakeTransport { files };
+        let mut sender = FakeRelaySender::default();
+        let session = Session::new(1.into(), Role::Queen);
+        let summary =
+            relay_once_with_sender(&mut transport, &session, &manifest, &wal, &mut sender)
+                .expect("stale record refused");
+        assert_eq!(summary.remote_write_failures, 1);
+        assert!(sender.calls.is_empty());
+        assert!(transport.files[&manifest.deadletter_path()][0].contains("stale-writer"));
+        let replay = relay_once_with_sender(&mut transport, &session, &manifest, &wal, &mut sender)
+            .expect("repeated stale record reuses terminal refusal");
+        assert_eq!(replay.deduped, 1);
+        assert_eq!(transport.files[&manifest.deadletter_path()].len(), 1);
+        manifest.authority.writer_epoch = 2;
+        let error = relay_once_with_sender(&mut transport, &session, &manifest, &wal, &mut sender)
+            .expect_err("configuration rollback refused");
+        assert!(error.to_string().contains("stale-writer-configuration"));
+        assert!(sender.calls.is_empty());
     }
 
     #[test]

@@ -45,6 +45,10 @@ pub fn compose_operation_response_timeout(
         .ok_or_else(|| anyhow!("gateway operation response timeout overflow"))
 }
 
+/// Absolute response-body bound, including metadata and error responses.
+/// Streaming decoding enforces this before trusting peer Content-Length.
+pub const MAX_REST_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
 type HttpResponse = ureq::http::Response<ureq::Body>;
 
 /// REST client for the hive-gateway API.
@@ -54,6 +58,7 @@ pub struct GatewayClient {
     metadata_agent: ureq::Agent,
     operation_agent: Box<ureq::Agent>,
     request_auth_token: Option<String>,
+    delegated_ticket: Option<String>,
 }
 
 impl GatewayClient {
@@ -71,6 +76,7 @@ impl GatewayClient {
                 DEFAULT_OPERATION_GLOBAL_TIMEOUT,
             )),
             request_auth_token: None,
+            delegated_ticket: std::env::var("COH_REST_TICKET").ok(),
         }
     }
 
@@ -80,6 +86,16 @@ impl GatewayClient {
     /// control/telemetry response timeout, and the fixed HTTP delivery grace.
     pub fn with_operation_response_timeout(mut self, timeout: Duration) -> Result<Self> {
         self.set_operation_response_timeout(timeout)?;
+        Ok(self)
+    }
+
+    /// Cap the entire HTTP mutation by an external WAL-backed caller deadline.
+    /// An elapsed deadline is an ambiguous outcome; it never authorizes retry.
+    pub fn with_operation_deadline(mut self, timeout: Duration) -> Result<Self> {
+        if timeout.is_zero() || timeout > Duration::from_secs(3600) {
+            return Err(anyhow!("operation deadline must be within 1ns..=3600s"));
+        }
+        *self.operation_agent = Self::build_agent(timeout, timeout);
         Ok(self)
     }
 
@@ -133,6 +149,17 @@ impl GatewayClient {
             self.request_auth_token = Some(trimmed.to_owned());
         }
         self
+    }
+
+    /// Configure the caller ticket required by mutating routes.
+    pub fn with_delegated_ticket(mut self, ticket: impl Into<String>) -> Self {
+        self.delegated_ticket = Some(ticket.into());
+        self
+    }
+
+    /// Replace caller delegation without changing the upstream gateway identity.
+    pub fn set_delegated_ticket(&mut self, ticket: Option<String>) {
+        self.delegated_ticket = ticket;
     }
 
     /// Return the configured base URL.
@@ -201,6 +228,7 @@ impl GatewayClient {
 
     /// Issue an ECHO request via the gateway.
     pub fn echo(&self, path: &str, line: &str) -> Result<usize> {
+        self.validate_write_credentials()?;
         let url = format!("{}/v1/fs/echo", self.base_url);
         let payload = EchoRequest {
             path: path.to_owned(),
@@ -222,6 +250,7 @@ impl GatewayClient {
                 COHESIX_TRANSPORT_COMMAND_BATCH_MAX
             ));
         }
+        self.validate_write_credentials()?;
         let url = format!("{}/v1/fs/echo-batch", self.base_url);
         let payload = EchoBatchRequest {
             path: path.to_owned(),
@@ -235,7 +264,7 @@ impl GatewayClient {
     fn get(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
         Self::get_with_agent(
             &self.metadata_agent,
-            self.request_auth_token.as_deref(),
+            self.resolved_request_auth()?.as_deref(),
             url,
         )
     }
@@ -243,7 +272,7 @@ impl GatewayClient {
     fn get_operation(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
         Self::get_with_agent(
             &self.operation_agent,
-            self.request_auth_token.as_deref(),
+            self.resolved_request_auth()?.as_deref(),
             url,
         )
     }
@@ -265,15 +294,51 @@ impl GatewayClient {
     }
 
     fn post_json<T: Serialize>(&self, url: &str, payload: &T) -> Result<HttpResponse, ureq::Error> {
-        let request = self.operation_agent.post(url);
-        if let Some(token) = self.request_auth_token.as_deref() {
+        let mut request = self.operation_agent.post(url);
+        if let Some(ticket) = &self.delegated_ticket {
+            request = request.header("x-cohesix-ticket", ticket);
+        }
+        if let Some(token) = self.resolved_request_auth()? {
             request
                 .header("Authorization", format!("Bearer {token}"))
-                .header("x-cohesix-auth", token)
+                .header("x-cohesix-auth", &token)
                 .send_json(payload)
         } else {
             request.send_json(payload)
         }
+    }
+
+    fn resolved_request_auth(&self) -> Result<Option<String>, ureq::Error> {
+        self.request_auth_token
+            .as_deref()
+            .map(cohesix_authority::secret::resolve_value)
+            .transpose()
+            .map_err(|error| {
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    error,
+                ))
+            })
+    }
+
+    fn validate_write_credentials(&self) -> Result<()> {
+        let auth = self
+            .request_auth_token
+            .as_deref()
+            .ok_or_else(|| anyhow!("EPERM request-auth-required"))?;
+        cohesix_authority::secret::resolve_value(auth)?;
+        let ticket = self
+            .delegated_ticket
+            .as_deref()
+            .ok_or_else(|| anyhow!("EPERM delegated-ticket-required"))?;
+        if ticket.len() > cohsh_core::MAX_TICKET_LEN {
+            return Err(anyhow!("ELIMIT delegated-ticket-length"));
+        }
+        // Structural validation is a client convenience. Only the gateway
+        // verifies the issuer MAC and adjudicates authority/quota state.
+        cohesix_ticket::TicketToken::decode_unverified(ticket)
+            .map_err(|_| anyhow!("EPERM delegated-ticket-malformed"))?;
+        Ok(())
     }
 
     fn operation_global_timeout(response_timeout: Duration) -> Option<Duration> {
@@ -541,6 +606,9 @@ pub struct ProcLeaseBounds {
 /// Gateway connection and broker status returned by `/v1/meta/status`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GatewayStatusResponse {
+    /// Optional gateway-enforced identity and quota/audit counters.
+    #[serde(default)]
+    pub authority: Option<cohesix_authority::policy::DelegationStatus>,
     /// True when the gateway currently has a console connection.
     pub connected: bool,
     /// Normalized configured backend TCP target host, never the REST bind host.
@@ -845,6 +913,8 @@ fn decode_json_response<T: DeserializeOwned>(
             if code >= 400 {
                 let body = resp
                     .body_mut()
+                    .with_config()
+                    .limit(MAX_REST_RESPONSE_BYTES)
                     .read_to_string()
                     .map_err(|err| anyhow!(err))
                     .with_context(|| format!("read {response_name} error response"))?;
@@ -854,6 +924,8 @@ fn decode_json_response<T: DeserializeOwned>(
                 return Err(anyhow!("{verb} failed (http {code}): {body}"));
             }
             resp.body_mut()
+                .with_config()
+                .limit(MAX_REST_RESPONSE_BYTES)
                 .read_json()
                 .map_err(|err| anyhow!(err))
                 .with_context(|| format!("decode {response_name} response"))
@@ -864,6 +936,8 @@ fn decode_json_response<T: DeserializeOwned>(
 
 fn parse_response(mut resp: HttpResponse) -> Result<GatewayResponse> {
     resp.body_mut()
+        .with_config()
+        .limit(MAX_REST_RESPONSE_BYTES)
         .read_json()
         .map_err(|err| anyhow!(err))
         .context("decode gateway response")
@@ -1222,6 +1296,37 @@ mod tests {
         );
     }
 
+    fn delegated_fixture() -> String {
+        use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
+        TicketIssuer::new("test-issuer-key")
+            .issue(TicketClaims::new(
+                Role::Queen,
+                BudgetSpec::unbounded(),
+                None,
+                MountSpec::empty(),
+                0,
+            ))
+            .expect("issue fixture")
+            .encode()
+            .expect("encode fixture")
+    }
+
+    #[test]
+    fn external_deadline_caps_the_whole_request_without_delivery_grace() {
+        let timeout = Duration::from_millis(1500);
+        let client = GatewayClient::new("http://127.0.0.1:1")
+            .with_operation_deadline(timeout)
+            .expect("relay deadline");
+        assert_eq!(
+            client.operation_agent.config().timeouts().global,
+            Some(timeout)
+        );
+        assert_eq!(client.operation_response_timeout(), timeout);
+        assert!(GatewayClient::new("http://127.0.0.1:1")
+            .with_operation_deadline(Duration::ZERO)
+            .is_err());
+    }
+
     #[test]
     fn ureq3_echo_sends_trimmed_auth_headers_and_json_body() {
         let (base_url, request_rx, server) = serve_once(
@@ -1230,6 +1335,7 @@ mod tests {
         );
         let bytes = GatewayClient::new(base_url)
             .with_request_auth_token("  test-token  ")
+            .with_delegated_ticket(delegated_fixture())
             .echo("/queen/ctl", "go")
             .expect("authenticated echo succeeds");
         assert_eq!(bytes, 2);
@@ -1242,6 +1348,10 @@ mod tests {
         assert!(lowercase.starts_with("post /v1/fs/echo http/1.1\r\n"));
         assert!(lowercase.contains("\r\nauthorization: bearer test-token\r\n"));
         assert!(lowercase.contains("\r\nx-cohesix-auth: test-token\r\n"));
+        assert!(lowercase.contains(&format!(
+            "\r\nx-cohesix-ticket: {}\r\n",
+            delegated_fixture()
+        )));
         let (_, body) = request
             .split_once("\r\n\r\n")
             .expect("captured request contains a body");
@@ -1259,6 +1369,7 @@ mod tests {
         let lines = vec!["one".to_owned(), "two".to_owned()];
         let written = GatewayClient::new(base_url)
             .with_request_auth_token("test-token")
+            .with_delegated_ticket(delegated_fixture())
             .echo_batch("/host/tickets/status", lines.as_slice())
             .expect("authenticated echo batch succeeds");
         assert_eq!(written, 2);

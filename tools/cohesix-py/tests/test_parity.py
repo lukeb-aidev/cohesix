@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 import sys
 import tempfile
@@ -86,7 +87,11 @@ def test_cohesix_parity_rest_backend() -> None:
         backend = MockBackend(root=tmp)
         server, base_url = start_rest_server(backend)
         try:
-            client = CohesixClient(RestBackend(base_url))
+            # Header-only parity server; the real gateway owns MAC verification.
+            parser_ticket = "cohesix-ticket-010000" + "00" * 12 + "." + "00" * 32
+            client = CohesixClient(RestBackend(
+                base_url, request_auth_token="rest-parity-credential", delegated_ticket=parser_ticket
+            ))
             audit = CohesixAudit()
 
             client.gpu_list(audit)
@@ -324,3 +329,64 @@ def test_interrupted_pointer_commit_requires_reconciliation(tmp_path: Path) -> N
     with pytest.raises(CohesixError, match="reconcile the interrupted commit"):
         client.peft_rollback(root)
     assert (root / "active").read_text() == "old\n"
+
+
+def cat_frames(record: str) -> list[str]:
+    """Independent C1 fixture with whole UTF-8 scalars and 176-byte payloads."""
+    payloads, current = [], ""
+    for character in record:
+        if len((current + character).encode()) > 176:
+            payloads.append(current)
+            current = ""
+        current += character
+    payloads.append(current)
+    digest = hashlib.sha256(record.encode()).hexdigest()
+    return [f"C1:{index:04x}:{len(payloads):04x}:{digest}:{value}"
+            for index, value in enumerate(payloads)]
+
+
+@pytest.mark.parametrize("verb", ["CAT", "TAIL"])
+def test_tcp_reconstructs_complete_authority_audit_records(verb):
+    from cohesix.backends import TcpBackend
+
+    # An 8192-byte JSONL record is the AuditFS ceiling, independent of ECHO.
+    record = json.dumps({"payload": "x" * 8178}, separators=(",", ":"))
+    assert len(record.encode()) == 8192
+    backend = object.__new__(TcpBackend)
+    sent = []
+    backend._send_line = sent.append
+    responses = iter([f"OK {verb}", "ordinary", *cat_frames(record), "END"])
+    backend._recv_line = lambda: next(responses)
+    read = backend.read_file if verb == "CAT" else backend.tail_file
+    assert read("/audit/journal", 16384) == f"ordinary\n{record}".encode()
+    assert sent == [f"{verb} /audit/journal"]
+    unicode_record = json.dumps({"payload": "🙂" * 600}, ensure_ascii=False)
+    responses = iter([f"OK {verb}", *cat_frames(unicode_record), "END"])
+    assert read("/audit/journal", 16384) == unicode_record.encode()
+
+
+@pytest.mark.parametrize("defect", ["partial", "order", "replay", "digest", "uppercase", "zero", "count", "wire", "logical"])
+def test_tcp_rejects_invalid_audit_chunk_groups(defect):
+    from cohesix.backends import _reassemble_cat_chunks
+
+    frames = cat_frames("x" * 500)
+    if defect == "partial":
+        frames.pop()
+    elif defect == "order":
+        frames[0], frames[1] = frames[1], frames[0]
+    elif defect == "replay":
+        frames.insert(1, frames[0])
+    elif defect == "digest":
+        frames = [frame[:13] + "0" * 64 + frame[77:] for frame in frames]
+    elif defect == "uppercase":
+        frames[0] = frames[0][:3] + "000A" + frames[0][7:]
+    elif defect == "zero":
+        frames[0] = frames[0][:8] + "0000" + frames[0][12:]
+    elif defect == "count":
+        frames[0] = frames[0][:8] + "0041" + frames[0][12:]
+    elif defect == "wire":
+        frames[0] += "x" * (257 - len(frames[0]))
+    else:
+        frames = cat_frames("x" * 8193)
+    with pytest.raises(CohesixError):
+        _reassemble_cat_chunks(frames)

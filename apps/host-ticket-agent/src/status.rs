@@ -15,7 +15,7 @@ use crate::{
 };
 
 /// Maximum compact JSON bytes for a valid version-2 result at current field bounds.
-pub const HOST_TICKET_V2_MAX_ENCODED_RESULT_BYTES: usize = 1467;
+pub const HOST_TICKET_V2_MAX_ENCODED_RESULT_BYTES: usize = 1942;
 
 /// Render a result receipt line for `/host/tickets/status` or `/host/tickets/deadletter`.
 pub fn build_result_line(
@@ -31,6 +31,8 @@ pub fn build_result_line(
         .filter(|text| !text.is_empty())
         .map(sanitize_message);
     let mut result = HostTicketResult {
+        writer_epoch: spec.writer_epoch,
+        admission: spec.admission.clone(),
         schema: result_schema.to_owned(),
         id: spec.id.clone(),
         idempotency_key: spec.idempotency_key.clone(),
@@ -220,6 +222,8 @@ mod tests {
 
     fn v1_spec() -> HostTicketSpec {
         HostTicketSpec {
+            writer_epoch: None,
+            admission: None,
             schema: HOST_TICKET_V1_SCHEMA.to_owned(),
             id: "ticket-1".to_owned(),
             idempotency_key: "k1".to_owned(),
@@ -246,6 +250,8 @@ mod tests {
 
     fn v2_spec() -> HostTicketSpec {
         HostTicketSpec {
+            writer_epoch: None,
+            admission: None,
             schema: HOST_TICKET_V2_SCHEMA.to_owned(),
             id: "ticket-v2".to_owned(),
             idempotency_key: "idem-v2".to_owned(),
@@ -343,7 +349,7 @@ mod tests {
             2048,
         )
         .expect("maximal result");
-        assert_eq!(line.len(), HOST_TICKET_V2_MAX_ENCODED_RESULT_BYTES);
+        assert_eq!(line.len(), 1467, "legacy result bound is unchanged");
         let parsed = crate::claim::parse_result_lines_from(
             &[line],
             &[HOST_TICKET_RESULT_V2_SCHEMA.to_owned()],
@@ -351,5 +357,31 @@ mod tests {
         )
         .expect("strict maximal result");
         assert_eq!(parsed.len(), 1);
+        spec.writer_epoch = Some(u64::MAX);
+        spec.admission = Some(cohesix_authority::AdmissionCorrelation {
+            admission_id: "a".repeat(128),
+            intent_hash: "0".repeat(64),
+            policy_hash: "f".repeat(64),
+            state_epoch: u64::MAX,
+            resource_generation: u64::MAX,
+            decision_expiry: u64::MAX,
+        });
+        let line = build_result_line(
+            &spec,
+            HOST_TICKET_RESULT_V2_SCHEMA,
+            "succeeded",
+            Some(&"\\".repeat(192)),
+            2048,
+        )
+        .expect("correlated result fits console contract");
+        assert_eq!(line.len(), HOST_TICKET_V2_MAX_ENCODED_RESULT_BYTES);
+        let parsed = crate::claim::parse_result_lines_from(
+            &[line],
+            &[HOST_TICKET_RESULT_V2_SCHEMA.to_owned()],
+            2048,
+        )
+        .expect("correlated result");
+        assert_eq!(parsed[0].writer_epoch, spec.writer_epoch);
+        assert_eq!(parsed[0].admission, spec.admission);
     }
 }

@@ -5,7 +5,7 @@
 openapi: 3.1.0
 info:
   title: Cohesix Hive Gateway
-  version: 0.1.0
+  version: 0.2.0
   description: |-
     Host-only REST gateway that projects Cohesix console/file semantics into a
     JSON API. Responses mirror OK/ERR/END semantics and enforce manifest bounds.
@@ -177,7 +177,9 @@ paths:
       summary: Append a single line (ECHO).
       security:
         - bearerAuth: []
+          delegatedTicket: []
         - requestAuthHeader: []
+          delegatedTicket: []
       requestBody:
         required: true
         content:
@@ -196,6 +198,12 @@ paths:
                 $ref: "#/components/schemas/GatewayResponse"
         "401":
           description: Missing or invalid request authentication token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "403":
+          description: Missing, invalid, expired or insufficient delegated capability (EPERM).
           content:
             application/json:
               schema:
@@ -234,7 +242,9 @@ paths:
         replayed after a partial transport failure.
       security:
         - bearerAuth: []
+          delegatedTicket: []
         - requestAuthHeader: []
+          delegatedTicket: []
       requestBody:
         required: true
         content:
@@ -244,6 +254,12 @@ paths:
       responses:
         "200":
           description: All ordered appends completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "403":
+          description: Missing, invalid, expired or insufficient delegated capability (EPERM).
           content:
             application/json:
               schema:
@@ -300,6 +316,15 @@ paths:
                 type: string
 components:
   securitySchemes:
+    delegatedTicket:
+      type: apiKey
+      in: header
+      name: x-cohesix-ticket
+      description: >
+        Required together with request authentication on every mutation. The
+        gateway verifies the existing ticket MAC, subject, scopes and quotas
+        under its configured transport authority ceiling. Identity is
+        gateway_enforced; the VM authenticates the gateway console session.
     bearerAuth:
       type: http
       scheme: bearer
@@ -567,6 +592,37 @@ components:
         executable_slots:
           type: integer
           minimum: 0
+    DelegationStatus:
+      type: object
+      required: [identity_class, writer_epoch, cache_entries, cache_capacity, cache_hits, cache_misses, refusals, audit_records, audit_emit_ns]
+      properties:
+        identity_class:
+          const: gateway_enforced
+        writer_epoch:
+          type: integer
+          minimum: 1
+        cache_entries:
+          type: integer
+          minimum: 0
+        cache_capacity:
+          type: integer
+          minimum: 1
+        cache_hits:
+          type: integer
+          minimum: 0
+        cache_misses:
+          type: integer
+          minimum: 0
+        refusals:
+          type: integer
+          minimum: 0
+        audit_records:
+          type: integer
+          minimum: 0
+        audit_emit_ns:
+          type: integer
+          minimum: 0
+          description: Cumulative synchronous gateway audit emission time; excludes downstream log storage.
     GatewayStatusResponse:
       type: object
       required:
@@ -577,6 +633,10 @@ components:
         - connects
         - broker
       properties:
+        authority:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/DelegationStatus"
         connected:
           type: boolean
           description: Console connection only; never target execution proof.

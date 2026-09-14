@@ -86,6 +86,16 @@ fn manifest_codegen_is_deterministic() {
     };
 
     let first = compile(&options).expect("compile manifest");
+    let public_key = fs::read_to_string(manifest_out.with_file_name("cas_verification_key.hex"))
+        .expect("retained compiler public key");
+    let source_key = fs::read_to_string(repo_path("resources/keys/cas_verification_key.hex"))
+        .expect("independent public verification fixture");
+    let expected_key = source_key
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .expect("public hex line");
+    assert_eq!(public_key.trim(), expected_key);
     let baseline = snapshot_dir(&out_dir);
     let generated_mod = fs::read_to_string(out_dir.join("mod.rs")).expect("generated mod.rs");
     let generated_bootstrap =
@@ -232,7 +242,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.20"
+schema = "1.21"
 
 [profile]
 name = "virt-aarch64"
@@ -322,7 +332,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.20"
+schema = "1.21"
 
 [profile]
 name = "virt-aarch64"
@@ -404,7 +414,7 @@ fn sharding_shard_bits_over_max_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid sharding manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.20"
+schema = "1.21"
 
 [profile]
 name = "virt-aarch64"
@@ -485,7 +495,7 @@ fn legacy_worker_paths_rejected_when_alias_disabled() {
 # Author: Lukas Bower
 # Purpose: Invalid alias manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.20"
+schema = "1.21"
 
 [profile]
 name = "virt-aarch64"
@@ -573,7 +583,7 @@ fn sharding_requires_walk_depth() {
 # Author: Lukas Bower
 # Purpose: Invalid walk depth manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.20"
+schema = "1.21"
 
 [profile]
 name = "virt-aarch64"

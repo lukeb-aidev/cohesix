@@ -48,8 +48,9 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub struct TicketSpec {{")?;
     writeln!(mod_contents, "    pub role: Role,")?;
     writeln!(mod_contents, "    pub secret: &'static str,")?;
-    writeln!(mod_contents, "    pub key: TicketKey,")?;
+    writeln!(mod_contents, "    pub key: Option<TicketKey>,")?;
     writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents, "pub const AUTHORITY_POLICY: cohesix_authority::policy::AuthorityPolicy = cohesix_authority::policy::{:?};", manifest.authority)?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct NamespaceMount {{")?;
@@ -1781,14 +1782,24 @@ pub fn emit_rust(
         manifest.tickets.len()
     )?;
     for ticket in &manifest.tickets {
-        let key_bytes = ticket_key_literal(&ticket.secret)?;
-        writeln!(
-            bootstrap_contents,
-            "    TicketSpec {{ role: {}, secret: \"{}\", key: TicketKey::from_bytes({}) }},",
-            role_to_rust(ticket.role),
-            escape_literal(&ticket.secret),
-            key_bytes
-        )?;
+        if let Some(reference) = &ticket.secret_ref {
+            let secret_expression = if let Some(name) = reference.strip_prefix("env:") {
+                format!("match option_env!({name:?}) {{ Some(value) => value, None => \"\" }}")
+            } else if let Some(path) = reference.strip_prefix("file:") {
+                format!("include_str!({path:?})")
+            } else {
+                anyhow::bail!("invalid ticket secret reference");
+            };
+            writeln!(
+                bootstrap_contents,
+                "    TicketSpec {{ role: {}, secret: {}, key: None }},",
+                role_to_rust(ticket.role),
+                secret_expression
+            )?;
+        } else {
+            let key_bytes = ticket_key_literal(&ticket.secret)?;
+            writeln!(bootstrap_contents, "    TicketSpec {{ role: {}, secret: \"{}\", key: Some(TicketKey::from_bytes({})) }},", role_to_rust(ticket.role), escape_literal(&ticket.secret), key_bytes)?;
+        }
     }
     writeln!(bootstrap_contents, "];\n")?;
 
@@ -3381,6 +3392,21 @@ fn cas_verification_key_literal(
     manifest: &Manifest,
     manifest_dir: Option<&Path>,
 ) -> Result<String> {
+    let Some(key) = cas_verification_key(manifest, manifest_dir)? else {
+        return Ok("None".to_owned());
+    };
+    let literal = key
+        .iter()
+        .map(|byte| format!("0x{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!("Some([{literal}])"))
+}
+
+pub(super) fn cas_verification_key(
+    manifest: &Manifest,
+    manifest_dir: Option<&Path>,
+) -> Result<Option<[u8; 32]>> {
     let verification_key_path = manifest
         .cas
         .signing
@@ -3389,16 +3415,11 @@ fn cas_verification_key_literal(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let Some(path) = verification_key_path else {
-        return Ok("None".to_owned());
+        return Ok(None);
     };
     let resolved = resolve_manifest_relative_path(manifest_dir, path);
     let key = crate::ir::read_hex_key_file(&resolved, "CAS verification key")?;
-    let literal = key
-        .iter()
-        .map(|byte| format!("0x{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(format!("Some([{literal}])"))
+    Ok(Some(key))
 }
 
 #[derive(Serialize)]

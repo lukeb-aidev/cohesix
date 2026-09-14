@@ -37026,7 +37026,15 @@ where
             }
             Command::Spawn(payload) => {
                 if self.ensure_authenticated(SessionRole::Queen) {
-                    if let Err(denial) = self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
+                    if !crate::generated::AUTHORITY_POLICY.legacy_queen_ctl {
+                        cmd_status = "err";
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some("detail=strict-intent-required error=EPERM"),
+                        );
+                    } else if let Err(denial) =
+                        self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
                     {
                         self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
                         self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
@@ -37056,7 +37064,15 @@ where
             Command::Kill(ident) => {
                 if self.ensure_authenticated(SessionRole::Queen) {
                     let payload_len = format!("{{\"kill\":\"{}\"}}", ident.as_str()).len() as u64;
-                    if let Err(denial) = self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
+                    if !crate::generated::AUTHORITY_POLICY.legacy_queen_ctl {
+                        cmd_status = "err";
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some("detail=strict-intent-required error=EPERM"),
+                        );
+                    } else if let Err(denial) =
+                        self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
                     {
                         self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
                         self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);

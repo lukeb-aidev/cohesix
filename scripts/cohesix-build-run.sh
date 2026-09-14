@@ -1270,7 +1270,7 @@ PY
         python_qemu_profile="$CANONICAL_QEMU_KVM_PROFILE"
     fi
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
-        "$PROJECT_ROOT/configs/root_task.toml" \
+      "$RTC_MANIFEST" \
         --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
         --profile "$python_qemu_profile" \
         --out "$GENERATED_CONFIG_DIR/cohesix_python_qemu_smp_production.json"

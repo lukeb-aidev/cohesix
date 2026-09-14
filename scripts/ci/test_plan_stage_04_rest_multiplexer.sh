@@ -378,30 +378,11 @@ stage4_stop_local_services() {
 }
 
 stage4_resolve_manifest_auth_token() {
-  local manifest_path="$1"
-  "${python_bin}" - "${manifest_path}" <<'PY'
-import pathlib
+    local manifest_path="$1"
+    PYTHONPATH="${TEST_PLAN_ROOT}/tools/cohesix-py${PYTHONPATH:+:$PYTHONPATH}" python3 - "$manifest_path" "toml" <<'PY'
 import sys
-
-manifest = pathlib.Path(sys.argv[1])
-if not manifest.is_file():
-    print("bootstrap")
-    raise SystemExit(0)
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    print("bootstrap")
-    raise SystemExit(0)
-
-data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-for ticket in data.get("tickets", []):
-    if str(ticket.get("role", "")).strip() == "queen":
-        secret = str(ticket.get("secret", "")).strip()
-        if secret:
-            print(secret)
-            raise SystemExit(0)
-print("bootstrap")
+from cohesix.auth import resolve_manifest_auth_token
+print(resolve_manifest_auth_token(sys.argv[1], sys.argv[2]))
 PY
 }
 
@@ -758,8 +739,8 @@ if [[ -z "${gateway_url}" ]]; then
   fi
   gateway_url="http://${gateway_bind}"
   export COHESIX_GATEWAY_URL="${gateway_url}"
-  gateway_auth_token="${TP_STAGE4_GATEWAY_AUTH_TOKEN:-test-plan-stage4-rest-token}"
-  console_auth_token="${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-$(stage4_resolve_manifest_auth_token "${TEST_PLAN_ROOT}/configs/root_task.toml")}}"
+  gateway_auth_token="${TP_STAGE4_GATEWAY_AUTH_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_hex(32))')}"
+  console_auth_token="${COH_AUTH_TOKEN_REF:-${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-$(stage4_resolve_manifest_auth_token "${COHSH_BASE_MANIFEST:-${TEST_PLAN_ROOT}/configs/root_task.toml}")}}}"
   artifact_dir="$(dirname "${stage4_artifact_manifest}")"
   cohsh_bin="${COHSH_BIN:-${artifact_dir}/host-tools/cohsh}"
   coh_bin="${TP_COH_BIN:-${artifact_dir}/host-tools/coh}"
@@ -821,6 +802,18 @@ if [[ -z "${gateway_url}" ]]; then
     tp_log "FAIL  hive-gateway binary missing from Stage 03 artifact: ${artifact_dir}/host-tools/hive-gateway"
     exit 1
   fi
+
+  # This isolated local gateway receives one finite test caller. The private
+  # issuer stays in its environment and is never included in the command log.
+  if [[ -z "${HIVE_GATEWAY_DELEGATION_KEY_REF:-}" ]]; then
+    TP_STAGE4_DELEGATION_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    export TP_STAGE4_DELEGATION_KEY
+    export HIVE_GATEWAY_DELEGATION_KEY_REF=env:TP_STAGE4_DELEGATION_KEY
+  fi
+  COH_REST_TICKET="$("${cohsh_bin}" --mint-ticket --role queen \
+    --ticket-subject stage4-operator --ticket-secret "${HIVE_GATEWAY_DELEGATION_KEY_REF}" \
+    --ticket-write-scope / --ticket-ttl-s 3600 --ticket-ops 1000000)"
+  export COH_REST_TICKET
 
   COHSH_AUTH_TOKEN="${console_auth_token}" \
   HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${gateway_auth_token}" \

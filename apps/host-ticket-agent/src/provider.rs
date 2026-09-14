@@ -1,0 +1,209 @@
+// Author: Lukas Bower
+// Purpose: Validate provider operands and reject ambiguous target/argument selections before dispatch.
+// Copyright 2026 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+#![forbid(unsafe_code)]
+
+use crate::HostTicketSpec;
+use anyhow::{anyhow, bail, Result};
+use serde_json::Map;
+
+/// Validated single argv/path operand. Never contains separators or options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToken(String);
+
+impl ProviderToken {
+    /// Reject path separators, option prefixes, empty and oversized operands.
+    pub fn parse(value: &str) -> Result<Self> {
+        cohesix_authority::validate_id(value)
+            .map_err(|_| anyhow!("EPERM invalid-provider-token"))?;
+        Ok(Self(value.to_owned()))
+    }
+}
+
+/// Validate the exact supported fields, independently of executor defaults.
+pub fn validate(spec: &HostTicketSpec) -> Result<()> {
+    ProviderToken::parse(&spec.id)?;
+    ProviderToken::parse(&spec.idempotency_key)?;
+    let components: Vec<_> = match &spec.target {
+        Some(target) => {
+            if target.len() > 255 {
+                bail!("ELIMIT provider-target");
+            }
+            let value = target.strip_prefix('/').unwrap_or(target);
+            let components: Vec<_> = value.split('/').collect();
+            for part in &components {
+                ProviderToken::parse(part)?;
+            }
+            components
+        }
+        None => Vec::new(),
+    };
+    if spec.schema == crate::HOST_TICKET_V2_SCHEMA {
+        return crate::claim::validate_v2_action_args(spec);
+    }
+    let empty = Map::new();
+    let args = if spec.args.is_null() {
+        &empty
+    } else {
+        spec.args
+            .as_object()
+            .ok_or_else(|| anyhow!("EPERM provider-args-object-required"))?
+    };
+    let allowed = cohesix_authority::PROVIDER_V1_FIELDS
+        .iter()
+        .find(|(action, _)| *action == spec.action)
+        .map(|(_, fields)| *fields)
+        .ok_or_else(|| anyhow!("EPERM unsupported-provider-action"))?;
+    for (name, value) in args {
+        if !allowed.contains(&name.as_str()) {
+            bail!("EPERM unsupported-provider-field {name}");
+        }
+        match name.as_str() {
+            "ttl_s" | "mem_mb" | "budget_ttl_s" | "budget_ops" => {
+                if !value
+                    .as_u64()
+                    .is_some_and(|v| v > 0 && v <= u32::MAX as u64)
+                {
+                    bail!("EPERM invalid-provider-bound {name}");
+                }
+            }
+            "priority" | "streams" => {
+                if !value
+                    .as_u64()
+                    .is_some_and(|v| v <= 255 && (name == "priority" || v > 0))
+                {
+                    bail!("EPERM invalid-provider-bound {name}");
+                }
+            }
+            "publish" => {
+                if !value.is_boolean() {
+                    bail!("EPERM invalid-provider-boolean");
+                }
+            }
+            "out_dir" | "out" | "adapter_dir" | "from" | "export_root" | "export"
+            | "registry_root" | "registry" => {
+                let path = value
+                    .as_str()
+                    .ok_or_else(|| anyhow!("EPERM invalid-provider-path"))?;
+                if path.len() > 1024 {
+                    bail!("ELIMIT provider-path");
+                }
+                for part in path.strip_prefix('/').unwrap_or(path).split('/') {
+                    ProviderToken::parse(part)?;
+                }
+            }
+            _ => {
+                ProviderToken::parse(
+                    value
+                        .as_str()
+                        .ok_or_else(|| anyhow!("EPERM invalid-provider-string"))?,
+                )?;
+            }
+        }
+    }
+    for (first, alias) in [
+        ("job_id", "job"),
+        ("model_id", "model"),
+        ("out_dir", "out"),
+        ("adapter_dir", "from"),
+        ("export_root", "export"),
+        ("registry_root", "registry"),
+    ] {
+        if args.contains_key(first) && args.contains_key(alias) {
+            bail!("EPERM ambiguous-provider-alias {first}");
+        }
+    }
+    let path = if components.first() == Some(&"host") {
+        &components[1..]
+    } else {
+        &components[..]
+    };
+    let (provider, field, index) = if spec.action.starts_with("systemd.") {
+        ("systemd", "unit", 1)
+    } else if spec.action.starts_with("docker.") {
+        ("docker", "container", 1)
+    } else if spec.action.starts_with("k8s.") {
+        ("k8s", "node", 2)
+    } else if spec.action.starts_with("gpu.") {
+        ("gpu", "gpu_id", 1)
+    } else {
+        if !path.is_empty() {
+            bail!("EPERM peft-target-must-use-args");
+        }
+        let required: &[(&str, &str)] = match spec.action.as_str() {
+            "peft.export" => &[("job_id", "job")],
+            "peft.import" => &[
+                ("job_id", "job"),
+                ("model_id", "model"),
+                ("adapter_dir", "from"),
+            ],
+            "peft.activate" => &[("model_id", "model")],
+            _ => &[],
+        };
+        for (name, alias) in required {
+            if !args.contains_key(*name) && !args.contains_key(*alias) {
+                bail!("EPERM missing-provider-field {name}");
+            }
+        }
+        return Ok(());
+    };
+    if !path.is_empty() {
+        if path.first() != Some(&provider)
+            || path.len() < index + 1
+            || path.len() > index + 2
+            || (provider == "k8s" && path.get(1) != Some(&"node"))
+        {
+            bail!("EPERM invalid-provider-target");
+        }
+        if let Some(suffix) = path.get(index + 1) {
+            let expected = spec
+                .action
+                .strip_prefix(provider)
+                .and_then(|v| v.strip_prefix('.'))
+                .ok_or_else(|| anyhow!("EPERM invalid-provider-action"))?;
+            let endpoint = if provider == "gpu" { "lease" } else { expected };
+            if *suffix != endpoint && !(expected == "lease.sync" && *suffix == "lease-sync") {
+                bail!("EPERM provider-target-action-mismatch");
+            }
+        }
+        if let Some(value) = args.get(field) {
+            if value.as_str() != path.get(index).copied() {
+                bail!("EPERM ambiguous-provider-target");
+            }
+        }
+    } else if !args.contains_key(field) && spec.action != "docker.status-check" {
+        bail!("EPERM missing-provider-target");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    #[test]
+    fn injection_ambiguous_targets_and_unknown_arguments_never_validate() {
+        let mut spec = HostTicketSpec {
+            id: "request".into(),
+            idempotency_key: "retry".into(),
+            action: "systemd.restart".into(),
+            target: Some("/host/systemd/service.service/restart".into()),
+            ..HostTicketSpec::default()
+        };
+        validate(&spec).expect("canonical target");
+        for unit in ["", "-root", "../service", "a/b", "a\nb"] {
+            spec.args = serde_json::json!({"unit":unit});
+            assert!(validate(&spec).is_err());
+        }
+        spec.args = serde_json::json!({"unit":"different.service"});
+        assert!(validate(&spec).is_err());
+        spec.args = serde_json::json!({"extra":true});
+        assert!(validate(&spec).is_err());
+        spec.args = Value::Null;
+        spec.target = Some("/host/systemd/service.service/stop".into());
+        assert!(validate(&spec).is_err());
+        spec.target = Some("/host//systemd/service.service/restart".into());
+        assert!(validate(&spec).is_err());
+    }
+}

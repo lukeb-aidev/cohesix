@@ -36,53 +36,53 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "aa88eb2d85f19cbff7819a3b667fad11eb3d3ec80dab7ee7428ca599d1936dee";
+    "6b1f95ce351681daf7705f3f535ea1bdf2acee53ec72d5ca73a6447e2d587673";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
         role: Role::Queen,
         secret: "bootstrap",
-        key: TicketKey::from_bytes([
+        key: Some(TicketKey::from_bytes([
             0xde, 0x01, 0x62, 0xbd, 0x1d, 0xab, 0xcd, 0x7c, 0xb1, 0xb6, 0xed, 0x29, 0x9b, 0x7e,
             0xff, 0x5b, 0x7a, 0xc5, 0xcf, 0x2c, 0x4a, 0x3b, 0x08, 0x7d, 0x04, 0x6c, 0x7b, 0x6a,
             0x81, 0xc1, 0x6a, 0xc8,
-        ]),
+        ])),
     },
     TicketSpec {
         role: Role::WorkerHeartbeat,
         secret: "worker",
-        key: TicketKey::from_bytes([
+        key: Some(TicketKey::from_bytes([
             0x88, 0xd8, 0x2e, 0x8a, 0xbd, 0x97, 0x9f, 0xbb, 0x21, 0x7f, 0x37, 0xf2, 0x2f, 0xcb,
             0xf9, 0xa6, 0x03, 0xfa, 0x1b, 0x8f, 0x46, 0xcf, 0xd8, 0x46, 0x97, 0xcc, 0xea, 0x60,
             0x30, 0xfc, 0x84, 0x12,
-        ]),
+        ])),
     },
     TicketSpec {
         role: Role::WorkerGpu,
         secret: "worker-gpu",
-        key: TicketKey::from_bytes([
+        key: Some(TicketKey::from_bytes([
             0x41, 0x36, 0x1e, 0x96, 0xe5, 0xf8, 0xcb, 0x4b, 0xa3, 0x6d, 0x54, 0x3f, 0x8e, 0xda,
             0x41, 0xc5, 0x7c, 0xe9, 0x3e, 0x9b, 0x1c, 0x1a, 0xd8, 0xc7, 0xfb, 0xbf, 0x92, 0x41,
             0x47, 0x49, 0x33, 0xa1,
-        ]),
+        ])),
     },
     TicketSpec {
         role: Role::WorkerBus,
         secret: "worker-bus",
-        key: TicketKey::from_bytes([
+        key: Some(TicketKey::from_bytes([
             0xc5, 0xd1, 0xf4, 0xb7, 0x82, 0xd6, 0x79, 0xbd, 0xb9, 0xb4, 0x33, 0xef, 0x07, 0x95,
             0x82, 0xab, 0x12, 0xc9, 0x8d, 0xa6, 0x8b, 0xa5, 0xd5, 0x5e, 0x3a, 0x36, 0xb5, 0xa2,
             0xb1, 0x49, 0x3d, 0x42,
-        ]),
+        ])),
     },
     TicketSpec {
         role: Role::WorkerLora,
         secret: "worker-lora",
-        key: TicketKey::from_bytes([
+        key: Some(TicketKey::from_bytes([
             0x2f, 0x33, 0x44, 0x88, 0xf4, 0x79, 0x0e, 0xe8, 0xd9, 0xfe, 0x6f, 0xc3, 0xee, 0x5b,
             0xe2, 0xa9, 0x63, 0xc6, 0x68, 0xbd, 0xa2, 0xfd, 0xbe, 0xd9, 0x9b, 0x41, 0xf5, 0x14,
             0xfa, 0x9e, 0x96, 0xc7,
-        ]),
+        ])),
     },
 ];
 
@@ -9796,9 +9796,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 57] = [
-    "manifest.schema=1.20",
+    "manifest.schema=1.21",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=fabaa97fd061a454a03a9ff628e7d3173fe8f70cc90bb83d1f523cf6a05b76f4",
+    "manifest.sha256=671a79e77984eab13c0c504b5ebc5b25003204b28653050a8214c14a1a6426c3",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9850,7 +9850,7 @@ pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "attestation.mode=measurement_only",
     "attestation.signed_evidence=unavailable",
     "attestation.ticket_keys=development_static",
-    "measurement.bound_manifest_sha256=fabaa97fd061a454a03a9ff628e7d3173fe8f70cc90bb83d1f523cf6a05b76f4",
+    "measurement.bound_manifest_sha256=671a79e77984eab13c0c504b5ebc5b25003204b28653050a8214c14a1a6426c3",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

@@ -14,12 +14,13 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .audit import CohesixAudit
 from .auth import resolve_tcp_auth_token
+from .authority import AdmissionCorrelation, QueenIntent, authority_id, authority_u64, validate_provider_v1
 from .backends import Backend, FilesystemBackend, MockBackend, RestBackend, TcpBackend
 from .client import CohesixClient
 from .defaults import DEFAULTS
@@ -306,8 +307,16 @@ class HostTicketRequest:
     target_hive: Optional[str] = None
     relay_hop: Optional[int] = None
     relay_correlation_id: Optional[str] = None
+    writer_epoch: Optional[int] = None
+    admission: Optional[AdmissionCorrelation] = None
 
     def __post_init__(self) -> None:
+        authority_id(self.ticket_id)
+        authority_id(self.idempotency_key)
+        if self.writer_epoch is not None:
+            authority_u64(self.writer_epoch, positive=True)
+        if self.admission is not None and not isinstance(self.admission, AdmissionCorrelation):
+            raise CohesixError("EPERM invalid admission correlation")
         object.__setattr__(
             self, "ticket_id", _normalize_token("ticket_id", self.ticket_id, max_bytes=128)
         )
@@ -359,14 +368,22 @@ class HostTicketRequest:
                     allow_colon=True,
                 ),
             )
+        validate_provider_v1(self.action, self.target, self.args)
 
     def to_payload(self, schema: str = "host-ticket/v1") -> Dict[str, object]:
+        if schema != "host-ticket/v1":
+            raise CohesixError("HostTicketRequest only encodes the v1 compatibility contract")
+        validate_provider_v1(self.action, self.target, self.args)
         payload: Dict[str, object] = {
             "schema": schema,
             "id": self.ticket_id,
             "idempotency_key": self.idempotency_key,
             "action": self.action,
         }
+        if self.writer_epoch is not None:
+            payload["writer_epoch"] = self.writer_epoch
+        if self.admission is not None:
+            payload["admission"] = asdict(self.admission)
         if self.target is not None:
             payload["target"] = self.target
         if self.args:
@@ -503,6 +520,11 @@ class CohesixOrchestrator:
             defaults=self.defaults,
             profile_contract=profile_contract,
         )
+        self.authority = dict(self.defaults["authority"])
+        if profile_contract is not None:
+            from .worker import load_profile_contract
+            contract = profile_contract if isinstance(profile_contract, TargetProfileContract) else load_profile_contract(profile_contract)
+            self.authority.update(contract.authority)
         self.console = self.defaults.get("console", {})
         self.paths = self.defaults.get("paths", {})
         self.control_plane = self.defaults.get("control_plane", {})
@@ -603,6 +625,12 @@ class CohesixOrchestrator:
         payloads = [json.dumps(item.to_payload(), separators=(",", ":")) for item in approvals]
         return self._append_json_lines("/actions/queue", payloads, 2048, audit)
 
+    def submit_queen_intent(self, intent: QueenIntent) -> int:
+        """Append one strict intent; reuse its exact identity for explicit retries."""
+        policy = self.authority
+        payload = intent.encode(policy)
+        return self.backend.write_append(str(policy["queen_intent_path"]), payload)
+
     def enqueue_schedule(
         self,
         requests: Iterable[ScheduleRequest],
@@ -690,6 +718,8 @@ class CohesixOrchestrator:
         payloads: List[str] = []
         transport_bound = self._transport_payload_bound(path)
         for request in requests:
+            if (self.authority["writer_epoch_required"] or request.writer_epoch is not None) and request.writer_epoch != self.authority["writer_epoch"]:
+                raise CohesixError("EPERM stale-writer")
             if allowlist and request.action not in allowlist:
                 raise CohesixError(
                     f"ticket action {request.action!r} is not in host ticket allowlist"

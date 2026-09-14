@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.20";
+const SCHEMA_VERSION: &str = "1.21";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -153,6 +153,8 @@ const fn ranges_overlap(
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     #[serde(default)]
+    pub authority: cohesix_authority::policy::AuthorityPolicy,
+    #[serde(default)]
     pub meta: ManifestMeta,
     pub root_task: RootTaskSection,
     pub profile: Profile,
@@ -255,6 +257,7 @@ impl Manifest {
         self.validate_namespace_mounts()?;
         self.validate_sharding()?;
         self.validate_tickets()?;
+        crate::authority::validate(self)?;
         self.validate_ticket_limits()?;
         self.validate_ecosystem()?;
         self.validate_sidecars()?;
@@ -3089,6 +3092,18 @@ impl Manifest {
             }
             let resolved = resolve_manifest_relative_path(base_dir, verification_key_path);
             let key = read_hex_key_file(&resolved, "CAS verification key")?;
+            if self.authority.production {
+                let fixture = include_str!("../../../resources/keys/cas_verification_key.hex");
+                let fixture = fixture
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty() && !line.starts_with('#'))
+                    .ok_or_else(|| anyhow::anyhow!("fixture public verification key is missing"))?;
+                if hex::encode(key) == fixture {
+                    bail!("production CAS verification key matches published fixture signing material");
+                }
+            }
+
             ed25519_dalek::VerifyingKey::from_bytes(&key).with_context(|| {
                 format!(
                     "CAS verification key {} is not a valid Ed25519 public key",
@@ -7363,7 +7378,10 @@ fn validate_worker_runtime_text(name: &str, value: &str) -> Result<()> {
 #[serde(deny_unknown_fields)]
 pub struct TicketSpec {
     pub role: Role,
+    #[serde(default)]
     pub secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

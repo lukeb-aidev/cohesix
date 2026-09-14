@@ -68,6 +68,7 @@ in-process = ["nine-door"]
 gpu-bridge = ["gpu-bridge-host"]
 
 [dependencies]
+cohesix-authority = { workspace = true, features = ["std"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-ticket = { workspace = true }

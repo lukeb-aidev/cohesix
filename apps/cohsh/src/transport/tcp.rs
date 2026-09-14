@@ -49,13 +49,14 @@ const CONSOLE_COMMAND_TRAILING_DRAIN_DEADLINE: Duration = Duration::from_millis(
 const FRAME_ERROR_VERB: &str = "FRAME";
 const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
 const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
+#[cfg(test)]
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const TCP_BATCH_MAX_WRITE_BYTES: usize = 1_360;
 const TCP_BATCH_MAX_FRAMES: usize = TRANSPORT_COMMAND_BATCH_MAX;
 
 /// Return true when the supplied token is the documented insecure placeholder.
 pub fn is_insecure_placeholder_token(token: &str) -> bool {
-    token.trim() == INSECURE_PLACEHOLDER_TOKEN
+    cohesix_authority::secret::is_placeholder(token)
 }
 
 /// Return true when verbose TCP debugging is enabled via the environment.
@@ -326,6 +327,7 @@ pub struct TcpTransport {
     retry_ceiling: Duration,
     max_retries: usize,
     auth_token: String,
+    auth_token_ref: Option<String>,
     allow_insecure_placeholder_token: bool,
     tcp_debug: bool,
     stream: Option<TcpStream>,
@@ -367,6 +369,7 @@ impl TcpTransport {
             retry_ceiling: DEFAULT_RETRY_CEILING,
             max_retries: DEFAULT_MAX_RETRIES,
             auth_token: DEFAULT_AUTH_TOKEN.to_owned(),
+            auth_token_ref: None,
             allow_insecure_placeholder_token: false,
             tcp_debug: tcp_debug_enabled(),
             stream: None,
@@ -423,7 +426,12 @@ impl TcpTransport {
     /// Override the authentication token expected by the remote listener.
     #[must_use]
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
-        self.auth_token = token.into();
+        let token = token.into();
+        self.auth_token_ref = token
+            .starts_with("env:")
+            .then(|| token.clone())
+            .or_else(|| token.starts_with("file:").then(|| token.clone()));
+        self.auth_token = token;
         self
     }
 
@@ -534,14 +542,17 @@ impl TcpTransport {
         }
     }
 
-    fn validate_auth_token(&self) -> Result<()> {
+    fn validate_auth_token(&mut self) -> Result<()> {
+        if let Some(reference) = &self.auth_token_ref {
+            self.auth_token = cohesix_authority::secret::resolve_reference(reference)?;
+        }
         let token = self.auth_token.trim();
         if token.is_empty() {
             return Err(anyhow!(
                 "tcp auth token must be configured with --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
             ));
         }
-        if token == INSECURE_PLACEHOLDER_TOKEN {
+        if is_insecure_placeholder_token(token) {
             if self.allow_insecure_placeholder_token {
                 warn!("tcp auth token uses insecure placeholder token; set a real secret");
                 return Ok(());
@@ -550,39 +561,14 @@ impl TcpTransport {
                 "tcp auth token uses insecure placeholder token; set a real secret"
             ));
         }
+        self.auth_token = cohesix_authority::secret::validate_value(token)?;
         Ok(())
     }
 
     fn perform_auth(&mut self) -> Result<()> {
         let auth_line = format!("AUTH {}", self.auth_token);
         let auth_start = Instant::now();
-        let auth_bytes = auth_line.as_bytes();
-        let dump_len = auth_bytes.len().min(32);
-        info!(
-            "[cohsh][auth] sending auth frame payload ({} bytes): {:02x?}",
-            auth_bytes.len(),
-            &auth_bytes[..dump_len]
-        );
-        debug!(
-            "[cohsh][auth] auth frame bytes (len={}): {:02x?}",
-            auth_bytes.len(),
-            &auth_bytes[..dump_len]
-        );
-        if self.tcp_debug {
-            info!(
-                "[cohsh][tcp] sending auth frame payload ({} bytes): {:02x?}",
-                auth_bytes.len(),
-                &auth_bytes[..dump_len]
-            );
-            info!(
-                "[cohsh][tcp] auth/handshake struct: magic=\"AUTH\" version=1 role={:?}",
-                self.requested_role
-            );
-            info!(
-                "[cohsh][tcp] expecting handshake response: magic=\"OK AUTH\" version=1 role={:?}",
-                self.requested_role
-            );
-        }
+        info!("[cohsh][auth] sending credential frame (redacted)");
         debug!(
             "[cohsh][auth] state={:?} send AUTH token_len={}",
             self.auth_state,

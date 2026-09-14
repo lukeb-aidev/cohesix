@@ -3,6 +3,38 @@
 <!-- Purpose: Define production failover and redundancy runbooks for Cohesix 1.0.0-beta using gateway and FUSE mounts. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Failover and Redundancy (1.0.0-beta As-Built)
+
+The optional shell-hook watchdog path is development-only. The M27a
+`--production` path requires an explicit `--writer-epoch`, absolute
+`--cutover-state` journal, and all five JSON argv hooks: `--pause-hook-json`,
+`--fence-hook-json`, `--promote-hook-json`, `--resume-hook-json`, and
+`--stop-hook-json`. Hold one deployment-wide watchdog lock. Missing hooks or an
+unknown old writer refuse cutover. A second promotion needs a new invocation
+with a strictly greater epoch.
+
+The watchdog persists `prepared -> pause -> fence -> promote -> routing ->
+resume -> complete`, syncing each boundary before its effect. Each hook receives
+one JSON request on stdin with `schema=writer-cutover/v1`, unique `id`, `src`,
+`dst`, `writer_epoch`, and `action`. Its sole bounded JSON reply must echo every
+field exactly and add `status=succeeded`, `terminal=true`, and `verified=true`.
+The fence hook may attest only after independently verifying the old writer is
+unable to act; promotion must install the new epoch in the provider's durable
+fence. A zero exit code alone is insufficient. Hooks must keep their own
+idempotent transaction identity. The stop hook must stop both writers and relay.
+Receipts are external provider attestations, not proof invented by the watchdog.
+
+Routing changes only after verified fencing, promotion and fresh root health at
+the selected epoch. Failed post-routing health, missing or ambiguous receipts,
+and any interrupted transaction remove routing and invoke stop-both. Restart
+never repeats an ambiguous promotion. A failed stop remains `stop-unverified`;
+no automatic rollback or resume is allowed. Storage failures still attempt the
+external stop. Preserve the journal and do not reset its epoch floor to recover.
+
+The single-host [M27a Release A profile](M27A_AUTHORITY.md) disables production
+failover/federation. Transaction unit tests establish host failure behavior;
+physical multi-host fence/cutover evidence remains required before enabling a
+production failover profile.
+
 Author: Lukas Bower  
 Revision: September 13, 2026
 

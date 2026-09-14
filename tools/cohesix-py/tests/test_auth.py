@@ -22,7 +22,7 @@ from cohesix.auth import resolve_tcp_auth_token  # noqa: E402
 def isolated_auth_environment(monkeypatch) -> None:
     """Authentication tests control every resolver input, including release CI."""
     for key in (
-        "COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN", "COH_RTC_MANIFEST",
+        "COH_AUTH_TOKEN_REF", "COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN", "COH_RTC_MANIFEST",
         "COH_MANIFEST", "COHESIX_MANIFEST",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -62,14 +62,14 @@ def test_resolve_tcp_auth_token_prefers_explicit_value() -> None:
             os.environ.update(original)
 
 
-def test_resolve_tcp_auth_token_prefers_manifest_over_env() -> None:
+def test_resolve_tcp_auth_token_prefers_explicit_environment_over_manifest() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         manifest = Path(tmp) / "root_task.toml"
         _write_manifest(manifest, "bootstrap")
         original = dict(os.environ)
         try:
             os.environ["COH_AUTH_TOKEN"] = "bootstrap-token"
-            assert resolve_tcp_auth_token(None, manifest_paths=[manifest]) == "bootstrap"
+            assert resolve_tcp_auth_token(None, manifest_paths=[manifest]) == "bootstrap-token"
         finally:
             os.environ.clear()
             os.environ.update(original)

@@ -17,6 +17,12 @@ interchangeable.
 
 ## Current development state
 
+Milestone [27a](BUILD_PLAN.md#27a) is **In Progress**, authorized on
+14 September 2026. Delegated REST identity, strict Queen intent replay,
+host execution recovery, production secrets, and target qualification are
+being implemented. The [27a task record](audit/M27A_COMPLETION_EVIDENCE.md)
+keeps qualification separate from the preceding milestone's approvals.
+
 Milestones [26e](BUILD_PLAN.md#26e) and [27](BUILD_PLAN.md#27) are Complete
 under their recorded owner approvals. On 14 September 2026, Lukas Bower
 approved M27 closure at tested source `b54bdd2fc`: QEMU Stages 01–05 and live

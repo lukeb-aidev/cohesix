@@ -225,6 +225,11 @@ impl Transport for RestTransport {
             let _ = normalize_ticket(role, Some(ticket), TicketPolicy::tcp())
                 .map_err(|err| anyhow!("ticket invalid for rest transport: {err}"))?;
         }
+        self.client.set_delegated_ticket(
+            ticket
+                .map(str::to_owned)
+                .or_else(|| std::env::var("COH_REST_TICKET").ok()),
+        );
         self.attached = true;
         let session = Session::new(DEFAULT_SESSION_ID, role);
         let detail = format!("role={}", role_label(role));
@@ -454,6 +459,7 @@ mod tests {
 
     fn sample_status(connected: bool) -> GatewayStatusResponse {
         GatewayStatusResponse {
+            authority: None,
             connected,
             target_host: "127.0.0.1".to_string(),
             target_port: 31337,
@@ -642,11 +648,23 @@ mod tests {
 
     #[test]
     fn write_batch_uses_one_rest_request_and_preserves_per_record_ack_order() {
+        use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+        let ticket = TicketIssuer::new("test-issuer-key")
+            .issue(TicketClaims::new(
+                Role::Queen,
+                BudgetSpec::unbounded(),
+                None,
+                MountSpec::empty(),
+                0,
+            ))
+            .expect("issue header fixture")
+            .encode()
+            .expect("encode header fixture");
         let response = r#"{"status":"OK","verb":"ECHO_BATCH","path":"/host/tickets/status","end":true,"bytes":6}"#.to_owned();
         let (base_url, requests_rx, server) = serve_json(vec![response]);
         let mut transport = RestTransport::new(base_url, Some("test-token".to_owned()));
         let session = transport
-            .attach(Role::Queen, None)
+            .attach(Role::Queen, Some(ticket.as_str()))
             .expect("attach local REST session");
         let _ = transport.drain_acknowledgements();
 
@@ -669,6 +687,9 @@ mod tests {
         let requests = requests_rx.recv().expect("receive captured requests");
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with("POST /v1/fs/echo-batch HTTP/1.1"));
+        assert!(requests[0]
+            .to_lowercase()
+            .contains(&format!("x-cohesix-ticket: {ticket}").to_lowercase()));
     }
 
     #[test]

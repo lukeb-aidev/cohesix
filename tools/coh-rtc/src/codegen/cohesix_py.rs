@@ -6,6 +6,9 @@
 use crate::codegen::hash_bytes;
 use crate::ir::{Manifest, TelemetryIngestEvictionPolicy};
 use anyhow::{bail, Context, Result};
+use cohsh_core::wire::{
+    CAT_CHUNK_MAX_COUNT, CAT_CHUNK_MAX_WIRE_BYTES, CAT_CHUNK_REASSEMBLED_MAX_BYTES,
+};
 use cohsh_core::{
     MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN, MAX_TICKET_LEN,
 };
@@ -14,7 +17,7 @@ use std::fs;
 use std::path::Path;
 
 /// Versioned schema for one target-qualified Cohesix Python profile contract.
-pub const PYTHON_PROFILE_SCHEMA: &str = "cohesix-python-profile/v1";
+pub const PYTHON_PROFILE_SCHEMA: &str = "cohesix-python-profile/v2";
 /// Accepted host-ticket request schemas. Version 1 remains a compatibility
 /// input; version 2 is the generation-bound Worker receipt path.
 pub const HOST_TICKET_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "host-ticket/v2"];
@@ -65,6 +68,18 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     writeln!(contents, "# Copyright 2026 Lukas Bower").ok();
     writeln!(contents).ok();
     writeln!(contents, "DEFAULTS = {{").ok();
+    writeln!(contents, "    \"provider_v1_fields\": {{").ok();
+    for (action, fields) in cohesix_authority::PROVIDER_V1_FIELDS {
+        writeln!(contents, "        {action:?}: {fields:?},").ok();
+    }
+    writeln!(contents, "    }},").ok();
+    writeln!(
+        contents,
+        "    \"placeholder_credentials\": {:?},",
+        cohesix_authority::PLACEHOLDER_CREDENTIALS
+    )
+    .ok();
+    writeln!(contents, "    \"authority\": {{\"production\": {}, \"delegated_rest\": {}, \"identity_class\": \"gateway_enforced\", \"strict_queen_intents\": {}, \"legacy_queen_ctl\": {}, \"writer_epoch\": {}, \"writer_epoch_required\": {}, \"queen_intent_schema\": \"queen-intent/v1\", \"queen_intent_path\": \"/queen/intents/ctl\", \"queen_dedupe_path\": \"/proc/queen/dedupe\", \"queen_intent_max_bytes\": {}}},", py_bool(manifest.authority.production), py_bool(manifest.authority.delegated_rest), py_bool(manifest.authority.strict_queen_intents), py_bool(manifest.authority.legacy_queen_ctl), manifest.authority.writer_epoch, py_bool(manifest.authority.writer_epoch_required), manifest.authority.queen_intent_max_bytes).ok();
     // The wheel is shared by every target. Its built-in values are bounded
     // fallback expectations and deliberately cannot identify a live target.
     // Keep the compiler input hash under a non-authoritative provenance key so
@@ -96,6 +111,24 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     writeln!(contents, "        \"max_id_len\": {},", MAX_ID_LEN).ok();
     writeln!(contents, "        \"max_echo_len\": {},", MAX_ECHO_LEN).ok();
     writeln!(contents, "        \"max_ticket_len\": {},", MAX_TICKET_LEN).ok();
+    writeln!(
+        contents,
+        "        \"cat_chunk_max_count\": {},",
+        CAT_CHUNK_MAX_COUNT
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"cat_chunk_max_wire_bytes\": {},",
+        CAT_CHUNK_MAX_WIRE_BYTES
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"cat_reassembled_max_bytes\": {},",
+        CAT_CHUNK_REASSEMBLED_MAX_BYTES
+    )
+    .ok();
     writeln!(contents, "    }},").ok();
 
     writeln!(contents, "    \"ticket_limits\": {{").ok();
@@ -734,6 +767,7 @@ pub fn render_profile_contract(
 
     let value = serde_json::json!({
         "schema": PYTHON_PROFILE_SCHEMA,
+        "authority": manifest.authority,
         "meta": {
             "author": "Lukas Bower",
             "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest.",

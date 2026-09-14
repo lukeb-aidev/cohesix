@@ -487,7 +487,8 @@ impl TicketToken {
     pub fn decode(token: &str, key: &TicketKey) -> Result<Self, TicketError> {
         let (payload_bytes, mac) = parse_token(token)?;
         let expected = keyed_mac(key, &payload_bytes);
-        if expected != mac {
+        // BLAKE3 Hash equality compares MAC bytes in constant time.
+        if blake3::Hash::from(expected) != blake3::Hash::from(mac) {
             return Err(TicketError::MacMismatch);
         }
         let claims = TicketClaims::decode_payload(&payload_bytes)?;

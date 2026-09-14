@@ -24,6 +24,20 @@ impl RestSession {
         Self { client }
     }
 
+    /// Configure the caller ticket required for REST mutations.
+    pub fn with_delegated_ticket(mut self, ticket: impl Into<String>) -> Self {
+        self.client = self.client.with_delegated_ticket(ticket);
+        self
+    }
+
+    /// Select explicit delegation; absent input retains the configured environment source.
+    pub fn with_optional_delegated_ticket(mut self, ticket: Option<&str>) -> Self {
+        if let Some(ticket) = ticket {
+            self.client.set_delegated_ticket(Some(ticket.to_owned()));
+        }
+        self
+    }
+
     /// Fetch manifest-derived bounds from the gateway.
     pub fn bounds(&self) -> Result<BoundsResponse> {
         self.client.bounds()

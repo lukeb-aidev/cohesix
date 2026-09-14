@@ -4,6 +4,19 @@
 <!-- Author: Lukas Bower -->
 # Worker Tickets
 
+[Milestone 27a authority policy](M27A_AUTHORITY.md) treats host action tickets and
+REST delegated tickets as host authority. Model/session roles grant no VM
+capabilities. Accepted Milestone 26e Worker and baseline isolated-driver records
+remain the authority for their complete task containment and teardown. A selected
+Milestone 29 storage runtime additionally requires its own accepted containment
+and generation evidence. Production Worker ticket/lease ledger binding, complete
+selected-driver ledger projection and structured quarantine remain Milestone 28b
+work; the compiler rejects those production claims before their evidence exists.
+REST mutations now require a finite scoped delegated ticket even for a Queen
+caller. An optional ticket on a direct Queen console session does not waive that
+REST requirement.
+
+
 **At a glance**
 - Worker tickets are the **application-layer authority boundary** for worker-role sessions.
 - Tickets are presented during `attach` and determine the namespace slice.

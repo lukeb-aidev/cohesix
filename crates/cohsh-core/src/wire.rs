@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Shared ACK/ERR/END console wire helpers.
 // Author: Lukas Bower
@@ -11,6 +11,14 @@ pub use console_ack_wire::{AckLine, AckStatus, ParsedAck};
 
 /// Terminal marker emitted at the end of a streaming response.
 pub const END_LINE: &str = "END";
+
+/// Existing C1 frames keep the fixed console response-line bound.
+pub const CAT_CHUNK_MAX_WIRE_BYTES: usize = 256;
+/// A logical record must fit the existing bounded response frame inventory.
+pub const CAT_CHUNK_MAX_COUNT: usize = 64;
+/// Schema 1.21 permits a complete AuditFS record up to the Secure9P byte ceiling.
+/// This does not enlarge commands, ECHO payloads or the response frame inventory.
+pub const CAT_CHUNK_REASSEMBLED_MAX_BYTES: usize = 8192;
 
 /// Parsed console line classification.
 #[derive(Debug, Clone, PartialEq, Eq)]

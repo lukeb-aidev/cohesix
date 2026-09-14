@@ -1,4 +1,25 @@
 {
+  "authority": {
+    "debug_memory": false,
+    "delegated_rest": true,
+    "delegated_ticket_entries": 256,
+    "delegated_ticket_max_ttl_s": 3600,
+    "execution_wal_required": true,
+    "gpu_frame_max_bytes": 8192,
+    "host_ai": false,
+    "legacy_queen_ctl": true,
+    "production": false,
+    "production_driver_ledger": false,
+    "production_failover": false,
+    "production_worker_ledger": false,
+    "queen_dedupe_entries": 64,
+    "queen_intent_max_bytes": 2048,
+    "strict_queen_intents": true,
+    "structured_quarantine": false,
+    "vm_verified_delegation": false,
+    "writer_epoch": 1,
+    "writer_epoch_required": false
+  },
   "bounds": {
     "console_max_json_bytes": 192,
     "console_max_line_bytes": 2304,
@@ -24,7 +45,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "virt-aarch64",
-  "manifest_sha256": "857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677",
+  "manifest_sha256": "91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
@@ -56,7 +77,7 @@
       "peft.rollback"
     ]
   },
-  "schema": "cohesix-python-profile/v1",
+  "schema": "cohesix-python-profile/v2",
   "schemas": {
     "host_ticket_accepted": [
       "host-ticket/v1",

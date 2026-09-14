@@ -23,12 +23,140 @@ pub const EXECUTION_JOURNAL_MAX_BYTES: usize = 1024 * 1024;
 pub const EXECUTION_JOURNAL_MAX_ENTRIES: usize = 256;
 /// Maximum supported durable execution-lane count.
 pub const EXECUTION_LANE_MAX_COUNT: u8 = 64;
+/// Compiler maximum for a serialized federation WAL; checked before decoding.
+const RELAY_WAL_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 const EXECUTION_LANE_TOPOLOGY_SCHEMA: &str = "host-ticket-execution-lanes/v1";
 const EXECUTION_JOURNAL_SCHEMA_V2: &str = "host-ticket-execution-journal/v2";
 const EXECUTION_JOURNAL_SCHEMA_V3: &str = "host-ticket-execution-journal/v3";
+const EXECUTION_JOURNAL_SCHEMA_V4: &str = "host-ticket-execution-journal/v4";
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Legacy-provider recovery state. Executing without a durable result is
+/// ambiguous and may only produce a deadletter, never another executor call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompatibilityExecution {
+    pub spec: HostTicketSpec,
+    pub executing: bool,
+    pub result: Option<(String, String)>,
+    pub terminal: bool,
+}
+
+/// Durable identity and result store for host-ticket/v1 provider side effects.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompatibilityJournal {
+    schema: String,
+    writer_epoch: u64,
+    entries: BTreeMap<String, CompatibilityExecution>,
+}
+
+impl CompatibilityJournal {
+    pub fn load(path: &Path, writer_epoch: u64) -> Result<Self> {
+        use std::io::Read;
+        let file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    schema: "host-ticket-compat-execution/v1".into(),
+                    writer_epoch,
+                    entries: BTreeMap::new(),
+                })
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let mut bytes = Vec::new();
+        file.take((EXECUTION_JOURNAL_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > EXECUTION_JOURNAL_MAX_BYTES {
+            return Err(anyhow!("compatibility journal exceeds byte bound"));
+        }
+        let mut journal: Self = serde_json::from_slice(&bytes)?;
+        if journal.schema != "host-ticket-compat-execution/v1"
+            || journal.entries.len() > EXECUTION_JOURNAL_MAX_ENTRIES
+            || journal.writer_epoch == 0
+        {
+            return Err(anyhow!("invalid compatibility journal"));
+        }
+        if writer_epoch < journal.writer_epoch {
+            return Err(anyhow!("EPERM stale-writer-configuration"));
+        }
+        for (key, entry) in &journal.entries {
+            crate::claim::validate_spec(&entry.spec, crate::claim::SpecSource::RawRequest)?;
+            if let Some((_, line)) = &entry.result {
+                let records = crate::claim::parse_result_lines(
+                    std::slice::from_ref(line),
+                    crate::HOST_TICKET_RESULT_V1_SCHEMA,
+                    2048,
+                )?;
+                let result = records
+                    .first()
+                    .ok_or_else(|| anyhow!("missing journal result"))?;
+                if result.id != entry.spec.id
+                    || result.idempotency_key != entry.spec.idempotency_key
+                    || result.action != entry.spec.action
+                    || result.writer_epoch != entry.spec.writer_epoch
+                    || result.admission != entry.spec.admission
+                    || !matches!(result.state.as_str(), "succeeded" | "failed" | "expired")
+                {
+                    return Err(anyhow!("journal result differs from request identity"));
+                }
+            }
+            if *key != TicketKey::new(&entry.spec.id, &entry.spec.idempotency_key).journal_key()
+                || entry.spec.schema != crate::HOST_TICKET_V1_SCHEMA
+                || (entry.terminal && entry.result.is_none())
+                || (entry.result.is_some() && !entry.executing)
+            {
+                return Err(anyhow!("invalid compatibility journal entry"));
+            }
+        }
+        if writer_epoch > journal.writer_epoch
+            && journal.entries.values().any(|entry| !entry.terminal)
+        {
+            return Err(anyhow!("EPERM writer-promotion-pending-recovery"));
+        }
+        journal.writer_epoch = writer_epoch;
+        Ok(journal)
+    }
+
+    pub fn prepare(&mut self, spec: &HostTicketSpec) -> Result<CompatibilityExecution> {
+        let key = TicketKey::new(&spec.id, &spec.idempotency_key).journal_key();
+        if let Some(entry) = self.entries.get(&key) {
+            if entry.spec != *spec {
+                return Err(anyhow!("EPERM idempotency-conflict"));
+            }
+            return Ok(entry.clone());
+        }
+        if self.entries.len() >= EXECUTION_JOURNAL_MAX_ENTRIES {
+            return Err(anyhow!("ELIMIT compatibility-journal-capacity"));
+        }
+        let entry = CompatibilityExecution {
+            spec: spec.clone(),
+            executing: false,
+            result: None,
+            terminal: false,
+        };
+        self.entries.insert(key, entry.clone());
+        Ok(entry)
+    }
+
+    pub fn store(&mut self, path: &Path, entry: CompatibilityExecution) -> Result<()> {
+        let key = TicketKey::new(&entry.spec.id, &entry.spec.idempotency_key).journal_key();
+        if !self.entries.contains_key(&key) {
+            return Err(anyhow!("unprepared compatibility execution"));
+        }
+        self.entries.insert(key, entry);
+        let payload = serde_json::to_vec(self)?;
+        durable_atomic_write(
+            path,
+            &payload,
+            EXECUTION_JOURNAL_MAX_BYTES,
+            "compatibility execution journal",
+        )
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +213,8 @@ pub enum RelayWalState {
     Pending,
     /// Entry was forwarded and acknowledged by the target hive.
     Delivered,
+    /// Epoch or authority rejection; retained as a terminal refusal.
+    Rejected,
 }
 
 /// One federated relay WAL record.
@@ -111,21 +241,53 @@ pub struct RelayWalEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RelayWal {
     #[serde(default)]
+    writer_epoch: u64,
+    #[serde(default)]
     next_seq: u64,
     #[serde(default)]
     entries: Vec<RelayWalEntry>,
 }
 
 impl RelayWal {
+    /// Persist a monotonic owner fence before any remote authority is contacted.
+    pub fn bind_writer_epoch(&mut self, path: &Path, epoch: u64) -> Result<()> {
+        if epoch == 0 || epoch < self.writer_epoch {
+            return Err(anyhow!("EPERM stale-writer-configuration"));
+        }
+        if epoch > self.writer_epoch && self.writer_epoch != 0 && self.pending_count() != 0 {
+            return Err(anyhow!("EPERM writer-promotion-pending-recovery"));
+        }
+        if epoch != self.writer_epoch {
+            self.writer_epoch = epoch;
+            self.save(path)?;
+        }
+        Ok(())
+    }
+
+    /// Retain an epoch refusal without allowing another delivery attempt.
+    pub fn mark_rejected(&mut self, key: &str, detail: &str) {
+        self.mark_failed(key, detail);
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == key) {
+            entry.state = RelayWalState::Rejected;
+        }
+    }
+
     /// Load relay WAL from disk; missing files resolve to an empty WAL.
     pub fn load(path: &Path) -> Result<Self> {
-        let payload = match fs::read(path) {
-            Ok(payload) => payload,
+        use std::io::Read;
+        let file = match File::open(path) {
+            Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(err) => {
                 return Err(err).with_context(|| format!("read relay WAL {}", path.display()))
             }
         };
+        let mut payload = Vec::new();
+        file.take((RELAY_WAL_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut payload)?;
+        if payload.len() > RELAY_WAL_MAX_BYTES {
+            return Err(anyhow!("ELIMIT relay WAL exceeds byte bound"));
+        }
         let wal: Self = serde_json::from_slice(&payload)
             .with_context(|| format!("parse relay WAL {}", path.display()))?;
         Ok(wal)
@@ -133,8 +295,8 @@ impl RelayWal {
 
     /// Persist relay WAL to disk atomically.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let payload = serde_json::to_vec_pretty(self).context("serialize relay WAL")?;
-        durable_atomic_write(path, &payload, usize::MAX, "relay WAL")
+        let payload = serde_json::to_vec(self).context("serialize relay WAL")?;
+        durable_atomic_write(path, &payload, RELAY_WAL_MAX_BYTES, "relay WAL")
     }
 
     /// Return true if the key already exists in delivered state.
@@ -216,20 +378,16 @@ impl RelayWal {
     }
 
     /// Enforce deterministic WAL retention limits.
-    pub fn enforce_limits(&mut self, max_entries: usize, max_bytes: usize) {
+    pub fn enforce_limits(&mut self, max_entries: usize, max_bytes: usize) -> Result<()> {
         if max_entries == 0 || max_bytes == 0 {
-            self.entries.clear();
-            return;
+            return Err(anyhow!("ELIMIT relay WAL bounds must be nonzero"));
         }
         while self.entries.len() > max_entries || self.serialized_len() > max_bytes {
             if !self.drop_oldest_delivered() {
-                if self.entries.is_empty() {
-                    break;
-                }
-                self.entries.sort_by_key(|entry| entry.seq);
-                self.entries.remove(0);
+                return Err(anyhow!("ELIMIT relay WAL cannot discard pending authority"));
             }
         }
+        Ok(())
     }
 
     fn drop_oldest_delivered(&mut self) -> bool {
@@ -238,7 +396,7 @@ impl RelayWal {
             .entries
             .iter()
             .enumerate()
-            .find(|(_idx, entry)| entry.state == RelayWalState::Delivered)
+            .find(|(_idx, entry)| entry.state != RelayWalState::Pending)
         {
             self.entries.remove(idx);
             true
@@ -313,6 +471,8 @@ pub struct ExecutionJournalEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionJournal {
+    #[serde(default)]
+    writer_epoch: u64,
     schema: String,
     /// Highest global admission sequence durably completed by this lane.
     ///
@@ -328,7 +488,8 @@ pub struct ExecutionJournal {
 impl Default for ExecutionJournal {
     fn default() -> Self {
         Self {
-            schema: EXECUTION_JOURNAL_SCHEMA_V3.to_owned(),
+            schema: EXECUTION_JOURNAL_SCHEMA_V4.to_owned(),
+            writer_epoch: 0,
             completed_through_admission_sequence: 0,
             entries: BTreeMap::new(),
         }
@@ -336,16 +497,41 @@ impl Default for ExecutionJournal {
 }
 
 impl ExecutionJournal {
+    /// Bind the persisted writer floor before dispatch. A regressed manifest
+    /// cannot regain write authority by restarting the same journal.
+    pub fn bind_writer_epoch(&mut self, path: &Path, epoch: u64) -> Result<()> {
+        if epoch == 0 || epoch < self.writer_epoch {
+            return Err(anyhow!("EPERM stale-writer-configuration"));
+        }
+        if self.writer_epoch != epoch {
+            if self.writer_epoch != 0
+                && self
+                    .entries
+                    .values()
+                    .any(|entry| entry.state != ExecutionJournalState::Terminal)
+            {
+                return Err(anyhow!("EPERM writer-promotion-pending-recovery"));
+            }
+            self.writer_epoch = epoch;
+            self.save(path)?;
+        }
+        Ok(())
+    }
+
     /// Load and validate a bounded journal; a missing file is empty state.
     pub fn load(path: &Path) -> Result<Self> {
-        let payload = match fs::read(path) {
-            Ok(payload) => payload,
+        use std::io::Read;
+        let file = match File::open(path) {
+            Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(err) => {
                 return Err(err)
                     .with_context(|| format!("read execution journal {}", path.display()))
             }
         };
+        let mut payload = Vec::new();
+        file.take((EXECUTION_JOURNAL_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut payload)?;
         if payload.len() > EXECUTION_JOURNAL_MAX_BYTES {
             return Err(anyhow!(
                 "execution journal {} exceeds {} bytes",
@@ -367,9 +553,12 @@ impl ExecutionJournal {
                     .filter_map(|entry| entry.spec.admission_sequence)
                     .max()
                     .unwrap_or(0);
-                journal.schema = EXECUTION_JOURNAL_SCHEMA_V3.to_owned();
+                journal.schema = EXECUTION_JOURNAL_SCHEMA_V4.to_owned();
             }
-            EXECUTION_JOURNAL_SCHEMA_V3 => {}
+            EXECUTION_JOURNAL_SCHEMA_V3 => {
+                journal.schema = EXECUTION_JOURNAL_SCHEMA_V4.to_owned();
+            }
+            EXECUTION_JOURNAL_SCHEMA_V4 => {}
             _ => return Err(anyhow!("unsupported execution journal schema")),
         }
         journal.validate()?;
@@ -566,7 +755,7 @@ impl ExecutionJournal {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.schema != EXECUTION_JOURNAL_SCHEMA_V3 {
+        if self.schema != EXECUTION_JOURNAL_SCHEMA_V4 {
             return Err(anyhow!("unsupported execution journal schema"));
         }
         if self.entries.len() > EXECUTION_JOURNAL_MAX_ENTRIES {
@@ -817,9 +1006,29 @@ mod tests {
         mutable.mark_delivered("a");
         assert!(mutable.contains_delivered("a"));
         mutable.upsert_pending("b", "hive-c", "{\"line\":2}");
-        mutable.enforce_limits(1, 1024);
+        mutable
+            .enforce_limits(1, 1024)
+            .expect("only terminal records evicted");
         assert_eq!(mutable.entries.len(), 1);
         assert_eq!(mutable.pending_count(), 1);
+    }
+
+    #[test]
+    fn journals_reject_oversized_disk_inputs_before_json_decode() {
+        let directory = tempfile::tempdir().expect("journal directory");
+        let path = directory.path().join("oversized.json");
+        File::create(&path)
+            .expect("file")
+            .set_len((RELAY_WAL_MAX_BYTES + 1) as u64)
+            .expect("sparse length");
+        assert!(RelayWal::load(&path)
+            .expect_err("relay size bound")
+            .to_string()
+            .contains("byte bound"));
+        assert!(ExecutionJournal::load(&path)
+            .expect_err("execution size bound")
+            .to_string()
+            .contains("exceeds"));
     }
 
     #[test]

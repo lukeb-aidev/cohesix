@@ -135,6 +135,19 @@ pub fn export_pack<C: CohAccess>(
             None,
         )?;
 
+        for path in ["/proc/authority", "/proc/queen/dedupe"] {
+            capture_file(
+                client,
+                &spec.out_dir,
+                path,
+                CaptureVerb::Cat,
+                64 * 1024,
+                audit,
+                &mut items,
+                None,
+            )?;
+        }
+
         capture_proc_schedule(client, bounds, spec, audit, &mut items)?;
         capture_proc_lease(client, bounds, spec, audit, &mut items)?;
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from .authority import QueenIntent
 from .backends import Backend, MockBackend
 from .errors import CohesixError
 from .generated import GPU_RECEIPT_ACTIONS, PEFT_RECEIPT_ACTIONS, PROFILE_SCHEMA
@@ -107,6 +108,7 @@ class TargetProfileContract:
     vocabularies: Mapping[str, Any]
     receipts: Mapping[str, Any]
     bounds: Mapping[str, Any]
+    authority: Mapping[str, Any]
     source: str = "file"
 
     @property
@@ -238,6 +240,7 @@ def load_profile_contract(
             "target",
             "manifest_profile",
             "manifest_sha256",
+            "authority",
             "worker",
             "schemas",
             "namespace",
@@ -509,6 +512,20 @@ def load_profile_contract(
     ):
         raise CohesixError("profile contract widens Python proof authority")
 
+    authority = _mapping(data["authority"], "authority")
+    _require_keys(authority, {
+        "production", "delegated_rest", "vm_verified_delegation", "delegated_ticket_entries", "delegated_ticket_max_ttl_s", "strict_queen_intents", "legacy_queen_ctl", "queen_dedupe_entries", "queen_intent_max_bytes", "writer_epoch", "writer_epoch_required", "execution_wal_required", "gpu_frame_max_bytes", "debug_memory", "production_worker_ledger", "production_driver_ledger", "structured_quarantine", "host_ai", "production_failover",
+    }, "authority")
+    for key, value in authority.items():
+        if key in {"writer_epoch", "delegated_ticket_entries", "delegated_ticket_max_ttl_s", "queen_dedupe_entries", "queen_intent_max_bytes", "gpu_frame_max_bytes"}:
+            _bounded_int(value, key, 1, {"delegated_ticket_entries": 4096, "delegated_ticket_max_ttl_s": 86400, "queen_dedupe_entries": 256, "queen_intent_max_bytes": 2048, "gpu_frame_max_bytes": 8192}.get(key, 2**64 - 1))
+        elif type(value) is not bool:
+            raise CohesixError("authority policy flags must be boolean")
+    if not authority["delegated_rest"] or any(authority[key] for key in ("vm_verified_delegation", "production_worker_ledger", "production_driver_ledger", "structured_quarantine", "host_ai", "production_failover")):
+        raise CohesixError("profile claims unavailable authority")
+    if authority["production"] and (authority["legacy_queen_ctl"] or authority["debug_memory"] or not all(authority[key] for key in ("writer_epoch_required", "strict_queen_intents", "execution_wal_required"))):
+        raise CohesixError("production authority floor is incomplete")
+
     return TargetProfileContract(
         target=target,
         target_profile=profile,
@@ -520,6 +537,7 @@ def load_profile_contract(
         vocabularies=vocabularies,
         receipts=receipts,
         bounds=bounds,
+        authority=authority,
         source=source,
     )
 
@@ -542,7 +560,7 @@ class WorkerClient:
                 int(self.contract.namespace["shard_bits"])
             )
 
-    def spawn(self, role: str, public_instance_id: str, *, slot: int = 0) -> WorkerControlResult:
+    def spawn(self, role: str, public_instance_id: str, *, slot: int = 0, intent: Optional[QueenIntent] = None) -> WorkerControlResult:
         """Submit a bounded Queen spawn request; ACK means admission only."""
 
         canonical_role = normalize_worker_role(role)
@@ -560,7 +578,17 @@ class WorkerClient:
             },
             int(self.contract.bounds["console_max_json_bytes"]),
         )
-        written = self.backend.write_append("/queen/ctl", payload)
+        path = "/queen/ctl"
+        if intent is not None:
+            if dict(intent.cmd) != json.loads(payload):
+                raise CohesixError("strict intent cmd differs from requested Worker spawn")
+            from .defaults import DEFAULTS
+            policy = {**DEFAULTS["authority"], **self.contract.authority}
+            payload = intent.encode(policy)
+            path = "/queen/intents/ctl"
+        elif not self.contract.authority["legacy_queen_ctl"]:
+            raise CohesixError("strict Queen intent identity is required by selected profile")
+        written = self.backend.write_append(path, payload)
         return WorkerControlResult(
             public_instance_id=worker_id,
             role=canonical_role,

@@ -4,9 +4,30 @@
 # Copyright 2026 Lukas Bower
 
 DEFAULTS = {
+    "provider_v1_fields": {
+        "systemd.start": ["unit"],
+        "systemd.stop": ["unit"],
+        "systemd.restart": ["unit"],
+        "systemd.status-check": ["unit"],
+        "docker.restart": ["container"],
+        "docker.stop": ["container"],
+        "docker.status-check": ["container"],
+        "k8s.cordon": ["node", "reason", "ttl_s"],
+        "k8s.drain": ["node", "reason", "ttl_s"],
+        "k8s.lease.sync": ["node", "reason", "ttl_s"],
+        "gpu.lease.grant": ["gpu_id", "mem_mb", "streams", "ttl_s", "priority", "budget_ttl_s", "budget_ops"],
+        "gpu.lease.renew": ["gpu_id", "ttl_s", "priority"],
+        "gpu.lease.release": ["gpu_id", "reason"],
+        "peft.export": ["job_id", "job", "out_dir", "out"],
+        "peft.import": ["model_id", "model", "job_id", "job", "adapter_dir", "from", "export_root", "export", "registry_root", "registry", "publish"],
+        "peft.activate": ["model_id", "model", "registry_root", "registry"],
+        "peft.rollback": ["registry_root", "registry"],
+    },
+    "placeholder_credentials": ["changeme", "bootstrap", "worker", "worker-gpu", "worker-bus", "worker-lora", "password", "secret", "default", "placeholder", "replace-me", "your-token", "your-token-here"],
+    "authority": {"production": False, "delegated_rest": True, "identity_class": "gateway_enforced", "strict_queen_intents": True, "legacy_queen_ctl": True, "writer_epoch": 1, "writer_epoch_required": False, "queen_intent_schema": "queen-intent/v1", "queen_intent_path": "/queen/intents/ctl", "queen_dedupe_path": "/proc/queen/dedupe", "queen_intent_max_bytes": 2048},
     "contract_kind": "target-neutral-fallback",
     "manifest_sha256": None,
-    "generation_source_sha256": "857846731b7a80d90a53766c610b5a7d11ebc5b8a303605c4c93601b4dbbe677",
+    "generation_source_sha256": "91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53",
     "execution_proof": "none",
     "diagnostic_artifacts": {"max_bytes": 1048576, "max_files": 682, "trace_max_duration_ms": 60000},
     "secure9p": {"msize": 8192, "walk_depth": 8},
@@ -17,6 +38,9 @@ DEFAULTS = {
         "max_id_len": 32,
         "max_echo_len": 2048,
         "max_ticket_len": 224,
+        "cat_chunk_max_count": 64,
+        "cat_chunk_max_wire_bytes": 256,
+        "cat_reassembled_max_bytes": 8192,
     },
     "ticket_limits": {
         "max_scopes": 8,
@@ -149,7 +173,7 @@ DEFAULTS = {
     },
 }
 
-PROFILE_SCHEMA = "cohesix-python-profile/v1"
+PROFILE_SCHEMA = "cohesix-python-profile/v2"
 HOST_TICKET_REQUEST_SCHEMAS = ("host-ticket/v1", "host-ticket/v2")
 HOST_TICKET_RESULT_SCHEMAS = ("host-ticket-result/v1", "host-ticket-result/v2")
 GPU_RECEIPT_ACTIONS = ("gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release")

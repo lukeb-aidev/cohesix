@@ -63,8 +63,8 @@ struct PackArgs {
     /// Optional base bundle directory for delta manifests.
     #[arg(long)]
     delta_base: Option<PathBuf>,
-    /// Path to an Ed25519 signing key (hex).
-    #[arg(long)]
+    /// Ed25519 hex key source: env:NAME, file:/absolute/path, or compatibility file path.
+    #[arg(long, env = "COH_CAS_SIGNING_KEY_REF")]
     signing_key: Option<PathBuf>,
 }
 

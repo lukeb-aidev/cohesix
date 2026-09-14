@@ -14,6 +14,10 @@ import socket
 import sys
 import time
 from collections.abc import Sequence
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools/cohesix-py"))
+from cohesix.auth import resolve_secret  # noqa: E402
 
 
 FRAME_HEADER_BYTES = 4
@@ -76,11 +80,15 @@ def validate_host(value: str) -> str:
 def load_auth_token() -> str:
     """Load the console credential without accepting it on the command line."""
 
-    token = os.environ.get("COHSH_AUTH_TOKEN", os.environ.get("COH_AUTH_TOKEN", ""))
+    token = os.environ.get("COH_AUTH_TOKEN_REF", os.environ.get("COHSH_AUTH_TOKEN", os.environ.get("COH_AUTH_TOKEN", "")))
     if not token:
         raise MatrixError("COHSH_AUTH_TOKEN or COH_AUTH_TOKEN is required")
     if token != token.strip() or "\r" in token or "\n" in token:
         raise MatrixError("console auth token must not contain surrounding whitespace or CR/LF")
+    try:
+        token = resolve_secret(token)
+    except ValueError as error:
+        raise MatrixError("selected console credential is invalid or unavailable") from error
     auth_bytes = f"AUTH {token}".encode("utf-8")
     if len(auth_bytes) > MAX_COMMAND_BYTES:
         raise MatrixError("console auth token exceeds the bounded command frame")

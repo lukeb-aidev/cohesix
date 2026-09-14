@@ -10,6 +10,7 @@ mod coh;
 pub mod cohesix_py;
 mod cohsh;
 mod docs;
+pub use docs::embed_snippets;
 pub mod root_tcb_topology;
 mod rust;
 mod swarmui;
@@ -112,6 +113,13 @@ pub fn emit_all(
     docs: &DocFragments,
     py_defaults: &cohesix_py::CohesixPyDefaults,
 ) -> Result<GeneratedArtifacts> {
+    if options
+        .manifest_out
+        .file_name()
+        .is_some_and(|name| name == "cas_verification_key.hex")
+    {
+        bail!("resolved manifest path collides with the compiler public-key artifact");
+    }
     fs::create_dir_all(&options.out_dir)
         .with_context(|| format!("failed to create {}", options.out_dir.display()))?;
     if let Some(parent) = options.manifest_out.parent() {
@@ -229,6 +237,21 @@ pub fn emit_all(
 
     let manifest_dir = options.manifest_path.parent();
     rust::emit_rust(manifest, manifest_hash, &options.out_dir, manifest_dir)?;
+    // Retain the exact public key used by the target compiler for later bundle
+    // assembly; release tooling must not re-read a mutable deployment key path.
+    let public_key = rust::cas_verification_key(manifest, manifest_dir)?;
+    let public_key_path = options
+        .manifest_out
+        .with_file_name("cas_verification_key.hex");
+    let public_key_hex = public_key
+        .map(|key| {
+            key.iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+                + "\n"
+        })
+        .unwrap_or_default();
+    fs::write(public_key_path, public_key_hex)?;
     let cas_template = cas::build_cas_template(manifest);
     let cas_artifacts = cas::emit_cas_template(&cas_template, &options.cas_manifest_template_out)?;
     cli::emit_cli_script(manifest, &options.cli_script_out)?;

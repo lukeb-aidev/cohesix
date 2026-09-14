@@ -8,6 +8,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+cohesix-authority = { workspace = true, features = ["std"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 base64 = { workspace = true }

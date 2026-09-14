@@ -153,6 +153,12 @@ pub fn validate_spec(spec: &HostTicketSpec, source: SpecSource) -> Result<()> {
     validate_token("id", spec.id.as_str())?;
     validate_token("idempotency_key", spec.idempotency_key.as_str())?;
     validate_token("action", spec.action.as_str())?;
+    if spec.writer_epoch == Some(0) {
+        return Err(anyhow!("writer_epoch must be nonzero"));
+    }
+    if let Some(admission) = &spec.admission {
+        admission.validate().map_err(|err| anyhow!("{err}"))?;
+    }
     if spec.expires_unix_ms == Some(0) {
         return Err(anyhow!("expires_unix_ms must be nonzero when present"));
     }
@@ -334,6 +340,12 @@ fn validate_v2_spec(spec: &HostTicketSpec, source: SpecSource) -> Result<()> {
 }
 
 fn validate_result(result: &HostTicketResult) -> Result<()> {
+    if result.writer_epoch == Some(0) {
+        return Err(anyhow!("writer_epoch must be nonzero"));
+    }
+    if let Some(admission) = &result.admission {
+        admission.validate().map_err(|err| anyhow!("{err}"))?;
+    }
     validate_token("id", result.id.as_str())?;
     validate_token("idempotency_key", result.idempotency_key.as_str())?;
     validate_token("action", result.action.as_str())?;
