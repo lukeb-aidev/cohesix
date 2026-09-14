@@ -5,76 +5,34 @@
 
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
 
-This document is the normative authorization and status ledger for Cohesix
-work. It records both active tasks and retained historical completion context;
-historical measurements are not current product claims unless the active
-milestone and [BENCHMARKS.md](BENCHMARKS.md) qualify them. Runtime contracts
-belong in [ARCHITECTURE.md](ARCHITECTURE.md),
-[INTERFACES.md](INTERFACES.md), and the other focused documents linked from
-`README.md`. Generated values remain authoritative in the selected manifest,
-resolved output, and `coh-rtc` artifacts.
+This is the normative milestone scope and status ledger. Work follows declared
+dependencies and the release sequence below. Historical results retain their
+original source and target limits; current claims require the applicable
+milestone and [benchmark evidence](BENCHMARKS.md). Runtime contracts live in
+[ARCHITECTURE.md](ARCHITECTURE.md), [INTERFACES.md](INTERFACES.md), and the
+focused documents linked from `README.md`. Selected manifests, resolved outputs,
+and `coh-rtc` artifacts define as-built configuration.
 
-- **Primary host:** macOS 26 on Apple Silicon.
-- **Reference target:** QEMU `aarch64/virt` with GICv3.
-- **Physical target:** Raspberry Pi 4 using Pi firmware, U-Boot, and the seL4
-  binary-image handoff.
-- **Reference AI host:** NVIDIA Jetson Orin Nano running host-side Cohesix
-  tools and external AI runtimes, with model, dataset, checkpoint, cache, and
-  evidence storage placed on configurable NVMe-backed paths.
-- **Kernel:** upstream seL4 from the selected external build directory.
-- **Userspace:** pure-Rust `root-task` and NineDoor adapters, root/host Worker
-  session and telemetry models, manifest-declared Pi 4 driver runtimes, and
-  host-side operator and bridge tools. Worker helper crates exist, but current
-  profiles launch no general Worker child tasks.
+- **Host:** macOS 26 on Apple Silicon.
+- **Targets:** QEMU `aarch64/virt` with GICv3; Raspberry Pi 4 via firmware →
+  U-Boot → seL4 binary image.
+- **Userspace:** pure Rust; Queen/Worker control uses bounded namespaces and
+  console operations, with no ad-hoc host RPC authority.
+- **Reference AI host:** NVIDIA Jetson Orin Nano. AI runtimes and GPU tools run
+  host-side, using configurable NVMe paths for models, data, caches and evidence.
 
-Milestones build cumulatively through their declared dependency graph, not by
-numeric order alone. The post-26e delivery sequence below is normative: it
-preserves stable milestone ids while allowing a narrow user-visible release to
-ship before optional storage, broad proof, scheduler, provider, namespace, or
-cloud work. Work may advance only when the active task, checks, evidence, and
-documentation agree. Cohesix uses a Queen/Worker control model over bounded
-namespace and console operations; it does not introduce an ad-hoc host RPC
-authority path.
-
-Current terminology: a **shard** is a manifest-derived worker namespace bucket, and the canonical worker telemetry path is `/shard/<label>/worker/<id>/telemetry`. Older milestone records may mention the legacy `/worker/<id>/telemetry` alias; that alias is valid only when `sharding.legacy_worker_alias = true`.
+A **shard** is a manifest-derived Worker namespace bucket. Telemetry uses
+`/shard/<label>/worker/<id>/telemetry`; the legacy `/worker/<id>/telemetry`
+alias requires `sharding.legacy_worker_alias = true`.
 
 ## seL4 Reference Manual Alignment (v16.0.0)
 
-We treat the official seL4 Reference Manual v16.0.0
-([PDF](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf)) as the
-authoritative description of kernel semantics. The selected profile-specific
-seL4 build directory, generated headers, and generated metadata define which
-configuration options, object layouts, and APIs are active in an as-built
-Cohesix image. A feature described by the manual is not an as-built Cohesix
-capability unless the selected profile enables it and target evidence proves it.
-
-- **Chapters 2 and 3 (Kernel Services and Objects; Capability Spaces)** govern
-  kernel object types, untyped retyping, capability derivation and revocation,
-  CSpace addressing, and capability-mediated authority.
-- **Chapters 4 and 5 (Message Passing (IPC); Notifications)** govern endpoint
-  send, receive, call, and reply semantics and notification signalling used
-  between target tasks. They do not define Secure9P, the Cohesix console
-  grammar, or host and wire transports; those remain Cohesix application
-  protocols with their own bounded contracts.
-- **Chapters 6 and 7 (Threads and Execution; Address Spaces and Virtual
-  Memory)** govern TCBs, priorities, affinities, faults, classic and MCS
-  scheduling semantics, scheduling contexts when MCS is selected, VSpaces,
-  page mappings, and address-space authority. Cooperative event-pump turns and
-  compiler-generated admission bounds are Cohesix contracts unless they are
-  explicitly backed by the corresponding kernel objects and operations.
-- **Chapter 8 (Hardware I/O)** governs kernel-visible interrupt and I/O
-  authority, mapping, delivery, and acknowledgement. It does not define virtio,
-  CYW43, SDIO, GENET, or other device-protocol semantics.
-- **Chapters 9 and 10 (System Bootstrapping; seL4 API Reference)** govern the
-  initial task environment, BootInfo, and the configuration-dependent kernel
-  ABI and API. CPIO composition, launch scripts, and the rootfs size guard are
-  Cohesix build and release contracts validated against those kernel inputs;
-  the seL4 manual does not specify them.
-
-Every new kernel interaction or manifest-controlled seL4 choice must be checked
-against both the relevant manual section and the generated artifacts for the
-selected build profile. Documentation and acceptance evidence must distinguish
-manual availability, profile selection, implementation, and target proof.
+The [seL4 v16.0.0 manual](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf)
+governs kernel semantics. The selected external seL4 build, headers and metadata
+define enabled options, object layouts and APIs. Check each kernel interaction
+against both. Manual availability, configured support, implementation and target
+proof are distinct; Cohesix protocols, device behavior and build rules remain
+owned by their specific contracts.
 
 ---
 
@@ -170,54 +128,15 @@ manual availability, profile selection, implementation, and target proof.
 
 ## Post-26e Investment-Constrained Delivery Sequence
 
-The remaining roadmap is optimized for a sharply reduced maintainer-time
-budget. It favors complete user journeys, a memorable public demonstration,
-and reusable seL4 contributions over breadth. Milestones 27 onward are numbered in
-build order below; whole numbers start each delivery group and letter suffixes
-preserve its internal sequence. The release slices determine activation order
-and what may block a release.
-
-The release labels and artifact versions are fixed as follows, using the
-existing `Cohesix-<version>-beta-<platform>` naming convention under
-`releases/`: Release A is **1.1.0-beta**, Release B is **1.2.0-beta**, and
-Release C is **1.3.0-beta**. The A/B/C names below are short roadmap aliases,
-not substitutes for the version in release artifacts or release notes.
+Prioritize complete user journeys, a polished demonstration and reusable seL4
+work within the maintainer budget. Milestone IDs stay fixed; the release slices
+below govern activation and blockers. Artifacts and release notes use
+`Cohesix-<version>-beta-<platform>`: **A = 1.1.0-beta**, **B = 1.2.0-beta**,
+**C = 1.3.0-beta**. These versions cannot be silently reassigned.
 
 ### Release 1.1.0-beta (A) — Show the Product
 
-**Outcome:** A new user installs Cohesix on the supported host, connects it to
-the accepted QEMU/Pi control plane and Jetson AI host, runs useful inference
-and a small PEFT lifecycle, observes or cancels the work, promotes or rolls
-back the result, and exports a trustworthy evidence case from an unmistakably
-polished SwarmUI experience.
-
-Release A contains only the smallest complete slices of:
-
-- Milestone **27**: `inspect`, live canonical trace capture, evidence
-  pack/case, deterministic `diff`, and truthful unavailable attestation where
-  signed device evidence is absent;
-- Milestone **27a**: delegated caller identity, strict idempotency, durable
-  execution recovery, secret hygiene, audit/replay, and the single-writer
-  safety needed by the selected profile; broad HA/federation failover work is
-  not a release blocker unless that profile is shipped;
-- Milestone **27b**: one generated integration contract and installable
-  conformance for the Jetson/Linux NVIDIA, CUDA/NVML, network, GPU-workload,
-  PEFT, model-registry, gateway, host-ticket, evidence, release, and SwarmUI
-  surfaces used by the reference journey. All other provider families remain
-  typed unavailable and do not block this release;
-- Milestone **27c core**: immutable snapshot and artifact references,
-  visibility/provenance enforcement, bounded selected spans, deterministic
-  Context Capsules, and render receipts. General AST/CFG/ownership graphs and
-  broad repository-history materialization are not Release A scope;
-- Milestones **27d** and **27e**: operator-directed run/status/stream/cancel/
-  resume, checkpoint and artifact lifecycle, a real PEFT train/evaluate/scan/
-  register/canary/activate/rollback path, and an OpenAI-compatible host
-  inference boundary with authoritative receipts; and
-- Milestone **27f showcase slice**: the Spectrum desktop shell, cinematic but
-  truthful Live AI Hive, Jetson/GPU/model/run story, evidence timeline, replay,
-  and release-quality community demo assets.
-
-Release A acceptance requires one exact, reproducible reference walkthrough:
+Deliver one reproducible QEMU/Pi + Jetson journey, presented through SwarmUI:
 
 ```text
 install -> doctor -> connect -> infer -> observe/stream -> cancel or resume
@@ -225,86 +144,61 @@ install -> doctor -> connect -> infer -> observe/stream -> cancel or resume
   -> inspect -> evidence case -> replay in SwarmUI
 ```
 
-The walkthrough must use real external execution on the selected Jetson
-profile, configurable NVMe-backed model/data/cache/artifact paths, accepted
-26e QEMU/Pi control-plane evidence for every VM claim it makes, and explicit
-`unavailable`, `mock`, `dry_run`, or `live` labels for every other surface.
-Host-only execution must never be presented as in-VM GPU execution.
+Required slices: **27** operator evidence tools; **27a** delegated identity,
+idempotency, durable recovery, secrets, audit/replay and selected-profile
+single-writer safety; **27b** generated integration contracts and installable
+Jetson/Linux reference conformance; **27c core** immutable references,
+visibility/provenance, bounded spans, deterministic Context Capsules and render
+receipts; **27d/27e** inference and PEFT run/checkpoint/artifact lifecycles,
+including evaluate/scan/register/canary/activate/rollback and authoritative
+receipts; **27f showcase** Spectrum shell, truthful Live AI Hive, GPU/model/run
+views, evidence, replay and community demo assets.
+
+Use real external execution and configurable NVMe storage. Every VM claim needs
+accepted 26e evidence for its target. Other surfaces remain explicitly
+`unavailable`, `mock`, `dry_run` or `live`; host GPU work is never in-VM execution.
+Broad provider coverage, semantic AST/CFG/ownership/history graphs and unshipped
+HA/federation profiles do not block A.
 
 ### Release 1.2.0-beta (B) — Prove the Control Boundary
 
-**Outcome:** Consequential AI and operator actions are admitted from typed
-intent and authoritative state, bound to the exact granted authority, and—when
-the profile claims it—bound to a live seL4 Worker bundle with deterministic
-fault, revoke, quarantine, and replay evidence.
-
-Release B contains:
-
-- the **28 core** claim register, generated authority witnesses, Secure9P
-  bounds, HAL/resource checks, and restricted policy-IR foundation;
-- **28a** admission for the small set of consequential Release A actions,
-  beginning with GPU lease, PEFT/model promotion or rollback, and explicitly
-  selected service-control actions;
-- **28b** one-to-one production Worker ticket/lease binding and structured
-  fault lifecycle for profiles that make that stronger claim;
-- **28c MCP phase 1** read-only resources plus a deliberately small set of
-  ticketed tools derived from accepted provider actions; and
-- the **27f governed-workflow slice**, which visualizes intent, policy,
-  grant, execution, receipt, fault, and replay without inventing authority.
-
-A2A is not required for Release B. It may be activated only by a concrete
-cross-agent use case that cannot be satisfied by the existing run/task model
-and MCP projection.
+Deliver **28 core** claim registers, generated witnesses, Secure9P bounds,
+HAL/resource checks and restricted policy IR; **28a** exact intent-to-authority
+admission for GPU leases, PEFT/model promotion or rollback and selected service
+controls; **28b** production Worker ticket/lease binding and deterministic
+fault/revoke/quarantine/replay evidence where claimed; **28c MCP phase 1**
+read-only resources and a small set of accepted ticketed tools; and the **27f**
+governed-workflow view. A2A requires a concrete use case that existing run/task
+and MCP surfaces cannot satisfy.
 
 ### Release 1.3.0-beta (C) — Deepen the Edge and Contribute Reusable seL4 Work
 
-Release C is selected from evidence-backed needs rather than assumed breadth:
-
-- **29** minimal profile-qualified VM persistence, with Pi EMMC2 work only for
-  a selected persistence-enabled Pi profile;
-- extended **28** formal models, bounded model checking, NIST mapping, or
-  persistence proof only where they support a named assurance claim;
-- **29a** or **29b** only after an accepted same-harness benchmark identifies
-  a concrete throughput or responsiveness SLO miss that smaller fixes cannot
-  close;
-- the standalone **30** field CLI or **30a** Pi firmware diagnostics only when
-  an operator workflow requires them; and
-- upstreamable Rust, Microkit/sDDF-aligned driver, capability-witness,
-  containment, restart, and reproducible-evidence work extracted from the
-  accepted Cohesix implementation.
+Select only evidence-backed needs: **29** minimal profile-qualified persistence
+(Pi EMMC2 only for an enabled Pi profile); extended **28** verification tied to
+a named assurance claim; **29a/29b** for an accepted same-harness SLO miss that
+smaller fixes cannot close; and **30/30a** for a demonstrated field workflow.
+Extract reusable Rust, Microkit/sDDF-aligned driver, capability-witness,
+containment, restart and reproducible-evidence contributions from accepted work.
 
 ### Demand-Gated and Parked Work
 
-- The complete Milestone **27b** provider catalogue, full Milestone **27c**
-  semantic graph, A2A phase, and broad Milestone **27f** enterprise desks are
-  activated only by a named use case and maintainer budget.
-- Milestone **30b** AI NineDoor namespaces remain deferred until CLI, Python,
-  OpenAI-compatible, and MCP workflows demonstrate that another projection
-  solves a real adoption problem.
-- Milestone **31** is not part of a committed release. Only its bounded
-  platform-feasibility gate may be authorized, and only after a funded user
-  requirement plus written confirmation of a supportable AWS Arm custom-OS
-  path. No ENA, TLS/HTTP, IMDS, or AMI implementation begins before that gate.
+The full **27b** provider catalogue, **27c** semantic graph, A2A and enterprise
+**27f** desks require a named use case and maintainer budget. **30b** stays
+deferred until existing CLI/Python/OpenAI-compatible/MCP workflows demonstrate
+a need. **31** is outside committed releases: funded demand and written AWS Arm
+custom-OS supportability confirmation may authorize its feasibility gate only;
+ENA, TLS/HTTP, IMDS and AMI implementation wait for that gate.
 
 ### Release-Scope Rules
 
-- Release A tasks do not wait for downstream Milestone 28 or conditional
-  Milestones 29, 29a, or 29b.
-  They may consume only already accepted 26e surfaces and must report missing
-  persistence, proof, scheduling, attestation, or hardware evidence honestly.
-- A conditional milestone cannot become a hidden prerequisite through a
-  generated schema, test, package, UI, or documentation reference. It is
-  absent or typed unavailable until explicitly activated.
-- Each release supports at most the provider, target, and use-case rows needed
-  by its accepted walkthroughs. Adding catalogue breadth without a complete
-  user journey is not release progress.
-- A visually impressive demonstration is still evidence-bound. Replay,
-  simulated, fixture, host-only, QEMU, Pi, and live-provider state remain
-  visibly distinct in the CLI, UI, release notes, screenshots, and recordings.
-- Release artifacts and notes use the reserved `1.1.0-beta`, `1.2.0-beta`, and
-  `1.3.0-beta` versions for Release A, B, and C respectively. Passing a release
-  gate authorizes cutting its reserved version; it does not permit renaming or
-  silently reassigning another slice to that version.
+Release A uses accepted 26e surfaces without waiting for 28 or conditional
+29/29a/29b. Missing persistence, proof, scheduling, attestation and hardware
+evidence stay explicit. No schema, test, package, UI or document may turn an
+inactive milestone into a hidden prerequisite. Support only the provider,
+target and use-case rows needed by accepted walkthroughs; catalogue breadth
+alone is not progress. Keep replay, fixture, simulation, host, QEMU, Pi and
+live-provider evidence distinct in all tools and public materials. Passing a
+release gate authorizes only that release's reserved version.
 
 ---
 
@@ -21086,379 +20980,9 @@ Deliverables:
 - Reproducible AMI build pipeline.
 ```
 
-----
-**Tracked Activities**
-----
-## Activity — seL4 Build Artifact Prune (Repo Only)
-
-**Status:** Planned.
-
-**Purpose:** Reduce repo-local seL4 build trees to the minimal artifacts required for Cohesix builds while preserving kernel truth outputs under `seL4/build/`.
-
-**Constraints**
-- Repo-only pruning; upstream seL4 trees under `~/seL4` are untouched.
-- Keep kernel truth outputs: `kernel/gen_headers/**`, `kernel/generated/**`, and config headers.
-- Preserve build/run dependencies (`elfloader`, `kernel.elf`, `libsel4.a`, libsel4 headers, and config files).
-- Cohesix must build and stage with `SEL4_BUILD_DIR` pointing at the pruned trees.
-
-**Inputs**
-- `seL4/build/`
-- `seL4/SMP_build/`
-- `scripts/cohesix-build-run.sh`
-- `crates/sel4-sys/build.rs`
-- `apps/root-task/build.rs`
-
-**Runbook (repo only)**
-1) Build allowlists for both trees and remove everything else.
-2) Build Cohesix with `SEL4_BUILD_DIR` set to each tree.
-3) Validate GIC detection against the pruned config headers.
-
-**Checks**
-- `SEL4_BUILD_DIR=... cargo build -p root-task --target aarch64-unknown-none` succeeds.
-- `SEL4_BUILD_DIR=... scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none` succeeds.
-- `scripts/lib/detect_gic_version.py <kernel/gen_config/kernel/gen_config.h>` returns a version.
-
-**Deliverables**
-- Repo-local seL4 trees pruned to the minimal allowlist.
-
-## Activity — Security Evidence Demo (Post-M24, NIST 800-53 LOW)
-
-**Status:** Complete.
-
-**Purpose:** Demonstrate the evidence-based NIST 800-53 LOW mapping for Cohesix using the machine-checkable registry and guard scripts; no runtime behavior changes.
-
-**Constraints**
-- No code changes; run the demo against the current repo state and artifacts.
-- Evidence is repo-local; no external URLs.
-- This is a mapping + evidence guard, not a compliance claim.
-
-**Inputs**
-- `docs/SECURITY_NIST_800_53.md`
-- `docs/nist/controls.toml`
-- `tests/security/nist_evidence_smoke.sh`
-
-**Runbook (host only)**
-1) Validate registry and evidence links:
-   - `cargo run -p security-nist -- check`
-2) Generate the markdown summary table:
-   - `cargo run -p security-nist -- report-md`
-3) Assert documentation invariants:
-   - `bash tests/security/nist_evidence_smoke.sh`
-
-**Checks**
-- `security-nist -- check` returns success with zero errors.
-- `docs/nist/REPORT.md` is generated and reflects the registry.
-- Smoke evidence script passes (Secure9P bounds, ACK/ERR ordering, role isolation).
-
-**Deliverables**
-- `docs/nist/REPORT.md` regenerated on demand from the registry.
-
-## Activity — Operator-First Demo (Post-M24, No Code Changes)
-
-**Status:** Complete for the Queen VM plus host-tool and Worker-session/model
-path described below. It did not demonstrate an executable Worker target.
-
-**Purpose:** Demonstrate Cohesix as an operator-first control plane using shipped behavior only, with host tools as the primary action surface and SwarmUI as the trustable lens.
-
-**Why host tools (sell the why)**
-- They prove the control plane is real infrastructure: leases, telemetry, and PEFT flows are all file-driven and auditable.
-- They let operators act without UI magic while SwarmUI verifies what actually happened.
-
-**Constraints**
-- No code changes; demo uses release bundle binaries and existing scripts only.
-- SwarmUI is the primary surface. Use `cohsh` only when a required action is not available in SwarmUI, and quit SwarmUI before launching `cohsh` (per `docs/QUICKSTART.md`).
-- Due to Mac port-forwarding issues, run the Queen VM on a Linux host. Jetson
-  and G5g remain host-tool/AI-runtime machines; they are not Cohesix Workers.
-- All ML/inference stays host-side; no CUDA/NVML in the VM.
-- All actions use documented Secure9P/console commands and namespaces; no ad-hoc RPC.
-- Live GPU bridge publish must be active for non-mock PEFT flows; the demo is blocked if `/gpu/models` is not exposed.
-
-**Inputs**
-- `docs/QUICKSTART.md`
-- `docs/OPERATOR_WALKTHROUGH.md`
-- `docs/GPU_NODES.md`
-
-**Target-placement note**
-- This demo exercises a role-scoped Worker session/model through host `cohsh`;
-  it does **not** exercise a Worker VM or Worker TCB. A future executable Worker
-  target is conditional on a selected profile with packaged task objects, live
-  capabilities, lifecycle delivery, scheduling, fault/revocation evidence, and
-  separately authorized acceptance scope.
-
-**Runbook (documented commands only; SwarmUI-first)**
-0) Framing line: “Cohesix is not an ML system. It is a control-plane OS that decides when learning can change a system.”
-1) Host readiness on the Mac queen host: `./bin/coh doctor --mock` (omit `--mock` to validate NVML/QEMU on a configured host).
-2) Boot queen (QEMU) on a Linux host: `./qemu/run.sh`.
-3) Launch SwarmUI on the same Linux host first (observational): `./bin/swarmui`.
-   - Live Hive is read-only and reflects sessions, pressure, root-cut state, and
-     Worker session/model activity.
-   - Use the embedded Cohesix console prompt in SwarmUI for core verbs (demo it explicitly):
-     - `help`
-     - `ping`
-     - `attach queen`
-   - SwarmUI’s embedded console supports core verbs only; CLI-only commands must use `cohsh`.
-4) When a required action is not available in SwarmUI, quit SwarmUI and switch to cohsh (host tools drive the story):
-   - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337`
-   - `attach queen`
-   - `cat /proc/lifecycle/state` (optionally `/proc/lifecycle/reason`, `/proc/lifecycle/since`)
-5) Create a role-scoped Worker session from the Jetson host (current model-only path):
-   - Do not boot or claim a Worker VM for current acceptance.
-   - Mint a Worker ticket on the Queen host (Linux) and pass it to Jetson:
-     - `./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
-     - (Alternative) `./bin/swarmui --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
-   - On the Jetson host, attach as the Worker role over TCP (outbound only per `docs/NETWORK_CONFIG.md`):
-     - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
-   - In the Queen view (SwarmUI or `cohsh`), confirm Worker model entries appear
-     under `/shard/<label>/worker` before proceeding. Legacy `/worker` appears
-     only when `sharding.legacy_worker_alias = true`.
-   - If `/shard` has no Worker model entries, request a Queen-side heartbeat
-     model spawn to seed a visible entry, then re-check:
-     - `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
-     - `spawn heartbeat ticks=100`
-     - `ls /shard`
-6) Keep Live Hive active (optional):
-   - `echo {"id":"spawn-2","target":"/queen/ctl","decision":"approve"} > /actions/queue`
-   - `spawn heartbeat ticks=100`.
-7) Host tools prove control-plane surface (Linux queen host or G5g, host tools only):
-   - Live GPU bridge publish (required for `/gpu/models` and PEFT):
-     - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" --interval-ms 1000 --registry demo/peft_registry`
-     - Optional sanity: `./bin/gpu-bridge-host --list`
-   - GPU surface (live):
-     - `./bin/coh --host <queen-host> --port 31337 gpu list`
-     - `./bin/coh --host <queen-host> --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60`
-   - Runtime breadcrumbs:
-     - `./bin/coh --host <queen-host> --port 31337 run --gpu GPU-0 -- echo ok`
-   - Telemetry export (pull):
-     - `./bin/coh --host <queen-host> --port 31337 telemetry pull --out demo/telemetry/pull`
-8) Telemetry ingest (queen surface; OS-named segments):
-   - `telemetry push demo/telemetry/demo.txt --device device-1`
-   - or (per walkthrough) `echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl` then append to `/queen/telemetry/dev-1/seg/seg-000001`
-9) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
-   - Live Hive shows bounded telemetry text overlays (last N lines) and a details panel for a selected worker/source.
-10) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
-11) Import + activate (host tool; no in-VM ML):
-   - Verify `/gpu/models` is visible (live publish in step 7 must be running).
-   - If the model already exists (previous demo run), remove it from the host registry before importing:
-     - `rm -rf demo/peft_registry/available/qwen-edge-v1`
-   - Live export (requires existing job under `/queen/export/lora_jobs/job_0001/`):
-     - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
-   - Live import + publish (refresh `/gpu/models` immediately after registry update):
-     - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
-   - Live activate:
-     - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
-   - Adapter inputs: `demo/peft_adapter/adapter.safetensors`, `demo/peft_adapter/lora.json`, `demo/peft_adapter/metrics.json`.
-   - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
-12) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
-13) Optional lifecycle control (only when no outstanding leases or Worker model entries):
-   - `ls /shard` (ensure no active Worker model entries; legacy `/worker` may exist only when enabled) and confirm no active leases.
-   - `lifecycle cordon`, `lifecycle drain`, `lifecycle resume`.
-
-**Checks**
-- `coh doctor` passes; QEMU boot ok; cohsh attaches and lifecycle reads return expected values.
-- Telemetry segments appear under `/queen/telemetry/<device>/seg/`; ACK/ERR ordering remains deterministic.
-- Live GPU bridge publish keeps `/gpu/models` visible without policy errors.
-- PEFT import/activate/rollback update `/gpu/models/available` and `/gpu/models/active` per docs.
-- Live Hive telemetry text overlays and details panel render bounded lines from live tails.
-- No concurrent cohsh + SwarmUI usage; no new semantics introduced.
-
-**Deliverables**
-- Demo runbook, `demo/demo_runbook.coh`, and demo assets under `demo/` (no code or release artifact changes).
-
 ---
 
-## Activity — LeJEPA Cloud/Edge Demo (Post-M24b, No Code Changes)
-
-**Status:** Complete for the Queen VM plus host-tool and Worker-session/model
-path described below. It did not demonstrate an executable Worker target.
-
-**Purpose:** Demonstrate LeJEPA’s heuristics-free training flow on g5g (ViT-S/16) with an edge-aligned ViT-Ti/16 deployment on Jetson, using Cohesix’s live GPU bridge publish + PEFT import/activate to close the loop without introducing new protocols.
-
-**Constraints**
-- No code changes; demo uses existing release bundle binaries and current repo artifacts only.
-- All training/inference remains host-side; no CUDA/NVML in the VM.
-- Live GPU bridge publish is required; the demo is blocked if `/gpu/models` is not visible.
-- Use existing Secure9P/console semantics only; no ad-hoc RPC.
-- SwarmUI must not run concurrently with cohsh (quit SwarmUI before cohsh).
-- Due to Mac port-forwarding issues, run the Queen VM on a Linux host. Jetson
-  and G5g remain host-tool, training, and inference machines; they are not
-  Cohesix Workers.
-
-**Inputs**
-- Models (already installed via Hugging Face):
-  - g5g: `/home/models/vit-s16` (WinKawaks/vit-small-patch16-224)
-  - Jetson: `/mnt/nvme/models/vit-ti16` (WinKawaks/vit-tiny-patch16-224)
-- `docs/GPU_NODES.md`, `docs/HOST_TOOLS.md`, `docs/OPERATOR_WALKTHROUGH.md`
-- Release bundle binaries on the Queen host, Jetson (host tools and model
-  runtime), and G5g (host tools and training runtime)
-
-**Runbook (documented commands only)**
-0) Verify model dirs (host-side only):
-   - g5g: `ls /home/models/vit-s16`
-   - Jetson: `ls /mnt/nvme/models/vit-ti16`
-1) Boot Queen on a Linux host: `./qemu/run.sh`
-2) Launch SwarmUI on the same Linux host: `./bin/swarmui`
-   - Use the embedded console for `help`, `ping`, `attach queen`.
-3) Start Live GPU Bridge publish on g5g (host tools only):
-   - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --interval-ms 1000 --registry /home/models/peft_registry`
-   - Sanity: `./bin/coh --host <queen-host> --port 31337 gpu list`
-   - Confirm `/gpu/models` is visible (quit SwarmUI first if using cohsh):
-     - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337`
-     - `ls /gpu/models`
-     - `ls /gpu/telemetry`
-4) Create a role-scoped Worker session from the Jetson host (current model-only edge path):
-   - Do not boot or claim a Worker VM for current acceptance. A future
-     executable Worker target remains conditional on its own profile and proof.
-   - Mint a ticket on the Queen host (Mac):
-     - `./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
-   - Attach from Jetson (outbound only):
-     - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
-   - Verify Worker model presence on Queen:
-     - `ls /shard` and then inspect the relevant `/shard/<label>/worker` model entry (legacy `/worker` only if aliasing is enabled)
-5) LeJEPA training (host-side, outside Cohesix):
-   - Run your LeJEPA training harness on g5g using `/home/models/vit-s16` as the base.
-   - Emit bounded telemetry records that conform to `gpu-telemetry/v1` via the bridge (no schema changes).
-   - Produce adapter artifacts into `/home/models/lejepa/adapter/` (e.g., `adapter.safetensors`, `lora.json`, `metrics.json`).
-6) Import + publish adapter (live refresh into `/gpu/models`):
-   - If the model already exists (previous demo run), remove it from the host registry before importing:
-     - `rm -rf /home/models/peft_registry/available/lejepa-edge-v1`
-   - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model lejepa-edge-v1 --from /home/models/lejepa/adapter --job job_0002 --export /home/models/lejepa/export --registry /home/models/peft_registry`
-   - `./bin/coh --host <queen-host> --port 31337 peft activate --model lejepa-edge-v1 --registry /home/models/peft_registry`
-   - Verify pointer (quit SwarmUI before cohsh):
-     - `ls /gpu/models/available`
-     - `cat /gpu/models/active`
-7) Observe Live Hive overlays (SwarmUI):
-   - Relaunch SwarmUI and confirm telemetry text overlays + details panel show bounded lines.
-   - Confirm the active model id appears in the logical Worker telemetry stream
-     (per the existing schema and labels); this is not target-task evidence.
-8) Edge validation (Jetson host-side inference):
-   - Load `/mnt/nvme/models/vit-ti16` and apply the newly published adapter (host-side only).
-   - Confirm telemetry continues to flow into `/gpu/telemetry` and `/queen/telemetry`.
-
-**Checks**
-- `/gpu/models` is visible after publish and contains `lejepa-edge-v1`.
-- `peft import` and `peft activate` update `/gpu/models/available` and `/gpu/models/active`.
-- Live Hive overlays show bounded telemetry lines (no UI polling logic).
-- All training/inference remains host-side; no in-VM GPU or new RPC.
-
-**Deliverables**
-- Demo notes and artifacts under `demo/` (no code changes, no release bundle changes).
-
----
-
-## Activity — Jetson Orin Nano Gesture Language Demo (Post-M24d, OSS Only)
-
-**Status:** Planned.
-
-**Purpose:** Train and deploy an OSS-only gesture command language (10-20 commands) using a Jetson Orin Nano 8GB + webcam, while demonstrating Cohesix GPU leasing, telemetry, and `/gpu/models` publish/activate without introducing new protocols or VM-side ML.
-
-**Constraints**
-- No Cohesix code changes; demo uses existing release bundle binaries and current repo artifacts only.
-- OSS-only stack; avoid NC/ND datasets or licenses that restrict derivative use.
-- Training/inference runs host-side on Jetson; no CUDA/NVML in the VM.
-- Use existing Secure9P/console semantics only; no ad-hoc RPC.
-- Live GPU bridge publish must be active for `/gpu/models` and `/gpu/telemetry/schema.json` visibility.
-- SwarmUI must not run concurrently with cohsh (quit SwarmUI before cohsh).
-
-**Inputs**
-- `docs/GPU_NODES.md`
-- `docs/HOST_TOOLS.md`
-- `docs/OPERATOR_WALKTHROUGH.md`
-- OSS stack (example): MediaPipe (Apache-2.0), PyTorch (BSD), OpenCV (Apache-2.0), HaGRID (CC BY-SA) or ASL Alphabet (CC BY 4.0).
-
-**Runbook (documented commands only; host-side training)**
-0) Boot Queen on a Linux host: `./qemu/run.sh`
-1) Start SwarmUI on the same Linux host: `./bin/swarmui`
-2) On Jetson, start live GPU bridge publish to the Queen:
-   - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --interval-ms 1000 --registry /mnt/nvme/models/gesture_registry`
-3) On Jetson, lease the GPU for training:
-   - `./bin/coh --host <queen-host> --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 3600`
-4) Capture dataset and train (host-side, OSS-only):
-   - Use a hand-landmark pipeline (e.g., MediaPipe) to record sequences from the webcam into a local dataset.
-   - Train a lightweight temporal classifier on landmark sequences; export artifacts under `/mnt/nvme/models/gesture/adapter/`.
-5) Publish model registry and activate (Jetson host tools):
-   - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model gesture-ctl-v1 --from /mnt/nvme/models/gesture/adapter --job job_0003 --export /mnt/nvme/models/gesture/export --registry /mnt/nvme/models/gesture_registry`
-   - `./bin/coh --host <queen-host> --port 31337 peft activate --model gesture-ctl-v1 --registry /mnt/nvme/models/gesture_registry`
-6) Verify visibility (quit SwarmUI before cohsh):
-   - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337`
-   - `ls /gpu/models/available`
-   - `cat /gpu/models/active`
-7) Live inference loop (Jetson host-side):
-   - Run the gesture recognizer against the webcam and emit bounded telemetry lines tagged with `model_id=gesture-ctl-v1` into `/queen/telemetry/*` via existing tools.
-
-**Checks**
-- `/gpu/models` is visible and contains `gesture-ctl-v1` after publish.
-- Telemetry records conform to existing `gpu-telemetry/v1` schema; no new paths introduced.
-- Training/inference remains host-side; no VM or Cohesix code changes.
-- No concurrent cohsh + SwarmUI usage.
-
-**Deliverables**
-- Demo notes and artifacts under `demo/` (no code changes, no release bundle changes).
-- Registry content under `/mnt/nvme/models/gesture_registry` (host-side only).
-
----
-
-## Activity — SwarmUI UI Presentation Regression (Post-M24, Playwright)
-
-**Status:** Complete.
-
-**Purpose:** Add a UI-only regression layer for SwarmUI rendering, wiring, and transcript parity without changing control-plane behavior.
-
-**Constraints**
-- UI-only: no new verbs, no new protocols, no control-plane assertions.
-- Replay-first determinism (UI must be driven from fixtures).
-- Tests target the **latest SwarmUI release bundle** assets; no source-only assumptions.
-- No SwarmUI runtime changes; no NineDoor/console semantics changes.
-- Use Playwright (Node LTS) and keep browser binaries out of the repo.
-
-**Inputs**
-- Release bundle under `releases/` (latest macOS bundle).
-- `tests/fixtures/traces/trace_v0.trace` and `tests/fixtures/traces/trace_v0.hive.cbor`.
-- `docs/TEST_PLAN.md` (additive section).
-
-**Commands**
-- `cd tools/swarmui-ui-tests`
-- `npm ci`
-- `npx playwright install webkit`
-- `SWARMUI_RELEASE_DIR=../releases/<latest> npm test`
-
-**Checks**
-- UI tests pass in replay mode without flake.
-- Snapshot comparisons are deterministic and stable.
-- Console transcript assertions match expected `OK/ERR/END` grammar.
-- No changes to SwarmUI runtime logic or transport semantics.
-
-**Deliverables**
-- Playwright harness under `tools/swarmui-ui-tests/`.
-- `docs/TEST_PLAN.md` updated with the SwarmUI Playwright section.
-- Baseline screenshot snapshots committed.
-
----
-
-## Activity — Warning Cleanup (Post-M24, No Behavior Changes)
-
-**Status:** Complete.
-
-**Purpose:** Remove compiler warnings without altering behavior or interfaces.
-
-**Constraints**
-- Warning-only cleanup; no behavioral or API changes.
-- No changes to control-plane semantics or test fixtures.
-
-**Inputs**
-- `cargo check` output from macOS ARM64.
-
-**Commands**
-- `cargo check`
-
-**Checks**
-- No new warnings introduced.
-- Existing tests and fixtures remain unchanged.
-
-**Deliverables**
-- Warning cleanups committed with no behavior changes.
-
----
-### Docs-as-Built Alignment (applies to Milestone 8 onward)
+## Docs-as-Built Alignment (applies to Milestone 8 onward)
 
 To prevent drift:
 
