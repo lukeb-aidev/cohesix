@@ -18,6 +18,16 @@ The generated Python profile and retained public verification key must match the
 selected image. Refresh embedded operator snippets with coh-rtc's explicit
 `--embed-userland-doc docs/USERLAND_AND_CLI.md` option after canonical generation.
 
+For literal capability tickets in the checked-in TCP regressions, the runner
+invokes `coh-rtc-regression-tickets`. It verifies the original development MAC,
+then signs the exact same claim bytes with the selected manifest's issuer.
+Expiry, role, subject, mounts, scopes, quotas and expected responses remain
+unchanged. An invalid original MAC or any claim-byte change fails before the
+client runs. Retained private script copies and hash-only binding records are
+included in each transport result's evidence inventory; originals are never
+edited. This fixture provisioning does not relax live placeholder refusal or
+qualify a production profile through compatibility scripts.
+
 
 This is the execution and acceptance guide for the complete Cohesix stack.
 Use the [action catalog](#canonical-action-catalog) for executable checks and

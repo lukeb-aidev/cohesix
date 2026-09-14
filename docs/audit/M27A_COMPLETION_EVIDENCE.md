@@ -148,6 +148,176 @@ because concurrent main documentation commits changed its Git source identity;
 `out/m27a/stage1-02-cancellation.txt` records the reason. No stage marker from
 that attempt is accepted. Remaining qualification uses a fixed isolated source.
 
+### Frozen candidate and current qualification
+
+Implementation candidate `275922fde5c607de38f767e8c19115093c27e9a1` was frozen
+without moving `main`. Candidate `72bffffd1b35dffaf65d1ae1525a8ac7112a1ec5`
+adds only the missing public verification keys to the release-qualification
+fixture; production implementation bytes are identical. The original archive
+SHA-256 is `5ca00473f80a89e7efd32f0a387a7d3e80d43923a77b8a85b7e06cf728491af2`.
+`out/m27a/qualification-candidate*.json` retains both source records.
+
+The native Linux AArch64 release build and 449 host tests pass on Merlin2 for
+the implementation candidate. The canonical Python SDK gate passes 139 tests
+with one skip on Python 3.12.3. Logs, toolchain versions and binary hashes are in
+`out/m27a/merlin2-275922fde5c6/logs/`. This proves native host contracts, not GPU
+provider execution or target behavior. An earlier manually selected Python
+command named a nonexistent test file and collected no tests; the subsequent
+canonical SDK command supplies the reported evidence.
+
+The corrected Mac Stage 01 attempt passes formatting, Clippy, workspace check,
+the catalogued Rust suites, 2,559 Python tests and example smokes. It stops at
+the Rust bootstrap guard because a checkout nested under the main repository
+inherits that parent's Cargo configuration. The guard correctly refuses this
+external configuration. Both candidate checkouts were moved to sibling
+directories outside the parent repository; all seven bootstrap tests then pass
+in `out/m27a/candidate-risk-bootstrap-41.log`. Full staged qualification is
+restarted there. No failed attempt supplies a stage marker. Earlier absent
+local Python environments and externally resolving compiler caches were also
+repaired without weakening their checks.
+
+The compatibility Pi image built from the clean corrected candidate is
+`sha256:35512e394a9266b9c0df28ff129d1679d15bf3b7f3fc449ed9650848f5ef623d`.
+`out/m27a/pi4-boot-36/` retains its fresh RAM-load/reset CRC checks, exact BUILD
+marker, settled serial log and first raw TCP sample: 64/64 requests, one
+connection, zero application retries or reconnects. The same boot passes strict
+intent first/duplicate acknowledgement, identity-conflict refusal and full
+`fresh`/`duplicate` audit labels. Its compiled writer epoch is 1; the diagnostic
+named `stale-epoch` actually tests future epoch 2, so it is only a non-current
+epoch refusal. Actual older-epoch and disabled legacy-path checks require the
+separate production epoch-7 run. The first raw CLI invocation rejected a missing
+ticket before connection; the retained successful invocation supplies a minted
+ticket and is the first target TCP connection. These observations remain
+non-claiming diagnostics until the applicable staged target checks complete.
+
+The production Pi image also builds with clean source binding:
+`sha256:e863b609e4c6ea8b462f69d3155f652669ae8a51ee10187e63198849f7e609a2`.
+Build evidence is `out/m27a/pi4-production-build-40.log`; its current hardware
+run is separate from the compatibility boot. `out/m27a/pi4-production-42/`
+now records a fresh exact BUILD, CRC checks before and after reset, a settled
+GENET lifetime and a first-connection 64/64 raw sample without retries or
+reconnects. The production authority diagnostic passes epoch 7, true stale
+epoch 6 refusal, stable duplicate acknowledgement with full dedupe audit labels,
+legacy-path refusal and explicit `SPAWN`/`KILL` refusal. A subsequent bounded
+check refuses both upper- and lowercase memory-dump commands on the production
+operator surface; it does not exercise the emergency fallback or a kernel fault.
+Paired continuous captures are retained under `out/m27a/pi4-capture-36/` and
+must be closed and sealed before final capture claims.
+
+Relocation also exposed cached host binaries with their old compile-time paths;
+the owned build caches were cleared before the clean staged rerun. Copied QEMU
+kernel trees fail the path-bound profile contract and remain unqualified. A
+fresh canonical toolchain setup and 303-step seL4 build in the sibling Pi
+checkout passes `qemu_smp_production` validation in
+`out/m27a/pi-worktree-qemu-profile-{configure,build,validate}-48.log`.
+The QEMU acceptance checkout needs its own corresponding profile build.
+
+The clean sibling Mac Stage 01 now passes all 22 common actions in
+`out/m27a/candidate-stage1-43.log`, including the Rust bootstrap and risk ratchet.
+The immutable common attestation is retained in
+`/Users/lukasbower/GitHub/cohesix-m27a-qualification/out/test-plan/m27a-qemu-43/`.
+The Pi checkout imports that exact verified common evidence in
+`out/m27a/pi4-stage1-import-50.log`; target-bound stages remain separate.
+
+The refreshed production QEMU diagnostic also passes for candidate
+`72bffffd1b35dffaf65d1ae1525a8ac7112a1ec5` in the sibling Pi checkout at
+`out/m27a/qemu-production-49/authority/result.json`. Compiled epoch 7 admits one
+fresh strict intent and the exact duplicate, retains one dedupe entry and one
+duplicate, refuses actual stale epoch 6, conflicting identity, the legacy path,
+SPAWN/KILL shortcuts and the normal HEXDUMP console command, and exposes full
+fresh/duplicate audit records plus replay status. The canonical pinned HVF
+QEMU build, source identity, selected manifest and runtime logs are retained
+beside it. This is target convergence evidence, not staged acceptance or a
+dynamic kernel fault/wake test.
+
+The QEMU sibling's own toolchain setup and fresh seL4 profile build now pass
+in `out/m27a/qemu-worktree-toolchain-50.log` and
+`qemu-profile-{configure,build,validate}-52.log`. Both target Stage 02 actions
+pass initially (`pi4-stage2-51.log`, `qemu-stage2-55.log`). The first attempted
+Pi Stage 03 refuses changed environment selectors before a hardware boot;
+`pi4-stage3-56.log` preserves that failure. Stage 02 is rerun with the complete
+stable target settings before either target progresses to Stage 03. The
+immutable source identity and acceptance checks remain unchanged.
+
+`out/m27a/production-payload-scan-54.log` passes selected production policy and
+private-fixture, canary and symlink scans for both built target artifact sets.
+This is an artifact payload check, not a full release assembly claim.
+
+The stable-settings Stage 02 refresh passes on QEMU and Pi in
+`out/m27a/{qemu,pi4}-stage2-57.log`. QEMU Stage 03 then starts normally.
+Pi Stage 03 attempt 58 records a fresh exact compatibility boot and a successful
+first raw sample, then refuses the production-built client's mismatch with the
+restored compatibility policy before regression operations reach the target.
+The matching compatibility clients are built and the policy check passes in
+`pi4-compat-clients-62.log` and `pi4-client-policy-62.log`. The earlier temporary
+production `coh` client installation is superseded by this ordinary Cargo build;
+its retained production artifact remains unchanged. Pi qualification restarts
+with those clients and a newly bound Stage 02; failed results are preserved.
+
+Merlin2's additional production-profile build first refuses the archive's
+missing Git tracked-file inventory. The exact candidate Git objects are
+transferred with pack SHA-256
+`00c0ad7a951dda722399ffa2e9603efef2a90c39d0566ba01958e657c55f9d3e`.
+Two vendor metadata files omitted by Git archive's export-ignore rules are
+restored from those immutable objects. The earlier host build's generated Linux
+UI schema is retained under ignored evidence. The resulting checkout is clean
+at candidate `275922fde5c607de38f767e8c19115093c27e9a1`, tree
+`37f84e6de0503cacda6aeafc3a2381ad29d987fe`; native production build 61 remains
+pending. This does not change or relabel the original native compatibility tests.
+
+Native production host compilation completes for all nine selected packages
+in `out/m27a/merlin2-production-61/host-build.log`. Artifact collection initially
+mistakes the `coh-status` library package for an executable; the eight actual
+executables and `libcoh_status.rlib` are subsequently retained without a rebuild.
+The correction does not relabel the failed collection process. The native
+production gateway probe passes all 32 positive and negative cases per scenario
+in `gateway-probe-65/report.json`, including actual stale epoch refusal, with no
+operation retries or backpressure. The original native compatibility logs remain
+separate; production evidence is not a physical GPU/provider execution claim.
+
+The matching optimized Mac comparison in
+`out/bench/m27a-gateway-authority-70/report.json` passes on an idle build host.
+The production epoch-7 gateway has status p50/p95 0.567/0.698 ms, delegated-write
+2.020/2.510 ms and duplicate-ACK 1.888/2.088 ms. All 32 conflicts, stale-epoch
+writes and missing-ticket writes are refused as expected; no unexpected error,
+client retry, reconnect or backpressure occurs. The queue high-water mark is 1;
+one ticket cache entry records 127 hits and one miss. The 160 authority audit
+records cost 4.636 ms in total. Against the matching optimized pre-27a binary,
+status p95 increases 0.273 ms (about 64%) and write p95 1.118 ms (about 80%).
+These are measured host-model latency regressions with bounded absolute costs;
+there is no target-throughput or improvement claim. The equivalent accepted 26d
+status comparator is still missing and remains required.
+
+QEMU Stage 03 attempt 58 passes the complete base group and fixed response
+matrix, then fails the telemetry fixture: its published-key MAC is correctly
+refused by the provisioned issuer before the expected expiry check. The
+`m27a-production-secret-profile` compatibility closure therefore adds
+`coh-rtc-regression-tickets` and runner integration. It verifies the original
+fixture MAC, replaces only the MAC with the selected issuer's signature, and
+asserts exact claim-byte preservation. Original scripts and expected outcomes
+remain unchanged; transport records retain the private materialized copies and
+hash bindings. Five independent fixture/bound tests, 21 wrapper tests and
+compiler Clippy pass in `out/m27a/regression-ticket-{tests,clippy}-67.log` and
+`regression-ticket-runner-tests-66.log`. Regeneration and Test Plan integrity pass
+in `check-generated-69.log` and `check-test-plan-69.log`.
+
+Pi Stage 02 attempt 63 passes with matching compatibility clients. The queued
+Stage 03 attempt 64 is interrupted after its fresh exact-image boot and first
+raw sample while the fixture mismatch is corrected; its incomplete record is
+not accepted. This is distinct from the earlier policy-file refusal.
+All target results retain their original source identity. The fixture workflow
+change requires a new frozen candidate and refreshed staged qualification.
+
+Candidate `cargo audit` and
+`cargo deny check advisories` pass under the existing advisory policy in
+`out/m27a/candidate-cargo-{audit,deny}-38.log`.
+
+The DD30 preflight still refuses the changed protected `kernel.rs` fingerprint.
+The existing approval is scoped to Milestone 27 and does not approve 27a's
+secret-registration and debug-memory changes. Fresh human Rust review and an
+explicit applicable DD30 disposition remain required before merge. The dynamic
+fault/wake test remains unexecuted; no static check or policy refusal replaces it.
+
 ## Outstanding acceptance
 
 Required remaining evidence is the complete applicable Test Plan, final exact
@@ -158,4 +328,4 @@ profile. No physical failover or future VM authority qualification is claimed.
 
 BUILD_PLAN and STATUS may become Complete only after their definition of done
 and applicable repository acceptance gates are satisfied. Commit and push are
-authorized after that closure; no M27a commit or push has occurred.
+authorized after that closure; no M27a change has been committed to main or pushed.

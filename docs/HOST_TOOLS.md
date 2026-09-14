@@ -967,6 +967,14 @@ under TCP because it checks a console-specific entry count. The REST wrapper
 defaults match the Stage 04 core selection. This test setup correction changes no
 production profile, host-tool or Python API, benchmark workload, or threshold.
 
+Provisioned TCP regression manifests use the compiler's developer-only
+`coh-rtc-regression-tickets` command to bind existing fixture tickets to the
+selected issuer. It verifies the development signature and preserves every
+claim byte, including deliberately expired and quota-limited claims. The runner
+retains private generated script copies and signature-binding records beside
+the target logs. This adds no shipped host-tool or Python API and changes no
+benchmark operations, refusal expectations or limits.
+
 ### Cohesix Python package
 
 The Python package supplies filesystem, direct TCP, REST, and deterministic

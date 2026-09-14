@@ -1099,6 +1099,17 @@ script_path_for() {
 
 run_cohsh_file() {
     local script_path="$1"
+    if grep -q '^[[:space:]]*attach .*cohesix-ticket-' "$script_path"; then
+        local fixture_dir="${COHSH_RUN_FIXTURE_DIR:?missing retained fixture directory}"
+        local selected_script="${fixture_dir}/$(basename "$script_path")"
+        mkdir -p "$fixture_dir"
+        chmod 700 "$fixture_dir"
+        cargo run --quiet --locked -p coh-rtc --bin coh-rtc-regression-tickets -- \
+            --fixture-manifest "${PROJECT_ROOT}/configs/root_task.toml" \
+            --manifest "${COHSH_RUN_MANIFEST:?missing selected fixture manifest}" \
+            --script "$script_path" --out "$selected_script" || return 1
+        script_path="$selected_script"
+    fi
     local bin="${COHSH_BIN:-./out/cohesix/host-tools/cohsh}"
     local tcp_host="${COHSH_RUN_TCP_HOST:-127.0.0.1}"
     local tcp_port="${COHSH_RUN_TCP_PORT:-31337}"
@@ -1305,6 +1316,10 @@ write_qemu_result() {
     for script in "${scripts[@]}"; do
         arguments+=(--script "$script")
         arguments+=(--log "${ARCHIVE_ROOT}/runtime/${name}/${script%.coh}.out.log")
+        if [[ -f "${ARCHIVE_ROOT}/runtime/${name}/provisioned/${script}" ]]; then
+            arguments+=(--log "${ARCHIVE_ROOT}/runtime/${name}/provisioned/${script}")
+            arguments+=(--log "${ARCHIVE_ROOT}/runtime/${name}/provisioned/${script%.coh}.tickets.json")
+        fi
     done
     mkdir -p "$TRANSPORT_RESULT_ROOT"
     "$QEMU_ARTIFACT_HELPER" "${arguments[@]}" >"${result_path}.id"
@@ -1367,6 +1382,13 @@ run_batch() {
     COHSH_RUN_TCP_HOST="$QEMU_TCP_HOST"
     COHSH_RUN_TCP_PORT="$QEMU_TCP_PORT"
     COHSH_RUN_POLICY="${artifact_dir}/evidence/cohsh_policy.toml"
+    COHSH_RUN_MANIFEST="$BASE_MANIFEST"
+    [[ "$name" != "gated" ]] || COHSH_RUN_MANIFEST="$GATED_MANIFEST"
+    if ! cmp -s "$COHSH_RUN_MANIFEST" "${artifact_dir}/evidence/source_manifest.toml"; then
+        echo "Selected fixture manifest differs from the retained QEMU artifact" >&2
+        return 1
+    fi
+    COHSH_RUN_FIXTURE_DIR="${log_root}/provisioned"
 
     if [[ "$name" == "base" ]]; then
         run_qemu_response_matrix \
@@ -1509,6 +1531,9 @@ run_live_group() {
     local scripts=("$@")
     local group_dir="${ARCHIVE_ROOT}/${name}"
     mkdir -p "$group_dir"
+    COHSH_RUN_MANIFEST="$BASE_MANIFEST"
+    [[ "$name" != "gated" ]] || COHSH_RUN_MANIFEST="$GATED_MANIFEST"
+    COHSH_RUN_FIXTURE_DIR="${group_dir}/provisioned"
 
     run_lifecycle_resume "before-${name}" || true
     for script in "${scripts[@]}"; do
@@ -1570,6 +1595,10 @@ write_pi4_result() {
     for script in "${scripts[@]}"; do
         arguments+=(--script "$script")
         arguments+=(--log "${ARCHIVE_ROOT}/${name}/${script%.coh}.out.log")
+        if [[ -f "${ARCHIVE_ROOT}/${name}/provisioned/${script}" ]]; then
+            arguments+=(--log "${ARCHIVE_ROOT}/${name}/provisioned/${script}")
+            arguments+=(--log "${ARCHIVE_ROOT}/${name}/provisioned/${script%.coh}.tickets.json")
+        fi
     done
     mkdir -p "$TRANSPORT_RESULT_ROOT"
     "$QEMU_ARTIFACT_HELPER" "${arguments[@]}" >"${result_path}.id"

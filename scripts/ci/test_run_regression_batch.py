@@ -16,9 +16,71 @@ import subprocess
 import sys
 import threading
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "cohsh" / "run_regression_batch.sh"
+
+
+@pytest.mark.parametrize("compiler_status", [0, 17])
+def test_selected_fixture_is_used_only_after_successful_materialization(
+    tmp_path: Path, compiler_status: int,
+) -> None:
+    """A selected issuer must be bound before the TCP client can read a fixture."""
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    fixture = tmp_path / "source.coh"
+    fixture.write_text("attach queen cohesix-ticket-fixture\nEXPECT ERR\n")
+    destination = tmp_path / "retained"
+    observed = tmp_path / "observed"
+    write_executable(command_dir / "cargo", f"""#!/usr/bin/env python3
+import pathlib
+import sys
+if {compiler_status}:
+    raise SystemExit({compiler_status})
+args = sys.argv
+out = pathlib.Path(args[args.index('--out') + 1])
+out.write_text('attach queen selected-ticket\\nEXPECT ERR\\n')
+out.with_suffix('.tickets.json').write_text('{{"claim_bytes_unchanged":true}}')
+""")
+    write_executable(command_dir / "cohsh", """#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+args = sys.argv
+script = pathlib.Path(args[args.index('--script') + 1])
+pathlib.Path(os.environ['OBSERVED']).write_text(str(script) + '\\n' + script.read_text())
+""")
+    source = SCRIPT.read_text().split("run_cohsh_file() {", 1)[1].split(
+        "\nrun_cohsh() {", 1
+    )[0]
+    result = subprocess.run(
+        ["bash", "-c", "run_cohsh_file() {" + source + '\nrun_cohsh_file "$1"',
+         "fixture-test", str(fixture)],
+        env={
+            **os.environ,
+            "PATH": str(command_dir) + os.pathsep + os.environ["PATH"],
+            "PROJECT_ROOT": str(REPO_ROOT),
+            "COHSH_RUN_FIXTURE_DIR": str(destination),
+            "COHSH_RUN_MANIFEST": str(tmp_path / "selected.toml"),
+            "COHSH_BIN": str(command_dir / "cohsh"),
+            "COHSH_AUTH_TOKEN": "offline-test-only",
+            "OBSERVED": str(observed),
+        },
+        capture_output=True, text=True, check=False,
+    )
+    if compiler_status:
+        assert result.returncode == 1
+        assert not observed.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert observed.read_text() == (
+            str(destination / "source.coh")
+            + "\nattach queen selected-ticket\nEXPECT ERR\n"
+        )
+        assert (destination / "source.tickets.json").is_file()
+    assert fixture.read_text() == "attach queen cohesix-ticket-fixture\nEXPECT ERR\n"
 
 
 def write_executable(path: Path, body: str) -> None:
