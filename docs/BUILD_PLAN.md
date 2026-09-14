@@ -147,7 +147,7 @@ manual availability, profile selection, implementation, and target proof.
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
-| [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | In Progress — 1.1.0-beta (Release A) |
+| [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Next — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Next — 1.1.0-beta (Release A) Jetson/Linux reference slice |
 | [27c](#27c) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Next — 1.1.0-beta (Release A) capsule core; full graph conditional |
