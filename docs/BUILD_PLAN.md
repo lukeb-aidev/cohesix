@@ -115,7 +115,7 @@ owned by their specific contracts.
 | [28](#28) | Formal Verification Baseline + Proof-Carrying Manifests | Staged — core in 1.2.0-beta (Release B); extended proofs conditional |
 | [28a](#28a) | Machine-Checked Intent Admission + Decision-Bound Authority | 1.2.0-beta (Release B) — consequential actions |
 | [28b](#28b) | Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle | 1.2.0-beta (Release B) — production assurance gate |
-| [28c](#28c) | MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later | 1.2.0-beta (Release B) — MCP first; A2A demand-gated |
+| [28c](#28c) | MCP/A2A Gateway Coverage + Governed Autonomous Workflows | 1.2.0-beta (Release B) — complete selected-profile MCP workflows; optional A2A interoperability |
 | [29](#29) | Bounded VM-Local Persistence: Spool Stores + Settings | Conditional — 1.3.0-beta (Release C) edge-depth track |
 | [29a](#29a) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Conditional — activate only for an accepted SLO miss |
 | [29b](#29b) | Operator-Lane Scheduler + Multi-Surface Responsiveness | Conditional — activate only for an accepted responsiveness miss |
@@ -166,10 +166,13 @@ Deliver **28 core** claim registers, generated witnesses, Secure9P bounds,
 HAL/resource checks and restricted policy IR; **28a** exact intent-to-authority
 admission for GPU leases, PEFT/model promotion or rollback and selected service
 controls; **28b** production Worker ticket/lease binding and deterministic
-fault/revoke/quarantine/replay evidence where claimed; **28c MCP phase 1**
-read-only resources and a small set of accepted ticketed tools; and the **27f**
-governed-workflow view. A2A requires a concrete use case that existing run/task
-and MCP surfaces cannot satisfy.
+fault/revoke/quarantine/replay evidence where claimed; **28c** complete MCP
+coverage of the selected profile's admitted gateway operations, discoverable
+use-case guidance, and an accepted unattended workflow including recovery;
+and the **27f** governed-workflow view. Read-only MCP is an intermediate gate.
+A2A is an optional first-class projection qualified against a named peer-agent
+integration; ecosystem interoperability is sufficient motivation. Both
+protocols remain globally and independently disableable in the manifest.
 
 ### Release 1.3.0-beta (C) — Deepen the Edge and Contribute Reusable seL4 Work
 
@@ -182,8 +185,11 @@ containment, restart and reproducible-evidence contributions from accepted work.
 
 ### Demand-Gated and Parked Work
 
-The full **27b** provider catalogue, **27c** semantic graph, A2A and enterprise
-**27f** desks require a named use case and maintainer budget. **30b** stays
+The full **27b** provider catalogue, **27c** semantic graph and enterprise
+**27f** desks require a named use case and maintainer budget. The optional
+**28c A2A** delivery slice requires a named interoperability target and
+maintainer budget; it need not demonstrate a capability unavailable in MCP.
+**30b** stays
 deferred until existing CLI/Python/OpenAI-compatible/MCP workflows demonstrate
 a need. **31** is outside committed releases: funded demand and written AWS Arm
 custom-OS supportability confirmation may authorize its feasibility gate only;
@@ -17722,15 +17728,33 @@ Deliverables: Python projects the same generated production-binding and quaranti
 ```
 
 
-## Milestone 28c — MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later <a id="28c"></a>
+## Milestone 28c — MCP/A2A Gateway Coverage + Governed Autonomous Workflows <a id="28c"></a>
 [Milestones](#Milestones)
 
-**Delivery posture:** Release B accepts MCP phase 1 plus only the ticketed MCP
-tools required by the accepted walkthroughs. A2A is a demand-gated extension,
-not part of the Release B definition of done. It may be activated only by a
-named cross-agent delegation case with an owner, protocol version, security
-posture, interoperability target, and evidence plan. Read-only MCP may ship
-before mutating MCP; neither implies A2A conformance.
+**Delivery posture:** Release B accepts complete MCP coverage of the selected
+profile's admitted gateway operations and at least one consequential workflow
+that executes, observes, and recovers unattended within standing authorization.
+Read-only conformance is an intermediate checkpoint, not milestone completion.
+The complete gateway inventory must account for every operation; a small demo
+catalog cannot substitute for coverage. Unselected future providers do not
+block delivery, and an unavailable action cannot be advertised as executable.
+
+A2A is a first-class optional projection of the same functions and use cases,
+with task-oriented composition where appropriate. Its delivery slice needs a
+named peer-agent integration, owner, pinned protocol/binding, security posture,
+and evidence plan; interoperability alone is sufficient justification. It may
+ship after MCP without blocking Release B, but A2A acceptance requires the same
+coverage, secure-use guidance, and unattended-workflow evidence. MCP acceptance
+never implies A2A conformance. Deployment enablement is a separate decision:
+the manifest can disable both protocols globally or either one independently.
+
+**Planning scope:** This section specifies future implementation and acceptance.
+It does not activate runtime work or claim that protocol support, the new
+manifest switches, standing-authority orchestration, or 28a admission exists.
+This roadmap refactor changes only BUILD_PLAN. The complete host-tool catalog,
+`tools/cohesix-py`, generated interfaces, and raw/REST benchmark contracts retain
+their as-built behavior; implementation tasks below own their compatibility
+review and any required atomic updates.
 
 **Why now (ecosystem boundary):**
 Milestone 27a gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 27b provides the generated provider/action and integration-surface graph, read visibility classes, identity mappings, external-executor conformance, package manifests, and use-case evidence rows that gateway protocol projections must consume. Milestone 27c provides immutable semantic objects and Context Capsules. Milestone 28a provides the typed-intent, authoritative-fact, decision, and state-bound-grant contract for every mutating protocol projection. Milestone 27d defines the host-side AI/provider model and complete PEFT lifecycle for delegated runs, optional NeMo providers, GPU leases, and evidence receipts, and Milestone 27e provides the OpenAI-compatible inference boundary and provider-neutral inference receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane, inference protocol, semantic store, policy evaluator, or VM grammar to satisfy them.
@@ -17741,11 +17765,27 @@ A2A belongs in the same gateway milestone only as a companion agent-delegation f
 
 **As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. The accepted 27e inference endpoint remains a separate host service; 28c discovers and references it but does not proxy, reimplement, or redefine its compatible wire contract. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28c must not rebuild that through MCP or A2A. Milestone 28c adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
-**Sequencing note:** Milestone 28c is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded namespace reads, accepted 27c semantic/capsule artifacts, and accepted 27e inference receipts, with every resource classified by the Milestone 27b visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 27a delegated authority floor, 27b provider/integration graph, 27c artifact model, 28a admission primitive, 27d run/checkpoint/evidence model, and 27e inference admission/receipt contract are proven. A projected mutating tool/skill is omitted or reports typed unavailable when its provider action lacks an accepted 28a policy or any required provider, surface, external executor, Worker tier, package, semantic artifact, or inference profile row is not accepted. No mutating MCP/A2A path can be accepted solely because read-only protocol conformance passes, and protocol conformance cannot promote the underlying use case. A path may cite matching 26e evidence for live Worker/driver authority; if it additionally claims production Worker ticket/lease binding, complete driver-inventory projection, or structured quarantine/restart, it must cite the corresponding Milestone 28b evidence. Host-ticket-only and read-only projections must not claim either class by implication.
+**Sequencing note:** Milestone 28c is staged inside one milestone. Phase 1 proves
+manifest controls, discovery, usage guidance, and read-only conformance for the
+selected protocol. MCP covers bounded namespace/catalog reads and accepted
+27c/27e artifacts where selected; A2A proves its own discovery, guidance,
+task/artifact visibility, and authorization without requiring MCP enablement or
+acceptance. Every resource uses the 27b visibility model. Phase 2 admits
+mutating tools/skills only after their exact 27a/27b authority/registry and 28a
+admission prerequisites pass, plus 27c context, 27d run/execution, or 27e
+inference contracts where the action uses them. Missing policy or required
+provider, surface, executor, Worker tier, package, or artifact evidence yields
+omission or typed unavailable and a retained coverage-ledger reason.
+Read-only protocol conformance cannot promote a mutating use case. Live
+Worker/driver claims cite matching 26e evidence; production ticket/lease
+binding, complete driver inventory, or structured quarantine/restart additionally
+cite 28b. Host-ticket-only and read-only projections cannot imply those claims.
 
-Phase 2 is itself split: selected mutating MCP tools may enter Release B after
-their exact 28a actions pass; A2A remains outside the release gate until the
-demand gate above is explicitly satisfied.
+Phase 2 completes the selected profile's MCP operation coverage after each
+mutating action's exact 28a contract passes, then proves an unattended workflow
+and its failure paths. A2A follows the same progression when its interoperability
+slice is selected. Broad authority is never inferred from protocol enablement,
+discovery, an earlier approval, or read-only acceptance.
 
 **Prerequisites**
 - Milestone **28a** completed for every mutating tool/skill, including the
@@ -17777,6 +17817,191 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
 10. Every mutating flow is `MCP tool call or A2A task -> generated typed intent
     -> 28a admission -> existing host-ticket or control action`; neither MCP
     nor A2A contains an independent policy evaluator.
+11. Every admitted gateway function is reachable through each enabled protocol
+    with equivalent authority and outcomes. One shared coverage ledger records
+    mappings, compositions, missing prerequisites, and justified protocol limits.
+12. Agents discover Cohesix use cases, prerequisites, exact input/output
+    contracts, authorization requirements, lifecycle, recovery, and evidence
+    through the richest supported native protocol surfaces, without private
+    repository knowledge or custom client patches.
+13. Standing authorization permits unattended execution within explicit,
+    revocable limits. Each side effect still requires current per-action
+    admission; human interaction occurs only when the selected policy requires
+    it or additional authority is needed.
+14. Manifest master and per-protocol switches default to disabled and are an
+    upper bound on every launch mode, transport, discovery surface, and client.
+
+**Shared contracts**
+
+### Manifest enablement and global disable
+
+The following are planned compiler-owned settings, not current manifest syntax:
+
+```toml
+[gateway.agent_protocols]
+enabled = false
+
+[gateway.mcp]
+enabled = false
+
+[gateway.a2a]
+enabled = false
+```
+
+- Effective MCP enablement is `gateway.agent_protocols.enabled &&
+  gateway.mcp.enabled`; A2A uses the same master switch and its own flag.
+  Missing settings resolve to false. Master false dominates retained child
+  settings; both false, MCP-only, A2A-only, and both enabled are supported.
+- CLI/environment/config overrides may narrow this generated ceiling only.
+  Direct stdio launch, remote requests, mount options, discovery, negotiation,
+  and agent tools cannot enable a manifest-disabled protocol. An invalid or
+  mismatched selected generated policy fails closed before protocol startup.
+- A disabled protocol registers no handlers, protocol-only listeners, public
+  or extended Agent Cards, catalog endpoints, streams, subscriptions, or push
+  callbacks and starts no protocol background work. Its credentials are not
+  resolved solely for that protocol. A dedicated disabled stdio invocation
+  exits with a bounded diagnostic on stderr before accepting protocol input.
+  Existing REST routes and independent host tools retain their own enablement.
+- Record effective flags and manifest fingerprint in bounded gateway/doctor
+  diagnostics. Reject attempts to override disabled settings deterministically;
+  HTTP requests to absent routes cannot activate an adapter or alternate path.
+- Apply a changed manifest through the supported configuration/restart lifecycle.
+  Do not claim hot reload unless implemented and tested. On disable transition,
+  stop new protocol admission and terminate protocol streams/callback workers.
+  Already accepted tickets retain the underlying executor's durable lifecycle;
+  disabling a transport neither cancels nor replays their side effects. Use
+  separately authorized cancellation or grant revocation and existing status
+  surfaces to manage that work. A2A-only operation never depends on MCP being on.
+- Bump the manifest schema when these fields are implemented, regenerate all
+  selected profiles and consumers, and validate schema even for disabled
+  configuration. Dependency readiness checks apply to effective enablement;
+  disabling both protocols must not require installing their optional services.
+
+### Complete function and use-case coverage
+
+- Extend the 27b registry projection to inventory every supported gateway
+  operation: metadata and bounds, namespace reads and admitted append/batch
+  writes, Queen/Worker lifecycle and scheduling controls, GPU leases, AI/PEFT
+  lifecycle, provider actions, policy/approval and administrative operations,
+  cancellation/recovery, and audit/evidence/replay wherever already supported.
+  Each entry retains its owning contract and selected-profile maturity.
+  Future or disabled functions are recorded as such without inventing support.
+- Every admitted entry has an MCP tool/resource mapping and an A2A
+  operation/skill mapping when that protocol is enabled. Many operations may
+  compose into a typed A2A skill; semantic parity does not require one endpoint
+  per tool. Schema/docs endpoints may map to native metadata or linked
+  resources. The ledger records any native protocol limitation, an equivalent
+  in-protocol composition where possible, and the owning rationale/evidence.
+  Unmapped admitted functionality blocks coverage acceptance. Exclusions cannot
+  be justified solely by a demo catalog, a human-only preference, or write risk.
+- Generic append, batch, and host-ticket tools validate the exact underlying
+  action and target against the same generated schema, policy, and admission
+  as named tools. No raw-write wrapper bypasses a missing action policy.
+- Keep full implementation coverage separate from caller-visible discovery.
+  Apply 27b visibility rules before constructing payloads; tools and skills are
+  filtered by current identity, grants, deployment readiness, and supported
+  protocol capabilities. Safe unavailable/authorization-needed explanations
+  must not reveal another subject's resources or privileged policy details.
+- Registry coverage includes end-to-end use cases, not only action names:
+  discover/inspect, acquire capacity, execute/observe, evaluate/canary/promote,
+  cancel/resume/rollback, bounded service remediation, and evidence/replay.
+  Include every supported use-case row and its applicable stages; do not
+  require optional inference or semantic dependencies for unrelated controls.
+
+### Standing authorization and per-action admission
+
+- Reuse 27a delegated identity, 27b action policy, 27d durable run state, and
+  28a admission for an explicit standing authorization bound to a subject,
+  workflow/run, action set, targets, policy version, expiry, and revocation
+  state. Bounds include resource/cost ceilings where applicable, cumulative
+  operations, concurrency, retry/cooldown limits, and delegation depth.
+  Subdelegation can only attenuate the original authority. Credentials travel
+  through authenticated transport/configuration, never model-visible arguments.
+- The shared authority/run owners enforce budgets across MCP, A2A, REST, child
+  agents, reconnects, and process recovery; protocol-local counters cannot
+  multiply a run's budget. Refuse autonomy claims where durable accounting,
+  fact freshness, revocation, or executor enforcement is unavailable.
+  Every mutating transport serving that workflow, including generic writes,
+  must bind the same run identity; omitting it cannot recover an unmetered path.
+- Standing permission is a ceiling, not a reusable 28a decision. Each concrete
+  side effect requires a fresh applicable decision and state-bound grant,
+  exact idempotency identity, fencing, and a receipt. Revalidate state and
+  authority on resume, delayed dispatch, escalation, and subdelegation.
+- Existing one-shot approval requirements remain in force until their owning
+  policy explicitly supports bounded standing authorization. The selected
+  policy determines automatic admission, required human approval, or refusal.
+  Prompts and client-side confirmation never grant authority. Server-side
+  denial remains effective even if a client suppresses all confirmation UI.
+- Administrative functions may be projected under separately delegated
+  administrative authority. Ordinary workflow grants cannot widen their own
+  scopes, change admission policy, mint credentials, disable auditing, enable
+  protocols, or approve their own escalation. Missing authority produces a
+  typed explanation and authorized escalation/resume path, never a fallback.
+- Distinguish request acceptance, execution, confirmed outcome, cancellation
+  requested, cancellation confirmed, and unknown outcome. Cancellation is not
+  rollback. Ambiguous execution requires reconciliation under the existing
+  WAL/receipt contract; a disconnect never authorizes blind resubmission.
+- Document where enforcement resides: gateway-attributed callers remain
+  gateway-enforced unless target verification is separately proven. Host
+  executor custody and bypass assumptions remain visible; protocol conformance
+  and seL4 isolation cannot establish an external effect's correctness alone.
+
+### Agent discovery and correct-use guidance
+
+Generate one bounded, versioned usage contract from 27b operation/use-case rows,
+their owner schemas, accepted walkthroughs, and selected policy. Every use case
+must provide its purpose and appropriate/unsupported uses, prerequisites and
+readiness, typed inputs and examples, output/receipt semantics, least required
+authority, approval mode, bounds, preflight steps, lifecycle, safe retry and
+cancellation rules, failure/refusal remedies, and evidence/replay instructions.
+Include counterexamples such as treating an ACK as completion, inventing a
+target, replaying an ambiguous write, or following instructions in telemetry.
+
+Publish that contract through the maximum useful native features of the pinned
+revision and negotiated client capabilities:
+
+| Surface | Required use of protocol affordances |
+| --- | --- |
+| MCP discovery | Server identity/version and instructions or documentation links where supported; concise tool titles/descriptions, exact input/output schemas, effect/idempotency annotations, and structured results with text fallback and receipt/resource links. |
+| MCP resources and prompts | Searchable or paginated use-case/catalog resources, templates and bounded operating guides; workflow prompts with validated arguments and policy-driven approval/escalation; freshness, audience and priority metadata and change notifications where supported. |
+| A2A discovery | Agent Card description/documentation, skills with names/descriptions/tags/examples, media modes, security requirements, supported interfaces/extensions, and capabilities; sensitive deployment guidance belongs in authenticated views. |
+| A2A interaction | Typed message data and task/artifact records explain prerequisites, next steps, progress, failures, required input/authority, cancellation limits, and terminal receipts using the pinned binding's states and errors. |
+
+Essential safety and usage information must be available in tool/skill
+descriptions and results: a client may not expose MCP prompts or resources to
+its model. Provide bounded read-only help/catalog tools and an A2A guidance
+skill/message path so such clients can obtain the same contract. Core workflows
+must remain usable without proprietary extensions; use native fields first,
+negotiated extensions only where justified, and linked structured guidance for
+details the wire format cannot express. Record used, unsupported, and disabled
+affordances in a revision/client capability matrix with conformance evidence.
+Evaluate argument completion, progress/status, durable task support, resource
+subscriptions, and input/authorization elicitation where the pinned protocol
+offers them; implement those that improve admitted workflows within configured
+bounds. Missing client support must yield a tested discovery/status/input
+fallback. Client callbacks cannot acquire extra authority or disclose secrets.
+Use progressive discovery and bounded pagination rather than unbounded prompt
+injection of the entire catalog. No runtime fetch of remote documentation is
+required for the packaged core guide.
+
+Guidance, schemas, examples, prompts, Agent Cards, and annotations are descriptive
+and never authoritative instructions to bypass validation. Bind guides to the
+selected manifest, registry/policy/schema versions, visibility, and freshness;
+invalidate caches on identity/policy changes and refuse stale authority. Keep
+credentials, private targets, raw prompts, and unredacted evidence out of public
+metadata. Validate examples against real schemas and exercise them through
+ordinary clients. Clients must be able to determine the correct sequence and
+handle refusal using only published protocol guidance; this is a tested
+usability contract, not a claim that every model will follow instructions.
+
+Protocol references for implementation-time revision selection:
+[MCP tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools),
+[MCP resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources),
+[MCP prompts](https://modelcontextprotocol.io/specification/2025-11-25/server/prompts),
+and [A2A specification](https://a2a-protocol.org/latest/specification/).
+These references describe available affordances across revisions; they do not
+select a mixed wire contract. Pin and validate one complete revision per
+protocol, recording supported features and client limitations before acceptance.
 
 **Non-Goals (Explicit)**
 - No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
@@ -17805,11 +18030,15 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
 **Purpose:** Let standard MCP hosts connect to Cohesix without client-specific shims while keeping the gateway's loopback/auth defaults.
 
 Implementation requirements:
+- Apply the shared manifest enablement contract before creating any transport,
+  resolving MCP credentials, or advertising discovery. Runtime flags can only
+  select or restrict manifest-enabled transports and endpoints.
 - Add an MCP server mode to `apps/hive-gateway` with:
   - stdio transport for local MCP hosts that launch the gateway as a subprocess,
   - Streamable HTTP endpoint for remote-capable MCP clients, sharing the gateway's loopback-only default and non-loopback risk override,
   - protocol revision, JSON Schema dialect, authorization mode, and capability negotiation pinned in `docs/HOST_API.md` and generated gateway metadata,
-  - HTTP `MCP-Protocol-Version` handling, optional `Mcp-Session-Id` lifecycle, explicit session termination behavior, and deterministic unsupported-version errors,
+  - exact revision-specific version/request metadata, session handling where
+    supported, explicit termination behavior, and deterministic unsupported-version errors,
   - `tools`, `resources`, and `prompts` capabilities with paginated discovery where needed,
   - optional list-change notifications only when the implementation has deterministic change detection.
 - Remote MCP transport must validate `Origin`, require gateway request auth, and require delegated tickets for mutating tools. A production non-loopback profile must implement the authorization contract of the pinned MCP revision or explicitly document and test a narrower compatibility mode; a preconfigured loopback bearer token alone is not generic remote MCP authorization conformance.
@@ -17817,6 +18046,9 @@ Implementation requirements:
 - MCP stdout/stdin must carry only valid MCP JSON-RPC messages; logs go to stderr or the existing gateway log path.
 - Streamable HTTP mode must support the accepted request/response content types, bounded SSE streams when enabled, explicit cancellation handling, and no broadcast of one client's server messages to another client.
 - The gateway must expose enough server metadata for common MCP clients and inspectors to identify the server, protocol revision, tool names, resource URI scheme, and auth requirements.
+- Populate the native discovery and guidance fields required by the shared
+  agent-usage contract. A negotiated feature limitation must yield the documented
+  help/result fallback without weakening authorization or requiring a client fork.
 
 As-built leverage:
 - Reuse `hive-gateway` broker queues, request-auth checks, loopback binding policy, OpenAPI bounds, and existing `cohsh` REST transport code.
@@ -17828,6 +18060,10 @@ As-built leverage:
 storage model.
 
 Implementation requirements:
+- Expose bounded `cohesix://guide/*` usage-contract and coverage resources from
+  generated 27b records and accepted operator guidance, with schema/manifest
+  fingerprints and visibility checks. These are host catalog artifacts and do
+  not require a semantic store or imply a VM namespace.
 - Define namespace-backed `cohesix://namespace/*` resource URIs that map
   one-to-one to existing bounded reads:
   - `/proc/boot`, `/proc/root/*`, `/proc/9p/*`, `/proc/lease/*`, `/proc/schedule/*`, `/proc/spool/*`, `/proc/attest/*`
@@ -17867,6 +18103,11 @@ As-built leverage:
 **Purpose:** Support useful MCP automation while preserving the Cohesix write path.
 
 Implementation requirements:
+- The families below illustrate the catalog; the shared coverage ledger defines
+  completeness. Include every admitted gateway control, administrative action,
+  batch operation, lifecycle/recovery operation, and metadata/evidence surface
+  under its exact authority. Include read-only help/use-case discovery for
+  clients that cannot consume resources or prompts.
 - Read-only tools:
   - `cohesix.fs.ls`, `cohesix.fs.cat`, `cohesix.fs.tail`
   - `cohesix.semantic.inspect` and `cohesix.semantic.query` over an admitted
@@ -17911,14 +18152,18 @@ Implementation requirements:
   - id/idempotency-key/writer-epoch requirements for mutating calls,
   - target path validation using existing Cohesix path rules.
 - Tool results must return structured MCP output plus a text fallback containing the Cohesix receipt id, ticket id, action, target, state path, and evidence refs. They must not expose raw tickets or provider credentials.
+- Describe preconditions, required scope and approval mode, consequential
+  effects, idempotency limits, completion evidence, and safe follow-up actions
+  in each generated tool contract. Return typed refusal/remediation information
+  without suggesting unsafe retries or escalation outside the caller's scope.
 
 As-built leverage:
 - Reuse `host-ticket-agent` executors, `coh peft`, `host-cuda`, generated policy defaults, delegated REST identity, writer-epoch fencing, and evidence/timeline redaction.
 
 ---
 
-### 4) Prompt templates for safe operator workflows
-**Purpose:** Provide MCP-native workflows without making prompts authoritative.
+### 4) Prompt templates for governed operator and autonomous workflows
+**Purpose:** Make the shared usage contract actionable for MCP clients.
 
 Implementation requirements:
 - Add prompt templates that assemble existing tools/resources for common Cohesix tasks:
@@ -17930,7 +18175,14 @@ Implementation requirements:
   - K8s cordon/drain with lease and evidence checks,
   - systemd service recovery with Docker workload status,
   - Docker remediation with post-action evidence collection.
-- Prompts must require explicit user approval for side-effecting tools and must name the exact host-ticket action that would be submitted.
+- Prompts name exact Cohesix actions, prerequisites, expected receipts, and
+  recovery paths. They support unattended execution inside an existing standing
+  authorization and request human approval only when the underlying selected
+  policy requires it or additional authority is needed. A prompt cannot replace
+  a missing approval, 28a decision, or server-side authorization check.
+- Cover all admitted use-case rows, including operational administration,
+  cancellation/resume, rollback, and evidence collection where supported;
+  maintain examples and counterexamples from the same generated usage contract.
 - Prompt text must not embed secrets, tickets, endpoint auth, or unbounded host paths.
 - Prompt outputs are guidance only; only existing Cohesix tickets, receipts, and evidence determine state.
 
@@ -17945,17 +18197,30 @@ As-built leverage:
 **Purpose:** Let external A2A peers delegate bounded Cohesix operational tasks and observe status/artifacts without making A2A a coordination plane.
 
 Implementation requirements:
-- Add an A2A-compatible HTTP facade in `hive-gateway` behind existing gateway request auth, loopback default, non-loopback exposure override, rate limits, and broker backpressure.
-- Record the accepted A2A protocol revision, Agent Card `protocolVersion`, endpoint paths, supported binding, media type, extension policy, unsupported-version errors, and streaming/push support in `docs/HOST_API.md` and generated gateway metadata.
+- Add an A2A-compatible HTTP facade in `hive-gateway` behind the shared manifest
+  master/per-protocol controls, existing request auth, loopback default,
+  non-loopback exposure override, rate limits, and broker backpressure.
+- Record the accepted A2A revision and its exact version-metadata location,
+  endpoint paths, binding, media types, extension policy, unsupported-version
+  errors, and streaming/push support in `docs/HOST_API.md` and generated metadata.
 - Pin one accepted binding/revision mapping in generated policy. JSON-RPC, HTTP+JSON, and gRPC method or endpoint names must not be mixed across protocol revisions, and fixtures must be regenerated when that mapping changes.
 - Publish an Agent Card from `/.well-known/agent-card.json` when A2A is enabled; alternate generated paths may exist only as additional configured aliases. The card must advertise only enabled Cohesix skills, authentication requirements, endpoint interfaces, and safe capability summaries; it must not expose raw tickets, secrets, host paths, or executor internals.
 - Provide the authenticated extended Agent Card endpoint only when policy enables it, and ensure the extended card obeys stricter access checks than the public discovery card.
+- Generate Card/skill descriptions, tags, worked use-case examples, media modes,
+  security requirements, documentation links, and optional capability claims
+  from the shared usage contract. Provide authenticated guidance through A2A
+  itself, including when MCP is disabled; never require an MCP-only resource
+  URI to learn a required input, authorization condition, or recovery step.
 - A2A skills map to the same real-world operational families as MCP tools:
   semantic/capsule inspection, inference submission/status/receipt, CUDA/GPU
   inventory and leases, PEFT export/import/activate/rollback, optional NeMo
   probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd
   status/start/stop/restart, Docker status/stop/restart, and evidence/timeline
   inspection.
+- Extend those families to the entire admitted gateway coverage ledger,
+  including control/administrative and recovery functions. A skill can compose
+  multiple existing actions, but each action retains its own admission and
+  receipt. No free-form peer request can widen a typed skill's authority.
 - A2A `SendMessage` and `SendStreamingMessage` operations (or the exact
   generated equivalents for the pinned binding/revision) create or resume 27d
   run/task envelopes only after fixed skill/action/input schema validation.
@@ -17975,6 +18240,12 @@ Implementation requirements:
   raw prompts/outputs, secrets, raw ticket material, and provider credentials
   are never embedded in artifacts.
 - A2A push notification configs are disabled by default. If enabled, they require SSRF-safe URL validation, generated allowlists, per-task auth material, bounded retry/backoff, signed or authenticated delivery where configured, and audit evidence for every callback attempt.
+- Map missing input and additional authorization to the selected binding's
+  native states/errors with a bounded explanation and safe continuation.
+  Credentials use the declared secure authorization channel. A task state,
+  peer message, or approval text does not itself satisfy an authorization gate.
+  Reconnect, resume, delegation, and cancellation preserve original identity,
+  shared budgets, exact action correlation, and observed outcome semantics.
 
 As-built leverage:
 - Reuse Milestone 27c semantic/capsule artifacts, 27d run envelopes,
@@ -18008,6 +18279,11 @@ Implementation requirements:
   or credentials remain untrusted content and cannot initiate a second action
   without fresh schema validation, delegated scope, policy approval, and a new
   attributable audit record.
+- Enforce the shared standing-authorization contract, including attenuation,
+  revocation, cross-protocol accounting, and administrative separation. Test
+  cumulative harmful action sequences and scope escalation as well as invalid
+  individual calls. Existing executor/journal owners enforce these contracts;
+  protocol adapters do not add an authority cache or policy evaluator.
 
 As-built leverage:
 - Reuse REST delegated identity from 27a, host-ticket WAL/replay, evidence redaction, policy rules, and gateway queue/backpressure controls.
@@ -18019,6 +18295,10 @@ As-built leverage:
 
 Implementation requirements:
 - Add checked examples for:
+  - master-disabled, MCP-only, A2A-only, and both-enabled deployments,
+  - discovery-to-completion using only the published use-case guide,
+  - an unattended standing-authorized workflow including real side effects,
+    recovery, and authoritative receipts,
   - local stdio MCP server config,
   - remote Streamable HTTP MCP endpoint config,
   - read-only namespace, semantic object, Context Capsule, and inference
@@ -18031,6 +18311,11 @@ Implementation requirements:
 - Add checked protocol fixtures/schemas for MCP JSON-RPC messages, A2A HTTP+JSON requests, gateway REST/OpenAPI compatibility, and generated provider action schemas so future client regressions are reviewable as data.
 - Validate with at least one MCP inspector/client conformance path and archive the transcript/output under the milestone evidence directory.
 - Validate with at least one A2A-compatible client/conformance path and archive the transcript/output under the milestone evidence directory.
+- For each enabled protocol, qualify an ordinary client/peer against a named
+  unattended scenario. Include limited-client capability fallback, safe refusal,
+  cancellation/resume, revocation, and ambiguous-outcome recovery. Deterministic
+  protocol fixtures remain the contract oracle; model-driven walkthroughs are
+  additional usability evidence and cannot replace authorization tests.
 - Add a gateway protocol performance probe covering namespace and host-artifact
   MCP resource reads, MCP tool calls that submit host tickets, A2A task
   creation/status streaming, and backpressure/refusal paths. Record semantic
@@ -18062,6 +18347,8 @@ Implementation requirements:
     namespace path/action for `LS`/`CAT`/`TAIL`/`ECHO` or
     `/host/tickets/spec`, or immutable artifact id/schema/hash and owner
     milestone for 27c semantic/capsule and 27e inference receipt resources.
+    Usage-guide/catalog files carry their generated 27b/28c contract version
+    and selected manifest fingerprint.
 - The MCP mount is read-only by default and in the milestone acceptance path. Writes, renames, chmod, symlink creation, and host filesystem path escapes fail deterministically with no MCP `tools/call`.
 - If a later task proposes write-capable MCP mount nodes, it must be a separate
   breaking-risk review and may append only the generated action-selected
@@ -18122,6 +18409,9 @@ As-built leverage:
 
 **Commands**
 - `cargo test -p hive-gateway`
+- `cargo test -p hive-gateway --test agent_protocol_controls`
+- `cargo test -p hive-gateway --test agent_usage_contract`
+- `cargo test -p hive-gateway --test agent_autonomy`
 - `cargo test -p hive-gateway --test mcp_protocol`
 - `cargo test -p hive-gateway --test mcp_resources`
 - `cargo test -p hive-gateway --test mcp_tools`
@@ -18142,25 +18432,70 @@ As-built leverage:
 - `scripts/cohsh/run_regression_batch.sh`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28c-qemu-gateway-agents`
 
+These are planned implementation/acceptance commands. The selected Test Plan
+also records ordinary-client transcripts and authoritative external-execution
+receipts for `m28c-unattended-workflow-acceptance`; a passing host test or QEMU
+run alone cannot establish live provider execution. Documentation-only roadmap
+changes use documentation, metadata, and generated-consistency checks.
+
 **Checks (Definition of Done)**
-- MCP lifecycle, `MCP-Protocol-Version`, optional `Mcp-Session-Id`, cancellation, `tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, and `prompts/get` pass against the accepted protocol revision recorded in the docs.
-- A2A Agent Card discovery, Agent Card `protocolVersion`, optional authenticated extended Agent Card, and the generated `SendMessage`, streaming, task query/list/cancel/subscribe, push-notification, artifact, and update mappings pass against the accepted protocol revision and binding recorded in the docs.
+- Master and per-protocol disabled configurations satisfy the shared enablement
+  contract across every transport/launch path, route, discovery surface, stream,
+  callback, and optional MCP mount. The master overrides retained true child
+  flags; CLI/env overrides cannot widen it. Missing/invalid configuration and
+  attempted indirect activation fail closed. Independent REST/host operation
+  remains available; disable-transition evidence accounts for accepted work.
+- The complete gateway inventory has no unaccounted operations. Every admitted
+  operation and supported use-case stage has an equivalent mapping/composition
+  in each enabled protocol; blocked/future rows and any native protocol limits
+  retain explicit reasons. Every advertised live action has its exact owning
+  authority, dependency, and execution evidence. An excluded action cannot
+  disappear from the coverage denominator merely because its adapter is missing.
+- Generated usage guidance covers appropriate and unsupported uses, schemas,
+  examples/counterexamples, authority/approval, bounds, lifecycle, failure,
+  recovery, and evidence. Ordinary clients can discover and execute the checked
+  scenario using this guidance alone, including tool-only MCP and A2A-only
+  configurations. Examples validate against owner schemas; stale or conflicting
+  guidance fails the consistency gate.
+- Every enabled protocol has a named unattended consequential workflow from
+  discovery/preflight through admission, execution, observation, recovery, and
+  authoritative receipt. No per-action human interaction occurs inside the
+  accepted standing policy. Exact-policy escalation, refusal, expiry/revocation
+  during a run, reconnect/restart, attenuation, cumulative budget exhaustion,
+  cancellation, and ambiguous execution have deterministic negative/recovery
+  evidence. Read-only, mock, or dry-run success alone cannot close this gate.
+- Shared authority checks prevent cross-protocol or child-agent budget renewal,
+  self-approval, and policy/manifest widening. Resume rechecks current state;
+  retries do not duplicate effects. Cancellation requested, confirmed canceled,
+  rollback, and unknown outcome remain distinguishable in receipts and tasks.
+- MCP lifecycle, discovery, cancellation, version/session handling, tool/resource/
+  prompt methods, and negotiated optional features pass the exact pinned
+  revision's contract and recorded client capability matrix. Regenerate fixtures
+  when a revision changes these methods or headers; never mix revisions.
+- A2A Agent Card discovery, revision-specific version metadata, optional
+  authenticated extended Card, and generated message/task/stream/push/artifact
+  mappings pass the exact pinned revision and binding recorded in the docs.
 - `crates/cohsh-core/fixtures/grammar.sha256` and generated `docs/snippets/cohsh_grammar.md` remain unchanged unless a separately approved breaking grammar milestone changes them.
 - Every namespace-backed MCP read maps to existing `LS`, `CAT`, or `TAIL`.
   Every semantic/capsule or inference-receipt read maps to the accepted
   read-only 27c or 27e core over an immutable id. Every MCP write maps to
   existing `ECHO` into a documented Cohesix control file or
   `/host/tickets/spec`; no host-artifact adapter mints authority.
+- Gateway metadata/bounds/schema and usage-guide reads project their existing
+  host/generated owner contract; they do not manufacture VM namespace paths.
 - Every A2A task maps to accepted 27c semantic/capsule refs where context is
   used, an existing 27d run/checkpoint/evidence record, a 27e inference
   receipt where inference is used, and, when mutating, an existing Cohesix
   host-ticket/control action. No A2A message text or metadata becomes
   authorization.
-- Read-only MCP acceptance passes before mutating MCP tools or A2A task creation are enabled in the milestone evidence path.
+- Each protocol's read-only discovery, usage guidance, visibility, and auth
+  acceptance passes before its mutating workflow acceptance. A2A-only profiles
+  do not require MCP runtime enablement or MCP acceptance evidence.
 - Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A
   task creation, inference/provider action execution, or VM Worker/driver
   authority. Each mutating acceptance artifact must name its
-  27a/27b/27c/27d/27e authority, context, admission, and receipt inputs,
+  27a/27b/28a authority/admission inputs and applicable 27c/27d/27e
+  context, run, and receipt inputs,
   matching 26e live-task evidence where applicable, and 28b evidence only for
   production Worker ledger binding, complete driver-inventory projection, or
   structured quarantine/restart claims.
@@ -18202,15 +18537,32 @@ As-built leverage:
 - `docs/OPERATOR_WALKTHROUGH.md` and related canonical docs describe the as-built transport, mount, MCP, A2A, host-ticket, provider, and evidence behavior without claiming implemented support before code/tests/generated outputs exist.
 
 **Compiler touchpoints**
+- `coh-rtc` adds schema-versioned `gateway.agent_protocols.enabled`,
+  `gateway.mcp.enabled`, and `gateway.a2a.enabled`, all false by default;
+  emits the effective enablement conjunctions and selected manifest fingerprint
+  into every gateway/profile consumer; and rejects runtime policy widening.
+  Master false dominates child flags without requiring optional providers.
+- `coh-rtc` emits one complete operation/use-case coverage and usage-contract
+  projection from the 27b registry and accepted owner schemas. It includes
+  mapping/composition/exclusion reasons, readiness and visibility, native
+  protocol/client affordances, schemas/examples, authority/approval mode,
+  lifecycle/recovery/evidence guidance, versioning, and cache invalidation.
+  Validate example/schema parity and reject unaccounted admitted operations.
+- Standing-authority schemas and budgets remain owned by shared 27a/27b/27d/28a
+  contracts. Generated protocol policy references their exact action, subject,
+  run, attenuation, revocation, and accounting rules rather than redefining them.
 - `coh-rtc` emits `gateway.mcp.*` policy:
   - enabled transports (`stdio`, `streamable_http`),
   - accepted MCP protocol revision,
   - JSON Schema dialect and authorization mode for the accepted revision,
-  - HTTP protocol-version header policy, optional session-id policy, cancellation policy, and SSE enablement/bounds,
+  - revision-specific version/request metadata, session/termination policy,
+    cancellation policy, and stream enablement/bounds,
   - endpoint path,
   - resource URI roots and path allowlists,
   - tool allowlists and provider action mappings,
   - prompt template ids,
+  - usage-guide/help mappings, schema and example refs, effect annotations,
+    client capability fallbacks, visibility/cache scope, and freshness policy,
   - MCP resource-mount enablement, read-only requirement, cache TTL, and synthetic tree bounds,
   - per-tool max input/output bytes,
   - delegated-ticket and writer-epoch requirements,
@@ -18237,23 +18589,28 @@ As-built leverage:
   availability, use-case refs, and evidence-export behavior. They are
   generated compatibility metadata, not a second registry, semantic store,
   inference protocol, or authority source.
-- Manifest validation rejects any MCP tool or A2A skill whose provider action mapping is absent from the shared registry or whose schema diverges between the two protocol projections.
+- Manifest validation rejects any MCP tool or A2A skill whose operation/action
+  mapping is absent from the shared registry or whose underlying owner schema
+  diverges between protocols. Task compositions preserve each action's schema.
 - `coh-rtc` emits `gateway.a2a.*` policy:
   - enabled endpoint/binding,
   - accepted A2A protocol revision,
   - binding-specific operation and endpoint mappings for that revision,
-  - Agent Card `protocolVersion` and extension policy,
+  - revision-specific version metadata and extension policy,
   - Agent Card path, provider metadata, skill ids, and interface declarations,
+  - skill guidance/examples/security/media modes, documentation/artifact links,
+    input/authority-required mappings, and client capability fallbacks,
   - task, artifact, stream, and push-notification bounds,
   - skill allowlists and provider action mappings,
   - per-skill max input/output bytes,
   - delegated-ticket, idempotency, and writer-epoch requirements,
   - redaction, evidence-export, and callback allowlist flags.
 - Manifest validation rejects A2A enablement when required Milestone
-  27a/27c/27d/27e delegated authority, immutable context, durable run/task
-  state, inference admission/receipt, audit/replay, evidence export, or fencing
-  prerequisites are disabled for the selected task-creating or task-mutating
-  skills.
+  27a/27b/28a delegated authority, registry or admission, audit/replay, or fencing
+  prerequisites are disabled for selected mutating skills. Validate 27d durable
+  run/task state for tasks and 27c/27e context/inference dependencies only where
+  used. Disabled protocols and unrelated operations do not acquire those
+  optional dependencies.
 - Manifest validation rejects NeMo A2A skills unless the 27d optional NeMo provider family and parity checks are enabled.
 - Generated docs refresh:
   - `docs/HOST_API.md`
@@ -18269,6 +18626,47 @@ As-built leverage:
 
 **Task Breakdown**
 ```
+Title/ID: m28c-manifest-protocol-controls
+Milestone: Milestone 28c — MCP/A2A Gateway Coverage + Governed Autonomous Workflows / m28c-manifest-protocol-controls
+Goal: Make global and independent protocol disable authoritative for every launch and discovery path.
+Inputs: tools/coh-rtc, configs/root_task*.toml, generated gateway/profile consumers, apps/hive-gateway, apps/coh/src/doctor.rs.
+Changes:
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/lib.rs + codegen — schema bump, false-default master/MCP/A2A flags, effective conjunctions, manifest binding, and disabled-profile dependency rules.
+  - configs/root_task*.toml + generated outputs — explicit selected enablement and propagated host defaults, fixtures, and docs.
+  - apps/hive-gateway startup/transport lifecycle — enforce generated ceiling before credential resolution, handlers, discovery, streams, callbacks, or background work; refuse CLI/env widening.
+  - apps/coh/src/doctor.rs + operator docs — report effective flags, safe configuration/restart, and existing-work handling on disable.
+  - apps/hive-gateway/tests/agent_protocol_controls.rs + compiler tests — master dominance, missing/invalid config, all flag combinations, stdio/HTTP/mount/alternate-route attempts, no disabled work, REST independence, and disable-transition fixtures.
+Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test agent_protocol_controls && scripts/check-generated.sh
+Checks: Disabled protocols have no active surface or callback work; no override widens manifest policy; A2A-only works; accepted tickets retain exact underlying lifecycle and are neither silently canceled nor replayed.
+Deliverables: Generated protocol controls, operational guidance, and deterministic enablement/disable evidence.
+
+Title/ID: m28c-standing-authority-integration
+Milestone: Milestone 28c — MCP/A2A Gateway Coverage + Governed Autonomous Workflows / m28c-standing-authority-integration
+Goal: Run complete workflows unattended inside standing authorization while retaining fresh per-action admission and shared durable limits.
+Inputs: accepted 27a delegation/replay, 27b action policies, 27d run/executor state, 28a intent/decision/grant contracts, selected workflow and host-tool consumers.
+Changes:
+  - shared authority/policy/compiler and run/executor owners — represent standing subject/run/action/target/expiry/revocation bounds, attenuation, cumulative budgets, concurrency, cooldowns, and approval/escalation modes without reusing a decision across intents.
+  - gateway REST/MCP/A2A admission adapters — bind authenticated identity and the same workflow accounting to exact action intents; keep policy evaluation and grant issuance in 28a.
+  - host-ticket-agent journal/executor integration — preserve accounting and identity across retry, resume, restart, and ambiguous outcomes; recheck current authority before dispatch.
+  - focused shared-owner tests + apps/hive-gateway/tests/agent_autonomy.rs — unattended authorization, required-human-policy retention, stale state, revocation, attenuation, cross-protocol budget exhaustion, administrative separation, and reconciliation.
+  - complete host-tool suite + tools/cohesix-py + benchmark contracts/docs — atomically update affected consumers and record unaffected surfaces; no implicit legacy-path or raw-append bypass.
+Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test agent_autonomy && cargo test -p host-ticket-agent
+Checks: No repeated human approval inside a valid standing policy; every effect has its own exact accepted 28a decision and receipt; escalation or missing shared enforcement refuses execution; adapters cannot mint grants or reset budgets.
+Deliverables: Shared standing-authority integration, bounded failure/recovery semantics, and attributable unattended-execution evidence.
+
+Title/ID: m28c-agent-usage-contract
+Milestone: Milestone 28c — MCP/A2A Gateway Coverage + Governed Autonomous Workflows / m28c-agent-usage-contract
+Goal: Let ordinary agents discover every admitted Cohesix use case and use it securely and correctly from protocol guidance alone.
+Inputs: complete 27b operation/use-case registry, accepted owner schemas/policies and walkthroughs, pinned protocol revisions, selected client/peer capability matrix.
+Changes:
+  - tools/coh-rtc registry/codegen + checked guidance source — one versioned usage contract with appropriate/unsupported uses, schemas, examples/counterexamples, authority, bounds, workflow steps, lifecycle, errors, recovery, and evidence.
+  - apps/hive-gateway MCP catalogs/tools/prompts + A2A Cards/skills/messages/artifacts — richest useful native projection, read-only help fallback, progressive discovery, visibility/freshness, and A2A-only access.
+  - apps/hive-gateway/tests/agent_usage_contract.rs — source/schema/example parity, missing guidance, stale cache and identity changes, public/private disclosure, limited-client fallback, and complete-use-case coverage.
+  - docs/OPERATOR_WALKTHROUGH.md + docs/HOST_API.md + docs/HOST_TOOLS.md + docs/API_GUIDELINES.md + docs/TEST_PLAN.md — installed guide, ordinary-client discovery walkthroughs, pinned feature matrix and exact conformance claims.
+Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test agent_usage_contract && scripts/check-generated.sh
+Checks: No admitted use case lacks required usage guidance; standard MCP and A2A clients can select valid inputs, understand authority, complete a workflow, handle refusal/recovery, and inspect evidence without private repository context or client patches.
+Deliverables: Generated agent-facing usage contract, validated examples, and archived native/fallback client walkthroughs.
+
 Title/ID: m28c-mcp-policy-ir
 Goal: Admit MCP gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
 Inputs: tools/coh-rtc, configs/root_task.toml, accepted 27c semantic/capsule
@@ -18279,7 +18677,7 @@ Changes:
     dialect, authorization mode, transports, endpoint, namespace and
     host-artifact resource roots, tool allowlists, prompt ids, owner-schema
     refs, bounds, and prerequisite gates.
-  - tools/coh-rtc/src/validate.rs — reject mutating MCP tools without delegated identity, audit/replay, and provider action prerequisites, and reject non-loopback production profiles whose authorization mode does not satisfy the pinned revision.
+  - tools/coh-rtc/src/lib.rs — reject mutating MCP tools without delegated identity, audit/replay, and provider action prerequisites, and reject non-loopback production profiles whose authorization mode does not satisfy the pinned revision.
   - tools/coh-rtc/src/codegen/* — generated gateway MCP defaults and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
 Checks: MCP revision/schema/auth policy is compiler-owned, profile-gated, conformance claims match the selected mode, and `cohsh-core` grammar specs remain untouched.
@@ -18292,19 +18690,19 @@ semantic/capsule schemas, accepted 27d/27e run/inference schemas,
 docs/HOST_API.md, docs/SECURITY.md, docs/TEST_PLAN.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `gateway.a2a.*` schema for endpoint/binding, accepted revision, binding-specific operation mappings, Agent Card path, skill ids, task/artifact/stream/push bounds, callback allowlists, and prerequisite gates.
-  - tools/coh-rtc/src/validate.rs — reject mixed-revision or mixed-binding
-    operation names and reject A2A task-creating or task-mutating skills without
-    their generated 28a intent/policy/fact/grant mapping, required 27a
-    delegated authority, 27c immutable context, 27d durable run/task state, 27e
-    inference admission/receipt, audit/replay, evidence export, and provider
-    action prerequisites.
+  - tools/coh-rtc/src/lib.rs — reject mixed-revision or mixed-binding
+    operation names and reject mutating skills without their generated 28a
+    intent/policy/fact/grant mapping, required 27a delegated authority and
+    27b action registry; require 27d durable state for tasks, and 27c/27e
+    context/inference contracts where used, plus the applicable audit/replay,
+    evidence and provider prerequisites. A2A must work with MCP disabled.
   - tools/coh-rtc/src/codegen/* — generated A2A gateway defaults, Agent Card metadata, and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
 Checks: A2A revision/binding mappings are compiler-owned and internally consistent, profile gates hold, and `cohsh-core` grammar specs and NineDoor semantics remain untouched.
 Deliverables: Generated A2A gateway policy, Agent Card metadata, and validation gates.
 
 Title/ID: m28c-provider-action-registry-projection
-Milestone: Milestone 28c — MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later / m28c-provider-action-registry-projection
+Milestone: Milestone 28c — MCP/A2A Gateway Coverage + Governed Autonomous Workflows / m28c-provider-action-registry-projection
 Goal: Consume the Milestone 27b provider/integration and use-case graph plus
 27c/27e owner schemas so MCP tools and A2A skills cannot define independent
 schemas or availability claims.
@@ -18313,18 +18711,20 @@ crates/host-cuda, accepted 27c semantic/capsule outputs, accepted 27e
 inference outputs, configs/generated/host_integration_dependency.json,
 configs/generated/use_case_evidence.json, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
-  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference
+  - tools/coh-rtc/src/lib.rs — reject MCP/A2A projections that reference
     undeclared 27b actions/surfaces, duplicate 27c/27e owner schemas, or
     drift from target, semantic/capsule/inference receipt, read-visibility,
     Worker, executor, package, use-case, or observed-mode records.
-  - apps/hive-gateway/src/actions/registry.rs — generated 27b provider/integration view consumed by MCP tools, A2A skills, evidence mapping, availability reporting, and security checks.
+  - apps/hive-gateway/src/actions/registry.rs — complete generated 27b gateway-operation/use-case view consumed by MCP tools/resources, A2A skills, evidence, availability, usage guidance, and security checks; include control/administrative/recovery and metadata functions as well as providers.
+  - generated coverage ledger — map every inventory row to native operations or typed compositions, with explicit blocked/future status and justified protocol limitations; missing adapters cannot shrink the inventory.
   - apps/hive-gateway/tests/gateway_action_registry.rs — parity fixtures proving MCP and A2A expose the same allowed actions, bounds, dependency availability, receipt refs, and refusal semantics where the same provider operation exists.
 Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test gateway_action_registry && scripts/check-generated.sh
 Checks: Provider/integration metadata is generated once by 27b, owner schemas
 remain owned by 27c/27e, projections stay protocol-neutral, missing
 dependencies are omitted or typed unavailable, and drift between MCP tools,
 A2A skills, host-ticket lines, context/receipt refs, read visibility, use-case
-maturity, and evidence receipts is rejected.
+maturity, and evidence receipts is rejected. Every admitted operation has a
+mapping in each enabled protocol; exclusions cannot conceal supported functions.
 Deliverables: Gateway protocol projection and parity tests for
 semantic/context, inference, CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker,
 federation, FUSE/read surfaces, and evidence operations without a second
@@ -18336,7 +18736,7 @@ Inputs: apps/hive-gateway/src/main.rs, gateway auth/broker code, docs/HOST_API.m
 Changes:
   - apps/hive-gateway/src/mcp/protocol.rs — MCP JSON-RPC lifecycle, capability negotiation, pagination, and error mapping.
   - apps/hive-gateway/src/mcp/transport.rs — stdio and Streamable HTTP endpoint handling with stdout/stderr separation and Origin validation.
-  - apps/hive-gateway/src/main.rs — CLI/env flags for MCP enablement and endpoint selection.
+  - apps/hive-gateway/src/main.rs — CLI/env transport and endpoint selection bounded by the generated master/per-protocol enablement ceiling.
 Commands: cargo test -p hive-gateway --test mcp_protocol
 Checks: Standard lifecycle and discovery requests work over both transports; invalid JSON-RPC, bad Origin, missing auth, and oversize messages fail deterministically.
 Deliverables: MCP-capable gateway process with safe defaults.
@@ -18350,7 +18750,7 @@ visibility defaults, accepted 27c/27e fixtures.
 Changes:
   - apps/hive-gateway/src/mcp/resources.rs — typed `cohesix://namespace`,
     `cohesix://semantic`, `cohesix://context`, and
-    `cohesix://inference/receipt` catalogs, templates, id/path validation,
+    `cohesix://inference/receipt` and `cohesix://guide` catalogs, templates, id/path validation,
     namespace dispatch through existing `LS`/`CAT`/`TAIL`, and host-artifact
     dispatch through accepted read-only owner libraries.
   - apps/hive-gateway/tests/mcp_resources.rs — resource list/read fixtures for
@@ -18365,7 +18765,7 @@ Deliverables: MCP resource catalog that faithfully projects Cohesix namespace
 state and accepted immutable host artifacts.
 
 Title/ID: m28c-mcp-prompts
-Goal: Add MCP prompt templates for safe operational workflows over existing Cohesix tools/resources.
+Goal: Project the shared usage contract as MCP prompts for governed operator and unattended workflows.
 Inputs: apps/hive-gateway/src/mcp, docs/HOST_TOOLS.md, docs/SECURITY.md.
 Changes:
   - apps/hive-gateway/src/mcp/prompts.rs — prompt templates for semantic impact
@@ -18373,18 +18773,18 @@ Changes:
     readiness, K8s drain, systemd recovery, and Docker remediation.
   - docs/HOST_TOOLS.md — operator guidance for MCP prompt use, approval expectations, and non-authority status.
 Commands: cargo test -p hive-gateway --test mcp_prompts
-Checks: Prompts contain no secrets, name exact Cohesix tools/actions, and require user approval before side-effecting tool calls.
+Checks: Prompts contain no secrets, name exact actions and expected receipts, honor standing authorization, and request approval only when the underlying policy requires it or additional authority is needed; descriptions/help tools retain essential guidance when prompts are unavailable.
 Deliverables: MCP prompt catalog that improves operator ergonomics without becoming control state.
 
 Title/ID: m28c-readonly-mcp-acceptance-gate
-Goal: Prove read-only MCP transport, resources, prompts, and conformance before enabling mutating tools or A2A task creation.
+Goal: Prove the intermediate read-only MCP transport, resources, prompts, and conformance checkpoint before mutating MCP acceptance; it cannot close the unattended-workflow gate.
 Inputs: apps/hive-gateway, generated MCP policy, docs/HOST_API.md, docs/TEST_PLAN.md.
 Changes:
   - apps/hive-gateway/tests/mcp_readonly_acceptance.rs — lifecycle, namespace
     and host-artifact resources, templates, prompts, visibility, hash/schema
     verification, redaction, auth, Origin, and oversize negative fixtures with
     mutating tools disabled.
-  - docs/TEST_PLAN.md — record read-only MCP acceptance as the first 28c evidence gate.
+  - docs/TEST_PLAN.md — record read-only MCP acceptance as the intermediate MCP evidence gate.
 Commands: cargo test -p hive-gateway --test mcp_readonly_acceptance && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28c-qemu-mcp-readonly
 Checks: Standard MCP clients can discover and read admitted context, but mutating tools are unavailable or deterministically refused until provider action registry and delegated-authority gates pass.
 Deliverables: Archived read-only MCP conformance evidence that later mutating MCP/A2A work must cite.
@@ -18398,7 +18798,8 @@ Changes:
   - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads,
     semantic/capsule inspect/query/render/verify, inference
     submit/status/receipt, CUDA/GPU inventory, host-ticket submission, GPU
-    leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries; each
+    leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries, plus every
+    other admitted gateway operation in the coverage ledger; each
     mutating call is first converted into its generated 28a typed intent.
   - apps/hive-gateway/src/mcp/tickets.rs — 28a admission-reference validator and host-ticket builder with id/idempotency/writer-epoch validation, provider action mapping, and generated v1/v2 selection from the required receipt mode; it contains no policy evaluator and cannot mint a grant.
   - apps/hive-gateway/tests/mcp_tools.rs — success and refusal fixtures for read-only, delegated mutating, duplicate, and unauthorized calls.
@@ -18422,7 +18823,7 @@ apps/coh/src/evidence.rs, accepted 27c/27d/27e owner schemas, generated
 provider action registry, docs/HOST_API.md, docs/API_GUIDELINES.md, accepted A2A
 protocol revision.
 Changes:
-  - apps/hive-gateway/src/a2a/agent_card.rs — generated Agent Card publication with enabled skills, auth requirements, supported interfaces, and no secret/internal executor data.
+  - apps/hive-gateway/src/a2a/agent_card.rs — manifest-gated generated Card with complete admitted skills/use cases, descriptions/examples/media/security/docs metadata, native capability claims, and public/authenticated visibility separation.
   - apps/hive-gateway/src/a2a/tasks.rs — generated `SendMessage`, streaming,
     task query/list/cancel/subscribe, push-notification, status, idempotency,
     and refusal mappings for the pinned A2A binding/revision, backed by 27c
@@ -18435,11 +18836,13 @@ Changes:
   - apps/hive-gateway/src/a2a/push.rs — disabled-by-default push notification config with allowlist, SSRF validation, per-task auth material, bounded retry, and audit evidence.
   - apps/hive-gateway/tests/a2a_protocol.rs + apps/hive-gateway/tests/a2a_tasks.rs — Agent Card, message, stream, task, artifact, cancel, push-refusal, duplicate, and unauthorized fixtures.
 Commands: cargo test -p hive-gateway --test a2a_protocol && cargo test -p hive-gateway --test a2a_tasks
-Checks: A2A clients can discover Cohesix skills, submit dry-run tasks, observe
+Checks: A2A clients can discover complete admitted use cases and correct-use
+guidance, submit dry-run or standing-authorized tasks, observe
 semantic/capsule/inference refs and status/artifacts, and receive deterministic
-refusals; no A2A path bypasses Cohesix tickets, context/run records, 27e
-admission/receipts, gateway auth, or provider allowlists; provider action
-registry parity and read-only MCP acceptance evidence already exists.
+refusals; no A2A path bypasses Cohesix tickets, 28a admission, applicable
+27c/27d/27e context/run/receipt contracts, gateway auth, or provider allowlists; provider action
+registry parity and A2A read-only discovery/visibility/auth acceptance evidence
+already exists; MCP enablement or conformance is not an A2A prerequisite.
 Deliverables: A2A-compatible gateway facade for bounded Cohesix delegation and observation.
 
 Title/ID: m28c-coh-mount-mcp-resource-view
@@ -18461,7 +18864,7 @@ Commands: cargo test -p coh --test mount_mcp && cargo test -p hive-gateway --tes
 Checks: Existing `coh mount --rest-url` behavior is unchanged; MCP mount reads
 only MCP-admitted context, refuses all filesystem mutations by default, never
 calls MCP tools from FUSE operations, and traces every mounted file back to a
-Cohesix path/action or verified 27c/27e artifact/catalog entry.
+Cohesix path/action, verified 27c/27e artifact, or generated 27b/28c usage contract.
 Deliverables: Agent- and filesystem-friendly MCP context mount that adds discovery/schema/prompt value without adding a new Cohesix write path.
 
 Title/ID: m28c-operator-docs-as-built-audit
@@ -18474,6 +18877,7 @@ Changes:
     resources/tools/prompts, A2A Agent Card/task flow, optional read-only MCP
     resource mount, evidence capture, and deterministic failure handling.
   - docs/HOST_API.md + docs/API_GUIDELINES.md — MCP and A2A endpoint/auth/error semantics and transport-choice guidance aligned with the REST gateway contract.
+  - generated usage contract + operator walkthroughs — master/per-protocol configuration, complete operation/use-case coverage, standing-authorization setup, secure credential provisioning, native discovery/help, approval/escalation, recovery and evidence instructions; preserve supported client capability fallbacks.
   - docs/HOST_TOOLS.md + docs/USERLAND_AND_CLI.md — command references and prerequisites for `hive-gateway`, `coh mount`, MCP resource mount, A2A task facade, host-ticket-agent, GPU bridge, sidecar bridge, and grammar-stability constraints.
   - docs/INTERFACES.md + docs/ARCHITECTURE.md + docs/SECURITY.md + docs/TEST_PLAN.md — as-built path/action/task/artifact mappings, VM/host boundary, delegated ticket/security posture, and evidence matrix.
   - resources/openapi/hive-gateway.yaml — keep REST/OpenAPI routes aligned with any gateway endpoint additions and document that MCP/A2A are adjacent protocol surfaces, not REST authority replacements.
@@ -18492,8 +18896,8 @@ Inputs: apps/hive-gateway, scripts/ci/gateway_perf_probe.sh, docs/BENCHMARKS.md,
 Changes:
   - scripts/ci/gateway_perf_probe.sh — add namespace, semantic/capsule, and
     inference-receipt MCP resource reads, MCP ticket-submitting tool call, A2A
-    task create/status stream, artifact read, and backpressure/refusal
-    scenarios.
+    task create/status stream, artifact read, complete-catalog discovery/help,
+    standing-authority accounting, and backpressure/refusal scenarios.
   - docs/BENCHMARKS.md + docs/TEST_PLAN.md — record protocol-projection performance as gateway evidence, separate from Pi/QEMU runtime throughput proof.
 Commands:
   - scripts/ci/gateway_perf_probe.sh --scenario mcp-a2a-protocols --state-dir out/bench/m28c-gateway-protocols
@@ -18522,15 +18926,33 @@ Changes:
   - docs/HOST_API.md + docs/API_GUIDELINES.md — MCP/A2A endpoint, transport, auth, error, and client configuration guidance.
 Commands: cargo test -p hive-gateway --test mcp_security && cargo test -p hive-gateway --test a2a_security && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28c-qemu-gateway-agents
 Checks: Standard MCP clients and A2A peers can discover and call allowed
-read-only/dry-run flows; unauthorized, prompt-injected, tampered-artifact,
+read-only, dry-run, and standing-authorized flows; unauthorized, prompt-injected,
+tampered-artifact,
 provider-direct, model-returned, forged callback, duplicate, or overbroad calls
-cannot bypass delegated tickets, 28a inference admission, the 27d host-ticket action, or Cohesix policy.
+cannot bypass delegated tickets, exact 28a action admission, the existing
+host-ticket/control path, or Cohesix policy.
 Deliverables: Archived MCP/A2A conformance and security evidence.
+
+Title/ID: m28c-unattended-workflow-acceptance
+Milestone: Milestone 28c — MCP/A2A Gateway Coverage + Governed Autonomous Workflows / m28c-unattended-workflow-acceptance
+Goal: Prove each enabled protocol completes a consequential Cohesix workflow unattended using its published guidance and bounded standing authority.
+Inputs: accepted controls/coverage/usage/autonomy tasks, exact 27a/27b/28a action evidence, named standard client or peer, selected target/provider profile and authoritative facts/receipts.
+Changes:
+  - docs/TEST_PLAN.md + canonical catalog/evidence integration — intermediate read-only gates, enabled-protocol coverage and guidance gates, and unattended workflow acceptance with exact source/manifest/protocol/client/provider identity.
+  - apps/hive-gateway/tests/agent_autonomy.rs + shared-owner fixtures — deterministic injected failure/reconnect/restart, stale state, expiration/revocation, denied escalation, attenuated delegation, cross-protocol cumulative limits, cancellation, and ambiguous-outcome reconciliation.
+  - docs/OPERATOR_WALKTHROUGH.md + accepted use-case evidence rows — at least one real consequential workflow per enabled protocol, such as bounded service remediation or GPU/PEFT lifecycle, from native discovery through preflight/admission/execute/observe/recovery to authoritative outcome receipt with no per-action human prompt inside policy.
+  - evidence/timeline consumers + complete host-tool, tools/cohesix-py, and benchmark compatibility review — preserve original subject/run/intent/decision/grant/action/outcome correlation and record changed or unaffected surfaces.
+Commands: cargo test -p hive-gateway --test agent_usage_contract && cargo test -p hive-gateway --test agent_autonomy && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28c-qemu-gateway-agents
+Checks: Archive ordinary-client live workflow transcripts and independently verified provider outcome evidence separately from deterministic host fixtures and target qualification. Injected target/provider behavior uses its owning Test Plan layer. Read-only/mock/dry-run or an ACK without confirmed execution cannot close the gate. Disabled protocols are recorded disabled, never conformant by inference.
+Deliverables: Exact-profile coverage report, native/fallback guidance evidence, accepted unattended workflow and failure/recovery records, and reproducible evidence-pack/replay instructions.
 ```
 
 **Outcome**
 After Milestone 28c:
-- Cohesix can be used from standard MCP-capable agent hosts and A2A-capable peer agents through `hive-gateway`.
+- Each enabled and qualified protocol gives standard agent hosts or peers full
+  access to the selected profile's admitted gateway functions within their
+  delegated authority, including operational recovery and administrative
+  functions where separately authorized. Disabled protocols expose no surface.
 - MCP clients see useful resources, tools, and prompts for immutable semantic
   objects, Context Capsules, inference receipts, CUDA/GPU, PEFT, NeMo, K8s,
   systemd, and Docker operations.
@@ -18538,6 +18960,16 @@ After Milestone 28c:
   tasks, observe task status, and retrieve redacted semantic/capsule/inference,
   CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence artifacts.
 - All side effects still flow through Cohesix tickets, files, policy, audit, and evidence.
+- Agents discover all supported use cases, correct inputs, appropriate use,
+  authority/approval requirements, bounds, lifecycle, recovery, and evidence
+  through native discovery and tested help fallbacks. Complete coverage is
+  machine-checked against the shared registry, not inferred from examples.
+- Standing-authorized workflows execute and recover unattended, with current
+  per-action decisions, shared durable budgets, revocation, and attributable
+  receipts. Human involvement follows selected policy or explicit escalation.
+- Master and per-protocol manifest controls remain authoritative over all
+  transports and launch overrides; MCP-only and A2A-only are independently
+  usable and independently qualified.
 - Every mutating MCP/A2A projection first produces its generated typed intent
   and consumes an accepted 28a admission; neither protocol owns policy
   evaluation or grant issuance.
@@ -19673,8 +20105,9 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - Milestone **27e** completed (compatible host inference admission,
   provider-neutral receipts, cache/stream evidence, content policy, host tools,
   and provider/client conformance).
-- Milestone **28c MCP phase 1** and any exact ticketed MCP actions used by the
-  namespace case completed over existing Cohesix grammar. A2A is not required.
+- Milestone **28c** MCP coverage, usage guidance, and the exact governed workflow
+  used by the namespace case completed over existing Cohesix grammar. A2A is
+  not required; read-only protocol conformance alone does not prove the workflow.
 - Production profiles may claim matching accepted 26e Worker/driver live authority for AI namespace projections. Claims of one-to-one Worker ticket/lease binding, complete driver-inventory ledger projection, or structured quarantine/restart additionally require Milestone **28b** evidence. Read-model-only or host-ticket-only profiles may remain gated by 27a/27b/27c/27d/27e/28c without either live-task or 28b production-ledger claims.
 
 **Non-Goals**
