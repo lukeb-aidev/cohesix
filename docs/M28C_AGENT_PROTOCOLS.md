@@ -10,7 +10,11 @@ This is the detailed future-work contract incorporated by
 dependencies, task IDs, and completion authority. This document cannot activate
 implementation work, waive repository invariants, or claim as-built support.
 Its requirements must remain aligned with that milestone and its owning
-architecture, interface, security, and testing contracts.
+architecture, interface, security, and testing contracts. Complete 28c includes
+both MCP and A2A, all listed adapters and guidance, and the read-only MCP mount.
+Qualify both protocols in enabled acceptance profiles and every disable
+combination. Deployment switches and negotiated capabilities control runtime
+availability; they are not permission to omit a listed implementation.
 
 **Shared contracts**
 
@@ -200,7 +204,7 @@ Implementation requirements:
   - exact revision-specific version/request metadata, session handling where
     supported, explicit termination behavior, and deterministic unsupported-version errors,
   - `tools`, `resources`, and `prompts` capabilities with paginated discovery where needed,
-  - optional list-change notifications only when the implementation has deterministic change detection.
+  - negotiated list-change notifications with deterministic change detection.
 - Remote MCP transport must validate `Origin`, require gateway request auth, and require delegated tickets for mutating tools. A production non-loopback profile must implement the authorization contract of the pinned MCP revision or explicitly document and test a narrower compatibility mode; a preconfigured loopback bearer token alone is not generic remote MCP authorization conformance.
 - Stdio mode must read credentials only from environment/config, never from prompts or tool arguments.
 - MCP stdout/stdin must carry only valid MCP JSON-RPC messages; logs go to stderr or the existing gateway log path.
@@ -231,7 +235,7 @@ Implementation requirements:
   - `/host/tickets/status`, `/host/tickets/deadletter`, and provider status under `/host/systemd/*`, `/host/docker/*`, and `/host/k8s/*`
   - evidence-pack and timeline summaries when Milestone
     27/27a/27c/27d/27e evidence is available
-  - NeMo capability, guardrail, evaluator, and provider receipt summaries only when the 27d optional provider family is enabled.
+  - NeMo capability, guardrail, evaluator, and provider receipt summaries only when the 27d manifest-selected provider family is enabled.
 - Define host-artifact resource families only when their owner milestones are
   accepted:
   - `cohesix://semantic/snapshot/<snapshot-id>/object/<object-id>/<view>` and
@@ -291,7 +295,7 @@ Implementation requirements:
     optional accepted Context Capsule ref through 28a admission to the
     existing 27d `infer.run` host-ticket action and 27e inference gateway. It
     never calls a provider directly or executes model-produced tool calls.
-  - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 27d optional provider actions or deterministically return unavailable when NeMo is not enabled.
+  - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 27d provider actions or deterministically return unavailable when NeMo is not enabled.
   - `cohesix.k8s.cordon`, `cohesix.k8s.drain`, and `cohesix.k8s.lease_sync` map to existing K8s host-ticket actions.
   - `cohesix.systemd.status_check`, `cohesix.systemd.start`, `cohesix.systemd.stop`, and `cohesix.systemd.restart` map to existing systemd host-ticket actions.
   - `cohesix.docker.status_check`, `cohesix.docker.stop`, and `cohesix.docker.restart` map to existing Docker host-ticket actions.
@@ -373,7 +377,7 @@ Implementation requirements:
   URI to learn a required input, authorization condition, or recovery step.
 - A2A skills map to the same real-world operational families as MCP tools:
   semantic/capsule inspection, inference submission/status/receipt, CUDA/GPU
-  inventory and leases, PEFT export/import/activate/rollback, optional NeMo
+  inventory and leases, PEFT export/import/activate/rollback, manifest-selectable NeMo
   probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd
   status/start/stop/restart, Docker status/stop/restart, and evidence/timeline
   inspection.
@@ -471,7 +475,7 @@ Implementation requirements:
 - Add checked protocol fixtures/schemas for MCP JSON-RPC messages, A2A HTTP+JSON requests, gateway REST/OpenAPI compatibility, and generated provider action schemas so future client regressions are reviewable as data.
 - Validate with at least one MCP inspector/client conformance path and archive the transcript/output under the milestone evidence directory.
 - Validate with at least one A2A-compatible client/conformance path and archive the transcript/output under the milestone evidence directory.
-- For each enabled protocol, qualify an ordinary client/peer against a named
+- For both MCP and A2A, qualify an ordinary client/peer against a named
   unattended scenario. Include limited-client capability fallback, safe refusal,
   cancellation/resume, revocation, and ambiguous-outcome recovery. Deterministic
   protocol fixtures remain the contract oracle; model-driven walkthroughs are
@@ -494,12 +498,12 @@ As-built leverage:
 
 ---
 
-### 8) `coh mount` interoperability: REST primary, MCP context view optional
-**Purpose:** Keep `coh mount --rest-url` as the direct gateway-backed namespace mount, while adding a useful MCP-facing filesystem view only where MCP resource discovery brings additional value.
+### 8) `coh mount` interoperability: REST namespace and read-only MCP context
+**Purpose:** Preserve the REST namespace mount and provide a read-only filesystem view of MCP resources, schemas, prompts, and guidance.
 
 Implementation requirements:
 - Preserve the existing `coh mount --rest-url` behavior as the canonical FUSE view over Cohesix namespaces through `hive-gateway`; it remains the path for normal file-shaped reads and append-only writes.
-- Add an optional MCP resource mount mode only if the MCP server exposes a resource/tool/prompt catalog that a local filesystem consumer cannot get from the existing mount without speaking MCP:
+- Implement the read-only MCP resource/catalog mount:
   - `coh mount --mcp-url <endpoint> --read-only --at <path>` mounts MCP-admitted context, not the full Cohesix namespace.
   - The mounted tree exposes bounded MCP resources, resource templates, tool schemas, prompt templates, and evidence/resource links as files.
   - Resource file reads call MCP `resources/list`, `resources/templates/list`, and `resources/read`; tool and prompt catalog files are generated from `tools/list`, `prompts/list`, and `prompts/get`.
@@ -537,7 +541,7 @@ Implementation requirements:
 - Audit and update `docs/OPERATOR_WALKTHROUGH.md` so the happy path, prerequisites, command ordering, failure handling, and expected evidence match the as-built gateway/MCP/A2A/mount behavior.
 - Audit and update related canonical docs in the same milestone work:
   - `docs/HOST_API.md` for REST, MCP, and A2A endpoint/auth behavior,
-  - `docs/HOST_TOOLS.md` for `coh mount --rest-url`, optional `coh mount --mcp-url`, `hive-gateway`, semantic/capsule and inference receipt resources, A2A Agent Card/task facade, host-ticket-agent, GPU bridge, and sidecar workflows,
+  - `docs/HOST_TOOLS.md` for `coh mount --rest-url`, `coh mount --mcp-url`, `hive-gateway`, semantic/capsule and inference receipt resources, A2A Agent Card/task facade, host-ticket-agent, GPU bridge, and sidecar workflows,
   - `docs/API_GUIDELINES.md` for transport choice and MCP-vs-A2A-vs-REST-vs-filesystem guidance,
   - `docs/USERLAND_AND_CLI.md` for operator-visible commands and grammar-stability wording,
   - `docs/INTERFACES.md` for path/action mappings and refusal semantics,
@@ -555,7 +559,7 @@ Implementation requirements:
   - direct TCP `cohsh` proof,
   - REST/gateway proof,
   - gateway-backed `coh mount --rest-url`,
-  - optional read-only MCP resource mount,
+  - read-only MCP resource mount,
   - read-only 27c semantic/capsule and 27e inference receipt projections
     versus namespace-backed resources,
   - the separate 27e OpenAI-compatible endpoint versus MCP inference
@@ -602,7 +606,7 @@ changes use documentation, metadata, and generated-consistency checks.
 **Checks (Definition of Done)**
 - Master and per-protocol disabled configurations satisfy the shared enablement
   contract across every transport/launch path, route, discovery surface, stream,
-  callback, and optional MCP mount. The master overrides retained true child
+  callback, and MCP mount. The master overrides retained true child
   flags; CLI/env overrides cannot widen it. Missing/invalid configuration and
   attempted indirect activation fail closed. Independent REST/host operation
   remains available; disable-transition evidence accounts for accepted work.
@@ -618,7 +622,8 @@ changes use documentation, metadata, and generated-consistency checks.
   scenario using this guidance alone, including tool-only MCP and A2A-only
   configurations. Examples validate against owner schemas; stale or conflicting
   guidance fails the consistency gate.
-- Every enabled protocol has a named unattended consequential workflow from
+- Both MCP and A2A, each enabled for qualification, have a named unattended
+  consequential workflow from
   discovery/preflight through admission, execution, observation, recovery, and
   authoritative receipt. No per-action human interaction occurs inside the
   accepted standing policy. Exact-policy escalation, refusal, expiry/revocation
@@ -740,7 +745,7 @@ changes use documentation, metadata, and generated-consistency checks.
   admission, receipt, provider, or content-retention contract does not match
   accepted 27d/27e outputs.
 - Manifest validation rejects MCP enablement when Milestone 27a delegated write identity or required audit/replay/fencing prerequisites are disabled for mutating tools.
-- Manifest validation rejects NeMo MCP tools unless the 27d optional NeMo provider family and parity checks are enabled.
+- Manifest validation rejects NeMo MCP tools unless the 27d manifest-selectable NeMo provider family and parity checks are enabled.
 - `coh-rtc` emits protocol-neutral `gateway.provider_actions.*` and
   `gateway.integration_surfaces.*` projections derived from the Milestone 27b
   graph for every operation exposed through MCP tools or A2A skills, with
@@ -773,7 +778,7 @@ changes use documentation, metadata, and generated-consistency checks.
   run/task state for tasks and 27c/27e context/inference dependencies only where
   used. Disabled protocols and unrelated operations do not acquire those
   optional dependencies.
-- Manifest validation rejects NeMo A2A skills unless the 27d optional NeMo provider family and parity checks are enabled.
+- Manifest validation rejects NeMo A2A skills unless the 27d manifest-selectable NeMo provider family and parity checks are enabled.
 - Generated docs refresh:
   - `docs/HOST_API.md`
   - `docs/API_GUIDELINES.md`
