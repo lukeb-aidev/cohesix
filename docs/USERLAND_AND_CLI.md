@@ -1,349 +1,1183 @@
-<!-- Copyright 2026 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Define the as-built Cohesix console, cohsh, and .coh command surfaces. -->
+<!-- Purpose: Guide Queen setup, serial diagnostics, cohsh operation and checked automation using the implemented console contracts. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Userland and CLI
 
-M27a introduces `/queen/intents/ctl` alongside compatibility `/queen/ctl`.
-Production Queen mutations use explicit identity, idempotency key, issue time,
-command JSON string, and selected writer epoch; clients never manufacture a
-retry identity after an ambiguous outcome. Production also refuses the raw
-console `SPAWN` and `KILL` shortcuts; submit their command object through the
-strict intent path. Compatibility profiles preserve those shortcuts.
-Root `hexdump` is refused when
-generated `authority.debug_memory=false`, including release/production
-profiles. It remains an explicitly enabled emergency bring-up diagnostic.
-REST clients require caller delegation in addition to gateway request auth.
-See [M27a authority](M27A_AUTHORITY.md) for the complete migration contract.
+# Cohesix serial console and cohsh — user guide
 
+Use the **serial console** to bring up a Queen, check its hardware and network,
+and recover when a host connection is unavailable. Use **`cohsh` on your Mac or
+Linux host** to inspect the Queen, retain logs, submit authorised work, upload
+telemetry and run repeatable checks.
 
-This document is the operator-facing reference for the Cohesix root console,
-the host-side `cohsh` shell, and `.coh` scripts. Namespace schemas and payload
-formats are defined in [INTERFACES.md](INTERFACES.md); host-tool composition is
-defined in [HOST_TOOLS.md](HOST_TOOLS.md); the canonical live workflow is in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md); and advanced, task-oriented
-procedures are in [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
+**Setting up a Queen?** Start with [Bring up and check the Queen](#bring-up-and-check-the-queen),
+then [Connect cohsh](#connect-cohsh) and [Test the connection](#test-the-connection).
+**Already connected?** Go to [Do useful work](#do-useful-work).
 
-See the [Glossary](GLOSSARY.md) for Cohesix-specific shell, namespace, and role
-terms.
+This guide describes the current source interfaces, not a promise that an older
+release implements every option. Keep the target image, host binaries and
+selected generated configuration together. Check the running image's `help`
+and the installed binary's `--help`. Historical fixture credentials are not
+valid deployment credentials; see [release migration](M27A_AUTHORITY.md#release-migration-and-historical-errata).
 
-## Command surfaces
+## Find what you need
 
-| Surface | Runs on | Primary use | Authority |
-| --- | --- | --- | --- |
-| Root console, prompt `cohesix>` | Root task through PL011; Pi 4 may also accept an admitted USB keyboard and mirror output to HDMI | Boot, capability, memory, network, and hardware diagnostics | Physical console policy plus command-specific checks |
-| `cohsh`, prompt `coh>` | Host | Authenticated namespace reads, bounded writes, lifecycle control, tests, and automation | Attached role and optional capability ticket |
-| `.coh` script | Host through `cohsh` | Deterministic command batches and assertions | Exactly the authority of the enclosing `cohsh` session |
-
-The local Pi 4 seat and PL011 are separate input sources that feed the same
-root-console parser. Serial remains the complete recovery surface when USB or
-HDMI is unavailable. Hardware-specific proof commands and their interpretation
-belong in [DRIVERS.md](DRIVERS.md) and
-[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md), not in this command reference.
-
-## Transport and authority rules
-
-- The target exposes one authenticated TCP console. In direct mode, only one host
-  process can own it at a time.
-- `hive-gateway` can own that TCP connection and multiplex bounded REST
-  projections for concurrent host clients. See
-  [API_GUIDELINES.md](API_GUIDELINES.md).
-- TCP authentication proves access to the console listener. `ATTACH` then
-  selects a role and validates any required ticket. Gateway request
-  authentication protects HTTP writes but does not create a new target identity.
-- Namespace visibility is profile- and role-dependent. The canonical worker
-  path is `/shard/<label>/worker/<id>`; `/worker/<id>` exists only when the
-  selected manifest enables the legacy alias.
-- Policy, lifecycle, ticket scope, and quota checks remain authoritative for
-  every transport. A client-side check is not an authorization decision.
-- The `cohsh` mock transport is in-process and isolated. State created by one
-  `cohsh` mock process is not shared with another process and is not live-target
-  evidence. The Python `MockBackend` is instead filesystem-backed; see
-  [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md).
-
-The host gateway optionally spaces telemetry transactions that were already
-queued when the previous transaction completed:
-`hive-gateway --concurrent-telemetry-gap-us 1000`. The range is `0..=1000`
-microseconds and the default is `0` (disabled). Idle requests acquire no added
-delay. The gap is between broker transactions, which can contain a batch;
-execution and control traffic retain priority before the next telemetry turn.
-Host timer resolution can make the observed gap longer than requested. This
-option trades dispatch delay for smoother sustained demand; compare complete
-REST request or batch times as well as wire latency before enabling it. It does
-not change direct `cohsh`/raw TCP behavior or target scheduling reservations.
-
-## Root console
-
-The root console appears as `cohesix>` after root-task console initialization.
-Run `help` on the active image: the command inventory is profile-gated and is
-the most precise description of that boot.
-
-### Core diagnostic commands
-
-| Command | Behavior |
+| Task | Go to |
 | --- | --- |
-| `help` | Print commands available in the selected profile. |
-| `bi` | Preserve the legacy line, then print source-labelled `[bi:v2]` kernel BootInfo and generated-profile records. |
-| `caps` | Print the legacy key capability-slot summary. |
-| `caps mcs` | Print bounded live MCS authority presence and generated fixed/capacity object counts as source-labelled records that fit the Pi linked-HDMI fallback width. |
-| `smp` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. This is the preferred spelling. |
-| `smp activity` | Compatibility spelling for `smp`; it produces the same bounded userspace activity report. |
-| `smp mcs` | Print `[smp:mcs/v1]` generated per-core/per-task admission joined to one copied live registry snapshot; Pi release profiles append the bounded runtime composer/Yield diagnostic batch before the end marker. |
-| `smp poll-time` | On Pi release profiles, print eight cached root-poll elapsed-time rows for the latest TCP connection. Other profiles return typed unsupported; bootstrap requires the event pump. |
-| `smp dump` | Request the raw kernel scheduler snapshot. This debug-only path is unavailable after linked-UART cutover. |
-| `mem` | Print the RAM/device untyped summary. |
-| `ping` | Return the liveness response. |
-| `cachelog [n]` | Dump a bounded number of recent cache operations. |
-| `nettest` | Start the profile-gated bounded network self-test. `OK NETTEST detail=started run_generation=<n>` is admission, not a terminal verdict. |
-| `netstats` | Print bounded network state, counters, and the complete generation-tagged `nettest` terminal/running verdict. |
-| `reboot` | Schedule a platform reboot only when Queen authorization and a reboot backend are both available. |
-| `quit` | In the event-pump console, end the session and request network disconnect when applicable. The earlier bootstrap `RootConsole` phase reports `quit` as unsupported. |
+| Open serial, choose network settings and check startup | [Queen bring-up](#bring-up-and-check-the-queen) |
+| Connect directly or through an existing gateway | [Connect cohsh](#connect-cohsh) |
+| Check health without intentionally changing workloads | [Connection checks](#test-the-connection) |
+| Inspect state, save logs or append an operator note | [State and logs](#inspect-state-and-save-logs) |
+| Upload a local telemetry file | [Telemetry upload](#upload-a-telemetry-file) |
+| Start, observe and stop a Worker | [Worker requests](#submit-and-observe-worker-requests) |
+| Make a production Queen control request safely | [Strict intents](#submit-a-production-queen-intent) |
+| Cordon, drain or resume a Queen | [Lifecycle control](#control-the-queen-lifecycle) |
+| Validate and run a command batch | [Scripts](#coh-scripts) |
+| Look up a command, option or failure | [Command reference](#command-reference), [CLI options](#cli-options-and-credentials), [Troubleshooting](#troubleshooting) |
+| Interpret low-level Pi counters | [Advanced diagnostic reference](#advanced-diagnostic-reference) |
 
-Use `smp` for normal QEMU and Pi 4 diagnostics. The activity report follows the
-linked serial owner and may be mirrored through the local-seat path. Use
-the selected Pi network section for fresh activity-gated driver counters:
-Wi-Fi emits the canonical CYW43 and SDIO owner snapshots, while wired mode
-emits the GENET owner snapshot. Each selected snapshot is projected as seven
+## Know which prompt you are using
+
+| Where you type | What it is | Example |
+| --- | --- | --- |
+| Your host terminal, before launching `cohsh` | Bash, zsh or another host shell | `"$COH_BIN/cohsh" --transport tcp ...` |
+| `Cohesix boot menu` or the advanced U-Boot shell | Pi bootloader, before Cohesix starts | Choose the network and boot option |
+| `cohesix>` | The target's root console, through serial or an admitted local USB keyboard | `netstats` |
+| `coh>` | The host-side `cohsh` application | `cat /proc/lifecycle/state` |
+
+Commands below omit the prompt so they can be copied. Each procedure says where
+to enter them. **Bash examples run on the host**, from the installation or
+repository root. Shell variables such as `COH_BIN` are conveniences for these
+examples; they do not expand inside `cohsh` or `.coh` files. Set `COH_BIN` and
+the relevant connection variables again in each new host terminal.
+
+Neither Cohesix console is a POSIX shell. There is no `cd`, `sudo`, package
+manager, shell pipeline, command substitution or general-purpose program
+launcher at `cohesix>` or `coh>`. Namespace paths are absolute. The host's
+`out/operator/queen-log.txt` and the Queen's `/log/queen.log` are different
+files on different machines.
+
+## Bring up and check the Queen
+
+### 1. Prepare the target and capture serial
+
+Start with an image built and staged for the actual target. Image construction,
+SD-card flashing, readback and boot identity are covered by
+[Hardware bring-up](HARDWARE_BRINGUP.md). Do not reflash a working installation
+merely to change its network settings.
+
+For a Pi, connect the serial adapter described by that hardware setup and
+identify its actual host device. Only one terminal or capture program may own
+that device. On **the Mac host**, this example captures a new boot:
+
+```bash
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+SERIAL_DEVICE="/dev/cu.usbserial-0001"  # Replace with your verified device.
+EVIDENCE_DIR="$PWD/out/pi4-proof/$RUN_ID"
+umask 077
+mkdir -p "$EVIDENCE_DIR"
+minicom -D "$SERIAL_DEVICE" -b 115200 -o \
+  -C "$EVIDENCE_DIR/pi4-serial.log"
+```
+
+Use 115200 baud, 8 data bits, no parity, one stop bit and no flow control.
+Start capture before powering on when retaining boot evidence. Do not open
+another serial client while minicom is running. Logs and packet captures can
+contain sensitive deployment information; review them before sharing.
+
+For an already running QEMU Queen, use the serial console in its launcher
+terminal. Host TCP normally connects to the launcher's forwarded address and
+port, rather than the guest's internal address. The separate `cohsh --transport
+qemu` mode is a diagnostic boot/log transport, not the normal live shell.
+
+### 2. Choose the Pi's network settings
+
+The staged Pi image stops at the **Cohesix boot menu**. Its first option says
+whether saved settings or the selected manifest's defaults are active.
+
+For first setup, choose **Change network settings**, then **Automatic (DHCP)**
+or **Manual (static IPv4)** and **Ethernet (wired)** or **Wi-Fi (wireless)**.
+Manual setup collects the address, subnet prefix length and optional gateway.
+Review the result, then choose **Boot once without saving** for a temporary
+check or **Save settings and restart** to retain it. After restart, select the
+boot option with the saved settings.
+
+The default image uses **USB keyboard input for the boot menu**. A visible menu
+on serial does not mean serial keystrokes are its selected input. Wi-Fi name
+and password entry requires the local USB keyboard and HDMI display; the
+bootloader deliberately refuses serial-only password entry. Do not type a PSK
+into minicom, a captured command or shell history. When local input is
+unavailable, follow the private `cohesix.env` editing procedure in
+[First-boot network policy](HARDWARE_BRINGUP.md#4-set-first-boot-network-policy).
+
+Network choices do not provision console tokens or ticket signing keys. Those
+must match the selected image's deployment configuration. Do not reset saved
+settings as a first response to an authentication error.
+
+### 3. Check the root console
+
+Wait for `cohesix>`. On **the target serial console**, enter these commands
+**one at a time**, waiting for each response to finish before sending the next:
+
+```text
+help
+ping
+bi
+caps
+mem
+smp
+netstats
+```
+
+| Check | What to look for | What it does not establish |
+| --- | --- | --- |
+| `help`, `ping` | A complete response and a responsive console | USB keyboard or TCP readiness |
+| `bi` | BootInfo and generated-profile identity appropriate to this image | Media readback or another boot's identity |
+| `caps`, `mem` | Bounded capability and memory summaries, without a reported fault | A stress-test pass |
+| `smp` | Userspace activity and assigned runtime/driver observations | Kernel CPU utilisation or performance acceptance |
+| `netstats` | The selected active driver, address/listener state and current counters | Successful host authentication |
+
+Record the **actual address and port** reported for this boot. The examples
+below use `192.168.10.50:31337`; change them to match your Queen. In Wi-Fi mode,
+`profile_backend=bcmgenet-v5` with `active_driver=cyw43` is not by itself a
+mismatch: one describes the profile and the other the selected physical path.
+
+`netstats` is diagnostic, not a non-interfering performance sampler. The Pi
+direct-GENET implementation can perform a bounded causal owner refresh. Do not
+mix repeated diagnostic commands into a timed benchmark.
+
+A serial prompt does not prove the local USB/HDMI seat is ready. The Pi HDMI
+prompt is withheld until keyboard command admission and display readiness are
+established. For a local-seat check, type a real command on the **USB keyboard**
+and confirm its echo and response. Use `usb status` from serial to inspect the
+result; startup history alone is not current input proof.
+
+### 4. Escalate only the relevant diagnostic
+
+| Symptom | Commands at `cohesix>` | Interpretation |
+| --- | --- | --- |
+| Keyboard or display not ready | `usb status`, then `usb diag` | Separate USB input progress from HDMI completion; inspect the reported blocker. |
+| Wi-Fi did not become usable | `wifi diag`, then `wifi dump-state` | Start with the first failing gate. Later `not-reached` gates are not independent failures. |
+| Runtime assignment or scheduling looks wrong | `caps mcs`, `smp mcs` | Distinguish generated assignments, kernel facts and copied runtime observations. |
+| A TCP session stalls | `netstats`, `smp poll-time` on a supported Pi image | Retain its generation/connection before a new connection replaces the snapshot. |
+| Need recent cache operations | `cachelog 9` | A bounded diagnostic snapshot, not a health verdict. |
+
+These are profile-gated commands. `usb enable-kbd` and `usb probe-kbd` are
+**active** operations, not passive inspection. Legacy `wifi retry`,
+`wifi load-fw` and `wifi probe-ht` return an ownership refusal on the linked
+runtime; they are not recovery procedures. Use the reported blocker and
+[Failure modes](FAILURE_MODES.md), rather than repeatedly issuing them.
+
+## Connect cohsh
+
+### Select the matching host binary
+
+From an extracted **Mac or Linux host bundle root**:
+
+```bash
+./scripts/setup_environment.sh --check
+export COH_BIN="$PWD/bin"
+"$COH_BIN/cohsh" --help
+```
+
+For a new installation, run `./scripts/setup_environment.sh` first as described
+in [Quickstart](QUICKSTART.md); it can install host dependencies. A Pi image
+bundle alone does not provide your Mac's host executables.
+
+From an **already built source checkout root**, use this instead:
+
+```bash
+export COH_BIN="$PWD/out/cohesix/host-tools"
+"$COH_BIN/cohsh" --help
+```
+
+Source developers can substitute `cargo run -p cohsh --` for
+`"$COH_BIN/cohsh"`. That builds the current Cargo feature selection; it does not
+make an old target match a new host binary. Use the selected generated policy,
+and remain in the installation root so relative configuration and local file
+paths resolve correctly.
+
+### Direct TCP: one shell owns the connection
+
+Use this when operating the Queen with one host process. Quit a direct SwarmUI,
+bridge, mount or other shell first. Do not leave a gateway connected while
+starting a competing direct client. Serial remains an independent operator
+surface and can stay open.
+
+Obtain the console credential provisioned for this image. In **host Bash**,
+select its existing private file and the address verified above:
+
+```bash
+export COH_AUTH_TOKEN_REF="file:$HOME/.config/cohesix/queen-console.token"
+export COH_TARGET_HOST="192.168.10.50"
+export COH_TARGET_PORT="31337"
+unset COHSH_TCP_HOST COHSH_TCP_PORT
+
+"$COH_BIN/cohsh" --transport tcp \
+  --tcp-host "$COH_TARGET_HOST" --tcp-port "$COH_TARGET_PORT" \
+  --role queen
+```
+
+The credential file must already contain the deployment token; setting its
+path does not create or discover a token. Restrict access to the file. An
+`env:NAME` reference is also supported. Do not substitute a published fixture,
+`bootstrap` or `changeme`.
+
+For a local QEMU instance, set `COH_TARGET_HOST=127.0.0.1` and use its forwarded
+port. The explicit `unset` avoids inherited `COHSH_TCP_*` overrides; see
+[Credential and environment precedence](#credential-and-environment-precedence).
+
+A successful start reports an attached Queen session and displays `coh>`.
+Interactive auto-attachment also attempts a bounded Queen log tail. The prompt
+alone is not proof of attachment: a failed connection can leave a detached
+shell. Run `ping` to confirm.
+
+Without `--role`, the shell starts detached. At `coh>`, use `attach queen`.
+To change attachment, use `detach`, then `attach <role> [ticket]`. `detach`
+closes the current transport session but keeps the shell open; `quit` exits.
+Worker attachments require a valid role-matching ticket with a subject.
+
+### REST: use the gateway that already owns TCP
+
+For simultaneous shell, UI and automation work, start one `hive-gateway` using
+[Host tools: connect and verify](HOST_TOOLS.md#connect-and-verify). Select its
+Pi or QEMU runtime profile correctly. **The gateway, not `cohsh`, owns the
+Queen's TCP connection.**
+
+In another **host terminal**, set `COH_BIN` again and connect:
+
+```bash
+export COH_REST_URL="http://127.0.0.1:8080"
+"$COH_BIN/cohsh" --transport rest --rest-url "$COH_REST_URL" --role queen
+```
+
+Read operations inherit the gateway's upstream scope. REST writes additionally
+need both the gateway request-authentication token and a delegated caller
+ticket. Load their values privately before starting a write-capable shell:
+
+```bash
+: "${COH_REST_AUTH_TOKEN:?load the gateway request-authentication token}"
+: "${COH_REST_TICKET:?load a valid delegated caller ticket}"
+export COH_REST_AUTH_TOKEN COH_REST_TICKET
+"$COH_BIN/cohsh" --transport rest --rest-url "$COH_REST_URL" --role queen
+```
+
+The ticket needs an unexpired lifetime, subject and write scope covering the
+actual destination. Permission to write `/log` does not permit a production
+intent at `/queen/intents/ctl`. The gateway verifies the caller ticket and
+intersects it with its upstream authority; `--role queen` does not grant
+unrestricted access. The current REST attachment selector accepts only Queen.
+
+Keep gateway HTTP on loopback or behind an approved authenticated tunnel/TLS
+boundary. Neither this console transport nor the gateway supplies TLS itself.
+On a Jetson, `127.0.0.1` refers to that Jetson, not your Mac.
+
+## Test the connection
+
+### Start with a small read-only check
+
+At **`coh>`**, run:
+
+```text
+ping
+ls /
+ls /proc
+cat /proc/lifecycle/state
+cat /proc/authority
+tail /log/queen.log 16
+```
+
+Confirm that every operation completes, the namespace is readable under the
+intended role, and the lifecycle and authority fields match your deployment.
+Read the returned state; an `OK CAT` acknowledgement does not mean the value
+was `ONLINE`. A policy refusal is different from an unavailable transport.
+
+If an optional path is absent, inspect the selected profile and source version
+rather than treating it as an empty value. Do not continue into mutation tests
+until attachment, lifecycle and policy are understood.
+
+### Run and finish the network self-test
+
+Use **direct TCP `cohsh`** for the authenticated network exercise. At `coh>`:
+
+```text
+nettest
+```
+
+Record the positive `run_generation` from
+`OK NETTEST detail=started run_generation=...`. That line means **started**, not
+passed. Keep the same connection open, allow the bounded 15-second test window
+to finish, exercise it with `ping`, then read `netstats`:
+
+```text
+ping
+netstats
+```
+
+Require a terminal verdict for that **same run generation**, with
+`running=false`. `pass` and `peer-assisted-pass` identify different supported
+test paths; read their component fields. `running`, `none`, a failed verdict
+or a different run is not a pass. With an isolated console-network child,
+peer-assisted success depends on post-admission response drain, TX and later
+RX/TCP progress for the matching authenticated connection. Its UDP echo field
+can truthfully be false. ICMP reachability is a separate check.
+
+Do not translate this wait into `WAIT 15000` in a `.coh` file: its local wait
+limit is 2000 ms. A serial-only `nettest` admission cannot substitute for the
+required authenticated peer interaction.
+
+### Run the installed self-tests deliberately
+
+First inspect what this image publishes at **`coh>`**:
+
+```text
+ls /proc/tests
+cat /proc/tests/selftest_negative.coh
+cat /proc/tests/selftest_quick.coh
+```
+
+Then run the reduced-mutation quick check:
+
+```text
+test --mode quick --no-mutate
+```
+
+**`--no-mutate` is not a universal read-only sandbox.** It skips `spawn`, `kill`
+and Worker telemetry tails in the installed scripts, plus their associated
+assertions. It still runs negative tests, including attempted writes that are
+expected to be refused. Review installed scripts before using this mode on a
+working deployment. Use the earlier explicit read-only commands when even
+attempted writes are inappropriate.
+
+| Mode | Selected script, after `selftest_negative.coh` | Use |
+| --- | --- | --- |
+| `quick` (default) | `/proc/tests/selftest_quick.coh` | Small installed regression sequence |
+| `full` | `/proc/tests/selftest_full.coh` | Broader sequence; inspect mutations first |
+| `smp` | `/proc/tests/selftest_smp.coh` | Installed SMP-specific checks |
+
+For an authorised test environment, examples are `test --mode full --timeout
+120` and `test --mode smp --no-mutate`. The default timeout is 30 seconds;
+accepted values are 1–120 seconds. A timeout is a failed check, not a reason to
+raise every retry setting.
+
+Human output reports `selftest PASS` or `selftest FAIL` and the first failed
+check. `--json` emits a single-line report object with `ok`, `mode`,
+`elapsed_ms`, `checks` and schema `version`. Other shell output can surround
+that JSON line; do not treat the whole stdout stream as one JSON document.
+Automation must require `ok=true` and a successful script exit.
+
+Internal scripts may close their session. `cohsh` attempts to restore the
+previous attachment afterwards, preserving outer script response bookkeeping;
+a failed restoration is reported. Verify attachment before continuing work.
+
+These are operational checks, **not release acceptance**. A QEMU result does
+not qualify a physical Pi, and mock success qualifies neither. For milestone
+or release claims use the staged, provenance-bound [Test plan](TEST_PLAN.md).
+
+## Do useful work
+
+### Inspect state and save logs
+
+At **`coh>`**, browse before assuming a path or object exists:
+
+```text
+ls /queen
+ls /shard
+cat /proc/lifecycle/state
+cat /proc/authority
+log
+tail /log/queen.log 16
+cat /log/queen.log
+```
+
+`log` is a convenience for the newest 64 retained Queen log records.
+`tail <path> [lines]` returns a **finite snapshot**, not `tail -f`; explicit
+counts are 1–256. Reissue a bounded tail when needed. `cat /log/queen.log`
+also includes the retained trusted boot-audit reserve in sequence order.
+Neither operation promises logs that have already been evicted.
+
+To save the retained log, create a directory in **host Bash** before starting
+the shell:
+
+```bash
+mkdir -p out/operator
+```
+
+Then, at **`coh>`**:
+
+```text
+log dump out/operator/queen-log.txt
+```
+
+This creates a **local `.txt` file**, containing log payload rather than wire
+`OK`/`END` framing. The parent directory must exist, and an existing destination
+is refused. Use a new filename for each capture. `log dump
+out/operator/queen-log.txt --force` explicitly replaces an existing capture.
+A failed or incomplete target read is not a complete log export.
+
+### Append an operator note
+
+This intentionally changes the Queen log. Use a Queen attachment with the
+necessary write authority; through REST, also supply a ticket scoped to `/log`.
+At **`coh>`**:
+
+```text
+echo operator-check: serial-and-host-readback-complete > /log/queen.log
+tail /log/queen.log 4
+```
+
+Confirm the note is present in returned data. The `>` is `cohsh` command syntax,
+not host redirection, and the operation **appends** rather than truncates.
+One outer pair of quotes may surround the text, but this is not shell quoting:
+there is no variable expansion, and a literal `>` inside the payload is not
+supported by this parser. Newline, carriage return and NUL payloads are refused.
+
+The equivalent **serial-console** write is path-first:
+
+```text
+echo /log/queen.log operator-check: serial-note
+```
+
+It remains subject to the physical console's role and write policy. Do not
+paste the `cohsh` spelling into serial or the serial spelling into `cohsh`.
+
+### Upload a telemetry file
+
+Use this to retain a bounded host observation under a device identifier, not to
+copy arbitrary files into a general-purpose target filesystem. In **host Bash**,
+create a small example file (explicitly labelled as an operator observation):
+
+```bash
+mkdir -p out/operator
+printf '%s\n' '{"source":"operator","event":"connectivity-check-complete"}' \
+  > out/operator/queen-check.ndjson
+```
+
+At **`coh>`**, using authorised telemetry write access:
+
+```text
+telemetry push out/operator/queen-check.ndjson --device operator-check
+ls /queen/telemetry/operator-check/seg
+```
+
+The acknowledgement reports `seg_id`, record count, encoded bytes, original
+source bytes and `mode=inline|reference`. Read the segment named in that
+acknowledgement. For example, **only when the returned ID is `seg-000001`**:
+
+```text
+cat /queen/telemetry/operator-check/seg/seg-000001
+```
+
+The source must be non-empty. Supported extensions are `.txt` and `.log`
+(`text/plain`), `.json` (`application/json`), `.ndjson`
+(`application/x-ndjson`) and `.csv` (`text/csv`). Local paths in these commands
+must not contain whitespace; `cohsh` is not a general shell argument parser.
+
+Small, bounded UTF-8 content uses inline `cohsh-telemetry-push/v1` records.
+Binary input or content exceeding the inline envelope budget uses
+`coh-ref-c/v1` chunk references. **Reference mode uploads offsets, lengths and
+hashes, not the referenced file bytes.** Retain the unchanged source file under
+your content-retention policy. The generated limits also cap reference size,
+entry count and per-device retention; repeated uploads can evict older segments.
+
+### Submit and observe Worker requests
+
+A Worker request manages a declared Cohesix control-plane task. It does not
+install Linux, launch an arbitrary application or execute CUDA inside the Queen.
+GPU discovery, actual GPU programs and PEFT tooling remain host-side; follow
+[Host tools](HOST_TOOLS.md) for those workflows.
+
+First inspect `/proc/authority` and `/proc/lifecycle/state`. The convenience
+commands below write **compatibility `/queen/ctl`**. They do not automatically
+construct a strict intent. Production profiles that disable the compatibility
+path require [the next procedure](#submit-a-production-queen-intent) instead.
+
+In a compatibility-enabled test deployment, at **`coh>`**:
+
+```text
+spawn heartbeat ticks=100 ttl_s=120 ops=500
+ls /shard
+```
+
+Read the returned control outcome and discover the published Worker through
+its shard directory. **Do not assume the next Worker has a particular ID.**
+For a concrete illustration, when the selected eight-bit shard layout publishes
+`worker-1`, its canonical shard is `13`:
+
+```text
+ls /shard/13/worker
+cat /shard/13/worker/worker-1/telemetry
+```
+
+Substitute the actual published label and ID in your session. The canonical
+shape is `/shard/<label>/worker/<id>/telemetry`. `/worker/<id>/telemetry` is only
+a compatibility alias when the selected manifest enables it.
+
+An accepted control append is **admission, not READY**. Inspect the structured
+Worker observation and keep these axes separate:
+
+| Field | What it establishes |
+| --- | --- |
+| Declaration | Whether that role is executable or model-only in the selected profile |
+| Lifecycle | `queued`, `starting`, `ready`, `closing`, `faulted`, `terminal` or absence |
+| Artifact | Whether the declared artifact is missing, verified or mismatched |
+| Receipt | Whether a runtime receipt is pending, confirmed, rejected, stale or absent |
+| Execution proof | `none`, `host-model`, `qemu` or `fresh-pi`; not interchangeable |
+
+Once the specific test Worker has been identified, `kill worker-1` submits its
+termination request in a compatibility deployment. Replace that ID; never kill
+a guessed Worker. Observe its subsequent state or removal. Termination admission
+is not proof that teardown has finished.
+
+Other accepted convenience forms are:
+
+```text
+spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1
+spawn lora
+```
+
+`GPU-0` is illustrative: use a GPU identifier actually published for the
+selected deployment and a resource request its policy permits. These commands
+are not evidence that a GPU exists or that training has run.
+
+| Role selectors | Required `key=value` arguments | Optional arguments |
+| --- | --- | --- |
+| `heartbeat`, `worker`, `worker-heartbeat` | `ticks` | `ttl_s`, `ops` |
+| `gpu`, `worker-gpu` | `gpu_id`, `mem_mb`, `streams`, `ttl_s` | `priority`, `budget_ttl_s`, `budget_ops` |
+| `lora`, `worker-lora` | None | None |
+
+Unknown or duplicate keys are rejected. `spawn bus` and `spawn worker-bus`
+return a model-only refusal without a control write. Role availability and
+capacity remain generated-profile decisions.
+
+`ls /shard` is a bounded view of up to 64 active shard labels, **not a complete
+large-fleet index**. Complete discovery enumerates the generated shard address
+space and reads each shard's Worker directory, as SwarmUI and the benchmark
+harness do. Empty shards do not imply failed discovery; a failed read or
+malformed/misplaced Worker record does.
+
+### Submit a production Queen intent
+
+Use `/queen/intents/ctl` when strict intents are required. An envelope contains
+`schema`, `id`, `idempotency_key`, `issued_unix_ms`, the selected `writer_epoch`
+and **`cmd` as a JSON string containing the existing command object**. A nested
+JSON object in `cmd` is not the same format.
+
+Before proceeding, confirm the selected epoch with `cat /proc/authority`,
+confirm that a new heartbeat Worker is appropriate, and obtain write authority
+for `/queen/intents/ctl`. This procedure deliberately creates one request. It
+does not bypass lifecycle, policy approval, ticket or capacity checks.
+
+In **host Bash**, enter the verified epoch and create a saved command file
+**once**. Python supplies the current issue time and new identifiers; exclusive
+file creation prevents accidentally replacing a request whose outcome is unknown:
+
+```bash
+mkdir -p out/operator
+umask 077
+read -r -p 'Writer epoch reported by this Queen: ' COH_WRITER_EPOCH
+export COH_WRITER_EPOCH
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import time
+import uuid
+
+raw_epoch = os.environ['COH_WRITER_EPOCH']
+if not raw_epoch.isascii() or not raw_epoch.isdecimal():
+    raise SystemExit('Writer epoch must be the unsigned integer read from /proc/authority')
+epoch = int(raw_epoch)
+if not 0 <= epoch <= (1 << 64) - 1:
+    raise SystemExit('Writer epoch is outside the unsigned 64-bit range')
+intent = {
+    'schema': 'queen-intent/v1',
+    'id': 'heartbeat-' + uuid.uuid4().hex,
+    'idempotency_key': uuid.uuid4().hex,
+    'issued_unix_ms': time.time_ns() // 1_000_000,
+    'writer_epoch': epoch,
+    'cmd': json.dumps({'spawn': 'heartbeat', 'ticks': 100}, separators=(',', ':')),
+}
+payload = json.dumps(intent, separators=(',', ':'))
+if len(payload.encode('utf-8')) > 2048:
+    raise SystemExit('Intent exceeds the console echo payload bound')
+path = Path('out/operator/spawn-heartbeat.coh')
+with path.open('x', encoding='utf-8') as stream:
+    stream.write('# Author: Lukas Bower\n')
+    stream.write('# Copyright 2026 Lukas Bower\n')
+    stream.write('# SPDX-License-Identifier: Apache-2.0\n')
+    stream.write('# Purpose: Submit one retained, explicitly identified heartbeat request.\n')
+    stream.write('echo ' + payload + ' > /queen/intents/ctl\nEXPECT OK\nquit\n')
+print('Created', path, 'with intent id', intent['id'])
+PY
+"$COH_BIN/cohsh" --check out/operator/spawn-heartbeat.coh
+```
+
+Inspect the saved file locally. Then, with the direct interactive client
+closed and the correct console credential still selected, execute it from
+**host Bash**:
+
+```bash
+"$COH_BIN/cohsh" --transport tcp \
+  --tcp-host "$COH_TARGET_HOST" --tcp-port "$COH_TARGET_PORT" \
+  --role queen --script out/operator/spawn-heartbeat.coh
+```
+
+For an existing gateway, use `--transport rest --rest-url "$COH_REST_URL"`
+instead of the TCP options, with the request-auth token and appropriately
+scoped delegated ticket loaded. Do not run both alternatives.
+
+After successful submission, reconnect and inspect `/proc/queen/dedupe`, the
+Queen log and the actual Worker observation. The dedupe view is bounded; an
+entry missing from its recent list is not proof that no effect occurred.
+
+**An interrupted write has an unknown outcome, not an automatic failure.**
+Reconcile the retained outcome before retrying. An authorised strict retry
+must reuse the exact saved request, including both identifiers, issue time,
+epoch and command bytes. Do not rerun the generator to manufacture a new
+identity. Exact duplicates return the retained outcome; changed fields under
+the same identity produce an idempotency conflict. Dedupe capacity is bounded,
+and its authority lifetime does not survive a VM restart as a durable promise.
+Do not reboot to clear it and resubmit. Full details are in
+[M27a authority](M27A_AUTHORITY.md#strict-queen-commands).
+
+The same envelope mechanism can carry an existing `kill`, `bind` or `mount`
+Queen command object. It is not a universal wrapper for every control file:
+use each namespace's own documented payload contract.
+
+### Control the Queen lifecycle
+
+These commands change node state and can affect ongoing work. First read the
+state at **`coh>`**:
+
+```text
+cat /proc/lifecycle/state
+```
+
+For a Queen currently `ONLINE` or `DEGRADED`, an authorised maintenance sequence
+begins:
+
+```text
+lifecycle cordon
+cat /proc/lifecycle/state
+```
+
+Only after confirming `DRAINING`, request `lifecycle drain` and inspect the
+state again. Resume only when maintenance and workload policy permit it:
+`lifecycle resume`, followed by another state read. Do not paste all transitions
+blindly into a live fleet.
+
+| Command | Client-side state check | Important distinction |
+| --- | --- | --- |
+| `lifecycle cordon` | `ONLINE` or `DEGRADED` | Maintenance admission control, not a hardware shutdown |
+| `lifecycle drain` | `DRAINING` | State and workload progress still need observation |
+| `lifecycle resume` | Not already `ONLINE` | Server policy can still refuse |
+| `lifecycle quiesce` | `ONLINE`, `DEGRADED` or `DRAINING` | A lifecycle transition, not a platform reboot |
+| `lifecycle reset` | Not already `BOOTING` | Resets lifecycle state; **does not reboot the Pi** |
+
+`cohsh` writes the lifecycle control namespace, not a shell command on the host.
+The server remains authoritative for every transition. Use `reboot` only for an
+intentional platform restart, with Queen authority and a supported backend,
+after retaining evidence and considering work in progress.
+
+<a id="coh-scripts-coh"></a>
+
+## .coh scripts
+
+A `.coh` file is a deterministic sequence of `cohsh` commands and assertions.
+It has no variables, substitutions, branching, loops, includes, macros or
+runtime downloads. One command per line; blank lines are ignored. `#` begins
+a comment, including inline comments, so do not put a literal `#` in a payload
+that must survive script parsing. Use host tooling to prepare concrete files.
+
+### Create, check and run a health script
+
+In **host Bash**:
+
+```bash
+mkdir -p out/operator
+cat > out/operator/health.coh <<'COH'
+# Author: Lukas Bower
+# Copyright 2026 Lukas Bower
+# SPDX-License-Identifier: Apache-2.0
+# Purpose: Check attachment and read bounded Queen state without workload writes.
+ping
+EXPECT OK
+ls /proc
+EXPECT OK
+cat /proc/lifecycle/state
+EXPECT OK
+cat /proc/authority
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
+quit
+COH
+"$COH_BIN/cohsh" --check out/operator/health.coh
+```
+
+`--check` reads local policy and validates script structure without connecting
+to a target. It does not prove that a path exists, credentials are valid,
+commands are authorised or the target will accept a payload.
+
+Close any direct interactive owner, then run the file in **host Bash**:
+
+```bash
+"$COH_BIN/cohsh" --transport tcp \
+  --tcp-host "$COH_TARGET_HOST" --tcp-port "$COH_TARGET_PORT" \
+  --role queen --script out/operator/health.coh
+```
+
+Retain a transcript without losing the command's failure status:
+
+```bash
+set -o pipefail
+"$COH_BIN/cohsh" --transport tcp \
+  --tcp-host "$COH_TARGET_HOST" --tcp-port "$COH_TARGET_PORT" \
+  --role queen --script out/operator/health.coh \
+  2>&1 | tee out/operator/health-transcript.txt
+```
+
+This pipeline is **host Bash**, not `.coh` syntax. Choose a new transcript
+filename when preserving an earlier run. A script stops on an unexpected
+command, transport or assertion failure and exits non-zero. Failure details
+include the source line, last command, response source and bounded history.
+
+### Use the right assertion
+
+| Statement | Meaning |
+| --- | --- |
+| `EXPECT OK` | Recorded response begins with `OK` |
+| `EXPECT ERR` | Recorded response begins with `ERR` |
+| `EXPECT SUBSTR <text>` | Case-sensitive substring in the recorded response |
+| `EXPECT NOT <text>` | Case-sensitive substring absent from the recorded response |
+| `WAIT <ms>` | Local delay of at most 2000 ms; no target command |
+| `WAIT <ms> TAIL <path> SUBSTR <text>` | Poll completed authenticated tail data for a substring, for at most the bounded polling interval |
+
+The recorded response normally prefers a transport acknowledgement over later
+payload output. Therefore `cat /proc/lifecycle/state` followed by `EXPECT OK`
+checks that the read succeeded; it does **not** assert `state=ONLINE`.
+
+To assert returned data, use the read-condition form. For a deployment expected
+to be online, this is a `.coh` fragment:
+
+```text
+WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=ONLINE
+EXPECT OK
+```
+
+Use the same pattern with the actual Worker telemetry path and its documented
+READY representation after asynchronous admission. The condition is checked
+against completed data, not merely an ACK. A refusal or transport failure stops
+immediately; the wait never repeats a mutation. Each read retains its own
+transport response timeout, so 2000 ms is not an override of network timeouts.
+
+A deliberate negative test may place `EXPECT ERR` immediately after the command
+whose refusal is expected. Do not use it to hide an unexpected production write
+failure. Scripts contain at most 256 non-empty statements. Generated scripts,
+such as [boot_v0.coh](../scripts/cohsh/boot_v0.coh), must be regenerated rather
+than edited manually.
+
+### Automate a self-test
+
+In a test environment where the installed negative checks are appropriate,
+create a file whose command is `test --mode quick --no-mutate --json` and run
+it with `--script` and an explicit attached role, just like `health.coh`.
+Inspect the report's `ok` field as well as process exit status. In interactive
+mode a printed failure report does not by itself make the eventual shell exit
+status a failed test run. Prefer `--script` for automation.
+
+### Retain a live trace or rehearse offline
+
+To record the read-only health script against the live target, close another
+direct owner and run in **host Bash**:
+
+```bash
+"$COH_BIN/cohsh" --transport tcp \
+  --tcp-host "$COH_TARGET_HOST" --tcp-port "$COH_TARGET_PORT" \
+  --role queen --script out/operator/health.coh \
+  --record-trace out/operator/health.trace
+```
+
+Live recording supports TCP and REST. Add `--trace-target-id`,
+`--trace-session-id`, `--trace-manifest-sha256` and `--trace-image-sha256` only
+with values known for the captured target; unspecified identity remains
+unknown, not inferred proof. Captures are bounded by generated size and duration
+limits. Incomplete capture is an error, not a complete trace.
+
+Replay that live capture **offline**, without reconnecting to the Queen:
+
+```bash
+"$COH_BIN/cohsh" --replay-trace out/operator/health.trace
+```
+
+For an isolated in-process rehearsal instead:
+
+```bash
+"$COH_BIN/cohsh" --transport mock --role queen
+```
+
+Mock state exists only in that `cohsh` process. A separate mock tool or a later
+process does not see its Workers or notes. Legacy fixture replay and mock GPU
+seeding also depend on compiled features. Neither replay nor mock is fresh
+hardware evidence. See [Operator evidence](OPERATOR_EVIDENCE.md) for capture,
+inspection, attestation and evidence-pack contracts.
+
+## Command reference
+
+### Root console
+
+Run `help` on the active image for profile availability. These commands are
+entered at **`cohesix>`**, not in host Bash.
+
+| Command | Action and boundary |
+| --- | --- |
+| `help` | Active image's console inventory |
+| `ping` | Root-console liveness |
+| `bi` | BootInfo summary and source-labelled `[bi:v2]` records |
+| `caps`, `caps mcs` | Capability summary or bounded MCS authority/object counts |
+| `mem` | RAM/device untyped-memory summary |
+| `smp`, `smp activity` | Equivalent bounded userspace activity reports |
+| `smp mcs` | Generated and live MCS topology, plus supported retained Pi diagnostics |
+| `smp poll-time` | Pi root elapsed-time, Yield and receive observations; unsupported elsewhere |
+| `smp dump` | Debug-only raw kernel scheduler dump; unavailable after linked-UART cutover |
+| `cachelog [n]` | Bounded recent cache-operation snapshot |
+| `nettest`, `netstats` | Network-test admission and separately observed terminal result/state |
+| `attach <role> [ticket]` | Select an authorised role for namespace operations |
+| `ls <path>`, `cat <path>`, `tail <path> [lines]` | Bounded namespace operations, subject to role/profile |
+| `log` | Retained Queen log tail |
+| `echo <path> <payload>` | **Path-first** append, subject to write policy |
+| `spawn <payload>`, `kill <worker>` | Raw compatibility shortcuts; production refuses these |
+| `reboot` | Queen-authorised platform restart when a backend is available |
+| `quit` | Event-pump session termination; early bootstrap reports unsupported |
+
+Root `test` directs you to host `cohsh`; it is not the host self-test runner.
+Pi-only `usb` and `wifi` families are described in the bring-up and advanced
+sections. Arbitrary-memory `hexdump` is disabled in production/release policy;
+a separately enabled debug profile permits only bounded immutable root-code
+inspection. It is not a normal operator command.
+
+### cohsh interactive commands
+
+Enter these at **`coh>`** or as command lines in a `.coh` file. Support of a
+forwarded diagnostic still depends on the selected transport and target.
+
+| Command | Purpose |
+| --- | --- |
+| `help` | Local shell inventory; not the target's raw HELP response |
+| `attach <role> [ticket]`, `login ...` | Attach; roles are Queen, worker-heartbeat (alias worker), worker-gpu, worker-bus, worker-lora |
+| `detach`, `quit` | Close attachment and stay in the shell, or close and exit |
+| `ping` | Check the active attachment |
+| `bi`, `caps [mcs]`, `smp [activity\|mcs\|poll-time\|dump]` | Forward supported root diagnostics |
+| `ls <path>`, `cat <path>` | List or read one absolute namespace path |
+| `tail <path> [lines]`, `log` | Finite bounded tail; not a background follower |
+| `log dump <file.txt> [--force]` | Save Queen log payload on the host |
+| `echo <text> > <path>` | Append a single line; not filesystem truncation |
+| `spawn <role> <key=value>...`, `kill <id>` | Compatibility Queen requests; no automatic strict envelope |
+| `bind <src> <dst>`, `mount <service> <path>` | Compatibility namespace-control requests through `/queen/ctl`; not host mount commands |
+| `lifecycle <cordon\|drain\|resume\|quiesce\|reset>` | Validated lifecycle control request |
+| `telemetry push <src> --device <id>` | Upload local telemetry content or reference records |
+| `test [--mode quick\|full\|smp] [--json] [--timeout <s>] [--no-mutate]` | Installed self-test runner |
+| `nettest`, `netstats`, `reboot` | Supported console operations; reboot requires Queen authority |
+| `tcp-diag [port]` | TCP connection diagnostics, not authentication proof |
+| `pool bench <options>` | Mutating host session-pool benchmark; use the [benchmark workflow](BENCHMARKS.md), not as a first health check |
+
+**`mem`, `cachelog`, `usb`, `wifi` and `hexdump` are not dispatched by the current
+host `cohsh` command handler.** Use the physical root console for them, even
+though some appear in the compiler-generated shared grammar below. Shared
+parser vocabulary and host CLI implementation are not identical inventories.
+
+The `qemu` transport launches staged artifacts and rejects writes; use TCP or
+REST for actual namespace work. REST is a bounded gateway projection, not an
+arbitrary raw-console relay. A locally listed diagnostic can be unsupported
+by that transport; use direct TCP when it is free, or serial, rather than
+assuming a locally displayed help item guarantees a REST operation.
+
+### Input limits
+
+The shared console currently bounds a complete command line to 2304 bytes, an
+absolute path to 96 bytes, a ticket to 224 bytes and an `echo` payload to 2048
+bytes. Raw console `spawn` JSON has a separate 192-byte bound; this is not the
+strict-intent envelope limit. Namespace walks are bounded to eight components,
+and selected namespace/profile policy can impose smaller limits. Keep payloads
+on one line and allow for the newline appended by `cohsh`.
+
+A general `msize=8192` transport budget does not enlarge the console's smaller
+path, line or payload bounds. Split work using the owning interface's supported
+segmentation, not invented continuation syntax.
+
+### Response and session rules
+
+Target acknowledgements use `OK <VERB>` and typed `ERR <VERB>` details.
+Streaming `LS`, `CAT` and `TAIL` responses complete with `END`. `cohsh` handles
+the transport framing and labels acknowledgements `[console]`; it also prints
+local status and payload lines. Do not send a plain terminal/netcat session to
+the framed TCP endpoint and expect serial behaviour.
+
+A refusal normally has no side effect unless its owning interface says
+otherwise. An **absent response** is not a refusal. Batches containing writes
+are not replayable merely because a connection failed part-way through them.
+Retry/backoff policy never grants authority to duplicate an uncertain mutation.
+
+TCP `quit` is complete only after exact `OK QUIT`, client write-half close and
+peer EOF on that same connection. Missing ACK, extra post-terminal frames,
+timeout or missing EOF fails script mode; QUIT is not retried on a replacement
+connection. Do not interpret the host process disappearing as proof of a clean
+remote close.
+
+## CLI options and credentials
+
+Use `cohsh --help` for compiled options. Most sessions need only transport,
+endpoint, role and a privately supplied credential.
+
+| Option group | Options |
+| --- | --- |
+| Connection | `--transport tcp\|rest\|mock\|qemu`, `--tcp-host`, `--tcp-port`, `--rest-url` |
+| Attachment | `--role`, `--ticket` |
+| Authentication | `--auth-token`, `--rest-auth-token`; prefer private environment/reference sources to literal secrets in arguments |
+| Automation | `--script FILE`, `--check FILE` (mutually exclusive) |
+| Diagnostics | `-v` / `--verbose`, `--tcp-debug` |
+| Selected policy | `--policy FILE` |
+| Response/retry policy | `--retry-max-attempts`, `--retry-backoff-ms`, `--retry-ceiling-ms`, `--retry-timeout-ms`, `--rest-response-timeout-ms` |
+| Pool/heartbeat policy | `--pool-control-sessions`, `--pool-telemetry-sessions`, `--heartbeat-interval-ms` |
+| Trace | `--record-trace FILE`, `--replay-trace FILE`, optional capture identity/hash fields |
+| Diagnostic QEMU boot | `--qemu-bin`, `--qemu-out-dir`, `--qemu-gic-version`, repeated `--qemu-arg` |
+| Mock GPU namespace | `--mock-seed-gpu` when the required features are compiled |
+| Ticket issuer tooling | `--mint-ticket`, `--ticket-subject`, `--ticket-config`, `--ticket-secret`, `--ticket-write-scope`, `--ticket-ttl-s`, `--ticket-ops` |
+
+Ticket minting is an issuer operation requiring the correct signing material;
+it is not how an ordinary user bypasses missing access. It requires `--role`
+and conflicts with an input ticket, script/check and trace modes. Worker
+subjects are required; delegated write tickets additionally need a subject,
+scope and bounded lifetime. Follow [Authority](M27A_AUTHORITY.md) and
+[Host tools authentication](HOST_TOOLS.md#authentication-layers).
+
+### Credential and environment precedence
+
+| Setting | Resolution order or implementation caveat |
+| --- | --- |
+| TCP credential | `--auth-token`, then `COH_AUTH_TOKEN_REF`, `COH_AUTH_TOKEN`, `COHSH_AUTH_TOKEN` |
+| TCP host | `COHSH_TCP_HOST` replaces a parsed host equal to `127.0.0.1`, including that explicitly supplied value |
+| TCP port | A valid numeric `COHSH_TCP_PORT` overrides the parsed port, including an explicit flag |
+| REST URL | `--rest-url`, `COHSH_REST_URL`, `COH_REST_URL`, `HIVE_GATEWAY_URL` |
+| REST request token | `--rest-auth-token`, `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` |
+| REST caller ticket | Explicit attachment ticket or `COH_REST_TICKET`; reattachment replaces the binding |
+| Policy file | `--policy`, `COHSH_POLICY`, installation default |
+| Ticket signing source | `--ticket-secret`, `COHSH_TICKET_SECRET`, then selected ticket config |
+| Ticket config | `--ticket-config`, `COHSH_TICKET_CONFIG`, `configs/root_task.toml` |
+
+TCP credential references are exactly `env:NAME` or `file:/absolute/path`.
+A selected reference that cannot be read or validated **fails without falling
+back** to a different credential. Reads are bounded to 4096 bytes; empty,
+malformed, placeholder and whitespace/control-containing live token values are
+refused. File sources are reread on new authentication for rotation.
+
+Pool, retry and heartbeat overrides also have corresponding `COHSH_*`
+environment forms (for example `COHSH_RETRY_TIMEOUT_MS`); explicit flags take
+precedence for those numeric settings. Do not infer that rule for TCP port,
+whose implementation behaves differently as shown above.
+
+REST filesystem response windows compose 5000 ms queue admission, the larger
+of the gateway control/telemetry response bounds, and 5000 ms delivery grace.
+The canonical `120000/120000 ms` gateway profile therefore needs a 130000 ms
+client envelope. `--rest-response-timeout-ms` precedes
+`COHSH_REST_RESPONSE_TIMEOUT_MS`; the selected window cannot be smaller than
+the composed gateway envelope. This is not a retry allowance and does not
+change the separate connection, metadata or body-transfer bounds.
+
+## Troubleshooting
+
+| What you see | First useful check | Next action |
+| --- | --- | --- |
+| No `cohesix>` after power-on | Is output still firmware/U-Boot, or has the root task started? | Retain the first blocker and boot identity; use the hardware runbook. A Pi splash screen is not a Cohesix boot. |
+| Boot menu visible but serial typing does nothing | Selected menu input; default is USB | Use the local USB keyboard. Do not send Wi-Fi secrets through serial. |
+| Serial text appears but commands are garbled or lost | Correct device, line settings, competing owner, paste rate | Use one owner and paced single commands. Root queue-drop zero does not exclude child/FIFO loss. |
+| HDMI prompt missing while serial works | `usb status`, display blocker and actual USB key response | Distinguish input admission from display health; preserve serial access. |
+| `coh>` appears but `ping` says not attached | Earlier attach error | Correct the endpoint/credentials, then `attach queen`; the prompt itself is local. |
+| TCP connection refused or times out | Actual boot address, port, network/listener state and current console owner | Stop competing direct clients; inspect serial `netstats` before changing retry limits. |
+| `tcp-diag` succeeds but attach fails | TCP is reachable; authentication and role are still unproven | Check the exact selected secret source and ticket policy, not just the socket. |
+| Token missing/invalid despite another token variable being set | Precedence and selected `env:`/`file:` source | Repair that source. It intentionally does not fall back. Never print the token to debug it. |
+| Connection goes to the wrong port/localhost | Inherited `COHSH_TCP_HOST` / `COHSH_TCP_PORT` | Clear stale overrides and restart with the intended endpoint. |
+| REST reads work, writes fail | Request-auth token, caller ticket, TTL, subject, scope, mount and quotas | Supply both authentication layers; `--role queen` alone is insufficient. |
+| `spawn`, `kill`, `bind` or `mount` refused in production | `/proc/authority`, compatibility policy | Use an authorised strict intent for the existing Queen command object. |
+| `OK` after spawn but no usable Worker | Published structured Worker observation | Inspect lifecycle/artifact/receipt/proof independently; do not manufacture READY from admission. |
+| Worker path is missing | Actual shard label, ID, profile and enabled aliases | Discover the canonical path; do not assume `/worker` or a guessed sequential ID. |
+| `nettest` says started but there is no pass | Same connection/run generation and terminal `netstats` verdict | Complete the required peer interaction; another run's result cannot satisfy this one. |
+| `test --no-mutate` still attempts writes | Installed negative script | This mode is selective skipping, not a read-only security boundary. Use explicit reads when necessary. |
+| `EXPECT SUBSTR` misses text visibly printed by `cat` | Recorded response source | Use `WAIT ... TAIL ... SUBSTR ...` for a data condition, not an ACK-text assertion. |
+| `log dump` fails | `.txt` suffix, parent directory and existing destination | Create the host directory; use a new filename or intentional `--force`. |
+| Telemetry reports `mode=reference` | Encoded inline budget/source format | Retain original bytes; only reference records were uploaded. |
+| Timeout or disconnect during a mutation | Retained request, logs, dedupe/result state | Treat outcome as unknown. Reconcile before any retry; never give the same work a fresh identity automatically. |
+| Unexpected `busy`, `quota`, `cut` or `policy` | Exact typed detail and relevant lifecycle/ticket/budget | Fix the specific cause. Larger client retries cannot widen target authority. |
+
+Capture the failing command, complete bounded response, target image/profile,
+boot/connection identity and relevant serial context. Keep credentials out of
+reports. Preserve the first fault before rebooting or opening another TCP
+connection that replaces latest-session evidence.
+
+## Advanced diagnostic reference
+
+The following expandable sections retain field interpretation for incident and
+driver analysis. They are not a required reading path for ordinary shell work.
+Use the matching image's records; unavailable, stale and unobserved values are
+not zero-valued proof. Detailed driver contracts are in [DRIVERS.md](DRIVERS.md),
+external schemas in [INTERFACES.md](INTERFACES.md), and acceptance requirements
+in [TEST_PLAN.md](TEST_PLAN.md).
+
+<details>
+<summary>Activity, USB and local-seat readiness</summary>
+
+`smp` and `smp activity` are equivalent. Selected driver snapshots use seven
 bounded `[smp] driver v=1 part=<turn|outcome|sched|retry|cache|traffic|role>`
-rows so saturated counters fit the common 256-byte console line ABI. This
-operator projection does not replace or change the complete 1,024-byte
-`DRIVER_TASK_COUNTER` provenance record retained by boot/qlog evidence. A
-missing activity-gated projection remains missing evidence rather than being
-replaced by an unrelated driver's counters. Use
-`smp dump` only when investigating kernel scheduler state on a compatible debug
-profile before linked-UART cutover; the raw kernel text is UART-only. The
-explicit `smp activity` spelling remains accepted for scripts and older
-runbooks. `smp mcs` labels compiler truth `source=generated`, BootInfo
-`source=kernel`, and copied live state `source=runtime`; unavailable is not a
-missing registration. On Pi release profiles it also emits the 25-row
-aggregate-only `mcs_quantum*`, `mcs_yield*`, command-dispatch, pending-state,
-budget-guard and idle-fence batch documented below. These rows are not emitted by
-`netstats`. The command never calls `seL4_SchedContext_Consumed`, which would
-reset the accounting interval. QEMU output proves only its exact boot, while Pi
-state requires a fresh exact-image Pi boot. The `serial_rx_drop` and `serial_rx_backpressure` values in this
-report describe the root serial queue only. A zero value does not claim that
-the isolated serial runtime queue or the mini-UART hardware FIFO could not
-have overrun; paced serial acceptance still requires a complete command and
-response transcript. Per-core rates follow the manifest assignment of the
-specific driver: `seatPoll_s`, `kbdB_s`, `seat_drop_s`, and
-`seat_no_reply_s` belong only to the USB core, while `hdmiB_s` and
-`hdmi_drop_s` belong only to the HDMI core. HDMI mirror-queue drops are not USB
-keyboard drops, and neither driver's rate is duplicated onto the other's core.
+rows, each fitting the 256-byte console line ABI. They do not replace the
+complete 1024-byte `DRIVER_TASK_COUNTER` provenance record. A missing selected
+driver projection is missing evidence, not permission to substitute another.
 
-On a physical-console request with Wi-Fi selected, either `smp` spelling may
-prepend a passive retained old-good transaction before the ordinary activity
-report. It appears only when the current Wi-Fi attempt, pair, connection
-generation, firmware identity, ordered association/EAPOL/DHCP receipt, and six
-current driver-owner records form one complete snapshot. The prefix is one
-atomic 37-line batch: owner records for serial, USB, HDMI, PCIe, CYW43, and SDIO
-in that order, followed by a contiguous 31-line
-`WIFI_OLDGOOD_RETAINED_BEGIN`/hash/26-step/`WIFI_OLDGOOD_RETAINED_END`
-transaction. Its presence performs no device work; its absence remains missing
-evidence. Fresh netstats, authenticated TCP, terminal nettest, and DPC rows
-must follow it in the capture and cannot be supplied by the retained block.
+`serial_rx_drop` and `serial_rx_backpressure` describe the root serial queue,
+not the isolated serial runtime queue or mini-UART FIFO. Per-core USB rates
+`seatPoll_s`, `kbdB_s`, `seat_drop_s`, `seat_no_reply_s` belong to the USB core;
+`hdmiB_s` and `hdmi_drop_s` belong to the display core. Display drops are not
+keyboard drops, and neither driver's rates are duplicated onto the other.
 
-`test` is present in the shared parser but the target root console directs the
-operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
-and `wifi` diagnostic families. Their gate meanings are documented in
-[DRIVERS.md](DRIVERS.md).
-The advertised Wi-Fi inventory is passive: `wifi help`, `wifi dump-state`,
-`wifi diag`, and `wifi rx-trace <0..5>`. `wifi diag` is the bounded causal-triage surface: it emits at most
-eight preflighted body lines plus its terminal/status/ACK tail, leads with the
-first known failing gate, and carries retained CYW43/SDIO progress, physical
-epoch/logical generation, parent/child identity, latest child timing receipts,
-grant consumption, wake counters, and exact fault identity. Its snapshot is
-explicitly `best-effort-multi-record`; downstream gates are `not-reached`
-instead of being presented as current acceptance after an earlier failure.
-`wifi dump-state` is the verbose acceptance, DPC, association, maintenance,
-queue, TX, and Gate 7/8 inspection surface. Its additive `wifi: pair_handoff`
-rows show the separately owned CYW43 and SDIO first-child trace, retained
-before recovery when available. `observed=no` means missing/unstable evidence;
-stage, route, detail, witness, and wrapping tick semantics are defined in
-[DRIVERS.md](DRIVERS.md). They cannot establish a boot or performance gate.
-Legacy `wifi probe-ht`, `wifi
-load-fw`, and `wifi retry` spellings
-remain recognized only to return one typed linked-runtime ownership refusal;
-they do not invoke a debug callback, snapshot traversal, or physical operation.
+The Pi startup banner and bounded elapsed counter do not gate boot readiness.
+The isolated display runtime owns rendering. The HDMI interactive prompt is
+released only after USB command input is admitted, the display is healthy and
+`Cohesix console ready` is queued before the prompt. A later passive
+`[drivers] USB console ready` record does not control that order. Loss of
+readiness retracts the prompt/ready banner while retaining the typed suffix;
+fresh readiness is required to restore them. Serial can be ready earlier.
 
-A retained recovery also emits `wifi: deferred_recovery scheduler_root`.
-Its 16-digit hexadecimal `site` packs a source tag in the upper 32 bits and
-an exact-build source line in the lower 32 bits: 1 = `hal/driver_task.rs`,
-2 = `drivers/driver_task_net.rs`, 3 = `event/mod.rs`, 4 = `userland/mod.rs`,
-15 = another source; zero is unavailable. It records the first root recovery
-request, including propagated retained-lease failures, and clears at accepted
-Gate 8. `terminal=yes` binds the hexadecimal code/detail/result triple to the
-exact root command sequence in the same retained scheduler tuple. With
-`terminal=no`, zeros mean unavailable. These are passive first-fault operands,
-not new fault, liveness or performance authority. The atomic recovery batch
-contains at most 13 rows; the compact eight-body-line `wifi diag` bound remains.
+`usb status`, `usb dump-state` and `usb diag` inspect retained state.
+`usb diag` also arms a post-command liveness observation without polling the
+device. Its ten-gate history is not current keyboard proof. After a real USB
+key, a one-shot pass requires linked HID-byte, parser-acceptance, parser-drain
+and echo counters to advance without a new drop. `usb enable-kbd` and
+`usb probe-kbd` may change polling or advance a retained probe slice. An
+`attached` probe result requires its live service turn to finish; a cached
+ready latch with pending work remains `keyboard-unavailable continuation=pending`.
 
-`wifi dump-state` additionally emits `wifi: rx_reject schema=v1`. Without a
-retained rejection it is one `retained=no` row. Otherwise eleven bounded rows
-preserve the first failed batch selection since accepted Gate 8: one identity
-row, four `rx_reject_queue` rows (`before`/`after`, samples 0/1), two
-`rx_reject_header` rows, and four `rx_reject_entries` rows (two halves of four
-slots for each header sample). The eight `stage` values are `envelope`,
-`queue-before`, `generation`, `header`, `initial-identity`, `queue-after`,
-`final-identity`, and `count`. They name the failed check, not a root cause.
-Queue samples retain the last pair from the existing three-attempt stable
-read; header samples are the original two reads. Unreached reads have
-`observed=false`; their placeholder values are unavailable evidence. Boolean
-values use `true`/`false`; numeric metadata is fixed-width hexadecimal except
-sample/half indices. Queue `abi` is version/size and `depth` is level/capacity.
-Header `count` is count/remaining and `valid` is body-valid/committed. Entry
-slots are offset/length/flags/source-CNTVCT-low-word, in FIFO slot order. No
-payload is recorded. Internally valid, same-generation queue publication
-(zero or changing commit) now defers before terminal retirement or sideband
-copy and does not populate this rejection record. Unavailable reads, malformed
-bodies, poison and identity failures remain distinct rejection evidence. A
-publication that does not finish remains bounded by its original ticket
-deadline. This passive record survives recovery scrub, clears at
-accepted Gate 8, and adds no read, retry, restart, scheduling or acceptance
-authority. The compact `wifi diag` and automatic recovery transaction keep
-their existing bounds.
+HDMI queue state and the display owner's completion receipt are separate.
+No boot framebuffer reports `state=unavailable`,
+`blocker=framebuffer-not-admitted`, `receipt=none`,
+`next_action=reboot-with-display-connected`. Counters without a registered
+owner report `state=unproven`, `blocker=driver-task-owner-unproven` and
+`receipt=none`. A ready receipt needs framebuffer, registered owner, completed
+turn, no outstanding turn and healthy retry state.
 
-`wifi rx-trace <0..5>` is serial/local-seat only. Supply exactly one ASCII digit
-from 0 through 5; invalid input returns
-`ERR WIFI reason=policy detail=rx-trace-page-required-0-through-5`.
-Each page contains a `wifi: rx_trace schema=v1` header, a `rx_trace_flow` row,
-up to 16 `rx_trace_row` records, and
-`OK WIFI detail=subcommand=rx-trace scope=serial-local`. The fixed 96-record
-journal holds SYN/FIN/RST and data headers for the latest control TCP flow.
-It excludes pure ACKs and payload bytes. New generation or a new SYN identity
-resets the journal; retransmissions retain separate receipt ordinals and IPv4
-IDs. `first`/`next` are absolute decimal ordinals and expose eviction;
-`ignored` counts other flows. Read all six pages after the measured connection
-closes and before another connection replaces it. Concurrent pages are separate
-snapshots: reconcile generation, flow and ordinal headers before joining them.
-IPs, SYN/sequence/ACK/flags, IPv4 ID, and `s/q/r/d` are hexadecimal; ports,
-lengths, ordinals and header counters are decimal. `none` means unavailable,
-while zero remains a valid observation. `s` is the existing source counter low
-word, `q` is the existing packed Q11 stage metadata, `r` the root-copy counter
-low word, and `d` the full dequeue CNTVCT observation. Stage validity and
-wrap rules remain those in [DRIVERS.md](DRIVERS.md); source is not wire arrival.
+Mapped USB and HDMI runtimes expose `usb: command_frontier` (request/command/
+completion sequence, lease phase, issued/admission, capability generation,
+producers/sends), `usb: command_wait` (notification binding, cap generation,
+prompted slice, absent/wait/ack state and exact request/slice match), and
+`usb: command_progress` (validity, sequence, phase and auxiliary value).
+`domain` distinguishes `usb-runtime` from `hdmi-display`. These are snapshots,
+not timeout or readiness verdicts.
 
-`smp poll-time` emits a `poll_time schema=v1` header with decimal generation,
-connection, counter frequency and invalid count, followed by seven phase rows:
-`serial`, `dispatch`, `containment`, `network`, `local-seat`, `display`, and
-`between`. Every numeric phase-row field is hexadecimal: `n` count, `sum` and
-`max` microseconds, `cmd` root accepted-command count at the maximum, and
-`ticks` its full beginning/end CNTVCT pair. These are wall intervals including
-preemption, not CPU consumption or proof of refill exhaustion. `between`
-includes all work and waits outside observed ordinary polls; the exclusive
-post-Yield passive-admission poll is deliberately uninstrumented. The most
-recent nonzero generation/connection is retained after disconnect and replaced
-by the next one. Invalid clocks cannot create timings or bridge a gap. Reading
-the eight-row batch never queries or resets kernel CPU accounting. Its separate
-command preserves the existing `smp activity` and `smp mcs` output capacities.
-
-The same command then emits one `yield_trace schema=v1` header and up to 32
-`yield` rows, retaining the first valid explicit Yield intervals for that
-nonzero session. Header `generation`, `conn`, `kept`, `total`, `omitted` and
-`invalid` are decimal. Row `n`, `ctx`, `phase`, `pub` and `hz` are decimal;
-`pending`, `cmd`, `stage`, `drain` and the entry/resume `ticks` pair are hex.
-`cause` names the existing Yield trigger. `ctx=0` omits unavailable context;
-with `ctx=1`, `pub` is 0 unknown, 1 observed empty, or 2 durable publication.
-The additive hex `route` word records the final root decision only when bit 63
-is set; zero means unavailable. Bits 0-15 retain the existing idle fence mask,
-16-17 its cut (0 before enable, 1 after enable, 2 timer rejection), and bit 18
-marks a same-session idle preparation from this loop. Without bit 18, those
-low fields are unavailable. Bits 19-21 classify the retained token (0 absent,
-1 awaiting child publication, 2 completed response, 3 command-only); bits 22/23
-mark an eligible/consumed nonblocking hint. Bytes at 24/32/40 retain completed
-quanta, causal waits and rejection mask. Bits 48-51 mark active tail, timed
-window, selected NaturalPostpone and pending fresh-publication lane. Other bits
-are reserved zero. The snapshot precedes passive-admission preparation and
-changes no decision, clock, queue, kernel accounting or producer operation.
-It identifies the final software guard, not the cause of kernel postponement.
-
-Invalid intervals are excluded and counted; a zero kept count or omitted tail
-cannot prove absence of all scheduler delay. Recording copies existing
-observations and adds no counter read or CPU-accounting operation.
-
-A `receive_trace schema=v1` header and at most 16 `receive` rows follow. These
-are the slowest root receive/endpoint-handler brackets, in descending whole
-microseconds with earlier samples first on ties. Header `generation`, `conn`,
-`kept`, `total`, `omitted`, `invalid` and `sum_us` are decimal; row `n`, `us` and
-`hz` are decimal while `cmd` and the two `ticks` values are hex. `outcome` is
-`empty`, `endpoint`, `fanin` or `unavailable`, preserving the returned receive
-classification. Two CNTVCT reads bracket the existing receive only while a
-nonzero Pi TCP identity is live; no receive or accounting operation is added.
-These intervals include existing endpoint handling and preemption, and do not
-measure CPU or prove that root slept throughout. Invalid clocks are counted;
-`omitted` counts valid brackets excluded by the bounded retention. The complete
-command is bounded to 58 body rows before its terminal acknowledgement.
-
-The Pi USB inventory separates passive inspection from active operations:
-`usb status`, `usb dump-state`, and `usb diag` are passive, while
-`usb enable-kbd` and `usb probe-kbd` may change polling or advance one retained
-probe slice. `usb diag` arms a post-command liveness observation without polling
-the device. Its ten-gate result is startup history, not current keyboard proof.
-After a real USB key is typed, `usb status` reports a one-shot pass only when
-the linked HID byte, parser acceptance, parser drain, and echo counters all
-advance with no new drop. `usb probe-kbd` reports `attached` only after its live
-retained service turn completes; a cached ready latch with a pending request is
-`keyboard-unavailable continuation=pending`. The same passive status also
-reports HDMI queue state separately from the isolated display driver's
-completion receipt. With no boot framebuffer it reports `state=unavailable`,
-`blocker=framebuffer-not-admitted`, `receipt=none`, and
-`next_action=reboot-with-display-connected`. Completed command counters alone
-cannot prove readiness: without a registered display owner, they report
-`state=unproven`, `blocker=driver-task-owner-unproven`, and `receipt=none`.
-The `ready` completion receipt requires framebuffer presence, a registered
-owner, a completed turn, no outstanding turn, and healthy retry state.
-
-Mapped USB and HDMI runtimes additionally report three bounded rows:
-`usb: command_frontier` has `seq=request/command/completion`, lease `phase`,
-`issued`, `admission`, capability generation `cap`, `producers` and `sends`.
-`usb: command_wait` has actual `notification_bound`, `cap_gen`, last
-`prompted` slice, `state=absent|wait|ack`, receipt `request`, `slice` and
-`exact` identity match. `usb: command_progress` has fresh shared-record
-`valid`, `seq`, `phase` and `aux`. Each row names `domain=usb-runtime` or
-`hdmi-display`; absent/unmapped runtimes retain their existing counter row.
-These are passive diagnostic snapshots, not readiness or timeout verdicts.
-
-Every passive `usb status`, `usb dump-state`, and `usb diag` response begins
-with one atomic adjacent old-good pair:
+Every passive USB response begins with this adjacent atomic pair:
 
 ```text
 USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0x<8hex> epoch=<u32> seq=<u32> mask=0x<8hex> topology=0x<8hex> input_gen=<u32> commit=<u32> source=<linked-runtime-hid|none>
 USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
 ```
 
-The owner and descriptor pairs are ordered USB then PCIe. A complete current
-receipt uses `mask=0x00003fff`, repeats `seq` in `commit`, names
-`source=linked-runtime-hid`, and requires both owners, both sealed descriptors,
-command readiness, `proof_gate=14`, and `blocker=none`. Missing evidence is
-reported as `v=1` with zero identity/body fields and `source=none`; the command
-does not fabricate or advance a hardware transition. Active `usb enable-kbd`
-and `usb probe-kbd` do not emit either old-good row.
+Pairs are USB then PCIe. A complete receipt needs `mask=0x00003fff`, `commit`
+equal to `seq`, `source=linked-runtime-hid`, both owners, both sealed
+descriptors, command readiness, `proof_gate=14` and `blocker=none`. Missing
+evidence retains version 1 with zero identity/body fields and `source=none`.
+Active enable/probe commands do not emit this pair. The passive command does
+not create a hardware transition. Linked local-seat readiness cannot release
+pre-proof input until both USB and PCIe owner/descriptor chains are current;
+failed service/recovery clears that retained readiness evidence.
 
-After `nettest` admission, allow its bounded 15-second window to finish and
-query `netstats`. The authoritative line is
-`nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>`.
-The positive run generation must match the admission ACK; another run on the
-same connection cannot satisfy the command.
-When the compiler-declared console-network child owns TCP/IP, the same command
-runs a bounded peer-assisted test instead of returning `detail=unsupported`.
-A physical result requires an exact post-admission child response drain, a
-later NIC TX completion, later RX/TCP counter progress, matching authenticated connection,
-and listener readiness; direct VirtIO uses the child drain as its TX boundary.
-The child's native ICMPv4 echo response is separate reachability behavior, so a
-peer-assisted terminal may truthfully report `udp_echo_ok=false`.
-Targets and backend identity are emitted separately as `nettargets:` so the
-terminal verdict cannot be truncated by long target strings.
-`profile_backend` is the backend selected by the resolved manifest,
-`active_driver` is the physical or virtual driver selected for this boot, and
-the compatibility `backend` field is an alias of `active_driver`. In Pi Wi-Fi
-mode, for example, `profile_backend=bcmgenet-v5` and
-`active_driver=backend=cyw43` is the truthful combination.
-For isolated profiles, `netstats` also emits `isolated_progress`,
-`isolated_units`, and `isolated_state` rows. They report the selected child
-turn, last material progress, per-unit counts, bounded command/output queues,
-pending egress and response-drain state, and ingress backpressure/drop. These
-are diagnostic counters, not a substitute for the terminal `nettest`, ICMP,
-authenticated TCP, or target-performance evidence.
-The additive direct-GENET cadence fields are:
+</details>
+
+<details>
+<summary>Wi-Fi triage, recovery and packet-receipt snapshots</summary>
+
+`wifi diag` has at most eight preflighted body lines plus terminal/status/ACK
+output. It leads with the first known failed gate and labels its snapshot
+`best-effort-multi-record`. Later gates are `not-reached` rather than falsely
+current. `wifi dump-state` is the verbose acceptance/DPC/association/maintenance/
+queue/TX/Gate 7–8 surface. Its `wifi: pair_handoff` records retain separately
+owned CYW43 and SDIO first-child traces; `observed=no` is missing or unstable
+information. Legacy probe/load/retry commands return typed ownership refusal
+without invoking a physical operation.
+
+Physical-console `smp` in Wi-Fi mode can prepend a passive atomic 37-line
+old-good batch: current serial, USB, HDMI, PCIe, CYW43 and SDIO owner records,
+then the contiguous 31-line `WIFI_OLDGOOD_RETAINED_BEGIN`/hash/26-step/
+`WIFI_OLDGOOD_RETAINED_END` transaction. It needs a complete matching attempt,
+pair, generation, firmware and ordered association/EAPOL/DHCP receipt. Its
+presence does no device work; its absence is missing evidence. Fresh network,
+authenticated TCP, terminal `nettest` and DPC observations must still follow.
+
+A retained `wifi: deferred_recovery scheduler_root` uses a 16-digit hex `site`:
+upper 32 bits are source tag 1=`hal/driver_task.rs`,
+2=`drivers/driver_task_net.rs`, 3=`event/mod.rs`, 4=`userland/mod.rs`,
+15=other; lower 32 bits are the exact-build line. Zero is unavailable.
+`terminal=yes` binds code/detail/result to the retained root command sequence;
+with `terminal=no`, zero operands are unavailable. The first request survives
+recovery and clears at accepted Gate 8. The atomic recovery batch is at most
+13 rows; compact `wifi diag` retains its eight-body-line bound.
+
+`wifi: rx_reject schema=v1` is one `retained=no` row when absent, otherwise
+11 rows: identity, four before/after queue samples, two header samples and
+four entry-half rows. Failure stages are `envelope`, `queue-before`,
+`generation`, `header`, `initial-identity`, `queue-after`, `final-identity`,
+`count`. These name failed checks, not root causes. Queue samples are the
+existing stable-read pair; headers are the original two reads. `observed=false`
+means placeholders cannot be used as evidence. Metadata is fixed-width hex
+except sample/half indices; booleans are `true`/`false`. Queue `abi` is
+version/size and `depth` level/capacity; header `count` is count/remaining,
+`valid` body-valid/committed; entries are offset/length/flags/source-counter-low
+word in FIFO slot order. Payload is not retained. Same-generation in-progress
+publication defers without fabricating rejection; malformed, unavailable,
+poisoned and identity-invalid records remain distinct. The original deadline
+still bounds publication. Records survive recovery scrub and clear at Gate 8.
+
+`wifi rx-trace <0..5>` requires one ASCII page digit, is serial/local-seat only,
+and returns a header, flow row, up to 16 records and
+`OK WIFI detail=subcommand=rx-trace scope=serial-local`. The 96-record journal
+contains SYN/FIN/RST and data headers for the latest control flow, not pure
+ACKs or payload. New generation or SYN identity resets it; retransmissions keep
+separate receipt ordinals/IPv4 IDs. `first`/`next` expose eviction, and `ignored`
+counts other flows. Collect all six pages after connection close, before a new
+connection; reconcile generation, flow and ordinal headers across snapshots.
+IPs, sequence/ACK/flags, IPv4 ID and `s/q/r/d` are hex; ports, lengths, ordinals
+and header counts are decimal. `none` means unavailable; zero is valid.
+`s` is source-counter low word, `q` packed Q11 metadata, `r` root-copy counter
+low word and `d` full dequeue CNTVCT. Source time is not wire arrival.
+
+Pi `netstats` additionally retains `wifi_ack_admission`, `wifi_ack_last`,
+`wifi_ack_fin` and `wifi_ack_before_fin` version-1 records. These describe a
+structurally valid, nonfragmented IPv4 ACK-only header (flags `0x10`, no TCP
+payload), stage/returned-signal identity and exact child-ingress completion.
+`consumed=yes` does **not** prove smoltcp processed or retired that ACK.
+A received SYN clears latest/close identity without resetting cumulative
+counts; a new Wi-Fi generation resets both. `wifi_ack_before_fin` freezes the
+same-flow ACK receipt immediately before the first matching FIN; later ACKs,
+repeated FINs and completions cannot rewrite that cut. Missing data is
+`absent=yes`. Collect through serial before another connection and reconcile
+with the boot-paired packet capture; no row proves on-air delivery.
+
+</details>
+
+<details>
+<summary>Network verdicts, isolated progress and GENET causal refresh</summary>
+
+The complete terminal/running network-test record is:
+
+```text
+nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>
+```
+
+The positive run generation must match admission. Target addresses/backend
+identity are emitted separately as `nettargets:`. `profile_backend` is resolved
+manifest selection; `active_driver` is this boot's selected physical/virtual
+driver; compatibility `backend` aliases `active_driver`.
+
+Isolated profiles also emit `isolated_progress`, `isolated_units` and
+`isolated_state`: child turns, last material progress, bounded queues, pending
+egress/drain and ingress backpressure/drop. Direct-GENET additions are:
 
 ```text
 isolated_progress: pcont=<candidates>/<admitted>/<rejected> peff_us=<n> preason=0x<n>
@@ -351,23 +1185,47 @@ isolated_units: output_ok=<n>
 isolated_state: ycalls=<n> ycredit_us=<n> yinvalid=0x<n>
 ```
 
-`pcont` counts candidate, admitted, and rejected retained root quanta;
-`peff_us` is the largest observed root-only elapsed sample and is never
-admission authority.
-`preason` uses `0x01` fence, `0x02` cap, `0x04` clock, `0x08` policy,
-`0x10` counter, `0x20` arithmetic, schema-reserved retired `0x40`, and `0x80`
-token bits.
-`output_ok` distinguishes attempted output turns from durable output-stage
-successes. `ycalls` and `ycredit_us` report direct child scheduling calls and
-their bounded child-execution credit; `yinvalid` uses `0x01` pre-drain,
-`0x02` counter/frequency, `0x04` syscall result, and `0x08` overflow bits.
-These fields are zero outside the exact Pi direct-GENET path. They explain
-cadence decisions but do not prove function, throughput, latency, or
-acceptance.
+`peff_us` is root elapsed observation, not admission authority. `preason` bits
+are fence `0x01`, cap `0x02`, clock `0x04`, policy `0x08`, counter `0x10`,
+arithmetic `0x20`, reserved retired `0x40`, token `0x80`. `output_ok` counts
+durable output-stage success, not attempts. `yinvalid` bits are pre-drain
+`0x01`, counter/frequency `0x02`, syscall result `0x04`, overflow `0x08`.
+These fields are zero outside that exact direct-GENET path.
 
-Pi release `netstats` appends six bounded fast-path rows and, when the selected
-isolated-network implementation exposes timing evidence, five causal seam
-rows. Their grammar is:
+On the exact Pi direct-GENET generation, `netstats` performs one bounded causal
+refresh with an idempotent `DGHO` replay. It may wake the owner and permit normal
+idle service to drain durable RX: **not a passive performance sample**.
+Available rows are emitted in this order:
+
+```text
+netstats: genet_direct ...
+netstats: genet_direct_flags ...
+netstats: genet_direct_before ...
+netstats: genet_direct_before_ring ...
+netstats: genet_direct_irq ...
+netstats: genet_direct_irq_source ...
+netstats: genet_direct_notification ...
+netstats: genet_direct_dpc ...
+netstats: genet_direct_dma ...
+netstats: genet_direct_ring ...
+netstats: genet_direct_peer ...
+```
+
+`refresh` is `fresh`, `ready-stale`, `ready-unverified`, `ready-missing`,
+`timeout`, `rejected` or `inactive`; a replacement can be
+`phase=pre-idle-service`. The `before` rows retain pre-replay owner/ring state;
+`ready-unverified` means no stable pre-replay record existed to prove freshness.
+Missing optional rows remain missing. DPC timing/reason fields diagnose bounded
+service, not qualified WCET or throughput. Component `active=yes` cannot
+replace canonical `NET_ACTIVE` backend selection. These rows establish neither
+DHCP/ARP/ICMP/TCP success nor Pi acceptance.
+
+</details>
+
+<details>
+<summary>Pi fast-path counters and causal seam histograms</summary>
+
+The bounded `netstats` fast-path record grammar is:
 
 ```text
 netstats: cyw43_publication schema=v1 candidates=<u64> minted=<u64> consumed=<u64> rejected=<u64> reasons=0x<hex>
@@ -379,85 +1237,69 @@ netstats: genet_defer schema=v1 passive=<u64> command=<u64> compose_open=<u64> c
 netstats: isolated_seam schema=v2 name=<command-created-root-observe|command-created-publish|command-publish-root-observe|dispatch-stage|stage-control-observe|stage-output-drained|output-drained-root-observe> n=<u64> bad=<u64> ms=<total>/<last>/<max> h=<hex>/<hex>/<hex>/<hex>/<hex> hs=<0|1> [pairs=<u64>]
 ```
 
-`cyw43_publication` counts exact transient-publication-credit candidates,
-credits minted and consumed, rejected cuts, and the sticky rejection-reason
-mask. The reason bits are snapshot/lifetime drift `0x1`, operator or recovery
-fence `0x2`, final pre-Network drift `0x4`, and non-material or empty
-publication `0x8`. `cyw43_publication_cut` assigns each rejection to the exact
-proof probe, next-composer entry, final pre-Network revalidation, or later
-revocation cut. The cut counters classify the aggregate `rejected` total; they
-do not create a retry or continuation. `cyw43_productive_window` counts exact
-same-lifetime, authenticated generation/connection and accepted-command window
-opens and closes inside the generated `NaturalPostpone` activation. Its
-schema-stable `idle_admitted` field records the retired transient-empty path
-and remains zero under event-backed continuation. `ready_rechecks` counts
-durable publication wins at the final wait cut, each spending the existing
-one-shot outer-recheck allowance. It is not an extra poll or retry allowance.
-Every full Operator, Driver,
-and attached Network service turn spends one of the unchanged 64 logical
-material-work units; productive Driver or attached Network progress is
-independently capped at 64. All operator, passive, recovery, containment,
-quarantine, reboot, handoff, and fault fences remain authoritative; these
-counters grant no refill, retry, readiness, or device authority. One credit
-may be rebased after the
-ordinary Dispatch cut only for one exact authenticated network command: the
-command count advances by one, an empty response lane becomes one exact
-nonempty sealed completed lane, and an empty flush becomes one bounded
-same-connection flush while every lifetime, identity, service, operator, and
-recovery fence remains exact. Any other delta is a pre-Network rejection.
+Publication rejection bits are snapshot/lifetime drift `0x1`, operator/recovery
+fence `0x2`, final pre-Network drift `0x4`, empty/non-material publication `0x8`.
+Cut counters classify rejections, not retries. `idle_admitted` is a retained
+schema field for a retired path and stays zero under event-backed continuation.
+`ready_rechecks` spends the existing one-shot recheck allowance. Full Operator,
+Driver and attached Network turns spend the unchanged 64 logical material-work
+units; productive Driver/Network progress is independently capped at 64.
+Counters do not grant continuation, refill, readiness or device authority.
 
-`genet_compose` counts the typed outcomes of moving one sealed response into
-the direct-GENET adapter. `composed` proves a sealed `SyncCapture` was moved.
-An immediate terminal such as `QUIT` already queues its exact adapter response,
-so `no_pending` may proceed only when the ordinary generation-, connection-,
-authentication-, recovery-, flush-, and batch-drain predicate independently
-proves that non-`SyncCapture` lane is stage-ready, terminal-queued,
-producer-closed, and contains exactly one completed response. Otherwise it
-defers as `output_missing`; identity drift remains fail-closed containment. The
-raw counter value alone authorizes no child-control successor. `not_sealed` and
-`backpressure` remain retained-response outcomes. `genet_compact` retains the
-adjacent bounded command-control outcomes and operator-rotation counts. Every
-aggregate compact Deferred increments exactly one `genet_defer` counter:
-`passive`, `command`, `compose_open`, `compose_backpressure`, `fence`,
-`prior_batch`, `control_busy`, `output_missing`, or `stage_backpressure`. Their
-sum therefore equals the aggregate `genet_compact deferred` count.
-`compose_open` maps the typed `NotSealed` outcome. This bounded one-hot
-classification does not authorize a retry, admission, child-control successor,
-or acceptance claim.
+The exact single-command credit-rebase case must preserve lifetime, identity,
+service and all operator/recovery fences while admitting one command, one newly
+sealed completed response and one bounded same-connection flush. Other changes
+are rejection, not an extra continuation path.
 
-The seven optional `isolated_seam schema=v2` rows distinguish command creation
-to root observation, creation to publication start, publication start to root
-observation, root dispatch to first durable `StageOutput`, `StageOutput` to
-observed control-consumption watermark, `StageOutput` to `OutputDrained`
-publication, and that publication to root observation. Command samples describe
-the first command in each bounded batch. `pairs` appears only on
-`command-created-publish` and counts command/egress bundles accepted under one
-publication credit; zero means no pairing has been observed.
+`genet_compose composed` means a sealed `SyncCapture` moved. `no_pending` is not
+by itself permission to advance: an immediate terminal's already queued lane
+must independently satisfy exact generation, connection, authentication,
+recovery, flush and batch-drain predicates, including one completed response,
+stage readiness, terminal queued and producer closed. Otherwise the result is
+`output_missing`; identity drift remains fail-closed. Each aggregate compact
+Deferred increments exactly one of the nine `genet_defer` classes; their sum
+matches the aggregate deferred count. `compose_open` corresponds to NotSealed.
 
-`n`, `bad`, and the `ms=total/last/max` components are decimal saturating u64
-counters. The five hexadecimal `h` counts describe integer millisecond ages
-0, 1, 2–3, 4–7, and at least 8. Display counts clip at `ffff`; `hs=1` explicitly
-reports clipping, while internal bins retain full u64 width. Zero age is valid
-when both endpoints are nonzero; zero endpoints or backwards pairs increment
-`bad` without changing samples or histogram. Mean age is `total/n` when n is
-nonzero. Every row fits the existing 256-byte line bound.
+The seven optional version-2 seam names separate creation, publication, root
+observation, dispatch, durable StageOutput, observed control-consumption
+watermark and OutputDrained publication. `pairs` appears only on
+`command-created-publish`. Counts and `ms=total/last/max` are decimal saturating
+u64; histogram bins are 0, 1, 2–3, 4–7 and at least 8 milliseconds. Display bins
+clip at `ffff`, with `hs=1`, while internal bins retain full width. Zero age is
+valid with nonzero endpoints; missing/backwards endpoints increment `bad`.
+Mean age is `total/n` when `n` is nonzero; rows fit 256 bytes.
 
-The old v1 name `command-publish-root-observe` actually included waiting inside
-the child before publication. v2 corrects that ambiguity with separate creation
-and publication timestamps. The control watermark has no timestamp, so
-`stage-control-observe` still includes both child consumption and later root
-observation. `stage-output-drained` includes peer TCP acknowledgment retirement
-and publication waiting, not just response emission. These intervals overlap
-and must not be summed into a wire latency estimate. Millisecond bins diagnose
-stages; raw framed TCP remains authoritative for the 1.845 ms GENET target.
-Both Pi endpoints use the absolute `CNTVCT_EL0` epoch and generated
-`TIMER_CLOCK_HZ`. Host tests retain their caller-time fallback; QEMU release
-omits this Pi accounting. External request/response framing is unchanged.
+Version 1's `command-publish-root-observe` included pre-publication waiting;
+version 2 separates those timestamps. `stage-control-observe` includes child
+consumption and later observation; `stage-output-drained` includes peer TCP
+ACK retirement and publication waiting. **Intervals overlap: do not sum them
+into wire latency.** Pi uses absolute CNTVCT with generated `TIMER_CLOCK_HZ`;
+host tests retain caller-time fallback and QEMU omits this Pi accounting.
+External framed TCP measurements remain authoritative for target latency.
 
-The detailed Pi composer/scheduler snapshot belongs to explicit `smp mcs`, not
-`netstats`. The Pi release batch contains 17 lifetime rows plus three global
-idle rows. Version-2 records combine related version-1 rows without dropping
-any measured value:
+</details>
+
+<details>
+<summary>MCS topology, composer/Yield accounting and latest-session evidence</summary>
+
+`smp mcs` labels generated admission `source=generated`, BootInfo `source=kernel`
+and copied live state `source=runtime`. Unavailable state is not a fabricated
+missing registration. Pi live registrations use paired `[smp:registry/v1]`
+rows, indexed by `base` into the same snapshot's ordered non-Worker task rows.
+`count` is one or two; registration/terminal lists match it. Missing generation
+is `none`, terminal `unknown`, not zero-valued evidence. For example:
+
+```text
+[smp:registry/v1] base=0 count=2 registration=present,missing generation0=1/1/1 generation1=none terminal=yes,unknown
+```
+
+The selected four-core Pi Wi-Fi body fits the 64-line synchronous TCP capture
+and 69-line physical body, retaining paired registrations, owner CPU rows,
+passive-timeout receipt, timing/idle records and the end marker. Protocol
+terminal space remains separate. QEMU retains its per-task registration format.
+
+Despite their `netstats:` prefix, the following **17 lifetime rows belong to
+`smp mcs`, not `netstats`**:
 
 ```text
 netstats: mcs_quantum schema=v1 hz=<u64> samples=<u64> material=<u64> periods=<u64> invalid=<u64> invalid_period=<u64>
@@ -479,631 +1321,116 @@ netstats: mcs_budget_guard schema=v2 totals=<u64>,<u64>,<u64>,<u64> pending=<u64
 netstats: mcs_budget_reason schema=v1 cap=<u64> clock=<u64> reserve=<u64> policy=<u64> mask=0x<hex>
 ```
 
-Progress bits are command `0x1`, child `0x2`, stage `0x4`, drain `0x8`,
-ingress `0x10`, token `0x20`, queue `0x40`. Pending bits are command queue
-`0x1`, root output `0x2`, child control `0x4`, child egress `0x8`, child event
-`0x10`, continuation `0x20`, WiFi driver `0x40`, passive admission `0x80`,
-operator `0x100`, recovery `0x200`. These fixed legends are documented here;
-the former `mcs_quantum_progress` and `mcs_pending` legend rows are no longer
-emitted. Every measured counter remains in the snapshot. The `totals` and
-`pending` lists use activation, attached, bootstrap operator, bootstrap driver
-order. The former `mcs_quantum_state`, `mcs_yield_cause_a`,
-`mcs_yield_cause_b` and `mcs_budget_pending` rows are folded into the
-version-2 records above.
+Progress bits: command `0x1`, child `0x2`, stage `0x4`, drain `0x8`, ingress
+`0x10`, token `0x20`, queue `0x40`. Pending bits: command queue `0x1`, root
+output `0x2`, child control `0x4`, child egress `0x8`, child event `0x10`,
+continuation `0x20`, Wi-Fi driver `0x40`, passive admission `0x80`, operator
+`0x100`, recovery `0x200`. Budget lists are activation, attached, bootstrap
+operator, bootstrap driver. Reason bits are cap `0x1`, clock `0x2`, reserve
+`0x4`, policy `0x8`. Former split v1 state/cause/pending records and emitted
+legend rows are folded into these version-2 records and fixed legends.
 
-Three global idle rows follow in `smp mcs`: `mcs_idle schema=v1`
-contains `before`, `after`, `timer_reject`, `clear=<before>/<after>`,
-`last_cut=<0|1|2>` (before enable, after enable, timer rejected), and `mask`.
-Two `mcs_idle_fences schema=v2 base=<0|8> counts=<eight decimal u64 values>`
-rows retain all sixteen fence counters formerly split over four v1 rows and
-count every set fence bit, saturating independently; co-occurring fences
-are not mutually exclusive. Bits 0..15 are inexact topology, unavailable child
+Three global idle rows follow: `mcs_idle schema=v1` has `before`, `after`,
+`timer_reject`, `clear=<before>/<after>`, `last_cut=<0|1|2>` (before enable,
+after enable, timer rejected), `mask`; two `mcs_idle_fences schema=v2`
+`base=<0|8> counts=<eight decimal u64 values>` rows retain all 16 independently
+saturating fence counts. Bits 0–15 are inexact topology, unavailable child
 level, staged IPC, physical input, serial output, display, reboot,
-recovery/containment, handoff, passive admission, local fault, physical response,
-retained output, network work, child publication service (including an owed ACK),
-and timer-enable rejection. These sample the existing predicates without changing them. A clear
-after-enable sample permits the existing wait but does not prove the syscall
-blocked, and timer rejection alone does not identify an inner HAL failure.
-
-Pi live registrations use bounded `[smp:registry/v1]` rows instead of one
-`[smp:mcs/v1] source=runtime task=...` row per task. `base` is the zero-based
-index into this snapshot's ordered generated non-Worker task rows; `count` is
-one or two. Comma-separated `registration` and `terminal` values have exactly
-that count, and `generation0`/`generation1` retain the corresponding decimal
-lease/supervisor/cap generations. Missing registration means `generationN=none`
-and `terminal=unknown`, never invented zero evidence. For example:
-
-```text
-[smp:registry/v1] base=0 count=2 registration=present,missing generation0=1/1/1 generation1=none terminal=yes,unknown
-```
-
-The selected four-core Pi profile's complete WiFi body is 64 lines, including
-all eight paired registration rows, eight owner CPU rows, the passive-timeout
-receipt, all seventeen lifetime MCS timing rows, three global idle rows and
-the end marker. Latest-session rows remain in `netstats`; no diagnostic
-batch is silently omitted to fit a response.
-It fits the existing 64-line synchronous TCP capture and 69-line physical
-body; the protocol terminal uses its existing separate reserve. Registry-busy
-and unavailable accounting states remain explicit. QEMU retains its existing
-per-task registration format. This is a Pi diagnostic text format change;
-consumers must use the versioned registry record and the same snapshot's task
-order rather than assuming a runtime row follows each generated task row.
-
-Pi MCS `smp mcs` also appends `[smp:consumed/v1]` kernel CPU evidence for the
-latest observed TCP lifecycle. The header reports decimal `generation`, `conn`,
-`hz`, boolean `ended`, and hexadecimal `selected`, `pending`, `claimed` role
-masks (root-control bit 0, console-network bit 1, GENET bit 2, CYW43 bit 3,
-SDIO bit 4, serial bit 5, USB bit 6, HDMI bit 7, PCIe bit 8). GENET selects
-seven owners and WiFi eight, so the batch contains at most nine nonempty lines
-including the header. Per-owner `cpu_us` is a
-decimal difference of cumulative kernel Consumed receipts. `cap_gen`, `begin`
-and `end` are hexadecimal pairs; each time pair brackets that owner's actual
-sampling syscall in the generated virtual-counter epoch. `valid=false` makes
-the numeric placeholder unusable as a CPU measurement. Missing samples,
-errors, backwards clocks or totals, and generation changes invalidate a pair.
-Read these retained rows before opening another TCP connection. Observed
-Connected/Disconnected boundaries differ from the host benchmark interval;
-driver-owner sampling is asynchronous and its own wall cost is visible.
-These totals do not localize a packet or prove that a refill was exhausted.
-No rows are emitted during the traffic itself, and QEMU does not collect them.
-`[smp:passive-timeout/v1]` reports the cumulative kernel fault `resumes`, latest
-resettable `last_sc_consumed_us` evidence, and `limit_per_call=1`. Reading it
-performs no kernel operation and changes no recovery state.
-
-Eight `mcs_session*` v1 rows retain the latest observed nonzero TCP connection
-and runtime generation after disconnect, until a different nonzero identity
-is observed. Zero/absent identity never erases this evidence; it is not an
-authentication or acceptance claim. `mcs_session` reports `generation`, `conn`,
-`before`, `after`, `timer_reject` and `clear=<before>/<after>`. Four
-`mcs_session_fences base=<0|4|8|12> counts=...` rows use the same fence bits.
-`mcs_session_operator` separately counts the sampled root serial RX queue,
-partial serial line, partial local-seat line, current local input chunk,
-queued USB bytes and USB readiness/recovery service debt as `serial_rx`,
-`serial_line`, `local_line`, `local_chunk`, `usb_bytes`, `usb_service`.
-These are independently sampled predicates and can co-occur; none changes the
-operator decision. `mcs_session_yield` reports `samples`, `total_us`, `max_us`
-and `invalid` for the existing exact Yield wall-time samples carrying this
-identity. Additive `causes` contains six decimal valid-sample counts ordered
-reserve guard, no productive successor, passive admission, recovery fence,
-operator rotation and other boundary. Invalid samples do not enter these
-counts. Cause counts saturate at `u32::MAX`; the existing aggregate counters
-remain `u64`. Backwards/zero clocks are invalid, and all counts/sums saturate.
-`mcs_session_yield_cut` retains the pre-Yield work context for the first
-maximum-duration valid sample in that session, or `absent=yes`. `cause` is the
-existing exclusive Yield trigger; `pending`, `cmd`, `stage`, `drain` and the
-entry/resume `ticks` pair are hexadecimal. Command, successful output-stage and
-response-drain counts are cumulative runtime counters at the cut. Decimal
-`phase` maps Serial=0, Dispatch=1, ContainmentDiagnostic=2, Network=3,
-LocalSeat=4 and Display=5; `pub` maps unknown=0, observed empty=1 and durable
-child publication=2. This is a bounded root observation before Yield
-preparation, not a synchronized child snapshot or new continuation authority.
-Shorter or invalid samples and disconnect cannot overwrite the maximum.
-The eight rows are emitted only by Pi `netstats`, with no hot-path serial output,
-new counter read or scheduling syscall. Idle observation points remain the
-existing idle-preparation cuts, so zero cuts does not imply an idle-free
-session. Gather these rows after the first raw connection closes and before
-opening another TCP session; later UART diagnostic typing with no active TCP
-identity cannot contaminate them. They still do not prove SC consumption,
-kernel activations, refill exhaustion or that a permitted wait actually slept.
-
-On Pi Wi-Fi, `netstats` also emits `wifi_ack_admission schema=v1` and
-`wifi_ack_last schema=v1`. They retain one latest structurally valid,
-nonfragmented IPv4/TCP ACK-only header (flags 0x10, zero TCP payload; Ethernet
-padding excluded), never payload bytes. `gen` is the Wi-Fi generation;
-`dequeued`, `staged` and `completed` are saturating counts. `runtime_gen` and
-`ingress_seq` identify that ACK's successful copied-page stage and returned
-signal; zero means absent. `consumed=yes` requires the exact child ingress
-completion watermark, and does not prove smoltcp processed or retired the ACK.
-The second row reports source/destination IPv4, sequence and ACK in hex,
-ports in decimal, or `absent=yes`. DPC timing missing/saturation does not discard these
-admission receipts. Each new ACK resets its receipt. A received SYN clears the
-latest header and close receipt to fence TCP tuple reuse without resetting the
-cumulative counts. `wifi_ack_fin schema=v1` adds the full received FIN header
-identity; `wifi_ack_before_fin schema=v1` freezes the latest same-flow ACK's
-sequence, acknowledgment and admission receipt immediately before that FIN.
-A missing same-flow ACK emits `absent=yes`. Repeated FINs with the same flow
-and sequence, closing ACKs and later ingress completions cannot rewrite this
-cut. It is header/admission evidence, not proof of TCP retirement or on-air
-delivery. A new Wi-Fi generation resets all counts and receipts. Collect via serial before another
-TCP connection, then match the exact header against the boot-paired pcap.
-There is no new device operation, timer read, ABI page, queue or capability.
-
-`mcs_quantum*` measures root-control composer quanta, not kernel activations,
-SC refills, or scheduling-context consumption. `run` brackets the composer
-leaf. `period` is start-to-start from the previous valid observed composer
-quantum to the current material quantum; the first observation has no period,
-and a backwards start increments `invalid_period`. A quantum is material when
-progress or pending work exists before or after it. `pending` counts material
-cuts with work pending at entry, while `stalled` requires pending work both
-before and after with no progress. Progress and pending masks use the fixed
-one-bit legends above.
-
-`mcs_yield*` instead measures the exact scheduler hiatus around one explicit
-Yield: the Pi target executes `CNTVCT -> svc -> CNTVCT` in one assembly block.
-Each sample has exactly one trigger class and retains the pre-Yield pending mask
-and lane/identity. The six trigger classes distinguish reserve rejection, no
-productive successor, passive admission, recovery fencing, operator rotation,
-and another explicit boundary. The budget rows retain schema-stable WiFi
-activation, attached, bootstrap-operator, and bootstrap-driver cuts; reason
-bits remain cap `0x1`, clock `0x2`, reserve `0x4`, and policy `0x8`. Exact
-`NaturalPostpone` productive lanes now close on the hard cap or
-incompatible-policy cut, not on a userland clock or reserve estimate; the
-retained clock/reserve fields remain diagnostic schema and historical-image
-evidence rather than current productive admission authority.
-
-Both composer and Yield recorders accumulate raw architectural-counter ticks
-at the exact selected Pi frequency of 54 MHz and convert to microseconds only
-when the explicit snapshot is rendered. Invalid frequency, zero counter
-endpoint, backwards execution, or backwards period is counted separately and
-never enters a valid latency aggregate. The fixed histogram final bucket is
-`>=20000 us`. A large composer period or Yield hiatus with pending work can
-locate an MCS scheduling seam, but it does not by itself prove which kernel
-refill caused it.
-
-All of these rows are Pi-private diagnostic output. Collection does not call
-`SchedContext_Consumed`, wake a task, grant a continuation, retry work, change
-admission, or emit a routine hot-path serial record. QEMU release builds retain
-their existing hot path and command output without these accounting writes or
-rows. Only fresh exact-image TCP, packet, operator, and benchmark evidence can
-establish Pi behavior, performance, August parity, or acceptance.
-
-When the exact Pi direct-GENET generation is active, one `netstats` command
-also runs one bounded causal refresh and emits a complete available snapshot in
-this order:
-
-```text
-netstats: genet_direct ...
-netstats: genet_direct_flags ...
-netstats: genet_direct_before ...
-netstats: genet_direct_before_ring ...
-netstats: genet_direct_irq ...
-netstats: genet_direct_irq_source ...
-netstats: genet_direct_notification ...
-netstats: genet_direct_dpc ...
-netstats: genet_direct_dma ...
-netstats: genet_direct_ring ...
-netstats: genet_direct_peer ...
-```
-
-The summary reports one of `refresh=fresh`, `refresh=ready-stale`,
-`refresh=ready-unverified`, `refresh=ready-missing`, `refresh=timeout`,
-`refresh=rejected`, or `refresh=inactive`; a present replacement is labelled
-`phase=pre-idle-service`. The two
-`before` rows preserve the stable pre-replay owner/ring cut, while the remaining
-rows carry the exact generation's flags, IRQ wake/ack and source state, raw
-receive-boundary notification counts and badge union, DPC counts, hardware DMA
-indices, direct-ring cursors and packets, peer hints, and poison state. The DPC
-row also reports the observed per-packet-slice duration high-water in
-microseconds and the cumulative fresh-command, elapsed-guard, counter-fault,
-attempt-cap, and stalled-retry MCS reason mask for the dense window. These
-fields diagnose bounded service; they do not assert that its Pi WCET or
-throughput target passed. Missing optional records can shorten this diagnostic
-batch and remain missing evidence. `ready-unverified` means no stable pre-replay
-record was available, so a visible post-replay record cannot be proven fresh even
-though the exact DGHO command returned READY. The refresh uses one exact
-idempotent `DGHO` replay,
-which can wake the GENET owner and allow its normal post-command idle service to
-drain durable RX. These rows are therefore causal triage, not a passive
-performance sample. A component field such as `genet_direct_flags active=yes`
-does not select or override the canonical `NET_ACTIVE` backend, and no complete
-or partial batch proves DHCP, ARP, ICMP, TCP, throughput, QEMU parity, or Pi
-acceptance.
-
-On the physical Pi startup screen, the first `Cohesix starting...` tile starts
-the display child's bounded clear of the surrounding U-Boot background. The
-banner stays visible throughout that startup command; clearing does not wait
-for USB readiness or the interactive console. The banner is followed by a
-bounded elapsed-seconds counter refreshed at safe checkpoints about every two
-seconds. Serial cutover does not stop that counter at six seconds: it continues
-through eight and ten seconds while the startup tile remains visible. Normal
-console rendering takes over immediately when available; boot readiness never
-waits for a particular counter value. The isolated display runtime owns both
-the counter and the terminal, with USB and serial retaining operator turns.
-
-On the physical Pi local seat, serial may show `cohesix>` while USB is still
-starting, but HDMI does not show the interactive prompt until USB command input
-is admitted, the display path is healthy, and the canonical
-`Cohesix console ready` rendering has been queued ahead of the prompt. The
-passive `[drivers] USB console ready` timing record may still arrive later and
-does not control that physical rendering order. `USB controller starting...` is
-followed by bounded controller, keyboard-enumeration, or first-report feedback;
-an unchanged stage appears at most once every two seconds. `USB console ready`
-reports the observed stage timings, but it is a passive EventPump record and may
-appear after the local seat has already released the prompt from that same
-readiness transition. Its relative ordering does not gate the prompt. Once
-visible, typed USB bytes update one canonical command row, backspace cannot
-erase the prompt prefix, and held up/down arrows use counter-paced repeat plus
-one desired-row viewport steps. Accumulated rendering debt is coalesced into
-the largest exact symmetric CSI `nT`/`nS` span that fits the bounded 512-byte
-HDMI frame. Receipts are generation-anchored; history eviction, generation
-wrap, invalid anchors, or missing rows collapse to one canonical redraw, and
-pending live-tail bytes cannot be overtaken when scrolling away from the tail.
-If command readiness is invalidated, HDMI
-retracts the prompt and stale console-ready banner while preserving the typed
-suffix, and restores them only after fresh readiness. This changes no command
-grammar or USB/HDMI authority. The isolated USB runtime additionally publishes
-one passive fixed 48-byte old-good receipt for its exact linked controller,
-hub, HID endpoint, interrupt-IN, first-report, and first-byte sequence. Local
-seat does not release endpoint readiness or a pre-proof input byte until both
-the PCIe and USB descriptor/owner proof chains are current; it retains the
-bounded bytes meanwhile and releases them exactly once. A failed service or
-recovery clears that cache, while an outstanding retained attach ticket cannot
-be discarded by a cached-ready shortcut.
-
-### Shared console line protocol
-
-The TCP console and physical console use the same bounded parser and response
-grammar. The generated command inventory is in
-[snippets/cohsh_grammar.md](snippets/cohsh_grammar.md). The canonical protocol
-rules are in
-[INTERFACES.md#target-console-contract](INTERFACES.md#target-console-contract).
-
-For the generated QEMU MCS build, `console-network-runtime` owns the sole TCP listener,
-smoltcp packet state, `AUTH` parsing, and transport framing in a restricted
-child. It forwards only a bounded command after authentication. Root still
-performs every role, ticket, quota, namespace, and command-policy decision and
-returns already-authorized response lines. This internal split adds no command,
-prompt, listener, or host-visible framing change: `cohsh` continues to observe
-the same `OK`/`ERR`/`END` stream. A child standard/protocol fault closes the
-network session fail-closed without taking ownership of the serial or
-local-seat input queues. Console SC exhaustion instead uses native seL4
-postponement and does not manufacture a console Timeout teardown. When no
-authenticated TCP session is active, root services serial and
-then local-seat input first. During an authenticated session it gives bounded
-TCP response flushing priority while continuing to service both physical
-inputs and fatal output.
-
-The selected internal contract is manifest schema 1.19 and console ABI/READY
-v6. Root may authorize one through eight already-ordered response lines in one
-binary `SendBatch` control, but the child still emits one ordinary
-length-prefixed line per replenishment-bounded Session unit. For one exact
-isolated authenticated connection, root captures synchronous HELP, NETSTATS,
-SMP, or CACHELOG output and its exact terminal before publication, then drains
-that immutable response through the same lane. The lane may perform eight
-useful response units before paying exactly one ordinary
-Operator/Runtime/Network debt turn. These are internal scheduling and
-shared-page changes only; clients must not send, parse, or depend on SendBatch.
-In the reverse direction, the child may coalesce up to eight consecutive
-already-authenticated commands for one connection into one bounded
-`CommandBatch` publication. Each command retains its own target timestamp and
-root validates and capacity-reserves the complete batch before dispatch. The
-batch never crosses connection lifecycle events and changes no public command,
-framing, authentication, ordering, or response semantics.
-After each committed frame the child retains one following service cycle, then
-quiesces on a no-progress Session; pending state or capacity failure cannot
-spin. Exact eligible retained work uses local Poll; idle or
-publication-uncredited work goes directly to Wait with no ordinary Yield. The
-child's TCB timeout handler is empty under `NaturalPostpone`, while its standard
-fault remains terminal and its reserved timeout capability/resource stays
-accounted. These scheduling details are likewise invisible to clients.
-
-Full host compatibility is not yet accepted. The fixed one-socket target matrix
-must return HELP 16 total lines, NETSTATS 20, first-call selected-QEMU SMP
-activity 17, and CACHELOG 10 for count nine, then PING and QUIT without
-reconnect, using the preexisting client response timeout. CACHELOG captures one
-immutable bounded snapshot under a single short lock hold; later live-ring
-changes cannot alter the response. Its internal 1920-record ring capacity is
-not a separate five-second promotion gate. Until fresh exact-artifact evidence
-passes the fixed matrix, standard-fault containment, and budget-exhaustion
-postponement liveness/isolation, these commands block
-Stage 03/REST/performance/26e promotion.
-
-This is QEMU-first as-built behavior. It does not claim that the current Pi 4
-network adapter has been moved or that GENET, CYW43, or SDIO has been exercised;
-that hardware wiring and evidence are a separate phase.
-
-- Commands and frames are bounded by the selected manifest.
-- Serial and local-seat USB keyboard ingress retain independent partial-line
-  buffers. Completing or rejecting a line from one physical source does not
-  erase an unfinished line from the other; explicit session termination clears
-  both.
-- Successful commands begin with `OK <VERB>`; for a streaming command the
-  acknowledgement is emitted before any payload. Refusals use
-  `ERR <VERB> reason=<busy|quota|cut|policy>` when that refusal taxonomy
-  applies, with bounded detail where available.
-- Streaming `LS`, `CAT`, and `TAIL` responses end with `END`.
-- An `ERR` has no side effects unless the interface contract explicitly says
-  otherwise.
-- Console `ECHO` uses path-first wire syntax. Interactive `cohsh` exposes the
-  friendlier `echo <text> > <path>` syntax and translates it to the same
-  operation.
-
-## `cohsh`
-
-`cohsh` is a host application. It does not run inside the target and does not add
-authority or protocol verbs.
-
-### Start a session
-
-Provide credentials through the environment or an approved secret-management
-mechanism. Do not commit tokens or put production tokens in example files.
-
-Direct TCP, where `cohsh` is the sole console owner:
-
-```bash
-cargo run -p cohsh -- --transport tcp --tcp-host 127.0.0.1 \
-  --tcp-port 31337 --role queen
-```
-
-REST, where a running gateway is the sole console owner:
-
-```bash
-export COH_REST_URL="http://127.0.0.1:8080"
-cargo run -p cohsh -- --transport rest --role queen
-```
-
-Deterministic in-process development:
-
-```bash
-cargo run -p cohsh -- --transport mock --role queen
-```
-
-For TCP, `cohsh` resolves `--auth-token`, then `COHSH_AUTH_TOKEN`, then
-`COH_AUTH_TOKEN`, and rejects missing or placeholder credentials. For REST it
-resolves the URL from `--rest-url`, `COHSH_REST_URL`, `COH_REST_URL`, or
-`HIVE_GATEWAY_URL`, and write authentication from `--rest-auth-token`,
-`COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, or
-`HIVE_GATEWAY_REQUEST_AUTH_TOKEN`.
-
-REST filesystem operations use a response window composed from the gateway's
-declared broker profile:
-
-```text
-5000 ms queue admission
-+ max(control_response_ms, telemetry_response_ms)
-+ 5000 ms HTTP response-delivery grace
-```
-
-The canonical `120000/120000 ms` Hive Gateway profile therefore uses a
-`130000 ms` client window. `cohsh` accepts an explicit
-`--rest-response-timeout-ms`; when the flag is absent it resolves
-`COHSH_REST_RESPONSE_TIMEOUT_MS` before using the shared canonical default.
-The selected value is applied to the primary REST transport and every pooled
-REST transport and must be no smaller than the composed gateway window.
-Metadata, name resolution, connection establishment, and response-body
-transfer retain separate short bounds. This setting does not add retries or
-change the REST request, response, console, or ACK/ERR/END contract.
-
-`--role` attaches immediately. Without it, the shell starts detached and
-expects `attach <role> [ticket]`. Supported role selectors are `queen`,
-`worker-heartbeat` (alias `worker`), `worker-gpu`, `worker-bus`, and
-`worker-lora`; the selected profile and ticket policy determine whether an
-attachment is allowed. These selectors apply to direct attachments. The current
-REST transport accepts only the local `queen` role, while every operation still
-inherits the gateway's upstream role and optional ticket.
-
-Use `cohsh --help` for command-line options. Generated pool, retry, heartbeat,
-ticket, and client defaults are maintained in:
-
-- [snippets/cohsh_client.md](snippets/cohsh_client.md)
-- [snippets/cohsh_policy.md](snippets/cohsh_policy.md)
-- [snippets/cohsh_ticket_policy.md](snippets/cohsh_ticket_policy.md)
-- [snippets/ticket_quotas.md](snippets/ticket_quotas.md)
-
-These snippets are `coh-rtc` outputs and must not be edited by hand.
-
-### Interactive commands
-
-Run `help` in the shell for the exact inventory compiled into the binary.
-
-| Command | Purpose |
-| --- | --- |
-| `attach <role> [ticket]`, `login ...` | Open an attached session. |
-| `detach` | Close the attached session without exiting the shell. |
-| `ping` | Check the active attachment. |
-| `ls <path>` | List a directory. |
-| `cat <path>` | Read bounded file contents. |
-| `tail <path> [lines]` | Read a bounded tail; `lines` is at most 256. |
-| `log` | Tail `/log/queen.log`. |
-| `log dump <file> [--force]` | Export the retained Queen log to a local file. |
-| `echo <text> > <path>` | Append one validated line. |
-| `spawn <heartbeat\|gpu\|lora> <key=value>...` | Validate role-specific arguments and submit a Queen Worker request. A successful ACK proves request admission only, not READY. |
-| `kill <worker_id>` | Submit a Queen worker-termination request. |
-| `lifecycle <cordon\|drain\|resume\|quiesce\|reset>` | Validate and submit a lifecycle transition. `reset` changes lifecycle state; it is not a platform reboot. |
-| `telemetry push <src> --device <id>` | Upload a bounded telemetry segment or content-reference manifest. |
-| `test [--mode quick\|full\|smp] [--json] [--timeout <s>] [--no-mutate]` | Run the installed Cohesix self-test scripts. |
-| `nettest`, `netstats` | Run network diagnostics through the console grammar. |
-| `reboot` | Request an authenticated Queen platform reboot. |
-| `pool bench <options>` | Run the bounded host-side session-pool benchmark. |
-| `tcp-diag [port]` | Diagnose TCP connectivity in TCP-enabled builds. |
-| `bind <src> <dst>`, `mount <service> <path>` | Apply namespace operations provided by the selected profile. |
-| `quit` | Close the session and exit. |
-
-Payload schemas, control paths, and `/proc` nodes are intentionally not
-duplicated here. Use [INTERFACES.md](INTERFACES.md).
-
-`cat /log/queen.log` includes the bounded trusted boot-audit reserve as well as
-the ordinary retained log, in original sequence order without duplicate copies.
-`log` and default `tail /log/queen.log` still return the newest 64 records;
-explicit tails retain the 1..256 bound. Full CAT can be larger than the ordinary
-ring alone and remains subject to the existing attachment quota and transport
-limits. A boot-audit failure record or an incomplete CAT stream is not complete
-boot evidence; see [DRIVERS.md](DRIVERS.md#8-build-diagnostics-for-developers-not-incidents).
-
-### Session behavior
-
-- Interactive TCP mode reconnects with bounded backoff after a transport loss;
-  the operator must re-establish the attachment when required.
-- Script mode fails the run on an unrecoverable transport or command error.
-- TCP `quit` succeeds only after the client receives exact `OK QUIT`,
-  half-closes its write side, and observes peer EOF on that same connection.
-  A missing acknowledgement, timeout, post-terminal frame, or missing EOF
-  fails script mode; QUIT is never retried on a replacement connection.
-- Heartbeats and retry limits come from generated policy unless explicitly
-  overridden.
-- The `qemu` transport launches the staged QEMU artifacts and is diagnostic;
-  its transport implementation rejects writes. Use TCP or REST for live
-  control-plane writes.
-
-### Self-test modes and report
-
-`test` always performs a preflight ping, then runs the negative script and the
-script selected by `--mode`:
-
-| Mode | Selected script | Intended scope |
-| --- | --- | --- |
-| `quick` | `/proc/tests/selftest_quick.coh` | Fast control-plane health check; this is the default. |
-| `full` | `/proc/tests/selftest_full.coh` | Broader installed regression sequence. |
-| `smp` | `/proc/tests/selftest_smp.coh` | SMP-specific installed checks. |
-
-The negative script is `/proc/tests/selftest_negative.coh`. The default timeout
-is 30 seconds and the hard maximum is 120 seconds. `--no-mutate` skips
-`spawn`, `kill`, and the associated worker telemetry tails; it does not bypass
-the negative checks or any server-side policy. The installed scripts end their
-sessions with `quit`; interactive `cohsh` attempts to restore its previous
-attachment afterward, while an outer `--script` run remains detached.
-
-`--json` emits one JSON object on one line. This example is expanded only for
-readability; `transcript_excerpt` is omitted when no bounded transcript is
-needed:
-
-```json
-{
-  "ok": true,
-  "mode": "quick",
-  "elapsed_ms": 123,
-  "checks": [
-    {
-      "name": "preflight/ping",
-      "ok": true,
-      "detail": "OK ping"
-    }
-  ],
-  "version": "1"
-}
-```
-
-Treat `version` as the report-schema version. Automation must fail the run when
-`ok` is false rather than inferring success from process output text.
-
-### Worker-spawn arguments
-
-The interactive command accepts the three executable Worker declarations:
-Heartbeat, GPU, and LoRA. Arguments use `key=value`; unknown, duplicate, or
-missing keys are rejected before `/queen/ctl` is written. WorkerBus remains a
-model/session-only role: `spawn bus` and `spawn worker-bus` fail deterministically
-without writing `/queen/ctl`.
-
-| Role selector | Required keys | Optional keys |
-| --- | --- | --- |
-| `heartbeat`, `worker`, `worker-heartbeat` | `ticks` | `ttl_s`, `ops` |
-| `gpu`, `worker-gpu` | `gpu_id`, `mem_mb`, `streams`, `ttl_s` | `priority`, `budget_ttl_s`, `budget_ops` |
-| `lora`, `worker-lora` | none | none |
-
-```text
-spawn heartbeat ticks=100 ttl_s=120 ops=500
-spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1
-spawn lora
-```
-
-These commands construct the strict records documented in
-[INTERFACES.md#worker-and-mount-control](INTERFACES.md#worker-and-mount-control).
-An accepted append proves only that the bounded request was admitted. Observe
-the structured record at the generated canonical
-`/shard/<label>/worker/<id>/telemetry` path before reporting lifecycle state.
-Declaration, lifecycle, artifact, receipt, and execution proof are independent
-axes: configured/executable does not mean READY, a host-model record is not QEMU
-proof, and package verification is not execution evidence. The compatibility
-`/worker/<id>/telemetry` path exists only when the generated profile enables the
-legacy alias.
-
-Fleet discovery in SwarmUI and the benchmark harness enumerates the bounded
-shard address space from generated `shard_bits`, then reads each
-`/shard/<label>/worker` directory and the published Workers' telemetry. Empty
-shards produce no Workers. The aggregate `ls /shard` reply is a bounded view of
-up to 64 distinct active shard labels; it is not a complete fleet index.
-Per-shard read failures and malformed or misplaced Worker records remain errors.
-
-### Telemetry file upload
-
-`telemetry push` accepts a non-empty local file with one of these extensions:
-
-| Extension | Declared MIME type |
-| --- | --- |
-| `.txt`, `.log` | `text/plain` |
-| `.json` | `application/json` |
-| `.ndjson` | `application/x-ndjson` |
-| `.csv` | `text/csv` |
-
-For bounded UTF-8 input that fits the selected manifest's segment budget,
-`cohsh` writes `cohsh-telemetry-push/v1` inline records. Binary input, oversized
-UTF-8 envelopes, or input larger than the inline segment budget is represented
-instead by `coh-ref-c/v1` records containing sequence, offset, length, and a
-SHA-256 digest for each host-side chunk. Reference mode transfers the manifest,
-not the referenced file bytes; retain the source file under the deployment's
-content-retention policy.
-
-The acknowledgement reports `seg_id`, record count, encoded bytes, original
-source bytes, and `mode=inline|reference`. Generated limits cap the source,
-reference entry count, reference-manifest bytes, segment bytes, and per-device
-retention; see [snippets/cohsh_client.md](snippets/cohsh_client.md).
-
-## `.coh` scripts
-
-`.coh` is a deterministic line-oriented format interpreted by `cohsh`. It is
-not a general-purpose shell: it has no variables, expansion, branching, loops,
-includes, macros, or runtime downloads.
-
-### Grammar
-
-- One statement per line.
-- Blank lines are ignored.
-- `#` begins a comment, including an inline comment.
-- A normal line is executed by the same handler used at the `coh>` prompt.
-- `EXPECT OK` requires the last response line to start with `OK`.
-- `EXPECT ERR` requires the last response line to start with `ERR`.
-- `EXPECT SUBSTR <text>` and `EXPECT NOT <text>` apply case-sensitive checks
-  to the last response line.
-- `WAIT <ms>` is a local delay capped at 2000 ms; it sends no target command.
-- `WAIT <ms> TAIL <path> SUBSTR <text>` polls authenticated, completed `TAIL`
-  data for a case-sensitive substring. The same 2000 ms bound limits polling;
-  each read retains the transport response timeout. A refusal or transport
-  error fails immediately. It never repeats a mutation, and an acknowledgement
-  alone cannot satisfy the data condition. Subsequent `EXPECT` statements use
-  the final read response. Use this after asynchronous admission before testing
-  READY-only operations, with a ticket that permits reading the selected path.
-- A script contains at most 256 non-empty statements.
-
-Assertions apply to the most recent command response recorded by `cohsh`. A
-failure reports the source line, command, last response, response source, and a
-bounded recent-response history, then exits non-zero.
-
-Example read-only health script:
-
-```text
-# health.coh
-ping
-EXPECT OK
-cat /proc/lifecycle/state
-EXPECT OK
-EXPECT SUBSTR path=/proc/lifecycle/state
-tail /log/queen.log 16
-EXPECT OK
-```
-
-Validate without execution:
-
-```bash
-cargo run -p cohsh -- --check health.coh
-```
-
-Execute against the already selected transport:
-
-```bash
-cargo run -p cohsh -- --transport rest --role queen --script health.coh
-```
-
-The checked-in regression scripts and their transcript fixtures are governed by
-[TEST_PLAN.md](TEST_PLAN.md). Generated scripts such as
-[`scripts/cohsh/boot_v0.coh`](../scripts/cohsh/boot_v0.coh) must be regenerated,
-not hand-edited.
+recovery/containment, handoff, passive admission, local fault, physical
+response, retained output, network work, child publication service (including
+owed ACK), timer-enable rejection. Co-occurring fences are not exclusive.
+A clear after-enable cut permits a wait but does not prove the syscall slept.
+
+Composer `run` brackets its leaf; `period` is start-to-start from the previous
+valid composer observation to the current material quantum. First observation
+has no period; backwards starts increment `invalid_period`. `pending` is
+material work at entry; `stalled` means pending before and after without
+progress. These are not kernel activations, SC refills or CPU consumption.
+Yield timing brackets the Pi's explicit `CNTVCT -> svc -> CNTVCT` interval,
+with one exclusive trigger per sample. Raw 54 MHz counter ticks are converted
+only when rendering. Missing/backwards counters or invalid frequency are
+counted separately; the final histogram bucket is `>=20000 us`. Under selected
+NaturalPostpone, retained clock/reserve fields are diagnostic/historical, not
+productive admission authority. Large wall gaps do not identify a kernel refill.
+
+`[smp:consumed/v1]` is different: retained per-owner differences of cumulative
+kernel Consumed receipts for the latest observed TCP lifecycle. Header decimal
+fields are generation/connection/frequency; `ended` is boolean; selected/pending/
+claimed masks are hex. Role bits 0–8 are root-control, console-network, GENET,
+CYW43, SDIO, serial, USB, HDMI, PCIe. GENET selects seven owners and Wi-Fi eight.
+Per-owner `cpu_us` is decimal; cap-generation and begin/end bracket pairs are
+hex. `valid=false` invalidates numeric placeholders. Missing samples, errors,
+backwards clocks/totals and generation changes invalidate pairs. Asynchronous
+owner sampling and observed connection boundaries differ from host benchmark
+boundaries. Read before another TCP lifecycle replaces the snapshot.
+`[smp:passive-timeout/v1]` retains cumulative `resumes`, resettable
+`last_sc_consumed_us` and `limit_per_call=1`. **Reading these snapshots performs
+no new kernel Consumed/accounting operation.** QEMU does not collect Pi receipts.
+
+Eight latest-session `mcs_session*` v1 rows instead belong to Pi **`netstats`**:
+summary, four fence rows (`base=0|4|8|12`), operator predicates, Yield summary
+and maximum Yield cut. They retain the latest nonzero generation/connection
+after disconnect; zero identity does not erase it. Operator counts are
+`serial_rx`, `serial_line`, `local_line`, `local_chunk`, `usb_bytes`,
+`usb_service`, and can co-occur. Yield summary has samples/total/max/invalid and
+six decimal cause counts in reserve, no-successor, passive, recovery, operator,
+other order. Cause counts saturate at u32 maximum; aggregates at u64 maximum.
+
+`mcs_session_yield_cut` retains the first maximum valid sample or `absent=yes`.
+Pending/command/stage/drain/tick pairs are hex. Decimal phase maps Serial=0,
+Dispatch=1, ContainmentDiagnostic=2, Network=3, LocalSeat=4, Display=5;
+publication maps unknown=0, empty=1, durable child publication=2. A shorter or
+invalid sample cannot replace the maximum. These are pre-Yield root
+observations, not synchronised child snapshots or continuation authority.
+Later serial typing with no active TCP identity cannot contaminate them.
+Zero idle cuts do not prove an idle-free session; these wall measurements do
+not prove consumption, refill exhaustion or that a permitted wait blocked.
+
+</details>
+
+<details>
+<summary>Pi poll-time, Yield trace and slow receive intervals</summary>
+
+`smp poll-time` starts with eight rows: a `poll_time schema=v1` header with
+decimal generation, connection, frequency and invalid count, then seven phases
+`serial`, `dispatch`, `containment`, `network`, `local-seat`, `display`,
+`between`. Phase-row `n`, `sum`, `max`, `cmd` and `ticks` are hexadecimal.
+Sum/max are microseconds; `cmd` is the accepted-command count at the maximum,
+and `ticks` brackets it. These wall intervals include preemption; `between`
+includes work/waits outside ordinary observed polls. The exclusive post-Yield
+passive-admission poll is deliberately not instrumented. The latest nonzero
+identity is retained after disconnect. Reading does not reset CPU accounting.
+
+`yield_trace schema=v1` follows with up to 32 earliest valid explicit Yield
+intervals for that session. Header generation/connection/kept/total/omitted/
+invalid are decimal; row `n`, `ctx`, `phase`, `pub`, `hz` are decimal and
+pending/command/stage/drain/tick fields hex. `cause` names the existing trigger;
+`ctx=0` means unavailable context. Invalid intervals are counted, not included.
+A zero kept count or omitted tail cannot establish that no scheduling delay
+occurred. Context bits and low-word wrap rules are exact-image diagnostic
+contracts, not permission to change scheduling decisions; consult
+[the recorder implementation](../apps/root-task/src/pi4_mcs_recorder.rs).
+
+A `receive_trace schema=v1` header and up to 16 slowest receive/endpoint-handler
+brackets follow, descending by whole microseconds with earlier samples first
+on ties. Header counts and `sum_us`, row `n`, `us`, `hz` are decimal; row `cmd`
+and tick pairs are hex. Outcome is `empty`, `endpoint`, `fanin` or
+`unavailable`. Two counter reads bracket an existing receive only while a
+nonzero Pi TCP identity is live; no receive is added. These spans include
+endpoint handling and preemption, not necessarily sleep. Invalid clocks are
+counted; omitted means valid observations outside bounded retention. The whole
+command is bounded to 58 body rows before its terminal acknowledgement.
+
+</details>
 
 ## Compiler-generated reference
 
-The following marker-delimited blocks are verified mirrors of the linked
-standalone `coh-rtc` snippets. They are retained for generated-document and
-compliance guards. Do not edit their contents by hand; change manifest/IR
-inputs and regenerate every affected output.
+These marker-delimited blocks are retained mirrors of the standalone
+`coh-rtc` snippets. They describe the generated configuration, not proof that
+your currently running target has that configuration. Do not edit their
+contents by hand; update manifest/IR inputs and regenerate affected outputs.
+In particular, the shared grammar is not the complete host dispatcher and
+its path-first `echo` is not interactive `cohsh` syntax.
 
 <!-- markdownlint-disable MD022 MD031 MD032 MD033 -->
 
@@ -1384,32 +1711,27 @@ _Generated from `configs/root_task.toml` (sha256: `91a0c04d4d6591ac87f6e228ba4f0
 
 <!-- markdownlint-enable MD022 MD031 MD032 MD033 -->
 
-## Related documentation
+## Implementation and related references
 
-- [HOST_TOOLS.md](HOST_TOOLS.md) — host applications and safe composition.
-- [API_GUIDELINES.md](API_GUIDELINES.md) — REST projection and authentication.
-- [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md) — Python client backends.
-- [FAILURE_MODES.md](FAILURE_MODES.md) — evidence-led recovery.
-- [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) — canonical live runbook.
-- [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) — advanced operator workflows.
-- [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md) — role and namespace authority.
+| Contract | Source or authoritative guide |
+| --- | --- |
+| Host options, environment resolution, script/trace startup | [cohsh main](../apps/cohsh/src/main.rs) |
+| Actual host dispatcher, payload builders, scripts, self-tests and local file export | [cohsh core](../apps/cohsh/src/lib.rs) |
+| Shared target parser and bounds | [cohsh-core command parser](../crates/cohsh-core/src/command.rs) |
+| TCP connection, acknowledgement and close handling | [TCP transport](../apps/cohsh/src/transport/tcp.rs) |
+| Gateway projection and caller binding | [REST transport](../apps/cohsh/src/transport/rest.rs), [API guidelines](API_GUIDELINES.md) |
+| Worker role/path projection and independent state axes | [Worker helpers](../apps/cohsh/src/worker.rs) |
+| Installed test content | [resources/proc_tests](../resources/proc_tests) |
+| Namespace schemas and control payloads | [Interfaces](INTERFACES.md) |
+| Production mutation/delegation and retry identity | [M27a authority](M27A_AUTHORITY.md) |
+| Host-side GPU work, bridges, gateway and UI | [Host tools](HOST_TOOLS.md) |
+| Live workflow and advanced recipes | [Operator walkthrough](OPERATOR_WALKTHROUGH.md), [Operator recipes](OPERATOR_RECIPES.md) |
+| Evidence packs, offline inspection and trace contracts | [Operator evidence](OPERATOR_EVIDENCE.md) |
+| Signed evidence, `/proc/attest`, verifier trust and unavailable modes | [Attestation](ATTESTATION.md) |
+| Image-qualified release and performance checks | [Test plan](TEST_PLAN.md), [Benchmarks](BENCHMARKS.md) |
 
-## Read-only operator utilities (Milestone 27)
-
-`coh inspect`, `coh diff`, `coh trace`, `coh attest`, and the `coh bundle`
-alias share the canonical evidence-pack and trace contracts. `coh evidence
-timeline --scenario incident` now emits additive `case.json`/`case.md`.
-Live `cohsh --record-trace` supports TCP and REST; replay stays offline.
-See [Operator inspection and evidence](OPERATOR_EVIDENCE.md) for arguments,
-exit codes, exact ordering, generated bounds, artifact classes, and the
-outstanding signed-attestation dependency.
-
-## Signed-device evidence availability
-
-The [signed evidence contract](ATTESTATION.md) defines the schema-1.20
-implementation modes, bounded `/proc/attest` discovery, verifier-owned trust
-policy, TPM2 quote verification, retained pack records and the stock Pi 4
-positive-attestation exemption. Optional profiles report unavailable or
-measurement-only; development ticket keys never become attested production
-keys. `coh attest --trust-policy <file>` verifies signatures, and
-`--input <pack>` remains explicitly offline.
+When changing the CLI, update the owning parser/transport, affected tests and
+this guide together. Keep examples explicit about their prompt, transport,
+authority, side effects and success condition. Regenerate the marker blocks
+instead of editing them. Documentation examples are procedures, not records
+that a particular Queen or release has passed them.
