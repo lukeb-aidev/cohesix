@@ -1,442 +1,1335 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Catalog Cohesix host tools and define their safe composition rules. -->
+<!-- Purpose: Explain how to install, connect, operate and troubleshoot the Cohesix host-tool suite without widening target authority. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Host Tools
 
-M27a requires delegated tickets on every mutating REST route used by this
-suite, including `coh`, `cohsh`, `host-ticket-agent`, GPU/sidecar bridges,
-SwarmUI and Python clients. Configure request auth and `COH_REST_TICKET` (or the
-client's explicit ticket binding). `cohsh --mint-ticket` supports bounded
-`--ticket-write-scope`, `--ticket-ttl-s` and `--ticket-ops`; ticket signing keys
-may be explicit `env:`/`file:` references. `cas-tool pack --signing-key` accepts
-the same reference syntax, with `COH_CAS_SIGNING_KEY_REF` as the environment
-default. See [M27a migration and release errata](M27A_AUTHORITY.md).
+# Cohesix host tools — user guide
 
+Use this guide to operate a Queen from a Mac or Linux host, share its connection
+between tools, publish host observations, run authorised host work, and retain
+results for later review. The Queen runs Cohesix; **the tools in this guide run
+on your host, not at the Queen's serial prompt**. CUDA, model files, containers,
+REST and the desktop UI remain host-side.
 
-The in-process `cohsh` transport, including Hive Gateway `--mock`, defaults
-`TAIL /log/queen.log` to the newest 64 records, matching the operational target.
-Explicit requests retain the existing 1..256 line bound; CAT still reads the
-complete model file. Other paths retain their existing tail behavior. The
-native 3,000-Worker Conditional E comparator exposed the former unbounded model
-default: its growing log exceeded the unchanged 32 KiB response ceiling.
-The benchmark workload, request byte limits, population, retry policy and error
-budget remain unchanged after the model correction; the failed run is retained.
+Start with [Quickstart](QUICKSTART.md) to install a matching host bundle and
+boot a target. Then follow [Connect and verify](#connect-and-verify). For normal
+work involving more than one tool, use a gateway rather than opening competing
+TCP sessions.
 
-For this restoration the complete host-tool compatibility review covers `coh`,
-`cohsh`, `coh-status`, Hive Gateway, SwarmUI, `gpu-bridge-host`,
-`host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, and
-`console-ack-wire`, plus `tools/cohesix-py`, `.coh` scripts, the REST performance
-harness and M26e pressure runner. Only the in-process `cohsh` implementation
-changes. Gateway and host clients inherit the bounded model result; direct TCP,
-Python implementations, generated contracts, namespaces, acknowledgements and
-benchmark reports require no changes. This conformance repair supplies no
-physical hardware or live provider proof.
+This guide describes the current source interfaces. An older release can have
+different options, credentials or authority policy. Keep its binaries and
+configuration together, check its `--help`, and read the
+[M27a migration notes](M27A_AUTHORITY.md#release-migration-and-historical-errata)
+before using historical deployment examples. Published fixture credentials are
+not deployment credentials.
 
-Cohesix keeps CUDA, NVML, container integrations, REST, desktop UI, packaging,
-and automation on the host. Host tools may perform local work, but every target
-read or mutation remains a projection of the documented console and Secure9P
-semantics. They do not create new in-target listeners or authority paths.
+## Find the right tool
 
-This document owns the host-tool catalog and composition rules. Command grammar
-belongs in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md), REST behavior in
-[API_GUIDELINES.md](API_GUIDELINES.md), and the runnable live sequence in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). Task-oriented evidence,
-mount, ticket, federation, lifecycle, and PEFT procedures live in
-[OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
+| Your job | Tool or workflow | Where the effect occurs |
+| --- | --- | --- |
+| Browse the Queen, issue commands or run a checked script | [`cohsh`](#cohsh) | Target, through TCP or REST |
+| Share one Queen between a shell, UI and automation | [`hive-gateway`](#hive-gateway) | Host service owning the target connection |
+| Inspect state, compare captures or export evidence | [`coh`](#coh), [evidence workflow](#capture-and-review-evidence) | Target reads and local files |
+| Use existing file-oriented software | [`coh mount`](#mount-a-namespace) | Host FUSE mount of permitted target paths |
+| Discover a real GPU and publish its inventory | [`gpu-bridge-host`](#gpu-bridge-host) | Discovery on the GPU host; snapshot on the Queen |
+| Run a local program after checking a GPU lease | [`coh run`](#run-a-host-program) | The host where `coh` is running |
+| Export a LoRA job and manage an adapter registry | [`coh peft`](#manage-peft-adapters) | Export reads, host registry and GPU projection |
+| Publish Docker, systemd, Kubernetes or other host observations | [`host-sidecar-bridge`](#host-sidecar-bridge) | Observations of the publishing host |
+| Execute admitted, allowlisted host actions | [`host-ticket-agent`](#host-ticket-agent) | The host running the agent |
+| Package and upload a small CAS update | [`cas-tool`](#cas-tool) | Local bundle, then target update store |
+| View the hive and use a graphical operator console | [SwarmUI](#swarmui) | Host desktop, using the same target contracts |
+| Integrate Cohesix into a Python application | [Python package](#cohesix-python-package) | Explicit REST, TCP, filesystem or mock backend |
 
-See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
-evidence terms.
+The eight operator executables are `cohsh`, `coh`, `hive-gateway`,
+`gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`, `cas-tool` and
+`swarmui`. Shared crates such as `coh-status`, `sidecar-bus` and
+`console-ack-wire` support the suite; you do not need to start additional
+services for them.
 
-The Pi `[smp:consumed/v1]` diagnostic rows extend only explicit `smp mcs` text.
-The host-tool catalog, `tools/cohesix-py`, generated integration contracts and
-raw/REST benchmark workloads retain their existing framing, authentication,
-namespace, quota, report and acceptance contracts. Consumers may retain these
-lines as diagnostic text; `valid=false` and unfinished owner intervals must
-not become CPU utilization or performance claims. The field contract is in
-[USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
+**In this guide:** [Setup](#set-up-your-host) ·
+[Connection ownership](#choose-one-live-topology) ·
+[First connection](#connect-and-verify) ·
+[Write credentials](#authentication-layers) ·
+[Tool reference](#tool-catalog) ·
+[Troubleshooting](#troubleshooting) ·
+[Shutdown](#shut-down-without-losing-state) ·
+[Release maintainer appendix](#release-factory)
 
-The complete host-tool catalogue (cohsh, coh, hive-gateway, swarmui,
-gpu-bridge-host, cas-tool, host-ticket-agent and host-sidecar-bridge), Python
-SDK/playbooks and raw/REST benchmark scripts retain opaque diagnostic bodies;
-none parses the retired Pi per-task registration rows or static bit legends.
-The Pi normalizer preserves the new `[smp:registry/v1]` records. The compact
-Pi MCS body changes diagnostic text only; framing, authentication, generated
-interfaces, namespaces, quotas, workloads, report schemas and thresholds need
-no change. Boot-video retention affects the generated Pi boot script and its
-handoff check, with no host-tool API change.
+## Set up your host
 
-Empty AuditFS streams are verified with a positive one-byte read allowance,
-then saved as empty files. Export cursor size zero never becomes a zero-byte
-REST request or a fabricated capture. This host-only edge-case repair changes
-`coh`; the rest of the tool suite, Python SDK, benchmark workloads and target
-contracts retain their current limits and semantics.
+### Use one matching installation
 
-The default shared session allowance is 8 MiB. A complete retained Queen log
-can exceed the former 128 KiB allowance before any other operator reads.
-All gateway clients consume the same upstream ticket budget; 8 MiB permits
-several full captures and ordinary work while retaining a finite ceiling.
-The compatibility review covers cohsh, coh, hive-gateway, native SwarmUI,
-gpu-bridge-host, host-sidecar-bridge, host-ticket-agent, cas-tool, coh-status,
-sidecar-bus, console-ack-wire, the Python SDK and playbooks, and raw/REST and
-Worker pressure benchmarks. Regenerated host defaults, policy fingerprints,
-Python wheel and native target profiles change together. CLI grammar, REST
-framing, explicit ticket attenuation, benchmark workloads and acceptance
-thresholds require no changes. Libraries keep their owning API contracts.
+For a release installation, extract the Mac or Linux host archive into its own
+directory and follow the bundle's `QUICKSTART.md`. The Pi image archive does
+not contain host executables: operating a Pi also requires the appropriate
+Mac or Linux host bundle. From the **host bundle root**, prepare and check the
+runtime:
 
-## Generated integration truth
+```bash
+./scripts/setup_environment.sh
+./scripts/setup_environment.sh --check
+source .venv/bin/activate
+export COH_BIN="$PWD/bin"
+```
 
-Passive Heartbeat evidence compatibility: the shared host validator and Python
-collector accept zero completion sequence for a freshly READY Heartbeat that
-has received no workload Call. GPU/LoRA completion and receipt requirements,
-all lifecycle/fault outcomes, exact identities and evidence hashes remain
-required. This fixes the evidence imported by Hive Gateway and SwarmUI; the
-other host tools and `tools/cohesix-py` already transport zero sequences without
-changing their meaning. No target, manifest, raw benchmark or console API changes.
+The first command can install host packages. The second checks an existing
+installation. Neither installs an NVIDIA driver or builds a Queen image.
+Verify the archive's `MANIFEST.sha256` as described in Quickstart before
+running its contents.
 
-Worker log transport compatibility review: cohsh, coh, hive-gateway, swarmui,
-gpu-bridge-host, cas-tool, host-ticket-agent, host-sidecar-bridge and
-`tools/cohesix-py` continue transporting bounded diagnostic lines without
-interpreting Worker proof fields. Their APIs and generated contracts are
-unchanged. `scripts/lib/worker_log.py`, the QEMU qualification runner, Worker
-evidence collector and REST benchmark harness reassemble the bounded fragments
-and hash the actual authenticated exports separately from UART/GDB. Raw TCP
-benchmark workloads and acceptance thresholds are unchanged.
+For an already built source checkout, work from the **repository root**:
 
-Pi release build-marker compatibility review: the complete host-tool catalogue,
-`tools/cohesix-py`, raw/REST benchmark scripts, and generated contracts need no
-interface or workload change. The existing sealed `[BUILD]` line is published
-once at serial-console readiness through the admitted driver. The canonical
-serial and image-identity validators keep their exact-marker-before-prompt
-requirement; no parser, threshold, or acceptance condition is relaxed.
+```bash
+source "$HOME/.cargo/env"
+source .venv/bin/activate
+export COH_BIN="$PWD/out/cohesix/host-tools"
+```
 
-`coh-rtc` compiles
-[`configs/host_integration_acceptance.toml`](../configs/host_integration_acceptance.toml)
-into the exact
-[`host-integration-dependency/v1`](../configs/generated/host_integration_dependency.json)
-graph. The generated [support table](snippets/host_integration_dependency.md)
-binds each advertised host binary, library API, use case, and built-in Python
-playbook to its required mode, package, evidence lane, and acceptance owner.
-Executable-Worker proof, provider availability, package presence, mock or
-dry-run success, and use-case promotion are independent states.
+When those binaries do not yet exist, follow
+[Build from source](QUICKSTART.md#build-from-source). Source developers can
+substitute `cargo run -p TOOL --` for `"$COH_BIN/TOOL"`. FUSE and GPU backends
+are build features: a minimal Cargo build is not necessarily equivalent to a
+native release build. Use the selected manifest's generated configuration,
+not policy copied from a different target or release.
 
-Target scheduling and service-compartment details are intentionally absent
-from this catalogue because they do not change host-tool composition. Host
-tools consume the stable console, namespace, REST, and generated target-profile
-contracts. Use [Roles and Scheduling](ROLES_AND_SCHEDULING.md) for target
-temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
-refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
+The examples below use **Bash**. In each new terminal, return to the same
+installation root and set `COH_BIN` and the relevant connection variables.
+Variables defined in one terminal are not automatically available in another.
+`COH_BIN` and `COH_TARGET_HOST` below are conveniences for these examples, not
+settings automatically understood by every executable.
 
-Pi ec3b display-continuation compatibility review: `cas-tool`, `coh`, `cohsh`,
-`gpu-bridge-host`, `hive-gateway`, `host-sidecar-bridge`, `host-ticket-agent`,
-`swarmui`, `tools/cohesix-py`, `.coh` workloads and
-`scripts/rest_perf_harness.py` retain their interfaces and operation counts.
-The additive explicit USB command/wait/progress rows are ordinary diagnostic
-payload; no consumer treats them as readiness or benchmark authority. No host
-implementation, REST schema, authentication, quota, retry, generated manifest
-or benchmark-report change is required.
+### Check the local tools
 
-The Pi-only GENET-to-console direct data plane is a private target transport
-change. Its optional causal diagnostic adds seventeen ordered
-`netstats: genet_direct*` rows without changing a command, listener, authentication,
-namespace, REST request/response, library API, workload, or report schema. The
-captured Pi-wired `cohsh` fixture includes the seventeen rows, including the raw
-receive-boundary notification discriminator and the v6 maximum-slice counter
-timestamps, including Signal entry/return and RX retirement, direction/cursor
-and optional TCP header tuple. The Pi trace
-normalizer classifies them as wired-driver evidence before generic network
-records and keeps legacy captures without them parseable. Network-state and
-TCP-authentication summaries explicitly exclude these observational rows: the
-packet tuple's `src=` must not replace canonical `NET_ADDR_SRC`, and component
-flags must not replace `NET_ACTIVE` or manufacture authentication proof. Partial
-batches remain individual observational rows. Parsing does not assert batch
-completeness or promote a partial capture to complete causal evidence. The
-one-shot DGHO refresh may
-wake the owner and enable its normal idle RX service, so neither the normalized
-rows nor their before/after delta is passive performance or acceptance proof.
+```bash
+"$COH_BIN/coh" --help
+"$COH_BIN/cohsh" --help
+"$COH_BIN/hive-gateway" --help
+"$COH_BIN/coh" doctor
+```
 
-The exact-d7fab follow-up under
-`m26e-driver-runtime-mcs-port-and-cyw43-coexistence` and
-`m26e-console-network-service-isolation` also advances existing copied WiFi
-NetData RX admission through every legal observable HAL transition. These changes
-preserve the console grammar and framing, AUTH/ATTACH and terminal semantics,
-Secure9P namespaces, role/ticket/cursor bounds, REST endpoints and deadlines,
-generated profiles, and physical-driver authority. The separately versioned
-GENET diagnostic advances from v5 to v6 while retaining its 320-byte extent,
-128-byte maximum-slice receipt and commit offset. Three formerly reserved words
-now distinguish peer Signal entry/return and RX retirement. It is decoded only by
-the paired target runtime and root reader, not by a host binary or Python API.
-Its timestamps measure elapsed counter intervals, not CPU use or packet arrival.
+`coh doctor` checks local policy/ticket, mount, GPU and runtime prerequisites.
+**It is not a target connection test:** its implementation does not use the
+connection options to probe the Queen. A missing optional GPU or FUSE
+prerequisite is different from a failed TCP connection; read the individual
+check results.
 
-The affected host surfaces are
-[`pi4_trace_normalize.py`](../scripts/pi4_trace_normalize.py), its
-[legacy/current/partial diagnostic fixtures](../tests/test_pi4_trace_normalize.py),
-and the [Pi-wired cohsh fixture](../apps/cohsh/tests/tcp_cli_script.rs). The
-normalizer retains legacy eleven-row and sixteen-row captures and current
-seventeen-row captures without assigning acceptance authority to any version.
-The new final `genet_direct_slice_rx` row reports `notify_due`,
-`signal_enter_ticks`, `signal_return_ticks` and `retired_ticks`; absent samples
-are zero and the existing presence mask distinguishes absent or empty evidence.
-The `cohsh` fixture verifies all seventeen diagnostic rows within the unchanged
-terminal-delimited response.
-No production `cohsh` transport change is required.
+For a deliberately simulated local check:
 
-The complete implementations of `coh`, `cohsh`, `coh-status`, Hive Gateway/REST,
-SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, sidecar
-bus, CAS tooling and `console-ack-wire` were reviewed and require no further
-compatibility change. The same review covers all `tools/cohesix-py` filesystem,
-TCP, REST and mock backends, typed helpers and playbooks; generated-profile and
-`coh-rtc` consumers; every `.coh` workload; Pi serial/gate helpers and driver
-model comparison; the M26e QEMU pressure runner; REST benchmark workloads,
-measurement arithmetic, evidence predicates and report readers. None requires
-an implementation, generated-output, workload or schema change for this batch.
-In particular, the existing explicit Pi gateway profile, canonical READY census,
-TAIL cursor accounting, pool/backpressure bounds, retries and timeouts remain
-unchanged. GENET diagnostic rows do not replace the harness's exact boot/handoff,
-authentication, Worker or pressure proofs. Host compatibility and a QEMU canary
-do not establish improvement on the next physical Pi image.
+```bash
+"$COH_BIN/coh" doctor --mock
+"$COH_BIN/cohsh" --transport mock --role queen
+```
 
-The Pi gate
-wrapper now preflights the canonical authenticated peer, selects only its
-command-bound exact DHCP lease on the required WiFi or GENET lane, starts that
-peer after a nonzero `nettest` admission, and still requires an exact
-same-generation target terminal after the bounded observation window.
-`pi4_serial_reboot.py` requires the clean staged
-identity sidecar and exact sealed marker, validates the exact current bound
-WiFi or wired address and its host route (`en0` for WiFi, canonical
-`192.168.10.1/24` on `en8` for GENET) plus canonical `cohsh`, Queen manifest, and
-`boot_v0.coh` inputs before acquiring the UART. Both controlled live paths reuse
-one asynchronous authenticated peer only after the target admits a nonzero
-nettest run generation. The Queen secret is passed only in the child
-environment and is
-redacted from the serial transcript; the generation-matched target terminal
-remains authoritative and any invalid address, peer failure, or incomplete
-terminal fails closed. The helper also takes two activity samples, and the REST
-performance harness accepts only terminal `OK AUTH`. These are bounded host
-evidence-truth changes, not wire, workload, or report-schema changes. The
-focused `cohsh` capture fixture and Pi trace-normalizer/helper tests change;
-`coh`, `coh-status`, Hive Gateway/REST, SwarmUI, the remaining host tools,
-`tools/cohesix-py`, generated-profile consumers, `.coh` workloads, benchmark
-arithmetic, and report schemas were reviewed and require no implementation
-change. Pi build selection and generated private ABI/resource records remain
-unchanged. A fresh physical benchmark is still the only Pi performance
-authority.
-
-The post-069 productive-micro-unit candidate is likewise private to Pi target
-scheduling. Direct GENET's command quiesce and exact response-control release,
-copied WiFi's one-shot transient publication credit, and the bounded causal
-MCS accumulators change no console command, TCP/REST framing, namespace,
-authentication, generated manifest/profile contract, Python API, `.coh`
-grammar, benchmark workload, arithmetic, evidence record, or report schema.
-Pi `netstats` adds six fast-path rows (`cyw43_publication`,
-`cyw43_publication_cut`, `cyw43_productive_window`, `genet_compact`,
-`genet_compose`, and `genet_defer`)
-plus five isolated-seam rows only when that timing snapshot is available. The detailed
-25-row composer/Yield/idle-fence batch is intentionally restricted to explicit `smp mcs`;
-it is not appended to ordinary `netstats`. Existing key/prefix-based consumers
-ignore these unknown additive rows unless they are later taught to consume
-them; no current parser derives readiness, quarantine, throughput, latency, or
-acceptance from their presence. `cyw43_productive_window` is diagnostic-only:
-its exact-identity `opened`, `idle_admitted`, and `closed` counters and additive
-`ready_rechecks` count grant no refill, retry, network readiness, or device
-authority. Every aggregate compact Deferred increments
-exactly one `genet_defer` reason counter, so the reason-counter sum equals the
-aggregate `genet_compact deferred` count; `compose_open` represents typed
-`NotSealed`. The row is classification only, not a retry or admission signal.
-The Pi-only accounting writes and runtime rows are absent from the QEMU
-release hot path and output. A future consumer must
-add bounded-row and missing/invalid-evidence fixtures rather than treating row
-absence as success.
-
-The root/SDIO independent-generation repair changes only private Pi runtime
-identity validation. Its five additive `mcs_idle*` rows sample existing root
-idle predicates; they do not change those predicates or grant acceptance.
-The normalizer's passive-component fixture verifies that these rows neither
-replace network selection nor manufacture TCP/nettest readiness. Review of
-the complete host-tool and Python-library catalogue, generated contracts,
-`.coh` workloads, pressure/benchmark scripts and report readers finds no
-other affected wire field, parser requirement, public API or report schema.
-
-The a176 four-boot follow-up adds seven passive `mcs_session*` rows to Pi
-`netstats` (moved from `smp mcs` after exact 55fc physical backlog overflow).
-They retain the latest nonzero TCP identity's idle fences, precise
-operator predicates and existing Yield intervals across disconnect, excluding
-later serial-only typing. The complete host suite listed below, Python library,
-`.coh` workloads, profile consumers, REST/raw workloads, benchmark arithmetic
-and report schemas were reviewed again. The trace normalizer and its
-passive-component fixture also change: packet
-`src` tuples cannot replace address provenance, whose `src` alias belongs only
-to `netstatus` and `[smp] activity net`. This fixes a reproduced diagnostic
-interpretation error, including earlier Wi-Fi dequeue rows; no API, workload
-or report schema changes. The new rows are optional
-evidence, not transport acceptance, SC-consumed time or scheduling authority.
-
-The exact-0783 two-WiFi/two-GENET follow-up adds one eighth session row for
-the longest valid Yield's pre-Yield work context and two WiFi FIN-cut rows
-for the preceding same-flow ACK admission receipt. Existing row fields remain
-unchanged. The passive-component normalizer fixture covers all three additions,
-including the new packet `src` tuple, without changing network provenance or
-manufacturing TCP/nettest proof. The complete host catalogue, `cohesix-py`
-backends and helpers, `coh-rtc` and generated-profile consumers, `.coh` scripts,
-REST/raw performance harnesses and report readers need no implementation,
-API, workload, timeout, generated-output or report-schema change. These optional
-Pi diagnostics retain evidence across teardown; they do not claim ACK retirement,
-SC consumption or measured performance improvement.
-
-The complete `coh`, `cohsh`, `coh-status`, Hive Gateway/REST, SwarmUI, GPU
-bridge, host-ticket agent, sidecar and sidecar bus, CAS tooling, Pi gate and
-serial helpers, trace normalization, `tools/cohesix-py`, generated-contract
-consumers, every `.coh` script, the M26e pressure runner, benchmark workloads,
-and report readers were reviewed for this candidate. None needs a behavior,
-fixture, generated-output, workload, or schema change. Targeted host and QEMU
-checks can reject shared regressions, but the 069 observations remain
-historical convergence input and only a fresh exact-candidate Pi benchmark can
-establish WiFi or GENET performance.
-
-The finite GENET ownership-boundary IRQ rearm, attached-CYW43 distinct-phase
-composition, Wi-Fi-bootstrap USB/serial/display fairness, and physical-Pi MCS
-HDMI finite-frame lane are private target scheduling and driver-lifetime
-changes. They add no command, wire field, namespace, Python API, workload, or
-report field. The bounded
-`[smp] driver v=1 part=...` rows are an operator-only projection; trace and
-benchmark tooling continues to consume the unchanged canonical
-`DRIVER_TASK_COUNTER` boot/qlog record. The generated profile contracts,
-`coh-rtc` outputs, Pi manifest/resource allocation, `tools/cohesix-py`, and
-benchmark scripts therefore require no change. Host tests can validate those
-bounds and parsing invariants, but only a fresh exact-image Pi run can establish
-GENET IRQ progress, Wi-Fi/USB/HDMI latency, TCP/script success, or performance.
-
-The physical-Pi MCS queue-only NetData op8 root episode changes only private
-HAL admission and stable-terminal retirement. Review of `coh`, `cohsh`,
-`coh-status`, Hive Gateway/REST, SwarmUI, GPU/sidecar bridges, host-ticket agent,
-CAS tools, Pi gate/serial helpers and trace normalization finds no exposed
-field or behavior contract requiring a host change. `tools/cohesix-py`,
-generated-contract consumers, `.coh` scripts, the REST/performance harnesses
-and report readers keep their existing APIs, framing, workloads and schemas.
-Existing RX timing receipts and unchanged raw/pressure workloads measure the
-candidate; no host pacing, retries or acceptance thresholds are adjusted.
-
-The Pi HDMI startup tile now supports a bounded two-second elapsed-status
-refresh before ordinary terminal takeover. This changes only the internal
-empty HDMI frame completion: a due pre-terminal raster returns `Progress`
-with its cell count; an inactive or early poll remains `Idle`. Its existing
-opcode, layout, generated budget, capability authority and ordinary frame
-contract remain unchanged. The complete `coh`/`cohsh`, Hive Gateway/REST,
-SwarmUI, host bridge/tool catalog, `tools/cohesix-py`, `.coh` scripts,
-serial/build/Pi evidence helpers, generated-profile consumers, performance
-harness workloads/arithmetic and report readers were reviewed. None consumes
-this display-private completion, so none requires behavior, fixture or schema
-changes. Root and display tests cover its bounded clock/raster semantics;
-only exact-image Pi evidence can prove visible two-second updates, clean
-terminal takeover, liveness and performance.
-
-The e11b follow-up keeps that counter scheduled across serial cutover through
-the ordinary retained Display phase until terminal takeover. It also repairs
-an unreceived initial USB/HDMI endpoint hint using the existing exact ticket,
-previous idle child record and generated wake-period gate. The complete host
-catalog, `tools/cohesix-py`, `.coh` operations, raw TCP and REST harnesses,
-generated consumers and report readers were reviewed together: their APIs,
-commands, framing, workloads, retries and schemas need no change. Existing
-USB command/wait/progress rows and send counters qualify the hardware repair;
-source checks or a successful flash cannot claim target performance.
-
-The fabc657cb four-boot follow-up changes Pi TCP packet scheduling only: keep
-the pinned stack's bounded ACK timer, permit response/ACK coalescing, and keep
-Nagle disabled. The direct-GENET command wait preserves due protocol timers
-and peer-ready retained egress in at most three existing child units while
-keeping its background-work latch closed. The NineDoor fault line adds existing raw kernel operands
-after its unchanged generation/class/sequence prefix. The complete catalog
-(`cohsh`, `coh`, `coh-status`, Hive Gateway, GPU/sidecar bridges, host-ticket
-agent, CAS tools, SwarmUI), `tools/cohesix-py`, `.coh` scripts, generated
-consumers, serial/Pi helpers, and raw/REST benchmark/report consumers were
-reviewed. Their framing, terminal responses, authentication, quotas, commands,
-timeouts, retries, workloads, and report schemas require no change. The
-service-evidence fixture includes the additive fault operands; its prefix
-parser remains compatible. Packet and diagnostic tests qualify those host
-contracts, while fresh unchanged-image Pi boots must establish performance
-and service repeatability.
+At `coh>`, type `help`, `ls /`, then `quit`. Mock state is not target evidence.
+Rust in-process mocks are separate for each process; one mock executable does
+not populate another. Python's filesystem-backed mock can retain state at its
+chosen directory. Also, **mock does not mean every tool is free of host side
+effects**: `coh run --mock`, for example, can still launch the supplied local
+program.
 
 ## Choose one live topology
 
-The target TCP console is single-client. Use direct mode for one foreground tool or
-gateway mode when tools must operate concurrently.
+The Queen's authenticated TCP console accepts **one client**. Choose one of
+these alternatives:
 
-```mermaid
-flowchart LR
-  TARGET["Cohesix target\nauthenticated TCP console"]
+```text
+Direct:   one foreground tool ----------------------> Queen TCP console
 
-  subgraph DIRECT["Direct mode: choose one owner"]
-    ONE["cohsh, coh, SwarmUI,\nor one bridge"]
-  end
-
-  subgraph MULTI["Gateway mode: concurrent host clients"]
-    CLIENTS["cohsh, coh, SwarmUI,\nPython, bridges, curl"]
-    GW["hive-gateway"]
-    CLIENTS -->|"bounded REST projection"| GW
-  end
-
-  ONE -->|"sole TCP connection"| TARGET
-  GW -->|"sole TCP connection"| TARGET
+Shared:   cohsh / coh / SwarmUI / Python / bridges
+                         |
+                         +---- REST ---> hive-gateway ---> Queen TCP console
 ```
 
-The two incoming TCP arrows are alternatives, not concurrent paths.
+| Mode | Console owner | How to use it safely |
+| --- | --- | --- |
+| Direct TCP | One shell, UI, mount or bridge | Finish that process before opening another direct client. |
+| Shared gateway | `hive-gateway` | Point every other live tool at its REST URL. This is the normal multi-tool setup. |
+| Mounted filesystem | The `coh mount` process uses TCP or REST | Keep the mount process running; filesystem clients inherit its access. |
+| Mock or offline replay | No live target | Keep the output labelled as model or historical data. |
 
-### Composition rules
+A direct publisher with `--watch` or `--interval-ms` keeps its connection.
+Starting a direct shell beside it is not concurrency; it is contention for
+the only console. A gateway does not add an in-target listener or a second
+control authority. The target's serial/local-seat console remains a separate
+operator surface; its guide is [Userland and CLI](USERLAND_AND_CLI.md).
 
-| Mode | Console owner | Safe clients | Important constraint |
-| --- | --- | --- | --- |
-| Direct TCP | One direct tool | Only that process | A continuous publisher holds the console; stop it before starting another direct client. |
-| Gateway | `hive-gateway` | Multiple REST-capable tools | Writes require request authentication and a delegated caller ticket constrained by the gateway's upstream authority. |
-| In-memory mock | The selected Rust executable | That process only | State is not shared across executables and is not live-system evidence. |
-| Python `MockBackend` | A local filesystem root | Processes selecting the same root | State can persist and be shared locally, but it is not live-system evidence. |
-| Mounted filesystem | `coh mount` over direct TCP or REST | Filesystem consumers | The mount is foreground; only one REST mount lock is allowed per gateway URL. |
+## Connect and verify
 
-Do not start a direct `cohsh` session while a direct `--watch` or
-`--interval-ms` publisher is running. Point both at `hive-gateway` instead.
+### 1. Select the actual target
+
+For a Pi, use the address verified at that Pi's current console. This is an
+example address, not automatic discovery:
+
+```bash
+export COH_TARGET_HOST="192.168.10.50"
+export COH_TARGET_PORT="31337"
+export COH_WORKER_PROFILE="pi4-production"
+export COH_REST_URL="http://127.0.0.1:8080"
+```
+
+For a locally running QEMU Queen, use these values instead:
+
+```bash
+export COH_TARGET_HOST="127.0.0.1"
+export COH_TARGET_PORT="31337"
+export COH_WORKER_PROFILE="qemu-smp-production"
+export COH_REST_URL="http://127.0.0.1:8080"
+```
+
+Use the forwarded port selected by the QEMU launcher if it differs.
+`--worker-runtime-profile` selects the gateway's generated Worker bounds; it
+does not detect or qualify the target. Select `pi4-production` explicitly for
+Pi even when the gateway itself runs on a Mac.
+
+### 2. Start the shared gateway
+
+First quit any direct TCP client. On the gateway host, obtain the Queen console
+credential and a **different** REST request-authentication token from the
+operator responsible for this deployment. For write-capable operation, also
+configure the delegated-ticket issuer reference. Do not put secret values in
+source files or shell command arguments.
+
+In the gateway terminal:
+
+```bash
+: "${COH_AUTH_TOKEN:?load the console credential for this target}"
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?load the gateway request-auth token}"
+: "${HIVE_GATEWAY_DELEGATION_KEY_REF:?set the provisioned env: or file: issuer reference}"
+export COH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN HIVE_GATEWAY_DELEGATION_KEY_REF
+
+"$COH_BIN/hive-gateway" \
+  --bind 127.0.0.1:8080 \
+  --tcp-host "$COH_TARGET_HOST" \
+  --tcp-port "$COH_TARGET_PORT" \
+  --worker-runtime-profile "$COH_WORKER_PROFILE" \
+  --delegation-key-ref "$HIVE_GATEWAY_DELEGATION_KEY_REF"
+```
+
+Leave this process running. Its upstream role defaults to `queen`; use its
+`--role` and `--ticket` only for the deployment's intended upstream attachment.
+A narrower upstream ticket also narrows every downstream client.
+
+Keep the bind on loopback. Neither the console nor the gateway supplies TLS.
+For clients on another machine, use an approved authenticated tunnel, VPN or
+TLS-terminating proxy. A remote Jetson's `127.0.0.1` refers to that Jetson, not
+to your Mac. Give it a URL reachable through the secured connection. Do not
+solve reachability by exposing an unauthenticated network boundary;
+`--allow-non-loopback-bind` is an explicit exposure opt-in, not encryption.
+
+### 3. Verify the gateway and the Queen separately
+
+In another terminal, set `COH_BIN` and `COH_REST_URL` as above, then run:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  "$COH_REST_URL/v1/meta/status"
+
+curl --fail-with-body --silent --show-error \
+  "$COH_REST_URL/v1/meta/bounds"
+
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'path=/proc/boot' \
+  --data-urlencode 'max_bytes=1024' \
+  "$COH_REST_URL/v1/fs/cat"
+```
+
+Require `connected: true`, the expected backend/profile and a successful
+`/proc/boot` read identifying the intended Queen. `/v1/meta/bounds` describes
+**compiled host policy**; `/proc/boot` is **target-reported identity**. Compare
+both with the selected deployment rather than treating either one alone as
+proof of parity. A connected mock gateway is still a model.
+
+Read endpoints currently do not require the REST mutation credentials, but
+reads still run under the gateway's upstream target authority. This is another
+reason to protect access to the gateway itself.
+
+### 4. Do a first useful read
+
+```bash
+"$COH_BIN/cohsh" --transport rest --rest-url "$COH_REST_URL" --role queen
+```
+
+At the **`coh>` prompt**, enter only the following commands, without a prompt
+prefix:
+
+```text
+ls /
+cat /proc/boot
+cat /proc/root/reachable
+cat /proc/schedule/summary
+cat /proc/lease/summary
+tail /log/queen.log 32
+quit
+```
+
+A successful read means that operation completed. Inspect the returned state;
+`OK` does not mean every service is healthy. The gateway stays running after
+`quit`, ready for the UI, another shell or an evidence capture.
 
 ## Authentication layers
 
-| Layer | Configuration | What it proves |
+There are several independent credentials and checks. Confusing them is a
+common cause of “connected, but writes fail”.
+
+| Layer | What you supply | What it permits |
 | --- | --- | --- |
-| TCP console authentication | `COH_AUTH_TOKEN` or tool-specific equivalent | Access to the target console listener |
-| Upstream attach | Gateway/direct-tool role plus optional capability ticket | Target namespace identity, scope, budget, and subject |
-| Gateway request authentication | `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, or tool-specific equivalent | Permission to call the host HTTP write edge |
-| REST caller delegation | `COH_REST_TICKET` / `x-cohesix-ticket`; gateway issuer key reference | Caller role, subject, mount/write scopes and quotas enforced at the gateway |
-| Target policy and lifecycle | Manifest rules and current target state | Whether the requested operation is allowed now |
+| Console authentication | This Queen's console credential, commonly `COH_AUTH_TOKEN` | Opening the authenticated TCP console |
+| Upstream attachment | Gateway/direct-tool role and, when required, capability ticket | Target namespace identity, scope and budget |
+| REST request authentication | Gateway token; clients commonly use `COH_REST_AUTH_TOKEN` or `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` | Calling the host HTTP mutation boundary |
+| REST caller delegation | Signed `COH_REST_TICKET`, sent as `x-cohesix-ticket` | Finite caller-specific write scopes and quotas beneath the upstream ceiling |
+| Target policy | Enabled paths, approvals, writer epoch and current lifecycle state | Whether the concrete operation is allowed now |
+| Host execution request | A `host-ticket/v1` or other supported action record | Asking the agent for a particular allowlisted host action; this is not a REST credential |
 
-The gateway verifies each mutating caller's delegated ticket and intersects its
-claims with the configured upstream role/ticket. It serializes admitted writes
-over the existing console session. The target sees that upstream principal and
-remains authoritative for its policy, lifecycle, path and quota checks; caller
-delegation is gateway-enforced, not VM-verified. See
-[M27A_AUTHORITY.md](M27A_AUTHORITY.md) for the versioned mutation contract.
+Every REST mutation, including a batch, needs **both request authentication
+and a delegated caller ticket**. A console password, `--role queen`, or the
+REST token alone is insufficient. The gateway verifies the caller ticket;
+the VM still sees the gateway's upstream principal. This is gateway-enforced
+caller identity, not VM-verified individual caller identity.
 
-Keep the gateway bound to loopback unless an explicitly secured deployment
-requires otherwise. The console and gateway do not provide transport-layer TLS;
-use an authenticated tunnel, VPN, or TLS-terminating reverse proxy for remote
-access.
+### Prepare a writing client
+
+Obtain a signed ticket for this client's job, with the needed path scope,
+subject, lifetime and operation budget. In the client terminal:
+
+```bash
+: "${COH_REST_AUTH_TOKEN:?load the request-auth token for this gateway}"
+: "${COH_REST_TICKET:?load the signed delegated ticket for this job}"
+export COH_REST_AUTH_TOKEN COH_REST_TICKET
+```
+
+Use a clean, deployment-specific environment. Different tools give different
+precedence to the request-token aliases; an old
+`HIVE_GATEWAY_REQUEST_AUTH_TOKEN` or `COHSH_REST_AUTH_TOKEN` can override the
+intended value. Do not leave conflicting aliases set.
+
+Start the writing shell from that environment:
+
+```bash
+"$COH_BIN/cohsh" --transport rest --rest-url "$COH_REST_URL" --role queen
+```
+
+REST attachment reads `COH_REST_TICKET`; an explicit `--ticket` overrides that
+binding, but exposes a bearer credential in process arguments. Prefer the
+environment on a private operator host. Changing the shell's REST attachment
+replaces its caller binding, not the gateway's upstream role. Current REST
+shell and `coh` transports accept only the local `queen` role; that local label
+does not widen the gateway's upstream authority.
+
+### Issue a narrow ticket — issuer administrators only
+
+A publisher needs its signed ticket, **not the issuer's signing key**. On a
+trusted issuer host with the provisioned key source available, this example
+creates a ticket only for GPU snapshot publication:
+
+```bash
+: "${HIVE_GATEWAY_DELEGATION_KEY_REF:?set the provisioned issuer reference}"
+COH_REST_TICKET=$("$COH_BIN/cohsh" --mint-ticket --role queen \
+  --ticket-secret "$HIVE_GATEWAY_DELEGATION_KEY_REF" \
+  --ticket-subject gpu-publisher \
+  --ticket-write-scope /gpu/bridge/ctl \
+  --ticket-ttl-s 300 --ticket-ops 128) || exit 1
+export COH_REST_TICKET
+```
+
+The key must match the gateway's delegated-ticket verifier. `env:NAME` reads a
+provisioned environment variable; `file:/absolute/path` reads a provisioned
+file. The `--ticket-secret` argument above contains a reference, not key bytes.
+A missing or invalid selected source fails rather than falling back. Transfer
+the resulting ticket through the deployment's secret-management channel.
+
+This ticket cannot authorise a host action, CAS upload or arbitrary Queen
+command. Issue separate scopes for separate jobs. `--ticket-write-scope` takes
+one prefix; do not assume it is a repeatable option. TTL and operation counts
+must fit the selected policy and the planned work, including each record in a
+multi-record publication. Long-running clients need an explicit renewal and
+restart procedure; a short-lived ticket does not renew itself.
+
+### Production Queen commands
+
+Production authority profiles disable `/queen/ctl` and the legacy `spawn` and
+`kill` shortcuts. They use `/queen/intents/ctl` with a bounded
+`queen-intent/v1` envelope, immutable retry identity, current timestamp and the
+selected `writer_epoch`. Its `cmd` field is a **JSON string containing the
+Queen command**, not a nested command object. Required policy approvals remain
+separate.
+
+The current `coh gpu lease` helper still targets the legacy `/queen/ctl` path.
+It is therefore a **compatibility-profile helper, not a production strict-intent
+client**. Do not disable production policy to make an example work. Use the
+strict-intent contract and the corresponding shell/Python interfaces in
+[M27a authority](M27A_AUTHORITY.md#strict-queen-commands),
+[Userland and CLI](USERLAND_AND_CLI.md) and [Python support](PYTHON_SUPPORT.md).
+A rejected legacy write is not evidence of a broken GPU connection.
+
+## Tool catalog
+
+Choose a tool below for its workflows, options and result checks. Commands use
+the installation and gateway selected above unless marked local or offline.
+
+### `cohsh`
+
+Use `cohsh` for interactive namespace work, checked `.coh` scripts, ticket
+minting and trace capture/replay. Full console grammar belongs in
+[Userland and CLI](USERLAND_AND_CLI.md); host invocation is shown here.
+
+| Invocation option | Use |
+| --- | --- |
+| `--transport tcp --tcp-host HOST --tcp-port PORT` | Own one live TCP session directly |
+| `--transport rest --rest-url URL` | Share the gateway |
+| `--role queen` | Attach on startup |
+| `--script FILE` | Execute a `.coh` script and exit |
+| `--check FILE` | Validate script syntax without executing it |
+| `--policy FILE` | Select a generated shell policy |
+| `--record-trace FILE` / `--replay-trace FILE` | Capture a bounded trace or replay one offline |
+| `--transport mock` | Use this process's in-memory model |
+| `--transport qemu` | Use the shell's QEMU-launch transport; not an alias for connecting to an already running TCP Queen |
+
+For a direct session, first stop the gateway and every other direct owner:
+
+```bash
+: "${COH_AUTH_TOKEN:?load the console credential for this Queen}"
+export COH_AUTH_TOKEN
+"$COH_BIN/cohsh" --transport tcp \
+  --tcp-host "$COH_TARGET_HOST" --tcp-port "$COH_TARGET_PORT" --role queen
+```
+
+For repeatable work, create a small script in your local output directory:
+
+```bash
+mkdir -p out/operator
+cat > out/operator/health.coh <<'COH'
+# Author: Lukas Bower
+# Purpose: Read a bounded Queen health baseline without mutation.
+# Copyright 2026 Lukas Bower
+ping
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+cat /proc/root/reachable
+EXPECT OK
+cat /proc/schedule/summary
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
+quit
+COH
+
+"$COH_BIN/cohsh" --check out/operator/health.coh &&
+"$COH_BIN/cohsh" --transport rest --rest-url "$COH_REST_URL" \
+  --role queen --script out/operator/health.coh > out/operator/health.txt
+```
+
+Check the exit status and transcript. Script failures identify the source line
+and recent responses. These assertions test successful reads, not the meaning
+of every health field. Add explicit assertions for your deployment's required
+state using the documented `.coh` grammar. `.coh` is not Bash: it has no shell
+variables, loops or command substitution. Never paste Bash assignments into
+`coh>` or copy the visible prompt into a command.
+
+The default Queen-log tail is the newest 64 records; an explicit tail accepts
+1–256 lines. Use an evidence pack for the complete retained log rather than
+mistaking a short tail for a full capture. Native clients reassemble bounded
+chunked `CAT` records; applications should use those clients rather than
+implementing ad hoc line joining.
+
+For incident tracing, see [Operator evidence](OPERATOR_EVIDENCE.md). Live
+capture accepts TCP or REST and explicit target/session identity fields;
+caller-supplied labels are not independently verified identity. `coh trace
+--input FILE` validates and summarises a saved trace without opening a target.
+
+### `coh`
+
+`coh` combines local diagnostics, target inspection, evidence export, FUSE,
+GPU lease helpers, host-command receipts and PEFT registry operations.
+
+Place its top-level `--policy`, `--role` and `--ticket` options **before** the
+subcommand. Connection options belong to the operation:
+
+```bash
+: "${COH_POLICY:?set the selected generated coh policy file}"
+"$COH_BIN/coh" --policy "$COH_POLICY" inspect --rest-url "$COH_REST_URL"
+```
+
+Use the installation default when no explicit policy selection is needed. `coh` has no `--transport` option:
+`--rest-url` selects REST; without a configured REST URL, applicable live
+operations use `--host` and `--port`. `--mock` selects the model. Check inherited
+`COH_REST_URL` settings before intending to use direct TCP.
+
+| Command | Example arguments after the command | Result |
+| --- | --- | --- |
+| `doctor` | `--mock` for a simulated check | Local prerequisite report, not connection health |
+| `inspect` | `--rest-url URL --json` or `--input PACK --json` | Source-labelled live or offline state |
+| `diff` | `--left BEFORE --right AFTER` | Comparison of packs or explicit `tcp://` / HTTP target URLs |
+| `attest` | `--rest-url URL --trust-policy FILE --record FILE` | Signed-evidence verification when the target and trust policy support it |
+| `trace` | `--input TRACE` | Offline trace validation and summary |
+| `bundle` | `--rest-url URL --out DIR` | Alias for `evidence pack` |
+| `evidence pack` | `--rest-url URL --out DIR` | Bounded evidence directory |
+| `evidence timeline` | `--input DIR` | `timeline.ndjson` and `timeline.md` |
+| `telemetry pull` | `--rest-url URL --out DIR` | Local copy of Queen telemetry bundles |
+| `fleet` | Repeated `--hive NAME=URL`, then `status`, `lease-summary` or `pressure` | Read-only multi-gateway report |
+| `mount` | `--rest-url URL --at DIR` | Foreground FUSE mount |
+| `gpu` | Connection options, then `list`, `status --gpu ID` or `lease ...` | Published inventory/status, or a legacy lease request |
+| `run` | `--rest-url URL --gpu ID -- PROGRAM ARGS` | Local program after lease validation |
+| `peft` | `export`, `import`, `activate` or `rollback` | Job export and host registry lifecycle |
+
+#### Capture and review evidence
+
+Use a new output directory for each observation. Keep the gateway running:
+
+```bash
+run_id="case-$(date -u +%Y%m%dT%H%M%SZ)"
+pack="$PWD/out/evidence/$run_id"
+
+"$COH_BIN/coh" inspect --rest-url "$COH_REST_URL" --json
+"$COH_BIN/coh" evidence pack --rest-url "$COH_REST_URL" --out "$pack"
+```
+
+Continue to review only after checking the exporter result. A capture error
+returns nonzero and retains a partial `summary.json`; preserve that directory
+for diagnosis rather than overwriting it. A missing optional path is not the
+same as a failed read. Optional capture errors also make the export fail.
+
+These commands read the pack without a live Queen:
+
+```bash
+"$COH_BIN/coh" inspect --input "$pack" --json
+"$COH_BIN/coh" evidence timeline --input "$pack"
+```
+
+| Retained file | What to check |
+| --- | --- |
+| `summary.json` | Which paths were captured, missing or errored? |
+| `meta.json`, `bounds.json` | Which exporter and generated host policy produced the capture? |
+| `proc/boot`, `proc/authority` when available | Which target identity and authority were reported? |
+| `proc/schedule/`, `proc/lease/` | What scheduler and lease state was retained? |
+| `log/queen.log` | What remains of the Queen's bounded log? |
+| `timeline.md`, `timeline.ndjson` | Human-readable and machine-readable offline correlation |
+
+Add `--with-telemetry` only when needed. `--manifest`, `--resolved-manifest`,
+`--serial-log`, `--trace` and `--attestation-record` attach supported local
+context. Capture implements bounded redaction; still review the resulting pack
+before sharing it. A valid empty audit stream is saved as an empty file after
+a positive-size read, not treated as an automatic failure or fabricated read.
+
+Compare two retained observations:
+
+```bash
+: "${BEFORE_PACK:?set the before-change evidence directory}"
+: "${AFTER_PACK:?set the after-change evidence directory}"
+"$COH_BIN/coh" diff --left "$BEFORE_PACK" --right "$AFTER_PACK"
+```
+
+A diff is a comparison, not an automatic go/no-go decision. Keep differing
+image, manifest and target identities visible. The full inventory, redaction
+and CI/SIEM contract is in
+[Evidence packs](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
+
+#### Pull telemetry or read a small fleet
+
+```bash
+"$COH_BIN/coh" telemetry pull --rest-url "$COH_REST_URL" \
+  --out out/telemetry/queen
+
+"$COH_BIN/coh" fleet \
+  --hive lab-pi=http://127.0.0.1:8080 \
+  --hive lab-qemu=http://127.0.0.1:8081 \
+  status
+```
+
+The fleet example requires **two separately configured gateways**, each owning
+its own target; port 8081 is not created automatically. Substitute
+`lease-summary` or `pressure` for `status` as needed. Inspect each named row:
+a failed hive can be reported within the result, so process completion alone
+does not mean the entire fleet is healthy. Fleet reads do not grant cross-hive
+write authority.
+
+#### Mount a namespace
+
+Use a mount when an existing program needs files instead of REST. The selected
+policy's root and allowlist determine what appears. The mount does not turn
+Cohesix into an unrestricted POSIX filesystem.
+
+The binary must include FUSE support. macOS needs the macFUSE/FUSE3 runtime
+selected by the native host setup; Linux requires FUSE 3 and usable `/dev/fuse`. Source developers enable this with `cargo build -p coh --features
+fuse`. See [the pinned mount integration](../third_party/fuser).
+
+In the mount terminal:
+
+```bash
+mount_dir="$PWD/out/mount/cohesix"
+mkdir -p "$mount_dir"
+"$COH_BIN/coh" mount --rest-url "$COH_REST_URL" --at "$mount_dir"
+```
+
+Keep it running. In another terminal at the same installation root:
+
+```bash
+mount_dir="$PWD/out/mount/cohesix"
+sed -n '1,40p' "$mount_dir/proc/boot"
+```
+
+The mount is private to the mounting host user. Only one REST mount may hold
+the host-side lock for a given gateway URL. Reads fetch current remote data;
+a remote error must not be mistaken for a successfully read empty file.
+Writes require the mount process's delegated credentials and the target's
+policy. Prefer explicit CLI workflows for control writes instead of tools
+that replace, truncate or rename files.
+
+Stop filesystem users, then unmount before terminating the server:
+
+```bash
+# Linux
+fusermount3 -u "$mount_dir"
+```
+
+```bash
+# macOS
+umount "$mount_dir"
+```
+
+After an abrupt server loss, clear the disconnected mount with the same host
+unmount procedure. Do not start another server over a still-mounted directory.
+
+#### Read GPUs and request a compatibility lease
+
+Read the **Queen's published** GPU inventory:
+
+```bash
+"$COH_BIN/coh" gpu --rest-url "$COH_REST_URL" list
+```
+
+Select an actual returned identifier, not an assumed `GPU-0`:
+
+```bash
+: "${COH_GPU_ID:?set a GPU identifier returned by the Queen}"
+"$COH_BIN/coh" gpu --rest-url "$COH_REST_URL" status --gpu "$COH_GPU_ID"
+```
+
+`coh gpu --nvml list` uses host discovery through a local in-process namespace;
+it is not a live Queen read. For the clearest local inventory check, use
+`gpu-bridge-host --list`.
+
+**Compatibility profiles only:** after obtaining the required fresh policy
+approval and REST authority, a bounded lease request has this syntax:
+
+```bash
+"$COH_BIN/coh" gpu --rest-url "$COH_REST_URL" lease \
+  --gpu "$COH_GPU_ID" --mem-mb 1024 --streams 1 --ttl-s 60 \
+  --priority 1 --receipt-out out/operator/gpu-lease.json
+```
+
+Create `out/operator` first. Memory is requested in MiB. The example's size,
+stream count and duration must fit the advertised device and selected policy.
+The command does not issue its own policy approval or wait for a Worker to
+become READY. A receipt records the request result and available lease
+observations, not completed GPU work. Production strict-intent profiles refuse
+this helper, as explained under [Production Queen commands](#production-queen-commands).
+
+#### Run a host program
+
+Run this **on the machine that should execute the program**, after the
+selected GPU has an appropriate active lease. The client needs write scope
+for the GPU status breadcrumbs as well as access to read its lease.
+
+```bash
+mkdir -p out/operator
+: "${COH_GPU_ID:?set the leased GPU identifier}"
+"$COH_BIN/coh" run --rest-url "$COH_REST_URL" --gpu "$COH_GPU_ID" \
+  --receipt-out out/operator/host-run.json \
+  -- python3 -c 'print("host program executed")'
+```
+
+This small program verifies the wrapper's local launch path without pretending
+to perform CUDA inference. Replace it with your already validated program and
+arguments. Arguments after `--` are passed to a host process, not interpreted
+as a `cohsh` script.
+
+The wrapper reads and validates the lease, publishes a START breadcrumb, runs
+the command, waits for it, and publishes EXIT. It does **not** provide a sandbox,
+select CUDA device affinity for the program, or continuously enforce lease
+expiry, memory use or revocation. Arrange those protections in the host runtime.
+A failed EXIT publication can occur after the program has run; inspect the
+local result and retained state before resubmitting anything. Do not put
+secrets in program arguments: command information appears in breadcrumbs and
+receipts.
+
+#### Manage PEFT adapters
+
+Use this on the host that owns the training outputs and model registry. It
+moves bounded job/registry information; training and inference remain outside
+the Queen. Before starting, confirm the selected manifest exposes the LoRA
+export paths and that the job has been admitted and made available for export.
+
+Supply real paths and identifiers:
+
+```bash
+: "${COH_PEFT_JOB:?set the available LoRA job identifier}"
+: "${COH_PEFT_MODEL:?set the model or adapter identifier}"
+: "${COH_PEFT_EXPORT:?set the local job export directory}"
+: "${COH_PEFT_ADAPTER:?set the trained adapter directory}"
+: "${COH_GPU_REGISTRY:?set the host registry directory}"
+
+"$COH_BIN/coh" peft export --rest-url "$COH_REST_URL" \
+  --job "$COH_PEFT_JOB" --out "$COH_PEFT_EXPORT"
+```
+
+Train and evaluate with the host runtime. The import directory must contain
+`adapter.safetensors`, `lora.json` and `metrics.json` in the supported formats,
+with provenance consistent with the exported job. Import into the local
+registry first:
+
+```bash
+"$COH_BIN/coh" peft import \
+  --model "$COH_PEFT_MODEL" --from "$COH_PEFT_ADAPTER" \
+  --job "$COH_PEFT_JOB" --export "$COH_PEFT_EXPORT" \
+  --registry "$COH_GPU_REGISTRY"
+```
+
+Without `--publish`, import is local. To publish during import, add
+`--publish --rest-url "$COH_REST_URL"` with the required GPU bridge write
+credentials. Alternatively publish explicitly with `gpu-bridge-host`.
+
+Activation and rollback in the **`coh` CLI** commit the host registry pointer
+and then attempt to publish the registry through the existing GPU bridge:
+
+```bash
+"$COH_BIN/coh" peft activate --rest-url "$COH_REST_URL" \
+  --model "$COH_PEFT_MODEL" --registry "$COH_GPU_REGISTRY"
+```
+
+Verify with a REST-backed `cohsh`:
+
+```text
+ls /gpu/models/available
+cat /gpu/models/active
+```
+
+Separately instruct the actual inference runtime to reload the adapter, run its
+canary and retain that result. The active registry pointer does not prove a
+reload or a successful inference. To restore the previous pointer:
+
+```bash
+"$COH_BIN/coh" peft rollback --rest-url "$COH_REST_URL" \
+  --registry "$COH_GPU_REGISTRY"
+```
+
+Do not run a continuous registry publisher concurrently with these publication
+steps. A local commit can succeed before target publication fails. Reconcile
+the registry and the target view; when only projection is pending, publish the
+existing registry rather than blindly repeating activation or rollback:
+
+```bash
+"$COH_BIN/gpu-bridge-host" --registry "$COH_GPU_REGISTRY" \
+  --publish --rest-url "$COH_REST_URL"
+```
+
+Python and ticket-agent PEFT helpers differ: their local activation/rollback
+reports `execution_location=host projection=pending`; a configured publisher
+must update the target view. Never write directly to the read-only
+`/gpu/models/active` projection. For the full data/provenance procedure, see
+[Adapter rollout](OPERATOR_RECIPES.md#stage-and-reverse-a-private-adapter-rollout).
+
+<a id="signed-device-evidence-availability"></a>
+#### Verify signed evidence, not just measurements
+
+`coh attest` without `--trust-policy` inspects attestation-related state; it
+does not establish a trusted signature. For a supported, enrolled deployment:
+
+```bash
+: "${COH_TRUST_POLICY:?set the independently enrolled trust-policy file}"
+mkdir -p out/operator
+"$COH_BIN/coh" attest --rest-url "$COH_REST_URL" \
+  --trust-policy "$COH_TRUST_POLICY" \
+  --record out/operator/attestation-record.json
+```
+
+A non-PASS verification returns nonzero. Include a successful retained record
+in an evidence pack with `--attestation-record`; later verify that pack with
+`coh attest --input PACK --trust-policy FILE`. The trust policy must come from
+the verifier, not from untrusted target evidence. Optional profiles can report
+unavailable or measurement-only; a stock Pi 4 does not acquire positive signed
+attestation merely by running this command. See [Attestation](ATTESTATION.md).
+
+### `hive-gateway`
+
+The gateway owns the one TCP console connection and serves bounded REST
+projections. Use the [startup sequence](#connect-and-verify), not a second
+gateway for each host application.
+
+| Option | Operational meaning |
+| --- | --- |
+| `--bind ADDRESS:PORT` | Local HTTP listener; default `127.0.0.1:8080` |
+| `--tcp-host HOST --tcp-port PORT` | Upstream Queen; pass these explicitly |
+| `--worker-runtime-profile PROFILE` | `qemu-smp-production` or `pi4-production`; match the target |
+| `--role ROLE --ticket TICKET` | Upstream namespace authority, not per-caller delegation |
+| `--delegation-key-ref REF` | Provisioned issuer source for delegated write verification |
+| `--allow-non-loopback-bind` | Explicitly permit network exposure; does not add TLS |
+| `--mock` | Own an in-process model instead of a physical or QEMU Queen |
+
+Useful endpoints are `/v1/meta/status`, `/v1/meta/bounds`, `/v1/fs/ls`,
+`/v1/fs/cat`, `/v1/fs/tail` and `/v1/fs/echo`. The served OpenAPI contract is at
+`/v1/openapi.yaml`; full request, status, batch and refusal semantics are in
+[API Guidelines](API_GUIDELINES.md). Use positive read limits and the returned
+bounds instead of guessing larger payload sizes.
+
+The broker serialises work over the existing target connection and provides
+bounded progress for host-ticket ingress, control/receipts and telemetry.
+Concurrent clients share its upstream budget; they do not get independent
+copies of that budget. The default shared session allowance is 8 MiB, and a
+narrower explicit ticket remains narrower. Retained logs and repeated polling
+consume real allowance.
+
+Keep compiled timeout defaults unless a deployment deliberately selects a
+different profile. The canonical gateway control and telemetry response
+windows are each 120,000 ms; `cohsh`'s REST operation window is 130,000 ms,
+including queue and return headroom. An earlier client timeout can leave a
+write outcome unconfirmed. Increasing retries or starting additional gateways
+is not a safe remedy for overload, exhausted authority or ambiguous writes.
+
+### `gpu-bridge-host`
+
+Run the bridge **on the NVIDIA/CUDA host whose devices and registry you want
+the Queen to see**. Running it on a Mac does not discover a remote Jetson.
+Backend availability depends on the native build and that host's driver stack.
+
+First inspect without contacting a target:
+
+```bash
+"$COH_BIN/gpu-bridge-host" --list
+```
+
+Then publish one snapshot through the shared gateway. This requires a delegated
+ticket permitting `/gpu/bridge/ctl` and the gateway request token:
+
+```bash
+"$COH_BIN/gpu-bridge-host" --publish --rest-url "$COH_REST_URL"
+```
+
+For a real model registry, include its host path:
+
+```bash
+: "${COH_GPU_REGISTRY:?set the validated registry root on this GPU host}"
+"$COH_BIN/gpu-bridge-host" --registry "$COH_GPU_REGISTRY" \
+  --publish --rest-url "$COH_REST_URL"
+```
+
+A one-shot publisher exits after sending the snapshot. Add `--interval-ms 5000`
+for repeated publication only after the one-shot path works and the credentials
+cover the intended run. Stop it with Ctrl-C before replacing its credentials or
+performing another registry publication workflow.
+
+Verify through the gateway-backed shell:
+
+```text
+ls /gpu
+cat /gpu/bridge/status
+ls /gpu/models/available
+```
+
+`--list` alone never publishes. No registry means explicit empty/unavailable
+model state, not a demo model or a guessed active selection. An invalid registry
+fails. `--mock` selects fixture inventory; an operational target rejects that
+publication and it cannot qualify real GPU integration. A successful inventory
+snapshot proves neither CUDA execution nor a Worker completion.
+
+For direct mode, use `--tcp-host`, `--tcp-port` and the documented console
+credential; that process must be the sole owner. Explicit `--rest-url` is
+required to select the REST publishing branch; setting a common URL variable
+without passing this option is not a universal transport switch.
+
+### `host-sidecar-bridge`
+
+Use the sidecar to publish observations of the host on which it runs. It does
+not execute service restarts, container changes or Kubernetes mutations; those
+belong to host-ticket execution.
+
+| Provider selector | What to provision | Continuous `--watch` |
+| --- | --- | --- |
+| `systemd` | Accessible systemd state on that host | Yes |
+| `docker` | Access to the intended Docker runtime | Yes |
+| `k8s` | The intended cluster context and permissions | Yes |
+| `nvidia` | The supported NVIDIA telemetry stack | Yes |
+| `jetson` | Jetson-specific host telemetry | No; one-shot |
+| `net` | Host network observations | No; one-shot |
+
+The selected target manifest must expose the matching host namespace/provider.
+Choose a provider explicitly rather than assuming all providers are available:
+
+```bash
+"$COH_BIN/host-sidecar-bridge" --rest-url "$COH_REST_URL" --provider net
+```
+
+Inspect its projection with `cohsh`:
+
+```text
+ls /host
+ls /host/net
+```
+
+For an already working scheduled provider:
+
+```bash
+"$COH_BIN/host-sidecar-bridge" --rest-url "$COH_REST_URL" \
+  --provider docker --watch
+```
+
+Repeat `--provider` to select several. `--policy FILE` selects polling policy;
+`--mount PATH` changes the host namespace mount and must match the target.
+`net` and `jetson` are not scheduled in watch mode; selecting only those with
+`--watch` fails rather than providing continuous updates.
+
+The bridge needs write credentials for its selected publication paths. Provider
+failures may be represented as bounded unknown/error observations; a successful
+publication is not proof that the provider itself is healthy. In direct mode,
+pass the TCP endpoint and `--auth-token` explicitly; do not assume this CLI
+reads the same console-token aliases as `cohsh`. A direct watcher occupies the
+only console until it exits.
+
+### `host-ticket-agent`
+
+The agent consumes admitted host-action records, checks their scope and
+lifecycle, executes supported actions, and publishes receipts/status. Run it
+on the host that should perform those actions, with that host's intentionally
+limited provider permissions.
+
+**Starting the agent can execute pending actions.** `--run-once` means one
+processing pass, not a dry run and not necessarily one ticket. Review the
+pending specification snapshot, provider allowlists and selected manifest
+before launching it. Begin with a non-mutating provider action such as an
+approved `systemd.status-check`, not a service restart.
+
+#### Start with explicit deployment state
+
+Point at the **resolved manifest for this Queen**, not a convenient unrelated
+checkout default. Pick a persistent, private state directory on the agent host:
+
+```bash
+: "${COH_RESOLVED_MANIFEST:?set the resolved manifest path for this deployment}"
+: "${COH_AGENT_STATE:?set a persistent private directory for this agent}"
+umask 077
+mkdir -p "$COH_AGENT_STATE"
+
+"$COH_BIN/host-ticket-agent" --rest-url "$COH_REST_URL" \
+  --manifest "$COH_RESOLVED_MANIFEST" \
+  --cursor "$COH_AGENT_STATE/cursor.json" \
+  --execution-journal "$COH_AGENT_STATE/execution-journal.json" \
+  --agent-lock "$COH_AGENT_STATE/agent.lock" \
+  --run-once
+```
+
+Supply request auth and the agent's delegated status/receipt write authority in
+its environment. Producer and executor are distinct jobs; do not hand either
+an issuer signing key. When host tickets are disabled by the manifest, the
+agent reports `tickets disabled` and exits successfully without doing work.
+Check that message and the per-ticket result, not just the exit code.
+
+For continuous processing, remove `--run-once`; `--poll-ms` defaults to 1000.
+Keep one lane initially. `--execution-lanes` accepts 1–64, but lane topology is
+bound to durable state. Through the gateway, all lanes still share one
+upstream connection and bounded provider capacity. Use REST for multi-lane
+operation; the mock
+supports exactly one lane. Conflicting provider resources remain serialised.
+
+#### Request and check a non-mutating host observation
+
+The following Python example submits one **host-action request**, not an
+arbitrary shell command. Prerequisites: the SDK is installed, the producer's
+REST credentials permit `/host/tickets/spec`, the selected policy allows
+`systemd.status-check`, and the named unit exists on the agent host. Confirm
+`COH_WRITER_EPOCH` against the selected resolved manifest and `/proc/authority`;
+do not guess it.
+
+```bash
+: "${COH_HOST_UNIT:?set an allowed unit, such as cohesix-agent.service}"
+: "${COH_WRITER_EPOCH:?set the current writer epoch for this deployment}"
+export COH_HOST_UNIT COH_WRITER_EPOCH
+python3 - <<'PY'
+import json
+import os
+import uuid
+from cohesix import RestBackend
+
+request_id = "status-" + uuid.uuid4().hex
+record = {
+    "schema": "host-ticket/v1",
+    "id": request_id,
+    "idempotency_key": request_id,
+    "writer_epoch": int(os.environ["COH_WRITER_EPOCH"]),
+    "action": "systemd.status-check",
+    "target": f"/host/systemd/{os.environ['COH_HOST_UNIT']}/status",
+}
+backend = RestBackend(
+    base_url=os.environ["COH_REST_URL"],
+    request_auth_token=os.environ["COH_REST_AUTH_TOKEN"],
+    delegated_ticket=os.environ["COH_REST_TICKET"],
+)
+print("Submitting host request:", request_id, flush=True)
+backend.write_append(
+    "/host/tickets/spec",
+    json.dumps(record, separators=(",", ":")).encode("utf-8"),
+)
+print("Request accepted; check agent status for completion:", request_id)
+PY
+```
+
+Retain the printed identity. Do not rerun this snippet after a timeout: it
+creates a new request identity each time. Inspect the original request before
+deciding whether further action is authorised. Production requires the current
+writer epoch independently of the REST ticket's validity.
+
+After an agent pass, inspect both result destinations in a REST-backed shell:
+
+```text
+cat /host/tickets/status.snapshot
+cat /host/tickets/deadletter.snapshot
+```
+
+Find the exact request ID and its terminal result. An admitted specification
+is not a completed status check. A failed or dead-lettered request is a result
+to investigate, not a reason to broaden provider permissions automatically.
+
+#### Preserve recovery state
+
+Reuse the same cursor, journal, lock and any relay WAL across restarts. Never
+share these files between independent concurrent agents or delete them to
+“clear” replay protection. Prepared work, executing work and persisted receipts
+have different recovery rules: a retained receipt can be republished; an
+ambiguous execution without a receipt can be dead-lettered as
+`replay-ambiguous` rather than executed twice.
+
+PEFT execution can use `--registry-root`, `--export-root` and `--adapter-root`
+for confined host locations. Federation requires manifest-declared peers and
+scope; `--relay --relay-wal FILE` does not invent authority. The single-writer
+production Release A profile disables federation. Use the full
+[host-ticket contract](INTERFACES.md) and
+[authority recovery rules](M27A_AUTHORITY.md#host-execution-and-writer-ownership)
+before changing epochs, state placement or execution topology.
+
+### `cas-tool`
+
+Use CAS for the supported **small, bounded update payloads**, not as a general
+file-transfer service for model weights or a release archive. Packaging is
+local; uploading writes the target's update store.
+
+#### Package locally
+
+Provide the matching generated template, an actual payload and a unique update
+epoch. For a signed deployment, select the private signing-key reference whose
+public key is trusted by the target:
+
+```bash
+: "${COH_CAS_PAYLOAD:?set the input payload file}"
+: "${COH_CAS_EPOCH:?set the intended update epoch label}"
+: "${COH_CAS_TEMPLATE:?set the matching generated cas_manifest_template.json}"
+: "${COH_CAS_SIGNING_KEY_REF:?set a provisioned env: or absolute file: signing-key reference}"
+
+cas_bundle="$PWD/out/cas/$COH_CAS_EPOCH"
+"$COH_BIN/cas-tool" pack \
+  --epoch "$COH_CAS_EPOCH" --input "$COH_CAS_PAYLOAD" \
+  --template "$COH_CAS_TEMPLATE" --out-dir "$cas_bundle" \
+  --signing-key "$COH_CAS_SIGNING_KEY_REF"
+```
+
+The bundle contains `manifest.cbor` and content-addressed chunks. Omit
+`--signing-key` only for a profile that explicitly permits unsigned updates;
+source examples using a fixture key are not a production trust chain.
+`--delta-base DIR` selects an existing base bundle when creating a supported
+delta manifest.
+
+Manifest-v1 allows at most eight chunks. The default 128-byte template therefore
+admits at most **1,024 payload bytes**. `--chunk-bytes` only confirms the selected
+template's value; it does not override target limits. Oversized payloads fail
+before a bundle is written. The template's `limits` fields are tooling metadata,
+not extra manifest-v1 wire fields.
+
+#### Upload and verify
+
+With a delegated ticket covering this update's paths:
+
+```bash
+"$COH_BIN/cas-tool" upload --bundle "$cas_bundle" --rest-url "$COH_REST_URL"
+```
+
+REST delegation comes from `COH_REST_TICKET`; the upload CLI's `--ticket`
+option is used for direct TCP attachment, not as its REST caller binding.
+Upload validates the manifest, chunk sizes and hashes before contacting the
+Queen, then uploads chunks and the manifest. It does not itself perform an
+activation or platform reboot. Inspect the matching `/updates` state and follow
+[CAS updates](INTERFACES.md) for any subsequent control action.
+
+A structurally valid bundle can still get a typed `buffer-full` refusal because
+the target's independent global CAS store is occupied. Preserve that outcome;
+do not truncate, relabel or automatically retry a partially delivered bundle.
+For direct upload, stop the gateway and use `--host`, `--port` and an explicit
+`--auth-token` source. Keep private signing material out of the bundle.
+
+### SwarmUI
+
+SwarmUI is a desktop application, so it needs a graphical session. A headless
+Jetson can run the gateway, publishers and CLI while the UI runs on your Mac
+through a secured REST connection.
+
+To join the existing gateway without taking its TCP connection:
+
+```bash
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL="$COH_REST_URL" \
+  "$COH_BIN/swarmui"
+```
+
+Select the intended role/attachment in the UI. Use the namespace and console to
+verify `/proc/boot` before relying on the Live Hive display. Reading panels does
+not grant write authority; embedded console mutations still need the REST
+request token, delegated caller binding and target policy.
+
+| Configuration | Meaning |
+| --- | --- |
+| `SWARMUI_TRANSPORT=rest` or `gateway` | Share a gateway; use `SWARMUI_REST_URL` or `COH_REST_URL` |
+| `SWARMUI_TRANSPORT=console` or `tcp` | Own the TCP console directly; this is the default |
+| `SWARMUI_9P_HOST`, `SWARMUI_9P_PORT` | Endpoint variables also used by direct **console** mode, despite their names |
+| `SWARMUI_TRANSPORT=9p` or `secure9p` | Use an explicitly supplied host-side Secure9P endpoint, not a new Queen listener |
+| `--replay FILE` | Load a retained Hive CBOR snapshot |
+| `--replay-trace FILE` | Load a retained trace for offline replay |
+
+SwarmUI does not accept `cohsh`'s `--transport` command-line option. Configure
+transport in the launching environment. Do not launch it in default direct mode
+while a gateway or direct publisher is connected.
+
+Worker discovery reads the generated shard addresses and actual Worker records;
+a bounded aggregate `/shard` listing is not a full fleet census. An empty shard
+is valid, but a refused read or invalid Worker record is not an empty successful
+result. The selected Worker's details refresh with live polling. Offline
+snapshots and replay overlays describe retained observations, not current
+readiness. Generated display/cache policy is documented in
+[SwarmUI defaults](snippets/swarmui_defaults.md).
+
+### Cohesix Python package
+
+Use the package when your application needs structured calls rather than
+terminal scraping. Install into an isolated Python 3.11+ environment. Release
+runtime setup installs the bundle's exact wheel; a prepared source checkout can
+use:
+
+```bash
+python3 -m pip install -e tools/cohesix-py
+```
+
+That editable path exists only in a source checkout. See
+[Python support](PYTHON_SUPPORT.md) for optional integration and ML dependencies.
+Do not substitute a different wheel or target contract to repair a missing
+feature in an older bundle.
+
+#### Read from the shared gateway
+
+Choose the backend explicitly so an inherited mock or mount setting cannot
+silently change what your application reads:
+
+```bash
+python3 - <<'PY'
+import os
+from cohesix import RestBackend
+
+backend = RestBackend(base_url=os.environ["COH_REST_URL"])
+print("Root entries:", backend.list_dir("/"))
+print(backend.read_file("/proc/boot", 1024).decode("utf-8"))
+print(backend.read_file("/proc/root/reachable", 128).decode("utf-8"))
+PY
+```
+
+Reads are bounded; use the gateway's metadata and selected contract for larger
+operations, not unbounded reads. A REST client validates responses and raises
+`CohesixError` for transport or server failures. Mutating calls require
+`request_auth_token=` and `delegated_ticket=` or their supported environment
+sources; they do not automatically retry ambiguous writes.
+
+| Backend | Use it when | Important boundary |
+| --- | --- | --- |
+| `RestBackend` | Several tools share one Queen | Inherits gateway authority; separate write delegation |
+| `TcpBackend` | Python is the sole console owner | Explicit authentication/attachment; close it when finished |
+| `FilesystemBackend` | `coh mount` is already running | Does not create or own the mount |
+| `MockBackend` | You need deterministic local model data | Selected filesystem root can persist; not live evidence |
+
+`CohesixClient` and `CohesixOrchestrator` add typed control, Worker, host-ticket,
+evidence and PEFT helpers. Live Worker operations require the explicit
+compiler-generated target contract, such as
+`configs/generated/cohesix_python_pi4_production.json` for Pi or
+`configs/generated/cohesix_python_qemu_smp_production.json` for the selected
+native QEMU build. The target-neutral wheel's defaults are not a live target
+identity. Production requests also need strict intents and the correct writer
+epoch; a Python object is not an admission grant.
+
+To explore supported integration patterns without a live target:
+
+```bash
+cohesix-playbook --list
+cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+```
+
+These are control-model plans, not proof of training, inference, provider
+execution or production use-case acceptance.
+
+## Common environment variables
+
+Pass endpoints explicitly in scripts. There is **no suite-wide environment
+parser**: an alias supported by one executable need not be read by another.
+
+| Variable | Use and caveat |
+| --- | --- |
+| `COH_BIN` | Convenience in this guide: directory containing the selected executables |
+| `COH_AUTH_TOKEN`, `COHSH_AUTH_TOKEN` | Console credential aliases used by `cohsh`, gateway and selected clients; not a universal substitute for `--auth-token` |
+| `COH_AUTH_TOKEN_REF` | Explicit credential reference recognised by `cohsh`, GPU bridge and Python before compatibility token aliases |
+| `COH_REST_URL` | Common gateway URL; this guide also passes `--rest-url` so bridges select REST explicitly |
+| `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` | REST request-token aliases; precedence differs, so avoid conflicting values |
+| `COH_REST_TICKET` | Signed delegated caller ticket for REST mutations; not the console password or a host-action record |
+| `HIVE_GATEWAY_DELEGATION_KEY_REF` | Issuer key reference on the gateway/issuer host; do not distribute the key to clients |
+| `COH_POLICY`, `COHSH_POLICY` | Selected generated policy for `coh` or `cohsh` |
+| `COHSH_TICKET_CONFIG`, `COHSH_TICKET_SECRET` | Explicit minting configuration/key source; issuer-side material |
+| `COH_CAS_SIGNING_KEY_REF` | CAS private signing source; public verification material is a separate artefact |
+| `SWARMUI_TRANSPORT`, `SWARMUI_REST_URL` | UI connection selection |
+| `SWARMUI_REST_AUTH_TOKEN` | UI-specific request-auth alias; also accepts the common aliases documented above |
+
+For direct `cohsh` and GPU bridge authentication, an explicit option takes
+precedence, then `COH_AUTH_TOKEN_REF`, `COH_AUTH_TOKEN`, and
+`COHSH_AUTH_TOKEN`. CAS upload, sidecar and ticket-agent direct examples should
+use their explicit token option rather than relying on that precedence.
+Credentials can use supported `env:NAME` or `file:/absolute/path` sources;
+a failed selected reference must not fall back to a different credential.
+Never print tokens, commit populated environment files or include secrets in
+support transcripts. Use private deployment storage outside the source tree.
+
+## Operational checks
+
+Before changing state, confirm the target identity and enabled feature, the
+sole connection owner, both REST write credentials, complete path scope and
+quota, and the operation's approval/epoch/lifecycle requirements. Capture a
+baseline when the change needs a rollback or incident record.
+
+A local prerequisite check is not a connection test; a control ACK is not
+Worker READY; a published snapshot is not executed work; and an offline pack
+is not fresh live state. Require the exact terminal result for the job you
+submitted. Do not infer broader acceptance from a narrower success.
+
+The default shared session budget is finite and cumulative. Plan captures and
+polling accordingly. When it legitimately exhausts, stop clients and establish
+a fresh authorised session under the approved operating policy. Do not restart
+services to bypass ticket quotas, replay protection or a frozen test's limits.
+
+## Troubleshooting
+
+Investigate the **first failed boundary**, retain its exact error, and avoid
+changing several settings at once. More detailed routing is in
+[Failure modes](FAILURE_MODES.md).
+
+| Symptom | Check first | Appropriate response |
+| --- | --- | --- |
+| Executable or policy file not found | Installation root, `COH_BIN`, generated configuration and native architecture | Use one complete matching installation; do not borrow files from another release. |
+| Doctor succeeds but reads fail | Doctor is local; target address, readiness, sole TCP owner and authentication | Run the gateway status and `/proc/boot` checks. |
+| TCP refused, busy or gateway disconnected | Existing direct shell/UI/watch/mount, endpoint and selected network | Release the old owner; keep one gateway and use REST clients. |
+| `ERR AUTH` or rejected placeholder | Credential for the exact target and selected reference | Correct the provisioned source; do not use fixture secrets. |
+| Reads work but writes return `EPERM` | Request token, delegated ticket, scope/mount, expiry, role and target policy | Correct the specific missing authority; `--role queen` alone is not a fix. |
+| Legacy spawn or `coh gpu lease` is denied | Production strict-intent policy | Use the versioned intent path; do not weaken the production profile. |
+| `ELIMIT`, quota or bounded backpressure | Payload size, queued work, ticket operations/bytes and shared session usage | Respect the typed limit; pause producers and investigate before changing budgets. |
+| Timeout after a mutation | Whether the target/agent retained the original identity and result | Treat delivery as unconfirmed; inspect audit/status before any retry. |
+| GPU visible locally, absent on Queen | Whether a real publish ran, its credentials and target `/gpu` feature | Publish from the actual GPU host and inspect `/gpu/bridge/status`. |
+| Sidecar exits or reports unknown provider | Explicit provider selection, host access, manifest and watch support | Test one supported provider; `net`/`jetson` are one-shot. |
+| Agent exits zero without execution | `tickets disabled`, pending queue, matching manifest and cursor | Check each ticket's status/dead letter; do not delete durable state. |
+| PEFT command fails after changing the registry | Local pointer state versus target publication | Reconcile and publish the existing state; do not blindly activate/rollback again. |
+| CAS preflight passes but upload gets `buffer-full` | Independent target store occupancy | Preserve the partial outcome and use the documented update lifecycle. |
+| FUSE reports a lock or disconnected mount | Existing mount owner and host mount table | Stop users and unmount cleanly before starting another mount. |
+| UI is empty or disagrees with CLI | UI transport, target identity, offline mode and underlying read errors | Trust the identified source record, not cached presentation state. |
+| Evidence exporter returns nonzero | Retained `summary.json` and first required/optional read error | Preserve the partial pack; use a new directory for any later capture. |
+
+A raw append must not be retried automatically after an ambiguous response.
+Where the strict-intent contract permits an explicit retry, reuse the exact
+original envelope and identity; a new ID is a new request. Neither increasing
+client retries nor restarting the Queen establishes exactly-once external work.
+
+## Shut down without losing state
+
+Stop new producers first. Let admitted work reach its documented terminal state
+and retain the needed evidence. Stop continuous GPU/sidecar publishers and
+agents, preserving their journals and cursors. Quit REST shells and the UI;
+stop filesystem users and unmount FUSE. Stop the gateway **last**, after clients
+have finished using its connection.
+
+Stopping a gateway or host process does not roll back an external action,
+revoke an already running CUDA program or reboot the Queen. Use the target's
+[maintenance lifecycle](OPERATOR_RECIPES.md#run-a-maintenance-window) for a
+planned target shutdown or reboot.
+
+## Generated integration truth
+
+The selected manifest and compiled policy determine which paths, providers,
+roles and bounds exist. `coh-rtc` compiles
+[`configs/host_integration_acceptance.toml`](../configs/host_integration_acceptance.toml)
+into the [dependency graph](../configs/generated/host_integration_dependency.json)
+and [support table](snippets/host_integration_dependency.md). Consult those
+records when a packaged tool exists but a live feature is unavailable.
+
+Package presence, mock success, provider availability, Worker READY,
+correlated execution and use-case acceptance are independent states. Optional
+Pi diagnostic rows remain diagnostic text; their presence, absence or elapsed
+counters must not be converted into CPU utilisation, readiness or performance
+claims. QEMU/model evidence does not qualify a physical Pi or its selected
+network path.
+
+<a id="milestone-27-compatibility-review"></a>
+### Maintaining this guide
+
+This is an operator reference, not a running regression journal. Preserve
+command, failure, authority and recovery contracts here; keep individual
+restoration histories in their owning audit/test records and Git history.
+Changes to public functionality must review the eight executables, shared
+status/transport/provider libraries, Python package, `.coh` workloads and
+benchmark consumers together. This documentation rewrite changes no runtime,
+wire contract, generated default or benchmark workload.
+
+| Need the exact contract? | Read |
+| --- | --- |
+| Serial console, shell grammar and scripts | [Userland and CLI](USERLAND_AND_CLI.md) |
+| REST endpoints, deadlines and errors | [API Guidelines](API_GUIDELINES.md) |
+| Namespace and control record schemas | [Interfaces](INTERFACES.md) |
+| Delegation, strict intents, epochs and migration | [M27a authority](M27A_AUTHORITY.md) |
+| Full situation-based workflows | [Operator walkthrough](OPERATOR_WALKTHROUGH.md), [Operator recipes](OPERATOR_RECIPES.md) |
+| Python installation and typed APIs | [Python support](PYTHON_SUPPORT.md) |
+| Evidence, replay and signed-device trust | [Operator evidence](OPERATOR_EVIDENCE.md), [Attestation](ATTESTATION.md) |
+| Physical target bring-up and acceptance | [Hardware bring-up](HARDWARE_BRINGUP.md), [Test plan](TEST_PLAN.md) |
+| Performance methodology, not health guesses | [Benchmarks](BENCHMARKS.md) |
+
+Implementation references for checking installed options:
+[`coh`](../apps/coh/src/main.rs), [`cohsh`](../apps/cohsh/src/main.rs),
+[`gateway`](../apps/hive-gateway/src/main.rs),
+[`GPU bridge`](../apps/gpu-bridge-host/src/main.rs),
+[`sidecar`](../apps/host-sidecar-bridge/src/main.rs),
+[`ticket agent`](../apps/host-ticket-agent/src/main.rs),
+[`CAS`](../apps/cas-tool/src/main.rs),
+[`SwarmUI`](../apps/swarmui/src-tauri/main.rs), and
+[`Python backends`](../tools/cohesix-py/cohesix/backends.py).
 
 ## Release factory
 
-Milestone 26e task `m26e-production-surface-truth-and-stub-retirement` owns
-this workflow. The release target is `Cohesix-1.0.0-beta`; the compiler inventory
-owns its version, notes and exact file sets. The current `releases/` directory
-holds only the current distribution. Historical releases remain immutable at
-their original Git tags.
-Prepare the selected Linux AArch64 NVIDIA host in advance. Jetson is one reference
-builder; use its board-managed NVIDIA packages. Release scripts do not install
-system packages or infer host, user, NVMe, cargo or authentication paths.
+**Maintainers only.** Operating an installation does not require building a
+release. This appendix retains the assembly entry point used by
+[Quickstart](QUICKSTART.md#build-from-source). The compiler inventory owns
+version, notes and exact file selection; never relabel immutable historical
+release evidence.
 
-Build and test a single clean source commit before assembly. Retain the entire
-QEMU evidence tree on each native host, including its relative artifact/result
-paths and logs. Mac uses `qemu_smp_production` (HVF, 24 MHz); the supported Linux
-host uses `qemu_smp_kvm_production` (KVM, native 31.25 MHz, `-cpu host`). Never copy
-the Mac guest into the Linux distribution or force a KVM counter frequency.
-Native builds enable `coh` FUSE on both hosts and NVML on Linux.
+<details>
+<summary>Native inputs, production preflight, assembly and qualification</summary>
 
-The normal staged Mac run supplies the default-manifest artifact and its passing
-`base` TCP result. On the provisioned Linux builder, run the equivalent native
-regression lane from the same clean commit:
+### Prepare exact native inputs
+
+Build from one clean selected source and provisioned manifest. Assembly requires
+`--release-manifest` naming that source manifest and rejects development
+authority profiles, including in build-only mode. Provision private secret
+sources and the deployment public verification key as described in
+[M27a authority](M27A_AUTHORITY.md#production-profile-and-secret-sources).
+The factory does not infer SSH, user, NVMe, Cargo or credential locations.
+
+Mac uses `qemu_smp_production`, HVF and a 24 MHz counter. Native Linux uses
+`qemu_smp_kvm_production`, KVM, a native 31.25 MHz counter and `-cpu host`.
+Do not distribute the Mac guest as the Linux guest or force a different KVM
+counter. Native tools include `coh` FUSE on both hosts and NVML on Linux.
+After building the selected Linux seL4 profile, run its native regression lane:
 
 ```bash
 COHESIX_SEL4_PROFILE=qemu_smp_kvm_production \
@@ -445,48 +1338,46 @@ COHSH_LOG_ROOT="$PWD/out/regression-logs/release-linux" \
   scripts/cohsh/run_regression_batch.sh
 ```
 
-The selected Linux seL4 profile must already be built and validated by
-`scripts/sel4_profile.py`; see TEST_PLAN's Linux KVM lane. This lane builds all
-eight native tools along with the guest. Download the complete retained Linux
-evidence tree into an ignored local directory, preserving relative paths. The
-factory accepts its `qemu-artifact.json` plus the matching `base.json` TCP result.
-Mac input selection uses the equivalent files from its own accepted tree.
-`scripts/release_inputs.py` verifies source identity, native profile, every guest
-and tool hash, and the passing result. Archival verification on Mac does not
-assert that Mac can execute Linux artifacts; launch checks remain native.
-Staged context v2, standalone target evidence, and the release factory use the
-same `scripts/ci/qemu_artifact.py source-digest` calculation. Historical staged
-context v1 used a different source hash; rerun qualification when it does not
-match the factory's current source identity. Do not rewrite retained artifacts
-or their passing results to substitute a new digest.
-Each build also retains the compiler-selected configuration set under
-`release-configs/configs/generated/`. Artifact recording hashes that exact set,
-and assembly copies it from the accepted native build. The QEMU Python contract
-keeps its existing filename on both hosts; its `target_profile` is HVF or KVM
-according to the selected build.
+Retain each native evidence tree intact: logs, relative paths,
+`qemu-artifact.json`, matching passing `base.json` and
+`release-configs/configs/generated/`. `scripts/release_inputs.py` verifies the
+source, native profile and guest/tool hashes against the result. Downloading
+Linux records to a Mac is archival verification, not a native Linux test.
 
-Build the exact Pi stage and target-neutral Python wheel using their existing
-canonical workflows. The Pi stage must identify the same clean commit. Then run
-the read-only release preflight, substituting the retained paths below:
-
-Run `scripts/ci/python_compat_run.sh --wheel-smoke` on each native checkout after
-its selected-profile build, using the same target-neutral wheel. Retain both
-package manifests and set `PYTHON_PACKAGE_MANIFEST` to the Mac record and
-`LINUX_PYTHON_PACKAGE_MANIFEST` to the downloaded Linux record before preflight
-or assembly. Each record must bind the contracts retained by its native build.
+Staged context v2 and assembly share
+`scripts/ci/qemu_artifact.py source-digest`. Historical v1 differences require
+new qualification, not edited digests. The native QEMU Python contracts share
+a filename but must retain their correct HVF/KVM target-profile binding.
+Stage the Pi image from the same clean source. Build one target-neutral wheel
+and run this in each native checkout after its selected-profile build:
 
 ```bash
+scripts/ci/python_compat_run.sh --wheel-smoke
+```
+
+Retain `PYTHON_PACKAGE_MANIFEST` for Mac and
+`LINUX_PYTHON_PACKAGE_MANIFEST` for the downloaded Linux record. Both must bind
+the exact wheel and their native retained configuration.
+
+### Preflight and assemble
+
+These are templates: replace every angle-bracket field with the retained path
+or provisioned setting before executing. First validate the inputs:
+
+```text
 scripts/release_bundle.sh --check-manifest --linux \
+  --release-manifest <provisioned-source.toml> \
   --macos-artifact <mac-qemu-artifact.json> --macos-result <mac-base.json> \
   --linux-artifact <linux-qemu-artifact.json> --linux-result <linux-base.json> \
   --linux-builder-max-glibc <major.minor> --pi4-stage-dir <local-pi4-stage>
 ```
 
-Assemble the three peer folders and archives under `releases/` on Mac, retaining
-Linux archive compression on the selected remote ARM64 builder:
+Then assemble on Mac, using the selected remote ARM64 builder for Linux archive
+compression:
 
-```bash
+```text
 scripts/release_bundle.sh --name Cohesix-1.0.0-beta --version 1.0.0-beta \
+  --release-manifest <provisioned-source.toml> \
   --linux --linux-use-accepted-tools \
   --macos-artifact <mac-qemu-artifact.json> --macos-result <mac-base.json> \
   --linux-artifact <linux-qemu-artifact.json> --linux-result <linux-base.json> \
@@ -496,559 +1387,51 @@ scripts/release_bundle.sh --name Cohesix-1.0.0-beta --version 1.0.0-beta \
   --linux-builder-max-glibc <major.minor>
 ```
 
-Add `--linux-builder-key <path>` only when SSH agent/config authentication is
-insufficient. Existing output requires explicit `--force`. With
-`--linux-use-accepted-tools`, the exact tested binaries are copied. Without it,
-the existing remote rebuild path additionally requires
-`--linux-builder-build-dir`, `--linux-builder-cargo`,
-`--linux-builder-cargo-home`, `--linux-host-tools-dir` and
-`--linux-host-tools-manifest`; every rebuilt binary must still match its accepted
-artifact, otherwise qualify the new build first. The independently callable
-`scripts/linux_host_tools_sync.sh build-tools` remains available for native
-host-tool preparation. Its archive contains the complete clean Git tree,
-including the pinned `third_party/fuser` dependency. The remote builder verifies
-the archive hash and reconstructed Git tree, then regenerates all policies,
-Rust defaults and the Python projection for the profile-owned KVM timer.
-Builder provenance records the source tree, profile and Python contract hash.
-`--no-clean` retains the Cargo cache; the source directory is always replaced
-from the exact archive so deleted inputs cannot survive between builds.
-
-
-For the owner-approved 1.0.0-beta publication workflow, append
-`--qualified-source-root <clean-tested-checkout>` to reuse the exact binaries
-and images from that checkout after documentation and obsolete-distribution
-cleanup. Both checkouts must be clean and the tested commit must be an ancestor
-of the publication commit. `scripts/release_publication.py` permits only the
-named release documents, factory code, output ignore rules, literal help text,
-old distribution removal, and the corresponding retired-document inventory
-update. Runtime source, policies, manifests, dependency locks, test/evidence
-machinery, release file selection and generated runtime contracts must match.
-Linux assembly requires `--linux-use-accepted-tools` in this mode.
-
-The factory retains original source/artifact/result identities and copies the
-qualified guest, tools and generated configurations byte-for-byte. An optional
-`publication` record in each host's `BUILD_PROVENANCE.json` and the Pi image
-metadata records both commits, both checkout digests, and the complete allowed
-file delta with before/after hashes. Qualification records are never rewritten.
-This mode runs no tests and grants no new staged, hardware or performance PASS.
-The owner requested this separation for release preparation on 2026-09-13;
-the standard same-checkout assembly path remains available.
-
-For a release-owner-directed build without tests, use `--build-only` with
-fresh native artifact manifests and omit `--macos-result` / `--linux-result`.
-Build guests using `scripts/cohesix-build-run.sh --no-run`, stage Pi files using
-`scripts/pi4-image-build.sh` without flash options, and build native Linux host
-tools using `scripts/linux_host_tools_sync.sh build-tools`. Record each guest
-and native tool set with `scripts/ci/qemu_artifact.py record`, action
-`release.build-only`, and the clean source digest; do not supply a test attempt.
-Both native records and the Pi image must identify the current source. This
-mode retains the compiler inventory, native profile, architecture, image and
-byte checks, copies the recorded tools, and never creates a TCP PASS result.
-It cannot be combined with `--qualified-source-root`.
-
-Each host bundle contains `BUILD_PROVENANCE.json` with source and artifact
-identities, native profile/timer, and exact guest/tool/configuration hashes.
-Tested assembly also records its TCP-result hash. Build-only assembly instead
-records `assembly_mode=build-only`, `test_status=NOT_RUN` and a null result hash;
-the Pi metadata records the same build-only status. These records do not extend
-the separate Stage 5 carry-forward acceptance to the rebuilt artifacts.
-The Pi bundle contains a compact raw MBR/FAT32 image, its SHA-256 sidecar and
-`cohesix-pi4-portable-sd-image/v2` metadata including the sealed boot identity.
-Image capacity derives from the payload. Any card at least `minimum_target_bytes`
-can hold it; additional capacity stays unallocated. Assembly verifies the raw
-image's embedded files but remains packaging evidence.
-
-All three archives ship the same maintained [QUICKSTART.md](QUICKSTART.md) at
-their root. It covers native host setup, QEMU, Pi whole-card write/readback,
-first-boot network configuration and authenticated access from a host bundle.
-The factory relocates documentation links for that root location; it does not
-replace the Pi guide with separate embedded instructions. HARDWARE_BRINGUP.md
-is included for the referenced offline network-policy and diagnostic procedures.
-Release-note links resolve inside the archive. References to source-only
-documents resolve to the publication commit on GitHub.
-
-Run [TEST_PLAN Conditional G](TEST_PLAN.md#conditional-g--release-bundle-validation-macos-linux-and-pi4)
-after assembly. It boots the packaged QEMU launcher on each native host and
-requires readback and a fresh configured Pi boot from the distributed image.
-A candidate folder or archive alone is not permission to claim release acceptance.
-
-Compatibility review for this change: all eight host tools retain their CLI,
-namespace and wire contracts; Linux `coh` retains the release's FUSE/NVML features
-in the native QEMU build as well. `tools/cohesix-py` retains its wheel version and
-target contracts and is exercised from the extracted package. `rest_perf_harness.py`,
-QEMU pressure and Pi performance scripts retain workload/report schemas and target
-acceptance authority; only the release artifact selection and installation
-qualification workflow change.
-
-The staged source-identity repair changes only evidence production and its
-context schema. Compatibility review of `cohsh`, `coh`, `gpu-bridge-host`,
-`host-sidecar-bridge`, `cas-tool`, `swarmui`, `hive-gateway`, and
-`host-ticket-agent` found no CLI, wire, namespace, feature, or payload changes.
-`tools/cohesix-py` retains its generated target contracts and wheel API.
-Raw/REST benchmarks and QEMU/Pi pressure scripts retain workloads, report
-schemas, retries, thresholds, and target authority; their existing source
-bindings now agree with staged production. Packaging still verifies the exact
-native artifact and matching TCP result and requires fresh installation proof.
-
-## Tool catalog
-
-The source commands below use `cargo run -p <package> -- ...`. Release bundles
-provide the corresponding executable under `bin/`. Run each executable with
-`--help` for the authoritative option list compiled into that build.
-
-### `cohsh`
-
-Interactive and scripted operator shell. It supports direct TCP, REST, QEMU,
-and in-process mock transports; performs role attachment; and implements the
-command and `.coh` grammar defined in
-[USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
-
-```bash
-cargo run -p cohsh -- --help
-```
-
-Use direct TCP only when `cohsh` is the sole console owner. For concurrent use,
-select `--transport rest` and a running gateway. The current REST transport
-accepts only the local `queen` role and still inherits the gateway's upstream
-role and optional ticket. The default REST filesystem-operation response window
-is 130,000 ms for the canonical 120,000/120,000 ms gateway broker profile. Use
-`--rest-response-timeout-ms` or `COHSH_REST_RESPONSE_TIMEOUT_MS` only when the
-gateway declares a different profile; the value must be at least
-`5,000 + max(control, telemetry) + 5,000` milliseconds.
-
-Direct-TCP `CAT` preserves ordinary lines up to 256 bytes unchanged. A longer
-canonical JSON line uses the existing response stream and the exact versioned
-wire form `C1:<seq4hex>:<count4hex>:<full_sha256>:<utf8_payload>`. Sequence and
-count are four lowercase hexadecimal digits, sequence starts at zero and is
-contiguous, count is in `1..=64`, every wire line remains at most 256 bytes,
-and every chunk repeats the full lowercase SHA-256 of the reconstructed line.
-Under manifest schema 1.21 the reconstructed line is bounded to 8,192 bytes so
-a complete authority audit record remains readable. The ECHO limit remains
-2,048 bytes. `cohsh` and the Python TCP backend reassemble this
-format before returning `CAT` output and rejects partial, reordered, replayed,
-mixed-digest, oversized, or noncanonical groups. This does not add a verb,
-path, authority, or larger global console-output queue.
-
-### `coh`
-
-Host integration CLI with these command families:
-
-| Command | Purpose |
-| --- | --- |
-| `doctor` | Validate local policy/ticket, mount, GPU, and runtime prerequisites. |
-| `mount` | Mount the allowed namespace through FUSE. |
-| `gpu` | List GPUs and manage GPU leases. |
-| `peft` | Export, import, activate, and roll back PEFT adapters. |
-| `run` | Run a host command after lease validation and record bounded breadcrumbs. |
-| `telemetry pull` | Export Queen telemetry to a local directory. |
-| `fleet` | Read status, lease summaries, or pressure from multiple REST gateways. |
-| `evidence pack` | Export a deterministic evidence directory. |
-| `evidence timeline` | Build NDJSON and Markdown timelines from an evidence pack. |
-
-```bash
-cargo run -p coh -- --help
-cargo run -p coh -- doctor --help
-```
-
-The evidence-pack inventory, redaction behavior, missing-path semantics, and
-offline CI/SIEM contract are defined in
-[OPERATOR_RECIPES.md#evidence-packs-ci-and-siem](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
-
-Timeline import accepts AuditFS errors as either legacy strings or the emitted
-`{"code":"Permission","message":"EPERM"}` object. Structured errors become
-`code: message` in the existing timeline-v1 string field; the original object
-remains in the evidence pack. Null or absent errors remain absent in the timeline,
-and malformed error shapes fail import. Refused actions retain their `err` outcome.
-
-`coh mount` remains in the foreground and is private to the mounting host user.
-The macOS build requires macFUSE 5 with its `fuse3` pkg-config/library package;
-the pinned fuser mount-selection patch is documented in
-[third_party/fuser/COHESIX.md](../third_party/fuser/COHESIX.md).
-Reads fetch current remote data and errors even when cached metadata reports
-an empty file; a failed remote read must not become a successful empty read.
-Create the mount point first, keep the
-mount process in its own terminal, and use the host's normal FUSE unmount
-procedure before terminating it. An orderly session exit also releases the
-mount; after an abrupt process loss, clear any disconnected mount with the same
-host unmount procedure. Generated policy and doctor behavior are in
-[snippets/coh_policy.md](snippets/coh_policy.md) and
-[snippets/coh_doctor_checks.md](snippets/coh_doctor_checks.md). Verified macOS,
-Linux, REST, and direct-mode mount procedures are in
-[OPERATOR_RECIPES.md#mounted-namespace-with-fuse](OPERATOR_RECIPES.md#mounted-namespace-with-fuse).
-
-The Milestone 26e burn-in discovered that evidence export could discard a
-required-read failure summary or return success with an optional capture error.
-The scoped Milestone 25e restoration seals partial summaries and returns a
-nonzero failure for either error. Successful contents, redaction, full retained
-Queen-log coverage and existing target quotas remain unchanged. Compatibility
-review covered `cohsh`, `coh-status`, Hive Gateway, SwarmUI, GPU bridge, host
-sidecar/sidecar-bus, host-ticket agent, CAS tooling, the installed Python SDK and
-its CI/SIEM readers, and performance benchmark scripts. Existing readers already
-inspect summary error rows; no wire, schema, manifest, provider, benchmark or
-Python changes are required. Shell callers must respect the corrected nonzero
-exit status. AuditFS journal and decision CAT responses also use the existing
-C1 chunk framing when a legitimate JSON record exceeds one console line, as
-host-ticket records already do. Existing shared TCP reassembly preserves the
-exact JSON before REST, native CLI, SDK, FUSE or UI consumption; line, stream,
-journal and ticket bounds remain unchanged. Native Mac and Linux builds and
-fresh exact-image Pi export require their own retained evidence.
-
-### `hive-gateway`
-
-Host-only REST multiplexer. It owns the one target TCP console connection and
-projects `LS`, `CAT`, `TAIL`, and `ECHO`, plus bounded metadata endpoints.
-
-```bash
-cargo run -p hive-gateway -- --help
-```
-
-Non-mock startup requires both a non-placeholder TCP console token and a
-non-placeholder request-auth token. The default bind is `127.0.0.1:8080`;
-non-loopback binds require an explicit opt-in. See
-[API_GUIDELINES.md](API_GUIDELINES.md) for endpoint, status, and compatibility
-rules.
-
-For a physical Pi gateway, select `--worker-runtime-profile pi4-production`.
-The default `qemu-smp-production` preserves the QEMU contract. This option
-selects the existing compiler-generated Worker roles, limits and namespace
-bounds for `/v1/meta/bounds`; it does not discover or qualify the target.
-Both current profiles use eight shard bits; their role and resource bounds
-still differ, so the selection must match the target before structured Worker
-discovery or REST pressure.
-
-The gateway owns one authenticated target connection and one bounded broker.
-It schedules three fixed progress classes over that connection: host-ticket
-specification ingress first, receipt/control progress second, and bulk reads or
-telemetry third. Each turn remains batch- and queue-bounded; an execution burst
-is followed by a control burst and one telemetry batch, so priority cannot
-become starvation. `/v1/fs/echo-batch` accepts one through eight same-path
-records and preserves an exact outcome per input record. It amortizes the
-internal command boundary without creating a retry, alternate target session,
-or compatibility path.
-
-### `gpu-bridge-host`
-
-Discovers host GPUs through the compiled backend, builds the `/gpu` snapshot,
-and optionally publishes it through `/gpu/bridge/ctl`.
-
-```bash
-# Local inventory only; no target mutation.
-cargo run -p gpu-bridge-host -- --list
-
-# One REST publish from a real registry; exits after the snapshot is sent.
-cargo run -p gpu-bridge-host -- --registry "$COH_GPU_REGISTRY" \
-  --publish --rest-url "$COH_REST_URL"
-```
-
-`--list` does not publish. `--publish` without `--interval-ms` is one-shot;
-adding an interval runs continuously. A continuous direct-TCP publisher owns
-the console for its lifetime. Live publication resolves and rejects placeholder
-TCP or REST credentials before opening a connection/request. A missing registry
-publishes explicit empty/unavailable state; an invalid registry fails. There is
-no demo-catalog or first-active-model fallback. `--mock` selects deterministic
-fixture inventory and carries `source_mode=fixture`; the operational target
-rejects it, and it cannot satisfy integration, release, attestation, or use-case
-evidence.
-
-### `host-sidecar-bridge`
-
-Projects selected host providers into `/host`. Supported provider selectors are
-`systemd`, `k8s`, `docker`, `nvidia`, `jetson`, and `net`.
-
-```bash
-# One provider collection through the gateway.
-cargo run -p host-sidecar-bridge -- \
-  --rest-url "$COH_REST_URL" --provider net
-
-# Continuous gateway-backed publication for a scheduled provider.
-cargo run -p host-sidecar-bridge -- \
-  --rest-url "$COH_REST_URL" --provider docker --watch
-```
-
-Provider availability is host-dependent. Failures are published as bounded
-unknown/error state where the provider contract permits; they do not authorize
-host control. Watch scheduling supports `systemd`, `docker`, `k8s`, and
-`nvidia`; `net` and `jetson` are one-shot providers. In direct `--watch` mode
-the bridge is the sole TCP owner.
-
-### `host-ticket-agent`
-
-Consumes manifest-enabled host control tickets, validates their lifecycle and
-scope, executes supported host actions, records status, and resumes from a
-bounded cursor. Optional federation relay behavior is defined entirely by the
-resolved manifest; `--relay` does not invent peers or delegated authority.
-
-The systemd executor preserves separate `ActiveState` and `SubState` property
-records within its existing 256-byte UTF-8-safe output bound. Receipt and error
-summaries remain bounded single lines. Parsing a host observation does not
-establish that its target publication path exists or that a provider is ready.
-Release compatibility review covers `cohsh`, `coh`, `hive-gateway`, `swarmui`,
-`gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`, `cas-tool`,
-`tools/cohesix-py`, generated contracts and benchmark scripts: this correction
-changes only the agent's systemd output parsing, with no public protocol,
-policy, report schema, workload or threshold change.
-
-```bash
-cargo run -p host-ticket-agent -- --help
-cargo run -p host-ticket-agent -- --rest-url "$COH_REST_URL" --run-once
-```
-
-Use a dedicated cursor and relay WAL per deployment. Do not share state files
-between concurrently running agents. Ticket schemas and status paths are
-defined with the manifest-gated namespaces in
-[INTERFACES.md#host-tickets-and-federation](INTERFACES.md#host-tickets-and-federation).
-Runnable local and federated examples are in
-[OPERATOR_RECIPES.md#host-tickets-and-federation](OPERATOR_RECIPES.md#host-tickets-and-federation).
-
-An agent may use up to eight deterministic execution lanes. Ticket identity
-selects exactly one lane; each lane has its own cursor and journal, while
-provider mutation locks serialize only the provider resource that actually
-conflicts. Status transitions are published with bounded ordered batches.
-Terminal journal payloads compact only after target publication and durable
-cursor advancement; the cumulative admission-sequence fence still rejects
-replay after compaction.
-
-### `cas-tool`
-
-Packages signed or unsigned content-addressed bundles locally and uploads a
-prepared bundle through direct TCP or REST.
-
-```bash
-cargo run -p cas-tool -- pack --help
-cargo run -p cas-tool -- upload --help
-```
-
-`pack` writes a manifest and chunks; it does not contact the target. `upload`
-appends the bundle through the documented CAS control paths and is subject to
-request authentication, target authority, bounds, and update policy. CAS schemas
-are in [INTERFACES.md#cas-updates](INTERFACES.md#cas-updates).
-
-Manifest-v1 uses the shared maximum of eight chunks. With the
-default generated template's 128-byte chunks, the largest structurally
-eligible payload is therefore 1,024 bytes. The generated JSON template exposes
-that host-tool projection as `limits.max_chunks = 8` and
-`limits.max_payload_bytes = 1024`; `limits` is tooling metadata and is not an
-additional CBOR manifest-v1 wire field. A legacy template without `limits`
-falls back to the shared eight-chunk maximum. When `limits` is present,
-`max_chunks` must equal the shared maximum exactly and `max_payload_bytes` must
-equal `chunk_bytes * max_chunks`; a smaller or larger declaration is rejected
-as contract drift. `--chunk-bytes` is only an explicit confirmation and must
-equal the selected template's `chunk_bytes`.
-
-`pack` rejects an over-limit payload before writing a bundle. `upload` decodes
-and validates a prepared manifest before reading its chunks or opening a TCP or
-REST connection, so a legacy or foreign bundle with more than eight chunks is
-also a local zero-network failure. This preflight proves only manifest
-eligibility. An otherwise valid bundle can still receive the target's typed
-`buffer-full` refusal when other chunks or models consume the independent
-global CAS store capacity; clients must preserve that refusal and must not
-retry, truncate, or silently relabel the payload.
-
-### SwarmUI
-
-SwarmUI is the host desktop application for bounded telemetry, replay, status,
-and the shared operator console. Read-only panels and Live Hive rendering do
-not add protocol verbs; the embedded console can issue the same authorized
-commands as `cohsh`.
-
-```bash
-cargo run -p swarmui -- --help
-```
-
-| `SWARMUI_TRANSPORT` | Use |
-| --- | --- |
-| `console` or `tcp` | Direct console mode; SwarmUI is the sole TCP owner. |
-| `rest` or `gateway` | Concurrent mode through `hive-gateway`. |
-| `9p` or `secure9p` | A documented host-side Secure9P endpoint; never an extra in-target listener. |
-
-For gateway mode, set `SWARMUI_REST_URL` or `COH_REST_URL`. Write auth resolves
-from `SWARMUI_REST_AUTH_TOKEN`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`,
-`COHSH_REST_AUTH_TOKEN`, or `COH_REST_AUTH_TOKEN`. Generated display and cache
-defaults are in [snippets/swarmui_defaults.md](snippets/swarmui_defaults.md).
-
-SwarmUI discovers the fleet by reading the compiler-declared shard addresses,
-then each actual Worker directory and structured telemetry record. It does not
-depend on the bounded aggregate `/shard` reply. This applies to direct console,
-gateway and host Secure9P transports; an empty shard is valid, while a refused
-read or invalid Worker record stops discovery.
-
-The selected Worker's detail refreshes during live polling, including while the
-canvas is scrolled out of view and its animation is paused. If a replay supplies
-only an overlay, the detail pane follows that overlay and clears when its data
-disappears. The Snapshot key field selects the named cached snapshot in offline
-mode.
-
-The native console editor disables spelling, capitalization, and quote
-correction so typed JSON and shell syntax remain literal.
-
-The selected-detail repair corrects only SwarmUI's existing Tauri argument
-wiring and display cache. Compatibility review of `cohsh`, `coh`, `coh-status`,
-`hive-gateway`, `gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`,
-`cas-tool`, `tools/cohesix-py`, `.coh` workloads and performance scripts requires
-no changes: console/REST operations, generated bounds, target state, benchmark
-workloads and report schemas retain their contracts.
-
-The release fleet-discovery repair also updates `rest_perf_harness.py` to use
-the gateway's validated generated shard bounds. Compatibility review found no
-change needed in `cohsh`, `coh`, `hive-gateway`, `gpu-bridge-host`,
-`host-sidecar-bridge`, `cas-tool`, `host-ticket-agent` or `tools/cohesix-py`:
-their existing filesystem operations and explicit Worker paths retain their
-contracts. The target aggregate `/shard` view now stops at 64 distinct active
-labels, matching the host model's bounded listing instead of rejecting a full
-fleet with `buffer-full`. Raw TCP workloads, measured REST operations, report
-schemas, authentication, target buffers, quotas and acceptance thresholds are
-unchanged.
-
-The QEMU Worker GDB validator consumes the current passive Worker ABI v2,
-including its fixed init-page address and role field. Its release qualification
-repair changes only test selection and stale fixtures. Compatibility review of
-`cohsh`, `coh`, `hive-gateway`, `swarmui`, `gpu-bridge-host`,
-`host-sidecar-bridge`, `cas-tool`, `host-ticket-agent`, `tools/cohesix-py`, and
-raw/REST benchmarks found no affected runtime, public interface, workload,
-report schema or threshold.
-
-The QEMU qualification setup follows the existing single-use approval contract:
-it admits an `/actions/queue` decision before each Queen lifecycle write,
-including writes expected to fail for capacity or model-only reasons. Failed
-approval prevents that write, and the control result is preserved without a
-retry. This setup repair requires no changes to the eight host tools or Python
-SDK reviewed above, measured benchmark workloads, schemas, or thresholds.
-
-PEFT activation and rollback commit the host registry pointer. The Rust library
-helpers take policy, registry specification, and audit arguments; they no longer
-take a target client or write the read-only `/gpu/models/active` view. The `coh`
-CLI then publishes the registry through its existing validated GPU bridge
-snapshot workflow. The ticket agent and Python helpers report
-`execution_location=host projection=pending`; the configured, serialized
-`gpu-bridge-host --registry <root> --publish` publisher updates the target view.
-A host registry commit does not prove snapshot publication or inference reload.
-An interrupted state/pointer commit fails closed pending reconciliation, and
-state preparation precedes replacement of the prior active pointer.
-
-The matching release qualification repair preserves all seven receipt actions
-and their three outcomes. GPU negative cases use valid advertised devices and
-operation IDs beyond the existing 32-byte lease bound, so admission succeeds
-and the provider rejects before I/O. Expired tickets retain their exact READY
-Worker so it can receive the stale result; the independent fault/lifecycle
-tests prove teardown and generation invalidation. Compatibility review covers
-all eight shipped host executables, `coh-status`, `tools/cohesix-py`, generated
-contracts, and raw/REST benchmarks. Changes are confined to `coh`, the ticket
-agent, Python's local PEFT helpers, and qualification fixtures; no target path,
-authority, schema, benchmark workload, threshold, or renewal round-trip changes.
-
-The provisioned-target check builds the manifest-selected console transport:
-`direct-virtio` for QEMU, and the canonical Pi build's `direct-genet` with its
-console-network/smoltcp optimization settings. QEMU production transport
-selection is independent of tracing, including the transitive `dev-virt` and
-`cohesix-dev` Cargo bundles used by the TCP regression runner. Compatibility
-review of the same eight host tools, Python SDK, and raw/REST benchmarks found
-no public interface,
-workload, schema, or threshold changes; exact image and page admission remain
-required.
-
-The operational shard and telemetry TCP fixtures use the current 8-bit shard
-addresses for both QEMU and Pi. Their path checks derive from the selected
-manifests and SHA-256 namespace contract. This fixture correction changes no
-host-tool, SDK, target, or benchmark interface.
-
-The QEMU TCP matrix checks the current fifteen-line HELP body, including its
-ordered command labels, followed by one exact `OK HELP`. NETSTATS requires its
-existing nineteen counter/status lines and one exact `OK NETSTATS`. This reconciles the
-older eleven-line fixture with the existing shared console help surface.
-Compatibility review of the complete host-tool suite, Python SDK, and raw/REST
-benchmarks requires no implementation change: commands, response framing,
-timeouts, retries, workloads, and thresholds remain unchanged.
-
-The positive gated TCP fixtures retain audit, replay, model, and Modbus support in their
-regression manifest. REST concurrency uses boot, ingest, and root reachability scripts;
-the console log-batching pool benchmark remains under TCP because REST batches
-are restricted to host ticket results. The host namespace fixture also stays
-under TCP because it checks a console-specific entry count. The REST wrapper
-defaults match the Stage 04 core selection. This test setup correction changes no
-production profile, host-tool or Python API, benchmark workload, or threshold.
-
-Provisioned TCP regression manifests use the compiler's developer-only
-`coh-rtc-regression-tickets` command to bind existing fixture tickets to the
-selected issuer. It verifies the development signature and preserves every
-claim byte, including deliberately expired and quota-limited claims. The runner
-retains private generated script copies and signature-binding records beside
-the target logs. This adds no shipped host-tool or Python API and changes no
-benchmark operations, refusal expectations or limits.
-
-### Cohesix Python package
-
-The Python package supplies filesystem, direct TCP, REST, and deterministic
-mock backends plus typed orchestration helpers. Its installation, API, and
-backend rules are owned by [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md).
-
-## Common environment variables
-
-| Variable | Consumer | Meaning |
+Add `--linux-builder-key PATH` only when SSH agent/config authentication is
+insufficient. Existing output requires `--force`. `--linux-use-accepted-tools`
+copies the tested binaries; rebuilding remotely additionally requires
+`--linux-builder-build-dir`, `--linux-builder-cargo`, `--linux-builder-cargo-home`,
+`--linux-host-tools-dir` and `--linux-host-tools-manifest`. Changed binaries
+require new qualification.
+
+The independent `scripts/linux_host_tools_sync.sh build-tools` workflow ships
+the complete clean tree, including `third_party/fuser`, verifies archive/tree
+hashes and regenerates KVM-owned policies and Python defaults. `--no-clean`
+retains Cargo cache, never stale source; each build replaces source from the
+exact archive.
+
+### Keep assembly modes distinct
+
+| Mode | Requirements | What the result means |
 | --- | --- | --- |
-| `COH_TCP_HOST`, `COH_TCP_PORT` | Gateway and selected host tools | Target TCP console endpoint |
-| `COH_AUTH_TOKEN`, `COHSH_AUTH_TOKEN` | Direct tools and gateway | TCP console authentication |
-| `COH_ROLE`, `COH_TICKET` | Gateway and selected tools | Upstream role and optional ticket |
-| `COH_REST_URL`, `COHSH_REST_URL`, `HIVE_GATEWAY_URL` | REST-capable clients | Gateway base URL |
-| `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN` | Gateway and REST clients | HTTP mutation authentication |
-| `COH_REST_TICKET` | REST-capable CLI tools, publishers, SwarmUI and Python | Delegated caller ticket required for mutations |
-| `HIVE_GATEWAY_DELEGATION_KEY_REF` | Gateway | Explicit `env:NAME` or absolute `file:` issuer-key source |
-| `COH_AUTH_TOKEN_REF` | `cohsh`, GPU bridge and Python | Explicit TCP credential reference selected before compatibility token variables |
+| Tested assembly | Exact native artefacts and matching passing TCP results | Packages those qualified bytes; still requires distribution validation below. |
+| Owner-approved publication reuse | `--qualified-source-root PATH`; clean tested ancestor and clean publication checkout; exact delta accepted by `scripts/release_publication.py`; Linux accepted tools | Retains original qualification and adds publication provenance. No tests or new PASS. |
+| Explicit build-only | `--build-only`; fresh native artefact records; production manifest; omit result flags; no `--qualified-source-root` | `assembly_mode=build-only`, `test_status=NOT_RUN`, null result hash. No acceptance carried forward. |
 
-Not every executable accepts every alias; its `--help` and the tool-specific
-sections above are authoritative. Prefer deployment-scoped environment files or
-a secret manager with restrictive permissions. Never commit a populated secret
-file.
+Publication reuse must preserve runtime, manifest/policy, lock, generated
+contract and test/evidence identities outside the guard's allowed publication
+delta. It is not a general waiver to reuse stale results. Provenance retains
+both source identities and allowed before/after file hashes.
 
-## Operational checks
+For build-only, use `scripts/cohesix-build-run.sh --no-run`, stage Pi with
+`scripts/pi4-image-build.sh` without flash options, and build native Linux tools
+with the canonical sync workflow. Record fresh artefacts through
+`scripts/ci/qemu_artifact.py record`, action `release.build-only`, with the clean
+source digest and no test attempt. `BUILD_PROVENANCE.json` records source,
+native profile/timer and exact guest/tool/configuration identities in all modes.
 
-Before adding a tool to a live topology:
+### Validate the distributed bytes
 
-1. Confirm whether it uses direct TCP, REST, a mount, or only local files.
-2. Confirm the delegated caller ticket and gateway upstream role/ticket both permit every REST write.
-3. Confirm the active manifest exposes the required path and feature gate.
-4. Use `/v1/meta/bounds` or generated client policy for request sizing.
-5. Check [FAILURE_MODES.md](FAILURE_MODES.md) before retrying a failed mutation.
+The Pi archive contains a compact raw MBR/FAT32 image, SHA-256 sidecar and
+`cohesix-pi4-portable-sd-image/v2` metadata. `minimum_target_bytes` sets the
+minimum card capacity; extra space stays unallocated. Embedded-file integrity
+is packaging evidence, not physical boot evidence.
 
-The full, ordered example is in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). Start there for a new live
-deployment; use [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) only after that
-topology is healthy.
+All archives carry the maintained root `QUICKSTART.md`, with links relocated
+by the factory rather than a separate invented Pi procedure. After assembly,
+run **Conditional G** in the [Test Plan](TEST_PLAN.md): validate each packaged
+QEMU launcher on its native host and perform Pi image readback plus a fresh
+configured boot of the distributed image. Archive creation or build-only
+success is not release acceptance.
 
-GPU refresh compatibility review: root and the in-process NineDoor model retain
-control logs across inventory refreshes from the same device/publisher epoch.
-`coh` (GPU, run, all mount transports), `cohsh`, `hive-gateway`,
-`gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `cas-tool`, SwarmUI,
-`tools/cohesix-py`, and raw/REST performance scripts were reviewed. Existing
-transport, snapshot schema, namespace, policy, role, and benchmark contracts
-remain unchanged. The mount now uses uncached reads to preserve remote errors
-and changing content. GPU snapshot seeds initialize append logs once per
-generation; authorized append operations remain the control update path.
-Neither inventory nor an ACTIVE record proves host execution, TTL enforcement,
-revocation, or a target Worker completion.
-
-## Milestone 27 compatibility review
-
-The [operator commands](OPERATOR_EVIDENCE.md) extend `coh`, `cohsh`, shared
-`coh-status` replay, and SwarmUI trace loading. Python consumes canonical case
-and attestation-result artifacts and opaque trace references. Schema 1.19
-regenerates client defaults and both supported Python target profiles; the
-console wire ABI and REST endpoint contracts are unchanged.
-
-Reviewed surfaces requiring no implementation change: Hive Gateway request
-broker/authentication and REST projection, host-ticket-agent ticket lifecycle,
-gpu-bridge-host GPU execution, host-sidecar-bridge provider execution, cas-tool
-CAS bytes, and existing FUSE/telemetry host adapters. Their requests, response
-bounds, authority, and receipts are unchanged. Existing performance scripts
-consume the same console/REST grammar; M27 adds a separate host parsing latency
-measurement. Historical release bundles and trace-v1 fixtures retain their
-original identities and cannot qualify the new generated manifest.
-
-## Signed-device evidence availability
-
-The [signed evidence contract](ATTESTATION.md) defines the schema-1.20
-implementation modes, bounded `/proc/attest` discovery, verifier-owned trust
-policy, TPM2 quote verification, retained pack records and the stock Pi 4
-positive-attestation exemption. Optional profiles report unavailable or
-measurement-only; development ticket keys never become attested production
-keys. `coh attest --trust-policy <file>` verifies signatures, and
-`--input <pack>` remains explicitly offline.
+</details>
