@@ -3,9 +3,14 @@
 <!-- Purpose: Guide Queen setup, serial diagnostics, cohsh operation and checked automation using the implemented console contracts. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix serial console and cohsh — user guide
+# Cohesix root shell and cohsh — user guide
 
-Use the **serial console** to bring up a Queen, check its hardware and network,
+## Root Shell vs `cohsh`
+The root shell is the local interface to the Cohesix OS. Its primary purpose is system bring up and troubleshooting. Raspberry Pi exposes the root console over serial, as well as USB and HDMI - both can be used concurrently.
+
+`cohsh` is the command line client that is used to interact with Cohesix - and it is the primary user interface for actual work.
+
+Use the **root shell** to bring up a Queen, check its hardware and network,
 and recover when a host connection is unavailable. Use **`cohsh` on your Mac or
 Linux host** to inspect the Queen, retain logs, submit authorised work, upload
 telemetry and run repeatable checks.
