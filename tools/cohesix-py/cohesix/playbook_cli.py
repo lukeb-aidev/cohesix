@@ -57,6 +57,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--coh-binary", type=Path)
     parser.add_argument("--deployment", type=Path)
+    parser.add_argument(
+        "--recipe", action="store_true",
+        help="durable CUDA recipe over admitted host tickets",
+    )
+    parser.add_argument(
+        "--cancel-stage",
+        help="with recover --recipe, use a separately authorized cancellation ticket",
+    )
     parser.add_argument("--auth-ref")
     parser.add_argument("--ticket-ref")
     parser.add_argument(
@@ -168,6 +176,8 @@ def main() -> None:
             port=args.tcp_port,
             auth_ref=args.auth_ref,
             ticket_ref=args.ticket_ref,
+            recipe=args.recipe,
+            cancel_stage=args.cancel_stage,
         )
         print(json.dumps(result, indent=2, sort_keys=True))
         return

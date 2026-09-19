@@ -24,6 +24,16 @@ installation/CI, the full SwarmUI workbench, then integrated qualification. Broa
 scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
 planning, not implementation or evidence status.
 
+Milestone [27c](BUILD_PLAN.md#27c), **Recoverable CUDA Recipes**, is **Complete**
+as of 19 September 2026. The shared CLI/Python lifecycle persists identity and
+submission intent, reconciles lost ACKs without duplicate CUDA execution, reuses
+compatible verified stage outputs and retains cumulative resource accounting.
+A fresh admitted native recipe, focused refusal/recovery/reuse checks, macOS and
+Linux ARM64 builds, generated consistency and Test Plan checks pass. Its canonical
+diagnostic case preserves a partial lease-detail capture error; no complete
+release evidence, new Pi qualification or full-suite pass is claimed. See the
+[implementation record](audit/M27C_IMPLEMENTATION_RECORD.md).
+
 Milestone [27b](BUILD_PLAN.md#27b) is **Complete** as of 19 September 2026
 for the selected **Executable Host Foundation**. The macOS ARM64 controller and
 Linux AArch64 CUDA 13.2.2 host pass real vector-add and matrix-multiply through

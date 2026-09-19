@@ -62,6 +62,8 @@ struct Case {
     proof: &'static str,
     inventory: BTreeMap<String, Availability>,
     chains: Vec<Chain>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipe: Option<serde_json::Value>,
 }
 
 const STAGES: &[(&str, &[&str])] = &[
@@ -203,10 +205,21 @@ pub(super) fn build(
         proof: "none",
         inventory,
         chains,
+        recipe: crate::recipe::case_diagnostic(root)?,
     };
     let json = serde_json::to_vec_pretty(&case)?;
     ensure!(json.len() <= operator::MAX_BYTES, "case-output-bound");
     let mut markdown = format!("# Evidence case\n\nScenario: {}\n\nOffline review; no target, hardware, health, external-execution, or authoritative-receipt proof.\n\n", serde_json::to_string(&scenario)?);
+    if let Some(recipe) = &case.recipe {
+        markdown.push_str(&format!(
+            "Recipe operation `{}` (local observation, proof none).\n\nCause: {}.\n\nRemaining uncertainty: {}.\n\nRecovery: {}.\n\nSource: `attachments/recipe.json`, sha256:{}.\n\n",
+            markdown_escape(recipe["operation_id"].as_str().unwrap_or("unknown")),
+            markdown_escape(recipe["cause"].as_str().unwrap_or("unknown")),
+            markdown_escape(recipe["uncertainty"].as_str().unwrap_or("unknown")),
+            markdown_escape(recipe["recovery"].as_str().unwrap_or("unknown")),
+            markdown_escape(recipe["source_sha256"].as_str().unwrap_or("unknown")),
+        ));
+    }
     for chain in &case.chains {
         markdown.push_str(&format!(
             "- Correlation `{}`: **{}**\n",

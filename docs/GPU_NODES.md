@@ -386,6 +386,21 @@ lease, or second workload is refused. Worker receipts still use one IPC call
 at a time. The agent reserves its control execution lane and rechecks the
 root-published memory/stream reservation along with the lease and device.
 
+### Durable recipe composition
+
+The external `coh` plan/apply/watch/explain/verify/recover commands accept
+`cuda-reference --recipe --deployment FILE`. They compose the admitted workload
+transport described above, preserving the original native job and ticket across
+controller failure. The protected host journal never supplies admission or
+execution proof. Signed native termination releases its reservation; verified
+output bytes in CAS permit bounded dependency-aware reuse. Current authority is
+required for every new submit/cancel action. See [Recoverable CUDA
+recipes](HOST_TOOLS.md#recoverable-cuda-recipes) for deployment fields, recovery,
+finite retention and the checked Python example. Device buffers are released by
+native child termination; retained output artifacts are not native training
+checkpoints. Queen reboot persistence and production Worker bundle binding keep
+their separate evidence owners.
+
 ### Native MIG identity and execution selection
 
 The `gpu-bridge-host --mig-inventory` diagnostic reads NVML directly through the

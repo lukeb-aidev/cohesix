@@ -291,6 +291,12 @@ SWARMUI
   cohsh key=value convenience syntax is not SwarmUI spawn syntax. A disabled
   console operation must use an authorized external cohsh workflow.
 
+  Durable CUDA recipes use the separate host coh CLI:
+    coh plan cuda-reference --recipe --deployment /absolute/recipe.json
+  apply/watch/explain/verify/recover use that same journal. These are not root
+  console, cohsh or SwarmUI console commands. See docs/HOST_TOOLS.md, Recoverable
+  CUDA recipes, for exact tickets, signed output verification and cancellation.
+
 ## kill
 NAME
   kill — request Worker termination in compatibility mode.

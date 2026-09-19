@@ -1115,6 +1115,31 @@ or the provider's documented unknown scalar. A control-file append records a
 request; only the corresponding host-ticket result or provider observation can
 prove that the host action occurred.
 
+## Host CUDA recipe records
+
+`configs/cuda_recipe.toml` compiles to `configs/generated/cuda_recipe.json`
+(`cohesix-cuda-recipe-contract/v1`). This is a host-only composition contract;
+it changes no target manifest field, console verb or Secure9P namespace. External
+`coh` lifecycle commands select it with `cuda-reference --recipe`.
+
+`cohesix-cuda-recipe/v1` binds a logical operation, immutable topology, generated
+contract digest, private journal and bounded dependency stages. Each stage binds
+an existing `host-ticket/v2` submit, canonical GPU input CAS bytes, exact CUDA
+runtime compatibility and separately enrolled graph/trust/CAS references.
+`cohesix-recipe-journal/v1` records configuration revisions, original request and
+idempotency, cumulative attempts, dependency keys and reservations before dispatch.
+New cancellation grants remain separate current authority. The
+`cohesix-recipe-operation-report/v1` view is non-authoritative: only the existing
+signed causal verifier plus actual output CAS validation advances a stage.
+
+Canonical evidence cases retain their `cohesix-evidence-pack/case-v1` schema.
+An optional `recipe` projection explains a sanitized report from
+`attachments/recipe.json`, with source hash, stage/ticket correlation, uncertainty
+and authorized recovery. Omitted recipe input preserves legacy case output.
+Neither journal, cache, report nor case grants execution or upgrades a receipt.
+See [Host tools](HOST_TOOLS.md#recoverable-cuda-recipes) for fields, exact bounds
+and operating examples.
+
 ## Host tickets and federation
 
 When host tickets are enabled, the namespace exposes:

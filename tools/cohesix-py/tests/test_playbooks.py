@@ -213,3 +213,34 @@ def test_workflow_credentials_are_references_and_live_endpoint_is_explicit(
             {"timeout_s": 30, "credential_refs": {}},
         )
     ]
+
+
+def test_recipe_lifecycle_preserves_deployment_and_cancellation_scope(tmp_path, monkeypatch):
+    import pytest
+    from cohesix import native_providers
+    from cohesix.errors import CohesixError
+    from cohesix.playbooks import execute_workflow
+
+    binary = tmp_path / "coh"
+    binary.write_text("fixture executable not launched")
+    deployment = tmp_path / "recipe.json"
+    deployment.write_text("{}")
+    seen = []
+
+    def capture(argv, **kwargs):
+        seen.append((argv, kwargs))
+        return b'{"authoritative":false,"production_use_case_accepted":false}'
+
+    monkeypatch.setattr(native_providers, "bounded_command", capture)
+    execute_workflow("cuda-reference", "plan", coh_binary=binary,
+                     deployment=deployment, recipe=True)
+    assert seen[-1][0] == [str(binary), "plan", "cuda-reference", "--recipe",
+                           "--deployment", str(deployment)]
+    execute_workflow("cuda-reference", "watch", coh_binary=binary,
+                     deployment=deployment, recipe=True)
+    assert seen[-1][1]["credential_refs"] == {}
+    with pytest.raises(CohesixError, match="invalid_cancellation"):
+        execute_workflow("cuda-reference", "apply", coh_binary=binary,
+                         deployment=deployment, recipe=True, cancel_stage="vadd")
+    with pytest.raises(CohesixError, match="not_registered"):
+        execute_workflow("shell", "plan", coh_binary=binary, recipe=True)

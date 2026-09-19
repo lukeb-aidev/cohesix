@@ -64,6 +64,17 @@ Native discovery uses the separate `--native-providers --live-reference` lane;
 observations remain INCOMPLETE until the corresponding execution and evidence
 obligations are independently met. Historical failed attempts remain retained.
 
+Recoverable CUDA recipes use `cargo test --locked -p coh --test recipe --test
+workflow --test evidence_case`, the `coh-rtc` `recipe::tests` contract check and
+the focused Python playbook wrapper tests. These prove deterministic journal,
+reuse, cancellation/accounting, corruption and diagnostic contracts. A fresh
+recipe on the selected native CUDA lane must separately prove actual output,
+lost-ACK/controller recovery and confirmed termination using the existing
+QEMU admission and independent enrolled evidence. Reuse unchanged 27b native
+executor refusal/cancel/restart evidence at its original component identity;
+controller fixtures do not replace it. Compile affected host implementations
+and run generated/Test Plan consistency. Whole-release staged gates remain 27g.
+
 Select tests by the contract at risk, its real execution surface, and the claim
 being made. Record the affected surfaces, catalog actions, expected positive
 and negative outcomes, exact profiles, and any evidence still missing. A

@@ -1134,6 +1134,20 @@ Accepted reports must cite their artifact paths in this section or in a linked
 checked-in audit ledger. Raw iteration files may remain under `out/bench` or
 `logs/bench`, but an uncommitted path alone is not durable documentation.
 
+## CUDA recipe reuse and accounting
+
+Recipe work uses focused stage measurements, not the raw target transport gate.
+Record the exact deployment/contract, controller binary, provider/native image,
+output graph/hash, stage key, attempt count, reused-stage count and elapsed host
+time for the tested operation. A changed-input comparison must show that only
+the changed stage and its descendants execute again. Keep requested cumulative
+allocation, measured allocation, unobserved attempts, unresolved reservations,
+confirmed release and retained output bytes separate in the existing
+`cohesix-recipe-operation-report/v1` projection. Never reset counters on recovery
+or describe a cache hit as native CUDA execution. Failure/ACK injection duration
+is diagnostic overhead, not a throughput measurement. No REST/raw-TCP workload,
+latency threshold, report schema or Pi/QEMU performance acceptance changes.
+
 ## Milestone 27 host operator latency
 
 Run `cargo test -p coh --test operator_latency -- --nocapture` and retain the

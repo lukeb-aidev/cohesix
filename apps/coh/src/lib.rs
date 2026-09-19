@@ -33,6 +33,8 @@ pub mod package;
 pub mod peft;
 /// Manifest-derived policy loader.
 pub mod policy;
+/// Durable CUDA recipe composition over the existing admitted workload path.
+pub mod recipe;
 /// REST-backed access helpers for hive-gateway.
 pub mod rest;
 /// Runtime command wrapper helpers.

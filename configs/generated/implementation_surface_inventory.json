@@ -5594,6 +5594,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/audit/M27C_IMPLEMENTATION_RECORD.md",
+      "kind": "tracked_surface",
+      "path": "docs/audit/M27C_IMPLEMENTATION_RECORD.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/audit/M27_COMPLETION_EVIDENCE.md",
       "kind": "tracked_surface",
       "path": "docs/audit/M27_COMPLETION_EVIDENCE.md",
@@ -7977,6 +7991,20 @@
       "id": "tracked:tools/cohesix-py/examples/common.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/examples/common.py",
+      "implementation_class": "diagnostic",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit examples directory; rule=cohesix-python-examples",
+      "package_disposition": "example_not_evidence",
+      "evidence_requirement": "cannot satisfy target or release acceptance",
+      "current_observed_mode": "example_playbook",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/examples/cuda_recipe.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/examples/cuda_recipe.py",
       "implementation_class": "diagnostic",
       "owner": "python-client",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",

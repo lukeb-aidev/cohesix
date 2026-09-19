@@ -257,5 +257,7 @@ pub fn default_host_integration_doc_path() -> PathBuf {
         .join("host_integration_dependency.md")
 }
 
+/// Bounded host CUDA recipe contract.
+pub mod recipe;
 /// Compiler-owned staged host workflow contracts.
 pub mod workflow;

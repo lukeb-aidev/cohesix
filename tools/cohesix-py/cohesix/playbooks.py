@@ -780,6 +780,8 @@ def execute_workflow(
     port: int = 31337,
     auth_ref: str | None = None,
     ticket_ref: str | None = None,
+    recipe: bool = False,
+    cancel_stage: str | None = None,
 ) -> dict[str, object]:
     """Use the shared Rust lifecycle and verifier; secrets never enter command arguments."""
     from .native_providers import bounded_command
@@ -788,20 +790,30 @@ def execute_workflow(
 
     if lifecycle not in {"plan", "apply", "watch", "explain", "verify", "recover"}:
         raise ProviderUnavailable("invalid_lifecycle", "workflow")
-    if playbook_id not in generated_workflows() or not coh_binary.is_absolute():
+    registered = (
+        playbook_id == "cuda-reference"
+        if recipe else playbook_id in generated_workflows()
+    )
+    if not registered or not coh_binary.is_absolute():
         raise ProviderUnavailable("not_registered", "workflow")
+    if cancel_stage is not None and (not recipe or lifecycle != "recover"):
+        raise ProviderUnavailable("invalid_cancellation", "workflow")
     command = [str(coh_binary.resolve(strict=True))]
     if ticket_ref is not None:
         # The Rust process resolves the same explicit source. Validate before spawning.
         resolve_secret_reference(ticket_ref)
         command.extend(["--ticket-ref", ticket_ref])
     command.extend([lifecycle, playbook_id])
-    if lifecycle not in {"plan", "explain"}:
+    if recipe:
+        command.append("--recipe")
+    if cancel_stage is not None:
+        command.extend(["--cancel-stage", cancel_stage])
+    if lifecycle not in {"plan", "explain"} or (recipe and deployment is not None):
         if deployment is None:
             raise ProviderUnavailable("not_enabled", "workflow_deployment")
         command.extend(["--deployment", str(deployment.resolve(strict=True))])
     credentials = {}
-    if lifecycle in {"apply", "watch", "recover"}:
+    if lifecycle in {"apply", "recover"} or (lifecycle == "watch" and not recipe):
         if (rest_url is None) == (host is None) or auth_ref is None:
             raise ProviderUnavailable("not_enabled", "workflow_endpoint")
         if rest_url is not None:

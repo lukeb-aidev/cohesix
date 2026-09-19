@@ -121,6 +121,12 @@ struct WorkflowArgs {
     /// Exact deployment, ticket requests and independent evidence trust paths.
     #[arg(long)]
     deployment: Option<PathBuf>,
+    /// Compose a durable CUDA recipe using the same lifecycle commands.
+    #[arg(long)]
+    recipe: bool,
+    /// With recover --recipe, request separately authorized cancellation of this stage.
+    #[arg(long, requires = "recipe")]
+    cancel_stage: Option<String>,
     #[command(flatten)]
     connect: ConnectArgs,
 }
@@ -479,6 +485,9 @@ enum EvidenceCommand {
     Timeline {
         #[arg(long, value_name = "DIR", alias = "in")]
         input: PathBuf,
+        /// Add a sanitized recipe diagnostic, including to a retained partial pack.
+        #[arg(long)]
+        recipe_report: Option<PathBuf>,
         /// Review framing only; never changes evidence authority.
         #[arg(long, value_enum, default_value = "generic")]
         scenario: evidence_timeline::Scenario,
@@ -487,6 +496,9 @@ enum EvidenceCommand {
 
 #[derive(Debug, Parser)]
 struct EvidencePackArgs {
+    /// Bounded non-authoritative recipe report to explain in the canonical case.
+    #[arg(long)]
+    recipe_report: Option<PathBuf>,
     /// Signed causal graph; requires separately configured trust and immutable CAS.
     #[arg(long, requires_all = ["evidence_trust", "evidence_cas"])]
     causal_graph: Option<PathBuf>,
@@ -536,11 +548,38 @@ fn main() -> Result<()> {
     let policy_path = resolve_policy_path(cli.policy)?;
     let role = Role::from(cli.role);
     match cli.command {
-        Command::Plan(args) | Command::Explain(args) => {
+        Command::Plan(args) => {
+            if args.recipe {
+                anyhow::ensure!(args.workflow == "cuda-reference", "not_registered recipe");
+                let report = if let Some(path) = &args.deployment {
+                    coh::recipe::plan(&coh::recipe::load(path)?)?
+                } else {
+                    coh::recipe::contract()?
+                };
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                return Ok(());
+            }
             println!(
                 "{}",
                 serde_json::to_string_pretty(&coh::workflow::plan(&args.workflow)?)?
             );
+            Ok(())
+        }
+        Command::Explain(args) => {
+            let report = if args.recipe {
+                anyhow::ensure!(args.workflow == "cuda-reference", "not_registered recipe");
+                if let Some(path) = &args.deployment {
+                    coh::recipe::inspect(
+                        &coh::recipe::load(path)?,
+                        gpu_bridge_host::workload::now_ms()?,
+                    )?
+                } else {
+                    coh::recipe::contract()?
+                }
+            } else {
+                coh::workflow::plan(&args.workflow)?
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
         Command::Apply(args) => {
@@ -1451,6 +1490,30 @@ fn run_workflow(
     let path = args
         .deployment
         .ok_or_else(|| anyhow!("not_enabled workflow-deployment"))?;
+    if args.recipe {
+        anyhow::ensure!(args.workflow == "cuda-reference", "not_registered recipe");
+        let deployment = coh::recipe::load(&path)?;
+        let now = gpu_bridge_host::workload::now_ms()?;
+        let report = if verb == "verify" || verb == "watch" {
+            coh::recipe::inspect(&deployment, now)?
+        } else {
+            let policy = load_policy(policy_path)?;
+            let mut access = connect_access(&args.connect, &policy, role, ticket)?;
+            coh::recipe::advance(
+                &mut access,
+                &deployment,
+                now,
+                verb == "recover",
+                args.cancel_stage.as_deref(),
+            )?
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        anyhow::ensure!(
+            verb != "verify" || report["all_steps_verified"] == true,
+            "unverified recipe-terminal"
+        );
+        return Ok(());
+    }
     let deployment = coh::workflow::load(&path, &args.workflow)?;
     let result = if verb == "verify" {
         let report = coh::workflow::inspect(&deployment)?;
@@ -1614,6 +1677,9 @@ fn run_evidence(
                     pack.trace.as_deref(),
                     pack.attestation_record.as_deref(),
                 )?;
+                if let Some(report) = &pack.recipe_report {
+                    coh::recipe::attach_diagnostic(&spec.out_dir, report)?;
+                }
                 if let (Some(graph), Some(trust), Some(cas)) =
                     (&pack.causal_graph, &pack.evidence_trust, &pack.evidence_cas)
                 {
@@ -1627,8 +1693,15 @@ fn run_evidence(
             }
             handle_result(result, audit, "EVIDENCE")
         }
-        EvidenceCommand::Timeline { input, scenario } => {
+        EvidenceCommand::Timeline {
+            input,
+            recipe_report,
+            scenario,
+        } => {
             let mut audit = CohAudit::new();
+            if let Some(report) = recipe_report {
+                coh::recipe::attach_diagnostic(&input, &report)?;
+            }
             let result =
                 evidence_timeline::write_timeline_with_scenario(&input, scenario).map(|summary| {
                     audit.push_line(format!(

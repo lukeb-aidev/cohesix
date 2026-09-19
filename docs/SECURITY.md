@@ -627,6 +627,26 @@ idempotency, and state before a configured host adapter performs a side effect.
 Use dedicated host identities, least-privilege adapter configuration, and the
 request/result/federation contracts in [Interfaces](INTERFACES.md#host-tickets-and-federation).
 
+### Recipe recovery and cached results
+
+The host recipe journal is private local controller state, not execution
+authority. An exclusive owner lock, synchronized atomic replacement, immutable
+operation/topology binding and finite cumulative attempts protect submission
+identity. Cache keys and accounting are recomputed from retained input contracts;
+result acceptance always rechecks independently enrolled signed evidence and
+actual output hashes. Owner control of a journal cannot grant target or native
+authority. Keep the controller state and evidence enrollment under distinct
+appropriate custody; the journal is not a cryptographic attestation of a DAG.
+
+A lost ACK retains uncertainty and its resource reservation. Recovery reconciles
+the existing native and ticket journals; it never silently dispatches an old
+grant. New execution/cancellation uses current exact root/host authority and
+state checks. Reuse across revisions requires current scoped ticket visibility,
+fresh compatible device/runtime publication and the bounded reuse age, while
+historical offline inspection refreshes no authority. Native termination is
+required before release; a cancellation request alone cannot establish it.
+Local diagnostic case attachments are sanitized and retain proof `none`.
+
 ### Bounded GPU workload host transport
 
 The optional GPU executor uses the generated `providers.gpu_executor` contract:

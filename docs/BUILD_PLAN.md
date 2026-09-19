@@ -108,7 +108,7 @@ owned by their specific contracts.
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Executable Host Foundation | Complete — selected foundation |
-| [27c](#27c) | Recoverable CUDA Recipes | Planned — next release |
+| [27c](#27c) | Recoverable CUDA Recipes | Complete |
 | [27d](#27d) | Verified Private LoRA Release | Planned — next release |
 | [27e](#27e) | Installation, Adoption and CI | Planned — next release |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
@@ -13384,7 +13384,17 @@ Deliverables: Embedded manuals, aligned help, updated references, scoped validat
 ## Milestone 27c — Recoverable CUDA Recipes <a id="27c"></a>
 [Milestones](#Milestones)
 
-**Status:** Planned — next-release scope.
+**Status:** Complete — 19 September 2026; bounded host CUDA recipe lifecycle.
+
+**Completion evidence:** [M27c implementation record](audit/M27C_IMPLEMENTATION_RECORD.md).
+The durable CLI/Python journal, generated recipe contract, dependency-aware reuse,
+cumulative accounting, current-authority cancellation and canonical diagnostics
+pass focused contract checks. A fresh admitted CUDA recipe completes with verified
+output and native cleanup after a deliberately lost submission ACK; a new
+controller reconciles the same operation without a second CUDA submission.
+Both host builds, generated consistency and Test Plan checks pass. The diagnostic
+case explicitly retains one partial-pack lease-detail capture error; it does not
+claim complete release evidence. No full suite or new Pi qualification was run.
 
 **Prerequisites:** completed 27b (and its earlier dependencies).
 
@@ -13431,6 +13441,7 @@ remaining uncertainty and authorized recovery; it is not a second evidence forma
 ```text
 Title/ID: m27c-recipe-lifecycle-and-identity
 Milestone: 27c / recipe-lifecycle-and-identity
+Status: Complete — focused contract and live recipe evidence in audit/M27C_IMPLEMENTATION_RECORD.md.
 Goal: Compose approved CUDA actions into a durable recoverable recipe.
 Inputs: 27b action/native identity and verifier; existing coh run, Python orchestration, CAS and host-ticket WAL.
 Changes:
@@ -13445,6 +13456,7 @@ Deliverables: Reusable recipe lifecycle, checked CUDA example and durable recove
 ```text
 Title/ID: m27c-stage-reuse-accounting-and-diagnostics
 Milestone: 27c / stage-reuse-accounting-and-diagnostics
+Status: Complete — focused contract and live recipe evidence in audit/M27C_IMPLEMENTATION_RECORD.md.
 Goal: Reuse compatible verified results and make resource use and failures understandable.
 Inputs: m27c-recipe-lifecycle-and-identity, current artifact cache and evidence/timeline tooling.
 Changes:

@@ -221,6 +221,12 @@ fn main() -> Result<()> {
         &args.host_integration_doc,
         (&args.provider_python, &args.provider_rust),
     )?;
+    coh_rtc::recipe::emit(
+        &repo_root.join("configs/cuda_recipe.toml"),
+        &args
+            .host_integration_graph
+            .with_file_name("cuda_recipe.json"),
+    )?;
     println!("coh-rtc: wrote {}", output.summary());
     println!(
         "coh-rtc: wrote implementation surfaces {}",

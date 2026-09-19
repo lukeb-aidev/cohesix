@@ -43,7 +43,7 @@ pub struct Package {
     pub trust: PathBuf,
 }
 /// One request and its provider-owned causal graph destination.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
     /// Root-admitted request grammar, including stable idempotency and writer fence.
@@ -189,7 +189,7 @@ fn preflight(d: &Deployment) -> Result<()> {
     Ok(())
 }
 
-fn verified(step: &Step) -> Result<Option<VerifiedGraph>> {
+pub(crate) fn verified(step: &Step) -> Result<Option<VerifiedGraph>> {
     if !step.graph.try_exists()? {
         return Ok(None);
     }

@@ -169,6 +169,7 @@ compare_file "$generated_root/implementation_surface_inventory.json" "$implement
 compare_file "$generated_root/host_integration_dependency.json" "$host_integration_graph"
 compare_file "$repo_root/docs/snippets/host_integration_dependency.md" "$host_integration_doc"
 compare_file "$generated_root/provider_registry.json" "$work_dir/provider_registry.json"
+compare_file "$generated_root/cuda_recipe.json" "$work_dir/cuda_recipe.json"
 compare_file "$repo_root/tools/cohesix-py/cohesix/provider_generated.py" "$work_dir/provider_generated.py"
 compare_file "$repo_root/crates/cohesix-authority/src/provider_generated.rs" "$work_dir/provider_generated.rs"
 compare_file "$generated_root/cohesix_python_qemu_smp_production.json" "$cohesix_python_qemu_profile"

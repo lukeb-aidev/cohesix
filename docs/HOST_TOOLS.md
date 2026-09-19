@@ -1449,9 +1449,106 @@ The generated catalogue retains preflight/admit/execute/observe/verify/recover
 stages and explicit external owners. Current domain workflows requiring an
 undeployed external application refuse apply with `not_enabled`; generic
 control writes cannot stand in for that application. This preserves prior
-implementation under 27c/28a ownership, without claiming recipe qualification.
+implementation under its domain-workflow owners, with separate recipe qualification.
 Python's `execute_workflow` delegates to this same installed verifier. Existing
 live control-model playbooks require explicit `--rehearsal`.
+
+#### Recoverable CUDA recipes
+
+Use `coh plan cuda-reference --recipe` to inspect the generated contract from
+`configs/cuda_recipe.toml`. A `cohesix-cuda-recipe/v1` deployment composes existing
+`gpu.workload.submit` tickets, pinned provider inputs and separately enrolled
+causal evidence. CUDA runs through the host-ticket agent and GPU bridge. The
+controller never invokes a native executable or creates an authoritative receipt.
+
+Each deployment supplies `operation_id`, `contract_sha256`, the explicit
+`controller`/`target-hive`/`provider-host` topology, an absolute private `journal`
+directory, dependency-ordered `stages`, and optional `recovery` cancellations.
+Each stage contains `id`, `after`, an absolute `input` path, exact numeric CUDA
+`runtime.driver_version` and `runtime.runtime_version`, and `execution` with the
+existing `request`, `graph`, `trust` and `cas` fields. `input` contains canonical
+`cohesix-gpu-workload-input/v1` bytes, including its pinned helper artifact,
+selected device/topology, checked `vadd` or `matmul` configuration and expected
+output hash. Its SHA-256 must match the ticket's `args.request_sha256`. These
+entrypoints generate their documented deterministic vector/matrix inputs; a
+dependency is an ordering and reuse dependency, not an implicit data transfer.
+A compatible adopter-built helper must implement this same allowlisted ABI and
+be pinned by the existing executor deployment. Arbitrary commands are unavailable.
+
+The checked [Python example](../tools/cohesix-py/examples/cuda_recipe.py) assembles
+one or more enrolled stage files and obtains the contract digest from the
+installed `coh`. Provision the native request CAS and independent graph trust
+through the existing provider workflow. Supply fresh inventory immediately before
+initial submission; the executor's five-second inventory freshness remains in force.
+
+```sh
+coh plan cuda-reference --recipe --deployment /absolute/recipe.json
+coh --ticket-ref file:/absolute/operator.ticket apply cuda-reference --recipe --deployment /absolute/recipe.json --rest-url http://127.0.0.1:8080
+coh watch cuda-reference --recipe --deployment /absolute/recipe.json
+coh verify cuda-reference --recipe --deployment /absolute/recipe.json
+coh --ticket-ref file:/absolute/operator.ticket recover cuda-reference --recipe --deployment /absolute/recipe.json --rest-url http://127.0.0.1:8080
+```
+
+Resolve gateway authentication through `COH_REST_AUTH_TOKEN=env:NAME` or an
+explicit protected file reference. `plan` durably creates identity/configuration
+before dispatch. `apply` persists each attempt and reservation before its one
+ticket write. `watch`, `explain` and `verify` read the local journal and independently
+reverify evidence and output CAS bytes. They do not refresh a grant. Copy the
+provider's actual `output.bin` to the referenced CAS under its signed output hash;
+metadata alone is insufficient. `verify` returns nonzero until every stage has a
+compatible verified output. Read-only `recover` reconciles the same original
+idempotency through current scoped ticket reads and retained signed evidence.
+
+A short write, disconnect or lost ACK remains ambiguous. Retain the journal and
+run the existing host-ticket agent against its original execution WAL; restart
+that owner to reconcile the native job. Do not replace the operation ID or repeat
+submission to clear an ambiguity. To cancel unresolved work, add a `recovery`
+entry naming `stage` and a separately enrolled `gpu.workload.cancel` execution
+whose `args.job_id` is the original submission ID, then use
+`recover ... --cancel-stage STAGE`. Recovery tickets can be refreshed without
+changing workload configuration. A cancellation request retains the reservation
+until signed native evidence confirms termination. A verified failed/cancelled
+stage can receive a new ticket after replanning; fresh execution always rechecks
+expiry, published compatibility and native/root authority.
+
+Reuse remains within the same protected operation journal. Code/helper, deterministic
+data/parameters, runtime, device/topology, predecessor keys and predecessor output
+digests enter the cache key. Changing a stage invalidates it and its descendants;
+independent verified stages survive. Reuse across revisions is limited to one hour,
+requires current scoped visibility and compatible published device/runtime, and
+rechecks every CAS hash. Reuse never imports an old execution grant. Keep the same
+operation ID and journal when replanning; unresolved work must be reconciled first.
+
+The generated bounds allow eight stages, 32 cumulative attempts/revisions, one
+active workload, zero automatic retries, a 256 KiB journal, 256 KiB per output and
+8 MiB retained output across attempts. Reservations, observed allocations and
+confirmed releases remain cumulative across failures and revisions. Unknown
+allocation measurements are counted explicitly. Native enforcement records name
+cgroup controls, one CUDA context and child kill/reap; allocation admission is
+not a hard GPU memory partition. Successful child termination provides resource
+cleanup. The recipe retains bounded immutable outputs/evidence references for
+review and performs no automatic CAS deletion or native compensation.
+
+For a failed or ambiguous stage, retain its JSON report and use the canonical pack:
+
+```sh
+coh --ticket-ref file:/absolute/operator.ticket evidence pack --rest-url http://127.0.0.1:8080 --out out/case --recipe-report /absolute/failed-report.json
+coh evidence timeline --input out/case --scenario incident
+```
+
+The existing `case.json`/`case.md` identify the stage, original ticket/idempotency,
+remaining uncertainty and permitted recovery. `attachments/recipe.json` contains
+only sanitized local observations, with proof `none`. If capture returns a
+nonzero partial-pack result, preserve its summary/errors and attach the report
+with `coh evidence timeline --input out/case --scenario incident --recipe-report
+/absolute/failed-report.json`. The diagnostic never upgrades incomplete capture. Signed causal graphs may
+also be attached using the existing `--causal-graph`, `--evidence-trust` and
+`--evidence-cas` options. No second pack or receipt format is introduced.
+
+Python's `execute_workflow("cuda-reference", ..., recipe=True)` and
+`python -m cohesix.playbook_cli plan --playbook cuda-reference --recipe` use the
+same installed Rust implementation. The recipe options belong to external `coh`;
+root-shell/cohsh/SwarmUI console grammars do not gain workflow commands.
 
 #### Build and validate the Python distribution
 
