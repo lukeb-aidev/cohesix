@@ -197,7 +197,7 @@ CAS verification key distinct from the published fixture, enabled bounded
 audit/replay, and disabled arbitrary-memory diagnostics. The release assembler
 rejects development authority profiles and scans selected payloads for renamed
 private fixture keys and secret canaries. [M27a authority](M27A_AUTHORITY.md)
-records production gates and the separate, still-deferred 28b ledger/quarantine
+records production gates and the separate, still-deferred 28d ledger/quarantine
 claims.
 
 ### Authentication and attachment

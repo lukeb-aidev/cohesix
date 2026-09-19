@@ -94,9 +94,10 @@ drift from that graph.
 Current probes observe only the machine running `cohesix-playbook`; they do not
 discover a remote execution topology. For example, a Mac control rehearsal may
 report its required NVIDIA provider as unavailable rather than silently
-pretending that it found a Jetson. Explicit Mac-controller, remote-CUDA/Jetson,
-and optional Apple-GPU executor selection belongs to the complete Milestone 27b
-workflow.
+pretending that it found a Jetson. Explicit Mac-controller and remote-CUDA/Jetson
+topology for the selected CUDA/PEFT recipes is owned by
+[27b–27d](BUILD_PLAN.md#27b); optional Apple-GPU and broader domain workflows
+belong to [28a](BUILD_PLAN.md#28a).
 
 ## Current Capability Boundary
 
@@ -220,9 +221,11 @@ before implementation.
 
 | Contribution | Why it matters | Planned owner |
 | --- | --- | --- |
-| Replace generic playbook endings with generated `preflight → admit → execute → observe → verify → recover` stages. | Makes a playbook a real workflow rather than a persuasive name around control writes. | `m27b-live-reference-workflows` in [Milestone 27b](BUILD_PLAN.md#27b) |
+| Replace generic playbook endings with generated `preflight → admit → execute → observe → verify → recover` stages. | Makes a playbook a real workflow rather than a persuasive name around control writes. | `m27c-recipe-lifecycle-and-identity` for the selected recipe; `m28a-live-reference-workflows` in [28a](BUILD_PLAN.md#28a) for all domain playbooks |
 | Prove the portable Linux AArch64 NVIDIA path on Jetson, with explicit CUDA/NVML versions and bounded real workloads. | Gives Cohesix one compelling, reproducible edge-AI reference instead of a mock GPU story. | `m27b-jetson-orin-nano-live-conformance` in [Milestone 27b](BUILD_PLAN.md#27b) |
 | Make host and Worker receipts authoritative and causally linked. | Lets operators reconstruct whether a request was admitted, executed, observed, and verified. | `m27b-authoritative-receipt-and-evidence-core` in [Milestone 27b](BUILD_PLAN.md#27b) |
+| Complete native import/training, comparable evaluation and verified serving rollback. | Makes a genuine adapter release usable and safe to recover. | [Milestone 27d](BUILD_PLAN.md#27d) |
+| Package the accepted recipes and reconcile CI retries. | Lets newcomers use CLI/Python without hidden setup or duplicated work. | [Milestone 27e](BUILD_PLAN.md#27e) |
 | Build the visual Live AI Hive journey in SwarmUI. | Makes capability boundaries, provider truth, failures, and evidence understandable to newcomers. | `m27f-live-ai-community-showcase` in [Milestone 27f](BUILD_PLAN.md#27f) |
 | Add focused provider fixtures, negative tests, and documentation. | Gives seL4, Rust, Python, GPU, and operations contributors useful pieces that can be reviewed independently. | [Test Plan](TEST_PLAN.md) and the active owning task |
 

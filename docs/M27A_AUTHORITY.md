@@ -97,7 +97,7 @@ Strict intents, host tickets, WAL entries, results and audit bodies can retain
 an optional `admission` object: `admission_id`, `intent_hash`, `policy_hash`,
 `state_epoch`, `resource_generation`, `decision_expiry`. Hashes are lowercase
 SHA-256 hex. This is correlation only. No missing admission is fabricated and no
-27a component issues a 28a admission decision. `writer_epoch` is separate.
+27a component issues a 28c admission decision. `writer_epoch` is separate.
 
 ## Production profile and secret sources
 
@@ -166,8 +166,8 @@ wheel default cannot establish a live target's identity or production readiness.
 Generated flags reject premature VM-verified delegation, production Worker or
 driver ledger binding, structured quarantine, host AI and production failover.
 This preserves accepted 26e task/driver authority and any independently accepted
-Milestone 29 storage bundle. Milestone 28b owns production ledger and quarantine
-projection; Milestone 28a owns per-intent admission.
+Milestone 29 storage bundle. Milestone 28d owns production ledger and quarantine
+projection; Milestone 28c owns per-intent admission.
 
 The gateway authority microbenchmark measures status reads, delegated writes,
 duplicate/conflicting identities and stale epochs without client retries. Its

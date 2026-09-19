@@ -10,7 +10,7 @@ capabilities. Accepted Milestone 26e Worker and baseline isolated-driver records
 remain the authority for their complete task containment and teardown. A selected
 Milestone 29 storage runtime additionally requires its own accepted containment
 and generation evidence. Production Worker ticket/lease ledger binding, complete
-selected-driver ledger projection and structured quarantine remain Milestone 28b
+selected-driver ledger projection and structured quarantine remain Milestone 28d
 work; the compiler rejects those production claims before their evidence exists.
 REST mutations now require a finite scoped delegated ticket even for a Queen
 caller. An optional ticket on a direct Queen console session does not waive that

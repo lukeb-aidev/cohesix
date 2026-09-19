@@ -41,6 +41,15 @@ candidate chronology, and qualified result history belong in
 
 ## Coverage without duplicate execution
 
+For the [27b–27g release
+sequence](BUILD_PLAN.md#post-26e-investment-constrained-delivery-sequence), each
+component milestone owns focused acceptance; 27g owns exact assembled
+CLI/Python/CI/native-app journeys and the complete applicable staged release gates.
+Foundation conformance does not require downstream recipes or UI. Historical milestone
+IDs in catalog entries, generated evidence and retained records resolve through the
+[roadmap mapping](BUILD_PLAN.md#roadmap-id-mapping); this planning change does not
+rename those artifacts or alter any evidence threshold.
+
 Select tests by the contract at risk, its real execution surface, and the claim
 being made. Record the affected surfaces, catalog actions, expected positive
 and negative outcomes, exact profiles, and any evidence still missing. A

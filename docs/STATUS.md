@@ -17,6 +17,13 @@ interchangeable.
 
 ## Current development state
 
+The next release follows
+[27b–27g](BUILD_PLAN.md#post-26e-investment-constrained-delivery-sequence): executable
+host foundation, recoverable CUDA recipes, Verified Private LoRA Release,
+installation/CI, the full SwarmUI workbench, then integrated qualification. Broader
+scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
+planning, not implementation or evidence status.
+
 Milestone [27a](BUILD_PLAN.md#27a) is **Complete**, approved on
 14 September 2026. Delegated REST identity, strict Queen intent replay,
 host execution recovery and production-secret enforcement are implemented.

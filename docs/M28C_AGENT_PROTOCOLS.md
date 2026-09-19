@@ -1,20 +1,29 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Specify M28c protocol controls, agent usage contracts, implementation requirements, and acceptance gates. -->
+<!-- Purpose: Specify M28g protocol controls, agent usage contracts, implementation requirements, and acceptance gates. -->
 <!-- Author: Lukas Bower -->
 
-# M28c — Agent Protocol Contracts and Acceptance
+# M28g — Agent Protocol Contracts and Acceptance
 
 This is the detailed future-work contract incorporated by
-[Milestone 28c](BUILD_PLAN.md#28c). BUILD_PLAN retains milestone status, scope,
+[Milestone 28g](BUILD_PLAN.md#28g). BUILD_PLAN retains milestone status, scope,
 dependencies, task IDs, and completion authority. This document cannot activate
 implementation work, waive repository invariants, or claim as-built support.
 Its requirements must remain aligned with that milestone and its owning
-architecture, interface, security, and testing contracts. Complete 28c includes
+architecture, interface, security, and testing contracts. Complete 28g includes
 both MCP and A2A, all listed adapters and guidance, and the read-only MCP mount.
 Qualify both protocols in enabled acceptance profiles and every disable
 combination. Deployment switches and negotiated capabilities control runtime
 availability; they are not permission to omit a listed implementation.
+
+The filename retains its historical M28c spelling for stable incoming links;
+the current owner is 28g. See the [old-to-new mapping](BUILD_PLAN.md#roadmap-id-mapping).
+The 27b foundation, 27c recoverable recipe and 27d private LoRA release are
+required earlier inputs at 28g implementation; 28a extends provider coverage, 28b owns semantic
+context, 28c general admission, 28d production binding, 28e advanced runs/NeMo,
+and 28f general inference. This entire protocol contract is deferred beyond
+27g and creates no next-release prerequisite. Preserve full coverage and all
+security, disablement, autonomy and conformance requirements below.
 
 **Shared contracts**
 
@@ -85,7 +94,7 @@ enabled = false
 
 ### Standing authorization and per-action admission
 
-- Shared 27a identity, 27b policy, 27d run state, and 28a admission bind standing
+- Shared 27a identity, 27b policy, 28e run state, and 28c admission bind standing
   authority to subject, workflow/run, actions, targets, policy version, expiry,
   and revocation. Bound resource/cost ceilings where applicable, cumulative
   operations, concurrency, retries/cooldowns, and delegation depth.
@@ -96,7 +105,7 @@ enabled = false
   every mutating path, including generic writes, binds the same run identity.
   Omitting it cannot yield unmetered execution. Refuse autonomy claims without
   durable accounting, fresh facts, revocation, and executor enforcement.
-- Standing authority is a ceiling, not a reusable 28a decision. Each effect
+- Standing authority is a ceiling, not a reusable 28c decision. Each effect
   needs a fresh applicable decision, state-bound grant, exact idempotency,
   fencing, and receipt. Resume, delayed dispatch, escalation, and subdelegation
   revalidate current state and authority.
@@ -176,10 +185,10 @@ validate one complete revision per protocol, recording features and client limit
   approval, fencing, allowlists, and evidence. Protocols cannot directly invoke
   `systemctl`, `docker`, `kubectl`, CUDA/NVML, PEFT, or NeMo APIs.
 - No inference endpoint/proxy/provider calls or model-output tool execution.
-  Submissions use admitted 27d `infer.run` and the 27e gateway; returned tool
+  Submissions use admitted 28e `infer.run` and the 28f gateway; returned tool
   calls remain inert until separately validated and authorized.
 - No duplicate semantic graph, vector index, capsule planner, prompt archive,
-  or inference receipt schema; reuse accepted 27c/27e libraries and immutable refs.
+  or inference receipt schema; reuse accepted 28b/28f libraries and immutable refs.
 - No protocol-local policy evaluator, fact-authority classifier, grant minter,
   or admission cache transferable across intents. Model text and client metadata
   remain untrusted; descriptions, prompts, and annotations grant no authority.
@@ -234,20 +243,20 @@ Implementation requirements:
   - `/gpu/*`, `/gpu/models/*`, `/gpu/telemetry/schema.json`
   - `/host/tickets/status`, `/host/tickets/deadletter`, and provider status under `/host/systemd/*`, `/host/docker/*`, and `/host/k8s/*`
   - evidence-pack and timeline summaries when Milestone
-    27/27a/27c/27d/27e evidence is available
-  - NeMo capability, guardrail, evaluator, and provider receipt summaries only when the 27d manifest-selected provider family is enabled.
+    27/27a/28b/28e/28f evidence is available
+  - NeMo capability, guardrail, evaluator, and provider receipt summaries only when the 28e manifest-selected provider family is enabled.
 - Define host-artifact resource families only when their owner milestones are
   accepted:
   - `cohesix://semantic/snapshot/<snapshot-id>/object/<object-id>/<view>` and
-    bounded edge/query summaries backed by the 27c read-only semantic core,
+    bounded edge/query summaries backed by the 28b read-only semantic core,
   - `cohesix://context/capsule/<capsule-id>` and its manifest/render receipt
-    backed by the 27c capsule verifier/renderer,
+    backed by the 28b capsule verifier/renderer,
   - `cohesix://inference/receipt/<receipt-id>` and bounded status/timeline views
-    backed by the 27e receipt verifier and evidence projection.
+    backed by the 28f receipt verifier and evidence projection.
 - Namespace-backed resource reads must use only `LS`, `CAT`, or `TAIL` through
   the existing gateway/session machinery and must enforce manifest-derived
   path, line, byte, and walk-depth bounds. Host-artifact resources must use
-  only the accepted read-only 27c/27e libraries over immutable ids and must
+  only the accepted read-only 28b/28f libraries over immutable ids and must
   not acquire repository paths, provider credentials, run admission, or write
   authority.
 - Resource templates may expose common path families, but template expansion must reject `..`, absolute host filesystem paths, overlong components, and undeclared provider roots.
@@ -275,11 +284,11 @@ Implementation requirements:
 - Read-only tools:
   - `cohesix.fs.ls`, `cohesix.fs.cat`, `cohesix.fs.tail`
   - `cohesix.semantic.inspect` and `cohesix.semantic.query` over an admitted
-    27c snapshot id,
+    28b snapshot id,
   - `cohesix.context.inspect`, `cohesix.context.render`, and
     `cohesix.context.verify` over an admitted immutable capsule id,
   - `cohesix.inference.status` and `cohesix.inference.receipt` over admitted
-    27e ids,
+    28f ids,
   - `cohesix.cuda.inventory` for bounded host CUDA/NVIDIA capability and GPU inventory summaries
   - `cohesix.evidence.timeline` for bounded evidence/timeline summaries.
 - Mutating or side-effect-capable tools must produce existing Cohesix writes only:
@@ -290,23 +299,23 @@ Implementation requirements:
     caller cannot choose a weaker schema than the provider/action registry
     requires.
   - `cohesix.gpu.lease_grant`, `cohesix.gpu.lease_renew`, and `cohesix.gpu.lease_release` map to existing GPU lease actions.
-  - `cohesix.peft.export`, `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 27d transaction receipts.
+  - `cohesix.peft.export`, `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 27d transaction receipts extended by 28e.
   - `cohesix.inference.submit` maps a fixed, generated request schema and
-    optional accepted Context Capsule ref through 28a admission to the
-    existing 27d `infer.run` host-ticket action and 27e inference gateway. It
+    optional accepted Context Capsule ref through 28c admission to the
+    existing 28e `infer.run` host-ticket action and 28f inference gateway. It
     never calls a provider directly or executes model-produced tool calls.
-  - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 27d provider actions or deterministically return unavailable when NeMo is not enabled.
+  - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 28e provider actions or deterministically return unavailable when NeMo is not enabled.
   - `cohesix.k8s.cordon`, `cohesix.k8s.drain`, and `cohesix.k8s.lease_sync` map to existing K8s host-ticket actions.
   - `cohesix.systemd.status_check`, `cohesix.systemd.start`, `cohesix.systemd.stop`, and `cohesix.systemd.restart` map to existing systemd host-ticket actions.
   - `cohesix.docker.status_check`, `cohesix.docker.stop`, and `cohesix.docker.restart` map to existing Docker host-ticket actions.
 - MCP tool schemas and A2A skill schemas must derive from the shared manifest/provider action and integration-surface registry. Provider action names, target selectors, dry-run flags, idempotency keys, receipt fields, Worker tier, external-executor requirement, and availability state must not be hand-maintained separately for the two protocols.
-- Every mutating schema additionally derives its exact 28a intent schema,
+- Every mutating schema additionally derives its exact 28c intent schema,
   required facts, policy id, grant ceiling, freshness/recheck mode, and decision
   receipt. The gateway maps the call/task into that typed intent, consumes the
   accepted `admission_id`, then submits only the existing host-ticket or control
   action.
 - Discovery omits or marks typed unavailable any operation whose
-  27b/27c/28a/27d/27e dependency row or admission policy is not accepted in the selected profile. A
+  27b/28b/28c/28e/28f dependency row or admission policy is not accepted in the selected profile. A
   client cannot select `live` mode to override missing semantic, capsule,
   provider, executor, inference, or receipt evidence.
 - Every tool schema must be generated or checked against manifest/provider policy:
@@ -343,7 +352,7 @@ Implementation requirements:
   recovery paths. They support unattended execution inside an existing standing
   authorization and request human approval only when the underlying selected
   policy requires it or additional authority is needed. A prompt cannot replace
-  a missing approval, 28a decision, or server-side authorization check.
+  a missing approval, 28c decision, or server-side authorization check.
 - Cover all admitted use-case rows, including operational administration,
   cancellation/resume, rollback, and evidence collection where supported;
   maintain examples and counterexamples from the same generated usage contract.
@@ -351,8 +360,8 @@ Implementation requirements:
 - Prompt outputs are guidance only; only existing Cohesix tickets, receipts, and evidence determine state.
 
 As-built leverage:
-- Reuse Milestone 27 operator utilities, 27a audit/replay/fencing, 27c
-  semantic/capsule artifacts, 27d run envelopes/checkpoints, 27e inference
+- Reuse Milestone 27 operator utilities, 27a audit/replay/fencing, 28b
+  semantic/capsule artifacts, 28e run envelopes/checkpoints, 28f inference
   receipts, and existing host-ticket provider receipts.
 
 ---
@@ -386,15 +395,15 @@ Implementation requirements:
   multiple existing actions, but each action retains its own admission and
   receipt. No free-form peer request can widen a typed skill's authority.
 - A2A `SendMessage` and `SendStreamingMessage` operations (or the exact
-  generated equivalents for the pinned binding/revision) create or resume 27d
+  generated equivalents for the pinned binding/revision) create or resume 28e
   run/task envelopes only after fixed skill/action/input schema validation.
-  Semantic inputs are immutable 27c snapshot/capsule refs; inference actions
-  map through 28a admission to the existing 27d action and 27e gateway. Free-form natural
+  Semantic inputs are immutable 28b snapshot/capsule refs; inference actions
+  map through 28c admission to the existing 28e action and 28f gateway. Free-form natural
   language is never translated directly into host or provider execution.
 - A2A `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`,
   push-notification configuration, and streaming update operations (or their
   generated binding equivalents) are projections of existing
-  semantic/capsule refs, run/checkpoint/evidence records, 27e inference
+  semantic/capsule refs, run/checkpoint/evidence records, 28f inference
   receipts, host-ticket receipt state, and gateway audit state. Cancellation
   may append a validated Cohesix cancel/control request when one exists; it
   must not kill provider executors directly.
@@ -412,8 +421,8 @@ Implementation requirements:
   shared budgets, exact action correlation, and observed outcome semantics.
 
 As-built leverage:
-- Reuse Milestone 27c semantic/capsule artifacts, 27d run envelopes,
-  checkpoints and provider receipts, 27e inference receipts,
+- Reuse Milestone 28b semantic/capsule artifacts, 28e run envelopes,
+  checkpoints and provider receipts, 28f inference receipts,
   `host-ticket-agent` state, gateway request auth, and delegated REST identity.
 
 ---
@@ -468,7 +477,7 @@ Implementation requirements:
   - read-only namespace, semantic object, Context Capsule, and inference
     receipt browsing,
   - an inference submission that carries an immutable capsule ref and returns
-    a 27e receipt ref without executing returned tool calls,
+    a 28f receipt ref without executing returned tool calls,
   - delegated mutating tool calls with explicit ticket/auth configuration,
   - A2A Agent Card discovery,
   - A2A task submission, streaming status, artifact retrieval, and cancellation against mock/dry-run providers.
@@ -510,8 +519,8 @@ Implementation requirements:
   - The tree must make the backing type explicit for every resource/tool entry:
     namespace path/action for `LS`/`CAT`/`TAIL`/`ECHO` or
     `/host/tickets/spec`, or immutable artifact id/schema/hash and owner
-    milestone for 27c semantic/capsule and 27e inference receipt resources.
-    Usage-guide/catalog files carry their generated 27b/28c contract version
+    milestone for 28b semantic/capsule and 28f inference receipt resources.
+    Usage-guide/catalog files carry their generated 27b/28g contract version
     and selected manifest fingerprint.
 - The MCP mount is read-only by default and in the milestone acceptance path. Writes, renames, chmod, symlink creation, and host filesystem path escapes fail deterministically with no MCP `tools/call`.
 - If a later task proposes write-capable MCP mount nodes, it must be a separate
@@ -560,16 +569,16 @@ Implementation requirements:
   - REST/gateway proof,
   - gateway-backed `coh mount --rest-url`,
   - read-only MCP resource mount,
-  - read-only 27c semantic/capsule and 27e inference receipt projections
+  - read-only 28b semantic/capsule and 28f inference receipt projections
     versus namespace-backed resources,
-  - the separate 27e OpenAI-compatible endpoint versus MCP inference
+  - the separate 28f OpenAI-compatible endpoint versus MCP inference
     submission/status/receipt tools,
   - MCP tools/prompts that submit Cohesix tickets rather than executing host commands directly,
   - A2A Agent Card discovery, task submission, streaming status, artifact retrieval, and refusal behavior.
 - Generated snippets and derived docs must be refreshed through `coh-rtc` or their owning generator; hand-editing generated blocks is invalid.
 
 As-built leverage:
-- Reuse 26c docs-as-built audit discipline, existing host-tool docs, generated snippets, and the 28c MCP/A2A conformance evidence.
+- Reuse 26c docs-as-built audit discipline, existing host-tool docs, generated snippets, and the 28g MCP/A2A conformance evidence.
 
 **Commands**
 - `cargo test -p hive-gateway`
@@ -590,15 +599,15 @@ As-built leverage:
 - `cargo test -p coh --test evidence_pack`
 - `cargo test -p coh --test evidence_timeline`
 - `cargo test -p coh-rtc`
-- `scripts/ci/gateway_perf_probe.sh --scenario mcp-a2a-protocols --state-dir out/bench/m28c-gateway-protocols`
+- `scripts/ci/gateway_perf_probe.sh --scenario mcp-a2a-protocols --state-dir out/bench/m28g-gateway-protocols`
 - `git diff --check -- docs/BUILD_PLAN.md docs/OPERATOR_WALKTHROUGH.md docs/HOST_API.md docs/HOST_TOOLS.md docs/API_GUIDELINES.md docs/USERLAND_AND_CLI.md docs/INTERFACES.md docs/ARCHITECTURE.md docs/SECURITY.md docs/TEST_PLAN.md`
 - `scripts/check-generated.sh`
 - `scripts/cohsh/run_regression_batch.sh`
-- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28c-qemu-gateway-agents`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28g-qemu-gateway-agents`
 
 These are planned implementation/acceptance commands. The selected Test Plan
 also records ordinary-client transcripts and authoritative external-execution
-receipts for `m28c-unattended-workflow-acceptance`; a passing host test or QEMU
+receipts for `m28g-unattended-workflow-acceptance`; a passing host test or QEMU
 run alone cannot establish live provider execution. Documentation-only roadmap
 changes use documentation, metadata, and generated-consistency checks.
 
@@ -644,13 +653,13 @@ changes use documentation, metadata, and generated-consistency checks.
 - `crates/cohsh-core/fixtures/grammar.sha256` and generated `docs/snippets/cohsh_grammar.md` remain unchanged unless a separately approved breaking grammar milestone changes them.
 - Every namespace-backed MCP read maps to existing `LS`, `CAT`, or `TAIL`.
   Every semantic/capsule or inference-receipt read maps to the accepted
-  read-only 27c or 27e core over an immutable id. Every MCP write maps to
+  read-only 28b or 28f core over an immutable id. Every MCP write maps to
   existing `ECHO` into a documented Cohesix control file or
   `/host/tickets/spec`; no host-artifact adapter mints authority.
 - Gateway metadata/bounds/schema and usage-guide reads project their existing
   host/generated owner contract; they do not manufacture VM namespace paths.
-- Every A2A task maps to accepted 27c semantic/capsule refs where context is
-  used, an existing 27d run/checkpoint/evidence record, a 27e inference
+- Every A2A task maps to accepted 28b semantic/capsule refs where context is
+  used, an existing 28e run/checkpoint/evidence record, a 28f inference
   receipt where inference is used, and, when mutating, an existing Cohesix
   host-ticket/control action. No A2A message text or metadata becomes
   authorization.
@@ -660,9 +669,9 @@ changes use documentation, metadata, and generated-consistency checks.
 - Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A
   task creation, inference/provider action execution, or VM Worker/driver
   authority. Each mutating acceptance artifact must name its
-  27a/27b/28a authority/admission inputs and applicable 27c/27d/27e
+  27a/27b/28c authority/admission inputs and applicable 28b/28e/28f
   context, run, and receipt inputs,
-  matching 26e live-task evidence where applicable, and 28b evidence only for
+  matching 26e live-task evidence where applicable, and 28d evidence only for
   production Worker ledger binding, complete driver-inventory projection, or
   structured quarantine/restart claims.
 - Read-only MCP and A2A artifact/resource acceptance includes negative tests for public, ticket-scoped, and admin-only read visibility; ticket/provider/evidence/audit reads for the wrong delegated identity fail before payload construction.
@@ -678,8 +687,8 @@ changes use documentation, metadata, and generated-consistency checks.
   or `kubectl` outside existing Cohesix adapters.
 - No MCP tool or A2A skill calls an inference provider directly, reimplements
   the OpenAI-compatible surface, or executes model-produced tool calls; an
-  inference submission is admitted through 27d and observed through a verified
-  27e receipt.
+  inference submission is admitted through 28e and observed through a verified
+  28f receipt.
 - Semantic/capsule inspection, inference submission/receipt, CUDA/GPU, PEFT,
   NeMo, K8s, systemd, and Docker scenarios have deterministic mock tests and at
   least one live-safe dry-run/conformance transcript appropriate to their claim
@@ -697,7 +706,7 @@ changes use documentation, metadata, and generated-consistency checks.
 - There is no A2A FUSE mode; A2A task/artifact state appears through gateway protocol responses and read-only evidence/resource projections only.
 - MCP-mounted resource contents match the corresponding MCP `resources/read` output and, for Cohesix namespace-backed resources, the corresponding REST/console read within documented bounds.
 - MCP-mounted semantic/capsule and inference receipt resources verify against
-  the same immutable hashes and schemas as the direct 27c/27e host tools;
+  the same immutable hashes and schemas as the direct 28b/28f host tools;
   their presence never claims those artifacts exist in the VM namespace.
 - A2A artifacts and push notification attempts are bounded, redacted, policy-gated, and reconstructable from audit/evidence without raw secret leakage.
 - Gateway protocol performance evidence shows MCP resource/tool and A2A task/artifact paths stay bounded relative to the 27a gateway authority baseline; any full Pi/QEMU benchmark is triggered only by evidence of upstream runtime-path regression.
@@ -715,7 +724,7 @@ changes use documentation, metadata, and generated-consistency checks.
   protocol/client affordances, schemas/examples, authority/approval mode,
   lifecycle/recovery/evidence guidance, versioning, and cache invalidation.
   Validate example/schema parity and reject unaccounted admitted operations.
-- Standing-authority schemas and budgets remain owned by shared 27a/27b/27d/28a
+- Standing-authority schemas and budgets remain owned by shared 27a/27b/28e/28c
   contracts. Generated protocol policy references their exact action, subject,
   run, attenuation, revocation, and accounting rules rather than redefining them.
 - `coh-rtc` emits `gateway.mcp.*` policy:
@@ -735,21 +744,21 @@ changes use documentation, metadata, and generated-consistency checks.
   - delegated-ticket and writer-epoch requirements,
   - redaction and evidence-export flags.
 - Generated MCP policy references, without redefining:
-  - accepted 27c semantic snapshot/object/view/edge, Context Capsule, render,
+  - accepted 28b semantic snapshot/object/view/edge, Context Capsule, render,
     visibility, and immutable-id schemas,
-  - accepted 27e inference request/admission/receipt ids, read visibility, and
+  - accepted 28f inference request/admission/receipt ids, read visibility, and
     status/submit action mappings.
 - Manifest validation rejects semantic/capsule resources whose schemas,
   visibility classes, store profiles, or immutable-id bounds do not match
-  accepted 27c outputs, and rejects inference resources/tools whose
+  accepted 28b outputs, and rejects inference resources/tools whose
   admission, receipt, provider, or content-retention contract does not match
-  accepted 27d/27e outputs.
+  accepted 28e/28f outputs.
 - Manifest validation rejects MCP enablement when Milestone 27a delegated write identity or required audit/replay/fencing prerequisites are disabled for mutating tools.
-- Manifest validation rejects NeMo MCP tools unless the 27d manifest-selectable NeMo provider family and parity checks are enabled.
+- Manifest validation rejects NeMo MCP tools unless the 28e manifest-selectable NeMo provider family and parity checks are enabled.
 - `coh-rtc` emits protocol-neutral `gateway.provider_actions.*` and
   `gateway.integration_surfaces.*` projections derived from the Milestone 27b
   graph for every operation exposed through MCP tools or A2A skills, with
-  referenced owner schemas from 27c and 27e where semantic/capsule or
+  referenced owner schemas from 28b and 28f where semantic/capsule or
   inference operations are present. They include action ids, target schema
   refs, dry-run support, idempotency requirements, writer-epoch requirements,
   receipt schema refs, Worker/executor/package dependencies, observed
@@ -773,12 +782,12 @@ changes use documentation, metadata, and generated-consistency checks.
   - delegated-ticket, idempotency, and writer-epoch requirements,
   - redaction, evidence-export, and callback allowlist flags.
 - Manifest validation rejects A2A enablement when required Milestone
-  27a/27b/28a delegated authority, registry or admission, audit/replay, or fencing
-  prerequisites are disabled for selected mutating skills. Validate 27d durable
-  run/task state for tasks and 27c/27e context/inference dependencies only where
+  27a/27b/28c delegated authority, registry or admission, audit/replay, or fencing
+  prerequisites are disabled for selected mutating skills. Validate 28e durable
+  run/task state for tasks and 28b/28f context/inference dependencies only where
   used. Disabled protocols and unrelated operations do not acquire those
   optional dependencies.
-- Manifest validation rejects NeMo A2A skills unless the 27d manifest-selectable NeMo provider family and parity checks are enabled.
+- Manifest validation rejects NeMo A2A skills unless the 28e manifest-selectable NeMo provider family and parity checks are enabled.
 - Generated docs refresh:
   - `docs/HOST_API.md`
   - `docs/API_GUIDELINES.md`
