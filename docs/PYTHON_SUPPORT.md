@@ -80,7 +80,7 @@ independent of a Cohesix release-bundle label.
 
 | Backend | Connection | Intended use | Authority and concurrency |
 | --- | --- | --- | --- |
-| `RestBackend` | `hive-gateway` HTTP API | Concurrent live clients | Inherits the gateway's upstream role/ticket; request auth protects writes |
+| `RestBackend` | `hive-gateway` HTTP API | Concurrent live clients | Scoped delegated reads/writes, bounded by the gateway's upstream role/ticket |
 | `TcpBackend` | Target TCP console | One direct live client | Performs `AUTH` and `ATTACH`; owns the single console connection |
 | `FilesystemBackend` | Existing `coh mount` tree | File-oriented integrations | Inherits the authority of the process that created the mount |
 | `MockBackend` | Local deterministic directory tree | Unit tests, examples, dry runs | Persistent at the selected root; processes using the same root can share it; never live-system evidence |
@@ -177,8 +177,12 @@ and REST writes have no automatic retry. See [M27a authority](M27A_AUTHORITY.md)
 `RestBackend` accepts an explicit `request_auth_token`. Otherwise it resolves,
 in order, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then
 `COH_REST_AUTH_TOKEN`. The backend sends both accepted gateway headers for
-authenticated writes. Read endpoints do not currently require request auth,
-but they still inherit the gateway's upstream target authority.
+authenticated requests. Non-public reads, including gateway status and namespace
+reads, require request auth and a delegated `Read` or `ReadWrite` ticket through
+`delegated_ticket=` or `COH_REST_TICKET`; public classification is generated.
+They remain bounded by the gateway's upstream target authority. The explicit
+single-caller read-compatibility option is not enabled by default. See
+[read authentication](HOST_API.md#authentication-and-exposure).
 
 ```python
 import os

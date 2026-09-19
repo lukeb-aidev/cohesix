@@ -218,16 +218,22 @@ solve reachability by exposing an unauthenticated network boundary;
 
 ### 3. Verify the gateway and the Queen separately
 
-In another terminal, set `COH_BIN` and `COH_REST_URL` as above, then run:
+In another terminal, set `COH_BIN` and `COH_REST_URL` as above. Obtain a
+private operator-provisioned header file containing `Authorization: Bearer TOKEN`
+and `x-cohesix-ticket: TICKET`, with the actual request credential and delegated
+read ticket for these paths. Set `COH_READ_HEADERS` to its absolute path; keep
+its contents private and never enable a compatibility bypass just to read.
+Then run:
 
 ```bash
-curl --fail-with-body --silent --show-error \
+: "${COH_READ_HEADERS:?set the private read-credential header file}"
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error \
   "$COH_REST_URL/v1/meta/status"
 
-curl --fail-with-body --silent --show-error \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error \
   "$COH_REST_URL/v1/meta/bounds"
 
-curl --fail-with-body --silent --show-error --get \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error --get \
   --data-urlencode 'path=/proc/boot' \
   --data-urlencode 'max_bytes=1024' \
   "$COH_REST_URL/v1/fs/cat"
@@ -239,9 +245,12 @@ Require `connected: true`, the expected backend/profile and a successful
 both with the selected deployment rather than treating either one alone as
 proof of parity. A connected mock gateway is still a model.
 
-Read endpoints currently do not require the REST mutation credentials, but
-reads still run under the gateway's upstream target authority. This is another
-reason to protect access to the gateway itself.
+Non-public reads require request authentication and delegated `Read` or
+`ReadWrite` scope, as described under [Delegated namespace reads](#delegated-namespace-reads).
+They remain bounded by the gateway's upstream target authority. Public read
+classification is generated; a request-auth token alone is not a delegated read
+grant. Protect the gateway endpoint and provision scoped credentials before
+using the read examples.
 
 ### 4. Do a first useful read
 

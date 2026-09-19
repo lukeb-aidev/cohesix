@@ -159,13 +159,20 @@ counters. See [M27a authority](M27A_AUTHORITY.md) and the
 
 ## Examples
 
+For non-public reads, use a private operator-provisioned header file containing
+`Authorization: Bearer TOKEN` and `x-cohesix-ticket: TICKET` with actual scoped
+read credentials. Set `COH_READ_HEADERS` to its absolute path; the file keeps
+secret values out of command arguments. A token in an environment variable alone
+does not make curl send it. Do not enable compatibility mode to bypass delegation.
+
 Read gateway status and a bounded target file:
 
 ```bash
-curl --fail-with-body --silent --show-error \
+: "${COH_READ_HEADERS:?set the private read-credential header file}"
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error \
   http://127.0.0.1:8080/v1/meta/status
 
-curl --fail-with-body --silent --show-error --get \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error --get \
   --data-urlencode 'path=/proc/schedule/queue' \
   --data-urlencode 'max_bytes=256' \
   http://127.0.0.1:8080/v1/fs/cat
@@ -174,7 +181,7 @@ curl --fail-with-body --silent --show-error --get \
 Tail a bounded number of log lines:
 
 ```bash
-curl --fail-with-body --silent --show-error --get \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error --get \
   --data-urlencode 'path=/log/queen.log' \
   --data-urlencode 'max_bytes=512' \
   --data-urlencode 'lines=64' \

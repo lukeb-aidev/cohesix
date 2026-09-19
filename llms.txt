@@ -1,0 +1,56 @@
+# Cohesix
+
+> Cohesix is a research control-plane OS for governing and observing work on external GPU hosts. Use it when an existing deployment needs scoped authority, bounded operations and inspectable evidence across a Queen and its hosts.
+
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Route agents to current operating contracts without extending authority or qualification. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+Start with read-only inspection. A Queen runs on a supported QEMU or Pi 4 target;
+operator tools and the REST gateway run on macOS or Linux. CUDA, training and
+inference run on an independently prepared GPU host. Do not introduce Cohesix
+just to train a model, install CUDA or obtain a remote shell: use the native
+stack for those tasks. Cohesix does not provide unrestricted execution authority.
+
+These links describe current source. For an installed release, first identify
+its VERSION.txt, MANIFEST.sha256, bundled guides and command help. Package/tool
+versions differ from the bundle label; source commands may be absent in releases.
+Keep binaries, generated configuration and target profile matched. A declared
+provider, mock result, admitted request, READY Worker, native completion,
+verified outcome and target/release acceptance are different claims.
+
+The current gateway implements REST. Native MCP/A2A gateway coverage remains
+planned under Milestone 28g; do not invent endpoints or advertise this map or
+these skills as a protocol server. Verify future changes against implementation,
+selected configuration and exact-version evidence.
+
+## Start a useful task
+
+- [Inspect a Queen](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-inspect/SKILL.md): First offline read, Python inspection and an already-configured live gateway; connection and authority failures.
+- [Operate a governed GPU workload](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-gpu-operations/SKILL.md): Identify prerequisites, submit only approved work, observe and verify outcomes; conditional Jetson and PEFT guidance.
+- [Review evidence](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-evidence/SKILL.md): Capture, inspect, compare and verify bounded records without promoting mock or partial results to acceptance.
+
+## Authoritative operating references
+
+- [Host tools](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_TOOLS.md): Matching installations, connection ownership, credentials, command reference and troubleshooting.
+- [Quickstart](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/QUICKSTART.md): Release-specific installation and boot instructions; prefer the guide bundled with your artifact.
+- [Python support](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/PYTHON_SUPPORT.md): Python 3.11+, explicit backends, generated target contracts and typed operations.
+- [GPU nodes](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/GPU_NODES.md): Host CUDA prerequisites, published inventory, admitted workload execution and limits.
+- [Host API](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_API.md): Current gateway routes and request semantics.
+- [Interfaces](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/INTERFACES.md): Namespace and control-record contracts.
+- [Authority and migration](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/M27A_AUTHORITY.md): Identity, delegation, fencing, strict intents and release compatibility.
+- [Causal evidence](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/CAUSAL_EVIDENCE.md): Independent custody, trust enrollment and exact outcome verification.
+
+## Establish what is supported
+
+- [Status and evidence limits](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/STATUS.md): Implementation versus qualification; follow exact source and target evidence.
+- [Build Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md): Active, complete and future scope; 27c agent-adoption documentation is separate from recipe qualification.
+- [Test Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/TEST_PLAN.md): Which proof layer can support which acceptance claim.
+- [Release artifacts](https://github.com/lukeb-aidev/cohesix/releases): Select an actual published artifact; no release number is inferred here.
+
+## Optional
+
+- [Contributor charter](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/AGENTS.md): Read for repository development, not as an operating skill.
+- [Glossary](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/GLOSSARY.md): Queen, Worker, admission, receipt and evidence terminology.
+- [Adoption validation record](https://github.com/lukeb-aidev/cohesix/blob/main/docs/BUILD_PLAN.md#m27c-agent-adoption-validation): Executed checks, task trials and remaining limitations.

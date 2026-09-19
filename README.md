@@ -40,6 +40,17 @@ automation agent, a Python SDK, and evidence tooling. These tools are part of
 Cohesix, but run beside the AI stack on the host—not inside the Cohesix OS—so
 the trusted core stays small.
 
+## For AI agents
+
+Start with [llms.txt](llms.txt) for task selection and authoritative references.
+Operational skills cover [Queen inspection](skills/cohesix-inspect/SKILL.md),
+[governed GPU operations](skills/cohesix-gpu-operations/SKILL.md) and
+[evidence review](skills/cohesix-evidence/SKILL.md), including Python workflows.
+Load the relevant `SKILL.md` directly or copy its folder into your agent's skill
+location; no supporting files are required. The skills use portable documentation
+links and explain how to select references matching an installed version.
+[AGENTS.md](AGENTS.md) remains the separate contributor charter.
+
 ## What makes Cohesix different?
 
 Cohesix complements macOS and Linux; it does not try to replace them. It adds a

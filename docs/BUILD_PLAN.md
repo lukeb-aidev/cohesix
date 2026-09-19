@@ -13455,6 +13455,130 @@ Commands: Select focused owner tests and exact host/target builds under TEST_PLA
 Checks: Independent verified stages survive a changed input; descendants rerun only when necessary and newly authorized; verified cleanup and remaining uncertainty match native evidence.
 Deliverables: CUDA recipe acceptance, reuse/accounting report and canonical diagnostic case.
 ```
+### Agent adoption documentation
+
+```text
+Title/ID: m27c-agent-adoption-documentation
+Milestone: 27c / Agent adoption documentation
+Status: Complete — owner-authorized documentation scope; validation recorded below.
+Goal: Make existing Cohesix capabilities discoverable and safely usable by unfamiliar agents.
+Inputs: AGENTS.md; current source/interfaces/examples; release evidence; Agent Skills specification and llms.txt convention.
+Changes:
+  - llms.txt — concise fit guidance and task-oriented authoritative documentation map.
+  - skills/*/SKILL.md — minimal operational skills for inspection, governed GPU outcomes, evidence and Python usage; conditional Jetson/PEFT routing.
+  - README.md — expose the agent entry points without changing product behavior.
+  - docs/HOST_TOOLS.md, docs/HOST_API.md and docs/PYTHON_SUPPORT.md — align read-auth guidance with current implementation.
+  - docs/BUILD_PLAN.md — command, link, format and task-trial evidence with explicit limitations.
+Commands: scripts/check-generated.sh; scripts/ci/check_test_plan.sh; applicable documentation/metadata checks; git diff --check; bounded offline examples and fresh-context task trials where available.
+Checks: Current source and released behavior remain distinct; portable references and verified workflows preserve credentials, authority, side effects and evidence boundaries; unsuitable training/CUDA-installation/shell tasks and MCP/A2A requests route honestly.
+Deliverables: Agent entry points, scoped compatibility review and validation record on main.
+Scope: Documentation-only owner-authorized addition to 27c, independent of CUDA recipe closure. Does not activate 27d/27e or future functionality and does not require expensive target acceptance.
+```
+
+### Agent adoption validation — 19 September 2026 <a id="m27c-agent-adoption-validation"></a>
+
+#### Design and authority
+
+The owner explicitly added this documentation-only task to 27c on 19 September.
+It is independent of concurrent CUDA recipe development and does not close the
+recipe milestone or activate 27d/27e. Validation used an isolated checkout of
+`3452248de`; unrelated working-tree implementation and evidence were excluded.
+
+Three job-oriented skills cover inspection, governed GPU outcomes and evidence.
+Python belongs inside those jobs; Jetson and PEFT remain conditional. Each skill
+is standalone with no scripts, assets or installation-specific metadata. The
+root map and README expose them. Absolute Markdown source links survive copying
+a skill folder; instructions require matching local references or pinning the
+URL to the installed source revision. No source-only command is promised in an
+older release. Release discovery uses actual artifact metadata rather than a
+hard-coded release label.
+
+Format follows the [Agent Skills specification](https://agentskills.io/specification)
+and current [llms.txt convention](https://llmstxt.org/), consulted on this date.
+The skills are operating guidance; AGENTS.md remains the contributor charter.
+
+#### Executed checks
+
+All final checks below passed. Logs and temporary probes were kept under ignored
+`out/agent-adoption/` in the validation checkout; no one-off helper was added to
+tracked `scripts/`.
+
+- `cargo build -p coh -p cohsh`: native macOS ARM64 default-feature host binaries
+  for command checks; not a release/FUSE/GPU-feature or target qualification build.
+- `scripts/check-generated.sh`: source/generated contracts match.
+- `scripts/ci/check_test_plan.sh`: catalog, documentation and cross-file integrity.
+- `python3 scripts/ci/check_implementation_surfaces.py --inventory configs/generated/implementation_surface_inventory.json`.
+- `python3 scripts/ci/check_host_integration_inventory.py --matrix-only --state-dir out/agent-adoption/inventory`:
+  metadata only; 47 surfaces, 29 dependencies, 9 playbooks, 6 use cases. The first
+  invocation omitted required `--state-dir`; the corrected command passed.
+- `scripts/ci/check_mermaid_github.sh --markdown-list out/agent-adoption/markdown-list.txt`
+  and `git diff --check`.
+- Skill-creator `quick_validate.py` for all three skills; independent frontmatter,
+  directory/name, description length, file-header and under-500-line checks.
+- All new map/skill links resolved to local candidate files; existing remote
+  canonical targets returned HTTP 200. New unpublished links were checked locally
+  before publication. Links use no author-home or source-relative parent paths.
+  Shell fences passed `bash -n`; Python snippets parsed successfully.
+- Exact `cohsh --transport mock --role queen` tour: root listing, boot, scheduler
+  and lease reads, then quit. All returned OK with simulated records.
+- Exact temporary-directory Python `MockBackend` snippet, run from outside the
+  source checkout with the candidate SDK: synthetic MockGPU returned; temporary
+  storage removed. No target selected via ambient environment.
+- `coh evidence pack --mock --out DIR`, `inspect --input DIR --json`,
+  `evidence timeline --input DIR`, and `diff --left DIR --right DIR`: successful
+  model pack, offline inspection, four derived timeline/case files and same-pack
+  comparison. `coh gpu --mock list` and `status --gpu GPU-0` also passed.
+- `coh providers`, `coh plan jetson-traffic-safety`, and `coh explain jetson-traffic-safety`:
+  read-only generated declarations, explicitly not production use-case acceptance.
+- Exact live-read curl and Python snippets exercised against a localhost HTTP
+  fixture: required request-auth/delegated headers, GET paths and 1024-byte CAT
+  query verified. This tests client construction, not real gateway authorization.
+- CLI help/parser plus source review verified every documented command family,
+  option order and outcome path. Live GPU submission and signed verification
+  were not executed; no deployment request, enrolled trust or live graph was
+  supplied for this task. Mutations were not sent to a target.
+
+#### Fresh-context trials
+
+An independent agent began with only `llms.txt`, task prompts and permission to
+resolve candidate links locally. It executed the exact mock Python example,
+mock cohsh tour and CLI help checks. Other scenarios were static task trials:
+
+| Request | Observed routing and decision |
+| --- | --- |
+| Inspect configured Queen | Select inspection, preserve sole gateway owner, require identity and scoped read credentials; distinguish connected mock from live console. |
+| Python without target | Explicit temporary MockBackend, model-labelled synthetic output; executed. |
+| GPU submit timed out | Preserve original identity, reconcile journal/native/evidence, no blind resubmit or implicit recovery. |
+| Sealed partial pack / signed failure | Inspect partial coverage, copy before timeline, independent trust; signed failure does not establish requested success. |
+| Jetson PEFT activation | Separate local registry, publication, native serving and verified deployment; no complete 27d claim. |
+| Standalone training, CUDA installation, unrestricted shell | Route native host tasks away from Cohesix; no widened authority or shell fallback. |
+| MCP/A2A | Current REST implementation, future 28g scope; no invented endpoint or server. |
+
+The first trial found missing delegated read credentials and a nonexistent
+`/host/tickets/result` path. Both were corrected and independently rereviewed;
+recovery now reads bounded `status.snapshot` and `deadletter.snapshot`. That
+review also exposed stale read-auth paragraphs and bare curl examples in the
+linked canonical guides. The same scoped change aligns those read instructions
+with the existing gateway read classifier and Rust/Python header handling.
+
+#### Compatibility and limits
+
+Reviewed all eight host tools: coh, cohsh, hive-gateway, gpu-bridge-host,
+host-sidecar-bridge, host-ticket-agent, cas-tool and SwarmUI; also cohesix-py,
+`rest_perf_harness.py`, benchmark methodology, generated provider/implementation
+inventories and packaged release guidance. No command, schema, bound, default,
+permission, transport, executor, benchmark workload or report format changes.
+The three guides need only read-auth documentation corrections. Other surfaces
+require no implementation/fixture change because this task adds entry points to
+existing contracts rather than changing those contracts.
+
+No live Queen/GPU/Jetson execution, fresh Pi evidence, target acceptance,
+production identity enrollment, external-user adoption study or website deployment
+was performed. Signed-verifier positive/negative runtime behavior was reviewed
+in implementation and existing tests, not freshly exercised with enrolled graphs.
+Link/format checks and mock or HTTP-fixture results cannot establish adoption,
+live authorization, native completion, workload success or release acceptance.
+
 ## Milestone 27d — Verified Private LoRA Release <a id="27d"></a>
 [Milestones](#Milestones)
 
