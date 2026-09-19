@@ -75,6 +75,7 @@ def substitutions(
         "field_bus",
         "evidence_enrollment_dir",
         "worker_evidence_enrollment_dir",
+        "peft",
     }:
         raise ValueError("EPERM service enrollment fields")
     if enrollment["schema"] != "cohesix-host-service-enrollment/v1":
@@ -117,6 +118,9 @@ def substitutions(
         "EVIDENCE_AGENT_ARGS": "",
         "EVIDENCE_AGENT_PLIST": "",
         "AGENT_DEVICE_ISOLATION": "PrivateDevices=yes",
+        "PEFT_AGENT_ARGS": "",
+        "PEFT_AGENT_ENVIRONMENT": "",
+        "AGENT_PROTECT_HOME": "yes",
     }
     roots = [values[key] for key in ("PREFIX", "ENROLLMENT", "STATE", "CREDENTIALS")]
     if any(
@@ -128,6 +132,37 @@ def substitutions(
             "EPERM package, state, credentials and enrollment must be separate trees"
         )
     profile = package["manifest"]["profile"]
+    if "peft" in enrollment:
+        peft = enrollment["peft"]
+        if (
+            profile["id"] != "linux-aarch64-cuda"
+            or not isinstance(peft, dict)
+            or set(peft) != {"agent_config", "runtime_dir"}
+        ):
+            raise ValueError(
+                "EPERM PEFT requires the CUDA profile and exact enrollment"
+            )
+        config = absolute_path(peft["agent_config"])
+        runtime = absolute_path(peft["runtime_dir"])
+        if not config.startswith(values["STATE"] + "/") or not re.fullmatch(
+            r"/run/user/[1-9][0-9]{0,9}", runtime
+        ):
+            raise ValueError("EPERM PEFT state or dedicated user runtime directory")
+        if not {"evidence_enrollment_dir", "worker_evidence_enrollment_dir"} <= set(
+            enrollment
+        ):
+            raise ValueError(
+                "EPERM PEFT requires independent native and Worker custody"
+            )
+        values["PEFT_AGENT_ARGS"] = f"--peft-release-config {config}"
+        # ProtectHome=yes cannot contain bind mounts. Hide home/runtime trees
+        # with tmpfs and expose only this dedicated user's two manager sockets.
+        values["AGENT_PROTECT_HOME"] = "tmpfs"
+        values["PEFT_AGENT_ENVIRONMENT"] = (
+            f"Environment=XDG_RUNTIME_DIR={runtime}\n"
+            f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus\n"
+            f"BindReadOnlyPaths={runtime}/bus {runtime}/systemd/private"
+        )
     if profile["os"] == "linux" and any(
         path == protected or path.startswith(protected + "/")
         for path in roots

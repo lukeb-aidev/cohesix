@@ -1449,6 +1449,12 @@ command is bounded to 58 body rows before its terminal acknowledgement.
 
 </details>
 
+The host-only `cohesix-journey identity|validate|doctor|run` command installs
+with the Python tools and composes the existing CUDA/LoRA lifecycle. See
+[Adoption](ADOPTION.md) and [CI workflows](CI_WORKFLOWS.md) for configuration,
+scoped approval, retry identity and verified outcome exit codes. It introduces
+no VM console verb.
+
 ## Compiler-generated reference
 
 These marker-delimited blocks are retained mirrors of the standalone

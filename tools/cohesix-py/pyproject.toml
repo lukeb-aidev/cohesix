@@ -34,6 +34,7 @@ dev = [
 
 [project.scripts]
 cohesix-playbook = "cohesix.playbook_cli:main"
+cohesix-journey = "cohesix.journey:main"
 
 # Only the public SDK package is importable from built distributions.
 [tool.setuptools]

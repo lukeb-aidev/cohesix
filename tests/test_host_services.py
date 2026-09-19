@@ -100,8 +100,12 @@ def test_cuda_devices_require_exact_profile_and_never_a_directory_wildcard() -> 
         values,
     )
     for required in (
-        "TasksMax=64", "MemoryMax=1G", "MemorySwapMax=0", "CPUQuota=200%",
-        "NoNewPrivileges=yes", "DevicePolicy=closed",
+        "TasksMax=64",
+        "MemoryMax=1G",
+        "MemorySwapMax=0",
+        "CPUQuota=200%",
+        "NoNewPrivileges=yes",
+        "DevicePolicy=closed",
     ):
         assert required in unit.splitlines()
     with pytest.raises(ValueError):
@@ -196,3 +200,43 @@ def test_field_bus_service_requires_signed_admission_and_exact_serial_devices() 
         }
         with pytest.raises(ValueError):
             services.field_bus_devices(registry)
+
+
+def test_peft_requires_cuda_profile_private_state_and_independent_custody() -> None:
+    candidate = enrollment()
+    candidate.update(
+        {
+            "gpu": {"id": "GPU-0", "uuid": "12" * 16, "device_nodes": ["/dev/nvidia0"]},
+            "evidence_enrollment_dir": "/etc/cohesix/native",
+            "worker_evidence_enrollment_dir": "/etc/cohesix/worker",
+            "peft": {
+                "agent_config": "/var/lib/cohesix/peft/agent.json",
+                "runtime_dir": "/run/user/1001",
+            },
+        }
+    )
+    values = substitutions(candidate, "linux-aarch64-cuda")
+    assert (
+        values["PEFT_AGENT_ARGS"]
+        == "--peft-release-config /var/lib/cohesix/peft/agent.json"
+    )
+    unit = services.render(
+        (ROOT / "packaging/systemd/cohesix-ticket-agent.service.in").read_text(), values
+    )
+    assert "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" in unit
+    assert "ProtectHome=tmpfs" in unit
+    assert "BindReadOnlyPaths=/run/user/1001/bus /run/user/1001/systemd/private" in unit
+    for field, value in [
+        ("agent_config", "/etc/outside.json"),
+        ("runtime_dir", "/run/user/1001\nUser=root"),
+        ("runtime_dir", "/run/user/0"),
+    ]:
+        invalid = copy.deepcopy(candidate)
+        invalid["peft"][field] = value
+        with pytest.raises(ValueError):
+            substitutions(invalid, "linux-aarch64-cuda")
+    del candidate["worker_evidence_enrollment_dir"]
+    with pytest.raises(ValueError, match="custody"):
+        substitutions(candidate, "linux-aarch64-cuda")
+    with pytest.raises(ValueError, match="CUDA"):
+        substitutions(candidate)

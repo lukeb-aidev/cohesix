@@ -12,11 +12,12 @@ Type=simple
 User=@USER@
 Group=@GROUP@
 WorkingDirectory=@STATE@
-ExecStart=@PREFIX@/bin/host-ticket-agent --rest-url http://127.0.0.1:8080 --manifest @PREFIX@/config/root_task_resolved.json --policy @PREFIX@/config/coh_policy.toml --cursor @STATE@/agent/cursor.json --execution-journal @STATE@/agent/execution.json --agent-lock @STATE@/agent/agent.lock --provider-evidence-root @STATE@/cas --export-root @STATE@/exports --adapter-root @STATE@/adapters --registry-root @STATE@/models @GPU_AGENT_ARGS@ @FIELD_BUS_AGENT_ARGS@ @EVIDENCE_AGENT_ARGS@
+ExecStart=@PREFIX@/bin/host-ticket-agent --rest-url http://127.0.0.1:8080 --manifest @PREFIX@/config/root_task_resolved.json --policy @PREFIX@/config/coh_policy.toml --cursor @STATE@/agent/cursor.json --execution-journal @STATE@/agent/execution.json --agent-lock @STATE@/agent/agent.lock --provider-evidence-root @STATE@/cas --export-root @STATE@/exports --adapter-root @STATE@/adapters --registry-root @STATE@/models @GPU_AGENT_ARGS@ @FIELD_BUS_AGENT_ARGS@ @EVIDENCE_AGENT_ARGS@ @PEFT_AGENT_ARGS@
 LoadCredential=request_auth:@CREDENTIALS@/request_auth
 LoadCredential=delegated_ticket:@CREDENTIALS@/agent_ticket
 Environment=HIVE_GATEWAY_REQUEST_AUTH_TOKEN=file:%d/request_auth
 Environment=COH_REST_TICKET=file:%d/delegated_ticket
+@PEFT_AGENT_ENVIRONMENT@
 @GPU_AGENT_CREDENTIAL@
 Restart=on-failure
 RestartSec=5
@@ -28,7 +29,7 @@ CapabilityBoundingSet=
 PrivateTmp=yes
 @AGENT_DEVICE_ISOLATION@
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=@AGENT_PROTECT_HOME@
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

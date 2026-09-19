@@ -88,6 +88,16 @@ independently enrolled native evidence. Host journal fault tests cannot substitu
 for those outcomes. Compile exact affected host/target profiles and run generated
 and Test Plan consistency; the full staged release campaign remains owned by 27g.
 
+Installation/adoption/CI uses focused signed-package refusal, explicit Python
+archive/install, service-rendering and journey identity/outcome/retry tests. Install
+selected packages into fresh directories, build/install the SDK in a clean interpreter,
+and exercise both shipped lifecycle paths and signed outcome verification without
+source-checkout imports. Retain exact package/source digests and first-use friction.
+Unchanged native execution evidence from 27b–27d retains its original identity;
+package or CI tests cannot promote it to a new physical target or integrated release.
+Compile affected native profiles and run generated/Test Plan consistency; 27g owns
+the complete assembled campaign.
+
 Select tests by the contract at risk, its real execution surface, and the claim
 being made. Record the affected surfaces, catalog actions, expected positive
 and negative outcomes, exact profiles, and any evidence still missing. A

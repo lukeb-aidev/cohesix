@@ -188,3 +188,12 @@ scripts/ci/python_compat_run.sh \
 
 See [`docs/PYTHON_SUPPORT.md`](../../docs/PYTHON_SUPPORT.md) for target
 projection commands and proof-boundary details.
+
+## Installed CUDA and LoRA journeys
+
+`cohesix-journey identity|validate|doctor|run` wraps the existing Rust lifecycle
+and signed verifier. `cohesix.journey.run` returns the same versioned outcome
+and exit mapping. Only verified requested completion returns zero; an ACK,
+timeout or recovered failed canary does not. Keep state outside runner scratch.
+See [Adoption](../../docs/ADOPTION.md) and [CI workflows](../../docs/CI_WORKFLOWS.md)
+for exact installation, config, authority and recovery steps.

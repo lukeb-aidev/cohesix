@@ -120,7 +120,7 @@ owned by their specific contracts.
 | [27b](#27b) | Executable Host Foundation | Complete — selected foundation |
 | [27c](#27c) | Recoverable CUDA Recipes | Complete |
 | [27d](#27d) | Verified Private LoRA Release | Complete |
-| [27e](#27e) | Installation, Adoption and CI | Planned — next release |
+| [27e](#27e) | Installation, Adoption and CI | Complete |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Planned — next release |
 | [28](#28) | Formal Verification Baseline + Proof-Carrying Manifests | Planned — deferred |
@@ -11590,7 +11590,15 @@ Deliverables: Verified Private LoRA Release reference, exact evaluation/runtime 
 ## Milestone 27e — Installation, Adoption and CI <a id="27e"></a>
 [Milestones](#Milestones)
 
-**Status:** Planned — next-release scope.
+**Status:** Complete — 20 September 2026. Selected Mac/Linux ARM64 signed
+packages, explicit Python wheel/sdist builds, workflow doctor and durable CI
+identity/verified-outcome gates are implemented. Focused package, service,
+retry/refusal and lifecycle tests, native host builds, clean installs and
+installed verification of accepted CUDA/LoRA outcomes pass.
+See the [implementation record](audit/M27E_IMPLEMENTATION_RECORD.md) for exact
+package/source identities, native evidence reuse and the compatibility review.
+The full suite, fresh assembled workflows and integrated release qualification
+remain 27g; no new physical Pi or production release acceptance is claimed.
 
 **Prerequisites:** completed 27b, 27c and 27d.
 

@@ -3924,7 +3924,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "macos-controller"
 os = "macos"
 architecture = "aarch64"
-version = "1.0.0-beta"
+version = "1.1.0-beta"
 integration_surfaces = ["coh", "cohsh", "direct_console", "evidence", "fleet", "fuse_direct", "fuse_rest", "hive_gateway", "host_sidecar", "host_ticket_agent", "otel", "prometheus", "rest", "siem"]
 required_credentials = ["TCP_AUTH", "ROOT_TICKET", "REQUEST_AUTH", "DELEGATION_KEY", "AGENT_TICKET"]
 
@@ -4038,12 +4038,332 @@ path = "packaging/README.md"
 kind = "text"
 executable = false
 version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/README.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/__init__.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/audit.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/auth.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/authority.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/backends.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/client.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/defaults.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/errors.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/evidence.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/evidence_graph.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/generated.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/hf_native.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/journey.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/identity.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/snapshots.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/integrations.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/native_providers.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/operator.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/orchestration.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/paths.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/playbook_cli.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/playbooks.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/provider_generated.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/providers.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/receipts.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/ticket.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/worker.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/workload.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/ci_evidence_pack.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/cuda_recipe.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/private_lora_release.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/private_lora_request.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/common.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/lease_run.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/peft_roundtrip.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/siem_export_ndjson.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/telemetry_write_pull.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/use_case_playbook.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/pyproject.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/ADOPTION.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/CI_WORKFLOWS.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/HOST_TOOLS.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/PRIVATE_LORA_RELEASE.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/CAUSAL_EVIDENCE.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/USERLAND_AND_CLI.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/INTERFACES.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/SECURITY.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "LICENSE.txt"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "scripts/install/build_python_package.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "scripts/install/stage_host_package.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "packaging/ci/cohesix-journey.yml"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "contracts/implementation_surface_inventory.json"
+kind = "json"
+executable = false
+version = "1"
+schema_pointer = "/schema"
+schema_value = "cohesix-implementation-surface-inventory/v1"
 [[providers.deployment_profiles]]
 schema = "cohesix-host-package-profile/v1"
 id = "linux-aarch64-controller"
 os = "linux"
 architecture = "aarch64"
-version = "1.0.0-beta"
+version = "1.1.0-beta"
 integration_surfaces = ["coh", "cohsh", "direct_console", "evidence", "fleet", "fuse_direct", "fuse_rest", "hive_gateway", "host_sidecar", "host_ticket_agent", "otel", "prometheus", "rest", "siem"]
 required_credentials = ["TCP_AUTH", "ROOT_TICKET", "REQUEST_AUTH", "DELEGATION_KEY", "AGENT_TICKET", "SIDECAR_TICKET"]
 
@@ -4169,6 +4489,326 @@ path = "packaging/README.md"
 kind = "text"
 executable = false
 version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/README.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/__init__.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/audit.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/auth.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/authority.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/backends.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/client.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/defaults.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/errors.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/evidence.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/evidence_graph.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/generated.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/hf_native.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/journey.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/identity.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/snapshots.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/integrations.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/native_providers.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/operator.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/orchestration.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/paths.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/playbook_cli.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/playbooks.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/provider_generated.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/providers.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/receipts.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/ticket.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/worker.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/workload.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/ci_evidence_pack.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/cuda_recipe.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/private_lora_release.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/private_lora_request.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/common.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/lease_run.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/peft_roundtrip.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/siem_export_ndjson.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/telemetry_write_pull.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/use_case_playbook.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/pyproject.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/ADOPTION.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/CI_WORKFLOWS.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/HOST_TOOLS.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/PRIVATE_LORA_RELEASE.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/CAUSAL_EVIDENCE.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/USERLAND_AND_CLI.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/INTERFACES.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/SECURITY.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "LICENSE.txt"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "scripts/install/build_python_package.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "scripts/install/stage_host_package.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "packaging/ci/cohesix-journey.yml"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "contracts/implementation_surface_inventory.json"
+kind = "json"
+executable = false
+version = "1"
+schema_pointer = "/schema"
+schema_value = "cohesix-implementation-surface-inventory/v1"
 [[providers.deployment_profiles]]
 schema = "cohesix-host-package-profile/v1"
 id = "linux-x86-64-controller"
@@ -4305,7 +4945,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "linux-aarch64-cuda"
 os = "linux"
 architecture = "aarch64"
-version = "1.0.0-beta"
+version = "1.1.0-beta"
 integration_surfaces = ["coh", "cohsh", "direct_console", "evidence", "fleet", "fuse_direct", "fuse_rest", "gpu_bridge", "hive_gateway", "host_sidecar", "host_ticket_agent", "jetson", "network", "otel", "prometheus", "rest", "siem"]
 required_credentials = ["TCP_AUTH", "ROOT_TICKET", "REQUEST_AUTH", "DELEGATION_KEY", "AGENT_TICKET", "SIDECAR_TICKET", "GPU_MAC", "GPU_INVENTORY_TICKET"]
 
@@ -4454,3 +5094,323 @@ path = "packaging/README.md"
 kind = "text"
 executable = false
 version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/README.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/__init__.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/audit.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/auth.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/authority.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/backends.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/client.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/defaults.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/errors.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/evidence.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/evidence_graph.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/generated.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/hf_native.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/journey.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/identity.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/snapshots.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/integrations.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/native_providers.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/operator.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/orchestration.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/paths.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/playbook_cli.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/playbooks.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/provider_generated.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/providers.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/receipts.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/ticket.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/worker.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/cohesix/workload.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/ci_evidence_pack.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/cuda_recipe.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/private_lora_release.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/private_lora_request.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/common.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/lease_run.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/peft_roundtrip.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/siem_export_ndjson.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/telemetry_write_pull.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/examples/use_case_playbook.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "tools/cohesix-py/pyproject.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/ADOPTION.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/CI_WORKFLOWS.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/HOST_TOOLS.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/PRIVATE_LORA_RELEASE.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/CAUSAL_EVIDENCE.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/USERLAND_AND_CLI.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/INTERFACES.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/SECURITY.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "LICENSE.txt"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "scripts/install/build_python_package.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "scripts/install/stage_host_package.py"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "packaging/ci/cohesix-journey.yml"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "contracts/implementation_surface_inventory.json"
+kind = "json"
+executable = false
+version = "1"
+schema_pointer = "/schema"
+schema_value = "cohesix-implementation-surface-inventory/v1"

@@ -1460,6 +1460,10 @@ live control-model playbooks require explicit `--rehearsal`.
 
 #### Recoverable CUDA recipes
 
+For extracted-package installation and the shared `cohesix-journey` doctor/CI
+outcome command, follow [Adoption](ADOPTION.md) and [CI workflows](CI_WORKFLOWS.md).
+These compose the same lifecycle and signed verifier described below.
+
 Use `coh plan cuda-reference --recipe` to inspect the generated contract from
 `configs/cuda_recipe.toml`. A `cohesix-cuda-recipe/v1` deployment composes existing
 `gpu.workload.submit` tickets, pinned provider inputs and separately enrolled

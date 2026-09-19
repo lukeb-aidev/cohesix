@@ -10,6 +10,10 @@ shell, gateway, Python client and desktop UI run on your Mac or Linux host.
 This guide gets you from a release archive to an authenticated console, then
 shows how several clients can share one target through the gateway.
 
+For selected installed CUDA/LoRA CLI and Python workflows, follow
+[Adoption](ADOPTION.md). Its doctor and CI outcome commands use the same
+admission, durable journals and signed evidence as the native recipes.
+
 ## Choose your download
 
 Use all files from the same release. For **1.0.0-beta**:

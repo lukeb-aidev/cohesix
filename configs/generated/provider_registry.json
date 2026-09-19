@@ -5,6 +5,14 @@
         "architecture": "aarch64",
         "artifacts": [
           {
+            "executable": false,
+            "kind": "text",
+            "path": "LICENSE.txt",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
             "executable": true,
             "kind": "elf",
             "path": "bin/coh",
@@ -79,6 +87,14 @@
           {
             "executable": false,
             "kind": "json",
+            "path": "contracts/implementation_surface_inventory.json",
+            "schema_pointer": "/schema",
+            "schema_value": "cohesix-implementation-surface-inventory/v1",
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "json",
             "path": "contracts/provider_registry.json",
             "schema_pointer": "/schema",
             "schema_value": "cohesix-provider-registry/v1",
@@ -87,7 +103,71 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "docs/ADOPTION.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/CAUSAL_EVIDENCE.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/CI_WORKFLOWS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "docs/FIELD_BUS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/HOST_TOOLS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/INTERFACES.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/PRIVATE_LORA_RELEASE.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/SECURITY.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/USERLAND_AND_CLI.md",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -104,6 +184,14 @@
             "executable": false,
             "kind": "text",
             "path": "packaging/README.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "packaging/ci/cohesix-journey.yml",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -151,7 +239,343 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "scripts/install/build_python_package.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "scripts/install/render_host_services.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "scripts/install/stage_host_package.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/README.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/__init__.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/audit.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/auth.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/authority.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/backends.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/client.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/defaults.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/errors.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/evidence.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/evidence_graph.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/generated.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/hf_native.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/identity.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/integrations.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/journey.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/native_providers.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/operator.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/orchestration.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/paths.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/playbook_cli.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/playbooks.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/provider_generated.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/providers.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/receipts.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/snapshots.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/ticket.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/worker.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/workload.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/ci_evidence_pack.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/common.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/cuda_recipe.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/lease_run.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/peft_roundtrip.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/private_lora_release.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/private_lora_request.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/siem_export_ndjson.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/telemetry_write_pull.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/use_case_playbook.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "toml",
+            "path": "tools/cohesix-py/pyproject.toml",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -184,11 +608,19 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.0.0-beta"
+        "version": "1.1.0-beta"
       },
       {
         "architecture": "aarch64",
         "artifacts": [
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "LICENSE.txt",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
           {
             "executable": true,
             "kind": "elf",
@@ -280,6 +712,14 @@
           {
             "executable": false,
             "kind": "json",
+            "path": "contracts/implementation_surface_inventory.json",
+            "schema_pointer": "/schema",
+            "schema_value": "cohesix-implementation-surface-inventory/v1",
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "json",
             "path": "contracts/provider_registry.json",
             "schema_pointer": "/schema",
             "schema_value": "cohesix-provider-registry/v1",
@@ -288,7 +728,71 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "docs/ADOPTION.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/CAUSAL_EVIDENCE.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/CI_WORKFLOWS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "docs/FIELD_BUS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/HOST_TOOLS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/INTERFACES.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/PRIVATE_LORA_RELEASE.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/SECURITY.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/USERLAND_AND_CLI.md",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -305,6 +809,14 @@
             "executable": false,
             "kind": "text",
             "path": "packaging/README.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "packaging/ci/cohesix-journey.yml",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -368,7 +880,343 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "scripts/install/build_python_package.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "scripts/install/render_host_services.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "scripts/install/stage_host_package.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/README.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/__init__.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/audit.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/auth.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/authority.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/backends.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/client.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/defaults.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/errors.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/evidence.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/evidence_graph.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/generated.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/hf_native.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/identity.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/integrations.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/journey.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/native_providers.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/operator.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/orchestration.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/paths.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/playbook_cli.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/playbooks.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/provider_generated.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/providers.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/receipts.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/snapshots.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/ticket.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/worker.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/workload.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/ci_evidence_pack.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/common.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/cuda_recipe.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/lease_run.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/peft_roundtrip.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/private_lora_release.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/private_lora_request.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/siem_export_ndjson.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/telemetry_write_pull.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/use_case_playbook.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "toml",
+            "path": "tools/cohesix-py/pyproject.toml",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -406,7 +1254,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.0.0-beta"
+        "version": "1.1.0-beta"
       },
       {
         "architecture": "x86_64",
@@ -597,6 +1445,14 @@
         "architecture": "aarch64",
         "artifacts": [
           {
+            "executable": false,
+            "kind": "text",
+            "path": "LICENSE.txt",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
             "executable": true,
             "kind": "mach_o",
             "path": "bin/coh",
@@ -671,6 +1527,14 @@
           {
             "executable": false,
             "kind": "json",
+            "path": "contracts/implementation_surface_inventory.json",
+            "schema_pointer": "/schema",
+            "schema_value": "cohesix-implementation-surface-inventory/v1",
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "json",
             "path": "contracts/provider_registry.json",
             "schema_pointer": "/schema",
             "schema_value": "cohesix-provider-registry/v1",
@@ -679,7 +1543,71 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "docs/ADOPTION.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/CAUSAL_EVIDENCE.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/CI_WORKFLOWS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "docs/FIELD_BUS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/HOST_TOOLS.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/INTERFACES.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/PRIVATE_LORA_RELEASE.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/SECURITY.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "docs/USERLAND_AND_CLI.md",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -696,6 +1624,14 @@
             "executable": false,
             "kind": "text",
             "path": "packaging/README.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "packaging/ci/cohesix-journey.yml",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -727,7 +1663,343 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "scripts/install/build_python_package.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "scripts/install/render_host_services.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "scripts/install/stage_host_package.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/README.md",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/__init__.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/audit.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/auth.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/authority.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/backends.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/client.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/defaults.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/errors.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/evidence.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/evidence_graph.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/generated.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/hf_native.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/identity.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/integrations.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/journey.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/native_providers.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/operator.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/orchestration.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/paths.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/playbook_cli.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/playbooks.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/provider_generated.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/providers.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/receipts.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/snapshots.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/ticket.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/worker.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/cohesix/workload.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/ci_evidence_pack.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/common.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/cuda_recipe.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/lease_run.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/peft_roundtrip.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/private_lora_release.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/private_lora_request.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/siem_export_ndjson.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/telemetry_write_pull.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
+            "path": "tools/cohesix-py/examples/use_case_playbook.py",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "toml",
+            "path": "tools/cohesix-py/pyproject.toml",
             "schema_pointer": null,
             "schema_value": null,
             "version": "1"
@@ -759,7 +2031,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.0.0-beta"
+        "version": "1.1.0-beta"
       }
     ],
     "export": {
@@ -6142,7 +7414,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "499d8608dd9bd5a62fe6cd797d456fbd5752ab123a6de2e712cd16eb227aa97d",
+  "graph_sha256": "af6fed8ac6cf5abe4443718b8b322817a68c4d78d9067add4d5b333884b97283",
   "playbooks": [
     {
       "dependencies": [
@@ -7089,7 +8361,7 @@
   ],
   "resolved_manifest_sha256": "33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "f09e4950ae2f0c30dd51dcdb9a6366eae65d401b4f86005083827d2e0a1feb17",
+  "source_sha256": "705699a2afc5995fa68e9e069cbad28d0968337fe891417cabae61c73b4e3a6d",
   "use_cases": [
     {
       "dependencies": [

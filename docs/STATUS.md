@@ -24,6 +24,18 @@ installation/CI, the full SwarmUI workbench, then integrated qualification. Broa
 scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
 planning, not implementation or evidence status.
 
+Milestone [27e](BUILD_PLAN.md#27e), **Installation, Adoption and CI**, is
+**Complete** as of 20 September 2026. Selected signed Mac/Linux ARM64 packages
+include the explicit Python distribution sources, offline adoption guides and
+CI example. The shared journey command preserves retry identity and durable
+state, reports doctor boundaries and returns success only after the requested
+outcome is verified. Focused package/service/lifecycle/CI tests, native host
+builds and clean SDK installs pass. Installed tools reverify the accepted native
+CUDA/LoRA evidence at its original identity; failed-canary rollback stays failed.
+See [Adoption](ADOPTION.md) and the
+[implementation record](audit/M27E_IMPLEMENTATION_RECORD.md). Native UI and
+fresh assembled release qualification remain 27f/27g.
+
 Milestone [27d](BUILD_PLAN.md#27d), **Verified Private LoRA Release**, is
 **Complete** as of 19 September 2026. Genuine native import and HF training pass
 comparable evaluation and actual serving promotion. A measured regression is
@@ -31,8 +43,8 @@ refused, and a forced canary failure restores the exact previous adapter and
 generation while remaining a failed candidate. Focused boundary/refusal checks,
 exact macOS/Linux ARM64 and QEMU builds, independent WorkerLora receipts,
 cleanup and generated/Test Plan checks pass. See the
-[implementation record](audit/M27D_IMPLEMENTATION_RECORD.md). Full package/UI
-adoption and integrated release qualification remain later milestones.
+[implementation record](audit/M27D_IMPLEMENTATION_RECORD.md). Package adoption is delivered by 27e; native UI
+and integrated release qualification remain later milestones.
 
 Milestone [27c](BUILD_PLAN.md#27c), **Recoverable CUDA Recipes**, is **Complete**
 as of 19 September 2026. The shared CLI/Python lifecycle persists identity and
@@ -141,6 +153,6 @@ native-profile and content integrity checks.
 - For performance claims, follow [Benchmarking](BENCHMARKS.md) and retain the
   complete result artifact.
 
-This snapshot describes the repository on 14 September 2026. A change that alters
+This snapshot describes the repository on 20 September 2026. A change that alters
 one of these public capability boundaries must update this page in the same
 change.

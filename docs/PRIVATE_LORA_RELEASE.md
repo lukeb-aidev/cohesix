@@ -179,5 +179,6 @@ remains in use until its owner stops the service. Retained artifacts and evidenc
 are bounded and are not silently deleted. Stop the reference service, verify it
 inactive and remove its private enrollment keys when ending a disposable run.
 Keep failed candidate evidence and the accepted/rollback artifacts needed for
-recovery. Full package adoption, UI and integrated release qualification belong
-to later milestones; these commands do not claim production ticket-to-bundle binding.
+recovery. Use [Adoption](ADOPTION.md) and [CI workflows](CI_WORKFLOWS.md) for installed
+CLI/Python operation. Native UI and integrated release qualification remain separate;
+these commands do not claim production ticket-to-bundle binding.
