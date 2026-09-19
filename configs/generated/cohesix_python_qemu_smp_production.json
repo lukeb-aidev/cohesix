@@ -45,7 +45,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "virt-aarch64",
-  "manifest_sha256": "91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53",
+  "manifest_sha256": "ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
@@ -67,7 +67,10 @@
     "gpu_actions": [
       "gpu.lease.grant",
       "gpu.lease.renew",
-      "gpu.lease.release"
+      "gpu.lease.release",
+      "gpu.workload.submit",
+      "gpu.workload.cancel",
+      "gpu.workload.observe"
     ],
     "max_control_inflight": 1,
     "peft_actions": [

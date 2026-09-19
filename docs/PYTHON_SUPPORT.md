@@ -157,15 +157,22 @@ print(snapshot.lease_summary)
 
 ## Authentication
 
+### REST
+
+`cohesix.exchange_identity` performs one bounded, authenticated exchange using
+credential references and an independently enrolled provider graph digest. It
+returns an `IdentityTicket` for explicit `RestBackend` delegation. It follows no
+redirects and does not retry or refresh authority. `cohesix.local_subject` reads
+only the local kernel euid. See [identity mapping](IDENTITY_MAPPING.md).
+
 The SDK provides `QueenIntent` and `AdmissionCorrelation`, delegated REST
 write credentials, strict-intent and writer-epoch validation, and bounded
 authority/dedupe snapshots in evidence packs. Generated
-`cohesix-python-profile/v2` adds selected authority policy; v1 contracts must be
-regenerated. Neither Python objects nor profile metadata constitute a VM
+`cohesix-python-profile/v2` includes selected authority policy; consumers
+require a generated profile matching the selected target. Neither Python objects nor profile metadata constitute a VM
 admission grant. Missing production epoch/delegation fails before mutation,
 and REST writes have no automatic retry. See [M27a authority](M27A_AUTHORITY.md).
 
-### REST
 
 `RestBackend` accepts an explicit `request_auth_token`. Otherwise it resolves,
 in order, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then
@@ -220,11 +227,19 @@ the repository.
 
 ## Public API
 
+The provider helpers `cohesix.providers.registry`, `provider`, `action`, `profile`,
+`surface`, and `validate_target` resolve compiler-generated contracts
+and stable integration IDs, including admission, target grammar, exact host
+profiles and read visibility. Returned dictionaries are detached projections;
+changing them cannot alter admission policy or establish live provider support.
+
+
+
 The package exports these primary surfaces from `cohesix`:
 
 | Surface | Purpose |
 | --- | --- |
-| `CohesixClient` | GPU discovery and leases, telemetry push/pull, host-command receipts, evidence packs, and PEFT lifecycle helpers |
+| `CohesixClient` | GPU discovery and leases, telemetry push/pull, host-command operation reports, evidence packs, and PEFT lifecycle helpers |
 | `CohesixOrchestrator` | Typed approvals, scheduler records, leases, exports, host tickets, and `/proc` snapshots |
 | `ControlPlan` | Declarative collection of approval, schedule, lease, and export writes |
 | `ApprovalRequest` | Validated `/actions/queue` record |
@@ -306,7 +321,14 @@ The API preserves these independent axes:
 | Python projection compatibility | both shipped interpreters passed against the wheel/contract | target, provider, or runtime acceptance |
 | runtime release / production use case | later evidence-graph promotions | inferred success from any Python object |
 
-`cohesix-receipt-v1` remains a non-authoritative compatibility wrapper.
+Local lease and command summaries now emit `cohesix-operation-report/v1`
+with `authoritative=false`, `proof_class=operation_report`, `mode=client_local`,
+and `source_identity=client-local`. Use `gpu_lease_with_report` and
+`run_command_with_report`; the previous `*_with_receipt` method names and
+`receipt_out` argument remain compatibility aliases. Historical
+`cohesix-receipt-v1` files are read as non-authoritative compatibility input and
+are never emitted by these helpers. An operation report cannot establish GPU
+execution, Worker completion, or provider receipt authority.
 Receipt-bearing host-ticket work uses the accepted
 `host-ticket/v2`/`host-ticket-result/v2` pair and the bounded
 `worker-gpu-receipt/v1` or `worker-lora-receipt/v1` telemetry encoding. Python
@@ -443,8 +465,19 @@ provider probes, and planned control counts. A dry-run report says
 `workflow_kind: control-model`, retains
 `production_use_case_accepted: false`, and emits no control writes. Remove
 `--dry-run --mock` only after selecting a live backend, reviewing the plan, and
-confirming the intended authority and side effects; live mode still submits the
-current generic control plan rather than a complete sector workflow.
+confirming the intended authority and side effects. A live generic control plan
+also requires `--rehearsal` (`rehearsal=True` in `execute_playbook`); it remains
+a control rehearsal and does not execute the sector application.
+
+Generated workflow lifecycle commands are available through `cohesix-playbook
+plan|explain|apply|watch|verify|recover --playbook ID --coh-binary /absolute/coh`.
+Mutating/verification operations require an explicit `--deployment` file.
+The SDK delegates to the installed Rust `coh` verifier; it cannot issue its own
+authoritative receipt. Connection secrets use `--auth-ref` and a protected
+`--ticket-ref file:/absolute/path`. The generated stages, unresolved external
+owners and exact package/topology inputs remain visible. Current domain workflows
+with undeployed external applications refuse apply; none is production-qualified.
+See [HOST_TOOLS.md](HOST_TOOLS.md#generated-workflow-foundation).
 
 Optional probes cover systemd, Docker, Kubernetes, NVML, and PEFT package
 state. They run on the host, validate and bound collected data, and do not grant

@@ -256,6 +256,14 @@ QEMU_RECEIPT_ACTIONS = {
     0x0303: ("peft.activate", "worker-lora"),
     0x0304: ("peft.rollback", "worker-lora"),
 }
+# The M26e required matrix stays frozen. Parsing newer M27b receipts uses the
+# extended ABI without claiming that a QEMU fixture executed external CUDA.
+WORKER_RECEIPT_ACTIONS = {
+    **QEMU_RECEIPT_ACTIONS,
+    0x0204: ("gpu.workload.submit", "worker-gpu"),
+    0x0205: ("gpu.workload.cancel", "worker-gpu"),
+    0x0206: ("gpu.workload.observe", "worker-gpu"),
+}
 QEMU_TERMINAL_OUTCOMES = {1: "confirmed", 2: "rejected", 8: "stale"}
 QEMU_WORKER_SYMBOLS = (
     "_start",
@@ -3943,9 +3951,9 @@ def _validate_marker_lifecycle(
     for receipt in receipts:
         action = _marker_uint(receipt, "action", maximum=0xFFFF)
         outcome = _marker_uint(receipt, "outcome", maximum=0xFFFF)
-        if action not in QEMU_RECEIPT_ACTIONS or outcome not in QEMU_TERMINAL_OUTCOMES:
+        if action not in WORKER_RECEIPT_ACTIONS or outcome not in QEMU_TERMINAL_OUTCOMES:
             raise EvidenceError("Worker receipt uses a non-canonical action/outcome")
-        if _marker_identity(receipt)[0] != QEMU_RECEIPT_ACTIONS[action][1]:
+        if _marker_identity(receipt)[0] != WORKER_RECEIPT_ACTIONS[action][1]:
             raise EvidenceError("Worker receipt action crossed its role boundary")
         sequence = _marker_uint(receipt, "sequence")
         matches = [
@@ -4738,7 +4746,7 @@ def _validate_pressure_cycles_and_receipts(
         expected = next(
             (
                 (raw_action, role)
-                for raw_action, (label, role) in QEMU_RECEIPT_ACTIONS.items()
+                for raw_action, (label, role) in WORKER_RECEIPT_ACTIONS.items()
                 if label == action
             ),
             None,

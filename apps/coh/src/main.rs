@@ -11,7 +11,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use coh::console::ConsoleSession;
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
 use coh::rest::RestSession;
@@ -36,6 +36,9 @@ struct Cli {
     /// Optional capability ticket payload.
     #[arg(long)]
     ticket: Option<String>,
+    /// Resolve a delegated ticket from env:NAME or file:/absolute/path, never argv bytes.
+    #[arg(long, conflicts_with = "ticket")]
+    ticket_ref: Option<String>,
 
     /// Path to the manifest-derived coh policy TOML.
     #[arg(long, value_name = "FILE")]
@@ -47,6 +50,39 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Inspect a generated workflow and its native owners without executing it.
+    Plan(WorkflowArgs),
+    /// Admit the next exact workflow ticket; native results advance later calls.
+    Apply(WorkflowArgs),
+    /// Read current ticket observations and signed terminal evidence once.
+    Watch(WorkflowArgs),
+    /// Explain generated stages, topology, refusals and compensation boundaries.
+    Explain(WorkflowArgs),
+    /// Verify every workflow terminal graph using independently enrolled custodians.
+    Verify(WorkflowArgs),
+    /// Submit separately admitted recovery linked to an original terminal graph.
+    Recover(WorkflowArgs),
+    /// Print compiler-owned provider and surface contracts without opening a transport.
+    Providers,
+    /// Build, verify or install an exact signed host package without a transport.
+    Package {
+        #[command(subcommand)]
+        command: PackageCommand,
+    },
+    /// Verify an enrolled subject; optionally issue a gateway-only ticket with an enrolled key.
+    Identity {
+        #[arg(long)]
+        mapping: String,
+        /// Pinned public JWKS file; required for JWT mappings. Token is read only from stdin.
+        #[arg(long, conflicts_with = "local")]
+        jwks: Option<PathBuf>,
+        /// Use the kernel effective uid for a generated local mapping.
+        #[arg(long)]
+        local: bool,
+        /// Privileged issuer enrollment (env:NAME or file:/absolute/path); omitted means proposal only.
+        #[arg(long)]
+        issuer_key_ref: Option<String>,
+    },
     /// Explain bounded live state or a canonical offline evidence pack.
     Inspect(InspectArgs),
     /// Compare two evidence packs or explicit tcp:// or REST target URLs.
@@ -76,6 +112,54 @@ enum Command {
     Fleet(FleetArgs),
     /// Evidence pack and timeline operations.
     Evidence(EvidenceArgs),
+}
+
+#[derive(Debug, Args)]
+struct WorkflowArgs {
+    /// Stable compiler-owned playbook id.
+    workflow: String,
+    /// Exact deployment, ticket requests and independent evidence trust paths.
+    #[arg(long)]
+    deployment: Option<PathBuf>,
+    #[command(flatten)]
+    connect: ConnectArgs,
+}
+
+#[derive(Debug, Subcommand)]
+enum PackageCommand {
+    /// Sign the exact compiler-owned artifact inventory and generate its file SBOM.
+    Build {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        source_sha256: String,
+        #[arg(long)]
+        key_id: String,
+        /// Explicit env:NAME or file:/absolute/path containing a hex Ed25519 seed.
+        #[arg(long)]
+        signing_key_ref: String,
+    },
+    /// Check signature, inventory, architecture, schemas and SBOM without execution.
+    Verify {
+        #[arg(long)]
+        input: PathBuf,
+        /// Independently enrolled package trust policy, outside the package.
+        #[arg(long)]
+        trust: PathBuf,
+    },
+    /// Install to a new directory on the matching host; service activation is separate.
+    Install {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        trust: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -144,6 +228,24 @@ struct ConnectArgs {
 struct DoctorArgs {
     #[command(flatten)]
     connect: ConnectArgs,
+    /// This host owns GPU execution; explicitly probe its local NVML/CUDA providers.
+    #[arg(long)]
+    local_gpu: bool,
+    /// This deployment requires a usable native FUSE mount.
+    #[arg(long)]
+    require_fuse: bool,
+    /// This is a development host requiring QEMU.
+    #[arg(long)]
+    developer_tools: bool,
+    /// Verify this exact signed installation and its enrolled credential references.
+    #[arg(long, requires_all = ["package_trust", "credential_refs"])]
+    package: Option<PathBuf>,
+    /// Independent package signer trust policy.
+    #[arg(long, requires = "package")]
+    package_trust: Option<PathBuf>,
+    /// JSON map of generated credential names to explicit env:/file: references.
+    #[arg(long, requires = "package")]
+    credential_refs: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -224,6 +326,13 @@ enum GpuCommand {
     },
     /// Request a GPU lease via /queen/ctl.
     Lease(GpuLeaseArgs),
+    /// Submit, cancel, or observe a workload through a root-admitted WorkerGpu ticket.
+    Workload {
+        #[arg(long, value_parser = ["gpu.workload.submit", "gpu.workload.cancel", "gpu.workload.observe"])]
+        action: String,
+        #[arg(long)]
+        spec: PathBuf,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -249,8 +358,12 @@ struct GpuLeaseArgs {
     /// Optional budget ops override.
     #[arg(long)]
     budget_ops: Option<u64>,
-    /// Optional receipt output path.
-    #[arg(long, value_name = "FILE")]
+    /// Optional non-authoritative operation report output path.
+    #[arg(
+        long = "report-out",
+        visible_alias = "receipt-out",
+        value_name = "FILE"
+    )]
     receipt_out: Option<PathBuf>,
 }
 
@@ -261,8 +374,12 @@ struct RunArgs {
     /// GPU identifier.
     #[arg(long)]
     gpu: String,
-    /// Optional receipt output path.
-    #[arg(long, value_name = "FILE")]
+    /// Optional non-authoritative operation report output path.
+    #[arg(
+        long = "report-out",
+        visible_alias = "receipt-out",
+        value_name = "FILE"
+    )]
     receipt_out: Option<PathBuf>,
     /// Command to execute (pass after `--`).
     #[arg(
@@ -310,6 +427,52 @@ enum FleetCommand {
 
 #[derive(Debug, Subcommand)]
 enum EvidenceCommand {
+    /// Correlate a separately admitted recovery ticket with its exact original terminal.
+    VerifyRecovery {
+        #[arg(long)]
+        original: PathBuf,
+        #[arg(long)]
+        original_trust: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        trust: PathBuf,
+        #[arg(long)]
+        cas: PathBuf,
+    },
+    /// Deliver one verified SIEM projection with durable retry state and an exact receiver ACK.
+    Deliver {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        trust: PathBuf,
+        #[arg(long)]
+        cas: PathBuf,
+        #[arg(long)]
+        state_dir: PathBuf,
+    },
+    /// Export a derived projection after verifying signed causal evidence and CAS.
+    Export {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        trust: PathBuf,
+        #[arg(long)]
+        cas: PathBuf,
+        #[arg(long)]
+        format: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Verify signed causal records and CAS objects against a separate local trust file.
+    Verify {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        trust: PathBuf,
+        #[arg(long)]
+        cas: PathBuf,
+    },
     /// Export a deterministic evidence pack directory.
     Pack(Box<EvidencePackArgs>),
     /// Generate `timeline.ndjson` and `timeline.md` from an evidence pack.
@@ -324,6 +487,13 @@ enum EvidenceCommand {
 
 #[derive(Debug, Parser)]
 struct EvidencePackArgs {
+    /// Signed causal graph; requires separately configured trust and immutable CAS.
+    #[arg(long, requires_all = ["evidence_trust", "evidence_cas"])]
+    causal_graph: Option<PathBuf>,
+    #[arg(long, requires = "causal_graph")]
+    evidence_trust: Option<PathBuf>,
+    #[arg(long, requires = "causal_graph")]
+    evidence_cas: Option<PathBuf>,
     #[command(flatten)]
     connect: ConnectArgs,
     /// Output directory for the evidence pack.
@@ -359,10 +529,124 @@ enum TelemetryCommand {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if let Some(reference) = &cli.ticket_ref {
+        cli.ticket = Some(cohesix_authority::secret::resolve_reference(reference)?);
+    }
     let policy_path = resolve_policy_path(cli.policy)?;
     let role = Role::from(cli.role);
     match cli.command {
+        Command::Plan(args) | Command::Explain(args) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&coh::workflow::plan(&args.workflow)?)?
+            );
+            Ok(())
+        }
+        Command::Apply(args) => {
+            run_workflow("apply", role, cli.ticket.as_deref(), &policy_path, args)
+        }
+        Command::Watch(args) => {
+            run_workflow("watch", role, cli.ticket.as_deref(), &policy_path, args)
+        }
+        Command::Verify(args) => {
+            run_workflow("verify", role, cli.ticket.as_deref(), &policy_path, args)
+        }
+        Command::Recover(args) => {
+            run_workflow("recover", role, cli.ticket.as_deref(), &policy_path, args)
+        }
+
+        Command::Package { command } => {
+            let report = match command {
+                PackageCommand::Build {
+                    input,
+                    out,
+                    profile,
+                    source_sha256,
+                    key_id,
+                    signing_key_ref,
+                } => coh::package::build(
+                    &input,
+                    &out,
+                    &profile,
+                    &source_sha256,
+                    &key_id,
+                    &signing_key_ref,
+                )?,
+                PackageCommand::Verify { input, trust } => coh::package::verify(
+                    &input,
+                    &coh::package::load_external_trust(&input, &trust)?,
+                )?,
+                PackageCommand::Install { input, trust, out } => coh::package::install(
+                    &input,
+                    &out,
+                    &coh::package::load_external_trust(&input, &trust)?,
+                )?,
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        Command::Providers => {
+            print!("{}", cohesix_authority::provider::registry_json());
+            Ok(())
+        }
+        Command::Identity {
+            mapping,
+            jwks,
+            local,
+            issuer_key_ref,
+        } => {
+            use std::io::Read;
+            let (mapping, actions, graph) = cohesix_identity::generated_policy(&mapping)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+            let request = if local {
+                cohesix_identity::map_local(&mapping, now, &graph, &actions)?
+            } else {
+                let path = jwks.ok_or_else(|| {
+                    anyhow!("JWT mapping requires --jwks; token is read from stdin")
+                })?;
+                let mut keys = Vec::new();
+                std::fs::File::open(path)?
+                    .take((cohesix_identity::MAX_KEYSET_BYTES + 1) as u64)
+                    .read_to_end(&mut keys)?;
+                let mut token = Vec::new();
+                std::io::stdin()
+                    .take((cohesix_identity::MAX_TOKEN_BYTES + 2) as u64)
+                    .read_to_end(&mut token)?;
+                if token.last() == Some(&b'\n') {
+                    token.pop();
+                }
+                cohesix_identity::map_jwt(&mapping, &token, &keys, now, &graph, &actions)?
+            };
+            if let Some(reference) = issuer_key_ref {
+                let secret = cohesix_authority::secret::resolve_reference(&reference)?;
+                let issuer = cohesix_identity::delegation::gateway_issuer(&secret);
+                let ticket = request.issue(&issuer)?;
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "event":"identity-issuance", "mapping_id":mapping.id,
+                        "credential_sha256":request.credential_sha256(),
+                        "provider_graph_sha256":graph, "result":"issued: gateway_enforced"
+                    })
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema":"cohesix-identity-exchange/v1", "status":"OK",
+                        "authoritative":false, "identity_class":"gateway_enforced",
+                        "mapping_id":mapping.id, "provider_graph_sha256":graph,
+                        "credential_sha256":request.credential_sha256(),
+                        "expires_unix_s":request.expires_unix_s(), "ticket":ticket
+                    })
+                );
+            } else {
+                println!("{}", serde_json::to_string(&request)?);
+            }
+            Ok(())
+        }
         Command::Inspect(args) => {
             run_inspect(role, cli.ticket.as_deref(), &policy_path, args, false)
         }
@@ -599,6 +883,22 @@ fn run_doctor(
         ticket: ticket.map(|value| value.to_owned()),
         policy_path: policy_path.to_path_buf(),
         mock: args.connect.mock,
+        local_gpu: args.local_gpu,
+        require_fuse: args.require_fuse,
+        developer_tools: args.developer_tools,
+        package: match (args.package, args.package_trust, args.credential_refs) {
+            (Some(root), Some(trust), Some(credential_refs)) => Some(doctor::PackageConfig {
+                root,
+                trust,
+                credential_refs,
+            }),
+            (None, None, None) => None,
+            _ => {
+                return Err(anyhow!(
+                    "package doctor requires package, trust and credential references"
+                ))
+            }
+        },
     };
     let result = doctor::run(config, &mut audit);
     handle_result(result, audit, "DOCTOR")
@@ -680,6 +980,11 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
     if args.connect.mock && args.nvml {
         return Err(anyhow!("--mock and --nvml are mutually exclusive"));
     }
+    if matches!(args.command, GpuCommand::Workload { .. }) && (args.connect.mock || args.nvml) {
+        return Err(anyhow!(
+            "GPU workload tickets require an explicit live target connection"
+        ));
+    }
     let bounds = evidence::build_local_bounds();
     let mut audit = CohAudit::new();
     if args.connect.mock || args.nvml {
@@ -698,6 +1003,10 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             }
         };
         let result = match args.command {
+            GpuCommand::Workload { action, spec } => {
+                let bytes = gpu_bridge_host::workload::read_file(&spec, 2048)?;
+                gpu::workload_ticket(&mut client, &mut audit, &action, &bytes)
+            }
             GpuCommand::List => gpu::list(&mut client, &mut audit),
             GpuCommand::Status { gpu } => gpu::status(&mut client, &mut audit, &gpu),
             GpuCommand::Lease(lease) => {
@@ -720,7 +1029,7 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
                     budget_ttl_s,
                     budget_ops,
                 };
-                gpu::lease_with_receipt(
+                gpu::lease_with_report(
                     &mut client,
                     &mut audit,
                     &args,
@@ -746,6 +1055,10 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             }
         };
         let result = match args.command {
+            GpuCommand::Workload { action, spec } => {
+                let bytes = gpu_bridge_host::workload::read_file(&spec, 2048)?;
+                gpu::workload_ticket(&mut client, &mut audit, &action, &bytes)
+            }
             GpuCommand::List => gpu::list(&mut client, &mut audit),
             GpuCommand::Status { gpu } => gpu::status(&mut client, &mut audit, &gpu),
             GpuCommand::Lease(lease) => {
@@ -768,7 +1081,7 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
                     budget_ttl_s,
                     budget_ops,
                 };
-                gpu::lease_with_receipt(
+                gpu::lease_with_report(
                     &mut client,
                     &mut audit,
                     &args,
@@ -804,7 +1117,7 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
             gpu_id: args.gpu,
             command: args.command,
         };
-        let result = coh_run::execute_with_receipt(
+        let result = coh_run::execute_with_report(
             &mut client,
             policy,
             &mut audit,
@@ -832,7 +1145,7 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
             gpu_id: args.gpu,
             command: args.command,
         };
-        let result = coh_run::execute_with_receipt(
+        let result = coh_run::execute_with_report(
             &mut client,
             policy,
             &mut audit,
@@ -1124,6 +1437,42 @@ fn run_telemetry(
     }
 }
 
+fn run_workflow(
+    verb: &str,
+    role: Role,
+    ticket: Option<&str>,
+    policy_path: &Path,
+    args: WorkflowArgs,
+) -> Result<()> {
+    anyhow::ensure!(
+        !args.connect.mock,
+        "not_supported workflow-mock-use-explicit-rehearsal"
+    );
+    let path = args
+        .deployment
+        .ok_or_else(|| anyhow!("not_enabled workflow-deployment"))?;
+    let deployment = coh::workflow::load(&path, &args.workflow)?;
+    let result = if verb == "verify" {
+        let report = coh::workflow::inspect(&deployment)?;
+        anyhow::ensure!(
+            report["all_steps_verified"] == true,
+            "unverified workflow-terminal"
+        );
+        report
+    } else {
+        let policy = load_policy(policy_path)?;
+        let mut access = connect_access(&args.connect, &policy, role, ticket)?;
+        match verb {
+            "apply" => coh::workflow::apply(&mut access, &deployment)?,
+            "watch" => coh::workflow::watch(&mut access, &deployment)?,
+            "recover" => coh::workflow::recover(&mut access, &deployment)?,
+            _ => return Err(anyhow!("unsupported workflow lifecycle")),
+        }
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
 fn run_fleet(args: FleetArgs) -> Result<()> {
     if args.connect.mock {
         return Err(anyhow!(
@@ -1155,6 +1504,80 @@ fn run_evidence(
     args: EvidenceArgs,
 ) -> Result<()> {
     match args.command {
+        EvidenceCommand::VerifyRecovery {
+            original,
+            original_trust,
+            input,
+            trust,
+            cas,
+        } => {
+            let original = operator::read_bounded(&original, cohesix_evidence::MAX_GRAPH_BYTES)?;
+            let original_trust: cohesix_evidence::Trust =
+                serde_json::from_slice(&operator::read_bounded(&original_trust, 65_536)?)?;
+            let original = cohesix_evidence::verify(&original, &original_trust, |artifact| {
+                cohesix_evidence::verify_cas(&cas, artifact)
+            })?;
+            let bytes = operator::read_bounded(&input, cohesix_evidence::MAX_GRAPH_BYTES)?;
+            let trust: cohesix_evidence::Trust =
+                serde_json::from_slice(&operator::read_bounded(&trust, 65_536)?)?;
+            let recovery =
+                cohesix_evidence::verify_recovery(&original, &bytes, &trust, |artifact| {
+                    cohesix_evidence::verify_cas(&cas, artifact)
+                })?;
+            println!("{}", serde_json::to_string(&recovery)?);
+            Ok(())
+        }
+        EvidenceCommand::Deliver {
+            input,
+            trust,
+            cas,
+            state_dir,
+        } => {
+            let bytes = operator::read_bounded(&input, cohesix_evidence::MAX_GRAPH_BYTES)?;
+            let trust: cohesix_evidence::Trust =
+                serde_json::from_slice(&operator::read_bounded(&trust, 65_536)?)?;
+            let verified = cohesix_evidence::verify(&bytes, &trust, |artifact| {
+                cohesix_evidence::verify_cas(&cas, artifact)
+            })?;
+            let now = u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis(),
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string(&coh::export::delivery::deliver(
+                    &verified, &state_dir, now
+                )?)?
+            );
+            Ok(())
+        }
+        EvidenceCommand::Export {
+            input,
+            trust,
+            cas,
+            format,
+            out,
+        } => {
+            let bytes = operator::read_bounded(&input, cohesix_evidence::MAX_GRAPH_BYTES)?;
+            let trust: cohesix_evidence::Trust =
+                serde_json::from_slice(&operator::read_bounded(&trust, 65_536)?)?;
+            let verified = cohesix_evidence::verify(&bytes, &trust, |artifact| {
+                cohesix_evidence::verify_cas(&cas, artifact)
+            })?;
+            operator::write_atomic(&out, &coh::export::render(&verified, &format)?)?;
+            Ok(())
+        }
+        EvidenceCommand::Verify { input, trust, cas } => {
+            let bytes = operator::read_bounded(&input, cohesix_evidence::MAX_GRAPH_BYTES)?;
+            let trust_bytes = operator::read_bounded(&trust, 65_536)?;
+            let trust: cohesix_evidence::Trust = serde_json::from_slice(&trust_bytes)?;
+            let verified = cohesix_evidence::verify(&bytes, &trust, |artifact| {
+                cohesix_evidence::verify_cas(&cas, artifact)
+            })?;
+            println!("{}", serde_json::to_string(&verified)?);
+            Ok(())
+        }
         EvidenceCommand::Pack(pack) => {
             let policy = load_policy(policy_path)?;
             let mut audit = CohAudit::new();
@@ -1191,6 +1614,11 @@ fn run_evidence(
                     pack.trace.as_deref(),
                     pack.attestation_record.as_deref(),
                 )?;
+                if let (Some(graph), Some(trust), Some(cas)) =
+                    (&pack.causal_graph, &pack.evidence_trust, &pack.evidence_cas)
+                {
+                    evidence::attach_causal_graph(&spec.out_dir, graph, trust, cas)?;
+                }
                 let digest = operator::read_bounded(&spec.out_dir.join("pack.sha256"), 65)?;
                 audit.push_line(format!(
                     "evidence pack sha256={}",

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Run a user-owned ticket agent with a private durable journal and delegated REST identity. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>org.cohesix.ticket-agent</string>
+<key>ProgramArguments</key><array>
+<string>@PREFIX@/bin/host-ticket-agent</string>
+<string>--rest-url</string><string>http://127.0.0.1:8080</string>
+<string>--manifest</string><string>@PREFIX@/config/root_task_resolved.json</string>
+<string>--policy</string><string>@PREFIX@/config/coh_policy.toml</string>
+<string>--cursor</string><string>@STATE@/agent/cursor.json</string>
+<string>--execution-journal</string><string>@STATE@/agent/execution.json</string>
+<string>--agent-lock</string><string>@STATE@/agent/agent.lock</string>
+<string>--provider-evidence-root</string><string>@STATE@/cas</string>
+<string>--export-root</string><string>@STATE@/exports</string>
+<string>--adapter-root</string><string>@STATE@/adapters</string>
+<string>--registry-root</string><string>@STATE@/models</string>
+@FIELD_BUS_AGENT_PLIST@
+@EVIDENCE_AGENT_PLIST@
+</array>
+<key>EnvironmentVariables</key><dict>
+<key>HIVE_GATEWAY_REQUEST_AUTH_TOKEN</key><string>file:@CREDENTIALS@/request_auth</string>
+<key>COH_REST_TICKET</key><string>file:@CREDENTIALS@/agent_ticket</string>
+</dict>
+<key>WorkingDirectory</key><string>@STATE@</string>
+<key>StandardOutPath</key><string>@STATE@/agent.stdout.log</string>
+<key>StandardErrorPath</key><string>@STATE@/agent.stderr.log</string>
+<key>RunAtLoad</key><false/>
+<key>KeepAlive</key><false/>
+<key>ThrottleInterval</key><integer>5</integer>
+<key>Umask</key><integer>63</integer>
+<key>SoftResourceLimits</key><dict><key>Core</key><integer>0</integer><key>NumberOfFiles</key><integer>256</integer></dict>
+</dict></plist>

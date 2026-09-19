@@ -49,7 +49,13 @@ For startup and end-to-end validation, use
 
 ## Authentication model
 
-### Delegated write authority
+### Delegation and identity exchange
+
+The separate `POST /v1/identity/exchange` issuance endpoint requires request
+authentication and a verified external credential; it does not require a
+preexisting delegated ticket. Mapped tickets remain gateway-only and each
+provider write is checked against current generated action permissions. See
+[identity issuance, refusal and wire contracts](IDENTITY_MAPPING.md).
 
 Mutating gateway REST requests require both gateway request authentication and
 `x-cohesix-ticket` containing a MAC-verified delegated capability ticket.
@@ -57,7 +63,7 @@ The gateway applies caller role, subject, write scopes, finite TTL, operation,
 rate and byte quotas beneath its configured upstream authority. Missing or
 invalid delegation returns HTTP 403 with `EPERM`; exhausted authority returns
 HTTP 429 with `ELIMIT`. Both `/v1/fs/echo` and `/v1/fs/echo-batch` enforce this
-contract. Read-only compatibility routes retain the configured gateway role.
+contract. Explicit read compatibility is limited to gateway-Queen admin projections.
 See [M27a authority and migration](M27A_AUTHORITY.md) for strict intents,
 credential sources, generated policy, and the gateway-enforced identity class.
 
@@ -90,28 +96,31 @@ or:
 x-cohesix-auth: <token>
 ```
 
-The as-built GET endpoints do not require this token. Keep the gateway on
-loopback or place it behind an authenticated boundary because those reads may
-expose operational state. A valid request-auth token only admits the HTTP
-write; the target can still refuse the operation for role, ticket, policy,
-lifecycle, bounds, or schema reasons.
+Public reads require no token. Generated ticket-scoped and admin-only reads
+require request authentication and an appropriate delegated read scope before
+cache lookup. Explicit `--read-compatibility` permits only gateway-Queen admin
+reads without a caller ticket; scoped reads remain delegated. A request-auth
+token alone cannot authorize a mutation. Target role, ticket, policy, lifecycle,
+bounds and schema checks remain independent.
 
 ## Endpoint reference
 
 | Method | Endpoint | Projection | Request auth |
 | --- | --- | --- | --- |
 | `GET` | `/v1/meta/bounds` | Gateway-compiled manifest fingerprint, protocol bounds, paths, and feature metadata | No |
-| `GET` | `/v1/meta/status` | Gateway connection, broker, queue, and cache status | No |
-| `GET` | `/v1/fs/ls?path=...` | `LS` | No |
-| `GET` | `/v1/fs/cat?path=...&max_bytes=...` | `CAT` | No |
-| `GET` | `/v1/fs/tail?path=...&max_bytes=...` | `TAIL`; optional `lines=1..256` | No |
-| `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes |
+| `GET` | `/v1/meta/providers` | Full provider registry and enrolled identity policies | Yes, plus read delegation |
+| `GET` | `/v1/meta/status` | Gateway connection, broker, queue, and cache status | Yes, plus read delegation |
+| `GET` | `/v1/fs/ls?path=...` | `LS` | Visibility-dependent read delegation |
+| `GET` | `/v1/fs/cat?path=...&max_bytes=...` | `CAT` | Visibility-dependent read delegation |
+| `GET` | `/v1/fs/tail?path=...&max_bytes=...` | `TAIL`; optional `lines=1..256` | Visibility-dependent read delegation |
+| `POST` | `/v1/identity/exchange` | Verify an external credential and issue a finite mapped ticket | Yes; no existing ticket |
+| `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes, plus write delegation |
+| `POST` | `/v1/fs/echo-batch` | Bounded ordered `ECHO` appends | Yes, plus write delegation |
 | `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
-| `GET` | `/docs` | Swagger UI loading the embedded document | No |
+| `GET` | `/docs` | Offline index linking the embedded OpenAPI document | No |
 
-`/docs` loads Swagger UI assets from a public CDN. In an air-gapped deployment,
-consume `/v1/openapi.yaml` directly or provide locally managed UI assets outside
-the gateway.
+`/docs` is a static offline index linking the embedded OpenAPI and provider
+contract. It loads no remote JavaScript or CDN assets.
 
 ### Read examples
 

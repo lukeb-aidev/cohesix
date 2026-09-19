@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.21";
+const SCHEMA_VERSION: &str = "1.26";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -966,6 +966,7 @@ impl Manifest {
         }
         self.validate_host_mount()?;
         self.validate_host_tickets()?;
+        self.validate_host_snapshots()?;
         self.validate_host_federation()?;
         if self.secure9p.msize > MAX_MSIZE {
             bail!("ecosystem.host.enable requires secure9p.msize <= {MAX_MSIZE}");
@@ -1323,6 +1324,86 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_host_snapshots(&self) -> Result<()> {
+        let config = &self.ecosystem.host.snapshots;
+        if !config.enable {
+            if !config.publishers.is_empty() {
+                bail!("disabled host snapshots cannot enroll publishers");
+            }
+            return Ok(());
+        }
+        if !self.ecosystem.host.enable
+            || config.publishers.is_empty()
+            || config.publishers.len() > 8
+        {
+            bail!("host snapshots require enabled host namespace and 1..8 publishers");
+        }
+        let depth = self
+            .ecosystem
+            .host
+            .mount_at
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .count();
+        if depth + 4 > self.secure9p.walk_depth as usize {
+            bail!("host snapshots exceed Secure9P walk depth");
+        }
+        let mut sources = std::collections::BTreeSet::new();
+        let mut slots = 0usize;
+        for publisher in &config.publishers {
+            if !sources.insert(&publisher.source_id) {
+                bail!("duplicate host snapshot source");
+            }
+            if publisher.source_id.len() > 32
+                || publisher.providers.iter().any(|provider| {
+                    provider.len() > 32
+                        || format!(
+                            "{}/snapshots/{}/{}/snapshot",
+                            self.ecosystem.host.mount_at, provider, publisher.source_id
+                        )
+                        .len()
+                            > 96
+                })
+            {
+                bail!("host snapshot paths exceed the console path bound");
+            }
+            let providers: Vec<_> = publisher.providers.iter().map(String::as_str).collect();
+            cohesix_authority::snapshot::Limits {
+                source_id: &publisher.source_id,
+                epoch: self.authority.writer_epoch,
+                providers: &providers,
+                max_bytes: config.max_bytes as usize,
+                max_entries: config.max_entries as usize,
+                max_value_bytes: config.max_value_bytes as usize,
+                max_ttl_ms: u64::from(config.max_ttl_ms),
+            }
+            .validate()
+            .map_err(|_| anyhow::anyhow!("invalid host snapshot limits"))?;
+            for provider in providers {
+                if !matches!(
+                    provider,
+                    "systemd"
+                        | "launchd"
+                        | "endpoint_compliance"
+                        | "docker"
+                        | "k8s"
+                        | "nvidia"
+                        | "jetson"
+                        | "network"
+                        | "modbus"
+                        | "dnp3"
+                ) {
+                    bail!("unregistered native host snapshot provider {provider}");
+                }
+            }
+            slots += publisher.providers.len();
+        }
+        if slots > 16 {
+            bail!("host snapshots exceed 16 publisher/provider slots");
+        }
+        Ok(())
+    }
+
     fn validate_host_tickets(&self) -> Result<()> {
         let tickets = &self.ecosystem.host.tickets;
         if !tickets.enable {
@@ -1410,8 +1491,32 @@ impl Manifest {
             HostTicketAction::PeftActivate,
             HostTicketAction::PeftRollback,
         ];
-        if tickets.receipt_action_allowlist.as_slice() != expected_receipt_actions {
-            bail!("ecosystem.host.tickets.receipt_action_allowlist must contain exactly three GPU and four PEFT actions");
+        let mut allowed_receipts = expected_receipt_actions.to_vec();
+        let workload_actions = [
+            HostTicketAction::GpuWorkloadSubmit,
+            HostTicketAction::GpuWorkloadCancel,
+            HostTicketAction::GpuWorkloadObserve,
+        ];
+        if workload_actions
+            .iter()
+            .any(|action| tickets.action_allowlist.contains(action))
+        {
+            allowed_receipts.extend_from_slice(&workload_actions);
+        }
+        if tickets
+            .receipt_action_allowlist
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            != allowed_receipts.into_iter().collect()
+            || tickets.receipt_action_allowlist.len()
+                != tickets
+                    .receipt_action_allowlist
+                    .iter()
+                    .collect::<BTreeSet<_>>()
+                    .len()
+        {
+            bail!("ecosystem.host.tickets.receipt_action_allowlist requires the existing GPU/PEFT actions and the complete selected workload action set");
         }
         if tickets
             .receipt_action_allowlist
@@ -8367,6 +8472,8 @@ pub struct EcosystemHost {
     pub tickets: HostTicketConfig,
     #[serde(default)]
     pub federation: HostFederationConfig,
+    #[serde(default)]
+    pub snapshots: HostSnapshotConfig,
 }
 
 impl Default for EcosystemHost {
@@ -8377,8 +8484,40 @@ impl Default for EcosystemHost {
             mount_at: default_host_mount(),
             tickets: HostTicketConfig::default(),
             federation: HostFederationConfig::default(),
+            snapshots: HostSnapshotConfig::default(),
         }
     }
+}
+
+/// Bounded source-specific native observation publication, separate from tickets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HostSnapshotConfig {
+    pub enable: bool,
+    pub max_bytes: u32,
+    pub max_entries: u16,
+    pub max_value_bytes: u16,
+    pub max_ttl_ms: u32,
+    pub publishers: Vec<HostSnapshotPublisher>,
+}
+impl Default for HostSnapshotConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            max_bytes: 8192,
+            max_entries: 64,
+            max_value_bytes: 1024,
+            max_ttl_ms: 30000,
+            publishers: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostSnapshotPublisher {
+    pub source_id: String,
+    pub providers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8478,6 +8617,12 @@ pub enum HostTicketAction {
     GpuLeaseRenew,
     #[serde(rename = "gpu.lease.release")]
     GpuLeaseRelease,
+    #[serde(rename = "gpu.workload.submit")]
+    GpuWorkloadSubmit,
+    #[serde(rename = "gpu.workload.cancel")]
+    GpuWorkloadCancel,
+    #[serde(rename = "gpu.workload.observe")]
+    GpuWorkloadObserve,
     #[serde(rename = "peft.export")]
     PeftExport,
     #[serde(rename = "peft.import")]
@@ -8486,6 +8631,28 @@ pub enum HostTicketAction {
     PeftActivate,
     #[serde(rename = "peft.rollback")]
     PeftRollback,
+    #[serde(rename = "mac_release.build")]
+    MacReleaseBuild,
+    #[serde(rename = "mac_release.test")]
+    MacReleaseTest,
+    #[serde(rename = "mac_release.archive")]
+    MacReleaseArchive,
+    #[serde(rename = "mac_release.codesign")]
+    MacReleaseCodesign,
+    #[serde(rename = "mac_release.notarize")]
+    MacReleaseNotarize,
+    #[serde(rename = "mac_release.upload")]
+    MacReleaseUpload,
+    #[serde(rename = "endpoint_compliance.observe")]
+    EndpointComplianceObserve,
+    #[serde(rename = "launchd.start")]
+    LaunchdStart,
+    #[serde(rename = "launchd.stop")]
+    LaunchdStop,
+    #[serde(rename = "launchd.restart")]
+    LaunchdRestart,
+    #[serde(rename = "launchd.status-check")]
+    LaunchdStatusCheck,
     #[serde(rename = "systemd.start")]
     SystemdStart,
     #[serde(rename = "systemd.stop")]
@@ -8500,6 +8667,14 @@ pub enum HostTicketAction {
     DockerStop,
     #[serde(rename = "docker.status-check")]
     DockerStatusCheck,
+    #[serde(rename = "modbus.read")]
+    ModbusRead,
+    #[serde(rename = "modbus.control")]
+    ModbusControl,
+    #[serde(rename = "dnp3.read")]
+    Dnp3Read,
+    #[serde(rename = "dnp3.control")]
+    Dnp3Control,
     #[serde(rename = "k8s.cordon")]
     K8sCordon,
     #[serde(rename = "k8s.drain")]
@@ -8514,10 +8689,24 @@ impl HostTicketAction {
             Self::GpuLeaseGrant => "gpu.lease.grant",
             Self::GpuLeaseRenew => "gpu.lease.renew",
             Self::GpuLeaseRelease => "gpu.lease.release",
+            Self::GpuWorkloadSubmit => "gpu.workload.submit",
+            Self::GpuWorkloadCancel => "gpu.workload.cancel",
+            Self::GpuWorkloadObserve => "gpu.workload.observe",
             Self::PeftExport => "peft.export",
             Self::PeftImport => "peft.import",
             Self::PeftActivate => "peft.activate",
             Self::PeftRollback => "peft.rollback",
+            Self::MacReleaseBuild => "mac_release.build",
+            Self::MacReleaseTest => "mac_release.test",
+            Self::MacReleaseArchive => "mac_release.archive",
+            Self::MacReleaseCodesign => "mac_release.codesign",
+            Self::MacReleaseNotarize => "mac_release.notarize",
+            Self::MacReleaseUpload => "mac_release.upload",
+            Self::EndpointComplianceObserve => "endpoint_compliance.observe",
+            Self::LaunchdStart => "launchd.start",
+            Self::LaunchdStop => "launchd.stop",
+            Self::LaunchdRestart => "launchd.restart",
+            Self::LaunchdStatusCheck => "launchd.status-check",
             Self::SystemdStart => "systemd.start",
             Self::SystemdStop => "systemd.stop",
             Self::SystemdRestart => "systemd.restart",
@@ -8525,6 +8714,10 @@ impl HostTicketAction {
             Self::DockerRestart => "docker.restart",
             Self::DockerStop => "docker.stop",
             Self::DockerStatusCheck => "docker.status-check",
+            Self::ModbusRead => "modbus.read",
+            Self::ModbusControl => "modbus.control",
+            Self::Dnp3Read => "dnp3.read",
+            Self::Dnp3Control => "dnp3.control",
             Self::K8sCordon => "k8s.cordon",
             Self::K8sDrain => "k8s.drain",
             Self::K8sLeaseSync => "k8s.lease.sync",

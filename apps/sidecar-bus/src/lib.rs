@@ -13,6 +13,13 @@
 
 extern crate alloc;
 
+#[cfg(all(feature = "live", unix))]
+pub mod live;
+#[cfg(all(feature = "live", unix))]
+pub mod protocol;
+#[cfg(all(feature = "live", unix))]
+pub mod transport;
+
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -248,15 +255,10 @@ impl BusAdapter {
         self.state = state;
     }
 
-    /// Enqueue a payload; spools if the link is offline.
+    /// Model-only enqueue; link state never proves native delivery.
     pub fn enqueue(&mut self, payload: &[u8]) -> Result<SpoolResult, SpoolError> {
-        match self.state {
-            LinkState::Online => Ok(SpoolResult::Delivered),
-            LinkState::Offline => {
-                let frame = self.spool.push(payload)?;
-                Ok(SpoolResult::Queued { seq: frame.seq })
-            }
-        }
+        let frame = self.spool.push(payload)?;
+        Ok(SpoolResult::Queued { seq: frame.seq })
     }
 
     /// Drain buffered frames in deterministic order.
@@ -265,13 +267,10 @@ impl BusAdapter {
     }
 }
 
-#[cfg(feature = "modbus")]
-/// MODBUS adapter alias for the shared bus adapter implementation.
-pub type ModbusAdapter = BusAdapter;
-
-#[cfg(feature = "dnp3")]
-/// DNP3 adapter alias for the shared bus adapter implementation.
-pub type Dnp3Adapter = BusAdapter;
+#[cfg(all(feature = "live", feature = "dnp3", unix))]
+pub use live::Dnp3Adapter;
+#[cfg(all(feature = "live", feature = "modbus", unix))]
+pub use live::ModbusAdapter;
 
 #[cfg(feature = "tokio")]
 /// Tokio runtime helpers for async sidecar loops.
@@ -297,6 +296,22 @@ pub mod tokio_runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn online_model_cannot_discard_data_or_claim_delivery() {
+        let config = BusAdapterConfig::new(
+            "model",
+            "model",
+            "model",
+            BusLink::Tcp,
+            0,
+            SpoolConfig::new(1, 4),
+        );
+        let mut adapter = BusAdapter::new(config);
+        adapter.set_state(LinkState::Online);
+        assert_eq!(adapter.enqueue(b"read"), Ok(SpoolResult::Queued { seq: 1 }));
+        assert_eq!(adapter.drain_spool()[0].payload, b"read");
+    }
 
     #[test]
     fn spool_rejects_overflow() {

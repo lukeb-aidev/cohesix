@@ -22,6 +22,7 @@ use thiserror::Error;
 extern crate std;
 
 const CLAIMS_VERSION: u8 = 1;
+const COMPACT_CLAIMS_VERSION: u8 = 2;
 const TICKET_PREFIX: &str = "cohesix-ticket-";
 const MAX_MOUNT_FIELD_LEN: usize = 255;
 const MAX_SCOPE_COUNT: usize = 16;
@@ -331,8 +332,12 @@ impl TicketClaims {
     }
 
     fn encode_payload(&self) -> Result<Vec<u8>, TicketError> {
+        self.encode_payload_version(CLAIMS_VERSION)
+    }
+
+    fn encode_payload_version(&self, version: u8) -> Result<Vec<u8>, TicketError> {
         let mut payload = Vec::new();
-        payload.push(CLAIMS_VERSION);
+        payload.push(version);
         payload.push(self.role.as_u8());
         let mut flags = 0u8;
         if self.budget.ticks.is_some() {
@@ -355,18 +360,18 @@ impl TicketClaims {
         }
         payload.push(flags);
         if let Some(ticks) = self.budget.ticks {
-            payload.extend_from_slice(&ticks.to_le_bytes());
+            encode_integer(ticks, version, &mut payload);
         }
         if let Some(ops) = self.budget.ops {
-            payload.extend_from_slice(&ops.to_le_bytes());
+            encode_integer(ops, version, &mut payload);
         }
         if let Some(ttl_s) = self.budget.ttl_s {
-            payload.extend_from_slice(&ttl_s.to_le_bytes());
+            encode_integer(ttl_s, version, &mut payload);
         }
         if let Some(subject) = &self.subject {
             encode_string(subject, &mut payload)?;
         }
-        payload.extend_from_slice(&self.issued_at_ms.to_le_bytes());
+        encode_integer(self.issued_at_ms, version, &mut payload);
         encode_string(&self.mounts.service, &mut payload)?;
         encode_string(&self.mounts.at, &mut payload)?;
         if flags & FLAG_SCOPES != 0 {
@@ -381,23 +386,26 @@ impl TicketClaims {
     fn decode_payload(bytes: &[u8]) -> Result<Self, TicketError> {
         let mut cursor = PayloadCursor::new(bytes);
         let version = cursor.read_u8()?;
-        if version != CLAIMS_VERSION {
+        if !matches!(version, CLAIMS_VERSION | COMPACT_CLAIMS_VERSION) {
             return Err(TicketError::UnsupportedVersion(version));
         }
         let role = Role::from_u8(cursor.read_u8()?)?;
         let flags = cursor.read_u8()?;
+        if version == COMPACT_CLAIMS_VERSION && flags & 0xc0 != 0 {
+            return Err(TicketError::MalformedToken);
+        }
         let ticks = if flags & FLAG_TICKS != 0 {
-            Some(cursor.read_u64()?)
+            Some(cursor.read_integer(version)?)
         } else {
             None
         };
         let ops = if flags & FLAG_OPS != 0 {
-            Some(cursor.read_u64()?)
+            Some(cursor.read_integer(version)?)
         } else {
             None
         };
         let ttl_s = if flags & FLAG_TTL != 0 {
-            Some(cursor.read_u64()?)
+            Some(cursor.read_integer(version)?)
         } else {
             None
         };
@@ -406,7 +414,7 @@ impl TicketClaims {
         } else {
             None
         };
-        let issued_at_ms = cursor.read_u64()?;
+        let issued_at_ms = cursor.read_integer(version)?;
         let service = cursor.read_string()?;
         let at = cursor.read_string()?;
         let scopes = if flags & FLAG_SCOPES != 0 {
@@ -420,7 +428,7 @@ impl TicketClaims {
             TicketQuotas::default()
         };
         cursor.ensure_empty()?;
-        Ok(Self {
+        let claims = Self {
             role,
             budget: BudgetSpec { ticks, ops, ttl_s },
             subject,
@@ -428,7 +436,11 @@ impl TicketClaims {
             issued_at_ms,
             scopes,
             quotas,
-        })
+        };
+        if version == COMPACT_CLAIMS_VERSION && claims.encode_payload_version(version)? != bytes {
+            return Err(TicketError::MalformedToken);
+        }
+        Ok(claims)
     }
 }
 
@@ -466,6 +478,7 @@ impl TicketKey {
 pub struct TicketToken {
     claims: TicketClaims,
     mac: [u8; 32],
+    version: u8,
 }
 
 impl TicketToken {
@@ -477,7 +490,7 @@ impl TicketToken {
 
     /// Encode the ticket into its text representation.
     pub fn encode(&self) -> Result<String, TicketError> {
-        let payload = self.claims.encode_payload()?;
+        let payload = self.claims.encode_payload_version(self.version)?;
         let payload_hex = hex::encode(payload);
         let mac_hex = hex::encode(self.mac);
         Ok(format!("{TICKET_PREFIX}{payload_hex}.{mac_hex}"))
@@ -492,7 +505,12 @@ impl TicketToken {
             return Err(TicketError::MacMismatch);
         }
         let claims = TicketClaims::decode_payload(&payload_bytes)?;
-        Ok(Self { claims, mac })
+        let version = *payload_bytes.first().ok_or(TicketError::Truncated)?;
+        Ok(Self {
+            claims,
+            mac,
+            version,
+        })
     }
 
     /// Decode a ticket without validating the MAC.
@@ -521,7 +539,27 @@ impl TicketIssuer {
     pub fn issue(&self, claims: TicketClaims) -> Result<TicketToken, TicketError> {
         let payload = claims.encode_payload()?;
         let mac = keyed_mac(&self.key, &payload);
-        Ok(TicketToken { claims, mac })
+        Ok(TicketToken {
+            claims,
+            mac,
+            version: CLAIMS_VERSION,
+        })
+    }
+
+    /// Issue version 2 with canonical unsigned LEB128 budget/time fields.
+    /// Scope, role, string and MAC semantics remain identical to version 1;
+    /// callers retain their existing absolute encoded-token byte bound.
+    pub fn issue_compact(&self, claims: TicketClaims) -> Result<TicketToken, TicketError> {
+        let payload = claims.encode_payload_version(COMPACT_CLAIMS_VERSION)?;
+        // Optional zero-valued quota fields are not canonical on this wire.
+        // Never issue bytes that the strict version-2 decoder would refuse.
+        TicketClaims::decode_payload(&payload)?;
+        let mac = keyed_mac(&self.key, &payload);
+        Ok(TicketToken {
+            claims,
+            mac,
+            version: COMPACT_CLAIMS_VERSION,
+        })
     }
 
     /// Return the key used by the issuer.
@@ -567,6 +605,18 @@ pub enum TicketError {
     /// Extra bytes remain in the claims payload.
     #[error("claims payload contains trailing data")]
     TrailingData,
+}
+
+fn encode_integer(mut value: u64, version: u8, payload: &mut Vec<u8>) {
+    if version == CLAIMS_VERSION {
+        payload.extend_from_slice(&value.to_le_bytes());
+        return;
+    }
+    while value >= 128 {
+        payload.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    payload.push(value as u8);
 }
 
 fn encode_string(value: &str, payload: &mut Vec<u8>) -> Result<(), TicketError> {
@@ -664,6 +714,27 @@ impl<'a> PayloadCursor<'a> {
         Ok(u64::from_le_bytes(buf))
     }
 
+    fn read_integer(&mut self, version: u8) -> Result<u64, TicketError> {
+        if version == CLAIMS_VERSION {
+            return self.read_u64();
+        }
+        let mut value = 0_u64;
+        for index in 0..10 {
+            let byte = self.read_u8()?;
+            if index == 9 && byte > 1 {
+                return Err(TicketError::MalformedToken);
+            }
+            value |= u64::from(byte & 0x7f) << (index * 7);
+            if byte & 0x80 == 0 {
+                if index > 0 && byte == 0 {
+                    return Err(TicketError::MalformedToken);
+                }
+                return Ok(value);
+            }
+        }
+        Err(TicketError::MalformedToken)
+    }
+
     fn read_u32(&mut self) -> Result<u32, TicketError> {
         let mut buf = [0u8; 4];
         buf.copy_from_slice(self.read_exact(4)?);
@@ -694,6 +765,110 @@ impl<'a> PayloadCursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_ticket_matches_the_versioned_wire_vector_and_preserves_legacy() {
+        let claims = TicketClaims::new(
+            Role::Queen,
+            BudgetSpec::unbounded()
+                .with_ops(Some(1))
+                .with_ttl(Some(200)),
+            Some("mi-test".into()),
+            MountSpec::empty(),
+            1_000_000,
+        )
+        .with_scopes(alloc::vec![TicketScope::new(
+            "/host/tickets/spec",
+            TicketVerb::Write,
+            0
+        )]);
+        // v2: header; unsigned LEB128 ops/TTL; u16-length subject; unsigned
+        // LEB128 issuer milliseconds; empty mounts; one ordinary v1 scope.
+        let expected = "02001e01c80107006d692d74657374c0843d000000000112002f686f73742f7469636b6574732f737065630100000000";
+        assert_eq!(
+            hex::encode(claims.encode_payload_version(2).unwrap()),
+            expected
+        );
+        let issuer = TicketIssuer::new("compact-ticket-fixture");
+        let compact = issuer
+            .issue_compact(claims.clone())
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert!(compact.starts_with(&format!("cohesix-ticket-{expected}.")));
+        let parsed = TicketToken::decode(&compact, &issuer.key()).unwrap();
+        assert_eq!(parsed.claims(), &claims);
+        assert_eq!(parsed.encode().unwrap(), compact);
+        let legacy = issuer.issue(claims.clone()).unwrap().encode().unwrap();
+        assert!(legacy.starts_with("cohesix-ticket-01001e0100000000000000c800000000000000"));
+        assert_eq!(
+            TicketToken::decode(&legacy, &issuer.key())
+                .unwrap()
+                .claims(),
+            &claims
+        );
+        assert_eq!(
+            TicketToken::decode(&compact.replacen("-02", "-01", 1), &issuer.key()).unwrap_err(),
+            TicketError::MacMismatch
+        );
+    }
+
+    #[test]
+    fn compact_integers_refuse_overflow_nonminimal_truncation_and_ambiguous_flags() {
+        for (value, encoded) in [
+            (0_u64, alloc::vec![0]),
+            (127, alloc::vec![0x7f]),
+            (128, alloc::vec![0x80, 0x01]),
+            (16_384, alloc::vec![0x80, 0x80, 0x01]),
+            (
+                u64::MAX,
+                alloc::vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 1],
+            ),
+        ] {
+            let mut actual = Vec::new();
+            encode_integer(value, 2, &mut actual);
+            assert_eq!(actual, encoded);
+            let mut cursor = PayloadCursor::new(&encoded);
+            assert_eq!(cursor.read_integer(2).unwrap(), value);
+            cursor.ensure_empty().unwrap();
+        }
+        for bad in [
+            alloc::vec![0x80, 0],
+            alloc::vec![0x81, 0],
+            alloc::vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 2],
+            alloc::vec![0x80; 10],
+        ] {
+            assert_eq!(
+                PayloadCursor::new(&bad).read_integer(2).unwrap_err(),
+                TicketError::MalformedToken
+            );
+        }
+        assert_eq!(
+            PayloadCursor::new(&[0x80]).read_integer(2).unwrap_err(),
+            TicketError::Truncated
+        );
+        assert_eq!(
+            TicketClaims::decode_payload(&[2, 0, 0x80]).unwrap_err(),
+            TicketError::MalformedToken
+        );
+        let claims = TicketClaims::new(
+            Role::Queen,
+            BudgetSpec::unbounded(),
+            None,
+            MountSpec::empty(),
+            1,
+        )
+        .with_quotas(TicketQuotas {
+            bandwidth_bytes: Some(0),
+            ..TicketQuotas::default()
+        });
+        assert_eq!(
+            TicketIssuer::new("compact-ticket-fixture")
+                .issue_compact(claims)
+                .unwrap_err(),
+            TicketError::MalformedToken
+        );
+    }
 
     #[test]
     fn default_heartbeat_limits_are_finite() {

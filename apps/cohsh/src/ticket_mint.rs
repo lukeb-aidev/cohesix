@@ -56,8 +56,28 @@ impl TicketMintRequest {
     }
     /// Require a finite scoped caller ticket suitable for REST delegation.
     pub fn with_delegated_write_scope(
+        self,
+        path: &str,
+        ttl_s: u64,
+        operations: u64,
+    ) -> Result<Self> {
+        self.with_delegated_scope(path, TicketVerb::Write, ttl_s, operations)
+    }
+
+    /// Add a bounded read scope; the same path with write authority becomes read/write.
+    pub fn with_delegated_read_scope(
+        self,
+        path: &str,
+        ttl_s: u64,
+        operations: u64,
+    ) -> Result<Self> {
+        self.with_delegated_scope(path, TicketVerb::Read, ttl_s, operations)
+    }
+
+    fn with_delegated_scope(
         mut self,
         path: &str,
+        verb: TicketVerb,
         ttl_s: u64,
         operations: u64,
     ) -> Result<Self> {
@@ -81,7 +101,16 @@ impl TicketMintRequest {
         {
             return Err(anyhow!("invalid delegated scope, TTL or operations"));
         }
-        self.scopes = vec![TicketScope::new(path, TicketVerb::Write, 0)];
+        if let Some(scope) = self.scopes.iter_mut().find(|scope| scope.path == path) {
+            if scope.verb != verb {
+                scope.verb = TicketVerb::ReadWrite;
+            }
+        } else {
+            if self.scopes.len() >= 16 {
+                return Err(anyhow!("delegated scope limit"));
+            }
+            self.scopes.push(TicketScope::new(path, verb, 0));
+        }
         self.budget = self.budget.with_ttl(Some(ttl_s)).with_ops(Some(operations));
         Ok(self)
     }

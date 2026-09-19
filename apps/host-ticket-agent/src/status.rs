@@ -60,13 +60,6 @@ pub fn build_result_line(
         return Ok(line);
     }
 
-    if result.schema == HOST_TICKET_RESULT_V1_SCHEMA {
-        result.relay_correlation_id = None;
-        if let Some(line) = encode_if_within_limit(&result, max_line_bytes)? {
-            return Ok(line);
-        }
-    }
-
     if let Some(message) = result.message.as_deref() {
         result.message = Some(truncate_utf8(message, 96));
         refresh_v2_digest(&mut result)?;
@@ -79,15 +72,6 @@ pub fn build_result_line(
     refresh_v2_digest(&mut result)?;
     if let Some(line) = encode_if_within_limit(&result, max_line_bytes)? {
         return Ok(line);
-    }
-
-    if result.schema == HOST_TICKET_RESULT_V1_SCHEMA {
-        result.source_hive = None;
-        result.target_hive = None;
-        result.relay_hop = None;
-        if let Some(line) = encode_if_within_limit(&result, max_line_bytes)? {
-            return Ok(line);
-        }
     }
 
     Err(anyhow!(
@@ -287,6 +271,13 @@ mod tests {
         )
         .expect("build line");
         assert!(line.contains("🔥 line one line two"));
+        let retained: HostTicketResult = serde_json::from_str(&line).expect("bounded result");
+        assert_eq!(
+            retained.relay_correlation_id,
+            v1_spec().relay_correlation_id
+        );
+        assert_eq!(retained.source_hive, v1_spec().source_hive);
+        assert_eq!(retained.target_hive, v1_spec().target_hive);
 
         let err = build_result_line(
             &v1_spec(),

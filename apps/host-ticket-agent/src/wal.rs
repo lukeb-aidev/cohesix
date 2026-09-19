@@ -163,6 +163,8 @@ impl CompatibilityJournal {
 struct ExecutionLaneTopology {
     schema: String,
     lanes: u8,
+    #[serde(default)]
+    gpu_control_lane: bool,
 }
 
 /// Bind one journal family to an immutable execution-lane count.
@@ -171,6 +173,20 @@ struct ExecutionLaneTopology {
 /// committed would orphan its journal and risk replay. The topology sidecar
 /// therefore fails closed until the operator selects a fresh state directory.
 pub fn bind_execution_lane_topology(journal_path: &Path, lanes: u8) -> Result<PathBuf> {
+    bind_execution_lane_topology_with_gpu(journal_path, lanes, false)
+}
+
+/// Fence the reserved GPU control lane as part of the immutable routing topology.
+pub fn bind_execution_lane_topology_with_gpu(
+    journal_path: &Path,
+    lanes: u8,
+    gpu_control_lane: bool,
+) -> Result<PathBuf> {
+    if gpu_control_lane && lanes < 2 {
+        return Err(anyhow!(
+            "GPU workloads require at least two execution lanes"
+        ));
+    }
     if lanes == 0 || lanes > EXECUTION_LANE_MAX_COUNT {
         return Err(anyhow!(
             "execution lane count must be within 1..={EXECUTION_LANE_MAX_COUNT}"
@@ -181,7 +197,10 @@ pub fn bind_execution_lane_topology(journal_path: &Path, lanes: u8) -> Result<Pa
         Ok(payload) => {
             let topology: ExecutionLaneTopology = serde_json::from_slice(&payload)
                 .with_context(|| format!("parse lane topology {}", topology_path.display()))?;
-            if topology.schema != EXECUTION_LANE_TOPOLOGY_SCHEMA || topology.lanes != lanes {
+            if topology.schema != EXECUTION_LANE_TOPOLOGY_SCHEMA
+                || topology.lanes != lanes
+                || topology.gpu_control_lane != gpu_control_lane
+            {
                 return Err(anyhow!(
                     "execution lane topology mismatch: state has {} lanes, requested {lanes}",
                     topology.lanes
@@ -192,6 +211,7 @@ pub fn bind_execution_lane_topology(journal_path: &Path, lanes: u8) -> Result<Pa
             let topology = ExecutionLaneTopology {
                 schema: EXECUTION_LANE_TOPOLOGY_SCHEMA.to_owned(),
                 lanes,
+                gpu_control_lane,
             };
             let payload = serde_json::to_vec_pretty(&topology)
                 .context("serialize execution lane topology")?;
@@ -211,7 +231,11 @@ pub fn bind_execution_lane_topology(journal_path: &Path, lanes: u8) -> Result<Pa
 pub enum RelayWalState {
     /// Entry has not yet been forwarded to the target hive.
     Pending,
-    /// Entry was forwarded and acknowledged by the target hive.
+    /// Target accepted the write; its terminal result has not returned.
+    AwaitingTerminal,
+    /// Exact target terminal bytes are durable and await source publication.
+    TerminalRetained,
+    /// The exact target terminal result was published to the source hive.
     Delivered,
     /// Epoch or authority rejection; retained as a terminal refusal.
     Rejected,
@@ -235,11 +259,16 @@ pub struct RelayWalEntry {
     /// Last delivery error summary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Exact canonical target result, persisted before source publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_result: Option<String>,
 }
 
 /// In-memory relay WAL with atomic file persistence.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RelayWal {
+    #[serde(default)]
+    schema_version: u8,
     #[serde(default)]
     writer_epoch: u64,
     #[serde(default)]
@@ -288,14 +317,42 @@ impl RelayWal {
         if payload.len() > RELAY_WAL_MAX_BYTES {
             return Err(anyhow!("ELIMIT relay WAL exceeds byte bound"));
         }
-        let wal: Self = serde_json::from_slice(&payload)
+        let mut wal: Self = serde_json::from_slice(&payload)
             .with_context(|| format!("parse relay WAL {}", path.display()))?;
+        if wal.schema_version > 2 {
+            return Err(anyhow!("unsupported relay WAL version"));
+        }
+        if wal.schema_version < 2 {
+            for entry in &mut wal.entries {
+                if entry.state == RelayWalState::Delivered {
+                    // Historical Delivered meant only an ACK. Recover its target
+                    // outcome without retransmitting or inventing a terminal result.
+                    entry.state = RelayWalState::AwaitingTerminal;
+                }
+            }
+            wal.schema_version = 2;
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for entry in &wal.entries {
+            if !keys.insert(&entry.key)
+                || entry.seq == 0
+                || entry.seq > wal.next_seq
+                || (matches!(
+                    entry.state,
+                    RelayWalState::TerminalRetained | RelayWalState::Delivered
+                ) && entry.terminal_result.is_none())
+            {
+                return Err(anyhow!("invalid relay WAL state"));
+            }
+        }
         Ok(wal)
     }
 
     /// Persist relay WAL to disk atomically.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let payload = serde_json::to_vec(self).context("serialize relay WAL")?;
+        let mut current = self.clone();
+        current.schema_version = 2;
+        let payload = serde_json::to_vec(&current).context("serialize relay WAL")?;
         durable_atomic_write(path, &payload, RELAY_WAL_MAX_BYTES, "relay WAL")
     }
 
@@ -327,16 +384,51 @@ impl RelayWal {
             state: RelayWalState::Pending,
             attempts: 0,
             last_error: None,
+            terminal_result: None,
         });
     }
 
-    /// Mark a key as delivered.
-    pub fn mark_delivered(&mut self, key: &str) {
+    /// ACK only advances to observation; it is not delivery completion.
+    pub fn mark_forwarded(&mut self, key: &str) {
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == key) {
-            entry.state = RelayWalState::Delivered;
+            entry.state = RelayWalState::AwaitingTerminal;
             entry.last_error = None;
             entry.attempts = entry.attempts.saturating_add(1);
         }
+    }
+
+    /// Retain a unique exact result before returning it to the source.
+    pub fn retain_terminal(&mut self, key: &str, result: &str) -> Result<()> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.key == key)
+            .ok_or_else(|| anyhow!("missing relay WAL key"))?;
+        if entry
+            .terminal_result
+            .as_deref()
+            .is_some_and(|existing| existing != result)
+        {
+            return Err(anyhow!("EPERM conflicting relay terminal"));
+        }
+        entry.terminal_result = Some(result.to_owned());
+        entry.state = RelayWalState::TerminalRetained;
+        Ok(())
+    }
+
+    /// Mark completion only after exact terminal publication acknowledgement.
+    pub fn mark_delivered(&mut self, key: &str) -> Result<()> {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == key) {
+            if entry.state != RelayWalState::TerminalRetained || entry.terminal_result.is_none() {
+                return Err(anyhow!(
+                    "relay completion requires a retained terminal result"
+                ));
+            }
+            entry.state = RelayWalState::Delivered;
+            entry.last_error = None;
+            return Ok(());
+        }
+        Err(anyhow!("missing relay WAL key"))
     }
 
     /// Mark a delivery attempt as failed with an error message.
@@ -353,7 +445,14 @@ impl RelayWal {
         let mut entries = self
             .entries
             .iter()
-            .filter(|entry| entry.state == RelayWalState::Pending)
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    RelayWalState::Pending
+                        | RelayWalState::AwaitingTerminal
+                        | RelayWalState::TerminalRetained
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.seq);
@@ -365,7 +464,14 @@ impl RelayWal {
     pub fn pending_count(&self) -> usize {
         self.entries
             .iter()
-            .filter(|entry| entry.state == RelayWalState::Pending)
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    RelayWalState::Pending
+                        | RelayWalState::AwaitingTerminal
+                        | RelayWalState::TerminalRetained
+                )
+            })
             .count()
     }
 
@@ -392,12 +498,12 @@ impl RelayWal {
 
     fn drop_oldest_delivered(&mut self) -> bool {
         self.entries.sort_by_key(|entry| entry.seq);
-        if let Some((idx, _entry)) = self
-            .entries
-            .iter()
-            .enumerate()
-            .find(|(_idx, entry)| entry.state != RelayWalState::Pending)
-        {
+        if let Some((idx, _entry)) = self.entries.iter().enumerate().find(|(_idx, entry)| {
+            matches!(
+                entry.state,
+                RelayWalState::Delivered | RelayWalState::Rejected
+            )
+        }) {
             self.entries.remove(idx);
             true
         } else {
@@ -898,7 +1004,12 @@ impl Drop for AgentFence {
     }
 }
 
-fn durable_atomic_write(path: &Path, payload: &[u8], max_bytes: usize, label: &str) -> Result<()> {
+pub(crate) fn durable_atomic_write(
+    path: &Path,
+    payload: &[u8],
+    max_bytes: usize,
+    label: &str,
+) -> Result<()> {
     if payload.len() > max_bytes {
         return Err(anyhow!(
             "{label} payload {} exceeds bound {max_bytes}",
@@ -989,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn wal_roundtrip_and_limits() {
+    fn relay_wal_roundtrip_and_limits() {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let path = temp.path().join("relay-wal.json");
 
@@ -1003,7 +1114,11 @@ mod tests {
         assert!(!loaded.contains_delivered("a"));
 
         let mut mutable = loaded;
-        mutable.mark_delivered("a");
+        assert!(mutable.mark_delivered("a").is_err());
+        mutable
+            .retain_terminal("a", "{\"terminal\":true}")
+            .expect("retain terminal");
+        mutable.mark_delivered("a").expect("publish terminal");
         assert!(mutable.contains_delivered("a"));
         mutable.upsert_pending("b", "hive-c", "{\"line\":2}");
         mutable
@@ -1011,6 +1126,21 @@ mod tests {
             .expect("only terminal records evicted");
         assert_eq!(mutable.entries.len(), 1);
         assert_eq!(mutable.pending_count(), 1);
+    }
+
+    #[test]
+    fn legacy_relay_ack_recovers_as_pending_terminal_without_eviction() {
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("legacy.json");
+        std::fs::write(&path, br#"{"next_seq":1,"entries":[{"seq":1,"key":"legacy","target_hive":"hive-b","payload":"{}","state":"delivered","attempts":1}]}"#).expect("legacy fixture");
+        let mut wal = RelayWal::load(&path).expect("migrate");
+        assert_eq!(
+            wal.pending_entries()[0].state,
+            RelayWalState::AwaitingTerminal
+        );
+        assert!(!wal.contains_delivered("legacy"));
+        assert!(wal.enforce_limits(1, 1).is_err());
+        assert_eq!(wal.pending_count(), 1);
     }
 
     #[test]

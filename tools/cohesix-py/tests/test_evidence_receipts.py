@@ -251,6 +251,11 @@ def test_gpu_lease_receipt_contains_proc_snapshot(tmp_path: Path) -> None:
         priority=1,
     )
     receipt = client.gpu_lease_with_receipt(args, receipt_path, audit)
+    assert receipt["schema"] == "cohesix-operation-report/v1"
+    assert receipt["authoritative"] is False
+    assert receipt["proof_class"] == "operation_report"
+    assert receipt["mode"] == "client_local"
+    assert receipt["source_identity"] == "client-local"
     assert receipt["kind"] == "gpu-lease"
     assert receipt["manifest_sha256"] == "unknown"
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -290,6 +295,11 @@ def test_run_receipt_no_secrets(tmp_path: Path) -> None:
         receipt_out=receipt_path,
         audit=audit,
     )
+    assert receipt["schema"] == "cohesix-operation-report/v1"
+    assert receipt["authoritative"] is False
+    assert receipt["proof_class"] == "operation_report"
+    assert receipt["mode"] == "client_local"
+    assert receipt["source_identity"] == "client-local"
     assert receipt["kind"] == "run"
     assert receipt["manifest_sha256"] == "unknown"
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -609,3 +619,18 @@ def test_python_projection_evidence_rejects_wrong_target_host_and_secret() -> No
     secret["host"]["provider_version"] = "authorization: Bearer abc123"
     with pytest.raises(CohesixError, match="sensitive material"):
         build_python_projection_evidence(**secret)
+
+
+def test_operation_report_cannot_claim_receipt_authority() -> None:
+    contract = load_profile_contract(QEMU_CONTRACT)
+    payload = {"schema": "cohesix-operation-report/v1", "authoritative": False,
+               "proof_class": "operation_report", "mode": "client_local",
+               "source_identity": "client-local", "kind": "run", "status": "ok"}
+    report = parse_receipt(payload, contract=contract)
+    assert report.authoritative is False
+    assert report.state == "none"
+    for field, value in [("authoritative", True), ("proof_class", "live-host"),
+                         ("mode", "live"), ("source_identity", "worker-1")]:
+        forged = dict(payload, **{field: value})
+        with pytest.raises(CohesixError, match="operation report authority"):
+            parse_receipt(forged, contract=contract)

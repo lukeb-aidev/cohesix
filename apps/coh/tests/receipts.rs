@@ -1,6 +1,6 @@
 // Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Validate receipt artifacts emitted by coh gpu lease and coh run.
+// Purpose: Verify local lease/run summaries cannot claim receipt or execution authority.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
@@ -54,7 +54,12 @@ fn gpu_lease_receipt_includes_proc_lease_snapshot() -> Result<()> {
 
     let receipt_text = std::fs::read_to_string(&receipt_path)
         .with_context(|| format!("read {}", receipt_path.display()))?;
-    let receipt: Value = serde_json::from_str(&receipt_text).context("parse receipt json")?;
+    let receipt: Value = serde_json::from_str(&receipt_text).context("parse report json")?;
+    assert_eq!(receipt["schema"], "cohesix-operation-report/v1");
+    assert_eq!(receipt["authoritative"], false);
+    assert_eq!(receipt["proof_class"], "operation_report");
+    assert_eq!(receipt["mode"], "client_local");
+    assert_eq!(receipt["source_identity"], "client-local");
     assert_eq!(
         receipt.get("kind").and_then(Value::as_str),
         Some("gpu-lease")
@@ -114,7 +119,12 @@ fn run_receipt_is_written_without_secrets() -> Result<()> {
 
     let receipt_text = std::fs::read_to_string(&receipt_path)
         .with_context(|| format!("read {}", receipt_path.display()))?;
-    let receipt: Value = serde_json::from_str(&receipt_text).context("parse receipt json")?;
+    let receipt: Value = serde_json::from_str(&receipt_text).context("parse report json")?;
+    assert_eq!(receipt["schema"], "cohesix-operation-report/v1");
+    assert_eq!(receipt["authoritative"], false);
+    assert_eq!(receipt["proof_class"], "operation_report");
+    assert_eq!(receipt["mode"], "client_local");
+    assert_eq!(receipt["source_identity"], "client-local");
     assert_eq!(receipt.get("kind").and_then(Value::as_str), Some("run"));
     assert_eq!(receipt.get("status").and_then(Value::as_str), Some("ok"));
 

@@ -30,7 +30,42 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 /// CLI arguments for the GPU bridge host tool.
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Cohesix GPU bridge host utilities")]
+#[command(group(clap::ArgGroup::new("reference_mode").args(["reference_inventory", "reference_request", "mig_inventory"])))]
 struct Args {
+    /// Publish exact native device identity from the same pinned executor configuration.
+    #[arg(long, conflicts_with_all = ["reference_mode", "mock", "workload_config"])]
+    native_inventory_config: Option<PathBuf>,
+    /// Serve admitted GPU workloads on the configured private authenticated Unix socket.
+    #[arg(long, conflicts_with_all = ["reference_mode", "mock", "list", "publish"])]
+    workload_config: Option<PathBuf>,
+    /// Observe exact CUDA reference device identity without target publication.
+    #[arg(long, requires_all = ["reference_helper", "reference_helper_sha256", "reference_state"], conflicts_with_all = ["mock", "publish", "list"])]
+    reference_inventory: bool,
+    /// Observe native NVML MIG instances without changing MIG mode or creating instances.
+    #[arg(long, requires_all = ["reference_helper", "reference_helper_sha256", "reference_state"], conflicts_with_all = ["mock", "publish", "list"])]
+    mig_inventory: bool,
+    /// Physical parent index for explicit NVML MIG discovery.
+    #[arg(long, requires = "mig_inventory", default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..32))]
+    mig_parent_ordinal: u32,
+    /// Exact independently enrolled MIG parent/CI identity for the generated MIG executor profile.
+    #[arg(long, requires = "reference_mode", conflicts_with = "mig_inventory")]
+    reference_mig_selection: Option<PathBuf>,
+    /// Execute a bounded diagnostic CUDA request; never an admission or Worker receipt.
+    #[arg(long, requires_all = ["reference_helper", "reference_helper_sha256", "reference_state"], conflicts_with_all = ["mock", "publish", "list"])]
+    reference_request: Option<PathBuf>,
+    /// Native child produced by scripts/build-gpu-reference.sh.
+    #[arg(long, requires = "reference_mode")]
+    reference_helper: Option<PathBuf>,
+    /// Exact trusted build manifest digest of the native child.
+    #[arg(long, requires = "reference_mode")]
+    reference_helper_sha256: Option<String>,
+    /// Fresh private invocation directory under the caller's evidence/CAS root.
+    #[arg(long, requires = "reference_mode")]
+    reference_state: Option<PathBuf>,
+    /// Cancel a reference request after a bounded diagnostic delay.
+    #[arg(long, requires = "reference_request", value_parser = clap::value_parser!(u32).range(1..=30_000))]
+    reference_cancel_after_ms: Option<u32>,
+
     /// Use the deterministic mock backend instead of NVML.
     #[arg(long, action = ArgAction::SetTrue)]
     mock: bool,
@@ -68,7 +103,23 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let bridge = auto_bridge_with_registry(args.mock, args.registry.as_deref())?;
+    if let Some(path) = &args.workload_config {
+        return gpu_bridge_host::workload::serve(gpu_bridge_host::workload::Config::load(path)?);
+    }
+    if args.reference_inventory || args.reference_request.is_some() || args.mig_inventory {
+        return run_reference(&args);
+    }
+    let bridge = if let Some(path) = &args.native_inventory_config {
+        let bridge = gpu_bridge_host::GpuBridge::new_reference(
+            gpu_bridge_host::workload::Config::load(path)?,
+        )?;
+        match &args.registry {
+            Some(root) => bridge.with_registry_root(root),
+            None => bridge,
+        }
+    } else {
+        auto_bridge_with_registry(args.mock, args.registry.as_deref())?
+    };
     let namespace: GpuNamespaceSnapshot = bridge.serialise_namespace()?;
     if args.list {
         println!("{}", namespace_to_json_pretty(&namespace));
@@ -131,6 +182,106 @@ fn main() -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn run_reference(args: &Args) -> Result<()> {
+    use gpu_bridge_host::reference::{self, ReferenceRequest};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let helper = args
+        .reference_helper
+        .as_deref()
+        .ok_or_else(|| anyhow!("reference helper required"))?;
+    let helper_hash = args
+        .reference_helper_sha256
+        .as_deref()
+        .ok_or_else(|| anyhow!("reference helper digest required"))?;
+    let state = args
+        .reference_state
+        .as_deref()
+        .ok_or_else(|| anyhow!("reference state required"))?;
+    if args.mig_inventory {
+        println!(
+            "{}",
+            serde_json::to_string(&gpu_bridge_host::mig::discover(
+                helper,
+                helper_hash,
+                state,
+                args.mig_parent_ordinal
+            )?)?
+        );
+        return Ok(());
+    }
+    let selection: Option<gpu_bridge_host::mig::Selection> = args
+        .reference_mig_selection
+        .as_ref()
+        .map(|path| {
+            let mut raw = Vec::new();
+            std::fs::File::open(path)?
+                .take(8193)
+                .read_to_end(&mut raw)?;
+            anyhow::ensure!(raw.len() <= 8192, "request_limit MIG_selection");
+            let selection: gpu_bridge_host::mig::Selection = serde_json::from_slice(&raw)?;
+            selection.validate()?;
+            Ok::<_, anyhow::Error>(selection)
+        })
+        .transpose()?;
+    if args.reference_inventory {
+        println!(
+            "{}",
+            serde_json::to_string(&reference::inventory_selected(
+                helper,
+                helper_hash,
+                state,
+                0,
+                selection.as_ref()
+            )?)?
+        );
+        return Ok(());
+    }
+    let request_path = args
+        .reference_request
+        .as_deref()
+        .ok_or_else(|| anyhow!("reference request required"))?;
+    let mut raw = Vec::new();
+    std::fs::File::open(request_path)?
+        .take(8193)
+        .read_to_end(&mut raw)?;
+    if raw.len() > 8192 {
+        anyhow::bail!("request_limit CUDA reference");
+    }
+    let request: ReferenceRequest = serde_json::from_slice(&raw)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (done, completion) = std::sync::mpsc::channel();
+    let timer = args.reference_cancel_after_ms.map(|delay| {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            if completion
+                .recv_timeout(Duration::from_millis(u64::from(delay)))
+                .is_err()
+            {
+                cancel.store(true, Ordering::Release);
+            }
+        })
+    });
+    let result = reference::execute_selected(
+        helper,
+        helper_hash,
+        state,
+        &request,
+        &cancel,
+        selection.as_ref(),
+    );
+    let _ = done.send(());
+    if let Some(timer) = timer {
+        timer
+            .join()
+            .map_err(|_| anyhow!("reference cancellation owner failed"))?;
+    }
+    println!("{}", serde_json::to_string(&result?)?);
     Ok(())
 }
 

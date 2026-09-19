@@ -63,6 +63,8 @@ Options:
                         qemu: run cohsh using its QEMU transport; cohsh manages QEMU and no
                               TCP console is exposed to the host by default.
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
+  --udp-echo-port <port>  Host UDP diagnostic port (default: 31338)
+  --tcp-smoke-port <port> Host TCP diagnostic port (default: 31339); no fallback when explicit
   --raw-qemu            Launch QEMU directly in this terminal after building (bypasses cohsh)
   --launch-existing     Validate and launch the immutable artefacts from one prior build;
                         do not rebuild, restage, or repack the QEMU inputs
@@ -771,7 +773,7 @@ launch_qemu_artifacts() {
         local local_log
         local_log="$(mktemp -t cohesix-qemu.log)"
         if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
-            if grep -q "Could not set up host forwarding rule" "$local_log" && grep -q "31339" "$local_log"; then
+            if [[ "$TCP_SMOKE_PORT" != "$HOST_SMOKE_PORT_FALLBACK" ]] && grep -q "Could not set up host forwarding rule" "$local_log" && grep -q "31339" "$local_log"; then
                 log "Retrying QEMU with fallback smoke port ${HOST_SMOKE_PORT_FALLBACK}"
                 TCP_SMOKE_PORT="$HOST_SMOKE_PORT_FALLBACK"
                 local_log="$(mktemp -t cohesix-qemu.log)"
@@ -934,12 +936,19 @@ main() {
                 esac
                 shift 2
                 ;;
-            --tcp-port)
-                [[ $# -ge 2 ]] || fail "--tcp-port requires a value"
-                if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                    fail "--tcp-port expects a numeric value"
+            --tcp-port|--udp-echo-port|--tcp-smoke-port)
+                [[ $# -ge 2 ]] || fail "$1 requires a value"
+                if [[ ! "$2" =~ ^[0-9]{1,5}$ ]] || (( 10#$2 < 1 || 10#$2 > 65535 )); then
+                    fail "$1 expects a port in 1..65535"
                 fi
-                TCP_PORT="$2"
+                case "$1" in
+                    --tcp-port) TCP_PORT=$((10#$2)) ;;
+                    --udp-echo-port) UDP_ECHO_PORT=$((10#$2)) ;;
+                    --tcp-smoke-port)
+                        TCP_SMOKE_PORT=$((10#$2))
+                        HOST_SMOKE_PORT_FALLBACK="$TCP_SMOKE_PORT"
+                        ;;
+                esac
                 shift 2
                 ;;
             --clean)

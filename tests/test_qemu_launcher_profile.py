@@ -21,6 +21,19 @@ def _write_executable(path: Path, source: str) -> None:
     path.chmod(0o755)
 
 
+def test_federation_host_ports_accept_decimal_range_before_launch() -> None:
+    for option in ("--tcp-port", "--udp-echo-port", "--tcp-smoke-port"):
+        for value in ("0", "65536", "-1", "1x", "999999999999999999999999"):
+            result = subprocess.run(["bash", str(BUILD_RUN), option, value, "--help"],
+                                    cwd=ROOT, capture_output=True, text=True, check=False)
+            assert result.returncode != 0
+            assert "expects a port in 1..65535" in result.stderr
+        for value in ("1", "65535", "03138"):
+            result = subprocess.run(["bash", str(BUILD_RUN), option, value, "--help"],
+                                    cwd=ROOT, capture_output=True, text=True, check=False)
+            assert result.returncode == 0, result.stderr
+
+
 def test_build_run_darwin_defaults_to_hvf_profile_envelope(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

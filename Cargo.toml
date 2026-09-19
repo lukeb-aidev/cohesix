@@ -30,6 +30,8 @@ members = [
     "crates/cohesix-cas",
     "crates/cohesix-attestation",
     "crates/cohesix-authority",
+    "crates/cohesix-evidence",
+    "crates/cohesix-identity",
     "crates/cohesix-rest",
     "crates/cohesix-ticket",
     "crates/cohesix-worker-evidence",
@@ -73,6 +75,8 @@ cargo-build-directive = { path = "crates/cargo-build-directive" }
 cohesix-ticket = { path = "crates/cohesix-ticket" }
 cohesix-attestation = { path = "crates/cohesix-attestation" }
 cohesix-authority = { path = "crates/cohesix-authority", default-features = false }
+cohesix-evidence = { path = "crates/cohesix-evidence" }
+cohesix-identity = { path = "crates/cohesix-identity" }
 cohsh-core = { path = "crates/cohsh-core" }
 secure9p-codec = { path = "crates/secure9p-codec" }
 secure9p-core = { path = "crates/secure9p-core" }

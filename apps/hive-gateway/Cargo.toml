@@ -16,6 +16,9 @@ hex = { workspace = true }
 clap = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohesix-identity = { workspace = true }
+cohesix-evidence = { workspace = true }
+rustix = { version = "1.1.4", features = ["fs"] }
 cohesix-worker-evidence = { workspace = true }
 cohsh = { path = "../cohsh", features = ["tcp"] }
 cohsh-core = { workspace = true }
@@ -30,3 +33,5 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+ed25519-dalek = { workspace = true }
+base64 = { workspace = true }

@@ -23,6 +23,8 @@ impl ProviderToken {
 
 /// Validate the exact supported fields, independently of executor defaults.
 pub fn validate(spec: &HostTicketSpec) -> Result<()> {
+    let encoded = serde_json::to_vec(spec)?;
+    cohesix_authority::provider::validate_request_size(&spec.action, encoded.len())?;
     ProviderToken::parse(&spec.id)?;
     ProviderToken::parse(&spec.idempotency_key)?;
     let components: Vec<_> = match &spec.target {
@@ -113,6 +115,65 @@ pub fn validate(spec: &HostTicketSpec) -> Result<()> {
         if args.contains_key(first) && args.contains_key(alias) {
             bail!("EPERM ambiguous-provider-alias {first}");
         }
+    }
+    if spec.action.starts_with("mac_release.") || spec.action.starts_with("endpoint_compliance.") {
+        let id = args
+            .get("target_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("EPERM macos-target"))?;
+        if args.len() != 1 || spec.target.as_deref() != Some(id) {
+            bail!("EPERM ambiguous-macos-target");
+        }
+        if !cohesix_authority::mac_release::targets()?
+            .iter()
+            .any(|t| t.id == id && t.operation.action() == spec.action)
+        {
+            bail!("not_enabled macos-target");
+        }
+        return Ok(());
+    }
+    if spec.action.starts_with("launchd.") {
+        let id = args
+            .get("service")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("EPERM missing-launchd-service"))?;
+        if args.len() != 1 || spec.target.as_deref() != Some(id) {
+            bail!("EPERM ambiguous-launchd-target");
+        }
+        if !cohesix_authority::macos::launchd_targets()?
+            .iter()
+            .any(|t| t.id == id)
+        {
+            bail!("not_enabled launchd-target");
+        }
+        return Ok(());
+    }
+    if spec.action.starts_with("modbus.") || spec.action.starts_with("dnp3.") {
+        let endpoint_id = args
+            .get("endpoint")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| anyhow!("EPERM missing-field-bus-endpoint"))?;
+        let point_id = args
+            .get("point")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| anyhow!("EPERM missing-field-bus-point"))?;
+        if spec.target.as_deref() != Some(endpoint_id) || args.len() != 2 {
+            bail!("EPERM ambiguous-field-bus-target");
+        }
+        let (endpoint, point) = cohesix_authority::bus::resolve(endpoint_id, point_id)?;
+        let family = match endpoint.protocol {
+            cohesix_authority::bus::Protocol::Modbus => "modbus",
+            cohesix_authority::bus::Protocol::Dnp3 => "dnp3",
+        };
+        let verb = if point.operation.is_control() {
+            "control"
+        } else {
+            "read"
+        };
+        if spec.action != format!("{family}.{verb}") {
+            bail!("EPERM field-bus-action-map-mismatch");
+        }
+        return Ok(());
     }
     let path = if components.first() == Some(&"host") {
         &components[1..]

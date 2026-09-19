@@ -17,6 +17,8 @@ pub mod doctor;
 pub mod evidence;
 /// Offline timeline generation for evidence packs.
 pub mod evidence_timeline;
+/// Bounded derived metrics, traces, events and attestation projections.
+pub mod export;
 /// Read-only multi-hive fleet fan-in helpers.
 pub mod fleet;
 /// GPU inventory and lease helpers.
@@ -25,6 +27,8 @@ pub mod gpu;
 pub mod mount;
 /// Bounded, read-only inspection and comparison of live state and evidence packs.
 pub mod operator;
+/// Exact signed host package construction, verification and installation.
+pub mod package;
 /// PEFT/LoRA lifecycle helpers.
 pub mod peft;
 /// Manifest-derived policy loader.
@@ -39,6 +43,8 @@ pub mod telemetry;
 pub mod transport;
 /// Compiler-derived Worker contract and state projection helpers.
 pub mod worker;
+/// Generated ticket-centred workflows with provider-owned causal verification.
+pub mod workflow;
 
 use anyhow::{anyhow, Context, Result};
 use cohsh::client::CohClient;

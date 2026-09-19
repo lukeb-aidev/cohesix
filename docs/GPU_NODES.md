@@ -21,6 +21,64 @@ a fixture catalog, mock result, or unavailable NVML/CUDA provider to live GPU
 execution; the reverse is also true. See the generated
 [support table](snippets/host_integration_dependency.md).
 
+## Native CUDA reference and publication
+
+The physical CUDA reference lane is owned by `gpu-bridge-host`.
+Build its child on the selected Linux AArch64 host with
+`scripts/build-gpu-reference.sh /mnt/nvme/<fresh-build-directory>`. The build
+checks the generated CUDA 13.2.2 profile and emits `build.json` with source,
+executable and provider-graph hashes. Use the recorded executable digest with
+`gpu-bridge-host --reference-inventory --reference-helper <executable>
+--reference-helper-sha256 <digest> --reference-state <fresh-directory>`.
+
+`--reference-request <file>` accepts only
+`cohesix-cuda-reference-request/v1`: ticket correlation ID, `vadd|matmul`,
+dimension, iterations, device ordinal/UUID, inventory timestamp, provider graph
+hash, memory budget and deadline. Vector length is at most 65536, matrix side
+at most 128, iterations at most 10000, allocation budget at most 64 MiB, and
+child deadline at most 30 seconds. Inventory expires at five seconds. The
+child rechecks UUID and preserves 2 GiB free shared-memory headroom before
+allocation. It accepts no command, inline code, or output path. The bridge
+pins helper bytes in a fresh private directory, checks every little-endian
+float output against the reference algebra, and retains its SHA-256 and
+native metadata. `--reference-cancel-after-ms` selects an explicit bounded
+diagnostic cancellation. Parent death kills the CUDA child.
+
+These reference outputs distinguish native discovery from native execution
+and carry `authoritative=false` and `worker_proof=false`. They do not supply
+root admission, a production lease, MIG isolation or a Worker receipt.
+Admitted workload transport and receipt custody have separate contracts and
+qualification; see [GPU workload authority](SECURITY.md#bounded-gpu-workload-host-transport).
+
+Run the finite native reference checks on the selected host with
+`scripts/ci/provider_conformance_run.sh --provider gpu.workload --live-reference
+--gpu-bridge /absolute/path/to/gpu-bridge-host --cuda-build
+/absolute/path/to/reference-build --state-dir /absolute/fresh/evidence-directory`.
+The runner retains vector addition, matrix multiplication, wrong-device,
+memory-budget, stale-inventory, deadline and cancellation outcomes. Its
+`reference_result` describes only these native checks; exit 2 and `INCOMPLETE`
+preserve the missing production admission and Worker evidence.
+
+Add `--execution-lane systemd --execution-user USER --sidecar-bridge
+/absolute/path/to/host-sidecar-bridge` for the authorized systemd launcher, or
+`--execution-lane nvidia-container --execution-user USER --container-image
+REPOSITORY@sha256:DIGEST` with Docker access. The launcher fixes the workload
+command, enforces an unprivileged workload UID, a 1 GiB memory cap and finite
+process/time bounds, and records the unit invocation/journal cursor or immutable
+container identity/events. State and outputs remain under `--state-dir`.
+These diagnostic lanes do not mint or admit Cohesix workload tickets.
+
+
+Live GPU bridge publication rejects missing, malformed or placeholder
+credentials before connecting. Console frames include their four-byte length
+header and are bounded by generated `authority.gpu_frame_max_bytes` (default
+8,192 bytes) before payload allocation. The shared REST client streams JSON
+under a 10 MiB response-body cap, including error responses. REST publication
+also requires the delegated ticket header; use the bridge's `--ticket` or
+`COH_REST_TICKET` with request auth. [M27a authority](M27A_AUTHORITY.md)
+describes secret resolution and rotation.
+
+
 ## 1. Trust boundary
 
 ```mermaid
@@ -116,15 +174,6 @@ it does not prove a published model or inference reload.
 The canonical schema and generated limits are documented in
 [INTERFACES.md](INTERFACES.md). When prose and generated output disagree, the
 generated profile is authoritative and the documentation drift must be fixed.
-
-Live GPU bridge publication rejects missing, malformed or placeholder
-credentials before connecting. Console frames include their four-byte length
-header and are bounded by generated `authority.gpu_frame_max_bytes` (default
-8,192 bytes) before payload allocation. The shared REST client streams JSON
-under a 10 MiB response-body cap, including error responses. REST publication
-also requires the delegated ticket header; use the bridge's `--ticket` or
-`COH_REST_TICKET` with request auth. [M27a authority](M27A_AUTHORITY.md)
-describes secret resolution and rotation.
 
 ## 4. Publishing a snapshot
 
@@ -259,6 +308,136 @@ root-owned `worker-gpu` model watch the active pointer, or hot-swap an inference
 process. Host telemetry may
 carry `model_id` and `lora_id`, but the host emitter owns validation, record
 bounds, and delivery to an accepted telemetry path.
+
+## Admitted GPU workload transport
+
+The optional GPU executor uses the generated `providers.gpu_executor` contract:
+a private Unix socket, HMAC-SHA256 authenticated request and response frames,
+16 KiB frame bound, one active CUDA context, 64 retained jobs, and a 4 MiB WAL.
+Its explicit `cohesix-gpu-executor-config/v1` deployment file binds the GPU ID,
+physical CUDA UUID, exact helper SHA-256, provider graph, writer epoch, socket,
+private state root, and secret reference. The reference profile is CUDA 13.2.2
+on Orin Nano; MIG is unavailable on that profile. Native host administration
+remains outside this authority boundary.
+
+For the qualified deployment paths, set `execution_lane` to `systemd` or
+`docker` in that file. Before dispatch and after completion the bridge reads its
+native cgroup v2 identity, finite memory/CPU/task controls and `NoNewPrivs`.
+The selected envelope permits at most 1 GiB process memory, two CPU cores and
+64 tasks; the service renderer selects these limits and disables swap. Docker
+uses the same limits, a read-only image pinned by digest, no network or added
+capabilities, and `--cgroupns=host` so the native container cgroup is observable.
+Correlate its 64-character container id with the version-negotiated Engine API;
+correlate systemd's invocation id with the manager D-Bus observation. The bridge
+includes these measured controls in its signed native result. Missing or changed
+controls refuse qualification. Omitting this optional field preserves the local
+lane and explicitly reports `cgroup_limits=not_selected`.
+
+The requested CUDA allocation budget is checked against measured device free
+capacity after reserving 2 GiB OS headroom. It is not a hard GPU partition.
+One active context bounds concurrency; the owned child is killed and reaped at
+its deadline or after loss of current authority. Process cgroups bound host
+resources, while the pinned helper rechecks exact CUDA device identity. MIG,
+DLA and PVA remain unsupported on this reference.
+
+Run `gpu-bridge-host --workload-config /absolute/config.json` as the owner of
+that private state. Select `host-ticket-agent --gpu-executor-socket PATH
+--gpu-executor-credential-ref env:NAME --gpu-request-root PATH --execution-lanes 2` on the same
+host. The secret value is never an argument or evidence field. The agent reads
+only root-admitted v2 requests, checks the exact ready Worker and active root
+lease, and renews a one-second bridge grant while both remain current. A changed
+lease sequence, Worker generation, expired ticket, lost agent, or disconnected
+control plane revokes execution. Cancellation completes only after the CUDA
+child has been killed and reaped. Bridge restart records interruption and never
+replays the operation. Retained successful output hashes are checked again
+before returning a stored result; full retention produces backpressure.
+
+`coh gpu [connection options] workload --action gpu.workload.submit --spec FILE`
+(and the corresponding cancel/observe actions) writes only `/host/tickets/spec`.
+Python `client.gpu_workload_ticket(spec)` follows the same path. A submission ACK
+is not a provider or Worker terminal receipt. Input CAS JSON uses the canonical
+Rust `workload::Input` serialization, is limited to 8192 bytes, and is stored as
+`<sha256>.json`. The agent cannot select an executable path through a ticket.
+The bridge independently rechecks device topology, free-memory headroom, every
+output element, and the expected output digest before reporting success.
+
+When the GPU executor is selected, lane zero is reserved for lease, cancel,
+and observe operations. Submissions and other provider work use the remaining
+lanes. This keeps cancellation serviceable during CUDA execution. The durable
+lane topology includes this selection; changing it requires a fresh journal
+root after existing operations are reconciled.
+
+Native workload publication uses `gpu-bridge-host --publish
+--native-inventory-config /absolute/executor.json`. This selects the same pinned
+helper, CUDA UUID and provider graph as the local executor. The
+`cohesix-gpu-device/v1` `execution_identity` in `/gpu/<id>/info` carries the
+native topology digest and publisher epoch. `host-ticket-agent` checks it before
+execution and throughout lease renewal. Snapshot expiry withdraws the device;
+replacement or changed identity revokes an outstanding grant. Legacy inventory
+without this identity remains useful for discovery but cannot admit workloads.
+Model-catalog availability in `/gpu/bridge/status` is separate from physical
+GPU inventory: an empty catalog does not supply model or inference evidence.
+
+For one pending `gpu.workload.submit`, root can admit one matching
+`gpu.workload.cancel`, `gpu.workload.observe`, `gpu.lease.renew`, or
+`gpu.lease.release` at the same Worker identity. Workload controls name that
+job; lease controls name that job's lease. A second pending control, unrelated
+lease, or second workload is refused. Worker receipts still use one IPC call
+at a time. The agent reserves its control execution lane and rechecks the
+root-published memory/stream reservation along with the lease and device.
+
+### Native MIG identity and execution selection
+
+The `gpu-bridge-host --mig-inventory` diagnostic reads NVML directly through the
+pinned CUDA helper. It returns parent and compute-instance UUIDs, GI/CI ids,
+profile ids, memory, and native placements in `cohesix-nvml-mig-topology/v1`.
+Discovery changes neither MIG mode nor instance configuration. It is bounded to
+32 parent indices, 64 instances and ten seconds. Missing APIs, disabled MIG,
+legacy UUID formats, partial discovery, or a pending mode change return typed
+unavailable state without a healthy partial topology. Orin remains an
+unsupported MIG reference; the physical CUDA lane does not depend on MIG.
+
+```sh
+gpu-bridge-host --mig-inventory --mig-parent-ordinal 0 \
+  --reference-helper "$CUDA_HELPER" \
+  --reference-helper-sha256 "$CUDA_HELPER_SHA256" \
+  --reference-state "$FRESH_PRIVATE_STATE"
+```
+
+An explicitly selected `providers.gpu_executor.profile = "nvidia-mig-cuda13"`
+compiler contract enables the MIG executor. Regenerate and rebuild the bridge
+and helper together. This contract uses native Linux AArch64 or x86_64, CUDA
+13.2.2, CUDA driver API 13020 or newer, and compute-80 PTX for supported
+nonintegrated NVIDIA GPUs. Selecting it does not qualify a deployment. A
+MIG-capable host must supply its own native workload and isolation evidence.
+
+Private workload configuration includes a `mig` enrollment with `parent_ordinal`,
+`parent_uuid`, the exact observed `instance` object, and `topology_sha256`.
+The digest is SHA-256 of the complete topology with instances sorted by UUID,
+object keys sorted, and compact JSON serialization. Enrollment is an operator
+configuration step; discovery does not automatically enroll a changed instance.
+`--reference-mig-selection` accepts the same enrollment for explicit diagnostic
+inventory and workload invocations. The workload still requires its admitted
+lease, writer/TTL fence, immutable request and executable hashes, and the full
+published device topology digest. Snapshot refresh cannot renew changed topology.
+
+The executor rechecks the complete MIG generation before dispatch and restricts
+its isolated child to one canonical `MIG-` UUID via `CUDA_VISIBLE_DEVICES`.
+The child accepts only ordinal zero and verifies the native compute-instance
+UUID using `cuDeviceGetUuid_v2`. Reused GI/CI numbers, changed profiles or
+placements, and unrelated instance changes invalidate enrollment. NVML recheck
+and CUDA execution share the request deadline and cancellation signal. Native
+output is independently verified and records the exact selection and topology
+digest. Memory accounting remains bounded by the same 64 MiB allocation ceiling,
+2 GiB headroom and single-stream contract. A compute instance shares its GPU
+instance's memory resources with sibling compute instances; it does not claim
+independent CI memory isolation. External administrators retain control over MIG
+configuration, and changes during execution can cause native CUDA failures.
+
+The native identity interpretation follows NVIDIA's
+[MIG device names](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/mig-device-names.html),
+[NVML MIG API](https://docs.nvidia.com/deploy/nvml-api/api/group__nvmlMultiInstanceGPU.html),
+and [CUDA device API](https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__DEVICE.html).
 
 ## 8. Security and acceptance
 

@@ -23,7 +23,7 @@ use host_ticket_agent::executors::ExecutorConfig;
 use host_ticket_agent::{
     process_ticket_lane_once_with_journal, process_ticket_lane_snapshot_once_with_journal_state,
     relay, unix_time_ms_now,
-    wal::{bind_execution_lane_topology, AgentFence},
+    wal::{bind_execution_lane_topology_with_gpu, AgentFence},
     HostTicketManifest, ProcessSummary, TicketLaneState, DEFAULT_CURSOR_STATE_PATH,
     DEFAULT_EXECUTION_JOURNAL_PATH, DEFAULT_EXECUTION_LOCK_PATH, DEFAULT_RELAY_WAL_PATH,
     DEFAULT_RESOLVED_MANIFEST_PATH,
@@ -100,6 +100,27 @@ struct Args {
     /// Confined source root for PEFT adapter bundles.
     #[arg(long, value_name = "DIR", default_value = "out/peft_adapters")]
     adapter_root: PathBuf,
+    /// Private durable root for bounded native provider evidence objects.
+    #[arg(long, value_name = "DIR", default_value = "out/provider-evidence")]
+    provider_evidence_root: PathBuf,
+    /// Private durable MODBUS/DNP3 WAL; must be shared with its snapshot publisher.
+    #[arg(long)]
+    field_bus_state_root: Option<PathBuf>,
+    /// Private per-operation evidence enrollments with independent gateway/native keys.
+    #[arg(long)]
+    evidence_enrollment_dir: Option<PathBuf>,
+    /// Separately enrolled Root/Worker witness custody for signed v2 operations.
+    #[arg(long, requires = "evidence_enrollment_dir")]
+    worker_evidence_enrollment_dir: Option<PathBuf>,
+    /// Private authenticated GPU executor socket.
+    #[arg(long, requires_all = ["gpu_executor_credential_ref", "gpu_request_root"])]
+    gpu_executor_socket: Option<PathBuf>,
+    /// GPU executor MAC secret reference (env:NAME or file:/absolute/path).
+    #[arg(long, requires = "gpu_executor_socket")]
+    gpu_executor_credential_ref: Option<String>,
+    /// Host-owned immutable workload request CAS.
+    #[arg(long, requires = "gpu_executor_socket")]
+    gpu_request_root: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -120,18 +141,38 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let _agent_fence = AgentFence::acquire(&args.agent_lock)?;
-    let _lane_topology =
-        bind_execution_lane_topology(&args.execution_journal, args.execution_lanes)?;
+    let _lane_topology = bind_execution_lane_topology_with_gpu(
+        &args.execution_journal,
+        args.execution_lanes,
+        args.gpu_executor_socket.is_some(),
+    )?;
 
     let registry_root = args
         .registry_root
         .clone()
         .unwrap_or_else(|| resolve_registry_root(args.policy.as_deref()));
+    anyhow::ensure!(
+        !args.mock || args.evidence_enrollment_dir.is_none(),
+        "EPERM mock cannot sign native evidence"
+    );
+    let evidence_executable_sha256 = args
+        .evidence_enrollment_dir
+        .as_ref()
+        .map(|_| cohesix_evidence::producer::executable_digest())
+        .transpose()?;
     let executor_config = ExecutorConfig {
         mount: manifest.mount_path.clone(),
         registry_root,
         export_root: args.export_root.clone(),
         adapter_root: args.adapter_root.clone(),
+        provider_evidence_root: args.provider_evidence_root.clone(),
+        field_bus_state_root: args.field_bus_state_root.clone(),
+        evidence_enrollment_dir: args.evidence_enrollment_dir.clone(),
+        worker_evidence_enrollment_dir: args.worker_evidence_enrollment_dir.clone(),
+        evidence_executable_sha256,
+        gpu_executor_socket: args.gpu_executor_socket.clone(),
+        gpu_executor_credential_ref: args.gpu_executor_credential_ref.clone(),
+        gpu_request_root: args.gpu_request_root.clone(),
     };
     if args.mock && args.execution_lanes != 1 {
         return Err(anyhow::anyhow!(
@@ -538,7 +579,7 @@ fn run_relay_lane(args: &Args, manifest: &HostTicketManifest, running: &AtomicBo
                     || summary.queue_depth > 0
                 {
                     println!(
-                        "host-ticket-agent relay: seen={} candidates={} deduped={} forwarded={} remote_failures={} backpressure={} queue_depth={} wal={}",
+                        "host-ticket-agent relay: seen={} candidates={} deduped={} forwarded={} remote_failures={} backpressure={} queue_depth={} terminal_returned={} wal={}",
                         summary.seen,
                         summary.candidates,
                         summary.deduped,
@@ -546,6 +587,7 @@ fn run_relay_lane(args: &Args, manifest: &HostTicketManifest, running: &AtomicBo
                         summary.remote_write_failures,
                         summary.backpressure_drops,
                         summary.queue_depth,
+                        summary.terminal_returned,
                         args.relay_wal.display()
                     );
                 }

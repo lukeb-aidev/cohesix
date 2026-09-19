@@ -218,13 +218,13 @@ current_observed_mode = "isolated_worker_lora_receipt_runtime"
 
 [[packages]]
 path = "apps/sidecar-bus"
-class = "host_model"
-owner = "sidecar-model"
-production_reachable = false
-selection_source = "host adapter tests and explicit feature selection"
-package_disposition = "library_only_not_staged"
-evidence_requirement = "cannot satisfy target evidence"
-current_observed_mode = "host_protocol_model"
+class = "production_live"
+owner = "sidecar-bus"
+production_reachable = true
+selection_source = "explicit live feature and generated exact field-bus endpoint maps"
+package_disposition = "release_host_tool"
+evidence_requirement = "remote protocol acknowledgement plus durable attempt and terminal record; WorkerBus remains model-only"
+current_observed_mode = "bounded_native_protocol_with_separate_in_memory_model"
 
 [[packages]]
 path = "apps/gpu-bridge-host"
@@ -335,6 +335,26 @@ selection_source = "M26e host integration evidence graph"
 package_disposition = "linked_host_library"
 evidence_requirement = "cross-layer evidence validation"
 current_observed_mode = "typed_evidence_contract"
+
+[[packages]]
+path = "crates/cohesix-evidence"
+class = "contract"
+owner = "evidence-verifier"
+production_reachable = true
+selection_source = "M27b signed causal evidence and host exporter graph"
+package_disposition = "linked_host_library"
+evidence_requirement = "independent signature, binding, causal and content integrity vectors"
+current_observed_mode = "signed_causal_evidence_contract"
+
+[[packages]]
+path = "crates/cohesix-identity"
+class = "contract"
+owner = "identity-mapper"
+production_reachable = true
+selection_source = "M27b generated external identity mappings"
+package_disposition = "linked_host_library"
+evidence_requirement = "signature and scope refusal vectors"
+current_observed_mode = "verified_subject_request"
 
 [[packages]]
 path = "crates/cohsh-core"
@@ -1207,7 +1227,7 @@ class = "fixture"
 owner = "python-client"
 production_reachable = false
 selection_source = "explicit package test directory"
-package_disposition = "release_test_fixture"
+package_disposition = "source_test_fixture"
 evidence_requirement = "fixture only; cannot satisfy target evidence"
 current_observed_mode = "python_test_fixture"
 
@@ -1647,16 +1667,23 @@ python_artifacts = [
   "tools/cohesix-py/cohesix/defaults.py",
   "tools/cohesix-py/cohesix/errors.py",
   "tools/cohesix-py/cohesix/evidence.py",
+  "tools/cohesix-py/cohesix/evidence_graph.py",
   "tools/cohesix-py/cohesix/generated.py",
+  "tools/cohesix-py/cohesix/identity.py",
+  "tools/cohesix-py/cohesix/snapshots.py",
   "tools/cohesix-py/cohesix/integrations.py",
+  "tools/cohesix-py/cohesix/native_providers.py",
   "tools/cohesix-py/cohesix/operator.py",
   "tools/cohesix-py/cohesix/orchestration.py",
   "tools/cohesix-py/cohesix/paths.py",
   "tools/cohesix-py/cohesix/playbook_cli.py",
   "tools/cohesix-py/cohesix/playbooks.py",
+  "tools/cohesix-py/cohesix/provider_generated.py",
+  "tools/cohesix-py/cohesix/providers.py",
   "tools/cohesix-py/cohesix/receipts.py",
   "tools/cohesix-py/cohesix/ticket.py",
   "tools/cohesix-py/cohesix/worker.py",
+  "tools/cohesix-py/cohesix/workload.py",
   "tools/cohesix-py/examples/ci_evidence_pack.py",
   "tools/cohesix-py/examples/common.py",
   "tools/cohesix-py/examples/lease_run.py",
@@ -1665,20 +1692,6 @@ python_artifacts = [
   "tools/cohesix-py/examples/telemetry_write_pull.py",
   "tools/cohesix-py/examples/use_case_playbook.py",
   "tools/cohesix-py/pyproject.toml",
-  "tools/cohesix-py/tests/test_auth.py",
-  "tools/cohesix-py/tests/test_authority.py",
-  "tools/cohesix-py/tests/test_evidence_receipts.py",
-  "tools/cohesix-py/tests/test_examples_ci_siem.py",
-  "tools/cohesix-py/tests/test_generated_contract.py",
-  "tools/cohesix-py/tests/test_integrations.py",
-  "tools/cohesix-py/tests/test_operator.py",
-  "tools/cohesix-py/tests/test_orchestration.py",
-  "tools/cohesix-py/tests/test_parity.py",
-  "tools/cohesix-py/tests/test_playbooks.py",
-  "tools/cohesix-py/tests/test_python_compat_runner.py",
-  "tools/cohesix-py/tests/test_rest_backend_auth.py",
-  "tools/cohesix-py/tests/test_tcp_backend_auth.py",
-  "tools/cohesix-py/tests/test_worker_compatibility.py",
 ]
 
 trace_fixtures = [
@@ -1800,3 +1813,14 @@ forbidden_paths = [
   "crates/domain-intents",
   "resources/fixtures/cas_signing_key.hex",
 ]
+
+[[tracked_rules]]
+id = "packaging-readme"
+exact = "packaging/README.md"
+class = "contract"
+owner = "host-packaging"
+production_reachable = false
+selection_source = "documented host package service workflow"
+package_disposition = "repository_documentation"
+evidence_requirement = "must describe current signed package and service behavior"
+current_observed_mode = "operator_documentation"

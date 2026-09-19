@@ -8,6 +8,9 @@
 
 extern crate alloc;
 
+mod host_snapshot;
+mod host_ticket_v1;
+
 #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
 use crate::affinity;
 use crate::authority::{AuthorityError, AuthorityOp, AuthorityQueue};
@@ -1319,6 +1322,9 @@ impl NineDoorBridge {
         raw: HostTicketV2RawSpec,
     ) -> Result<(), NineDoorBridgeError> {
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        self.host
+            .snapshots
+            .withdraw_expired(crate::hal::timebase().now_ms());
         validate_host_ticket_v2_subject(&raw, &self.gpu)?;
         let canonical_raw = serialize_host_ticket(&raw)?;
         let raw_digest = sha256_bytes(canonical_raw.as_bytes());
@@ -1352,7 +1358,7 @@ impl NineDoorBridge {
             current_control_sequence: snapshot.control_sequence,
             last_control_sequence: snapshot.last_control_sequence,
         };
-        ensure_host_ticket_worker_available(&self.host.admissions, binding)?;
+        ensure_host_ticket_request_available(&self.host.admissions, binding, &raw)?;
         let (sequence, next_sequence) =
             next_host_ticket_admission_sequence(self.host.next_admission_sequence)?;
         let admitted = admit_host_ticket_v2_spec(raw, binding, sequence)?;
@@ -1679,6 +1685,9 @@ impl NineDoorBridge {
     /// Append a payload line to an append-only file.
     pub fn echo(&mut self, path: &str, payload: &str) -> Result<EchoOutcome, NineDoorBridgeError> {
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        self.host
+            .snapshots
+            .withdraw_expired(crate::hal::timebase().now_ms());
         let prepared = self.prepare_namespace(NamespaceOpcode::Echo, path, payload)?;
         let path = prepared.path();
         let payload = prepared.payload();
@@ -2083,6 +2092,10 @@ impl NineDoorBridge {
             }
             if self.host.is_ticket_write_path(path) {
                 self.handle_host_ticket_append(path, payload)?;
+            } else if self.host.snapshots.is_control(path) {
+                self.host
+                    .snapshots
+                    .append(path, payload, crate::hal::timebase().now_ms())?;
             } else {
                 self.host.validate_append(path, payload)?;
                 self.host.update_value(path, payload);
@@ -2145,6 +2158,10 @@ impl NineDoorBridge {
             }
             if self.host.is_ticket_write_path(path) {
                 self.handle_host_ticket_append(path, payload)?;
+            } else if self.host.snapshots.is_control(path) {
+                self.host
+                    .snapshots
+                    .append(path, payload, crate::hal::timebase().now_ms())?;
             } else {
                 self.host.validate_append(path, payload)?;
                 self.host.update_value(path, payload);
@@ -2211,6 +2228,9 @@ impl NineDoorBridge {
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        self.host
+            .snapshots
+            .withdraw_expired(crate::hal::timebase().now_ms());
         let prepared = self.prepare_namespace(NamespaceOpcode::Cat, path, "")?;
         let path = prepared.path();
         output.clear();
@@ -2539,10 +2559,15 @@ impl NineDoorBridge {
         if let Some(result) = self.observe.ingest_lines_into(path, output) {
             return result;
         }
+        // CAT projects the same bounded retained ring as TAIL. It neither
+        // consumes the tail cursor nor creates a second telemetry source.
+        if self.telemetry_tail_into(path, 0, output)?.is_some() {
+            return Ok(());
+        }
         Err(NineDoorBridgeError::InvalidPath)
     }
 
-    /// List directory entries (not yet supported by the shim bridge).
+    /// List bounded namespace directory entries.
     pub fn list(
         &mut self,
         path: &str,
@@ -2564,6 +2589,9 @@ impl NineDoorBridge {
         #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
         self.sync_target_worker_projections()?;
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        self.host
+            .snapshots
+            .withdraw_expired(crate::hal::timebase().now_ms());
         let prepared = self.prepare_namespace(NamespaceOpcode::List, path, "")?;
         let path = prepared.path();
         output.clear();
@@ -2962,6 +2990,20 @@ impl NineDoorBridge {
         }
         if let Some(result) = self.host.list_into(path, output) {
             return result;
+        }
+        if let Some((worker_id, false)) = parse_worker_namespace_path(path) {
+            let worker = self
+                .workers
+                .iter()
+                .find(|worker| worker.id.as_str() == worker_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            if !worker.target_published {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let _ = worker;
+            list_from_slice_into(&[WORKER_TELEMETRY_FILE], output)?;
+            return Ok(());
         }
         Err(NineDoorBridgeError::InvalidPath)
     }
@@ -5122,6 +5164,7 @@ struct HostState {
     mount_at: String,
     mount_parts: Vec<String>,
     providers: &'static [generated::HostProvider],
+    snapshots: host_snapshot::NativeSnapshots,
     tickets_enabled: bool,
     ticket_request_schema: &'static str,
     ticket_result_schema: &'static str,
@@ -5153,6 +5196,7 @@ impl HostState {
             .collect::<Vec<_>>();
         let mut state = Self {
             enabled: config.enable,
+            snapshots: host_snapshot::NativeSnapshots::new(&mount_at),
             mount_at,
             mount_parts,
             providers: config.providers,
@@ -5190,6 +5234,10 @@ impl HostState {
         if !self.enabled {
             return None;
         }
+        if let Some(entries) = self.snapshots.list(path) {
+            output.clear();
+            return Some(list_from_slice_into(&entries, output));
+        }
         let parts = split_path_segments(path);
         if parts.is_empty() {
             return None;
@@ -5208,6 +5256,9 @@ impl HostState {
             }
             output.clear();
             if self.tickets_enabled && push_list_entry(output, "tickets").is_err() {
+                return Some(Err(NineDoorBridgeError::BufferFull));
+            }
+            if self.snapshots.enabled() && push_list_entry(output, "snapshots").is_err() {
                 return Some(Err(NineDoorBridgeError::BufferFull));
             }
             for provider in self.providers.iter().copied() {
@@ -5261,6 +5312,9 @@ impl HostState {
         if !self.enabled {
             return None;
         }
+        if let Some(value) = self.snapshots.read(path, crate::hal::timebase().now_ms()) {
+            return Some(value);
+        }
         self.entries
             .iter()
             .find(|entry| entry.path == path)
@@ -5270,6 +5324,9 @@ impl HostState {
     fn entry_tail_window(&self, path: &str) -> Option<(&str, u64)> {
         if !self.enabled {
             return None;
+        }
+        if let Some(value) = self.snapshots.read(path, crate::hal::timebase().now_ms()) {
+            return Some((value, 0));
         }
         self.entries
             .iter()
@@ -5511,188 +5568,11 @@ impl HostState {
     }
 
     fn validate_v1_ticket_spec_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
-        let mut saw_line = false;
-        for raw_line in payload.lines() {
-            let line = raw_line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            saw_line = true;
-            self.validate_ticket_line_bytes(line)?;
-            validate_json_keys(
-                line,
-                &[
-                    "schema",
-                    "id",
-                    "idempotency_key",
-                    "action",
-                    "target",
-                    "args",
-                    "expires_unix_ms",
-                    "source_hive",
-                    "target_hive",
-                    "relay_hop",
-                    "relay_correlation_id",
-                    "receipt_mode",
-                ],
-            )?;
-            let schema = parse_json_string_field(line, "schema")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            if schema != self.ticket_request_schema
-                || !self.accepted_request_schema(schema)
-                || schema == HOST_TICKET_V2_REQUEST_SCHEMA
-            {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            let id =
-                parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let idempotency_key = parse_json_string_field(line, "idempotency_key")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let action = parse_json_string_field(line, "action")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            validate_host_ticket_token(id)?;
-            validate_host_ticket_token(idempotency_key)?;
-            if !self
-                .ticket_action_allowlist
-                .iter()
-                .any(|allowed| host_ticket_action_label(*allowed) == action)
-            {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if self.receipt_action(action) {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if parse_json_string_field(line, "receipt_mode").is_some_and(|mode| mode != "none") {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if let Some(target) = parse_json_string_field(line, "target") {
-                if target.trim().is_empty() {
-                    return Err(NineDoorBridgeError::InvalidPayload);
-                }
-            }
-            if let Some(expires_unix_ms) = parse_json_u64_field(line, "expires_unix_ms") {
-                if expires_unix_ms == 0 {
-                    return Err(NineDoorBridgeError::InvalidPayload);
-                }
-            }
-            let source_hive = parse_json_string_field(line, "source_hive");
-            let target_hive = parse_json_string_field(line, "target_hive");
-            if source_hive.is_some() != target_hive.is_some() {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if let Some(source_hive) = source_hive {
-                validate_host_ticket_token(source_hive)?;
-            }
-            if let Some(target_hive) = target_hive {
-                validate_host_ticket_token(target_hive)?;
-            }
-            if let Some(relay_hop) = parse_json_u64_field(line, "relay_hop") {
-                if relay_hop == 0 || relay_hop > 32 {
-                    return Err(NineDoorBridgeError::InvalidPayload);
-                }
-            }
-            if let Some(correlation) = parse_json_string_field(line, "relay_correlation_id") {
-                validate_host_ticket_token(correlation)?;
-            }
-        }
-        if !saw_line {
-            return Err(NineDoorBridgeError::InvalidPayload);
-        }
-        Ok(())
+        host_ticket_v1::requests(payload, self)
     }
 
     fn validate_v1_ticket_result_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
-        let mut saw_line = false;
-        for raw_line in payload.lines() {
-            let line = raw_line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            saw_line = true;
-            self.validate_ticket_line_bytes(line)?;
-            validate_json_keys(
-                line,
-                &[
-                    "schema",
-                    "id",
-                    "idempotency_key",
-                    "action",
-                    "state",
-                    "message",
-                    "source_hive",
-                    "target_hive",
-                    "relay_hop",
-                    "relay_correlation_id",
-                    "receipt_mode",
-                ],
-            )?;
-            let schema = parse_json_string_field(line, "schema")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            if schema != self.ticket_result_schema
-                || !self.accepted_result_schema(schema)
-                || schema == HOST_TICKET_V2_RESULT_SCHEMA
-            {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            let id =
-                parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let idempotency_key = parse_json_string_field(line, "idempotency_key")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let action = parse_json_string_field(line, "action")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let state = parse_json_string_field(line, "state")
-                .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            validate_host_ticket_token(id)?;
-            validate_host_ticket_token(idempotency_key)?;
-            if !self
-                .ticket_action_allowlist
-                .iter()
-                .any(|allowed| host_ticket_action_label(*allowed) == action)
-            {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if self.receipt_action(action) {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if parse_json_string_field(line, "receipt_mode").is_some_and(|mode| mode != "none") {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if !self
-                .ticket_lifecycle
-                .iter()
-                .any(|allowed| host_ticket_lifecycle_label(*allowed) == state)
-            {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if let Some(message) = parse_json_string_field(line, "message") {
-                if message.trim().is_empty() {
-                    return Err(NineDoorBridgeError::InvalidPayload);
-                }
-            }
-            let source_hive = parse_json_string_field(line, "source_hive");
-            let target_hive = parse_json_string_field(line, "target_hive");
-            if source_hive.is_some() != target_hive.is_some() {
-                return Err(NineDoorBridgeError::InvalidPayload);
-            }
-            if let Some(source_hive) = source_hive {
-                validate_host_ticket_token(source_hive)?;
-            }
-            if let Some(target_hive) = target_hive {
-                validate_host_ticket_token(target_hive)?;
-            }
-            if let Some(relay_hop) = parse_json_u64_field(line, "relay_hop") {
-                if relay_hop == 0 || relay_hop > 32 {
-                    return Err(NineDoorBridgeError::InvalidPayload);
-                }
-            }
-            if let Some(correlation) = parse_json_string_field(line, "relay_correlation_id") {
-                validate_host_ticket_token(correlation)?;
-            }
-        }
-        if !saw_line {
-            return Err(NineDoorBridgeError::InvalidPayload);
-        }
-        Ok(())
+        host_ticket_v1::results(payload, self)
     }
 
     fn validate_ticket_line_bytes(&self, line: &str) -> Result<(), NineDoorBridgeError> {
@@ -5728,6 +5608,17 @@ impl HostState {
     }
 
     fn build_entries(&mut self) {
+        if self.snapshots.enabled() {
+            for publisher in generated::host_config().snapshots.publishers {
+                for provider in publisher.providers {
+                    self.push_entry(
+                        &["snapshots", provider, publisher.source_id, "ctl"],
+                        "",
+                        Some("snapshots.publish"),
+                    );
+                }
+            }
+        }
         if self.tickets_enabled {
             self.push_entry(&["tickets", "spec"], "", Some("tickets.spec"));
             self.push_entry(&["tickets", "status"], "", Some("tickets.status"));
@@ -8995,10 +8886,24 @@ fn host_ticket_action_label(action: generated::HostTicketAction) -> &'static str
         generated::HostTicketAction::GpuLeaseGrant => "gpu.lease.grant",
         generated::HostTicketAction::GpuLeaseRenew => "gpu.lease.renew",
         generated::HostTicketAction::GpuLeaseRelease => "gpu.lease.release",
+        generated::HostTicketAction::GpuWorkloadSubmit => "gpu.workload.submit",
+        generated::HostTicketAction::GpuWorkloadCancel => "gpu.workload.cancel",
+        generated::HostTicketAction::GpuWorkloadObserve => "gpu.workload.observe",
         generated::HostTicketAction::PeftExport => "peft.export",
         generated::HostTicketAction::PeftImport => "peft.import",
         generated::HostTicketAction::PeftActivate => "peft.activate",
         generated::HostTicketAction::PeftRollback => "peft.rollback",
+        generated::HostTicketAction::MacReleaseBuild => "mac_release.build",
+        generated::HostTicketAction::MacReleaseTest => "mac_release.test",
+        generated::HostTicketAction::MacReleaseArchive => "mac_release.archive",
+        generated::HostTicketAction::MacReleaseCodesign => "mac_release.codesign",
+        generated::HostTicketAction::MacReleaseNotarize => "mac_release.notarize",
+        generated::HostTicketAction::MacReleaseUpload => "mac_release.upload",
+        generated::HostTicketAction::EndpointComplianceObserve => "endpoint_compliance.observe",
+        generated::HostTicketAction::LaunchdStart => "launchd.start",
+        generated::HostTicketAction::LaunchdStop => "launchd.stop",
+        generated::HostTicketAction::LaunchdRestart => "launchd.restart",
+        generated::HostTicketAction::LaunchdStatusCheck => "launchd.status-check",
         generated::HostTicketAction::SystemdStart => "systemd.start",
         generated::HostTicketAction::SystemdStop => "systemd.stop",
         generated::HostTicketAction::SystemdRestart => "systemd.restart",
@@ -9006,6 +8911,10 @@ fn host_ticket_action_label(action: generated::HostTicketAction) -> &'static str
         generated::HostTicketAction::DockerRestart => "docker.restart",
         generated::HostTicketAction::DockerStop => "docker.stop",
         generated::HostTicketAction::DockerStatusCheck => "docker.status-check",
+        generated::HostTicketAction::ModbusRead => "modbus.read",
+        generated::HostTicketAction::ModbusControl => "modbus.control",
+        generated::HostTicketAction::Dnp3Read => "dnp3.read",
+        generated::HostTicketAction::Dnp3Control => "dnp3.control",
         generated::HostTicketAction::K8sCordon => "k8s.cordon",
         generated::HostTicketAction::K8sDrain => "k8s.drain",
         generated::HostTicketAction::K8sLeaseSync => "k8s.lease.sync",
@@ -9222,6 +9131,20 @@ fn validate_host_ticket_v2_args(
             }
             Ok(())
         }
+        WorkerAction::GpuWorkloadSubmit
+        | WorkerAction::GpuWorkloadCancel
+        | WorkerAction::GpuWorkloadObserve => {
+            let action = match action {
+                WorkerAction::GpuWorkloadSubmit => "gpu.workload.submit",
+                WorkerAction::GpuWorkloadCancel => "gpu.workload.cancel",
+                _ => "gpu.workload.observe",
+            };
+            if cohesix_authority::gpu::validate_args(action, args) {
+                Ok(())
+            } else {
+                Err(NineDoorBridgeError::InvalidPayload)
+            }
+        }
         WorkerAction::HeartbeatPublish => Err(NineDoorBridgeError::InvalidPayload),
     }
 }
@@ -9326,6 +9249,9 @@ fn host_ticket_action(action: &str) -> Result<WorkerAction, NineDoorBridgeError>
         "gpu.lease.grant" => Ok(WorkerAction::GpuLeaseGrant),
         "gpu.lease.renew" => Ok(WorkerAction::GpuLeaseRenew),
         "gpu.lease.release" => Ok(WorkerAction::GpuLeaseRelease),
+        "gpu.workload.submit" => Ok(WorkerAction::GpuWorkloadSubmit),
+        "gpu.workload.cancel" => Ok(WorkerAction::GpuWorkloadCancel),
+        "gpu.workload.observe" => Ok(WorkerAction::GpuWorkloadObserve),
         "peft.export" => Ok(WorkerAction::PeftExport),
         "peft.import" => Ok(WorkerAction::PeftImport),
         "peft.activate" => Ok(WorkerAction::PeftActivate),
@@ -9441,6 +9367,53 @@ fn ensure_host_ticket_worker_available(
         if admission.terminal_result_digest.is_none() {
             return Err(NineDoorBridgeError::Busy);
         }
+    }
+    Ok(())
+}
+
+/// A running external workload may have one separately admitted control ticket.
+/// The target still permits one Worker IPC call at a time; native execution is
+/// outside that call. A second workload, unrelated lease, or second pending
+/// control cannot consume this bounded cancellation path.
+fn ensure_host_ticket_request_available(
+    admissions: &BTreeMap<[u8; 32], HostTicketV2Admission>,
+    binding: HostTicketV2WorkerBinding<'_>,
+    request: &HostTicketV2RawSpec,
+) -> Result<(), NineDoorBridgeError> {
+    if ensure_host_ticket_worker_available(admissions, binding).is_ok() {
+        return Ok(());
+    }
+    if binding.current_control_sequence != 0 || binding.role != WorkerRole::Gpu {
+        return Err(NineDoorBridgeError::Busy);
+    }
+    let mut pending = admissions.values().filter(|admission| {
+        admission.terminal_result_digest.is_none()
+            && admission_identity(&admission.spec).ok() == Some(binding.identity)
+            && admission.spec.receipt_worker_id == binding.public_id
+    });
+    let running = pending.next().ok_or(NineDoorBridgeError::Busy)?;
+    if pending.next().is_some()
+        || running.spec.action != "gpu.workload.submit"
+        || running.spec.subject_ref != request.subject_ref
+    {
+        return Err(NineDoorBridgeError::Busy);
+    }
+    let matches = match request.action.as_str() {
+        "gpu.workload.cancel" | "gpu.workload.observe" => {
+            request.args.get("job_id").and_then(JsonValue::as_str) == Some(running.spec.id.as_str())
+        }
+        "gpu.lease.renew" | "gpu.lease.release" => {
+            running
+                .spec
+                .args
+                .get("lease_id")
+                .and_then(JsonValue::as_str)
+                == Some(request.operation_id.as_str())
+        }
+        _ => false,
+    };
+    if !matches {
+        return Err(NineDoorBridgeError::Busy);
     }
     Ok(())
 }
@@ -11007,38 +10980,36 @@ fn telemetry_ingest_seg_dir(path: &str) -> Option<&str> {
     }
 }
 
-fn parse_worker_telemetry_path(path: &str) -> Option<&str> {
+fn parse_worker_namespace_path(path: &str) -> Option<(&str, bool)> {
     let segments = split_path_segments(path);
     let sharding = generated::sharding_config();
-    if sharding.enabled {
-        if let ["shard", label, "worker", worker_id, leaf] = segments.as_slice() {
-            if *leaf != WORKER_TELEMETRY_FILE {
-                return None;
-            }
-            if !shard_label_known(label) {
-                return None;
-            }
-            let expected = worker_shard_label(worker_id, sharding);
-            if expected != *label {
-                return None;
-            }
-            return Some(worker_id);
+    let (worker_id, rest) = match segments.as_slice() {
+        ["shard", label, "worker", worker_id, rest @ ..]
+            if sharding.enabled
+                && shard_label_known(label)
+                && worker_shard_label(worker_id, sharding) == *label =>
+        {
+            (*worker_id, rest)
         }
-        if legacy_worker_alias_enabled(sharding) {
-            if let ["worker", worker_id, leaf] = segments.as_slice() {
-                if *leaf == WORKER_TELEMETRY_FILE {
-                    return Some(worker_id);
-                }
-            }
+        ["worker", worker_id, rest @ ..]
+            if !sharding.enabled || legacy_worker_alias_enabled(sharding) =>
+        {
+            (*worker_id, rest)
         }
-        return None;
+        _ => return None,
+    };
+    match rest {
+        [] => Some((worker_id, false)),
+        [WORKER_TELEMETRY_FILE] => Some((worker_id, true)),
+        _ => None,
     }
-    if let ["worker", worker_id, leaf] = segments.as_slice() {
-        if *leaf == WORKER_TELEMETRY_FILE {
-            return Some(worker_id);
-        }
+}
+
+fn parse_worker_telemetry_path(path: &str) -> Option<&str> {
+    match parse_worker_namespace_path(path) {
+        Some((worker_id, true)) => Some(worker_id),
+        _ => None,
     }
-    None
 }
 
 fn parse_cas_path(path: &str) -> Result<Option<CasPath>, NineDoorBridgeError> {
@@ -12043,6 +12014,66 @@ mod tests {
     }
 
     #[test]
+    fn host_ticket_workload_admits_one_matching_control_without_parallel_worker_ipc() {
+        let binding = HostTicketV2WorkerBinding {
+            public_id: "worker-gpu-1",
+            role: WorkerRole::Gpu,
+            identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
+            ready: true,
+            ready_sequence: 1,
+            current_control_sequence: 0,
+            last_control_sequence: 0,
+        };
+        let host = HostState::new();
+        let mut request =
+            parse_host_ticket_v2_spec(&host_ticket_v2_request_fixture(), &host).unwrap();
+        request.action = "gpu.workload.submit".into();
+        request.args = serde_json::json!({"lease_id":"lease-1","request_sha256":"ab".repeat(32)});
+        let running = admit_host_ticket_v2_spec(request.clone(), binding, 1).unwrap();
+        let mut admissions = BTreeMap::new();
+        admissions.insert(
+            [1; 32],
+            HostTicketV2Admission {
+                spec: running,
+                raw_digest: [1; 32],
+                terminal_result_digest: None,
+                terminal_outcome: None,
+            },
+        );
+        assert!(ensure_host_ticket_request_available(&admissions, binding, &request).is_err());
+        request.action = "gpu.workload.cancel".into();
+        request.args = serde_json::json!({"job_id":"ticket-v2"});
+        ensure_host_ticket_request_available(&admissions, binding, &request).unwrap();
+        request.args = serde_json::json!({"job_id":"different-ticket"});
+        assert!(ensure_host_ticket_request_available(&admissions, binding, &request).is_err());
+        request.args = serde_json::json!({"job_id":"ticket-v2"});
+        assert!(ensure_host_ticket_request_available(
+            &admissions,
+            HostTicketV2WorkerBinding {
+                current_control_sequence: 1,
+                ..binding
+            },
+            &request
+        )
+        .is_err());
+        request.action = "gpu.lease.release".into();
+        request.operation_id = "lease-1".into();
+        request.args = serde_json::json!({"reason":"cancelled"});
+        ensure_host_ticket_request_available(&admissions, binding, &request).unwrap();
+        let control = admit_host_ticket_v2_spec(request.clone(), binding, 2).unwrap();
+        admissions.insert(
+            [2; 32],
+            HostTicketV2Admission {
+                spec: control,
+                raw_digest: [2; 32],
+                terminal_result_digest: None,
+                terminal_outcome: None,
+            },
+        );
+        assert!(ensure_host_ticket_request_available(&admissions, binding, &request).is_err());
+    }
+
+    #[test]
     fn host_ticket_admission_window_retires_only_the_oldest_terminal_entry() {
         let template = host_ticket_v2_admitted_fixture();
         let digest_for = |index: usize| {
@@ -12105,6 +12136,44 @@ mod tests {
                 .expect("an underfull window needs no retirement"),
             None,
         );
+    }
+
+    #[test]
+    fn host_ticket_v2_workload_actions_use_exact_gpu_receipt_binding() {
+        let host = HostState::new();
+        for (action, code, args) in [
+            (
+                "gpu.workload.submit",
+                0x0204,
+                serde_json::json!({"lease_id":"lease-1","request_sha256":"a".repeat(64)}),
+            ),
+            (
+                "gpu.workload.cancel",
+                0x0205,
+                serde_json::json!({"job_id":"job-1"}),
+            ),
+            (
+                "gpu.workload.observe",
+                0x0206,
+                serde_json::json!({"job_id":"job-1"}),
+            ),
+        ] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&host_ticket_v2_request_fixture()).unwrap();
+            value["action"] = action.into();
+            value["args"] = args;
+            let parsed =
+                parse_host_ticket_v2_spec(&serde_json::to_string(&value).unwrap(), &host).unwrap();
+            assert_eq!(host_ticket_action(&parsed.action).unwrap() as u16, code);
+            assert_eq!(
+                host_ticket_action(&parsed.action).unwrap().role(),
+                WorkerRole::Gpu
+            );
+            value["args"]["command"] = "echo ok".into();
+            assert!(
+                parse_host_ticket_v2_spec(&serde_json::to_string(&value).unwrap(), &host).is_err()
+            );
+        }
     }
 
     #[test]
@@ -12687,6 +12756,53 @@ mod tests {
                 .contains("heartbeat 1000"),
             "latest worker telemetry missing from bounded namespace"
         );
+    }
+
+    #[test]
+    fn worker_directory_and_cat_share_the_canonical_tail_ring() {
+        let mut bridge = NineDoorBridge::new();
+        bridge.spawn_worker(SpawnTarget::Heartbeat).unwrap();
+        bridge.workers[0].ring.append(b"heartbeat 1\n").unwrap();
+        let sharding = generated::sharding_config();
+        let directory = if sharding.enabled {
+            format!(
+                "/shard/{}/worker/worker-1",
+                worker_shard_label("worker-1", sharding)
+            )
+        } else {
+            "/worker/worker-1".to_owned()
+        };
+        let path = format!("{directory}/telemetry");
+        let entries = bridge.list(&directory).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.as_str())
+                .collect::<Vec<_>>(),
+            vec!["telemetry"]
+        );
+        let mut tail = HeaplessVec::new();
+        bridge
+            .telemetry_tail_into(&path, 0, &mut tail)
+            .unwrap()
+            .unwrap();
+        let cat = bridge.cat(&path).unwrap();
+        assert_eq!(cat, tail);
+        assert!(cat.iter().any(|line| line.as_str() == "heartbeat 1"));
+        assert!(bridge.list(&path).is_err());
+        assert!(bridge.cat(&directory).is_err());
+        assert!(bridge
+            .list(&directory.replace("worker-1", "worker-missing"))
+            .is_err());
+        if sharding.enabled {
+            assert!(bridge.list("/shard/invalid/worker/worker-1").is_err());
+            assert!(bridge
+                .cat("/shard/invalid/worker/worker-1/telemetry")
+                .is_err());
+        }
+        bridge.remove_worker("worker-1").unwrap();
+        assert!(bridge.list(&directory).is_err());
+        assert!(bridge.cat(&path).is_err());
     }
 
     #[test]

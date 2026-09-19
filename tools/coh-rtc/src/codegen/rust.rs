@@ -1120,10 +1120,24 @@ pub fn emit_rust(
     writeln!(mod_contents, "    GpuLeaseGrant,")?;
     writeln!(mod_contents, "    GpuLeaseRenew,")?;
     writeln!(mod_contents, "    GpuLeaseRelease,")?;
+    writeln!(mod_contents, "    GpuWorkloadSubmit,")?;
+    writeln!(mod_contents, "    GpuWorkloadCancel,")?;
+    writeln!(mod_contents, "    GpuWorkloadObserve,")?;
     writeln!(mod_contents, "    PeftExport,")?;
     writeln!(mod_contents, "    PeftImport,")?;
     writeln!(mod_contents, "    PeftActivate,")?;
     writeln!(mod_contents, "    PeftRollback,")?;
+    writeln!(mod_contents, "    MacReleaseBuild,")?;
+    writeln!(mod_contents, "    MacReleaseTest,")?;
+    writeln!(mod_contents, "    MacReleaseArchive,")?;
+    writeln!(mod_contents, "    MacReleaseCodesign,")?;
+    writeln!(mod_contents, "    MacReleaseNotarize,")?;
+    writeln!(mod_contents, "    MacReleaseUpload,")?;
+    writeln!(mod_contents, "    EndpointComplianceObserve,")?;
+    writeln!(mod_contents, "    LaunchdStart,")?;
+    writeln!(mod_contents, "    LaunchdStop,")?;
+    writeln!(mod_contents, "    LaunchdRestart,")?;
+    writeln!(mod_contents, "    LaunchdStatusCheck,")?;
     writeln!(mod_contents, "    SystemdStart,")?;
     writeln!(mod_contents, "    SystemdStop,")?;
     writeln!(mod_contents, "    SystemdRestart,")?;
@@ -1131,6 +1145,10 @@ pub fn emit_rust(
     writeln!(mod_contents, "    DockerRestart,")?;
     writeln!(mod_contents, "    DockerStop,")?;
     writeln!(mod_contents, "    DockerStatusCheck,")?;
+    writeln!(mod_contents, "    ModbusRead,")?;
+    writeln!(mod_contents, "    ModbusControl,")?;
+    writeln!(mod_contents, "    Dnp3Read,")?;
+    writeln!(mod_contents, "    Dnp3Control,")?;
     writeln!(mod_contents, "    K8sCordon,")?;
     writeln!(mod_contents, "    K8sDrain,")?;
     writeln!(mod_contents, "    K8sLeaseSync,")?;
@@ -1201,12 +1219,30 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HostSnapshotPublisher {{")?;
+    writeln!(mod_contents, "    pub source_id: &'static str,")?;
+    writeln!(mod_contents, "    pub providers: &'static [&'static str],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HostSnapshotConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub max_entries: u16,")?;
+    writeln!(mod_contents, "    pub max_value_bytes: u16,")?;
+    writeln!(mod_contents, "    pub max_ttl_ms: u32,")?;
+    writeln!(
+        mod_contents,
+        "    pub publishers: &'static [HostSnapshotPublisher],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct HostConfig {{")?;
     writeln!(mod_contents, "    pub enable: bool,")?;
     writeln!(mod_contents, "    pub mount_at: &'static str,")?;
     writeln!(mod_contents, "    pub providers: &'static [HostProvider],")?;
     writeln!(mod_contents, "    pub tickets: HostTicketConfig,")?;
     writeln!(mod_contents, "    pub federation: HostFederationConfig,")?;
+    writeln!(mod_contents, "    pub snapshots: HostSnapshotConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -1752,7 +1788,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationMode, AuditConfig, BadgeRange, CachePolicy, CapabilityRights, CasConfig, ConsoleNetworkServiceConfig, ControlPlaneConfig, CriticalHandoffConfig, CriticalTcbResource, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExecutableRoleAdmission, ExecutableRoleMix, ExportControlConfig, FaultRegistryAdmission, HandoffClass, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, KernelObjectBits, KernelObjectBudget, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, RoleMixCount, SaturationPolicy, ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TemporalAuthorityConfig, TemporalCoreAdmission, TemporalExecution, TemporalTaskConfig, TemporalTaskKind, TicketLimits, TicketSpec, TimeoutPolicy, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerResourceAdmissionConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile, WorkerTaskAbiConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationMode, AuditConfig, BadgeRange, CachePolicy, CapabilityRights, CasConfig, ConsoleNetworkServiceConfig, ControlPlaneConfig, CriticalHandoffConfig, CriticalTcbResource, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExecutableRoleAdmission, ExecutableRoleMix, ExportControlConfig, FaultRegistryAdmission, HandoffClass, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostSnapshotConfig, HostSnapshotPublisher, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, KernelObjectBits, KernelObjectBudget, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, RoleMixCount, SaturationPolicy, ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TemporalAuthorityConfig, TemporalCoreAdmission, TemporalExecution, TemporalTaskConfig, TemporalTaskKind, TicketLimits, TicketSpec, TimeoutPolicy, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerResourceAdmissionConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile, WorkerTaskAbiConfig}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -2857,9 +2893,24 @@ pub fn emit_rust(
         )?;
     }
     writeln!(bootstrap_contents, "];\n")?;
+    let snapshots = &manifest.ecosystem.host.snapshots;
     writeln!(
         bootstrap_contents,
-        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", accepted_request_schemas: &HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS, accepted_result_schemas: &HOST_TICKET_ACCEPTED_RESULT_SCHEMAS, max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, receipt_action_allowlist: &HOST_TICKET_RECEIPT_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }}, federation: HostFederationConfig {{ enable: {}, local_hive: \"{}\", peers: &HOST_FEDERATION_PEERS, action_allowlist: &HOST_FEDERATION_ACTION_ALLOWLIST, relay_queue_max_entries: {}, relay_queue_max_bytes: {}, wal_max_entries: {}, wal_max_bytes: {}, relay_timeout_ms: {} }} }};\n",
+        "pub const HOST_SNAPSHOT_PUBLISHERS: [HostSnapshotPublisher; {}] = [",
+        snapshots.publishers.len()
+    )?;
+    for publisher in &snapshots.publishers {
+        writeln!(
+            bootstrap_contents,
+            "    HostSnapshotPublisher {{ source_id: {:?}, providers: &{:?} }},",
+            publisher.source_id, publisher.providers
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(bootstrap_contents, "pub const HOST_SNAPSHOT_CONFIG: HostSnapshotConfig = HostSnapshotConfig {{ enable: {}, max_bytes: {}, max_entries: {}, max_value_bytes: {}, max_ttl_ms: {}, publishers: &HOST_SNAPSHOT_PUBLISHERS }};", snapshots.enable, snapshots.max_bytes, snapshots.max_entries, snapshots.max_value_bytes, snapshots.max_ttl_ms)?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, snapshots: HOST_SNAPSHOT_CONFIG, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", accepted_request_schemas: &HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS, accepted_result_schemas: &HOST_TICKET_ACCEPTED_RESULT_SCHEMAS, max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, receipt_action_allowlist: &HOST_TICKET_RECEIPT_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }}, federation: HostFederationConfig {{ enable: {}, local_hive: \"{}\", peers: &HOST_FEDERATION_PEERS, action_allowlist: &HOST_FEDERATION_ACTION_ALLOWLIST, relay_queue_max_entries: {}, relay_queue_max_bytes: {}, wal_max_entries: {}, wal_max_bytes: {}, relay_timeout_ms: {} }} }};\n",
         manifest.ecosystem.host.enable,
         escape_literal(&manifest.ecosystem.host.mount_at),
         manifest.ecosystem.host.tickets.enable,
@@ -3216,10 +3267,26 @@ fn host_ticket_action_to_rust(action: HostTicketAction) -> &'static str {
         HostTicketAction::GpuLeaseGrant => "HostTicketAction::GpuLeaseGrant",
         HostTicketAction::GpuLeaseRenew => "HostTicketAction::GpuLeaseRenew",
         HostTicketAction::GpuLeaseRelease => "HostTicketAction::GpuLeaseRelease",
+        HostTicketAction::GpuWorkloadSubmit => "HostTicketAction::GpuWorkloadSubmit",
+        HostTicketAction::GpuWorkloadCancel => "HostTicketAction::GpuWorkloadCancel",
+        HostTicketAction::GpuWorkloadObserve => "HostTicketAction::GpuWorkloadObserve",
         HostTicketAction::PeftExport => "HostTicketAction::PeftExport",
         HostTicketAction::PeftImport => "HostTicketAction::PeftImport",
         HostTicketAction::PeftActivate => "HostTicketAction::PeftActivate",
         HostTicketAction::PeftRollback => "HostTicketAction::PeftRollback",
+        HostTicketAction::MacReleaseBuild => "HostTicketAction::MacReleaseBuild",
+        HostTicketAction::MacReleaseTest => "HostTicketAction::MacReleaseTest",
+        HostTicketAction::MacReleaseArchive => "HostTicketAction::MacReleaseArchive",
+        HostTicketAction::MacReleaseCodesign => "HostTicketAction::MacReleaseCodesign",
+        HostTicketAction::MacReleaseNotarize => "HostTicketAction::MacReleaseNotarize",
+        HostTicketAction::MacReleaseUpload => "HostTicketAction::MacReleaseUpload",
+        HostTicketAction::EndpointComplianceObserve => {
+            "HostTicketAction::EndpointComplianceObserve"
+        }
+        HostTicketAction::LaunchdStart => "HostTicketAction::LaunchdStart",
+        HostTicketAction::LaunchdStop => "HostTicketAction::LaunchdStop",
+        HostTicketAction::LaunchdRestart => "HostTicketAction::LaunchdRestart",
+        HostTicketAction::LaunchdStatusCheck => "HostTicketAction::LaunchdStatusCheck",
         HostTicketAction::SystemdStart => "HostTicketAction::SystemdStart",
         HostTicketAction::SystemdStop => "HostTicketAction::SystemdStop",
         HostTicketAction::SystemdRestart => "HostTicketAction::SystemdRestart",
@@ -3227,6 +3294,10 @@ fn host_ticket_action_to_rust(action: HostTicketAction) -> &'static str {
         HostTicketAction::DockerRestart => "HostTicketAction::DockerRestart",
         HostTicketAction::DockerStop => "HostTicketAction::DockerStop",
         HostTicketAction::DockerStatusCheck => "HostTicketAction::DockerStatusCheck",
+        HostTicketAction::ModbusRead => "HostTicketAction::ModbusRead",
+        HostTicketAction::ModbusControl => "HostTicketAction::ModbusControl",
+        HostTicketAction::Dnp3Read => "HostTicketAction::Dnp3Read",
+        HostTicketAction::Dnp3Control => "HostTicketAction::Dnp3Control",
         HostTicketAction::K8sCordon => "HostTicketAction::K8sCordon",
         HostTicketAction::K8sDrain => "HostTicketAction::K8sDrain",
         HostTicketAction::K8sLeaseSync => "HostTicketAction::K8sLeaseSync",

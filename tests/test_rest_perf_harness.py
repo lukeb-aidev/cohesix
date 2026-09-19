@@ -55,6 +55,20 @@ def test_mutating_rest_auth_fails_before_network(monkeypatch, token, ticket):
         client.post_json("/v1/fs/echo", {"path": "/queen/ctl", "line": "test"})
 
 
+def test_benchmark_reads_carry_delegated_identity(monkeypatch):
+    """The benchmark exercises the same read authority as shipped REST clients."""
+    ticket = "cohesix-ticket-010000" + "00" * 12 + "." + "00" * 32
+    seen = []
+    def fetch(url, timeout, headers):
+        seen.append(headers)
+        return {"status": "OK"}
+    monkeypatch.setattr(rest_perf, "fetch_json", fetch)
+    client = rest_perf.RestClient("http://127.0.0.1:8080", 1.0, "gateway-read-key", ticket)
+    client.get_json("/v1/meta/status")
+    assert seen == [{"Authorization": "Bearer gateway-read-key", "x-cohesix-auth": "gateway-read-key",
+                     "x-cohesix-ticket": ticket}]
+
+
 def test_benchmark_mutation_sends_delegation_and_refreshes_secret_file(monkeypatch, tmp_path):
     """Header parity and rotation are checked without granting this unsigned fixture authority."""
     ticket = "cohesix-ticket-010000" + "00" * 12 + "." + "00" * 32

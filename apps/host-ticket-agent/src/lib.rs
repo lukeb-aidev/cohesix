@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 use crate::claim::{terminal_keys, TicketKey};
 use crate::executors::ExecutorConfig;
 
+/// Enrolled native evidence custody; never substitutes for Root or Worker authority.
+pub mod causal;
 /// Claim/idempotency helpers.
 pub mod claim;
 /// Ticket action executors.
@@ -443,10 +445,22 @@ impl HostTicketManifest {
             "peft.import".to_owned(),
             "peft.rollback".to_owned(),
         ];
+        let workload_actions = [
+            "gpu.workload.submit",
+            "gpu.workload.cancel",
+            "gpu.workload.observe",
+        ];
+        if workload_actions
+            .iter()
+            .any(|action| actions.iter().any(|selected| selected == action))
+        {
+            expected_receipt_actions
+                .extend(workload_actions.iter().map(|action| (*action).to_owned()));
+        }
         expected_receipt_actions.sort();
         if enabled && receipt_actions != expected_receipt_actions {
             return Err(anyhow!(
-                "ecosystem.host.tickets.receipt_action_allowlist must contain exactly the three GPU and four PEFT receipt actions"
+                "ecosystem.host.tickets.receipt_action_allowlist must contain the existing GPU/PEFT actions and the complete selected workload action set"
             ));
         }
         if receipt_actions
@@ -948,11 +962,16 @@ where
         return Ok(ProcessSummary::default());
     }
 
+    let gpu_control_lane = executor_config.gpu_executor_socket.is_some();
+    if gpu_control_lane && lane_count < 2 {
+        return Err(anyhow!("GPU workloads require a separate control lane"));
+    }
+    let compatibility_lane = usize::from(gpu_control_lane);
     let spec_path = manifest.spec_path();
     let snapshot_path = manifest.spec_snapshot_path();
     let status_path = manifest.status_path();
     let deadletter_path = manifest.deadletter_path();
-    let spec_lines = if lane_index == 0 {
+    let spec_lines = if lane_index == compatibility_lane {
         transport
             .read(session, spec_path.as_str())
             .with_context(|| format!("read {spec_path}"))?
@@ -968,7 +987,7 @@ where
             .with_context(|| format!("read {snapshot_path}"))?;
         snapshot_owned.as_slice()
     };
-    let (status_lines, deadletter_lines) = if lane_index == 0 {
+    let (status_lines, deadletter_lines) = if lane_index == compatibility_lane {
         (
             transport
                 .read(session, status_path.as_str())
@@ -1029,7 +1048,7 @@ where
         .max(journal.completed_through_admission_sequence());
     let mut summary = ProcessSummary::default();
 
-    if lane_index == 0 {
+    if lane_index == compatibility_lane {
         for spec in raw_specs.iter().skip(cursor.raw_next_spec_index) {
             if spec.schema == HOST_TICKET_V2_SCHEMA {
                 // Caller bytes are intentionally never executable. Root must emit the
@@ -1087,7 +1106,7 @@ where
                 admission_sequence,
             ));
         }
-        let assigned = ticket_lane_for_spec(spec, lane_count)? == lane_index;
+        let assigned = ticket_lane_for_execution(spec, lane_count, gpu_control_lane)? == lane_index;
         if assigned {
             process_v2_spec(
                 transport,
@@ -1104,6 +1123,24 @@ where
                 &mut executor,
                 &mut reconciler,
             )?;
+            if executor_config.evidence_enrollment_dir.is_some() {
+                // Persist publication before waiting on the separately signed
+                // Worker witness. A retry reconciles this result without dispatch.
+                journal.save(journal_path)?;
+                let provider = journal
+                    .get(&TicketKey::new(&spec.id, &spec.idempotency_key))
+                    .and_then(|entry| entry.provider_result.as_ref())
+                    .ok_or_else(|| anyhow!("unconfirmed signed v2 provider result"))?;
+                let (path, line) = build_v2_provider_result_line(manifest, spec, provider)?;
+                causal::terminal_worker(
+                    transport,
+                    session,
+                    executor_config,
+                    spec,
+                    &path,
+                    &serde_json::from_str(&line)?,
+                )?;
+            }
         }
         cursor.snapshot_next_spec_index = cursor
             .snapshot_next_spec_index
@@ -1131,6 +1168,28 @@ where
     Ok(summary)
 }
 
+fn ticket_lane_for_execution(
+    spec: &HostTicketSpec,
+    lanes: usize,
+    gpu_control: bool,
+) -> Result<usize> {
+    if !gpu_control {
+        return ticket_lane_for_spec(spec, lanes);
+    }
+    if lanes < 2 {
+        return Err(anyhow!("GPU workloads require a separate control lane"));
+    }
+    if spec.action.starts_with("gpu.lease.")
+        || matches!(
+            spec.action.as_str(),
+            "gpu.workload.cancel" | "gpu.workload.observe"
+        )
+    {
+        return Ok(0);
+    }
+    Ok(1 + ticket_lane_for_spec(spec, lanes - 1)?)
+}
+
 fn ticket_lane_for_spec(spec: &HostTicketSpec, lane_count: usize) -> Result<usize> {
     if spec.admission_sequence.unwrap_or(0) == 0 || lane_count == 0 {
         return Err(anyhow!("ticket lane assignment requires non-zero bounds"));
@@ -1141,6 +1200,13 @@ fn ticket_lane_for_spec(spec: &HostTicketSpec, lane_count: usize) -> Result<usiz
             spec.operation_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("GPU ticket lane assignment requires operation_id"))?,
+        )
+    } else if spec.action.starts_with("gpu.workload.") {
+        (
+            "gpu-workload",
+            spec.subject_ref
+                .as_deref()
+                .ok_or_else(|| anyhow!("GPU workload requires subject_ref"))?,
         )
     } else if spec.action == "peft.export" {
         // A completed export is immutable and may be observed concurrently by
@@ -1290,8 +1356,11 @@ where
             "journal result path is outside selected ticket result authority"
         ));
     }
-    status::append_result_line(transport, session, path, line)?;
     let result: HostTicketResult = serde_json::from_str(line)?;
+    if !causal::already_published(transport, session, executor_config, path, &result)? {
+        status::append_result_line(transport, session, path, line)?;
+    }
+    causal::terminal(transport, session, executor_config, spec, path, &result)?;
     match result.state.as_str() {
         "succeeded" => summary.succeeded = summary.succeeded.saturating_add(1),
         "expired" => summary.expired = summary.expired.saturating_add(1),
@@ -1793,7 +1862,7 @@ fn validate_ready_worker_binding(
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 struct HostTicketCurrent {
     state: String,
     role: String,
@@ -2761,6 +2830,30 @@ mod tests {
             6u64.saturating_sub(persisted.snapshot_last_admission_sequence)
                 < V2_CURSOR_CHECKPOINT_STRIDE
         );
+    }
+
+    #[test]
+    fn gpu_workload_control_has_an_independent_durable_lane() {
+        let mut spec = HostTicketSpec {
+            admission_sequence: Some(1),
+            subject_ref: Some("GPU-0".into()),
+            operation_id: Some("job".into()),
+            ..HostTicketSpec::default()
+        };
+        spec.action = "gpu.workload.submit".into();
+        assert!(ticket_lane_for_execution(&spec, 1, true).is_err());
+        for lanes in [2, 4, 8] {
+            spec.action = "gpu.workload.submit".into();
+            assert!(ticket_lane_for_execution(&spec, lanes, true).unwrap() > 0);
+            for action in [
+                "gpu.workload.cancel",
+                "gpu.workload.observe",
+                "gpu.lease.release",
+            ] {
+                spec.action = action.into();
+                assert_eq!(ticket_lane_for_execution(&spec, lanes, true).unwrap(), 0);
+            }
+        }
     }
 
     #[test]

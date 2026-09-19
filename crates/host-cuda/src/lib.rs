@@ -1,6 +1,6 @@
 // Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Provide CUDA driver/runtime probes for host GPU inventory.
+// Purpose: Observe installed CUDA driver and runtime identity without substituting driver capability for runtime evidence.
 // Author: Lukas Bower
 #![warn(missing_docs)]
 
@@ -87,7 +87,7 @@ mod linux {
         let runtime_version = runtime
             .as_ref()
             .and_then(|rt| rt.runtime_version().ok())
-            .unwrap_or_else(|| driver_version.clone());
+            .unwrap_or_else(|| "unavailable".to_owned());
 
         let mut devices = Vec::new();
         for index in 0..device_count {
@@ -222,7 +222,7 @@ mod linux {
 
     impl CudaRuntime {
         fn load() -> Result<Self> {
-            let lib = load_library(&["libcudart.so.12", "libcudart.so"])?;
+            let lib = load_library(&["libcudart.so.13", "libcudart.so.12", "libcudart.so"])?;
             unsafe {
                 let cuda_runtime_get_version =
                     load_symbol::<CudaRuntimeGetVersion>(&lib, b"cudaRuntimeGetVersion\0")?;
@@ -314,6 +314,7 @@ mod tests {
     #[test]
     fn cuda_version_formatting() {
         assert_eq!(format_cuda_version(12060), "12.6");
+        assert_eq!(format_cuda_version(13020), "13.2");
         assert_eq!(format_cuda_version(11040), "11.4");
         assert_eq!(format_cuda_version(0), "unknown");
         assert_eq!(format_cuda_version(-1), "unknown");

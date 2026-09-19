@@ -94,9 +94,14 @@ impl Usage {
         bytes: usize,
         operations: usize,
         now: u64,
+        read: bool,
     ) -> Result<(), &'static str> {
         if now >= self.expires
-            || !role_allows(&self.claims, path)
+            || !(if read {
+                read_role_allows(&self.claims, path)
+            } else {
+                role_allows(&self.claims, path)
+            })
             || (!self.claims.mounts.is_empty() && !within(path, &self.claims.mounts.at))
         {
             return Err("EPERM delegated-ticket-scope");
@@ -107,7 +112,11 @@ impl Usage {
             .iter()
             .enumerate()
             .filter(|(_, s)| {
-                matches!(s.verb, TicketVerb::Write | TicketVerb::ReadWrite) && within(path, &s.path)
+                (if read {
+                    matches!(s.verb, TicketVerb::Read | TicketVerb::ReadWrite)
+                } else {
+                    matches!(s.verb, TicketVerb::Write | TicketVerb::ReadWrite)
+                }) && within(path, &s.path)
             })
             .max_by_key(|(_, s)| s.path.len())
             .map(|(i, _)| i);
@@ -215,10 +224,50 @@ fn role_allows(claims: &TicketClaims, path: &str) -> bool {
     }
 }
 
+fn read_role_allows(claims: &TicketClaims, path: &str) -> bool {
+    // An explicitly issued root read scope is administrative authority. Empty
+    // scopes occur only on the configured gateway ceiling, never a caller.
+    if claims.role == Role::Queen
+        && (claims.scopes.is_empty()
+            || claims.scopes.iter().any(|scope| {
+                scope.path == "/" && matches!(scope.verb, TicketVerb::Read | TicketVerb::ReadWrite)
+            }))
+    {
+        return true;
+    }
+    let Ok((class, owner)) = cohesix_authority::provider::read_visibility(path) else {
+        return false;
+    };
+    if class == "admin_only" {
+        return claims.role == Role::Queen;
+    }
+    if class == "public" {
+        return true;
+    }
+    if owner == "worker_subject" {
+        let parts: Vec<_> = path.split('/').skip(1).collect();
+        let worker = match parts.as_slice() {
+            ["worker", worker, ..] => Some(*worker),
+            ["shard", shard, "worker", worker, ..]
+                if shard.len() == 2
+                    && shard
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+            {
+                Some(*worker)
+            }
+            _ => None,
+        };
+        return worker.is_some() && worker == claims.subject.as_deref();
+    }
+    claims.role == Role::Queen || (!claims.mounts.is_empty() && within(path, &claims.mounts.at))
+}
+
 /// Live entries are never evicted to admit another caller: doing so would
 /// reset quotas. Expired tickets cannot re-enter the table.
 pub struct Delegation {
     key: Option<TicketKey>,
+    identity: Option<std::sync::Arc<crate::identity::Identity>>,
     policy: AuthorityPolicy,
     ceiling_role: Role,
     ceiling: Option<Usage>,
@@ -250,6 +299,7 @@ impl Delegation {
         }
         Ok(Self {
             key,
+            identity: None,
             policy,
             ceiling_role,
             ceiling,
@@ -261,6 +311,11 @@ impl Delegation {
             audit_records: 0,
             audit_emit_ns: 0,
         })
+    }
+
+    pub fn with_identity(mut self, identity: std::sync::Arc<crate::identity::Identity>) -> Self {
+        self.identity = Some(identity);
+        self
     }
 
     pub fn snapshot(&self) -> cohesix_authority::policy::DelegationStatus {
@@ -282,6 +337,7 @@ impl Delegation {
         self.audit_emit_ns = self.audit_emit_ns.saturating_add(elapsed_ns);
     }
 
+    #[cfg(test)]
     pub fn authorize(
         &mut self,
         token: Option<&str>,
@@ -290,7 +346,40 @@ impl Delegation {
         operations: usize,
         now: u64,
     ) -> Result<String, &'static str> {
-        let result = self.admit(token, path, bytes, operations, now);
+        let result = self.admit(token, path, bytes, operations, now, Some(&[]));
+        if result.is_err() {
+            self.refusals = self.refusals.saturating_add(1);
+        }
+        result
+    }
+
+    pub fn authorize_write(
+        &mut self,
+        token: Option<&str>,
+        path: &str,
+        lines: &[&str],
+        now: u64,
+    ) -> Result<String, &'static str> {
+        let result = lines
+            .iter()
+            .try_fold(0usize, |total, line| total.checked_add(line.len()))
+            .ok_or("ELIMIT delegated-request-bytes")
+            .and_then(|bytes| self.admit(token, path, bytes, lines.len(), now, Some(lines)));
+        if result.is_err() {
+            self.refusals = self.refusals.saturating_add(1);
+        }
+        result
+    }
+
+    /// Read scopes share signature, expiry, quotas and ceiling state with writes.
+    pub fn authorize_read(
+        &mut self,
+        token: Option<&str>,
+        path: &str,
+        bytes: usize,
+        now: u64,
+    ) -> Result<String, &'static str> {
+        let result = self.admit(token, path, bytes, 1, now, None);
         if result.is_err() {
             self.refusals = self.refusals.saturating_add(1);
         }
@@ -304,7 +393,9 @@ impl Delegation {
         bytes: usize,
         operations: usize,
         now: u64,
+        write_lines: Option<&[&str]>,
     ) -> Result<String, &'static str> {
+        let read = write_lines.is_none();
         if !canonical_path(path) || operations == 0 {
             return Err("EPERM delegated-request-shape");
         }
@@ -316,12 +407,27 @@ impl Delegation {
         if token.len() > cohsh_core::MAX_TICKET_LEN {
             return Err("ELIMIT delegated-ticket-length");
         }
-        let key = self
-            .key
-            .as_ref()
-            .ok_or("EPERM delegation-key-unavailable")?;
-        let verified =
-            TicketToken::decode(token, key).map_err(|_| "EPERM delegated-ticket-invalid")?;
+        // Unverified claims select a verifier only. Neither signature domain
+        // falls back to the other after a refusal.
+        let claims =
+            TicketToken::decode_unverified(token).map_err(|_| "EPERM delegated-ticket-invalid")?;
+        let (verified, claims) = if claims.subject.as_deref().is_some_and(|subject| {
+            subject.starts_with(cohesix_identity::delegation::SUBJECT_PREFIX)
+        }) {
+            self.identity
+                .as_ref()
+                .ok_or("EPERM identity mapping unavailable")?
+                .verify(token, path, write_lines, read)?
+        } else {
+            let key = self
+                .key
+                .as_ref()
+                .ok_or("EPERM delegation-key-unavailable")?;
+            let verified =
+                TicketToken::decode(token, key).map_err(|_| "EPERM delegated-ticket-invalid")?;
+            let claims = verified.claims().clone();
+            (verified, claims)
+        };
         let canonical = verified
             .encode()
             .map_err(|_| "EPERM delegated-ticket-invalid")?;
@@ -329,7 +435,7 @@ impl Delegation {
         self.entries.retain(|_, usage| usage.expires > now);
         if !self.entries.contains_key(&identity) {
             self.misses = self.misses.saturating_add(1);
-            let usage = Usage::new(verified.claims().clone(), now, self.policy)?;
+            let usage = Usage::new(claims, now, self.policy)?;
             if self.entries.len() >= self.policy.delegated_ticket_entries as usize {
                 return Err("ELIMIT delegated-ticket-capacity");
             }
@@ -344,9 +450,9 @@ impl Delegation {
             .get(&identity)
             .cloned()
             .ok_or("EPERM delegated-ticket-state")?;
-        caller.charge(path, bytes, operations, now)?;
+        caller.charge(path, bytes, operations, now, read)?;
         if let Some(ceiling) = &mut self.ceiling {
-            ceiling.charge(path, bytes, operations, now)?;
+            ceiling.charge(path, bytes, operations, now, read)?;
         } else if self.ceiling_role != Role::Queen {
             return Err("EPERM gateway-ceiling");
         }
@@ -540,5 +646,40 @@ mod tests {
         worker.role = Role::WorkerBus;
         worker.mounts.at = "/".into();
         assert!(!role_allows(&worker, "/log/queen.log"));
+    }
+    #[test]
+    fn delegated_reads_reject_other_subjects_global_state_write_only_and_expiry() {
+        let mut caller = claims();
+        caller.subject = Some("alice".into());
+        caller.scopes = vec![TicketScope::new("/worker", TicketVerb::Read, 0)];
+        let ticket = token(caller.clone());
+        let mut gateway = delegation();
+        assert!(gateway
+            .authorize_read(Some(&ticket), "/worker/alice/telemetry", 20, 1000)
+            .is_ok());
+        for path in [
+            "/worker/bob/telemetry",
+            "/host/tickets/status",
+            "/audit",
+            "/replay/status",
+            "/proc/identity",
+        ] {
+            assert!(
+                gateway
+                    .authorize_read(Some(&ticket), path, 20, 1000)
+                    .is_err(),
+                "{path}"
+            );
+        }
+        caller.scopes[0].verb = TicketVerb::Write;
+        assert!(delegation()
+            .authorize_read(Some(&token(caller)), "/worker/alice/telemetry", 20, 1000)
+            .is_err());
+        assert!(gateway
+            .authorize_read(Some(&ticket), "/worker/alice/telemetry", 20, 11_000)
+            .is_err());
+        assert!(gateway
+            .authorize_read(None, "/worker/alice/telemetry", 20, 11_000)
+            .is_err());
     }
 }

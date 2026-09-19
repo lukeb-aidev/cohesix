@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("check_implementation_surfaces.py")
@@ -41,6 +42,20 @@ def classification(
 
 
 class ImplementationSurfaceGuardTests(unittest.TestCase):
+    def test_python_source_tests_remain_classified_outside_release(self) -> None:
+        path = "tools/cohesix-py/tests/test_authority.py"
+        with patch.object(SURFACES, "_tracked_files", return_value={path}):
+            errors = SURFACES.validate_tracked_coverage(Path("."), {})
+            self.assertTrue(any(path in error for error in errors))
+            row = classification("tracked:" + path, "fixture", False)
+            row["path"] = path
+            self.assertEqual(
+                SURFACES.validate_tracked_coverage(
+                    Path("."), {"tracked_surfaces": [row]}
+                ),
+                [],
+            )
+
     def test_rejects_production_reachable_fixture(self) -> None:
         payload = {
             "schema": SURFACES.SCHEMA,

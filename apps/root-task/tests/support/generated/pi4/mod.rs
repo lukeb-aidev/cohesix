@@ -943,10 +943,24 @@ pub enum HostTicketAction {
     GpuLeaseGrant,
     GpuLeaseRenew,
     GpuLeaseRelease,
+    GpuWorkloadSubmit,
+    GpuWorkloadCancel,
+    GpuWorkloadObserve,
     PeftExport,
     PeftImport,
     PeftActivate,
     PeftRollback,
+    MacReleaseBuild,
+    MacReleaseTest,
+    MacReleaseArchive,
+    MacReleaseCodesign,
+    MacReleaseNotarize,
+    MacReleaseUpload,
+    EndpointComplianceObserve,
+    LaunchdStart,
+    LaunchdStop,
+    LaunchdRestart,
+    LaunchdStatusCheck,
     SystemdStart,
     SystemdStop,
     SystemdRestart,
@@ -954,6 +968,10 @@ pub enum HostTicketAction {
     DockerRestart,
     DockerStop,
     DockerStatusCheck,
+    ModbusRead,
+    ModbusControl,
+    Dnp3Read,
+    Dnp3Control,
     K8sCordon,
     K8sDrain,
     K8sLeaseSync,
@@ -1003,12 +1021,27 @@ pub struct HostFederationConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct HostSnapshotPublisher {
+    pub source_id: &'static str,
+    pub providers: &'static [&'static str],
+}
+#[derive(Clone, Copy, Debug)]
+pub struct HostSnapshotConfig {
+    pub enable: bool,
+    pub max_bytes: u32,
+    pub max_entries: u16,
+    pub max_value_bytes: u16,
+    pub max_ttl_ms: u32,
+    pub publishers: &'static [HostSnapshotPublisher],
+}
+#[derive(Clone, Copy, Debug)]
 pub struct HostConfig {
     pub enable: bool,
     pub mount_at: &'static str,
     pub providers: &'static [HostProvider],
     pub tickets: HostTicketConfig,
     pub federation: HostFederationConfig,
+    pub snapshots: HostSnapshotConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1078,9 +1111,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.21";
+pub const MANIFEST_SCHEMA: &str = "1.26";
 pub const MANIFEST_SHA256: &str =
-    "671a79e77984eab13c0c504b5ebc5b25003204b28653050a8214c14a1a6426c3";
+    "79681af9129fd8a18247acf4501d711db4c4851e816561d5c9885e1eb775dd55";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

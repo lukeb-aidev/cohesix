@@ -8,6 +8,7 @@ pub mod codegen;
 pub mod host_integration;
 pub mod implementation_surface;
 pub mod ir;
+pub mod provider_registry;
 pub mod resource_admission;
 pub mod temporal;
 
@@ -255,3 +256,6 @@ pub fn default_host_integration_doc_path() -> PathBuf {
         .join("snippets")
         .join("host_integration_dependency.md")
 }
+
+/// Compiler-owned staged host workflow contracts.
+pub mod workflow;

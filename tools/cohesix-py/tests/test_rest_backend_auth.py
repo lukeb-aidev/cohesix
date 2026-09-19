@@ -141,7 +141,6 @@ def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, A
             data = json.loads(payload.decode("utf-8"))
             path = str(data.get("path") or "")
             line = str(data.get("line") or "")
-            capture.delegated_values.append(self.headers.get("x-cohesix-ticket", ""))
             if not self._validate_auth("ECHO", path):
                 return
             self._send_ok("ECHO", path, lines=[], bytes_written=len(line.encode("utf-8")))
@@ -149,6 +148,7 @@ def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, A
         def _validate_auth(self, verb: str, path: str) -> bool:
             auth = self.headers.get("Authorization", "")
             request_auth = self.headers.get("x-cohesix-auth", "")
+            capture.delegated_values.append(self.headers.get("x-cohesix-ticket", ""))
             capture.authorization_values.append(auth)
             capture.request_auth_values.append(request_auth)
             expected_auth = f"Bearer {capture.expected_token}"
@@ -273,7 +273,7 @@ def test_rest_backend_sends_explicit_request_auth_headers() -> None:
     assert written == len('{"op":"noop"}'.encode("utf-8"))
     assert capture.authorization_values == ["Bearer explicit-token"] * 3
     assert capture.request_auth_values == ["explicit-token"] * 3
-    assert capture.delegated_values == [PARSER_TICKET]
+    assert capture.delegated_values == [PARSER_TICKET] * 3
 
 
 def test_rest_backend_uses_env_request_auth_header() -> None:

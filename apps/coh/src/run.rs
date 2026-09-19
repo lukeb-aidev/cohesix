@@ -146,8 +146,8 @@ pub fn execute<C: CohAccess>(
     }
 }
 
-/// Execute a command and optionally emit a receipt JSON.
-pub fn execute_with_receipt<C: CohAccess>(
+/// Execute a local command and optionally emit a non-authoritative operation report.
+pub fn execute_with_report<C: CohAccess>(
     client: &mut C,
     policy: &CohPolicy,
     audit: &mut CohAudit,
@@ -160,8 +160,12 @@ pub fn execute_with_receipt<C: CohAccess>(
         return result;
     };
     let proc_lease = snapshot_proc_lease(client, bounds);
-    let receipt = RunReceipt {
-        schema: "cohesix-receipt-v1",
+    let receipt = RunOperationReport {
+        schema: "cohesix-operation-report/v1",
+        authoritative: false,
+        proof_class: "operation_report",
+        mode: "client_local",
+        source_identity: "client-local",
         kind: "run",
         manifest_sha256: bounds.manifest_sha256.as_str(),
         gpu_id: spec.gpu_id.clone(),
@@ -176,8 +180,12 @@ pub fn execute_with_receipt<C: CohAccess>(
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RunReceipt<'a> {
+struct RunOperationReport<'a> {
     schema: &'static str,
+    authoritative: bool,
+    proof_class: &'static str,
+    mode: &'static str,
+    source_identity: &'static str,
     kind: &'static str,
     manifest_sha256: &'a str,
     gpu_id: String,
@@ -387,3 +395,6 @@ fn truncate_to_bytes(input: &str, max_bytes: usize) -> String {
     }
     out
 }
+
+/// Compatibility name; emitted artifacts use the operation-report schema.
+pub use execute_with_report as execute_with_receipt;

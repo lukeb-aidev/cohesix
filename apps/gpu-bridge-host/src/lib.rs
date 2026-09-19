@@ -5,10 +5,16 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Host-side GPU bridge utilities. The bridge discovers GPUs (mocked by
-//! default) and materialises namespace entries that NineDoor can expose via the
-//! `/gpu` mount. When built with the `nvml` feature the bridge performs real
-//! discovery through `nvml-wrapper`.
+//! Native inventory and explicitly selected fixtures remain distinct. Workload
+//! admission uses a device UUID and topology from the bounded native helper.
+
+/// Kernel-observed limits for selected native CUDA execution lanes.
+pub mod enforcement;
+/// Bounded native CUDA reference execution; admission and Worker proof remain separate.
+pub mod reference;
+/// Authenticated bounded host-local workload executor.
+#[cfg(unix)]
+pub mod workload;
 
 #[cfg(feature = "cuda")]
 use anyhow::Context;
@@ -23,6 +29,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Native MIG topology and exact host-owned instance enrollment.
+pub mod mig;
 
 const TELEMETRY_SCHEMA_VERSION: &str = "gpu-telemetry/v1";
 const MAX_TELEMETRY_BYTES: usize = 4096;
@@ -56,11 +65,16 @@ pub struct GpuInfo {
     pub driver_version: String,
     /// Runtime version string.
     pub runtime_version: String,
+    /// Exact native execution identity, absent from legacy or fixture discovery.
+    pub execution_identity: Option<PublishedDevice>,
 }
+
+/// Shared native device publication contract.
+pub use cohesix_authority::gpu::PublishedDevice;
 
 impl GpuInfo {
     fn to_info_payload(&self) -> String {
-        format!(
+        let mut payload = format!(
             "{{\n    \"id\": \"{}\",\n    \"name\": \"{}\",\n    \"memory_mb\": {},\n    \"sm_count\": {},\n    \"driver_version\": \"{}\",\n    \"runtime_version\": \"{}\"\n}}",
             escape_json_string(&self.id),
             escape_json_string(&self.name),
@@ -68,7 +82,16 @@ impl GpuInfo {
             self.sm_count,
             escape_json_string(&self.driver_version),
             escape_json_string(&self.runtime_version)
-        )
+        );
+        if let Some(identity) = &self.execution_identity {
+            payload.pop();
+            // PublishedDevice contains only finite integers and UTF-8 strings.
+            payload.push_str(&format!(
+                ",\"execution_identity\":{:#}}}",
+                serde_json::json!(identity)
+            ));
+        }
+        payload
     }
 }
 
@@ -318,6 +341,8 @@ pub enum InventoryBackend {
     Nvml,
     /// CUDA driver/runtime inventory (Jetson).
     Cuda,
+    /// Digest-pinned bounded native helper with exact execution identity.
+    CudaReference,
 }
 
 impl InventoryBackend {
@@ -328,6 +353,7 @@ impl InventoryBackend {
             Self::Mock => "mock",
             Self::Nvml => "nvml",
             Self::Cuda => "cuda",
+            Self::CudaReference => "cuda-reference",
         }
     }
 }
@@ -367,6 +393,7 @@ impl Inventory for MockInventory {
                 sm_count: 144,
                 driver_version: "555.0".into(),
                 runtime_version: "12.4".into(),
+                execution_identity: None,
             },
             GpuInfo {
                 id: "GPU-1".into(),
@@ -375,6 +402,7 @@ impl Inventory for MockInventory {
                 sm_count: 64,
                 driver_version: "555.0".into(),
                 runtime_version: "12.4".into(),
+                execution_identity: None,
             },
         ])
     }
@@ -412,6 +440,7 @@ impl Inventory for NvmlInventory {
                     .unwrap_or(0),
                 driver_version: nvml.sys_driver_version()?.to_string(),
                 runtime_version: runtime_version.clone(),
+                execution_identity: None,
             };
             gpus.push(info);
         }
@@ -456,9 +485,67 @@ impl Inventory for CudaInventory {
                 sm_count: device.sm_count,
                 driver_version,
                 runtime_version,
+                execution_identity: None,
             });
         }
         Ok(gpus)
+    }
+}
+
+struct ReferenceInventory {
+    config: workload::Config,
+}
+
+impl Inventory for ReferenceInventory {
+    fn discover(&self) -> Result<Vec<GpuInfo>> {
+        // Ephemeral discovery artifacts are removed on every refresh. Execution
+        // evidence has a separate durable owner and is never rotated here.
+        let temporary = tempfile::tempdir()?;
+        let observed = reference::inventory_selected(
+            &self.config.helper,
+            &self.config.helper_sha256,
+            &temporary.path().join("inventory"),
+            0,
+            self.config.mig.as_ref(),
+        )?;
+        let native = &observed["native"];
+        ensure!(
+            native["device_uuid"] == self.config.device_uuid,
+            "device_identity_changed"
+        );
+        let number = |name: &str| -> Result<u32> {
+            u32::try_from(
+                native[name]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("native field missing {name}"))?,
+            )
+            .map_err(Into::into)
+        };
+        let total = native["total_bytes"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("native total memory missing"))?;
+        Ok(vec![GpuInfo {
+            id: self.config.gpu_id.clone(),
+            name: format!("CUDA {}", self.config.device_uuid),
+            memory_mb: u32::try_from(total / (1024 * 1024))?,
+            sm_count: number("sm_count")?,
+            driver_version: number("driver_version")?.to_string(),
+            runtime_version: number("runtime_version")?.to_string(),
+            execution_identity: Some(PublishedDevice {
+                schema: "cohesix-gpu-device/v1".into(),
+                device_uuid: self.config.device_uuid.clone(),
+                device_ordinal: number("device_ordinal")?,
+                topology_sha256: observed["topology_sha256"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("native topology missing"))?
+                    .into(),
+                helper_sha256: self.config.helper_sha256.clone(),
+                provider_graph_sha256: self.config.provider_graph_sha256.clone(),
+                source_id: String::new(),
+                source_epoch: 0,
+                source_mode: String::new(),
+            }),
+        }])
     }
 }
 
@@ -506,6 +593,14 @@ pub struct GpuNamespaceSnapshot {
 }
 
 impl GpuBridge {
+    /// Use the selected bounded native helper for publication and execution identity.
+    pub fn new_reference(config: workload::Config) -> Result<Self> {
+        config.validate()?;
+        Ok(Self::from_candidates(vec![InventoryCandidate::new(
+            InventoryBackend::CudaReference,
+            Box::new(ReferenceInventory { config }),
+        )]))
+    }
     /// Create a bridge using the mock inventory.
     pub fn mock() -> Self {
         Self {
@@ -672,7 +767,12 @@ impl GpuBridge {
         }
         let nodes = namespaces
             .into_iter()
-            .map(|namespace| {
+            .map(|mut namespace| {
+                if let Some(identity) = &mut namespace.info.execution_identity {
+                    identity.source_id = source_id.clone();
+                    identity.source_epoch = self.epoch;
+                    identity.source_mode = "production".into();
+                }
                 let info_payload = namespace.info.to_info_payload();
                 let ctl_payload = namespace.ctl_seed;
                 let lease_payload = namespace.lease_seed;
@@ -1847,6 +1947,33 @@ pub fn auto_bridge_with_registry(mock: bool, registry_root: Option<&Path>) -> Re
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_device_identity_fits_the_console_line_contract() {
+        let identity = PublishedDevice {
+            schema: "cohesix-gpu-device/v1".into(),
+            device_uuid: "ab".repeat(16),
+            device_ordinal: 0,
+            topology_sha256: "cd".repeat(32),
+            helper_sha256: "ef".repeat(32),
+            provider_graph_sha256: "01".repeat(32),
+            source_id: "gpu-bridge-host/cuda-reference".into(),
+            source_epoch: 7,
+            source_mode: "production".into(),
+        };
+        let info = GpuInfo {
+            id: "GPU-0".into(),
+            name: "CUDA device".into(),
+            memory_mb: 7485,
+            sm_count: 8,
+            driver_version: "13020".into(),
+            runtime_version: "13020".into(),
+            execution_identity: Some(identity.clone()),
+        };
+        let payload = info.to_info_payload();
+        assert!(payload.lines().all(|line| line.len() < 256));
+        let decoded: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(decoded["execution_identity"], serde_json::json!(identity));
+    }
     use super::*;
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

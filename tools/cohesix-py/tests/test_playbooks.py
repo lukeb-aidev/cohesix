@@ -155,3 +155,61 @@ def test_execute_playbook_live_rerun_uses_unique_ids() -> None:
         first_ids = {entry["id"] for entry in lines[:2]}
         second_ids = {entry["id"] for entry in lines[2:4]}
         assert first_ids.isdisjoint(second_ids)
+
+
+def test_generated_workflows_are_staged_and_live_rehearsal_is_explicit(tmp_path):
+    import pytest
+    from cohesix.backends import FilesystemBackend
+    from cohesix.errors import CohesixError
+    from cohesix.playbooks import generated_workflows
+
+    workflows = generated_workflows()
+    assert set(workflows) == set(playbook_ids())
+    for row in workflows.values():
+        flow = row["workflow"]
+        assert [stage["id"] for stage in flow["stages"]] == [
+            "preflight",
+            "admit",
+            "execute",
+            "observe",
+            "verify",
+            "recover",
+        ]
+        assert flow["stages"][-1]["when"] == "explicit_recovery"
+        assert flow["authority_custodian"] == "root-admitted-ticket"
+    orchestrator = CohesixOrchestrator(backend=FilesystemBackend(str(tmp_path)))
+    with pytest.raises(CohesixError, match="staged deployment"):
+        execute_playbook(orchestrator, load_playbook("mac-release-factory"))
+    assert not list(tmp_path.iterdir())
+
+
+def test_workflow_credentials_are_references_and_live_endpoint_is_explicit(
+    tmp_path, monkeypatch
+):
+    import pytest
+    from cohesix.errors import CohesixError
+    from cohesix import native_providers
+    from cohesix.playbooks import execute_workflow
+
+    binary = tmp_path / "coh"
+    binary.write_text("fixture executable not launched")
+    with pytest.raises(CohesixError, match="workflow_deployment"):
+        execute_workflow("mac-release-factory", "apply", coh_binary=binary)
+    with pytest.raises(CohesixError, match="invalid_credential_destination"):
+        native_providers.bounded_command(
+            [str(binary)], credential_refs={"DYLD_INSERT_LIBRARIES": "env:KEY"}
+        )
+    seen = []
+
+    def capture(argv, **kwargs):
+        seen.append((argv, kwargs))
+        return b'{"authoritative":false,"production_use_case_accepted":false}'
+
+    monkeypatch.setattr(native_providers, "bounded_command", capture)
+    execute_workflow("mac-endpoint-compliance", "plan", coh_binary=binary)
+    assert seen == [
+        (
+            [str(binary), "plan", "mac-endpoint-compliance"],
+            {"timeout_s": 30, "credential_refs": {}},
+        )
+    ]

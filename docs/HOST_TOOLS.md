@@ -286,6 +286,20 @@ REST token alone is insufficient. The gateway verifies the caller ticket;
 the VM still sees the gateway's upstream principal. This is gateway-enforced
 caller identity, not VM-verified individual caller identity.
 
+### Delegated namespace reads
+
+non-public REST reads, including gateway status, require
+request authentication and a delegated `Read` or `ReadWrite` scope. Mint with
+`cohsh --mint-ticket --role queen --ticket-subject <subject> --ticket-read-scope <prefix>`
+and an existing protected signing-key reference. Combining read and write on
+the same prefix creates `ReadWrite`; both consume one shared finite quota.
+An explicitly issued Queen read scope `/` is administrative authority.
+`--read-compatibility` permits gateway-Queen reads of admin-class paths using
+request auth in a single-caller installation. Ticket-scoped paths still require
+delegation. The default enables no compatibility bypass. Rust and Python REST
+clients, REST FUSE and SwarmUI use the same delegated read header. Native direct
+console/FUSE transports retain their own authenticated session authority.
+
 ### Prepare a writing client
 
 Obtain a signed ticket for this client's job, with the needed path scope,
@@ -314,6 +328,17 @@ environment on a private operator host. Changing the shell's REST attachment
 replaces its caller binding, not the gateway's upstream role. Current REST
 shell and `coh` transports accept only the local `queen` role; that local label
 does not widen the gateway's upstream authority.
+
+### Enrolled external identities
+
+Use `coh identity --mapping ID --jwks FILE` (JWT on stdin) and
+`coh identity --mapping ID --local` (kernel effective uid). Both normally render a
+verified subject's finite ticket request. An enrolled issuer may add
+`--issuer-key-ref env:NAME` or `file:/absolute/path` to issue a gateway-only
+ticket. The authenticated gateway exchange provides the remote JWT path. Enrollment is
+compiler-owned under `providers.identity_mappings`; defaults are disabled.
+See [identity enrollment](IDENTITY_MAPPING.md) and
+[SIEM boundaries](SECURITY.md) before enabling a deployment.
 
 ### Issue a narrow ticket — issuer administrators only
 
@@ -480,6 +505,13 @@ operations use `--host` and `--port`. `--mock` selects the model. Check inherite
 | `run` | `--rest-url URL --gpu ID -- PROGRAM ARGS` | Local program after lease validation |
 | `peft` | `export`, `import`, `activate` or `rollback` | Job export and host registry lifecycle |
 
+`coh doctor` reports the compiled provider graph, declared provider availability,
+and exporter configuration without equating registration with installation.
+Local GPU, FUSE and QEMU checks are selected explicitly with `--local-gpu`,
+`--require-fuse` and `--developer-tools`. A Mac operator controlling a remote
+CUDA node therefore does not probe local NVML. GPU executor profiles use
+`--local-gpu` to exercise NVML and the deterministic CUDA fallback.
+
 #### Capture and review evidence
 
 Use a new output directory for each observation. Keep the gateway running:
@@ -531,6 +563,57 @@ A diff is a comparison, not an automatic go/no-go decision. Keep differing
 image, manifest and target identities visible. The full inventory, redaction
 and CI/SIEM contract is in
 [Evidence packs](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
+
+#### Verify, export and deliver signed evidence
+
+`coh evidence verify --input GRAPH --trust TRUST --cas CAS`
+uses the shared `cohesix-evidence` host verifier. `TRUST` is an operator-supplied
+file outside the evidence pack, with exact ticket/subject/action/epoch,
+manifest/component/graph hashes, phase-scoped public keys and an explicit
+verification time. Every referenced object must exist under its SHA-256 CAS
+filename and match its declared size and digest. Historical verification at a
+recorded time does not establish current admission authority. The optional
+gateway and ticket-agent `--evidence-enrollment-dir` path signs validated native
+v1 request observations and native terminal readbacks using distinct enrolled
+keys. See [causal evidence custody](CAUSAL_EVIDENCE.md) for enrollment, bounds,
+restart behavior and proof classes. Provider results and Worker witnesses have separate custody and proof
+requirements; native systemd evidence is not device attestation or Worker proof.
+
+`coh evidence export` takes the same `--input`, `--trust`, and `--cas`, plus
+`--format prometheus|otel|cloudevents|in_toto|siem --out FILE`. It emits bounded
+derived records, withholding raw payloads, credentials and native identity
+text. SLSA output refuses actions without an implemented build provenance
+contract. The projections follow [OTLP JSON](https://opentelemetry.io/docs/specs/otlp/),
+[CloudEvents 1.0](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md)
+and the in-toto statement envelope; a generic action is never described as a
+[SLSA build](https://slsa.dev/spec/v1.2/build-provenance). These commands write
+local export artifacts. Destination delivery and acknowledgements remain separate.
+
+Evidence packs include the generated provider registry and seal every retained
+file. Inspection refuses changed, missing, unexpected and symlinked files in a
+sealed pack. Historical unsealed packs remain unverified review inputs. Add
+`--causal-graph GRAPH --evidence-trust TRUST --evidence-cas CAS` to `coh evidence
+pack` to attach a graph after shared validation; the copied verification result
+remains a derived projection. `cohesix.evidence_graph.verify_graph` invokes the
+same installed Rust verifier from Python using an explicit executable path.
+
+`coh evidence deliver --input GRAPH --trust TRUST --cas CAS --state-dir STATE`
+verifies a causal graph, renders the allowlisted SIEM NDJSON, and attempts
+delivery to the generated `providers.siem_delivery` HTTPS destination. The
+private state directory retains projections, bounded cursor/WAL, attempt and
+retry state, deadletters and exact receiver acknowledgements. Repeat with the
+same input after the reported retry time to resume safely. The sink must honor
+the documented idempotency and acknowledgement contract. A disabled destination
+returns `not_enabled`; no local-file copy is presented as live SIEM delivery.
+An optional `providers.siem_delivery.ca_certificate_path_ref` selects an
+environment or file reference whose value is an absolute PEM certificate path.
+That one CA replaces the default trust roots for this destination; unreadable,
+oversized or malformed certificates fail without fallback. The receiver must
+commit its idempotency record before acknowledging. A lost reply retries the
+same graph/payload hashes after durable backoff, while an acknowledged WAL entry
+does not transmit again. A missing WAL in an existing delivery store requires
+reconciliation and cannot reset its sequence. Delivery of historically verified
+evidence proves receiver acceptance of that record, not fresh provider execution.
 
 #### Pull telemetry or read a small fleet
 
@@ -598,6 +681,21 @@ umount "$mount_dir"
 After an abrupt server loss, clear the disconnected mount with the same host
 unmount procedure. Do not start another server over a still-mounted directory.
 
+The direct and REST FUSE backends share append semantics. `O_APPEND` writes
+use the remote atomic append operation even when the kernel has a stale or
+nonzero EOF; other write handles require sequential offsets from zero. Cursors
+advance only for acknowledged bytes, preserving failed and partial-write
+recovery. Canonical `/shard/<label>/worker/<id>/...` paths use the generated
+mount allowlist and the same component checks in both backends. Focused mount
+checks do not by themselves qualify a physical FUSE deployment.
+
+On the tested macFUSE 5.3.3 VFS backend, OPEN and WRITE omit the caller's
+`O_APPEND` flag. `coh mount` accepts the exact EOF it last published through
+file attributes as an append position, as well as sequential offsets within an
+open handle. Other seek positions fail. All remote writes still use the
+namespace's atomic append operation; the filesystem cannot overwrite retained
+records. The Linux path preserves the kernel's explicit append flag.
+
 #### Read GPUs and request a compatibility lease
 
 Read the **Queen's published** GPU inventory:
@@ -660,6 +758,13 @@ A failed EXIT publication can occur after the program has run; inspect the
 local result and retained state before resubmitting anything. Do not put
 secrets in program arguments: command information appears in breadcrumbs and
 receipts.
+
+Local operation reports: `coh gpu lease --report-out FILE` and
+`coh run --report-out FILE` emit `cohesix-operation-report/v1`, explicitly
+`authoritative=false`, `proof_class=operation_report`, `mode=client_local`,
+and `source_identity=client-local`. The `--receipt-out` spelling and Rust
+`*_with_receipt` names remain compatibility aliases. A successful local command
+or lease request does not establish CUDA execution or a Worker/provider receipt.
 
 #### Manage PEFT adapters
 
@@ -845,6 +950,55 @@ credential; that process must be the sole owner. Explicit `--rest-url` is
 required to select the REST publishing branch; setting a common URL variable
 without passing this option is not a universal transport switch.
 
+#### Admitted GPU workload execution
+
+The optional GPU executor uses the generated `providers.gpu_executor` contract:
+a private Unix socket, HMAC-SHA256 authenticated request and response frames,
+16 KiB frame bound, one active CUDA context, 64 retained jobs, and a 4 MiB WAL.
+Its explicit `cohesix-gpu-executor-config/v1` deployment file binds the GPU ID,
+physical CUDA UUID, exact helper SHA-256, provider graph, writer epoch, socket,
+private state root, and secret reference. The reference profile is CUDA 13.2.2
+on Orin Nano; MIG is unavailable on that profile. Native host administration
+remains outside this authority boundary.
+
+Run `gpu-bridge-host --workload-config /absolute/config.json` as the owner of
+that private state. Select `host-ticket-agent --gpu-executor-socket PATH
+--gpu-executor-credential-ref env:NAME --gpu-request-root PATH --execution-lanes 2` on the same
+host. The secret value is never an argument or evidence field. The agent reads
+only root-admitted v2 requests, checks the exact ready Worker and active root
+lease, and renews a one-second bridge grant while both remain current. A changed
+lease sequence, Worker generation, expired ticket, lost agent, or disconnected
+control plane revokes execution. Cancellation completes only after the CUDA
+child has been killed and reaped. Bridge restart records interruption and never
+replays the operation. Retained successful output hashes are checked again
+before returning a stored result; full retention produces backpressure.
+
+`coh gpu [connection options] workload --action gpu.workload.submit --spec FILE`
+(and the corresponding cancel/observe actions) writes only `/host/tickets/spec`.
+Python `client.gpu_workload_ticket(spec)` follows the same path. A submission ACK
+is not a provider or Worker terminal receipt. Input CAS JSON uses the canonical
+Rust `workload::Input` serialization, is limited to 8192 bytes, and is stored as
+`<sha256>.json`. The agent cannot select an executable path through a ticket.
+The bridge independently rechecks device topology, free-memory headroom, every
+output element, and the expected output digest before reporting success.
+
+When the GPU executor is selected, lane zero is reserved for lease, cancel,
+and observe operations. Submissions and other provider work use the remaining
+lanes. This keeps cancellation serviceable during CUDA execution. The durable
+lane topology includes this selection; changing it requires a fresh journal
+root after existing operations are reconciled.
+
+Native workload publication uses `gpu-bridge-host --publish
+--native-inventory-config /absolute/executor.json`. This selects the same pinned
+helper, CUDA UUID and provider graph as the local executor. The
+`cohesix-gpu-device/v1` `execution_identity` in `/gpu/<id>/info` carries the
+native topology digest and publisher epoch. `host-ticket-agent` checks it before
+execution and throughout lease renewal. Snapshot expiry withdraws the device;
+replacement or changed identity revokes an outstanding grant. Legacy inventory
+without this identity remains useful for discovery but cannot admit workloads.
+Model-catalog availability in `/gpu/bridge/status` is separate from physical
+GPU inventory: an empty catalog does not supply model or inference evidence.
+
 ### `host-sidecar-bridge`
 
 Use the sidecar to publish observations of the host on which it runs. It does
@@ -892,6 +1046,73 @@ publication is not proof that the provider itself is healthy. In direct mode,
 pass the TCP endpoint and `--auth-token` explicitly; do not assume this CLI
 reads the same console-token aliases as `cohsh`. A direct watcher occupies the
 only console until it exits.
+
+#### Native provider discovery
+
+The read-only macOS network provider uses the compiled
+`scripts/providers/network_macos.swift` helper for native interface/link/address
+and error-counter state, plus SystemConfiguration default routes. A bounded
+native routing-table export retains other routes. Build with
+`swiftc -O scripts/providers/network_macos.swift -o network-observer` and set
+`COHESIX_MACOS_NETWORK_HELPER` to its absolute installed path. It performs no
+network changes and does not probe local NVIDIA devices. Jetson discovery uses
+read-only cpufreq/devfreq and thermal cooling-device sources for clock and
+throttling observations, including typed unavailable readings when a node is
+not supported.
+
+Kubernetes native adapters require `COHESIX_K8S_API_URL`,
+`COHESIX_K8S_CA_FILE`, and `COHESIX_K8S_TOKEN_REF` in the agent service's
+protected deployment environment. The token reference resolves through the
+existing secret resolver. Node UID/resourceVersion fencing, bounded inventory,
+and disruption-budget-aware eviction replace CLI table parsing and force drain.
+No cluster or service account is provisioned implicitly.
+
+Federation's `forwarded` counter records target write acknowledgement;
+`terminal_returned` records the uniquely correlated target outcome returned to
+the source. An acknowledged operation stays in `queue_depth` until that return
+is durable. Provision each peer's generated request-auth and delegated ticket
+environment references (for example `COHESIX_RELAY_HIVE_B_TOKEN` and
+`COHESIX_RELAY_HIVE_B_TICKET`). The peer ticket needs the exact write scope for
+ticket submission and read scopes for status/deadletter observation. No global
+client ticket is substituted. Missing results or conflicts retain recovery
+state; they do not trigger another provider execution after an acknowledged write.
+
+`host-sidecar-bridge --native-systemd-unit <unit.service>` reads exact Manager
+D-Bus properties without connecting to a Cohesix target. Ticket-agent systemd
+start/stop/restart uses the Manager API and waits for the matching native
+postcondition. Restart requires a new invocation id and no pending job; an
+unobservable dispatched action reports ambiguity; the durable journal prevents
+blind replay. Version-1 compatibility records retain their existing failed/ambiguous
+terminal classification, while version-2 journals retain pending execution.
+The existing `/host/systemd/<unit>/status` text shape is preserved.
+
+#### Source-scoped snapshots
+
+Native source-scoped observations are published by `host-sidecar-bridge` with
+explicit `--source-id` and private `--state-dir`; see
+[host snapshots](HOST_SNAPSHOTS.md) for generated enrollment, native prerequisites,
+withdrawal semantics and Python point-in-time reads. The legacy fixture `/host`
+paths do not supply native discovery input.
+
+The `host-sidecar-bridge` Rust library uses the same enrolled `snapshots::Publisher`
+as the CLI. `publish_live` takes that publisher and visits its compiled providers;
+`publish_live_provider` takes an exact provider id. Both reject a bridge mount
+that differs from the compiled enrollment. Publication binds source, sequence, epoch and TTL rather than treating
+legacy status-file contents as native discovery input.
+`discover_topology` returns bounded native diagnostic entries, never target-seeded
+state or publication authority. NVIDIA helper discovery honours an explicitly
+enrolled MIG instance and its complete topology fence.
+
+### `sidecar-bus`
+
+Runs compiled MODBUS RTU/TCP and DNP3 point maps with an acknowledgement-aware
+private WAL. Build with `--features live,modbus,dnp3`; read requests use
+`--state-dir` and `--request`. Controls require an exact admitted ticket and
+independent signed enrollment. No request supplies a native address, function,
+write value or executable. The normal host-ticket-agent path dispatches these
+same adapters, and snapshot publication remains separate from action evidence.
+See [FIELD_BUS.md](FIELD_BUS.md) for protocol bounds, commands, service enrollment
+and the independent native conformance workflow. WorkerBus remains model-only.
 
 ### `host-ticket-agent`
 
@@ -995,6 +1216,23 @@ cat /host/tickets/deadletter.snapshot
 Find the exact request ID and its terminal result. An admitted specification
 is not a completed status check. A failed or dead-lettered request is a result
 to investigate, not a reason to broaden provider permissions automatically.
+
+The ticket agent retains native operation observations under
+`--provider-evidence-root` (default `out/provider-evidence`, private mode 0700).
+Records are bounded to 64 KiB and 4096 retained objects; a full store refuses
+new native dispatch. Results carry `native_observation=sha256:<digest>` and the
+corresponding `<digest>.json` stores ticket/action/writer and provider graph
+bindings plus exact native identity. File and directory sync precede result
+publication. These records remain non-authoritative native evidence until a
+complete admitted result graph is validated; they never assert Worker proof.
+
+Signed GPU workload v2 operations also select
+`--worker-evidence-enrollment-dir` on host-ticket-agent. The separate witness
+custodian consumes the same verified prefix and private CAS; it can sign only
+Worker and terminal phases. Native result publication is durable before waiting
+for an exact Root Worker completion. Missing evidence holds the journal/cursor
+for reconciliation. See [Causal evidence custody](CAUSAL_EVIDENCE.md) for key,
+image-enrollment and non-attestation limits.
 
 #### Preserve recovery state
 
@@ -1180,6 +1418,54 @@ cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
 These are control-model plans, not proof of training, inference, provider
 execution or production use-case acceptance.
 
+#### Generated workflow foundation
+
+`coh plan ID` and `coh explain ID` inspect the compiler-owned workflow without
+opening a transport. `coh apply ID --deployment FILE`, `watch`, `verify` and
+`recover` share a bounded `cohesix-workflow-deployment/v1` file. It binds the
+generated graph, controller/target/provider topology, installed signed package,
+ordered ticket requests and separately enrolled graph/trust/CAS paths. Use
+connection options for live operations and `--ticket-ref file:/absolute/path`
+for delegated credentials.
+
+Apply submits only the next unverified action with its durable request and
+idempotency identity. Progress requires the shared causal verifier and an exact
+signed intent matching the supplied request. Watch observes bounded status;
+verify is offline and never refreshes authority. Recover requires its own
+current admitted request and a link to the original terminal graph. It never
+infers permission for compensation. These reports are explicitly
+non-authoritative and keep `production_use_case_accepted=false`.
+
+The generated catalogue retains preflight/admit/execute/observe/verify/recover
+stages and explicit external owners. Current domain workflows requiring an
+undeployed external application refuse apply with `not_enabled`; generic
+control writes cannot stand in for that application. This preserves prior
+implementation under 27c/28a ownership, without claiming recipe qualification.
+Python's `execute_workflow` delegates to this same installed verifier. Existing
+live control-model playbooks require explicit `--rehearsal`.
+
+#### Build and validate the Python distribution
+
+Python distribution builds use `scripts/install/build_python_package.py` and the
+`release.python_artifacts` list emitted by `coh-rtc`. The builder copies only
+listed SDK modules, `pyproject.toml`, and the package README into a private
+temporary directory. It inspects both the wheel and sdist for exact source
+hashes, archive entry types, byte bounds, package version, and wheel RECORD
+hashes. Tests, caches, example state, keys and credentials are excluded.
+Run the builder with a Python environment containing setuptools, wheel and
+packaging, then run the existing focused installation smoke:
+
+```sh
+python3 scripts/install/build_python_package.py --out out/python-distributions
+scripts/ci/python_compat_run.sh --wheel-smoke \
+  --wheel-dir out/python-distributions \
+  --package-manifest out/python-distributions/python-package.json \
+  --state-dir out/python-package-smoke
+```
+
+The distribution report records observed contents and hashes; release signing
+and target qualification remain separate records.
+
 ## Common environment variables
 
 Pass endpoints explicitly in scripts. There is **no suite-wide environment
@@ -1269,6 +1555,82 @@ revoke an already running CUDA program or reboot the Queen. Use the target's
 [maintenance lifecycle](OPERATOR_RECIPES.md#run-a-maintenance-window) for a
 planned target shutdown or reboot.
 
+## Provider contracts and conformance
+
+`coh providers`, `cohsh --provider-registry`, and the admin-only
+`GET /v1/meta/providers` endpoint expose the same compiled contract without
+provider dispatch. Registration and declared requirements are separate from
+native observations and verified execution.
+
+For macOS service control, [macOS native providers](MACOS_PROVIDERS.md) describes
+the compiled service map, measured process helper, lifecycle postconditions and
+owned-service reference check. `launchd.start`, `stop`, `restart` and
+`status-check` require exact configured targets; an empty map remains unavailable.
+
+The compiler extends the stable integration graph with
+`configs/generated/provider_registry.json` and the Python
+`cohesix.providers` projection. These describe required provider identity,
+target grammar, admission, lifecycle and evidence fields; registration cannot
+assert live execution. The Jetson reference is Ubuntu 24.04, L4T 39.2.1,
+JetPack 7.2.1 and CUDA toolkit 13.2.2. Unsupported accelerators remain explicit.
+
+For read-only host discovery, run
+`scripts/ci/provider_conformance_run.sh --native-providers --live-reference
+--host-profile jetson-orin-nano-jp7 --state-dir <fresh-directory>` on the
+selected Linux host. Jetson identity/package/thermal/power observations,
+network address/link/route counters and a version-negotiated Docker Engine
+inventory have finite byte, row and time bounds. Docker requires an authorized
+local socket. Discovery mode returns
+`INCOMPLETE` with exit code 2, and lists missing execution phases; it cannot
+mark a provider or use case production-proven.
+
+`configs/provider_conformance.toml` selects focused host contract checks from
+the same generated registry. Run `scripts/ci/provider_conformance_run.sh
+--matrix configs/provider_conformance.toml --evidence-only --state-dir
+<fresh-directory>` for one group, or select `--executors-only`,
+`--observability-only`, `--packaging-only`, `--identity-only` or
+`--registry-only`. `--provider federation` selects relay recovery contracts.
+`--validate-only` records the exact selection without executing it. The runner
+rejects unknown profiles/providers, duplicate cases, incomplete lifecycle
+obligations, unscoped commands and oversized output. A zero-exit command that
+ran no tests is not PASS. Host-contract PASS preserves generated availability;
+native execution, Worker results, installation and receiver delivery retain
+their own evidence. Use the repository Python environment with pytest installed
+on PATH when selecting Python checks.
+
+For two local hive instances, the QEMU launcher accepts distinct `--tcp-port`,
+`--udp-echo-port` and `--tcp-smoke-port` host ports in `1..65535`. Explicit smoke
+ports do not silently fall back. Guest diagnostic ports and image identity are
+unchanged. Each hive still has one gateway owning its console connection.
+
+The live federation check requires two disposable provisioned hives with empty
+ticket streams, a running target native agent, and the exact generated source
+and target manifests. It compares both Root manifest measurements before
+submitting the single read-only `systemd.status-check`. The source's selected
+peer URL must be a free IPv4 loopback port for the owned fault proxy; the real
+target URL uses TLS or loopback. The proxy drops the first accepted-forward
+reply. Three source-agent processes must return one exact target terminal,
+recover their WAL and avoid another send after acknowledgement:
+
+```sh
+scripts/ci/provider_conformance_run.sh --provider federation --live-reference \
+  --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/federation-01 \
+  --source-agent /opt/cohesix/a/bin/host-ticket-agent \
+  --source-manifest /opt/cohesix/a/config/root_task_resolved.json \
+  --source-policy /opt/cohesix/a/config/coh_policy.toml \
+  --target-manifest /opt/cohesix/b/config/root_task_resolved.json \
+  --source-url http://127.0.0.1:8080 --target-url https://hive-b.example \
+  --source-auth-ref env:HIVE_A_REQUEST_AUTH --source-ticket-ref env:HIVE_A_TICKET \
+  --target-auth-ref env:HIVE_B_REQUEST_AUTH --target-ticket-ref env:HIVE_B_TICKET \
+  --native-unit ssh.service
+```
+
+This check observes correlated terminal return. The target's native evidence,
+signed custody and any Worker proof require their separate validators; the
+runner never fabricates a target result. It stops only its owned fault proxy
+and source-agent processes. The independently deployed hives and target agent
+remain under their existing supervisors.
+
 ## Generated integration truth
 
 The selected manifest and compiled policy determine which paths, providers,
@@ -1328,6 +1690,15 @@ release evidence.
 
 <details>
 <summary>Native inputs, production preflight, assembly and qualification</summary>
+
+Signed host deployment profiles come from the same compiler registry.
+`coh package build`, `verify`, and `install` bind the exact file set, source
+inventory, configuration hashes, native format/architecture and file SBOM to an
+independently enrolled Ed25519 signer. `coh doctor --package` additionally checks
+the profile's exact credential-reference map. See [host package deployment](../packaging/README.md)
+for staging, external trust, systemd/LaunchAgent enrollment and the distinction
+between package validation and native provider execution. The renderer verifies
+its input package and writes service files without activating them.
 
 ### Prepare exact native inputs
 

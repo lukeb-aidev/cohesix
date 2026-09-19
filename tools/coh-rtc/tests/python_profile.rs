@@ -59,7 +59,17 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
         pi["worker"]["executable_roles"],
         qemu["worker"]["executable_roles"]
     );
-    assert_eq!(qemu["receipts"]["gpu_actions"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        qemu["receipts"]["gpu_actions"],
+        serde_json::json!([
+            "gpu.lease.grant",
+            "gpu.lease.renew",
+            "gpu.lease.release",
+            "gpu.workload.submit",
+            "gpu.workload.cancel",
+            "gpu.workload.observe"
+        ])
+    );
     assert_eq!(
         qemu["receipts"]["peft_actions"].as_array().unwrap().len(),
         4
@@ -124,6 +134,9 @@ fn host_ticket_v2_schema_and_receipt_matrices_are_exact() {
             HostTicketAction::GpuLeaseGrant,
             HostTicketAction::GpuLeaseRenew,
             HostTicketAction::GpuLeaseRelease,
+            HostTicketAction::GpuWorkloadSubmit,
+            HostTicketAction::GpuWorkloadCancel,
+            HostTicketAction::GpuWorkloadObserve,
             HostTicketAction::PeftExport,
             HostTicketAction::PeftImport,
             HostTicketAction::PeftActivate,
@@ -155,5 +168,5 @@ fn host_ticket_v2_schema_and_receipt_matrices_are_exact() {
         .expect_err("incomplete receipt actions must fail");
     assert!(error
         .to_string()
-        .contains("exactly three GPU and four PEFT actions"));
+        .contains("the existing GPU/PEFT actions and the complete selected workload action set"));
 }

@@ -538,7 +538,7 @@ class RestBackend(Backend):
             if request_auth:
                 req.add_header("Authorization", f"Bearer {request_auth}")
                 req.add_header("x-cohesix-auth", request_auth)
-            if mutating:
+            if self.delegated_ticket:
                 req.add_header("x-cohesix-ticket", self.delegated_ticket)
             if body is not None:
                 req.add_header("Content-Type", "application/json")

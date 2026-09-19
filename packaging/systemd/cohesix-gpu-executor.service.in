@@ -1,0 +1,48 @@
+# Author: Lukas Bower
+# Purpose: Own the bounded native CUDA child and private authenticated socket under an exact device allowlist.
+# Copyright 2026 Lukas Bower
+[Unit]
+Description=Cohesix native GPU executor
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@STATE@
+ExecStart=@PREFIX@/bin/gpu-bridge-host --workload-config @ENROLLMENT@/gpu-executor.json
+LoadCredential=gpu_mac:@CREDENTIALS@/gpu_mac
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=no
+DevicePolicy=closed
+@GPU_DEVICE_POLICY@
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=@STATE@
+LimitCORE=0
+TasksMax=64
+MemoryMax=1G
+MemorySwapMax=0
+CPUQuota=200%
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cohesix-gpu-executor
+
+[Install]
+WantedBy=multi-user.target

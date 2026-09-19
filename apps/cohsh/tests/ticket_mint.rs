@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate host-side ticket minting helpers.
 // Author: Lukas Bower
@@ -62,5 +62,27 @@ fn queen_subject_optional() -> Result<()> {
     assert_eq!(claims.role, Role::Queen);
     assert!(claims.subject.is_none());
     assert_eq!(claims.budget, default_budget_for_role(Role::Queen));
+    Ok(())
+}
+
+#[test]
+fn delegated_read_and_write_scopes_combine_without_losing_bounds() -> Result<()> {
+    let request = TicketMintRequest::new(Role::Queen, Some("operator"), None)?
+        .with_delegated_write_scope("/host", 60, 30)?
+        .with_delegated_read_scope("/host", 60, 30)?
+        .with_delegated_read_scope("/proc", 60, 30)?;
+    let token = mint_ticket_from_secret(&request, "test-issuer-key")?;
+    let verified = TicketToken::decode(&token, &TicketKey::from_secret("test-issuer-key"))?;
+    assert_eq!(verified.claims().scopes.len(), 2);
+    assert_eq!(
+        verified.claims().scopes[0].verb,
+        cohesix_ticket::TicketVerb::ReadWrite
+    );
+    assert_eq!(
+        verified.claims().scopes[1].verb,
+        cohesix_ticket::TicketVerb::Read
+    );
+    assert_eq!(verified.claims().budget.ttl_s(), Some(60));
+    assert_eq!(verified.claims().budget.ops(), Some(30));
     Ok(())
 }

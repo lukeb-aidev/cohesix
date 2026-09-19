@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Run a user-owned loopback gateway with separate file-backed credentials and explicit activation. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>org.cohesix.gateway</string>
+<key>ProgramArguments</key><array>
+<string>@PREFIX@/bin/hive-gateway</string>
+<string>--bind</string><string>127.0.0.1:8080</string>
+<string>--tcp-host</string><string>@TARGET_HOST@</string>
+<string>--tcp-port</string><string>@TARGET_PORT@</string>
+</array>
+<key>EnvironmentVariables</key><dict>
+<key>COH_AUTH_TOKEN</key><string>file:@CREDENTIALS@/tcp_auth</string>
+<key>COH_TICKET</key><string>file:@CREDENTIALS@/root_ticket</string>
+<key>HIVE_GATEWAY_REQUEST_AUTH_TOKEN</key><string>file:@CREDENTIALS@/request_auth</string>
+<key>HIVE_GATEWAY_DELEGATION_KEY_REF</key><string>file:@CREDENTIALS@/delegation_key</string>
+<key>RUST_LOG</key><string>warn</string>
+</dict>
+<key>WorkingDirectory</key><string>@STATE@</string>
+<key>StandardOutPath</key><string>@STATE@/gateway.stdout.log</string>
+<key>StandardErrorPath</key><string>@STATE@/gateway.stderr.log</string>
+<key>RunAtLoad</key><false/>
+<key>KeepAlive</key><false/>
+<key>ThrottleInterval</key><integer>5</integer>
+<key>Umask</key><integer>63</integer>
+<key>SoftResourceLimits</key><dict><key>Core</key><integer>0</integer><key>NumberOfFiles</key><integer>256</integer></dict>
+</dict></plist>

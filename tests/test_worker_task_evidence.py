@@ -2177,8 +2177,14 @@ def test_component_validator_accepts_bounded_role_exemplars() -> None:
 
 
 @pytest.mark.parametrize("identity_mode", ["exact", "missing", "wrong-generation"])
+@pytest.mark.parametrize("action,code", [
+    ("gpu.lease.renew", "0x0202"),
+    ("gpu.workload.submit", "0x0204"),
+    ("gpu.workload.cancel", "0x0205"),
+    ("gpu.workload.observe", "0x0206"),
+])
 def test_pressure_receipts_distinguish_equal_sequences_on_different_workers(
-    identity_mode: str,
+    identity_mode: str, action: str, code: str,
 ) -> None:
     """Independent Worker counters can coincide without sharing an identity."""
     before = {"role": "worker-heartbeat", "slot": 0, "lease_epoch": 1,
@@ -2188,7 +2194,7 @@ def test_pressure_receipts_distinguish_equal_sequences_on_different_workers(
            "supervisor_generation": 8, "cap_generation": 1}
     another = {**gpu, "slot": 4, "supervisor_generation": 9}
     operation = {
-        "action": "gpu.lease.renew", "role": "worker-gpu", "worker_id": "worker-11",
+        "action": action, "role": "worker-gpu", "worker_id": "worker-11",
         "sequence_before": {"receipt": 6, "completion": 6},
         "sequence_after": {"receipt": 7, "completion": 7}, "status": "succeeded",
     }
@@ -2202,9 +2208,9 @@ def test_pressure_receipts_distinguish_equal_sequences_on_different_workers(
 
     markers = {
         "teardown": [marker(before, reason="shutdown")], "ready": [marker(after)],
-        "receipt": [marker(identity, action="0x0202", outcome=1, sequence=7)
+        "receipt": [marker(identity, action=code, outcome=1, sequence=7)
                     for identity in (gpu, another)],
-        "completion": [marker(identity, action="0x0202", status=1, sequence=7)
+        "completion": [marker(identity, action=code, status=1, sequence=7)
                        for identity in (gpu, another)],
     }
     report = {"lifecycle_cycles": [{

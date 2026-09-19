@@ -212,6 +212,11 @@ pub fn validate_v2_action_args(spec: &HostTicketSpec) -> Result<()> {
             validate_optional_sha256(args, "lora_sha256")?;
             validate_optional_sha256(args, "metrics_sha256")?;
         }
+        "gpu.workload.submit" | "gpu.workload.cancel" | "gpu.workload.observe" => {
+            if !cohesix_authority::gpu::validate_args(&spec.action, &spec.args) {
+                return Err(anyhow!("invalid bounded GPU workload arguments"));
+            }
+        }
         other => return Err(anyhow!("action {other} is not a version-2 receipt action")),
     }
     Ok(())
@@ -234,7 +239,12 @@ pub fn terminal_keys(results: &[HostTicketResult]) -> HashSet<TicketKey> {
 pub fn expected_receipt_role(action: &str) -> Option<&'static str> {
     if matches!(
         action,
-        "gpu.lease.grant" | "gpu.lease.renew" | "gpu.lease.release"
+        "gpu.lease.grant"
+            | "gpu.lease.renew"
+            | "gpu.lease.release"
+            | "gpu.workload.submit"
+            | "gpu.workload.cancel"
+            | "gpu.workload.observe"
     ) {
         Some("worker-gpu")
     } else if matches!(

@@ -9,8 +9,10 @@ license = "MIT"
 publish = false
 
 [dependencies]
+gpu-bridge-host = { path = "../gpu-bridge-host", default-features = false }
 cohesix-rest = { path = "../../crates/cohesix-rest" }
 cohesix-authority = { workspace = true, features = ["std"] }
+cohesix-evidence = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 coh = { path = "../coh" }
@@ -20,6 +22,7 @@ cohsh-core = { workspace = true }
 fs2 = "0.4.3"
 hex = { workspace = true }
 host-sidecar-bridge = { path = "../host-sidecar-bridge" }
+sidecar-bus = { path = "../sidecar-bus", features = ["live", "modbus", "dnp3"] }
 nine-door = { path = "../nine-door" }
 serde = { workspace = true }
 serde_json = { workspace = true }

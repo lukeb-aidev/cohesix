@@ -54,16 +54,46 @@ impl AppendOnlyTracker {
 
     /// Validate the next write offset and advance the cursor.
     pub fn check_and_advance(&mut self, offset: u64, len: usize) -> Result<()> {
-        if offset != self.cursor {
+        self.validate_write(offset, len, false)?;
+        self.commit_write(len, len)
+    }
+
+    /// O_APPEND delegates placement to the atomic remote append operation.
+    /// Other handles preserve sequential per-open offsets, independent of remote EOF.
+    pub fn validate_write(&self, offset: u64, len: usize, append: bool) -> Result<()> {
+        self.validate_placement(offset, len, append, None)
+    }
+
+    /// Some FUSE kernels omit O_APPEND. A kernel placement at the exact EOF
+    /// we last reported is still an append; arbitrary seek offsets are refused.
+    pub fn validate_placement(
+        &self,
+        offset: u64,
+        len: usize,
+        append: bool,
+        reported_eof: Option<u64>,
+    ) -> Result<()> {
+        if !append && offset != self.cursor && reported_eof != Some(offset) {
             return Err(anyhow!(
                 "append-only offset mismatch: expected {} got {}",
                 self.cursor,
                 offset
             ));
         }
+        self.cursor
+            .checked_add(len as u64)
+            .ok_or_else(|| anyhow!("append-only offset overflow"))?;
+        Ok(())
+    }
+
+    /// Advance only after acknowledged bytes; failures and short writes cannot skip data.
+    pub fn commit_write(&mut self, requested: usize, written: usize) -> Result<()> {
+        if written > requested {
+            return Err(anyhow!("append-only invalid acknowledgement count"));
+        }
         self.cursor = self
             .cursor
-            .checked_add(len as u64)
+            .checked_add(written as u64)
             .ok_or_else(|| anyhow!("append-only offset overflow"))?;
         Ok(())
     }
@@ -359,6 +389,10 @@ impl<T: Secure9pTransport> CohFuse<T> {
     }
 
     fn attr_for(&self, inode: u64, is_dir: bool) -> fuser::FileAttr {
+        #[cfg(target_os = "macos")]
+        if let Some(entry) = lock_inodes(&self.inodes).by_inode.get_mut(&inode) {
+            entry.reported_size = Some(0);
+        }
         let now = SystemTime::now();
         fuser::FileAttr {
             ino: fuser::INodeNo(inode),
@@ -394,7 +428,7 @@ impl<T: Secure9pTransport> CohFuse<T> {
     }
 
     fn resolve_inode_path(&self, inode: u64) -> Option<String> {
-        let inodes = self.inodes.lock().expect("inode lock");
+        let inodes = lock_inodes(&self.inodes);
         inodes.path_for(inode).map(|entry| entry.path.clone())
     }
 
@@ -445,7 +479,7 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
             }
         };
         let inode = {
-            let mut inodes = self.inodes.lock().expect("inode lock");
+            let mut inodes = lock_inodes(&self.inodes);
             inodes.insert(&child_path, is_dir)
         };
         let attr = self.attr_for(inode, is_dir);
@@ -460,7 +494,7 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
         reply: fuser::ReplyAttr,
     ) {
         let entry = {
-            let inodes = self.inodes.lock().expect("inode lock");
+            let inodes = lock_inodes(&self.inodes);
             inodes.path_for(inode.0).cloned()
         };
         let Some(entry) = entry else {
@@ -533,7 +567,7 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
                 Err(_) => false,
             };
             let inode = {
-                let mut inodes = self.inodes.lock().expect("inode lock");
+                let mut inodes = lock_inodes(&self.inodes);
                 inodes.insert(&child_path, is_dir)
             };
             let file_type = if is_dir {
@@ -608,6 +642,7 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
         let file_handle = FileHandle {
             fid,
             append_tracker: AppendOnlyTracker::new(),
+            append: flags.0 & libc::O_APPEND != 0,
         };
         self.handles
             .lock()
@@ -672,9 +707,17 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
                 return;
             }
         };
+        // macFUSE 5.3.3 omits O_APPEND from OPEN and WRITE requests. Accept
+        // only its published EOF placement in addition to sequential offsets.
+        #[cfg(target_os = "macos")]
+        let reported_eof = lock_inodes(&self.inodes)
+            .path_for(_inode.0)
+            .and_then(|entry| entry.reported_size);
+        #[cfg(not(target_os = "macos"))]
+        let reported_eof = None;
         if handle
             .append_tracker
-            .check_and_advance(offset, data.len())
+            .validate_placement(offset, data.len(), handle.append, reported_eof)
             .is_err()
         {
             reply.error(fuser::Errno::EINVAL);
@@ -688,6 +731,14 @@ impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
                 return;
             }
         };
+        if handle
+            .append_tracker
+            .commit_write(data.len(), written as usize)
+            .is_err()
+        {
+            reply.error(fuser::Errno::EIO);
+            return;
+        }
         reply.written(written);
     }
 
@@ -748,6 +799,10 @@ impl<C: CohAccess + Send> AccessFuse<C> {
     }
 
     fn attr_for(&self, inode: u64, is_dir: bool, size: u64) -> fuser::FileAttr {
+        #[cfg(target_os = "macos")]
+        if let Some(entry) = lock_inodes(&self.inodes).by_inode.get_mut(&inode) {
+            entry.reported_size = Some(if is_dir { 0 } else { size });
+        }
         let now = SystemTime::now();
         fuser::FileAttr {
             ino: fuser::INodeNo(inode),
@@ -775,7 +830,7 @@ impl<C: CohAccess + Send> AccessFuse<C> {
     }
 
     fn resolve_inode_path(&self, inode: u64) -> Option<String> {
-        let inodes = self.inodes.lock().expect("inode lock");
+        let inodes = lock_inodes(&self.inodes);
         inodes.path_for(inode).map(|entry| entry.path.clone())
     }
 
@@ -907,7 +962,7 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
             }
         };
         let inode = {
-            let mut inodes = self.inodes.lock().expect("inode lock");
+            let mut inodes = lock_inodes(&self.inodes);
             inodes.insert(&child_path, is_dir)
         };
         let size = if is_dir {
@@ -927,7 +982,7 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
         reply: fuser::ReplyAttr,
     ) {
         let entry = {
-            let inodes = self.inodes.lock().expect("inode lock");
+            let inodes = lock_inodes(&self.inodes);
             inodes.path_for(inode.0).cloned()
         };
         let Some(entry) = entry else {
@@ -1011,7 +1066,7 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
                     self.probe_is_dir(&remote).unwrap_or(false)
                 };
             let inode = {
-                let mut inodes = self.inodes.lock().expect("inode lock");
+                let mut inodes = lock_inodes(&self.inodes);
                 inodes.insert(&child_path, is_dir)
             };
             let file_type = if is_dir {
@@ -1042,7 +1097,7 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
     ) {
         let write = flags.0 & libc::O_ACCMODE != libc::O_RDONLY;
         let entry = {
-            let inodes = self.inodes.lock().expect("inode lock");
+            let inodes = lock_inodes(&self.inodes);
             inodes.path_for(inode.0).cloned()
         };
         let Some(entry) = entry else {
@@ -1061,13 +1116,10 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
             }
         };
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
-        let mut tracker = AppendOnlyTracker::new();
-        if write && !entry.is_dir {
-            tracker.cursor = self.file_size_bytes(&remote);
-        }
         let file_handle = AccessHandle {
             path: remote,
-            append_tracker: tracker,
+            append_tracker: AppendOnlyTracker::new(),
+            append: flags.0 & libc::O_APPEND != 0,
         };
         self.handles
             .lock()
@@ -1141,20 +1193,21 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
                 return;
             }
         };
+        // macFUSE 5.3.3 omits O_APPEND from OPEN and WRITE requests. Accept
+        // only its published EOF placement in addition to sequential offsets.
+        #[cfg(target_os = "macos")]
+        let reported_eof = lock_inodes(&self.inodes)
+            .path_for(_inode.0)
+            .and_then(|entry| entry.reported_size);
+        #[cfg(not(target_os = "macos"))]
+        let reported_eof = None;
         if handle
             .append_tracker
-            .check_and_advance(offset, data.len())
+            .validate_placement(offset, data.len(), handle.append, reported_eof)
             .is_err()
         {
-            handle.append_tracker.cursor = self.file_size_bytes(&handle.path);
-            if handle
-                .append_tracker
-                .check_and_advance(offset, data.len())
-                .is_err()
-            {
-                reply.error(fuser::Errno::EINVAL);
-                return;
-            }
+            reply.error(fuser::Errno::EINVAL);
+            return;
         }
         let mut client = self.client.lock().expect("coh client lock");
         let written: usize = match client.write_append(&handle.path, data) {
@@ -1164,8 +1217,16 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
                 return;
             }
         };
-        let written = written.min(u32::MAX as usize) as u32;
-        reply.written(written);
+        if written > u32::MAX as usize
+            || handle
+                .append_tracker
+                .commit_write(data.len(), written)
+                .is_err()
+        {
+            reply.error(fuser::Errno::EIO);
+            return;
+        }
+        reply.written(written as u32);
     }
 
     fn release(
@@ -1195,6 +1256,7 @@ impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
 struct AccessHandle {
     path: String,
     append_tracker: AppendOnlyTracker,
+    append: bool,
 }
 
 #[cfg(any(feature = "fuse", target_os = "linux"))]
@@ -1202,6 +1264,7 @@ struct AccessHandle {
 struct FileHandle {
     fid: u32,
     append_tracker: AppendOnlyTracker,
+    append: bool,
 }
 
 #[cfg(any(feature = "fuse", target_os = "linux"))]
@@ -1209,6 +1272,15 @@ struct FileHandle {
 struct InodeEntry {
     path: String,
     is_dir: bool,
+    #[cfg(target_os = "macos")]
+    reported_size: Option<u64>,
+}
+
+#[cfg(any(feature = "fuse", target_os = "linux"))]
+fn lock_inodes(inodes: &Mutex<InodeTable>) -> std::sync::MutexGuard<'_, InodeTable> {
+    inodes
+        .lock()
+        .expect("inode table operations must not poison the bookkeeping mutex")
 }
 
 #[cfg(any(feature = "fuse", target_os = "linux"))]
@@ -1247,6 +1319,8 @@ impl InodeTable {
         let entry = InodeEntry {
             path: path.to_owned(),
             is_dir,
+            #[cfg(target_os = "macos")]
+            reported_size: None,
         };
         self.by_inode.insert(inode, entry);
         self.by_path.insert(path.to_owned(), inode);

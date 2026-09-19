@@ -51,6 +51,20 @@ def _build_backend(args: argparse.Namespace):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "lifecycle",
+        nargs="?",
+        choices=["plan", "apply", "watch", "explain", "verify", "recover"],
+    )
+    parser.add_argument("--coh-binary", type=Path)
+    parser.add_argument("--deployment", type=Path)
+    parser.add_argument("--auth-ref")
+    parser.add_argument("--ticket-ref")
+    parser.add_argument(
+        "--rehearsal",
+        action="store_true",
+        help="explicit control-model rehearsal; never workflow execution proof",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="list available built-in playbooks and exit",
@@ -72,14 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="output directory for report and audit artifacts",
     )
 
-    parser.add_argument("--mock", action="store_true", help="use deterministic mock backend")
+    parser.add_argument(
+        "--mock", action="store_true", help="use deterministic mock backend"
+    )
     parser.add_argument(
         "--mock-root",
         type=Path,
         default=Path("out/examples/mockfs"),
         help="mock backend filesystem root",
     )
-    parser.add_argument("--include-mig", action="store_true", help="seed MIG mock GPU entries")
+    parser.add_argument(
+        "--include-mig", action="store_true", help="seed MIG mock GPU entries"
+    )
     parser.add_argument(
         "--mount-root",
         type=Path,
@@ -100,8 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--role", default="queen", help="attach role for TCP backend")
     parser.add_argument("--ticket", default=None, help="capability ticket payload")
-    parser.add_argument("--timeout-s", type=float, default=2.0, help="transport timeout")
-    parser.add_argument("--max-retries", type=int, default=3, help="transport retry count")
+    parser.add_argument(
+        "--timeout-s", type=float, default=2.0, help="transport timeout"
+    )
+    parser.add_argument(
+        "--max-retries", type=int, default=3, help="transport retry count"
+    )
 
     parser.add_argument(
         "--no-proc-snapshot",
@@ -129,6 +151,27 @@ def main() -> None:
         print(json.dumps(describe_playbooks(), indent=2, sort_keys=True))
         return
 
+    if args.lifecycle:
+        from .playbooks import execute_workflow
+
+        if args.coh_binary is None or args.mock or args.auth_token or args.ticket:
+            parser.error(
+                "workflow lifecycle requires --coh-binary and credential references"
+            )
+        result = execute_workflow(
+            args.playbook,
+            args.lifecycle,
+            coh_binary=args.coh_binary,
+            deployment=args.deployment,
+            rest_url=args.rest_url,
+            host=None if args.rest_url else args.tcp_host,
+            port=args.tcp_port,
+            auth_ref=args.auth_ref,
+            ticket_ref=args.ticket_ref,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
     playbook = load_playbook(args.playbook)
     backend = _build_backend(args)
     orchestrator = CohesixOrchestrator(backend=backend)
@@ -143,6 +186,7 @@ def main() -> None:
             include_host_snapshot=not args.no_host_snapshot,
             push_host_snapshot=not args.no_push_host_snapshot,
             audit=audit,
+            rehearsal=args.rehearsal,
         )
     finally:
         orchestrator.close()
@@ -155,7 +199,9 @@ def main() -> None:
         encoding="utf-8",
     )
     audit_path = out_dir / "audit.txt"
-    audit_path.write_text("\n".join(audit.lines) + ("\n" if audit.lines else ""), encoding="utf-8")
+    audit_path.write_text(
+        "\n".join(audit.lines) + ("\n" if audit.lines else ""), encoding="utf-8"
+    )
     print(json.dumps({"report": str(report_path), "audit": str(audit_path)}))
 
 

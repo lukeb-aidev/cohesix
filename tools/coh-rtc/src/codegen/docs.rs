@@ -1592,6 +1592,17 @@ impl DocFragments {
                 .join(", ");
             writeln!(ecosystem_md, "- `ecosystem.host.providers`: {providers}").ok();
         }
+        let snapshots = &manifest.ecosystem.host.snapshots;
+        writeln!(ecosystem_md, "- `ecosystem.host.snapshots`: enable=`{}`, max_bytes=`{}`, max_entries=`{}`, max_value_bytes=`{}`, max_ttl_ms=`{}`; paths `/host/snapshots/<provider>/<source>/{{ctl,status,snapshot}}`.", snapshots.enable, snapshots.max_bytes, snapshots.max_entries, snapshots.max_value_bytes, snapshots.max_ttl_ms).ok();
+        for publisher in &snapshots.publishers {
+            writeln!(
+                ecosystem_md,
+                "- Host snapshot publisher `{}`: {}.",
+                publisher.source_id,
+                publisher.providers.join(", ")
+            )
+            .ok();
+        }
         writeln!(
             ecosystem_md,
             "- `ecosystem.host.tickets.enable`: `{}`",

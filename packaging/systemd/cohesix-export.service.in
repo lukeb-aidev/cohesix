@@ -1,0 +1,40 @@
+# Author: Lukas Bower
+# Purpose: Deliver one independently verified ticket graph through the bounded SIEM WAL.
+# Copyright 2026 Lukas Bower
+[Unit]
+Description=Cohesix verified evidence delivery for %i
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@STATE@
+ExecStart=@PREFIX@/bin/coh evidence deliver --input @STATE@/evidence/%i/graph.json --trust @ENROLLMENT@/evidence-trust.json --cas @STATE@/cas --state-dir @STATE@/siem
+LoadCredential=siem_token:@CREDENTIALS@/siem_token
+Environment=COHESIX_SIEM_TOKEN=file:%d/siem_token
+TimeoutStartSec=30
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=@STATE@/siem
+LimitCORE=0
+TasksMax=64
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cohesix-export

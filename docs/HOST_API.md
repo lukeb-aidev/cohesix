@@ -26,13 +26,16 @@ the OpenAPI document.
 | Method | Endpoint | Operation | Request auth |
 | --- | --- | --- | --- |
 | `GET` | `/v1/meta/bounds` | Gateway-compiled bounds and manifest fingerprint | No |
-| `GET` | `/v1/meta/status` | Connection, broker, queue, and cache state | No |
-| `GET` | `/v1/fs/ls?path=...` | `LS` | No |
-| `GET` | `/v1/fs/cat?path=...&max_bytes=...` | Bounded `CAT` | No |
-| `GET` | `/v1/fs/tail?path=...&max_bytes=...` | Bounded `TAIL`; optional `lines=1..256` | No |
-| `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes |
+| `GET` | `/v1/meta/providers` | Full registry, including identity mappings; read scope `/proc/providers/registry` | Yes, plus read delegation |
+| `GET` | `/v1/meta/status` | Connection, broker, queue, and cache state | Yes, plus read delegation |
+| `GET` | `/v1/fs/ls?path=...` | `LS` | Visibility-dependent read delegation |
+| `GET` | `/v1/fs/cat?path=...&max_bytes=...` | Bounded `CAT` | Visibility-dependent read delegation |
+| `GET` | `/v1/fs/tail?path=...&max_bytes=...` | Bounded `TAIL`; optional `lines=1..256` | Visibility-dependent read delegation |
+| `POST` | `/v1/identity/exchange` | [Mapped identity issuance](IDENTITY_MAPPING.md) | Yes; no existing ticket |
+| `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes, plus write delegation |
+| `POST` | `/v1/fs/echo-batch` | Bounded ordered `ECHO` appends | Yes, plus write delegation |
 | `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
-| `GET` | `/docs` | Swagger UI backed by the embedded document | No |
+| `GET` | `/docs` | Offline index linking the embedded OpenAPI and provider contract | No |
 
 Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 `lines` query. The gateway validates those bounds before contacting the target.
@@ -131,8 +134,18 @@ write only; it is not a target identity or capability ticket.
 
 The default bind is loopback. The gateway does not terminate TLS. Keep it on
 loopback or place it behind an authenticated tunnel, VPN, or TLS reverse proxy.
-The built-in Swagger UI loads public CDN assets; use `/v1/openapi.yaml` directly
+The built-in `/docs` index loads no CDN assets; use `/v1/openapi.yaml` directly
 in air-gapped environments.
+
+The admin-only `GET /v1/meta/providers` returns the exact compiled
+`cohesix-provider-registry/v1` contract and stable integration graph/source
+hashes. This describes requirements, without asserting live provider state.
+Non-public `GET /v1/meta/status` and `/v1/fs/{ls,cat,tail}` require request auth
+and `x-cohesix-ticket` carrying an explicit Read/ReadWrite scope. The generated
+read classification defaults to admin-only and is checked before caches.
+Scope refusals return bounded ERR/END responses with HTTP 403. Explicit
+single-caller `--read-compatibility` covers gateway-Queen admin reads only.
+
 
 Mutations require gateway request auth plus the delegated
 `x-cohesix-ticket` header. A request-auth token alone does not authorize a write.

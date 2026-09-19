@@ -1,0 +1,33 @@
+# Author: Lukas Bower
+# Purpose: Build an owned native Xcode framework and one XCTest without distribution credentials.
+# Copyright 2026 Lukas Bower
+name: CohesixNativeReference
+options:
+  deploymentTarget:
+    macOS: '14.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+    PRODUCT_BUNDLE_IDENTIFIER: org.cohesix.native-reference
+    SKIP_INSTALL: NO
+targets:
+  NativeReference:
+    type: framework
+    platform: macOS
+    sources: [Sources]
+  NativeReferenceTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    dependencies:
+      - target: NativeReference
+schemes:
+  NativeReference:
+    build:
+      targets:
+        NativeReference: all
+        NativeReferenceTests: [test]
+    test:
+      targets: [NativeReferenceTests]

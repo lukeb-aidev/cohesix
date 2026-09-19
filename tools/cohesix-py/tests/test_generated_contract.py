@@ -53,6 +53,9 @@ def test_generated_defaults_are_target_neutral() -> None:
         "gpu.lease.grant",
         "gpu.lease.renew",
         "gpu.lease.release",
+        "gpu.workload.submit",
+        "gpu.workload.cancel",
+        "gpu.workload.observe",
     )
     assert PEFT_RECEIPT_ACTIONS == (
         "peft.export",

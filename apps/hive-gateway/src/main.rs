@@ -8,6 +8,8 @@
 //! Host-only REST gateway projecting Cohesix console/file semantics.
 
 mod auth;
+mod evidence;
+mod identity;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
@@ -20,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
@@ -150,30 +152,20 @@ const CACHE_INVALIDATE_POLICY_NAMESPACES: &[&str] = &["/proc/pressure/policy"];
 const OPENAPI_YAML: &str = include_str!("../../../resources/openapi/hive-gateway.yaml");
 
 const SWAGGER_UI_HTML: &str = r#"<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hive Gateway API</title>
-  <link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui.css\" />
   <style>
-    body { margin: 0; background: #0c121c; }
-    #swagger-ui { min-height: 100vh; }
+    body { margin: 3rem auto; max-width: 42rem; padding: 1rem; font: 18px system-ui; }
   </style>
 </head>
 <body>
-  <div id=\"swagger-ui\"></div>
-  <script src=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js\"></script>
-  <script>
-    window.onload = () => {
-      window.ui = SwaggerUIBundle({
-        url: '/v1/openapi.yaml',
-        dom_id: '#swagger-ui',
-        presets: [SwaggerUIBundle.presets.apis],
-        layout: 'BaseLayout'
-      });
-    };
-  </script>
+  <h1>Hive Gateway API</h1>
+  <p><a href="/v1/openapi.yaml">Open the bundled OpenAPI specification</a></p>
+  <p><a href="/v1/meta/providers">Read the generated provider contract</a></p>
+  <p>This offline page uses no external assets. An interactive API viewer is not bundled.</p>
 </body>
 </html>"#;
 
@@ -205,9 +197,18 @@ struct Cli {
     /// Per-request REST auth token for mutating paths (`Authorization: Bearer` or `x-cohesix-auth`).
     #[arg(long)]
     request_auth_token: Option<String>,
+    /// Allow gateway-role admin reads without a delegated ticket for a single-caller installation.
+    #[arg(long)]
+    read_compatibility: bool,
     /// Delegated-ticket issuer key source (env:NAME or file:/absolute/path).
     #[arg(long)]
     delegation_key_ref: Option<String>,
+    /// Absolute JSON file mapping generated identity policy ids to pinned public JWKS paths.
+    #[arg(long)]
+    identity_keysets: Option<PathBuf>,
+    /// Private per-operation evidence enrollments, independent of HTTP requests.
+    #[arg(long)]
+    evidence_enrollment_dir: Option<PathBuf>,
     /// Allow non-loopback bind addresses (risk: exposes write-capable gateway over network).
     #[arg(long, default_value_t = false)]
     allow_non_loopback_bind: bool,
@@ -266,7 +267,10 @@ struct GatewayInner {
     role: Role,
     ticket: Option<String>,
     request_auth_token: String,
+    read_compatibility: bool,
     delegation: Mutex<auth::Delegation>,
+    identity: Arc<identity::Identity>,
+    evidence_enrollment: Option<(PathBuf, String)>,
     status: Mutex<GatewayStatus>,
     shutdown: Arc<AtomicBool>,
     broker_timeouts: BrokerTimeouts,
@@ -1290,7 +1294,7 @@ async fn main() -> Result<()> {
         info!("hive-gateway mock transport enabled");
     }
 
-    let delegation = config.delegation()?;
+    let (delegation, identity) = config.delegation()?;
     let policy = apply_policy_overrides(CohshPolicy::from_generated(), &config)?;
     info!(
         "hive-gateway session pool control={} telemetry={}",
@@ -1321,6 +1325,15 @@ async fn main() -> Result<()> {
         config.concurrent_telemetry_gap,
     );
 
+    anyhow::ensure!(
+        !config.mock || config.evidence_enrollment_dir.is_none(),
+        "EPERM mock cannot sign native evidence"
+    );
+    let evidence_enrollment = config
+        .evidence_enrollment_dir
+        .clone()
+        .map(|path| cohesix_evidence::producer::executable_digest().map(|digest| (path, digest)))
+        .transpose()?;
     let state = AppState {
         inner: Arc::new(GatewayInner {
             pool: pool.clone(),
@@ -1328,7 +1341,10 @@ async fn main() -> Result<()> {
             role: config.role,
             ticket: config.ticket.clone(),
             request_auth_token: config.request_auth_token.clone(),
+            read_compatibility: config.read_compatibility,
             delegation: Mutex::new(delegation),
+            identity,
+            evidence_enrollment,
             status: Mutex::new(GatewayStatus::default()),
             shutdown,
             broker_timeouts: config.broker_timeouts,
@@ -1357,6 +1373,11 @@ async fn main() -> Result<()> {
     spawn_connection_manager(state.clone(), log_host, log_port);
 
     let app = Router::new()
+        .route(
+            "/v1/identity/exchange",
+            post(identity_exchange).layer(DefaultBodyLimit::max(identity::MAX_EXCHANGE_BODY)),
+        )
+        .route("/v1/meta/providers", get(meta_providers))
         .route("/v1/meta/bounds", get(meta_bounds))
         .route("/v1/meta/status", get(meta_status))
         .route("/v1/fs/ls", get(fs_ls))
@@ -1396,7 +1417,10 @@ struct GatewayConfig {
     worker_runtime_profile: WorkerRuntimeProfile,
     auth_token: String,
     request_auth_token: String,
+    read_compatibility: bool,
     delegation_key_ref: Option<String>,
+    identity_keysets: Option<PathBuf>,
+    evidence_enrollment_dir: Option<PathBuf>,
     role: Role,
     ticket: Option<String>,
     pool_control_sessions: Option<u16>,
@@ -1453,15 +1477,8 @@ fn validate_tcp_target_port(port: u16) -> Result<u16> {
 
 impl GatewayConfig {
     fn from_cli(cli: Cli) -> Result<Self> {
-        let mut mock = cli.mock;
-        if !mock {
-            if let Ok(value) = env::var("HIVE_GATEWAY_MOCK") {
-                let trimmed = value.trim();
-                if !trimmed.is_empty() && !matches!(trimmed, "0" | "false" | "off" | "no") {
-                    mock = true;
-                }
-            }
-        }
+        // Backend selection is explicit CLI state; environment data cannot select fixtures.
+        let mock = cli.mock;
         let bind = env_override(cli.bind, "127.0.0.1:8080", "HIVE_GATEWAY_BIND");
         let tcp_host =
             normalize_tcp_target_host(&env_override(cli.tcp_host, "127.0.0.1", "COH_TCP_HOST"))?;
@@ -1504,6 +1521,11 @@ impl GatewayConfig {
                 }
             }
         }
+        let ticket = ticket
+            .as_deref()
+            .map(cohesix_authority::secret::resolve_value)
+            .transpose()
+            .context("resolve upstream capability ticket")?;
         let pool_control_sessions = env_override_opt_u16(
             cli.pool_control_sessions,
             "HIVE_GATEWAY_POOL_CONTROL_SESSIONS",
@@ -1553,9 +1575,12 @@ impl GatewayConfig {
             worker_runtime_profile: cli.worker_runtime_profile,
             auth_token,
             request_auth_token,
+            read_compatibility: cli.read_compatibility,
             delegation_key_ref: cli
                 .delegation_key_ref
                 .or_else(|| env::var("HIVE_GATEWAY_DELEGATION_KEY_REF").ok()),
+            identity_keysets: cli.identity_keysets,
+            evidence_enrollment_dir: cli.evidence_enrollment_dir,
             role,
             ticket,
             pool_control_sessions,
@@ -1574,21 +1599,35 @@ impl GatewayConfig {
         })
     }
 
-    fn delegation(&self) -> Result<auth::Delegation> {
+    fn delegation(&self) -> Result<(auth::Delegation, Arc<identity::Identity>)> {
         let policy = generated_authority_policy()?;
-        let key = self
+        // Resolve the enrolled secret once so key rotation cannot split the
+        // ordinary verifier and mapped issuer into different generations.
+        let secret = self
             .delegation_key_ref
             .as_deref()
             .map(cohesix_authority::secret::resolve_reference)
-            .transpose()?
-            .map(|secret| cohesix_ticket::TicketKey::from_secret(&secret));
+            .transpose()?;
+        let key = secret
+            .as_deref()
+            .map(cohesix_ticket::TicketKey::from_secret);
+        let issuer = secret
+            .as_deref()
+            .map(cohesix_identity::delegation::gateway_issuer);
+        let identity = Arc::new(identity::Identity::configured(
+            issuer,
+            self.identity_keysets.as_deref(),
+        )?);
         let ceiling = self
             .ticket
             .as_deref()
             .map(cohesix_ticket::TicketToken::decode_unverified)
             .transpose()?;
-        auth::Delegation::new(key, policy, self.role, ceiling, authority_now_ms()?)
-            .map_err(anyhow::Error::msg)
+        let delegation =
+            auth::Delegation::new(key, policy, self.role, ceiling, authority_now_ms()?)
+                .map_err(anyhow::Error::msg)?
+                .with_identity(identity.clone());
+        Ok((delegation, identity))
     }
 }
 
@@ -3338,7 +3377,12 @@ impl AppState {
         let start = Instant::now();
         let path = &path[..path.floor_char_boundary(255)];
         let result = &result[..result.floor_char_boundary(192)];
-        tracing::info!(target: "hive_gateway::authority", event = "delegated-write", identity_class = "gateway_enforced", delegated_ticket_hash = identity, gateway_credential_class = "configured_upstream", path, action, upstream_result = result);
+        let event = if action == "READ" {
+            "delegated-read"
+        } else {
+            "delegated-write"
+        };
+        tracing::info!(target: "hive_gateway::authority", event, identity_class = "gateway_enforced", delegated_ticket_hash = identity, gateway_credential_class = "configured_upstream", path, action, upstream_result = result);
         let elapsed = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
         if let Ok(mut authority) = self.inner.delegation.lock() {
             authority.record_audit(elapsed);
@@ -3547,12 +3591,38 @@ fn is_pool_exhausted(err: &anyhow::Error) -> bool {
     err.to_string().contains("session pool exhausted")
 }
 
+async fn meta_providers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    if let Err(error) = authorize_read_projection(
+        &state,
+        &headers,
+        "/proc/providers/registry",
+        cohesix_authority::provider::registry_json().len(),
+    ) {
+        return delegation_refusal("PROVIDERS", "/proc/providers/registry", error);
+    }
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        cohesix_authority::provider::registry_json(),
+    )
+        .into_response()
+}
+
 async fn meta_bounds(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     Json(state.bounds())
 }
 
-async fn meta_status(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    Json(state.status())
+async fn meta_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    if let Err(error) = authorize_read_projection(&state, &headers, "/proc/gateway/status", 65_536)
+    {
+        return delegation_refusal("STATUS", "/proc/gateway/status", error);
+    }
+    Json(state.status()).into_response()
 }
 
 async fn openapi_yaml() -> impl axum::response::IntoResponse {
@@ -3568,23 +3638,204 @@ async fn swagger_ui() -> impl axum::response::IntoResponse {
 
 async fn fs_ls(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<PathQuery>,
-) -> impl axum::response::IntoResponse {
-    handle_list(state, query.path).await
+) -> axum::response::Response {
+    if let Err(error) = authorize_read_projection(&state, &headers, &query.path, 65_536) {
+        return delegation_refusal("LS", &query.path, error);
+    }
+    handle_list(state, query.path).await.into_response()
 }
 
 async fn fs_cat(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<CatQuery>,
-) -> impl axum::response::IntoResponse {
-    handle_cat(state, query).await
+) -> axum::response::Response {
+    if let Err(error) = authorize_read_projection(
+        &state,
+        &headers,
+        &query.path,
+        query.max_bytes.unwrap_or(0) as usize,
+    ) {
+        return delegation_refusal("CAT", &query.path, error);
+    }
+    handle_cat(state, query).await.into_response()
 }
 
 async fn fs_tail(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<TailQuery>,
-) -> impl axum::response::IntoResponse {
-    handle_tail(state, query).await
+) -> axum::response::Response {
+    if let Err(error) = authorize_read_projection(
+        &state,
+        &headers,
+        &query.path,
+        query.max_bytes.unwrap_or(0) as usize,
+    ) {
+        return delegation_refusal("TAIL", &query.path, error);
+    }
+    handle_tail(state, query).await.into_response()
+}
+
+fn authorize_read_projection(
+    state: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+    bytes: usize,
+) -> Result<(), &'static str> {
+    let result = authorize_read_projection_inner(state, headers, path, bytes);
+    if let Err(error) = result {
+        state.record_delegation(&delegated_header_hash(headers), path, "READ", error);
+    }
+    result
+}
+
+fn authorize_read_projection_inner(
+    state: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+    bytes: usize,
+) -> Result<(), &'static str> {
+    let (class, _) = cohesix_authority::provider::read_visibility(path)
+        .map_err(|_| "EPERM read-path-unclassified")?;
+    if class == "public" {
+        return Ok(());
+    }
+    validate_request_auth(headers, state.request_auth_token())
+        .map_err(|_| "EPERM read-request-auth")?;
+    let count = headers.get_all(auth::TICKET_HEADER).iter().count();
+    if count == 0
+        && state.inner.read_compatibility
+        && class == "admin_only"
+        && state.inner.role == Role::Queen
+    {
+        return Ok(());
+    }
+    let token = if count == 1 {
+        headers
+            .get(auth::TICKET_HEADER)
+            .and_then(|value| value.to_str().ok())
+    } else {
+        None
+    };
+    state
+        .inner
+        .delegation
+        .lock()
+        .map_err(|_| "EPERM authority-state-unavailable")?
+        .authorize_read(
+            token,
+            path,
+            bytes,
+            authority_now_ms().map_err(|_| "EPERM authority-clock-unavailable")?,
+        )
+        .map(|_| ())
+}
+
+async fn identity_exchange(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<identity::ExchangeRequest>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    let mut response = identity_exchange_inner(state, headers, payload).await;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+async fn identity_exchange_inner(
+    state: AppState,
+    headers: HeaderMap,
+    payload: Result<Json<identity::ExchangeRequest>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    const PATH: &str = "/v1/identity/exchange";
+    let refuse = |identity: &str, code: &str, status| {
+        state.record_delegation(identity, PATH, "IDENTITY", code);
+        response_err("IDENTITY", PATH, code, status).into_response()
+    };
+    if validate_request_auth(&headers, state.request_auth_token()).is_err() {
+        return refuse(
+            "unverified",
+            "EPERM identity request authentication",
+            StatusCode::UNAUTHORIZED,
+        );
+    }
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) if error.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return refuse(
+                "unverified",
+                "ELIMIT identity HTTP body",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            );
+        }
+        Err(_) => {
+            return refuse(
+                "unverified",
+                "EPERM identity request shape",
+                StatusCode::BAD_REQUEST,
+            )
+        }
+    };
+    if request.credential.len() > cohesix_identity::MAX_TOKEN_BYTES
+        || cohesix_authority::validate_id(&request.mapping_id).is_err()
+    {
+        return refuse(
+            "unverified",
+            "ELIMIT identity request",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    use sha2::{Digest, Sha256};
+    let credential_hash = hex::encode(Sha256::digest(request.credential.as_bytes()));
+    let Ok(permit) = state.inner.identity.permits.clone().try_acquire_owned() else {
+        return refuse(
+            &credential_hash,
+            "ELIMIT identity verification capacity",
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+    };
+    let Ok(now) = authority_now_ms() else {
+        return refuse(
+            &credential_hash,
+            "EPERM identity clock",
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    };
+    let identity = state.inner.identity.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        identity.exchange(&request, now / 1000)
+    })
+    .await;
+    match result {
+        Ok(Ok(issued)) => {
+            if !authority_now_ms().is_ok_and(|now| now / 1000 < issued.expires_unix_s) {
+                return refuse(
+                    &credential_hash,
+                    "ESTALE identity lifetime",
+                    StatusCode::FORBIDDEN,
+                );
+            }
+            state.record_delegation(
+                &credential_hash,
+                PATH,
+                "IDENTITY",
+                "issued: gateway_enforced",
+            );
+            Json(issued).into_response()
+        }
+        Ok(Err(error)) => refuse(&credential_hash, &error.to_string(), StatusCode::FORBIDDEN),
+        Err(_) => refuse(
+            &credential_hash,
+            "EPERM identity verification unavailable",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    }
 }
 
 async fn fs_echo(
@@ -3606,8 +3857,7 @@ async fn fs_echo(
         &state,
         &headers,
         &payload.path,
-        payload.line.as_ref().map_or(0, String::len),
-        1,
+        &[payload.line.as_deref().unwrap_or("")],
     ) {
         Ok(identity) => identity,
         Err(err) => {
@@ -3638,27 +3888,19 @@ async fn fs_echo_batch(
         )
         .into_response();
     }
-    let bytes = match payload
-        .lines
-        .iter()
-        .try_fold(0usize, |total, line| total.checked_add(line.len()))
-    {
-        Some(bytes) => bytes,
-        None => return delegation_refusal("ECHO_BATCH", &payload.path, "ELIMIT batch-size"),
+    let lines: Vec<_> = payload.lines.iter().map(String::as_str).collect();
+    let identity = match authorize_delegated(&state, &headers, &payload.path, &lines) {
+        Ok(identity) => identity,
+        Err(err) => {
+            state.record_delegation(
+                &delegated_header_hash(&headers),
+                &payload.path,
+                "ECHO_BATCH",
+                err,
+            );
+            return delegation_refusal("ECHO_BATCH", &payload.path, err);
+        }
     };
-    let identity =
-        match authorize_delegated(&state, &headers, &payload.path, bytes, payload.lines.len()) {
-            Ok(identity) => identity,
-            Err(err) => {
-                state.record_delegation(
-                    &delegated_header_hash(&headers),
-                    &payload.path,
-                    "ECHO_BATCH",
-                    err,
-                );
-                return delegation_refusal("ECHO_BATCH", &payload.path, err);
-            }
-        };
     handle_echo_batch(state, payload, identity)
         .await
         .into_response()
@@ -3676,8 +3918,7 @@ fn authorize_delegated(
     state: &AppState,
     headers: &HeaderMap,
     path: &str,
-    bytes: usize,
-    operations: usize,
+    lines: &[&str],
 ) -> Result<String, &'static str> {
     let token = if headers.get_all(auth::TICKET_HEADER).iter().count() == 1 {
         headers
@@ -3691,11 +3932,10 @@ fn authorize_delegated(
         .delegation
         .lock()
         .map_err(|_| "EPERM authority-state-unavailable")?
-        .authorize(
+        .authorize_write(
             token,
             path,
-            bytes,
-            operations,
+            lines,
             authority_now_ms().map_err(|_| "EPERM authority-clock-unavailable")?,
         )
 }
@@ -3966,7 +4206,11 @@ async fn handle_echo(
     let path = payload.path.clone();
     let payload_bytes = trimmed.as_bytes().to_vec();
     let audit_state = state.clone();
-    let result = tokio::task::spawn_blocking(move || state.write(&path, &payload_bytes)).await;
+    let evidence_identity = identity.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        evidence::write(&state, &evidence_identity, &path, &payload_bytes)
+    })
+    .await;
     audit_state.record_delegation(
         &identity,
         &payload.path,
@@ -6127,7 +6371,10 @@ mod tests {
             worker_runtime_profile: WorkerRuntimeProfile::QemuSmpProduction,
             auth_token: "token".to_owned(),
             request_auth_token: "request-token".to_owned(),
+            read_compatibility: false,
             delegation_key_ref: None,
+            identity_keysets: None,
+            evidence_enrollment_dir: None,
             role: Role::Queen,
             ticket: None,
             pool_control_sessions: Some(3),
@@ -6221,6 +6468,51 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn identity_exchange_http_auth_capacity_and_disabled_mapping_never_reach_broker() {
+        let state = disconnected_cached_state();
+        let request = || {
+            Ok(Json(identity::ExchangeRequest {
+                mapping_id: "enterprise".into(),
+                credential: "a.b.c".into(),
+            }))
+        };
+        let response = identity_exchange(State(state.clone()), HeaderMap::new(), request()).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "no-store"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(REQUEST_AUTH_HEADER, "request-token".parse().unwrap());
+        let response = identity_exchange(State(state.clone()), headers.clone(), request()).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let permit = state
+            .inner
+            .identity
+            .permits
+            .clone()
+            .try_acquire_many_owned(4)
+            .unwrap();
+        let response = identity_exchange(State(state.clone()), headers, request()).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            state.inner.broker.control_requests.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .inner
+                .delegation
+                .lock()
+                .unwrap()
+                .snapshot()
+                .audit_records,
+            3
+        );
+        drop(permit);
+    }
+
     fn disconnected_cached_state() -> AppState {
         let (execution_tx, _execution_rx) = mpsc::sync_channel(0);
         let (control_tx, _control_rx) = mpsc::sync_channel(0);
@@ -6241,6 +6533,7 @@ mod tests {
                 role: Role::Queen,
                 ticket: None,
                 request_auth_token: "request-token".to_owned(),
+                read_compatibility: false,
                 delegation: Mutex::new(
                     auth::Delegation::new(
                         None,
@@ -6251,6 +6544,10 @@ mod tests {
                     )
                     .expect("fixture delegation"),
                 ),
+                identity: Arc::new(
+                    identity::Identity::configured(None, None).expect("fixture identity"),
+                ),
+                evidence_enrollment: None,
                 status: Mutex::new(GatewayStatus {
                     connected: false,
                     last_error: Some("offline".to_owned()),
@@ -7087,5 +7384,63 @@ mod tests {
         let expected = lines.join("\n").len();
         assert_eq!(bounded_joined_line_bytes(&lines, expected), Some(expected));
         assert_eq!(bounded_joined_line_bytes(&lines, expected - 1), None);
+    }
+    #[tokio::test]
+    async fn read_routes_refuse_unauthorized_cached_data_and_private_registry() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert("/proc/root/reachable", vec!["private-global-state".into()]);
+        let response = fs_cat(
+            State(state.clone()),
+            HeaderMap::new(),
+            Query(CatQuery {
+                path: "/proc/root/reachable".into(),
+                max_bytes: Some(128),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bounded refusal");
+        assert!(!String::from_utf8_lossy(&body).contains("private-global-state"));
+        let tail = fs_tail(
+            State(state.clone()),
+            HeaderMap::new(),
+            Query(TailQuery {
+                path: "/host/tickets/status".into(),
+                max_bytes: Some(128),
+                lines: Some(1),
+            }),
+        )
+        .await;
+        assert_eq!(tail.status(), StatusCode::FORBIDDEN);
+        let list = fs_ls(
+            State(state),
+            HeaderMap::new(),
+            Query(PathQuery {
+                path: "/host".into(),
+            }),
+        )
+        .await;
+        assert_eq!(list.status(), StatusCode::FORBIDDEN);
+        let mut registry_state = disconnected_cached_state();
+        let refused = meta_providers(State(registry_state.clone()), HeaderMap::new()).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        Arc::get_mut(&mut registry_state.inner)
+            .expect("one state owner")
+            .read_compatibility = true;
+        let headers = HeaderMap::from_iter([(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer request-token"),
+        )]);
+        let response = meta_providers(State(registry_state), headers).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .expect("bounded registry");
+        assert_eq!(
+            body.as_ref(),
+            cohesix_authority::provider::registry_json().as_bytes()
+        );
     }
 }

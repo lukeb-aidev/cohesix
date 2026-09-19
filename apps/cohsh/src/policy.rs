@@ -267,6 +267,16 @@ fn default_trace_duration_ms() -> u32 {
 
 /// Return the default policy path under the working directory or bundle root.
 pub fn default_policy_path() -> PathBuf {
+    // A signed installation carries its exact policy beside its executable.
+    // Repository working-directory lookup remains the development fallback.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = exe.parent().and_then(Path::parent) {
+            let candidate = root.join("config/cohsh_policy.toml");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
     if let Ok(cwd) = std::env::current_dir() {
         let candidate = cwd.join("configs/generated/cohsh_policy.toml");
         if candidate.is_file() {

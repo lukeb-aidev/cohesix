@@ -253,6 +253,7 @@ pub fn inspect_live<C: CohAccess + ?Sized>(client: &mut C, source_class: &str) -
 
 /// Inspect only inventory-listed files in a canonical pack; never follow symlinks.
 pub fn inspect_pack(root: &Path) -> Result<Snapshot> {
+    crate::evidence::verify_pack_integrity(root)?;
     let mut remaining = MAX_BYTES;
     let summary = read_bounded(&root.join("summary.json"), remaining)?;
     consume(&mut remaining, summary.len())?;

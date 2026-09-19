@@ -4,6 +4,8 @@
 
 """Cohesix Python client package."""
 
+from .snapshots import HostObservation, SnapshotReader
+
 from .authority import AdmissionCorrelation, QueenIntent
 from .audit import CohesixAudit
 from .backends import FilesystemBackend, MockBackend, RestBackend, TcpBackend
@@ -19,6 +21,7 @@ from .evidence import (
     write_evidence_timeline,
 )
 from .errors import CohesixError
+from .identity import IdentityTicket, exchange_identity, local_subject
 from .orchestration import (
     ApprovalRequest,
     CohesixOrchestrator,
@@ -42,6 +45,7 @@ from .playbooks import (
 )
 from .receipts import (
     CompatibilityReceipt,
+    OperationReport,
     WorkerReceipt,
     parse_receipt,
     receipt_actions_for_role,
@@ -57,6 +61,11 @@ from .worker import (
 )
 
 __all__ = [
+    "HostObservation",
+    "SnapshotReader",
+    "IdentityTicket",
+    "exchange_identity",
+    "local_subject",
     "AdmissionCorrelation",
     "QueenIntent",
     "ApprovalRequest",
@@ -66,6 +75,7 @@ __all__ = [
     "CohesixError",
     "ControlPlan",
     "CompatibilityReceipt",
+    "OperationReport",
     "EvidencePackSummary",
     "ExportRequest",
     "FilesystemBackend",

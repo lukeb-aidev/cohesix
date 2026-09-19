@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Pi4 U-Boot aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.21"
+schema = "1.26"
 
 [root_task.affinity]
 enabled = true
@@ -1591,6 +1591,21 @@ enable = true
 providers = ["systemd", "k8s", "docker", "nvidia"]
 mount_at = "/host"
 
+[ecosystem.host.snapshots]
+enable = true
+max_bytes = 8192
+max_entries = 64
+max_value_bytes = 1024
+max_ttl_ms = 30000
+
+[[ecosystem.host.snapshots.publishers]]
+source_id = "linux-reference"
+providers = ["systemd", "docker", "k8s", "nvidia", "jetson", "network"]
+
+[[ecosystem.host.snapshots.publishers]]
+source_id = "mac-controller"
+providers = ["launchd", "network"]
+
 [ecosystem.host.tickets]
 enable = true
 request_schema = "host-ticket/v1"
@@ -1602,6 +1617,9 @@ action_allowlist = [
   "gpu.lease.grant",
   "gpu.lease.renew",
   "gpu.lease.release",
+  "gpu.workload.submit",
+  "gpu.workload.cancel",
+  "gpu.workload.observe",
   "peft.export",
   "peft.import",
   "peft.activate",
@@ -1621,6 +1639,9 @@ receipt_action_allowlist = [
   "gpu.lease.grant",
   "gpu.lease.renew",
   "gpu.lease.release",
+  "gpu.workload.submit",
+  "gpu.workload.cancel",
+  "gpu.workload.observe",
   "peft.export",
   "peft.import",
   "peft.activate",

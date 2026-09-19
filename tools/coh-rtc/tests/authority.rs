@@ -63,6 +63,26 @@ fn future_authority_cannot_be_claimed_by_target_profiles() {
 }
 
 #[test]
+fn selected_federation_preserves_the_production_fence_and_audit_floor() {
+    let temp = tempfile::TempDir::new().expect("temporary public key");
+    let key = temp.path().join("verification.hex");
+    std::fs::write(&key, "public-key-shape-only").expect("public fixture");
+    let mut selected = authority::release_a(manifest(), &key, 7).expect("authority profile");
+    assert!(!selected.ecosystem.host.federation.enable);
+    selected.ecosystem.host.federation.enable = true;
+    authority::validate(&selected).expect("M27b host relay selection is not a use-case claim");
+    for field in 0..3 {
+        let mut invalid = selected.clone();
+        match field {
+            0 => invalid.authority.execution_wal_required = false,
+            1 => invalid.authority.writer_epoch_required = false,
+            _ => invalid.ecosystem.audit.replay_enable = false,
+        }
+        assert!(authority::validate(&invalid).is_err());
+    }
+}
+
+#[test]
 fn published_cas_key_is_not_a_production_trust_root() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let profile = authority::release_a(

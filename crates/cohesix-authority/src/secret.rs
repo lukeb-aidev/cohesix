@@ -58,14 +58,36 @@ pub fn validate_reference(reference: &str) -> Result<(), SecretError> {
     Err(SecretError::InvalidReference)
 }
 
-/// Resolve exactly the selected source. Explicit references take precedence
-/// over compatibility literals at their callers; failure never tries another source.
+/// Resolve exactly the selected source. An environment variable may point to
+/// one file reference, allowing service managers to inject credential paths.
+/// Environment-to-environment chains and file-to-reference chains are refused.
+/// Failure never tries another source.
 pub fn resolve_reference(reference: &str) -> Result<String, SecretError> {
+    resolve_reference_with(reference, |name| {
+        env::var(name).map_err(|_| SecretError::Unavailable)
+    })
+}
+
+fn resolve_reference_with(
+    reference: &str,
+    environment: impl Fn(&str) -> Result<String, SecretError>,
+) -> Result<String, SecretError> {
     validate_reference(reference)?;
     if let Some(name) = reference.strip_prefix("env:") {
-        let value = env::var(name).map_err(|_| SecretError::Unavailable)?;
+        let value = environment(name)?;
+        if value.starts_with("file:") {
+            return resolve_file_reference(&value);
+        }
+        if value.starts_with("env:") {
+            return Err(SecretError::InvalidReference);
+        }
         return validate_value(&value);
     }
+    resolve_file_reference(reference)
+}
+
+fn resolve_file_reference(reference: &str) -> Result<String, SecretError> {
+    validate_reference(reference)?;
     let path = reference
         .strip_prefix("file:")
         .ok_or(SecretError::InvalidReference)?;
@@ -87,6 +109,9 @@ pub fn resolve_reference(reference: &str) -> Result<String, SecretError> {
     file.take((MAX_SECRET_BYTES + 1) as u64)
         .read_to_string(&mut value)
         .map_err(|_| SecretError::InvalidValue)?;
+    if value.starts_with("env:") || value.starts_with("file:") {
+        return Err(SecretError::InvalidReference);
+    }
     validate_value(&value)
 }
 
@@ -157,6 +182,32 @@ mod tests {
         assert_eq!(
             validate_value("unique-deployment-token\n"),
             Ok("unique-deployment-token".to_string())
+        );
+    }
+
+    #[test]
+    fn service_credential_reference_has_one_file_hop_and_no_fallback() {
+        let directory = tempfile::tempdir().expect("private credential directory");
+        let path = directory.path().join("credential");
+        std::fs::write(&path, "deployment-credential-value\n").expect("write credential");
+        let reference = alloc::format!("file:{}", path.display());
+        assert_eq!(
+            resolve_reference_with("env:COH_TEST_KEY", |_| Ok(reference.clone())),
+            Ok("deployment-credential-value".to_string())
+        );
+        assert_eq!(
+            resolve_reference_with("env:COH_TEST_KEY", |_| Ok("env:LOOP".to_string())),
+            Err(SecretError::InvalidReference)
+        );
+        std::fs::write(&path, "file:/private/another-credential").expect("invalid chain");
+        assert_eq!(
+            resolve_reference_with("env:COH_TEST_KEY", |_| Ok(reference.clone())),
+            Err(SecretError::InvalidReference)
+        );
+        std::fs::remove_file(&path).expect("remove selected credential");
+        assert_eq!(
+            resolve_reference_with("env:COH_TEST_KEY", |_| Ok(reference.clone())),
+            Err(SecretError::Unavailable)
         );
     }
 }

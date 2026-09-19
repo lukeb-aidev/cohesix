@@ -24,8 +24,36 @@ installation/CI, the full SwarmUI workbench, then integrated qualification. Broa
 scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
 planning, not implementation or evidence status.
 
+Milestone [27b](BUILD_PLAN.md#27b) is **Complete** as of 19 September 2026
+for the selected **Executable Host Foundation**. The macOS ARM64 controller and
+Linux AArch64 CUDA 13.2.2 host pass real vector-add and matrix-multiply through
+QEMU admission, the host-ticket agent and bounded GPU bridge under both hardened
+systemd and a digest-pinned NVIDIA container. Separately enrolled gateway,
+native and Worker custodians produce verified causal chains. Native manager
+identities match the signed results and measured memory/CPU/task controls;
+CUDA allocation admission is explicitly not a hard GPU partition.
+
+Focused authority/refusal, deadline/cancel/revoke, lost-ACK/restart, evidence
+integrity and safe OOM checks pass at their recorded proof layers. Exact host
+and QEMU builds, generated consistency and Test Plan checks pass. No full suite,
+new physical Pi qualification, production Worker ticket-to-bundle binding,
+Queen reboot persistence or complete use-case acceptance is claimed. See the
+[implementation record](audit/M27B_IMPLEMENTATION_RECORD.md#selected-executable-foundation-closure-19-september-2026)
+for exact identities, evidence reuse and the scoped compatibility review.
+
+Earlier broad 27b implementation remains available under the updated roadmap:
+identity/exporter/federation, native snapshots, FUSE and package foundations,
+field-bus references, launchd/Xcode adapters, MIG discovery and generated workflow
+stages. Their existing evidence stays at its original source/profile identity.
+Credentialed Apple release, broader native-provider/package integration and
+complete domain workflows remain unqualified under their later milestone owners.
+MIG is unsupported on Merlin; CUDA, data and artifacts remain host-side.
+
 Milestone [27a](BUILD_PLAN.md#27a) is **Complete**, approved on
-14 September 2026. Delegated REST identity, strict Queen intent replay,
+14 September 2026. The scoped `m27a-host-ticket-validation-replay` restoration
+found during M27b is also Complete: production Root now accepts strict native
+argument/correlation objects and enforces version-1 request/result writer epochs;
+focused QEMU/Merlin checks pass. The previous closure evidence is retained. Delegated REST identity, strict Queen intent replay,
 host execution recovery and production-secret enforcement are implemented.
 Focused host, QEMU and Pi authority/compatibility checks pass. The
 [27a task record](audit/M27A_COMPLETION_EVIDENCE.md) records the owner's approval

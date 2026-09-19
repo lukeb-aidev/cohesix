@@ -140,6 +140,15 @@ struct Args {
     /// Output path for the generated host-integration documentation table.
     #[arg(long, default_value_os_t = default_host_integration_doc_path())]
     host_integration_doc: PathBuf,
+    /// Output path for the Python provider binding from the integration graph.
+    #[arg(long, default_value = "tools/cohesix-py/cohesix/provider_generated.py")]
+    provider_python: PathBuf,
+    /// Output path for the shared Rust provider binding.
+    #[arg(
+        long,
+        default_value = "crates/cohesix-authority/src/provider_generated.rs"
+    )]
+    provider_rust: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -210,6 +219,7 @@ fn main() -> Result<()> {
         &repo_root.join("docs/BUILD_PLAN.md"),
         &args.host_integration_graph,
         &args.host_integration_doc,
+        (&args.provider_python, &args.provider_rust),
     )?;
     println!("coh-rtc: wrote {}", output.summary());
     println!(

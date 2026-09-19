@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the host-sidecar-bridge crate for publishing /host providers.
+# Copyright 2026 Lukas Bower
 [package]
 name = "host-sidecar-bridge"
 version = "0.1.0"
@@ -13,8 +14,22 @@ tcp = ["cohsh/tcp", "cohsh/rest"]
 rest = ["cohsh/rest"]
 
 [dependencies]
+cohesix-authority = { workspace = true, features = ["std"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
+cohsh-core = { workspace = true }
 cohsh = { path = "../cohsh" }
 cohesix-ticket = { workspace = true }
 nine-door = { path = "../nine-door" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+fs2 = "0.4.3"
+rustix = { version = "1.1.4", features = ["process"] }
+libc = "0.2"
+tempfile = "3.27.0"
+gpu-bridge-host = { path = "../gpu-bridge-host" }
+sidecar-bus = { path = "../sidecar-bus", features = ["live", "modbus", "dnp3"] }

@@ -475,6 +475,12 @@ pub enum WorkerAction {
     GpuLeaseRenew = 0x0202,
     /// Project a terminal `gpu.lease.release` result.
     GpuLeaseRelease = 0x0203,
+    /// Project a terminal bounded CUDA execution result.
+    GpuWorkloadSubmit = 0x0204,
+    /// Project a terminal GPU job cancellation result.
+    GpuWorkloadCancel = 0x0205,
+    /// Project an observation of an exact GPU job.
+    GpuWorkloadObserve = 0x0206,
     /// Project a terminal `peft.export` result.
     PeftExport = 0x0301,
     /// Project a terminal `peft.import` result.
@@ -493,6 +499,9 @@ impl WorkerAction {
             0x0201 => Ok(Self::GpuLeaseGrant),
             0x0202 => Ok(Self::GpuLeaseRenew),
             0x0203 => Ok(Self::GpuLeaseRelease),
+            0x0204 => Ok(Self::GpuWorkloadSubmit),
+            0x0205 => Ok(Self::GpuWorkloadCancel),
+            0x0206 => Ok(Self::GpuWorkloadObserve),
             0x0301 => Ok(Self::PeftExport),
             0x0302 => Ok(Self::PeftImport),
             0x0303 => Ok(Self::PeftActivate),
@@ -506,19 +515,29 @@ impl WorkerAction {
     pub const fn role(self) -> WorkerRole {
         match self {
             Self::HeartbeatPublish => WorkerRole::Heartbeat,
-            Self::GpuLeaseGrant | Self::GpuLeaseRenew | Self::GpuLeaseRelease => WorkerRole::Gpu,
+            Self::GpuLeaseGrant
+            | Self::GpuLeaseRenew
+            | Self::GpuLeaseRelease
+            | Self::GpuWorkloadSubmit
+            | Self::GpuWorkloadCancel
+            | Self::GpuWorkloadObserve => WorkerRole::Gpu,
             Self::PeftExport | Self::PeftImport | Self::PeftActivate | Self::PeftRollback => {
                 WorkerRole::Lora
             }
         }
     }
 
-    /// Return true for the three receipt-bearing GPU actions.
+    /// Return true for the six receipt-bearing GPU actions.
     #[must_use]
     pub const fn is_gpu(self) -> bool {
         matches!(
             self,
-            Self::GpuLeaseGrant | Self::GpuLeaseRenew | Self::GpuLeaseRelease
+            Self::GpuLeaseGrant
+                | Self::GpuLeaseRenew
+                | Self::GpuLeaseRelease
+                | Self::GpuWorkloadSubmit
+                | Self::GpuWorkloadCancel
+                | Self::GpuWorkloadObserve
         )
     }
 

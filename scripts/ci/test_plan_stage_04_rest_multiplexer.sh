@@ -815,7 +815,7 @@ if [[ -z "${gateway_url}" ]]; then
   fi
   COH_REST_TICKET="$("${cohsh_bin}" --mint-ticket --role queen \
     --ticket-subject stage4-operator --ticket-secret "${HIVE_GATEWAY_DELEGATION_KEY_REF}" \
-    --ticket-write-scope / --ticket-ttl-s 3600 --ticket-ops 1000000)"
+    --ticket-write-scope / --ticket-read-scope / --ticket-ttl-s 3600 --ticket-ops 1000000)"
   export COH_REST_TICKET
 
   COHSH_AUTH_TOKEN="${console_auth_token}" \

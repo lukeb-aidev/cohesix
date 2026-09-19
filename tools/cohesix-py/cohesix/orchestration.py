@@ -20,7 +20,13 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .audit import CohesixAudit
 from .auth import resolve_tcp_auth_token
-from .authority import AdmissionCorrelation, QueenIntent, authority_id, authority_u64, validate_provider_v1
+from .authority import (
+    AdmissionCorrelation,
+    QueenIntent,
+    authority_id,
+    authority_u64,
+    validate_provider_v1,
+)
 from .backends import Backend, FilesystemBackend, MockBackend, RestBackend, TcpBackend
 from .client import CohesixClient
 from .defaults import DEFAULTS
@@ -75,9 +81,7 @@ def _normalize_token(
     pattern = _TOKEN_PATTERN_WITH_COLON if allow_colon else _TOKEN_PATTERN
     if not pattern.match(token):
         charset = "[A-Za-z0-9._:-]" if allow_colon else "[A-Za-z0-9._-]"
-        raise CohesixError(
-            f"{field_name} must use ASCII token characters {charset}"
-        )
+        raise CohesixError(f"{field_name} must use ASCII token characters {charset}")
     return token
 
 
@@ -102,7 +106,9 @@ class ScheduleRequest:
             self, "request_id", _normalize_token("request_id", self.request_id)
         )
         object.__setattr__(self, "role", _normalize_token("role", self.role))
-        object.__setattr__(self, "priority", _require_positive("priority", self.priority))
+        object.__setattr__(
+            self, "priority", _require_positive("priority", self.priority)
+        )
         object.__setattr__(self, "ticks", _require_positive("ticks", self.ticks))
         object.__setattr__(
             self, "budget_ms", _require_positive("budget_ms", self.budget_ms)
@@ -246,7 +252,9 @@ class ExportRequest:
         object.__setattr__(self, "op", op)
         if op not in {"open", "close"}:
             raise CohesixError("export op must be one of open|close")
-        object.__setattr__(self, "export_id", _normalize_token("export_id", self.export_id))
+        object.__setattr__(
+            self, "export_id", _normalize_token("export_id", self.export_id)
+        )
         if op == "open":
             if self.ttl_s is None:
                 raise CohesixError("open export request requires ttl_s")
@@ -315,10 +323,14 @@ class HostTicketRequest:
         authority_id(self.idempotency_key)
         if self.writer_epoch is not None:
             authority_u64(self.writer_epoch, positive=True)
-        if self.admission is not None and not isinstance(self.admission, AdmissionCorrelation):
+        if self.admission is not None and not isinstance(
+            self.admission, AdmissionCorrelation
+        ):
             raise CohesixError("EPERM invalid admission correlation")
         object.__setattr__(
-            self, "ticket_id", _normalize_token("ticket_id", self.ticket_id, max_bytes=128)
+            self,
+            "ticket_id",
+            _normalize_token("ticket_id", self.ticket_id, max_bytes=128),
         )
         object.__setattr__(
             self,
@@ -329,8 +341,13 @@ class HostTicketRequest:
             self, "action", _normalize_token("action", self.action, max_bytes=64)
         )
         if self.target is not None:
-            target = self.target.strip()
-            validate_path(target)
+            if self.action.startswith(
+                ("modbus.", "dnp3.", "launchd.", "mac_release.", "endpoint_compliance.")
+            ):
+                target = authority_id(self.target)
+            else:
+                target = self.target.strip()
+                validate_path(target)
             object.__setattr__(self, "target", target)
         if not isinstance(self.args, dict):
             raise CohesixError("host ticket args must be a JSON object")
@@ -372,7 +389,9 @@ class HostTicketRequest:
 
     def to_payload(self, schema: str = "host-ticket/v1") -> Dict[str, object]:
         if schema != "host-ticket/v1":
-            raise CohesixError("HostTicketRequest only encodes the v1 compatibility contract")
+            raise CohesixError(
+                "HostTicketRequest only encodes the v1 compatibility contract"
+            )
         validate_provider_v1(self.action, self.target, self.args)
         payload: Dict[str, object] = {
             "schema": schema,
@@ -415,13 +434,21 @@ class K8sRbacIntent:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "intent_id", _normalize_token("intent_id", self.intent_id, max_bytes=128)
+            self,
+            "intent_id",
+            _normalize_token("intent_id", self.intent_id, max_bytes=128),
         )
-        object.__setattr__(self, "subject", _normalize_token("subject", self.subject, max_bytes=128))
         object.__setattr__(
-            self, "namespace", _normalize_token("namespace", self.namespace, max_bytes=128)
+            self, "subject", _normalize_token("subject", self.subject, max_bytes=128)
         )
-        object.__setattr__(self, "node", _normalize_token("node", self.node, max_bytes=128))
+        object.__setattr__(
+            self,
+            "namespace",
+            _normalize_token("namespace", self.namespace, max_bytes=128),
+        )
+        object.__setattr__(
+            self, "node", _normalize_token("node", self.node, max_bytes=128)
+        )
         normalized = _normalize_token("verb", self.verb, max_bytes=32).lower()
         if normalized not in {"cordon", "drain", "lease-sync"}:
             raise CohesixError("verb must be one of cordon|drain|lease-sync")
@@ -441,9 +468,9 @@ class K8sRbacIntent:
         }
         action = action_map[self.verb]
         idempotency_seed = f"{self.intent_id}.{self.verb}.{self.node}"
-        idempotency_key = "k8s" + hashlib.sha256(
-            idempotency_seed.encode("utf-8")
-        ).hexdigest()[:8]
+        idempotency_key = (
+            "k8s" + hashlib.sha256(idempotency_seed.encode("utf-8")).hexdigest()[:8]
+        )
         args: Dict[str, object] = {"node": self.node}
         if self.reason is not None:
             args["reason"] = self.reason
@@ -523,7 +550,12 @@ class CohesixOrchestrator:
         self.authority = dict(self.defaults["authority"])
         if profile_contract is not None:
             from .worker import load_profile_contract
-            contract = profile_contract if isinstance(profile_contract, TargetProfileContract) else load_profile_contract(profile_contract)
+
+            contract = (
+                profile_contract
+                if isinstance(profile_contract, TargetProfileContract)
+                else load_profile_contract(profile_contract)
+            )
             self.authority.update(contract.authority)
         self.console = self.defaults.get("console", {})
         self.paths = self.defaults.get("paths", {})
@@ -581,7 +613,11 @@ class CohesixOrchestrator:
                 or os.environ.get("COHESIX_PROFILE_CONTRACT"),
             )
 
-        host = os.environ.get("COH_TCP_HOST") or os.environ.get("COHSH_TCP_HOST") or "127.0.0.1"
+        host = (
+            os.environ.get("COH_TCP_HOST")
+            or os.environ.get("COHSH_TCP_HOST")
+            or "127.0.0.1"
+        )
         port = _env_int("COH_TCP_PORT", _env_int("COHSH_TCP_PORT", 31337))
         try:
             auth_token = resolve_tcp_auth_token()
@@ -622,7 +658,9 @@ class CohesixOrchestrator:
         approvals: Iterable[ApprovalRequest],
         audit: Optional[CohesixAudit] = None,
     ) -> List[ControlWriteResult]:
-        payloads = [json.dumps(item.to_payload(), separators=(",", ":")) for item in approvals]
+        payloads = [
+            json.dumps(item.to_payload(), separators=(",", ":")) for item in approvals
+        ]
         return self._append_json_lines("/actions/queue", payloads, 2048, audit)
 
     def submit_queen_intent(self, intent: QueenIntent) -> int:
@@ -640,7 +678,9 @@ class CohesixOrchestrator:
         max_bytes = int(
             self.control_plane.get("schedule", {}).get("ctl_max_bytes", 8192)
         )
-        payloads = [json.dumps(item.to_payload(), separators=(",", ":")) for item in requests]
+        payloads = [
+            json.dumps(item.to_payload(), separators=(",", ":")) for item in requests
+        ]
         return self._append_json_lines(path, payloads, max_bytes, audit)
 
     def dequeue_schedule(
@@ -666,7 +706,9 @@ class CohesixOrchestrator:
     ) -> List[ControlWriteResult]:
         path = str(self.paths.get("queen_lease_ctl", "/queen/lease/ctl"))
         max_bytes = int(self.control_plane.get("lease", {}).get("ctl_max_bytes", 8192))
-        payloads = [json.dumps(item.to_payload(), separators=(",", ":")) for item in requests]
+        payloads = [
+            json.dumps(item.to_payload(), separators=(",", ":")) for item in requests
+        ]
         return self._append_json_lines(path, payloads, max_bytes, audit)
 
     def apply_exports(
@@ -675,10 +717,10 @@ class CohesixOrchestrator:
         audit: Optional[CohesixAudit] = None,
     ) -> List[ControlWriteResult]:
         path = str(self.paths.get("queen_export_ctl", "/queen/export/ctl"))
-        max_bytes = int(
-            self.control_plane.get("export", {}).get("ctl_max_bytes", 2048)
-        )
-        payloads = [json.dumps(item.to_payload(), separators=(",", ":")) for item in requests]
+        max_bytes = int(self.control_plane.get("export", {}).get("ctl_max_bytes", 2048))
+        payloads = [
+            json.dumps(item.to_payload(), separators=(",", ":")) for item in requests
+        ]
         return self._append_json_lines(path, payloads, max_bytes, audit)
 
     def execute_plan(
@@ -718,7 +760,10 @@ class CohesixOrchestrator:
         payloads: List[str] = []
         transport_bound = self._transport_payload_bound(path)
         for request in requests:
-            if (self.authority["writer_epoch_required"] or request.writer_epoch is not None) and request.writer_epoch != self.authority["writer_epoch"]:
+            if (
+                self.authority["writer_epoch_required"]
+                or request.writer_epoch is not None
+            ) and request.writer_epoch != self.authority["writer_epoch"]:
                 raise CohesixError("EPERM stale-writer")
             if allowlist and request.action not in allowlist:
                 raise CohesixError(
@@ -818,7 +863,9 @@ class CohesixOrchestrator:
         )
 
         return ProcSnapshot(
-            schedule_summary=schedule_summary_lines[0] if schedule_summary_lines else "",
+            schedule_summary=(
+                schedule_summary_lines[0] if schedule_summary_lines else ""
+            ),
             schedule_queue=schedule_queue_lines,
             lease_summary=lease_summary_lines[0] if lease_summary_lines else "",
             lease_active=lease_active_lines,
@@ -840,10 +887,7 @@ class CohesixOrchestrator:
             if not line:
                 raise CohesixError("control payload must not be empty")
             line_bytes = len(line.encode("utf-8"))
-            if (
-                transport_bound is not None
-                and line_bytes > transport_bound
-            ):
+            if transport_bound is not None and line_bytes > transport_bound:
                 raise CohesixError(
                     f"control payload for {path} exceeds transport payload bound {transport_bound} bytes"
                 )

@@ -13,6 +13,27 @@ std = []
 modbus = []
 dnp3 = []
 tokio = ["std", "dep:tokio"]
+live = ["std", "dep:cohesix-authority", "dep:cohesix-evidence", "dep:serde", "dep:serde_json", "dep:sha2", "dep:hex", "dep:fs2", "dep:nix", "dep:clap", "dep:thiserror"]
 
 [dependencies]
 tokio = { version = "1.53.1", features = ["rt", "time"], optional = true }
+
+cohesix-authority = { workspace = true, features = ["std"], optional = true }
+cohesix-evidence = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+fs2 = { version = "0.4.3", optional = true }
+nix = { version = "0.31.3", features = ["term", "poll", "fs", "user"], optional = true }
+clap = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+ed25519-dalek = "2.2.0"
+
+[[bin]]
+name = "sidecar-bus"
+path = "src/main.rs"
+required-features = ["live", "modbus", "dnp3"]

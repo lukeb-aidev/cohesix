@@ -1,3 +1,6 @@
+# Author: Lukas Bower
+# Purpose: Parse bounded versioned ticket claims without claiming MAC verification.
+# Copyright 2026 Lukas Bower
 """Ticket parsing and validation mirroring cohsh-core semantics."""
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ MAX_TICKET_LEN = 224
 MAX_MOUNT_FIELD_LEN = 255
 MAX_SCOPE_COUNT = 16
 CLAIMS_VERSION = 1
+COMPACT_CLAIMS_VERSION = 2
 
 FLAG_TICKS = 0b0000_0001
 FLAG_OPS = 0b0000_0010
@@ -69,6 +73,22 @@ class PayloadCursor:
     def read_u64(self) -> int:
         return int.from_bytes(self.read_exact(8), "little", signed=False)
 
+    def read_integer(self, version: int) -> int:
+        """Decode fixed u64 or canonical unsigned LEB128, never wider than u64."""
+        if version == CLAIMS_VERSION:
+            return self.read_u64()
+        value = 0
+        for index in range(10):
+            byte = self.read_u8()
+            if index == 9 and byte > 1:
+                raise TicketError("ticket integer overflow")
+            value |= (byte & 0x7f) << (7 * index)
+            if byte & 0x80 == 0:
+                if index > 0 and byte == 0:
+                    raise TicketError("ticket integer noncanonical")
+                return value
+        raise TicketError("ticket integer overflow")
+
     def read_string(self) -> str:
         length = int.from_bytes(self.read_exact(2), "little", signed=False)
         if length > MAX_MOUNT_FIELD_LEN:
@@ -84,29 +104,37 @@ class PayloadCursor:
             raise TicketError("ticket payload has trailing data")
 
 
-def _decode_scopes(cursor: PayloadCursor) -> None:
+def _decode_scopes(cursor: PayloadCursor, version: int) -> None:
     count = cursor.read_u8()
     if count > MAX_SCOPE_COUNT:
         raise TicketError("ticket scope count exceeds max")
+    if version == COMPACT_CLAIMS_VERSION and count == 0:
+        raise TicketError("ticket empty scopes noncanonical")
     for _ in range(count):
         _ = cursor.read_string()
-        _ = cursor.read_u8()  # verb
+        if cursor.read_u8() not in (0, 1, 2):
+            raise TicketError("ticket scope verb unsupported")
         _ = cursor.read_u32()  # rate_per_s
 
 
-def _decode_quotas(cursor: PayloadCursor) -> None:
-    _ = cursor.read_u64()  # bandwidth_bytes
-    _ = cursor.read_u32()  # cursor_resumes
-    _ = cursor.read_u32()  # cursor_advances
+def _decode_quotas(cursor: PayloadCursor, version: int) -> None:
+    values = (cursor.read_u64(), cursor.read_u32(), cursor.read_u32())
+    if version == COMPACT_CLAIMS_VERSION and not any(values):
+        raise TicketError("ticket empty quotas noncanonical")
 
 
 def decode_ticket_claims(token: str) -> TicketClaims:
+    """Inspect claims only; a trusted issuer key is required to verify authority."""
+    if len(token) > MAX_TICKET_LEN:
+        raise TicketError("ticket payload exceeds max bytes")
     if not token.startswith(TICKET_PREFIX):
         raise TicketError("ticket missing cohesix-ticket prefix")
     payload = token[len(TICKET_PREFIX) :]
     if "." not in payload:
         raise TicketError("ticket missing mac separator")
     payload_hex, mac_hex = payload.split(".", 1)
+    if any(char not in "0123456789abcdefABCDEF" for char in payload_hex + mac_hex):
+        raise TicketError("ticket hex decode failed")
     try:
         payload_bytes = bytes.fromhex(payload_hex)
         mac_bytes = bytes.fromhex(mac_hex)
@@ -117,29 +145,31 @@ def decode_ticket_claims(token: str) -> TicketClaims:
 
     cursor = PayloadCursor(payload_bytes)
     version = cursor.read_u8()
-    if version != CLAIMS_VERSION:
+    if version not in (CLAIMS_VERSION, COMPACT_CLAIMS_VERSION):
         raise TicketError("ticket version unsupported")
     role_code = cursor.read_u8()
     role = ROLE_MAP.get(role_code)
     if role is None:
         raise TicketError("ticket role unsupported")
     flags = cursor.read_u8()
+    if version == COMPACT_CLAIMS_VERSION and flags & 0xc0:
+        raise TicketError("ticket flags unsupported")
     if flags & FLAG_TICKS:
-        cursor.read_u64()
+        cursor.read_integer(version)
     if flags & FLAG_OPS:
-        cursor.read_u64()
+        cursor.read_integer(version)
     if flags & FLAG_TTL:
-        cursor.read_u64()
+        cursor.read_integer(version)
     subject = None
     if flags & FLAG_SUBJECT:
         subject = cursor.read_string()
-    cursor.read_u64()  # issued_at_ms
+    cursor.read_integer(version)  # issued_at_ms
     cursor.read_string()  # mounts.service
     cursor.read_string()  # mounts.at
     if flags & FLAG_SCOPES:
-        _decode_scopes(cursor)
+        _decode_scopes(cursor, version)
     if flags & FLAG_QUOTAS:
-        _decode_quotas(cursor)
+        _decode_quotas(cursor, version)
     cursor.ensure_empty()
     return TicketClaims(role=role, subject=subject)
 

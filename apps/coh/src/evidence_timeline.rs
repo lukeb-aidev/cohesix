@@ -182,6 +182,7 @@ pub fn write_timeline_with_scenario(
     pack_dir: &Path,
     scenario: Scenario,
 ) -> Result<TimelineSummary> {
+    let sealed = crate::evidence::verify_pack_integrity(pack_dir)?;
     let events = build_events(pack_dir)?;
     let (case_json, case_markdown) = case::build(pack_dir, &events, scenario)?;
     let ndjson_path = pack_dir.join("timeline.ndjson");
@@ -190,6 +191,9 @@ pub fn write_timeline_with_scenario(
     write_markdown(&markdown_path, &events)?;
     crate::operator::write_atomic(&pack_dir.join("case.json"), &case_json)?;
     crate::operator::write_atomic(&pack_dir.join("case.md"), case_markdown.as_bytes())?;
+    if sealed {
+        crate::evidence::seal_pack(pack_dir)?;
+    }
     Ok(TimelineSummary {
         events: events.len(),
         ndjson_path,

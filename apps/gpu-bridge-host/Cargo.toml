@@ -8,6 +8,9 @@ edition = "2021"
 publish = false
 
 [dependencies]
+ring = "0.17.14"
+fs2 = "0.4.3"
+tempfile = "3.27.0"
 cohesix-authority = { workspace = true, features = ["std"] }
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -80,19 +80,40 @@ impl TransportKind {
     }
 }
 
+#[cfg(test)]
+mod provider_mode_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_transport_is_unselected_and_fixture_transport_is_explicit() {
+        let cli = Cli::try_parse_from(["cohsh"]).expect("parse offline-capable CLI");
+        assert!(cli.transport.is_none());
+        #[cfg(feature = "in-process")]
+        {
+            let cli =
+                Cli::try_parse_from(["cohsh", "--transport", "mock"]).expect("explicit fixture");
+            assert!(matches!(cli.transport, Some(TransportKind::Mock)));
+        }
+    }
+}
+
 /// Cohesix shell command-line arguments.
 #[derive(Debug, Parser)]
 #[command(author = "Lukas Bower", version, about = "Cohesix shell prototype", long_about = None)]
+#[command(group(clap::ArgGroup::new("delegated_scope").multiple(true).args(["ticket_write_scope", "ticket_read_scope"])))]
 struct Cli {
     /// Read an embedded manual (or list topics) and exit without connecting.
     #[arg(
         long,
         num_args = 0..=1,
         default_missing_value = "",
-        conflicts_with_all = ["script", "check", "mint_ticket", "record_trace", "replay_trace"]
+        conflicts_with_all = ["script", "check", "mint_ticket", "provider_registry", "record_trace", "replay_trace"]
     )]
     man: Option<String>,
 
+    /// Print compiler-owned provider contracts without opening a transport.
+    #[arg(long)]
+    provider_registry: bool,
     /// Attach immediately as the supplied role.
     #[arg(long)]
     role: Option<RoleArg>,
@@ -127,12 +148,16 @@ struct Cli {
     #[arg(long, requires = "mint_ticket")]
     ticket_write_scope: Option<String>,
 
+    /// Delegated REST read prefix; requires a subject identity.
+    #[arg(long, requires = "mint_ticket")]
+    ticket_read_scope: Option<String>,
+
     /// Delegated ticket lifetime in seconds (1..86400).
-    #[arg(long, requires = "ticket_write_scope", default_value_t = 60)]
+    #[arg(long, requires = "delegated_scope", default_value_t = 60)]
     ticket_ttl_s: u64,
 
     /// Total operations permitted by a delegated ticket.
-    #[arg(long, requires = "ticket_write_scope", default_value_t = 1024)]
+    #[arg(long, requires = "delegated_scope", default_value_t = 1024)]
     ticket_ops: u64,
 
     /// Execute commands from a script file instead of starting an interactive shell.
@@ -196,29 +221,9 @@ struct Cli {
     #[arg(long)]
     heartbeat_interval_ms: Option<u64>,
 
-    /// Select the transport backing the shell session.
-    #[cfg_attr(feature = "tcp", arg(long, value_enum, default_value_t = TransportKind::Tcp))]
-    #[cfg_attr(
-        all(not(feature = "tcp"), feature = "in-process"),
-        arg(long, value_enum, default_value_t = TransportKind::Mock)
-    )]
-    #[cfg_attr(
-        all(
-            not(feature = "tcp"),
-            not(feature = "in-process"),
-            feature = "rest"
-        ),
-        arg(long, value_enum, default_value_t = TransportKind::Rest)
-    )]
-    #[cfg_attr(
-        all(
-            not(feature = "tcp"),
-            not(feature = "in-process"),
-            not(feature = "rest")
-        ),
-        arg(long, value_enum, default_value_t = TransportKind::Qemu)
-    )]
-    transport: TransportKind,
+    /// Select the transport explicitly; an omitted transport cannot start a mock backend.
+    #[arg(long, value_enum)]
+    transport: Option<TransportKind>,
 
     /// Seed the mock transport with GPU namespaces.
     #[cfg(feature = "in-process")]
@@ -478,6 +483,10 @@ fn main() -> Result<()> {
         println!("{}", cohsh::manual::render(topic)?);
         return Ok(());
     }
+    if cli.provider_registry {
+        print!("{}", cohesix_authority::provider::registry_json());
+        return Ok(());
+    }
     init_logging(cli.verbose);
     let stdout = io::stdout();
     let writer = stdout.lock();
@@ -491,6 +500,11 @@ fn main() -> Result<()> {
             cohsh::ticket_mint::TicketMintRequest::new(role, cli.ticket_subject.as_deref(), None)?;
         let request = if let Some(scope) = cli.ticket_write_scope.as_deref() {
             request.with_delegated_write_scope(scope, cli.ticket_ttl_s, cli.ticket_ops)?
+        } else {
+            request
+        };
+        let request = if let Some(scope) = cli.ticket_read_scope.as_deref() {
+            request.with_delegated_read_scope(scope, cli.ticket_ttl_s, cli.ticket_ops)?
         } else {
             request
         };
@@ -573,78 +587,83 @@ fn main() -> Result<()> {
 
     type TransportSelection = (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>);
     let build_regular_transport = || -> Result<TransportSelection> {
-        Ok(match cli.transport {
-            #[cfg(feature = "in-process")]
-            TransportKind::Mock => {
-                let server = build_mock_server(cli.mock_seed_gpu)?;
-                let pool_server = server.clone();
-                let factory = Arc::new(move || {
-                    Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
-                        as Box<dyn Transport + Send>)
-                });
-                (
-                    Box::new(NineDoorTransport::new(server)) as Box<dyn Transport>,
-                    Some(factory),
-                )
-            }
-            TransportKind::Qemu => (
-                Box::new(QemuTransport::new(
-                    cli.qemu_bin.clone(),
-                    cli.qemu_out_dir.clone(),
-                    cli.qemu_gic_version.clone(),
-                    qemu_args,
-                )) as Box<dyn Transport>,
-                None,
-            ),
-            #[cfg(feature = "tcp")]
-            TransportKind::Tcp => {
-                let auth_token = resolve_tcp_auth_token(cli.auth_token.as_deref())?;
-                let retry = policy.retry;
-                let heartbeat = policy.heartbeat;
-                let shared = Arc::new(Mutex::new(
-                    TcpTransport::new(tcp_host.clone(), tcp_port)
-                        .with_retry_policy(retry)
-                        .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
-                        .with_auth_token(auth_token.clone())
-                        .with_tcp_debug(tcp_debug),
-                ));
-                let transport =
-                    Box::new(SharedTcpTransport::new(Arc::clone(&shared))) as Box<dyn Transport>;
-                let pool_shared = Arc::clone(&shared);
-                let factory = Arc::new(move || {
-                    Ok(Box::new(PooledTcpTransport::new(Arc::clone(&pool_shared)))
-                        as Box<dyn Transport + Send>)
-                });
-                (transport, Some(factory))
-            }
-            #[cfg(feature = "rest")]
-            TransportKind::Rest => {
-                let rest_url = resolve_rest_url(cli.rest_url.as_deref()).ok_or_else(|| {
+        Ok(
+            match cli
+                .transport
+                .ok_or_else(|| anyhow!("not_enabled transport: select --transport explicitly"))?
+            {
+                #[cfg(feature = "in-process")]
+                TransportKind::Mock => {
+                    let server = build_mock_server(cli.mock_seed_gpu)?;
+                    let pool_server = server.clone();
+                    let factory = Arc::new(move || {
+                        Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
+                            as Box<dyn Transport + Send>)
+                    });
+                    (
+                        Box::new(NineDoorTransport::new(server)) as Box<dyn Transport>,
+                        Some(factory),
+                    )
+                }
+                TransportKind::Qemu => (
+                    Box::new(QemuTransport::new(
+                        cli.qemu_bin.clone(),
+                        cli.qemu_out_dir.clone(),
+                        cli.qemu_gic_version.clone(),
+                        qemu_args,
+                    )) as Box<dyn Transport>,
+                    None,
+                ),
+                #[cfg(feature = "tcp")]
+                TransportKind::Tcp => {
+                    let auth_token = resolve_tcp_auth_token(cli.auth_token.as_deref())?;
+                    let retry = policy.retry;
+                    let heartbeat = policy.heartbeat;
+                    let shared = Arc::new(Mutex::new(
+                        TcpTransport::new(tcp_host.clone(), tcp_port)
+                            .with_retry_policy(retry)
+                            .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
+                            .with_auth_token(auth_token.clone())
+                            .with_tcp_debug(tcp_debug),
+                    ));
+                    let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)))
+                        as Box<dyn Transport>;
+                    let pool_shared = Arc::clone(&shared);
+                    let factory = Arc::new(move || {
+                        Ok(Box::new(PooledTcpTransport::new(Arc::clone(&pool_shared)))
+                            as Box<dyn Transport + Send>)
+                    });
+                    (transport, Some(factory))
+                }
+                #[cfg(feature = "rest")]
+                TransportKind::Rest => {
+                    let rest_url = resolve_rest_url(cli.rest_url.as_deref()).ok_or_else(|| {
                         anyhow!(
                             "--transport rest requires --rest-url (or COHSH_REST_URL/COH_REST_URL/HIVE_GATEWAY_URL)"
                         )
                     })?;
-                let rest_auth_token = resolve_rest_auth_token(cli.rest_auth_token.as_deref());
-                let pool_url = rest_url.clone();
-                let pool_token = rest_auth_token.clone();
-                let pool_response_timeout = rest_response_timeout;
-                let factory = Arc::new(move || {
-                    Ok(Box::new(build_rest_transport(
-                        pool_url.clone(),
-                        pool_token.clone(),
-                        pool_response_timeout,
-                    )?) as Box<dyn Transport + Send>)
-                });
-                (
-                    Box::new(build_rest_transport(
-                        rest_url,
-                        rest_auth_token,
-                        rest_response_timeout,
-                    )?) as Box<dyn Transport>,
-                    Some(factory),
-                )
-            }
-        })
+                    let rest_auth_token = resolve_rest_auth_token(cli.rest_auth_token.as_deref());
+                    let pool_url = rest_url.clone();
+                    let pool_token = rest_auth_token.clone();
+                    let pool_response_timeout = rest_response_timeout;
+                    let factory = Arc::new(move || {
+                        Ok(Box::new(build_rest_transport(
+                            pool_url.clone(),
+                            pool_token.clone(),
+                            pool_response_timeout,
+                        )?) as Box<dyn Transport + Send>)
+                    });
+                    (
+                        Box::new(build_rest_transport(
+                            rest_url,
+                            rest_auth_token,
+                            rest_response_timeout,
+                        )?) as Box<dyn Transport>,
+                        Some(factory),
+                    )
+                }
+            },
+        )
     };
 
     #[cfg(feature = "in-process")]
@@ -673,11 +692,16 @@ fn main() -> Result<()> {
         ));
     }
     #[cfg(feature = "in-process")]
-    let mock_transport = matches!(cli.transport, TransportKind::Mock);
+    let mock_transport = matches!(cli.transport, Some(TransportKind::Mock));
     #[cfg(not(feature = "in-process"))]
     let mock_transport = false;
     let live_capture = if cli.record_trace.is_some() && !mock_transport {
-        let backend = cli.transport.capture_backend()?;
+        let backend = cli
+            .transport
+            .ok_or_else(|| {
+                anyhow!("not_enabled transport: live capture requires an explicit transport")
+            })?
+            .capture_backend()?;
         let digest = |text: &Option<String>| -> Result<[u8; 32]> {
             match text {
                 None => Ok([0; 32]),
@@ -842,7 +866,7 @@ fn main() -> Result<()> {
         } else {
             let auto_role = cli.role.map(Role::from);
             #[cfg(feature = "in-process")]
-            let auto_log = !matches!(cli.transport, TransportKind::Mock);
+            let auto_log = !matches!(cli.transport, Some(TransportKind::Mock));
             #[cfg(not(feature = "in-process"))]
             let auto_log = true;
             let auto_attach = auto_role.map(|role| AutoAttach {

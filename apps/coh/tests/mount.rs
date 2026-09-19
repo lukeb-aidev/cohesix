@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate coh mount path and offset guards.
 // Author: Lukas Bower
@@ -80,4 +80,66 @@ fn append_only_offsets_are_enforced() {
     tracker.check_and_advance(0, 8).expect("first append");
     assert!(tracker.check_and_advance(4, 4).is_err());
     tracker.check_and_advance(8, 4).expect("second append");
+}
+
+#[test]
+fn append_placement_and_acknowledged_offsets_match_both_mount_backends() {
+    let mut tracker = AppendOnlyTracker::new();
+    // O_APPEND placement belongs to the remote append, including stale kernel EOF.
+    tracker
+        .validate_write(4096, 8, true)
+        .expect("existing remote EOF");
+    tracker
+        .validate_write(0, 8, true)
+        .expect("stale cached EOF");
+    tracker
+        .validate_write(0, 8, false)
+        .expect("failed write did not advance");
+    tracker.commit_write(8, 3).expect("partial acknowledgement");
+    tracker
+        .validate_write(3, 5, false)
+        .expect("resume after three acknowledged bytes");
+    assert!(tracker.validate_write(8, 5, false).is_err());
+    assert!(tracker.commit_write(5, 6).is_err());
+    tracker
+        .validate_write(3, 5, false)
+        .expect("invalid acknowledgement did not advance");
+}
+
+#[test]
+fn canonical_shard_paths_use_component_boundaries() {
+    let mut policy = test_policy();
+    policy.mount.allowlist.push("/shard".into());
+    let validator = MountValidator::from_policy(&policy).unwrap();
+    assert_eq!(
+        validator
+            .resolve_remote("/shard/edge/worker/gpu-1/telemetry")
+            .unwrap(),
+        "/shard/edge/worker/gpu-1/telemetry"
+    );
+    assert!(validator
+        .resolve_remote("/sharded/edge/worker/gpu-1/telemetry")
+        .is_err());
+    assert!(validator
+        .resolve_remote("/shard/edge/../other/worker/gpu-1")
+        .is_err());
+}
+
+#[test]
+fn omitted_append_flag_accepts_only_a_reported_end_or_sequential_cursor() {
+    let mut tracker = AppendOnlyTracker::new();
+    assert!(tracker.validate_placement(123, 8, false, Some(123)).is_ok());
+    assert!(tracker
+        .validate_placement(122, 8, false, Some(123))
+        .is_err());
+    assert!(tracker
+        .validate_placement(124, 8, false, Some(123))
+        .is_err());
+    assert!(tracker.validate_placement(123, 8, false, None).is_err());
+    tracker.commit_write(8, 3).unwrap();
+    assert!(tracker.validate_placement(3, 5, false, Some(123)).is_ok());
+    // A later getattr may publish a new EOF after another append. Neither
+    // that observation nor a failed write changes our acknowledged cursor.
+    assert!(tracker.validate_placement(200, 5, false, Some(200)).is_ok());
+    assert!(tracker.validate_placement(8, 5, false, Some(200)).is_err());
 }

@@ -13,21 +13,21 @@ use super::{
     DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExecutableRoleAdmission,
     ExecutableRoleMix, ExportControlConfig, FaultRegistryAdmission, HandoffClass, HardwareConfig,
     HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig,
-    HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState,
-    KernelObjectBits, KernelObjectBudget, LeaseControlConfig, LifecycleAutoTransition,
-    LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind,
-    NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig, ObservabilityConfig, PolicyConfig,
-    PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig,
-    ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, RoleMixCount, SaturationPolicy,
-    ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits, ShardingConfig, ShortWritePolicy,
-    SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config,
-    TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
-    TelemetryIngestEvictionPolicy, TemporalAuthorityConfig, TemporalCoreAdmission,
-    TemporalExecution, TemporalTaskConfig, TemporalTaskKind, TicketLimits, TicketSpec,
-    TimeoutPolicy, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig,
-    UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig,
-    WorkerResourceAdmissionConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig,
-    WorkerSchedulingProfile, WorkerTaskAbiConfig,
+    HostFederationPeer, HostProvider, HostSnapshotConfig, HostSnapshotPublisher, HostTicketAction,
+    HostTicketConfig, HostTicketLifecycleState, KernelObjectBits, KernelObjectBudget,
+    LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig,
+    NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig,
+    ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig,
+    ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig,
+    RoleMixCount, SaturationPolicy, ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits,
+    ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig,
+    SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig,
+    TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy,
+    TemporalAuthorityConfig, TemporalCoreAdmission, TemporalExecution, TemporalTaskConfig,
+    TemporalTaskKind, TicketLimits, TicketSpec, TimeoutPolicy, UiPolicyPreflightConfig,
+    UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig,
+    WorkerNotificationConfig, WorkerResourceAdmissionConfig, WorkerRoleRuntime,
+    WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile, WorkerTaskAbiConfig,
 };
 use cohesix_ticket::{Role, TicketKey};
 
@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "0b330230965d2e95334799686700cfb8b3549e666173c221416ed4992e7cab02";
+    "40de2b6636ac0e0e1397e95601aed533907b754d3af958ac0c52547db4e74e7a";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9358,10 +9358,13 @@ pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Nvidia,
 ];
 
-pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 17] = [
+pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 20] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
+    HostTicketAction::GpuWorkloadSubmit,
+    HostTicketAction::GpuWorkloadCancel,
+    HostTicketAction::GpuWorkloadObserve,
     HostTicketAction::PeftExport,
     HostTicketAction::PeftImport,
     HostTicketAction::PeftActivate,
@@ -9383,10 +9386,13 @@ pub const HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "
 pub const HOST_TICKET_ACCEPTED_RESULT_SCHEMAS: [&str; 2] =
     ["host-ticket-result/v1", "host-ticket-result/v2"];
 
-pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 7] = [
+pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 10] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
+    HostTicketAction::GpuWorkloadSubmit,
+    HostTicketAction::GpuWorkloadCancel,
+    HostTicketAction::GpuWorkloadObserve,
     HostTicketAction::PeftExport,
     HostTicketAction::PeftImport,
     HostTicketAction::PeftActivate,
@@ -9435,10 +9441,30 @@ pub const HOST_FEDERATION_ACTION_ALLOWLIST: [HostTicketAction; 17] = [
     HostTicketAction::K8sLeaseSync,
 ];
 
+pub const HOST_SNAPSHOT_PUBLISHERS: [HostSnapshotPublisher; 2] = [
+    HostSnapshotPublisher {
+        source_id: "linux-reference",
+        providers: &["systemd", "docker", "k8s", "nvidia", "jetson", "network"],
+    },
+    HostSnapshotPublisher {
+        source_id: "mac-controller",
+        providers: &["launchd", "network"],
+    },
+];
+
+pub const HOST_SNAPSHOT_CONFIG: HostSnapshotConfig = HostSnapshotConfig {
+    enable: true,
+    max_bytes: 8192,
+    max_entries: 64,
+    max_value_bytes: 1024,
+    max_ttl_ms: 30000,
+    publishers: &HOST_SNAPSHOT_PUBLISHERS,
+};
 pub const HOST_CONFIG: HostConfig = HostConfig {
     enable: true,
     mount_at: "/host",
     providers: &HOST_PROVIDERS,
+    snapshots: HOST_SNAPSHOT_CONFIG,
     tickets: HostTicketConfig {
         enable: true,
         request_schema: "host-ticket/v1",
@@ -9527,9 +9553,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 52] = [
-    "manifest.schema=1.21",
+    "manifest.schema=1.26",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=91a0c04d4d6591ac87f6e228ba4f0f4ec79cdb0b87acd00e584450ea776cae53",
+    "manifest.sha256=ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

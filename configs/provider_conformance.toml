@@ -1,0 +1,216 @@
+# Author: Lukas Bower
+# Purpose: Select bounded provider contract checks and preserve separate native, executor, deployment and evidence proof lanes.
+# Copyright 2026 Lukas Bower
+schema = "cohesix-provider-conformance-matrix/v1"
+registry = "configs/generated/provider_registry.json"
+maximum_cases = 64
+maximum_output_bytes = 1048576
+maximum_case_seconds = 600
+
+# Exact versions, auth/secret refs, lifecycle, native identity, evidence and
+# deployment obligations are inherited from the generated registry. This file
+# selects checks; it cannot add actions, change versions or promote availability.
+profiles = ["jetson-orin-nano-jp7"]
+required_lifecycle = ["discover", "preflight", "execute", "observe", "verify", "compensate", "export_evidence"]
+proof_lanes = ["mock", "dry_run", "live_safe", "negative", "receipt", "recovery", "package"]
+
+[[cases]]
+id = "native-identity-and-postcondition"
+group = "executors"
+providers = ["systemd", "docker", "k8s"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "host-ticket-agent", "--lib", "executors::"]
+
+[[cases]]
+id = "federation-durable-terminal-return"
+group = "executors"
+providers = []
+surface = "federation"
+proof_class = "host_contract"
+lane = "recovery"
+command = ["cargo", "test", "--locked", "-p", "host-ticket-agent", "--lib", "relay::tests::"]
+
+[[cases]]
+id = "signed-causal-graph-refusals"
+group = "evidence"
+providers = []
+proof_class = "host_contract"
+lane = "receipt"
+command = ["cargo", "test", "--locked", "-p", "cohesix-evidence", "--test", "graph", "--test", "producer"]
+
+[[cases]]
+id = "exporter-derived-authority-boundary"
+group = "observability"
+providers = ["prometheus", "otel", "siem"]
+proof_class = "host_contract"
+lane = "receipt"
+command = ["cargo", "test", "--locked", "-p", "coh", "--test", "export"]
+
+[[cases]]
+id = "siem-durable-delivery"
+group = "observability"
+providers = ["siem"]
+proof_class = "host_contract"
+lane = "recovery"
+command = ["cargo", "test", "--locked", "-p", "coh", "--lib", "export::delivery::tests::"]
+
+[[cases]]
+id = "native-package-trust-and-inventory"
+group = "packaging"
+providers = []
+proof_class = "host_contract"
+lane = "package"
+command = ["cargo", "test", "--locked", "-p", "coh", "--lib", "package::tests::"]
+
+[[cases]]
+id = "identity-exact-delegation"
+group = "identity"
+providers = []
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "cohesix-identity", "--lib"]
+
+[[cases]]
+id = "generated-python-provider-contract"
+group = "registry"
+providers = []
+proof_class = "host_contract"
+lane = "dry_run"
+command = ["python3", "-m", "pytest", "-q", "tools/cohesix-py/tests/test_provider_registry.py"]
+
+[[cases]]
+id = "provider-exporter-overhead"
+group = "perf"
+providers = []
+proof_class = "host_contract"
+lane = "dry_run"
+command = ["cargo", "test", "--locked", "--release", "-p", "coh", "--test", "provider_overhead", "--", "--ignored", "--nocapture", "--exact", "bounded_provider_exporter_overhead"]
+
+[[cases]]
+id = "mig-identity-and-topology-fencing"
+group = "executors"
+providers = ["gpu.workload"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "gpu-bridge-host", "--lib", "mig::tests::"]
+
+[[cases]]
+id = "field-bus-protocol-bounds"
+group = "executors"
+providers = ["modbus", "dnp3"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "sidecar-bus", "--features", "live,modbus,dnp3", "--lib", "protocol::tests::"]
+
+[[cases]]
+id = "field-bus-wal-and-grant"
+group = "executors"
+providers = ["modbus", "dnp3"]
+proof_class = "host_contract"
+lane = "recovery"
+command = ["cargo", "test", "--locked", "-p", "sidecar-bus", "--features", "live,modbus,dnp3", "--lib", "live::"]
+
+[[cases]]
+id = "field-bus-snapshot-expiry"
+group = "executors"
+providers = ["modbus", "dnp3"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "host-sidecar-bridge", "--lib", "field_bus::tests::"]
+
+[[cases]]
+id = "field-bus-sdk-maps"
+group = "registry"
+providers = ["modbus", "dnp3"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["python3", "-m", "pytest", "-q", "tools/cohesix-py/tests/test_field_bus.py"]
+
+[[cases]]
+id = "signed-worker-admission-contract"
+group = "evidence"
+providers = ["gpu.workload"]
+proof_class = "host_contract"
+lane = "receipt"
+command = ["cargo", "test", "--locked", "-p", "cohesix-evidence", "--lib", "ticket::"]
+
+[[cases]]
+id = "signed-gateway-root-admission"
+group = "evidence"
+providers = ["gpu.workload"]
+proof_class = "host_contract"
+lane = "receipt"
+command = ["cargo", "test", "--locked", "-p", "hive-gateway", "--bin", "hive-gateway", "evidence::tests"]
+
+[[cases]]
+id = "signed-worker-terminal-correlation"
+group = "evidence"
+providers = ["gpu.workload"]
+proof_class = "host_contract"
+lane = "receipt"
+command = ["cargo", "test", "--locked", "-p", "host-ticket-agent", "--lib", "causal::tests"]
+
+[[cases]]
+id = "launchd-compiled-service-map"
+group = "registry"
+providers = ["launchd"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "cohesix-authority", "--features", "std", "--lib", "macos::tests::"]
+
+[[cases]]
+id = "launchd-native-incarnation-contract"
+group = "executors"
+providers = ["launchd"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "host-sidecar-bridge", "--lib", "launchd::tests::"]
+
+[[cases]]
+id = "launchd-sdk-compiled-target"
+group = "registry"
+providers = ["launchd"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["python3", "-m", "pytest", "-q", "tools/cohesix-py/tests/test_launchd.py"]
+
+[[cases]]
+id = "macos-immutable-target-map"
+group = "registry"
+providers = ["mac_release", "endpoint_compliance"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "cohesix-authority", "--features", "std", "--lib", "mac_release::tests::"]
+
+[[cases]]
+id = "macos-native-result-contract"
+group = "executors"
+providers = ["mac_release", "endpoint_compliance"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "host-sidecar-bridge", "--lib", "mac_release::tests::"]
+
+[[cases]]
+id = "macos-sdk-compiled-target"
+group = "registry"
+providers = ["mac_release", "endpoint_compliance"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["python3", "-m", "pytest", "-q", "tools/cohesix-py/tests/test_macos_release.py"]
+
+[[cases]]
+id = "cuda-native-enforcement"
+group = "executors"
+providers = ["gpu.workload"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "gpu-bridge-host", "--lib", "enforcement::tests"]
+
+[[cases]]
+id = "cuda-safe-oom-mapping"
+group = "executors"
+providers = ["gpu.workload"]
+proof_class = "host_contract"
+lane = "negative"
+command = ["cargo", "test", "--locked", "-p", "gpu-bridge-host", "--lib", "native_oom_mapping"]

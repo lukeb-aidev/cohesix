@@ -151,7 +151,8 @@ impl GatewayClient {
         self
     }
 
-    /// Configure the caller ticket required by mutating routes.
+    /// Configure the caller ticket or explicit env:/file: credential reference.
+    /// References are resolved at the request boundary to support rotation.
     pub fn with_delegated_ticket(mut self, ticket: impl Into<String>) -> Self {
         self.delegated_ticket = Some(ticket.into());
         self
@@ -228,13 +229,13 @@ impl GatewayClient {
 
     /// Issue an ECHO request via the gateway.
     pub fn echo(&self, path: &str, line: &str) -> Result<usize> {
-        self.validate_write_credentials()?;
+        let ticket = self.validate_write_credentials()?;
         let url = format!("{}/v1/fs/echo", self.base_url);
         let payload = EchoRequest {
             path: path.to_owned(),
             line: Some(line.to_owned()),
         };
-        let response = self.post_json(&url, &payload);
+        let response = self.post_json(&url, &payload, &ticket);
         let parsed = handle_response("ECHO", response)?;
         Ok(parsed.bytes.unwrap_or(0))
     }
@@ -250,13 +251,13 @@ impl GatewayClient {
                 COHESIX_TRANSPORT_COMMAND_BATCH_MAX
             ));
         }
-        self.validate_write_credentials()?;
+        let ticket = self.validate_write_credentials()?;
         let url = format!("{}/v1/fs/echo-batch", self.base_url);
         let payload = EchoBatchRequest {
             path: path.to_owned(),
             lines: lines.to_vec(),
         };
-        let response = self.post_json(&url, &payload);
+        let response = self.post_json(&url, &payload, &ticket);
         let _ = handle_response("ECHO_BATCH", response)?;
         Ok(lines.len())
     }
@@ -265,6 +266,7 @@ impl GatewayClient {
         Self::get_with_agent(
             &self.metadata_agent,
             self.resolved_request_auth()?.as_deref(),
+            self.resolved_delegation()?.as_deref(),
             url,
         )
     }
@@ -273,6 +275,7 @@ impl GatewayClient {
         Self::get_with_agent(
             &self.operation_agent,
             self.resolved_request_auth()?.as_deref(),
+            self.resolved_delegation()?.as_deref(),
             url,
         )
     }
@@ -280,9 +283,13 @@ impl GatewayClient {
     fn get_with_agent(
         agent: &ureq::Agent,
         request_auth_token: Option<&str>,
+        delegated_ticket: Option<&str>,
         url: &str,
     ) -> Result<HttpResponse, ureq::Error> {
-        let request = agent.get(url);
+        let mut request = agent.get(url);
+        if let Some(ticket) = delegated_ticket {
+            request = request.header("x-cohesix-ticket", ticket);
+        }
         if let Some(token) = request_auth_token {
             request
                 .header("Authorization", format!("Bearer {token}"))
@@ -293,11 +300,16 @@ impl GatewayClient {
         }
     }
 
-    fn post_json<T: Serialize>(&self, url: &str, payload: &T) -> Result<HttpResponse, ureq::Error> {
-        let mut request = self.operation_agent.post(url);
-        if let Some(ticket) = &self.delegated_ticket {
-            request = request.header("x-cohesix-ticket", ticket);
-        }
+    fn post_json<T: Serialize>(
+        &self,
+        url: &str,
+        payload: &T,
+        ticket: &str,
+    ) -> Result<HttpResponse, ureq::Error> {
+        let request = self
+            .operation_agent
+            .post(url)
+            .header("x-cohesix-ticket", ticket);
         if let Some(token) = self.resolved_request_auth()? {
             request
                 .header("Authorization", format!("Bearer {token}"))
@@ -321,24 +333,36 @@ impl GatewayClient {
             })
     }
 
-    fn validate_write_credentials(&self) -> Result<()> {
+    fn resolved_delegation(&self) -> Result<Option<String>, ureq::Error> {
+        self.delegated_ticket
+            .as_deref()
+            .map(cohesix_authority::secret::resolve_value)
+            .transpose()
+            .map_err(|error| {
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    error,
+                ))
+            })
+    }
+
+    fn validate_write_credentials(&self) -> Result<String> {
         let auth = self
             .request_auth_token
             .as_deref()
             .ok_or_else(|| anyhow!("EPERM request-auth-required"))?;
         cohesix_authority::secret::resolve_value(auth)?;
         let ticket = self
-            .delegated_ticket
-            .as_deref()
+            .resolved_delegation()?
             .ok_or_else(|| anyhow!("EPERM delegated-ticket-required"))?;
         if ticket.len() > cohsh_core::MAX_TICKET_LEN {
             return Err(anyhow!("ELIMIT delegated-ticket-length"));
         }
         // Structural validation is a client convenience. Only the gateway
         // verifies the issuer MAC and adjudicates authority/quota state.
-        cohesix_ticket::TicketToken::decode_unverified(ticket)
+        cohesix_ticket::TicketToken::decode_unverified(&ticket)
             .map_err(|_| anyhow!("EPERM delegated-ticket-malformed"))?;
-        Ok(())
+        Ok(ticket)
     }
 
     fn operation_global_timeout(response_timeout: Duration) -> Option<Duration> {
@@ -1312,6 +1336,45 @@ mod tests {
     }
 
     #[test]
+    fn credential_files_resolve_for_reads_and_writes_and_fail_closed_after_removal() {
+        let root = tempfile::tempdir().expect("private credentials");
+        let path = root.path().join("delegation");
+        let ticket = delegated_fixture();
+        std::fs::write(&path, format!("{ticket}\n")).expect("credential file");
+        let reference = format!("file:{}", path.display());
+        for write in [false, true] {
+            let (base_url, request_rx, server) = serve_once(
+                "200 OK",
+                r#"{"status":"OK","verb":"ECHO","path":"/host/tickets/spec","end":true,"bytes":1,"lines":[]}"#,
+            );
+            let client = GatewayClient::new(base_url)
+                .with_request_auth_token("test-token")
+                .with_delegated_ticket(&reference);
+            if write {
+                client
+                    .echo("/host/tickets/spec", "x")
+                    .expect("file-authenticated write");
+            } else {
+                client.list("/").expect("file-authenticated read");
+            }
+            let request = request_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("capture request");
+            server.join().expect("server exits");
+            assert!(request
+                .to_ascii_lowercase()
+                .contains(&format!("\r\nx-cohesix-ticket: {ticket}\r\n")));
+            assert!(!request.contains(&reference));
+        }
+        let client = GatewayClient::new("http://127.0.0.1:1")
+            .with_request_auth_token("test-token")
+            .with_delegated_ticket(&reference);
+        std::fs::remove_file(&path).expect("credential rotation/removal");
+        assert!(client.resolved_delegation().is_err());
+        assert!(client.validate_write_credentials().is_err());
+    }
+
+    #[test]
     fn external_deadline_caps_the_whole_request_without_delivery_grace() {
         let timeout = Duration::from_millis(1500);
         let client = GatewayClient::new("http://127.0.0.1:1")
@@ -1325,6 +1388,27 @@ mod tests {
         assert!(GatewayClient::new("http://127.0.0.1:1")
             .with_operation_deadline(Duration::ZERO)
             .is_err());
+    }
+
+    #[test]
+    fn read_requests_carry_the_same_delegated_identity_as_mutations() {
+        let (base_url, request_rx, server) = serve_once(
+            "200 OK",
+            r#"{"status":"OK","verb":"LS","path":"/","end":true,"lines":[]}"#,
+        );
+        GatewayClient::new(base_url)
+            .with_request_auth_token("test-token")
+            .with_delegated_ticket(delegated_fixture())
+            .list("/")
+            .expect("bounded read");
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture");
+        server.join().expect("loopback server exits");
+        assert!(request.to_ascii_lowercase().contains(&format!(
+            "\r\nx-cohesix-ticket: {}\r\n",
+            delegated_fixture()
+        )));
     }
 
     #[test]

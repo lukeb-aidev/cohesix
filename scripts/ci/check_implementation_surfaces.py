@@ -52,6 +52,7 @@ PUBLIC_PATH_SUFFIXES = ("/README.md",)
 HOST_ADAPTER_PREFIXES = (
     "tools/cohesix-py/cohesix/",
     "tools/cohesix-py/examples/",
+    "tools/cohesix-py/tests/",
     "scripts/cohsh/",
 )
 

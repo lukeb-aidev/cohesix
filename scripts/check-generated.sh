@@ -97,6 +97,8 @@ generate_selected_manifest() {
     --host-integration-source "$repo_root/configs/host_integration_acceptance.toml" \
     --host-integration-graph "$host_integration_graph" \
     --host-integration-doc "$host_integration_doc" \
+    --provider-python "$work_dir/provider_generated.py" \
+    --provider-rust "$work_dir/provider_generated.rs" \
     --cohesix-py-defaults "$cohesix_py_defaults" \
     --cohesix-py-doc "$cohesix_py_doc" \
     --coh-doctor-doc "$coh_doctor_doc"
@@ -125,6 +127,7 @@ compare_file() {
   fi
 }
 
+compare_file "$generated_root/use_case_evidence.json" "$work_dir/use_case_evidence.json"
 compare_file "$repo_root/apps/root-task/src/generated/mod.rs" "$generated_dir/mod.rs"
 compare_file "$repo_root/apps/root-task/src/generated/bootstrap.rs" "$generated_dir/bootstrap.rs"
 compare_file "$generated_root/root_task_resolved.json" "$manifest_out"
@@ -165,6 +168,9 @@ compare_file "$repo_root/docs/snippets/coh_doctor_checks.md" "$coh_doctor_doc"
 compare_file "$generated_root/implementation_surface_inventory.json" "$implementation_surface_inventory"
 compare_file "$generated_root/host_integration_dependency.json" "$host_integration_graph"
 compare_file "$repo_root/docs/snippets/host_integration_dependency.md" "$host_integration_doc"
+compare_file "$generated_root/provider_registry.json" "$work_dir/provider_registry.json"
+compare_file "$repo_root/tools/cohesix-py/cohesix/provider_generated.py" "$work_dir/provider_generated.py"
+compare_file "$repo_root/crates/cohesix-authority/src/provider_generated.rs" "$work_dir/provider_generated.rs"
 compare_file "$generated_root/cohesix_python_qemu_smp_production.json" "$cohesix_python_qemu_profile"
 compare_file "$generated_root/cohesix_python_pi4_production.json" "$cohesix_python_pi4_profile"
 

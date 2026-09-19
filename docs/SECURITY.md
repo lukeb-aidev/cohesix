@@ -86,10 +86,10 @@ and IPC through capabilities. Cohesix root-task remains trusted for bootstrap,
 HAL admission, manifest enforcement, namespace authority, tickets, lifecycle,
 and audit. Queen and Worker-role sessions receive only their generated
 namespace view; Worker tickets are mandatory and Queen ticket requirements are
-profile-controlled. Operational QEMU and Pi profiles declare Heartbeat, GPU and LoRA executable
-with compiler-owned endpoint and lifecycle authority. WorkerBus remains model-only.
-Declaration and reserved badges do not prove live capability installation or
-execution; READY and exact-target evidence remain separate.
+profile-controlled. The operational QEMU and Pi profiles declare Heartbeat, GPU and LoRA as
+executable roles with compiler-owned endpoint and lifecycle authority. WorkerBus
+remains model/session-only. Declaration and reserved badges do not prove live
+capability installation or execution; READY and exact-target evidence are separate.
 
 Physical devices run in manifest-declared, single-threaded Rust driver
 runtimes. HAL owns physical-address discovery, device-untyped admission, MMIO,
@@ -189,6 +189,8 @@ retry policy, public grammar, and fault authority are unchanged. Exact temporal
 values and response analysis belong to the selected generated profile and
 [Roles and Scheduling](ROLES_AND_SCHEDULING.md).
 
+### Authentication and attachment
+
 The host authority floor combines MAC-verified REST delegation, bounded
 caller quota retention, strict Queen idempotency, and durable host executor
 recovery. It is `gateway_enforced`, not evidence of VM-verified REST caller
@@ -200,7 +202,44 @@ private fixture keys and secret canaries. [M27a authority](M27A_AUTHORITY.md)
 records production gates and the separate, still-deferred 28d ledger/quarantine
 claims.
 
-### Authentication and attachment
+### External identity and read visibility
+
+External identity mapping is host-only. `coh identity --mapping ID`
+accepts a JWT through stdin and public keys through `--jwks FILE`; a local
+mapping uses `--local` and the kernel effective uid. The generated
+`providers.identity_mappings` policy pins issuer, one audience, signing
+algorithm, exact public-JWKS digests, external subject, required groups,
+normalized audit subject, role, paths, provider actions, operation count and
+TTL. OIDC and Kubernetes issuers require HTTPS identities; JWT-SVIDs bind the
+SPIFFE trust domain and exact workload path. RS256, ES256 and Ed25519 keys
+cannot be interchanged, and token-supplied discovery URLs are not followed.
+Unknown subjects, missing groups, wrong audience, invalid signatures, expired
+or overlong tokens and broad root scopes are refused. Deployments enroll
+explicit mappings in compiler input; shipped mappings are disabled.
+
+By default, the CLI prints a `cohesix-identity-request/v1` proposal. Explicit
+issuer enrollment enables gateway-only ticket issuance through the CLI or
+`POST /v1/identity/exchange`. The gateway checks each write's generated provider
+action before charging quotas or forwarding it; mapped tickets have a separate
+signing domain and cannot authenticate directly to the VM. JWT issuer time and
+expiry survive repeated exchanges. Local uid assertions are accepted only from
+the local kernel-backed CLI, never from HTTP. See the complete
+[identity enrollment and ticket wire contract](IDENTITY_MAPPING.md), including
+finite bounds, audit redaction, disabled defaults and restart limitations.
+
+The gateway classifies all REST namespace reads using compiler-owned component-prefix
+rules. Unclassified paths inherit `admin_only`; the admin-only registry and
+public version/capability summaries contain no live provider state. File reads and
+status check request authentication and delegated Read/ReadWrite scopes before
+cache lookup or broker dispatch, sharing signature, expiry, mount, role,
+ceiling and quota checks with writes. Scoped Worker reads bind the subject;
+an explicit Queen root read scope grants administrative access. Write-only
+scopes confer no read authority. `--read-compatibility` is an explicit
+single-caller gateway-Queen posture for admin-class paths only; it cannot
+expose ticket-scoped paths without delegation. Read denials enter the existing
+bounded delegation audit path. Python objects and native labels remain
+non-authoritative projections.
+
 
 Transport `AUTH` proves access to the console listener. Application
 `ATTACH` separately selects a role and validates any required ticket. A
@@ -474,6 +513,58 @@ from successfully using that policy on the current image.
 
 ## Audit, evidence, and replay
 
+The host-only causal verifier requires canonical typed bytes, bounded
+Ed25519-signed records, separately configured phase custodians, exact component
+and target hashes, ticket/subject/action/idempotency/writer binding, chronological
+parent references, one terminal result, native identity/generation continuity,
+and immutable CAS contents. A provider key with no grant phase permission cannot
+sign a grant. Pack checksums establish content integrity only. Imported
+operation reports, OTel spans, CloudEvents and in-toto statements never become
+authoritative Cohesix receipts. The verifier's explicitly selected recorded time
+supports offline reconstruction without claiming current freshness. Live
+producer integration and admission remain distinct from verifier conformance.
+
+Recovery uses a new ticket and idempotency key with its own signed
+intent/facts/approval/grant/execution/verification/terminal chain. The signed
+binding links the original ticket, graph hash and terminal hash.
+`coh evidence verify-recovery` verifies both independent graphs and their
+chronology, target and epoch relationships. Appending a provider-signed
+compensation assertion to an earlier ticket cannot authorize reversal.
+
+Federation distinguishes target-write acknowledgement from terminal delivery.
+Pending and acknowledged intents, and retained results awaiting source delivery,
+are non-evictable. The relay persists the exact target terminal bytes before
+publishing them to the source, and checks action, writer epoch, idempotency and
+source/target/hop/correlation identity. Conflicting terminals remain unresolved.
+Restart observes acknowledged work without executing it again; old WAL
+`delivered` entries are migrated to awaiting terminal observation because their
+historical ACK did not prove completion. Peer request-auth and delegated ticket
+references come from the generated provider contract and are resolved host-side.
+
+### SIEM delivery custody
+
+SIEM delivery consumes a graph accepted by the shared verifier and exports
+only the generated allowlist. `providers.siem_delivery` selects one HTTPS
+endpoint and a credential reference; event data cannot select a destination.
+Redirects and environment proxies are disabled. A private, locked state
+directory durably retains the projection, monotonic cursor, attempt state,
+retry time, and exact destination acknowledgement. The receiver must dedupe
+`Idempotency-Key` durably and return `cohesix-siem-ack/v1` with the same graph
+digest, payload digest and `status=accepted`. Lost acknowledgements can cause
+the same key to be sent again; receiver deduplication is part of the deployment
+contract. No local copy or HTTP status alone counts as delivery. Pending and
+deadletter entries are retained at capacity, applying backpressure. Re-running
+the command with the same verified graph resumes the bounded retry state;
+changing destination policy requires a separately owned state directory.
+An explicit `ca_certificate_path_ref` resolves locally to one bounded PEM CA
+path and replaces default TLS roots. Invalid selection never falls back to
+ambient trust. State files reject symlinks, hard links, foreign ownership and
+group/world write permissions inside the private owner-only directory. An
+existing owner lock with a missing WAL is a recovery error, not an empty queue.
+The exact receiver ACK bytes are retained and hashed before the sender advances
+its durable acknowledgement state. Historic evidence delivery carries no new
+provider-execution or admission authority.
+
 Security-relevant accepts and denials write bounded audit lines to
 `/log/queen.log` and, when enabled by the selected profile, `/audit` records.
 Host ticket actions use versioned, allowlisted schemas, idempotency keys, and
@@ -514,6 +605,17 @@ No Python projection, case outcome or trace label proves external execution.
 
 ## Sidecars and host actions
 
+### Kubernetes mutation authority
+
+Kubernetes mutations use its HTTPS API with an explicitly configured CA and
+service-account credential reference. Cordon tests both immutable UID and
+resourceVersion atomically. Drain uses `policy/v1` Eviction with UID/version
+preconditions, retains DaemonSet, mirror and terminal-pod exclusions, and
+respects disruption budgets. It does not force-delete workloads. Terminal
+success requires the same cordoned node identity and no remaining eligible
+pods. Transport ambiguity or a pending disruption budget leaves the admitted
+operation unresolved for reconciliation rather than publishing success.
+
 Sidecar mounts and providers are manifest-gated. Namespace collisions receive
 deterministic hash-prefixed labels; role and path scopes are checked on each
 operation. Offline spool and replay are bounded by selected manifest limits and
@@ -524,6 +626,63 @@ the host. The host ticket agent validates schema, action allowlist, arguments,
 idempotency, and state before a configured host adapter performs a side effect.
 Use dedicated host identities, least-privilege adapter configuration, and the
 request/result/federation contracts in [Interfaces](INTERFACES.md#host-tickets-and-federation).
+
+### Bounded GPU workload host transport
+
+The optional GPU executor uses the generated `providers.gpu_executor` contract:
+a private Unix socket, HMAC-SHA256 authenticated request and response frames,
+16 KiB frame bound, one active CUDA context, 64 retained jobs, and a 4 MiB WAL.
+Its explicit `cohesix-gpu-executor-config/v1` deployment file binds the GPU ID,
+physical CUDA UUID, exact helper SHA-256, provider graph, writer epoch, socket,
+private state root, and secret reference. The reference profile is CUDA 13.2.2
+on Orin Nano; MIG is unavailable on that profile. Native host administration
+remains outside this authority boundary.
+
+Run `gpu-bridge-host --workload-config /absolute/config.json` as the owner of
+that private state. Select `host-ticket-agent --gpu-executor-socket PATH
+--gpu-executor-credential-ref env:NAME --gpu-request-root PATH --execution-lanes 2` on the same
+host. The secret value is never an argument or evidence field. The agent reads
+only root-admitted v2 requests, checks the exact ready Worker and active root
+lease, and renews a one-second bridge grant while both remain current. A changed
+lease sequence, Worker generation, expired ticket, lost agent, or disconnected
+control plane revokes execution. Cancellation completes only after the CUDA
+child has been killed and reaped. Bridge restart records interruption and never
+replays the operation. Retained successful output hashes are checked again
+before returning a stored result; full retention produces backpressure.
+
+`coh gpu [connection options] workload --action gpu.workload.submit --spec FILE`
+(and the corresponding cancel/observe actions) writes only `/host/tickets/spec`.
+Python `client.gpu_workload_ticket(spec)` follows the same path. A submission ACK
+is not a provider or Worker terminal receipt. Input CAS JSON uses the canonical
+Rust `workload::Input` serialization, is limited to 8192 bytes, and is stored as
+`<sha256>.json`. The agent cannot select an executable path through a ticket.
+The bridge independently rechecks device topology, free-memory headroom, every
+output element, and the expected output digest before reporting success.
+
+When the GPU executor is selected, lane zero is reserved for lease, cancel,
+and observe operations. Submissions and other provider work use the remaining
+lanes. This keeps cancellation serviceable during CUDA execution. The durable
+lane topology includes this selection; changing it requires a fresh journal
+root after existing operations are reconciled.
+
+### Field-bus action and snapshot boundary
+
+The [field-bus contract](FIELD_BUS.md) keeps MODBUS/DNP3 protocol I/O host-side.
+Compiler-owned endpoint/point maps reject arbitrary addresses, functions and
+control payloads. Read-only is the default; controls require an independently
+signed admitted ticket binding the exact map, target, writer epoch, manifest and
+native component. Durable attempt state precedes wire I/O. Missing control ACKs
+remain ambiguous and cannot be replayed after restart. A new compensating
+control requires separate admission.
+
+Base MODBUS/DNP3 framing does not authenticate the physical device. Protocol
+ACKs and local host signatures cannot imply plant behavior or device attestation.
+Native OS/network permissions and independently verified endpoint ownership
+remain deployment responsibilities. The service renderer permits only compiled
+serial devices and retains private devices for TCP-only configurations. Field-bus
+snapshots are admin-only by default, preserve the original ACK expiry, omit raw
+control payloads and withdraw on stale/failed/missing points. They never become
+an action grant, Worker receipt or physical device proof.
 
 ## Content-addressed storage
 

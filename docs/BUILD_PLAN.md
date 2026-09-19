@@ -107,7 +107,7 @@ owned by their specific contracts.
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
-| [27b](#27b) | Executable Host Foundation | In Progress — selected foundation |
+| [27b](#27b) | Executable Host Foundation | Complete — selected foundation |
 | [27c](#27c) | Recoverable CUDA Recipes | Planned — next release |
 | [27d](#27d) | Verified Private LoRA Release | Planned — next release |
 | [27e](#27e) | Installation, Adoption and CI | Planned — next release |
@@ -12753,6 +12753,12 @@ completion decision, candidate-F Rust sign-off, the separate DD30 accepted risk
 and each observed result. This decision grants no performance-equivalence claim
 or staged target PASS.
 
+**Scoped restoration (2026-09-15):** `m27a-host-ticket-validation-replay` is
+Complete after restoring the production Root version-1 parser discovered by
+M27b native provider integration. Focused typed-parser, QEMU and Merlin checks
+are recorded in [the M27b record](audit/M27B_IMPLEMENTATION_RECORD.md).
+The earlier completion evidence remains historical.
+
 **Delivery posture:** Release A authority floor. Delegated identity, strict
 idempotency, durable execution recovery, production secrets, audit/replay, and
 single-writer safety are required for the reference workflow. Multi-host
@@ -13121,6 +13127,8 @@ Checks: Evidence includes audit/replay plus fencing/dedupe state and preserves a
 Deliverables: Audit-first production baseline with deterministic incident reconstruction inputs.
 
 Title/ID: m27a-host-ticket-validation-replay
+Status: Complete — the scoped production Root version-1 parser restoration discovered by m27b-native-provider-discovery-and-actions on 15 September 2026 is closed. Strict typed arguments/correlation, current writer fencing and native ticket result delivery pass focused parser, exact QEMU and Merlin checks in docs/audit/M27B_IMPLEMENTATION_RECORD.md; the earlier M27a closure evidence remains unchanged.
+Milestone: 27a / m27a-host-ticket-validation-replay; discovery: 27b / m27b-native-provider-discovery-and-actions
 Goal: Harden host-ticket target/arg validation and make host side-effect replay durable across crashes.
 Inputs: apps/host-ticket-agent, docs/INTERFACES.md, docs/SECURITY.md, docs/FAILOVER.md
 Changes:
@@ -13224,9 +13232,19 @@ After Milestone 27a:
 ## Milestone 27b — Executable Host Foundation <a id="27b"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress — next-release scope.
+**Status:** Complete — 19 September 2026; selected executable foundation.
 
 **Prerequisites:** completed 26e, 27 and 27a.
+
+**Completion evidence:** [M27b implementation record](audit/M27B_IMPLEMENTATION_RECORD.md#selected-executable-foundation-closure-19-september-2026).
+Exact QEMU admission and separately signed native/Worker chains pass real CUDA
+vector-add and matrix-multiply under both hardened systemd and a digest-pinned
+NVIDIA container. Native invocation/container/device identities and finite kernel
+controls are independently correlated. Focused refusal/recovery/evidence checks,
+safe OOM mapping, exact host/target builds and generated/Test Plan consistency
+pass. The full suite was not run, as requested. This closes only the selected
+foundation; later recipe, LoRA, packaging, UI and broad-provider qualification
+retain their own owners and truthful evidence status.
 
 **Goal:** Qualify a small executable host foundation with one generated action
 contract, current scoped authority, shared evidence verification and real CUDA
@@ -13351,7 +13369,7 @@ Deliverables: Focused foundation qualification for 27c and later consumers.
 ```text
 Title/ID: m27b-operator-manuals-and-reference-maintenance
 Milestone: Milestone 27b — Executable Host Foundation / Operator manuals and reference maintenance
-Status: In Progress — implementation and scoped validation complete; shared M27b generated/provenance gate closure remains open.
+Status: Complete — scoped validation and shared generated/Test Plan consistency checks pass.
 Goal: Provide complete local cohsh manuals, aligned SwarmUI guidance, concise root help, and integrated community documentation.
 Inputs: Current command handlers and generated contracts; origin/main operator guides; current M27b implementation.
 Changes:

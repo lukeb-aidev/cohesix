@@ -25,8 +25,14 @@ pub const HOST_TICKET_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "host-tick
 pub const HOST_TICKET_RESULT_SCHEMAS: [&str; 2] =
     ["host-ticket-result/v1", "host-ticket-result/v2"];
 /// Exact GPU actions that can produce a WorkerGpu receipt.
-pub const GPU_RECEIPT_ACTIONS: [&str; 3] =
-    ["gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release"];
+pub const GPU_RECEIPT_ACTIONS: [&str; 6] = [
+    "gpu.lease.grant",
+    "gpu.lease.renew",
+    "gpu.lease.release",
+    "gpu.workload.submit",
+    "gpu.workload.cancel",
+    "gpu.workload.observe",
+];
 /// Exact PEFT actions that can produce a WorkerLora receipt.
 pub const PEFT_RECEIPT_ACTIONS: [&str; 4] = [
     "peft.export",
@@ -68,11 +74,6 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     writeln!(contents, "# Copyright 2026 Lukas Bower").ok();
     writeln!(contents).ok();
     writeln!(contents, "DEFAULTS = {{").ok();
-    writeln!(contents, "    \"provider_v1_fields\": {{").ok();
-    for (action, fields) in cohesix_authority::PROVIDER_V1_FIELDS {
-        writeln!(contents, "        {action:?}: {fields:?},").ok();
-    }
-    writeln!(contents, "    }},").ok();
     writeln!(
         contents,
         "    \"placeholder_credentials\": {:?},",
@@ -80,6 +81,17 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     )
     .ok();
     writeln!(contents, "    \"authority\": {{\"production\": {}, \"delegated_rest\": {}, \"identity_class\": \"gateway_enforced\", \"strict_queen_intents\": {}, \"legacy_queen_ctl\": {}, \"writer_epoch\": {}, \"writer_epoch_required\": {}, \"queen_intent_schema\": \"queen-intent/v1\", \"queen_intent_path\": \"/queen/intents/ctl\", \"queen_dedupe_path\": \"/proc/queen/dedupe\", \"queen_intent_max_bytes\": {}}},", py_bool(manifest.authority.production), py_bool(manifest.authority.delegated_rest), py_bool(manifest.authority.strict_queen_intents), py_bool(manifest.authority.legacy_queen_ctl), manifest.authority.writer_epoch, py_bool(manifest.authority.writer_epoch_required), manifest.authority.queen_intent_max_bytes).ok();
+    let snapshots = &manifest.ecosystem.host.snapshots;
+    writeln!(contents, "    \"host_snapshots\": {{\"enable\": {}, \"max_bytes\": {}, \"max_entries\": {}, \"max_value_bytes\": {}, \"max_ttl_ms\": {}, \"publishers\": [", py_bool(snapshots.enable), snapshots.max_bytes, snapshots.max_entries, snapshots.max_value_bytes, snapshots.max_ttl_ms).ok();
+    for publisher in &snapshots.publishers {
+        writeln!(
+            contents,
+            "        {{\"source_id\": {:?}, \"providers\": {:?}}},",
+            publisher.source_id, publisher.providers
+        )
+        .ok();
+    }
+    writeln!(contents, "    ]}},").ok();
     // The wheel is shared by every target. Its built-in values are bounded
     // fallback expectations and deliberately cannot identify a live target.
     // Keep the compiler input hash under a non-authoritative provenance key so
@@ -664,8 +676,12 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     .ok();
     writeln!(
         contents,
-        "GPU_RECEIPT_ACTIONS = (\"{}\", \"{}\", \"{}\")",
-        GPU_RECEIPT_ACTIONS[0], GPU_RECEIPT_ACTIONS[1], GPU_RECEIPT_ACTIONS[2]
+        "GPU_RECEIPT_ACTIONS = ({})",
+        GPU_RECEIPT_ACTIONS
+            .iter()
+            .map(|action| format!("{action:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
     .ok();
     writeln!(

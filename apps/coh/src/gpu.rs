@@ -139,8 +139,8 @@ pub fn lease<C: CohAccess>(
     Ok(())
 }
 
-/// Write a receipt-backed GPU lease request.
-pub fn lease_with_receipt<C: CohAccess>(
+/// Request a GPU lease and write a non-authoritative local operation report.
+pub fn lease_with_report<C: CohAccess>(
     client: &mut C,
     audit: &mut CohAudit,
     args: &GpuLeaseArgs,
@@ -152,11 +152,15 @@ pub fn lease_with_receipt<C: CohAccess>(
         return result;
     };
     let proc_lease = snapshot_proc_lease(client, bounds);
-    let receipt = LeaseReceipt {
-        schema: "cohesix-receipt-v1",
+    let receipt = LeaseOperationReport {
+        schema: "cohesix-operation-report/v1",
+        authoritative: false,
+        proof_class: "operation_report",
+        mode: "client_local",
+        source_identity: "client-local",
         kind: "gpu-lease",
         manifest_sha256: bounds.manifest_sha256.as_str(),
-        request: LeaseReceiptRequest::from(args),
+        request: LeaseOperationReportRequest::from(args),
         status: if result.is_ok() { "ok" } else { "err" },
         error: result.as_ref().err().map(safe_error_detail),
         ack: find_ack_line(audit, "ECHO"),
@@ -172,11 +176,15 @@ pub fn lease_with_receipt<C: CohAccess>(
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct LeaseReceipt<'a> {
+struct LeaseOperationReport<'a> {
     schema: &'static str,
+    authoritative: bool,
+    proof_class: &'static str,
+    mode: &'static str,
+    source_identity: &'static str,
     kind: &'static str,
     manifest_sha256: &'a str,
-    request: LeaseReceiptRequest,
+    request: LeaseOperationReportRequest,
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -186,7 +194,7 @@ struct LeaseReceipt<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct LeaseReceiptRequest {
+struct LeaseOperationReportRequest {
     gpu_id: String,
     mem_mb: u32,
     streams: u8,
@@ -198,7 +206,7 @@ struct LeaseReceiptRequest {
     budget_ops: Option<u64>,
 }
 
-impl From<&GpuLeaseArgs> for LeaseReceiptRequest {
+impl From<&GpuLeaseArgs> for LeaseOperationReportRequest {
     fn from(args: &GpuLeaseArgs) -> Self {
         Self {
             gpu_id: args.gpu_id.clone(),
@@ -339,4 +347,89 @@ fn safe_error_detail(err: &anyhow::Error) -> String {
         return text;
     }
     text[..MAX_DETAIL].to_owned()
+}
+
+/// Compatibility name; emitted artifacts use the operation-report schema.
+pub use lease_with_report as lease_with_receipt;
+
+/// Submit a bounded GPU workload control request through the existing root ticket namespace.
+/// An acknowledged write is submission only; the root/Worker result is observed separately.
+pub fn workload_ticket(
+    access: &mut dyn CohAccess,
+    audit: &mut CohAudit,
+    action: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    if bytes.len() > 2048 {
+        anyhow::bail!("ELIMIT GPU workload ticket");
+    }
+    let spec: serde_json::Value = serde_json::from_slice(bytes)?;
+    let fields = spec
+        .as_object()
+        .ok_or_else(|| anyhow!("invalid GPU workload ticket"))?;
+    let allowed = [
+        "schema",
+        "id",
+        "idempotency_key",
+        "writer_epoch",
+        "admission",
+        "action",
+        "args",
+        "expires_unix_ms",
+        "receipt_mode",
+        "operation_id",
+        "subject_ref",
+        "receipt_worker_role",
+        "receipt_worker_id",
+        "receipt_supervisor_generation",
+        "receipt_cap_generation",
+    ];
+    if fields.keys().any(|key| !allowed.contains(&key.as_str()))
+        || spec["schema"] != "host-ticket/v2"
+        || spec["action"] != action
+        || spec["receipt_mode"] != "worker"
+        || spec["receipt_worker_role"] != "worker-gpu"
+        || !cohesix_authority::gpu::validate_args(action, &spec["args"])
+    {
+        anyhow::bail!("EPERM invalid or caller-enriched GPU workload ticket");
+    }
+    for field in [
+        "id",
+        "idempotency_key",
+        "operation_id",
+        "subject_ref",
+        "receipt_worker_id",
+    ] {
+        cohesix_authority::validate_id(
+            spec[field]
+                .as_str()
+                .ok_or_else(|| anyhow!("missing GPU ticket identity"))?,
+        )
+        .map_err(|_| anyhow!("invalid GPU ticket identity"))?;
+    }
+    for field in [
+        "writer_epoch",
+        "expires_unix_ms",
+        "receipt_supervisor_generation",
+        "receipt_cap_generation",
+    ] {
+        if !spec[field].as_u64().is_some_and(|value| value > 0) {
+            anyhow::bail!("EPERM missing GPU ticket bound");
+        }
+    }
+    let mut payload = serde_json::to_vec(&spec)?;
+    payload.push(b'\n');
+    if payload.len() > 2048 {
+        anyhow::bail!("ELIMIT GPU workload ticket");
+    }
+    let written = access.write_append("/host/tickets/spec", &payload)?;
+    if written != payload.len() {
+        anyhow::bail!("partial GPU ticket acknowledgement");
+    }
+    audit.push_ack(
+        AckStatus::Ok,
+        "GPU",
+        Some("submitted; execution and Worker terminal proof pending"),
+    );
+    Ok(())
 }

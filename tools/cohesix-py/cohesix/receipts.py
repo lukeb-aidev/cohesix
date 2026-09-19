@@ -1,8 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Build deterministic lease/run receipt artifacts for the Cohesix Python SDK.
+# Purpose: Keep local operation reports distinct from bounded Worker receipt projections.
 # Copyright 2026 Lukas Bower
 
-"""Receipt helpers for receipt-backed GPU lease and run workflows."""
+"""Non-authoritative operation reports and explicit Worker receipt projections."""
 
 from __future__ import annotations
 
@@ -25,14 +25,15 @@ from .worker import (
 if TYPE_CHECKING:
     from .client import GpuLeaseArgs
 
-RECEIPT_SCHEMA = "cohesix-receipt-v1"
+RECEIPT_SCHEMA = "cohesix-receipt-v1"  # Historical input only.
+OPERATION_REPORT_SCHEMA = "cohesix-operation-report/v1"
 WORKER_GPU_RECEIPT_SCHEMA = "worker-gpu-receipt/v1"
 WORKER_LORA_RECEIPT_SCHEMA = "worker-lora-receipt/v1"
 MAX_WORKER_RECEIPT_BYTES = 8192
 _RECEIPT_DIGEST_FIELDS = ("ticket", "idempotency", "operation", "subject", "result")
 
 
-def build_lease_receipt(
+def build_lease_report(
     backend: Backend,
     defaults: Mapping[str, Any],
     args: "GpuLeaseArgs",
@@ -41,11 +42,15 @@ def build_lease_receipt(
     error: Optional[Exception],
     audit: Optional[CohesixAudit],
 ) -> Dict[str, Any]:
-    """Build the receipt payload for a GPU lease operation."""
+    """Build a local lease report; ACK and snapshots do not prove execution."""
 
     bounds = _resolve_bounds(backend, defaults)
     receipt = {
-        "schema": RECEIPT_SCHEMA,
+        "schema": OPERATION_REPORT_SCHEMA,
+        "authoritative": False,
+        "proof_class": "operation_report",
+        "mode": "client_local",
+        "source_identity": "client-local",
         "kind": "gpu-lease",
         "manifest_sha256": _manifest_label(defaults),
         "request": _lease_request(args),
@@ -57,7 +62,7 @@ def build_lease_receipt(
     return _strip_none(receipt)
 
 
-def build_run_receipt(
+def build_run_report(
     backend: Backend,
     defaults: Mapping[str, Any],
     *,
@@ -67,11 +72,15 @@ def build_run_receipt(
     error: Optional[Exception],
     audit: Optional[CohesixAudit],
 ) -> Dict[str, Any]:
-    """Build the receipt payload for a lease-validated run operation."""
+    """Build a local command report without asserting GPU or Worker execution."""
 
     bounds = _resolve_bounds(backend, defaults)
     receipt = {
-        "schema": RECEIPT_SCHEMA,
+        "schema": OPERATION_REPORT_SCHEMA,
+        "authoritative": False,
+        "proof_class": "operation_report",
+        "mode": "client_local",
+        "source_identity": "client-local",
         "kind": "run",
         "manifest_sha256": _manifest_label(defaults),
         "gpu_id": gpu_id,
@@ -84,8 +93,8 @@ def build_run_receipt(
     return _strip_none(receipt)
 
 
-def write_receipt_json(path: Path, payload: Mapping[str, Any]) -> None:
-    """Write a receipt JSON file atomically."""
+def write_operation_report_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Write a non-authoritative operation report atomically."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".partial")
@@ -289,6 +298,21 @@ class WorkerReceipt:
         self.authoritative = authoritative
 
 
+class OperationReport:
+    """Client-local summary that can never supply receipt authority."""
+
+    def __init__(self, payload: Mapping[str, Any]) -> None:
+        if (payload.get("authoritative") is not False
+                or payload.get("proof_class") != "operation_report"
+                or payload.get("mode") != "client_local"
+                or payload.get("source_identity") != "client-local"):
+            raise CohesixError("operation report authority or provenance is invalid")
+        self.schema = OPERATION_REPORT_SCHEMA
+        self.payload = dict(payload)
+        self.state = "none"
+        self.authoritative = False
+
+
 class CompatibilityReceipt:
     """Version-1 host compatibility receipt; never a Worker receipt."""
 
@@ -306,11 +330,13 @@ def parse_receipt(
     expected_identity: Optional[WorkerIdentity] = None,
     expected_instance_id: Optional[str] = None,
     source: str = "untrusted",
-) -> WorkerReceipt | CompatibilityReceipt:
-    """Parse a v1 compatibility receipt or exact local-only v2 Worker receipt."""
+) -> WorkerReceipt | CompatibilityReceipt | OperationReport:
+    """Parse historical summaries, operation reports, or local Worker projections."""
 
     value = _receipt_object(payload)
     schema = value.get("schema")
+    if schema == OPERATION_REPORT_SCHEMA:
+        return OperationReport(value)
     if schema == RECEIPT_SCHEMA:
         if len(_canonical_receipt_bytes(value)) > MAX_WORKER_RECEIPT_BYTES:
             raise CohesixError("compatibility receipt exceeds bounded size")
@@ -476,3 +502,8 @@ def _reject_receipt_sensitive(value: Any) -> None:
             )
         ):
             raise CohesixError("Worker receipt contains prohibited authority data")
+
+# Compatibility entry points emit only the operation-report schema.
+build_lease_receipt = build_lease_report
+build_run_receipt = build_run_report
+write_receipt_json = write_operation_report_json

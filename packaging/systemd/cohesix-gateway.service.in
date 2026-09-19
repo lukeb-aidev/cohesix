@@ -1,0 +1,53 @@
+# Author: Lukas Bower
+# Purpose: Isolate the sole upstream console owner with file-backed deployment credentials.
+# Copyright 2026 Lukas Bower
+[Unit]
+Description=Cohesix loopback gateway
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@STATE@
+ExecStart=@PREFIX@/bin/hive-gateway --bind 127.0.0.1:8080 --tcp-host @TARGET_HOST@ --tcp-port @TARGET_PORT@
+LoadCredential=tcp_auth:@CREDENTIALS@/tcp_auth
+LoadCredential=root_ticket:@CREDENTIALS@/root_ticket
+LoadCredential=request_auth:@CREDENTIALS@/request_auth
+LoadCredential=delegation_key:@CREDENTIALS@/delegation_key
+Environment=COH_AUTH_TOKEN=file:%d/tcp_auth
+Environment=COH_TICKET=file:%d/root_ticket
+Environment=HIVE_GATEWAY_REQUEST_AUTH_TOKEN=file:%d/request_auth
+Environment=HIVE_GATEWAY_DELEGATION_KEY_REF=file:%d/delegation_key
+Environment=RUST_LOG=warn
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=@STATE@
+LimitCORE=0
+TasksMax=128
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cohesix-gateway
+
+[Install]
+WantedBy=multi-user.target

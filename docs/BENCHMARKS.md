@@ -240,6 +240,30 @@ mixed offered-load profiles below or 256-Worker acceptance.
 
 ## Workload contracts and comparison boundaries
 
+Provider/exporter overhead uses `scripts/ci/provider_conformance_run.sh
+--perf-only --matrix configs/provider_conformance.toml --state-dir
+out/bench/<fresh-run>`. This explicitly selected release-profile host probe
+measures cached registry lookup, valid/invalid target validation, local identity
+mapping, signed graph verification, receipt rendering and each registered
+derived exporter. It performs ten warmup calls and records 100 timed samples
+per operation, with nearest-rank p50/p95, maximum, input graph/registry sizes,
+output sizes, compiled graph hash and source inventory. The representative
+eight-node signed fixture remains test-only; its in-memory CAS callback excludes
+disk and network costs. No live provider, TLS delivery, GPU, Worker, QEMU or Pi
+execution is inferred. The normal matrix does not run this opt-in probe.
+Retain the raw report even when a later comparable baseline is unavailable;
+timings alone establish no performance improvement or hardware equivalence.
+
+For authorized REST status/read workloads, the benchmark client sends the same delegated ticket on GET and POST, and the current
+authority microbenchmark mints an explicit status read scope. Historical
+pre-27a baseline binaries retain their own recorded authentication contract.
+Record the provider graph hash, delegated scopes, and compatibility posture
+when comparing runs; no provider timing or read authorization result replaces
+Pi raw framed-TCP throughput evidence. Stage 04's isolated operator ticket
+contains both root read and write scopes. No full performance suite is required
+for the focused provider/read contract implementation checks.
+
+
 QEMU/Pi comparisons use the paired release kernels and common production
 manifest contract in [PRODUCTION_PROFILES.md](PRODUCTION_PROFILES.md).
 Retained Pi diagnostic-kernel results are a distinct baseline. Use
@@ -272,8 +296,8 @@ They do not alter future benchmark requirements.
 Mutating REST harness workloads require request authentication and
 `COH_REST_TICKET`. The request token may be an explicit `env:NAME` or absolute
 `file:` reference and is resolved for each operation. Missing delegation or an
-invalid selected credential fails before networking. Read-only workloads retain
-their existing request-auth posture. These rules do not alter raw TCP sampling,
+invalid selected credential fails before networking. Non-public read workloads also require
+the generated read delegation. These rules do not alter raw TCP sampling,
 throughput thresholds or retry accounting.
 
 Use `--mode raw --raw-requests 64` for the raw framed console TCP baseline,

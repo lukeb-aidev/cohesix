@@ -6,6 +6,9 @@
 #![forbid(unsafe_code)]
 
 extern crate alloc;
+
+/// Bounded authenticated host observation and freshness contracts.
+pub mod snapshot;
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
@@ -14,6 +17,21 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Compiler-owned host field-bus endpoints and exact operation maps.
+#[cfg(feature = "std")]
+pub mod bus;
+/// Immutable native release inputs and scoped macOS observations.
+#[cfg(feature = "std")]
+pub mod mac_release;
+/// Compiler-selected native macOS control targets.
+#[cfg(feature = "std")]
+pub mod macos;
+
+/// Shared bounded GPU workload ticket arguments.
+pub mod gpu;
+/// Host-only package requirements; never a VM installer or namespace.
+#[cfg(feature = "std")]
+pub mod package;
 pub mod policy;
 #[cfg(feature = "std")]
 pub mod secret;
@@ -307,55 +325,13 @@ pub struct DedupeSnapshot {
     pub duplicates: u64,
 }
 
-/// Exact legacy provider argument names; generated clients consume this contract.
-pub const PROVIDER_V1_FIELDS: &[(&str, &[&str])] = &[
-    ("systemd.start", &["unit"]),
-    ("systemd.stop", &["unit"]),
-    ("systemd.restart", &["unit"]),
-    ("systemd.status-check", &["unit"]),
-    ("docker.restart", &["container"]),
-    ("docker.stop", &["container"]),
-    ("docker.status-check", &["container"]),
-    ("k8s.cordon", &["node", "reason", "ttl_s"]),
-    ("k8s.drain", &["node", "reason", "ttl_s"]),
-    ("k8s.lease.sync", &["node", "reason", "ttl_s"]),
-    (
-        "gpu.lease.grant",
-        &[
-            "gpu_id",
-            "mem_mb",
-            "streams",
-            "ttl_s",
-            "priority",
-            "budget_ttl_s",
-            "budget_ops",
-        ],
-    ),
-    ("gpu.lease.renew", &["gpu_id", "ttl_s", "priority"]),
-    ("gpu.lease.release", &["gpu_id", "reason"]),
-    ("peft.export", &["job_id", "job", "out_dir", "out"]),
-    (
-        "peft.import",
-        &[
-            "model_id",
-            "model",
-            "job_id",
-            "job",
-            "adapter_dir",
-            "from",
-            "export_root",
-            "export",
-            "registry_root",
-            "registry",
-            "publish",
-        ],
-    ),
-    (
-        "peft.activate",
-        &["model_id", "model", "registry_root", "registry"],
-    ),
-    ("peft.rollback", &["registry_root", "registry"]),
-];
+// Compatibility vocabulary is now emitted from the same provider IR as host clients.
+mod provider_generated;
+pub use provider_generated::PROVIDER_V1_FIELDS;
+
+/// Host-only provider registry; no native provider implementation enters the VM.
+#[cfg(feature = "std")]
+pub mod provider;
 
 #[cfg(test)]
 mod tests {

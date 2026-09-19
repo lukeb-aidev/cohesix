@@ -25,7 +25,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.21",
+    "schema": "1.26",
     "affinity": {
       "enabled": true,
       "max_cores": 4,
@@ -370,6 +370,9 @@
           "gpu.lease.grant",
           "gpu.lease.renew",
           "gpu.lease.release",
+          "gpu.workload.submit",
+          "gpu.workload.cancel",
+          "gpu.workload.observe",
           "peft.export",
           "peft.import",
           "peft.activate",
@@ -389,6 +392,9 @@
           "gpu.lease.grant",
           "gpu.lease.renew",
           "gpu.lease.release",
+          "gpu.workload.submit",
+          "gpu.workload.cancel",
+          "gpu.workload.observe",
           "peft.export",
           "peft.import",
           "peft.activate",
@@ -442,6 +448,33 @@
         "wal_max_entries": 1024,
         "wal_max_bytes": 524288,
         "relay_timeout_ms": 2000
+      },
+      "snapshots": {
+        "enable": true,
+        "max_bytes": 8192,
+        "max_entries": 64,
+        "max_value_bytes": 1024,
+        "max_ttl_ms": 30000,
+        "publishers": [
+          {
+            "source_id": "linux-reference",
+            "providers": [
+              "systemd",
+              "docker",
+              "k8s",
+              "nvidia",
+              "jetson",
+              "network"
+            ]
+          },
+          {
+            "source_id": "mac-controller",
+            "providers": [
+              "launchd",
+              "network"
+            ]
+          }
+        ]
       }
     },
     "audit": {

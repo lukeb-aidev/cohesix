@@ -27,6 +27,25 @@ pub struct DoctorConfig {
     pub policy_path: PathBuf,
     /// Use mock mode (skip NVML + mount checks).
     pub mock: bool,
+    /// Probe a local NVIDIA provider only when this host is an explicitly selected GPU executor.
+    pub local_gpu: bool,
+    /// Require FUSE only for a deployment selecting filesystem mounts.
+    pub require_fuse: bool,
+    /// Check QEMU only for a development host profile.
+    pub developer_tools: bool,
+    /// Optional signed package and independent enrollment checks.
+    pub package: Option<PackageConfig>,
+}
+
+/// All package inputs are explicit; credential references live outside the package.
+#[derive(Debug, Clone)]
+pub struct PackageConfig {
+    /// Installed package root.
+    pub root: PathBuf,
+    /// Independently enrolled signer policy.
+    pub trust: PathBuf,
+    /// Exact map from generated credential names to env:/file: references.
+    pub credential_refs: PathBuf,
 }
 
 /// Run the doctor checks and emit audit lines.
@@ -77,18 +96,73 @@ pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
             Some("check=nvml status=skip reason=mock"),
         );
     } else {
-        check_mount(policy.as_ref(), audit, &mut errors);
-        check_nvml(audit, &mut errors);
+        if config.require_fuse {
+            check_mount(policy.as_ref(), audit, &mut errors);
+        } else {
+            audit.push_line("doctor check=mount status=not_enabled");
+        }
+        if config.local_gpu {
+            check_nvml(audit, &mut errors);
+        } else {
+            audit.push_line("doctor check=local-gpu status=not_enabled");
+        }
     }
 
     check_runtime("python3", config.mock, audit, &mut errors);
-    check_runtime("qemu-system-aarch64", config.mock, audit, &mut errors);
+    if config.developer_tools {
+        check_runtime("qemu-system-aarch64", config.mock, audit, &mut errors);
+    }
+    check_provider_contract(audit)?;
+    if let Some(package) = config.package {
+        let trust = crate::package::load_external_trust(&package.root, &package.trust)?;
+        let report = crate::package::doctor(&package.root, &trust, &package.credential_refs)?;
+        audit.push_line(serde_json::to_string(&report)?);
+    }
 
     if errors.is_empty() {
         Ok(())
     } else {
         Err(anyhow!("doctor failed: {} check(s) failed", errors.len()))
     }
+}
+
+fn check_provider_contract(audit: &mut CohAudit) -> Result<()> {
+    let registry = cohesix_authority::provider::registry()?;
+    audit.push_line(format!(
+        "doctor check=provider-registry schema={} graph_sha256={}",
+        registry["schema"]
+            .as_str()
+            .ok_or_else(|| anyhow!("provider registry schema"))?,
+        registry["graph_sha256"]
+            .as_str()
+            .ok_or_else(|| anyhow!("provider registry hash"))?
+    ));
+    let families = registry["contract"]["families"]
+        .as_array()
+        .ok_or_else(|| anyhow!("provider families"))?;
+    for provider in families {
+        audit.push_line(format!(
+            "doctor check=provider id={} declared={} installed=unverified",
+            provider["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("provider identity"))?,
+            provider["availability"]
+                .as_str()
+                .ok_or_else(|| anyhow!("provider availability"))?
+        ));
+    }
+    audit.push_line(format!(
+        "doctor check=export schema={} siem_delivery={}",
+        registry["contract"]["export"]["schema"]
+            .as_str()
+            .ok_or_else(|| anyhow!("export schema"))?,
+        if registry["contract"]["siem_delivery"]["enabled"] == true {
+            "configured-unverified"
+        } else {
+            "not_enabled"
+        }
+    ));
+    Ok(())
 }
 
 fn check_ticket(role: Role, ticket: Option<&str>, audit: &mut CohAudit, errors: &mut Vec<String>) {

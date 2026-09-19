@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
+import json
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .audit import CohesixAudit
@@ -112,7 +114,9 @@ def built_in_playbooks() -> Dict[str, UseCasePlaybook]:
 
     shared_approvals = (
         ApprovalRequest(approval_id="approve-queen-ctl", target_path="/queen/ctl"),
-        ApprovalRequest(approval_id="approve-schedule", target_path="/queen/schedule/ctl"),
+        ApprovalRequest(
+            approval_id="approve-schedule", target_path="/queen/schedule/ctl"
+        ),
         ApprovalRequest(approval_id="approve-lease", target_path="/queen/lease/ctl"),
     )
     return {
@@ -369,7 +373,9 @@ def built_in_playbooks() -> Dict[str, UseCasePlaybook]:
                     ),
                 ),
                 exports=(
-                    ExportRequest(op="open", export_id="jetson-infra-export", ttl_s=1200),
+                    ExportRequest(
+                        op="open", export_id="jetson-infra-export", ttl_s=1200
+                    ),
                 ),
             ),
             probes=ProbeSpec(
@@ -558,9 +564,21 @@ def execute_playbook(
     include_host_snapshot: bool = True,
     push_host_snapshot: bool = True,
     audit: Optional[CohesixAudit] = None,
+    rehearsal: bool = False,
 ) -> PlaybookReport:
     """Execute a playbook via existing control-plane semantics."""
 
+    from .backends import MockBackend
+    from .errors import CohesixError
+
+    if (
+        not dry_run
+        and not rehearsal
+        and not isinstance(orchestrator.backend, MockBackend)
+    ):
+        raise CohesixError(
+            "not_enabled staged deployment; select a generated workflow or explicit control rehearsal"
+        )
     run_id = None if dry_run else _generate_run_id()
     plan = _apply_run_id(playbook.plan, run_id) if run_id is not None else playbook.plan
     plan_execution = orchestrator.execute_plan(plan, dry_run=dry_run, audit=audit)
@@ -643,7 +661,11 @@ def describe_playbooks(
 ) -> List[Dict[str, object]]:
     """Render concise playbook metadata for UI/CLI listing."""
 
-    items = list(playbooks) if playbooks is not None else list(built_in_playbooks().values())
+    items = (
+        list(playbooks)
+        if playbooks is not None
+        else list(built_in_playbooks().values())
+    )
     rendered: List[Dict[str, object]] = []
     for item in sorted(items, key=lambda value: value.playbook_id):
         rendered.append(
@@ -655,6 +677,9 @@ def describe_playbooks(
                 "objective": item.objective,
                 "capability_summary": item.capability_summary,
                 "workflow_kind": "control-model",
+                "generated_workflow": generated_workflows()[item.playbook_id][
+                    "workflow"
+                ],
                 "provider_probes": list(item.probes.dependency_ids()),
                 "next_milestone": "m27b-live-reference-workflows",
                 "plan": summarize_plan(item.plan),
@@ -734,3 +759,69 @@ def _append_run_suffix(token: str, run_id: str, max_bytes: int) -> str:
     if len(compact.encode("utf-8")) <= max_bytes:
         return compact
     return compact[:max_bytes]
+
+
+def generated_workflows() -> dict[str, dict[str, object]]:
+    """Return detached compiler-owned DAGs; their presence is not deployment acceptance."""
+    from copy import deepcopy
+    from .providers import registry
+
+    return {row["id"]: deepcopy(row) for row in registry()["playbooks"]}
+
+
+def execute_workflow(
+    playbook_id: str,
+    lifecycle: str,
+    *,
+    coh_binary: Path,
+    deployment: Path | None = None,
+    rest_url: str | None = None,
+    host: str | None = None,
+    port: int = 31337,
+    auth_ref: str | None = None,
+    ticket_ref: str | None = None,
+) -> dict[str, object]:
+    """Use the shared Rust lifecycle and verifier; secrets never enter command arguments."""
+    from .native_providers import bounded_command
+    from .providers import ProviderUnavailable
+    from .auth import resolve_secret_reference
+
+    if lifecycle not in {"plan", "apply", "watch", "explain", "verify", "recover"}:
+        raise ProviderUnavailable("invalid_lifecycle", "workflow")
+    if playbook_id not in generated_workflows() or not coh_binary.is_absolute():
+        raise ProviderUnavailable("not_registered", "workflow")
+    command = [str(coh_binary.resolve(strict=True))]
+    if ticket_ref is not None:
+        # The Rust process resolves the same explicit source. Validate before spawning.
+        resolve_secret_reference(ticket_ref)
+        command.extend(["--ticket-ref", ticket_ref])
+    command.extend([lifecycle, playbook_id])
+    if lifecycle not in {"plan", "explain"}:
+        if deployment is None:
+            raise ProviderUnavailable("not_enabled", "workflow_deployment")
+        command.extend(["--deployment", str(deployment.resolve(strict=True))])
+    credentials = {}
+    if lifecycle in {"apply", "watch", "recover"}:
+        if (rest_url is None) == (host is None) or auth_ref is None:
+            raise ProviderUnavailable("not_enabled", "workflow_endpoint")
+        if rest_url is not None:
+            command.extend(["--rest-url", rest_url])
+            credentials["COH_REST_AUTH_TOKEN"] = auth_ref
+        else:
+            command.extend(["--host", str(host), "--port", str(port)])
+            credentials["COH_AUTH_TOKEN"] = auth_ref
+    # Credential-reference environment variables for a delegated ticket must be
+    # resolved by the child too; require file references for this separate key.
+    if ticket_ref is not None and not ticket_ref.startswith("file:"):
+        raise ProviderUnavailable(
+            "invalid_credential_reference", "workflow_ticket_requires_file"
+        )
+    result = json.loads(
+        bounded_command(command, timeout_s=30, credential_refs=credentials)
+    )
+    if (
+        result.get("authoritative") is not False
+        or result.get("production_use_case_accepted") is not False
+    ):
+        raise ProviderUnavailable("invalid_operation_report", "workflow")
+    return result

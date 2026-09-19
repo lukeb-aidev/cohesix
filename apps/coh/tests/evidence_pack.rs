@@ -19,6 +19,20 @@ use tempfile::TempDir;
 const EXPECTED_RETAINED_LOG_BYTES: usize = 2048 * (256 + 1);
 
 #[test]
+fn pack_seal_detects_corrupt_and_unlisted_regular_files() -> Result<()> {
+    let root = TempDir::new()?;
+    std::fs::write(root.path().join("retained.json"), b"{\"observation\":1}")?;
+    coh::evidence::seal_pack(root.path())?;
+    assert!(coh::evidence::verify_pack_integrity(root.path())?);
+    std::fs::write(root.path().join("unexpected.json"), b"{}")?;
+    assert!(coh::evidence::verify_pack_integrity(root.path()).is_err());
+    std::fs::remove_file(root.path().join("unexpected.json"))?;
+    std::fs::write(root.path().join("retained.json"), b"{\"observation\":2}")?;
+    assert!(coh::evidence::verify_pack_integrity(root.path()).is_err());
+    Ok(())
+}
+
+#[test]
 fn evidence_pack_redacts_ticket_payloads() -> Result<()> {
     let audit = AuditConfig::enabled(
         AuditLimits {

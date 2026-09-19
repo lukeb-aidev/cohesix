@@ -74,6 +74,8 @@ HOST_TICKET_CURRENT_PREFIX = "/host/tickets/current/"
 WORKER_RECEIPT_ACTION_CODES = {
     "gpu.lease.grant": "0x0201", "gpu.lease.renew": "0x0202",
     "gpu.lease.release": "0x0203", "peft.export": "0x0301",
+    "gpu.workload.submit": "0x0204", "gpu.workload.cancel": "0x0205",
+    "gpu.workload.observe": "0x0206",
     "peft.import": "0x0302", "peft.activate": "0x0303",
     "peft.rollback": "0x0304",
 }
@@ -822,7 +824,7 @@ class RestClient:
 
     def post_json(self, path: str, payload: dict) -> dict:
         headers = self.request_auth_headers()
-        if not headers or not self.delegated_ticket:
+        if not self.request_auth_token or not self.delegated_ticket:
             raise RestError("mutating REST requires request auth and a delegated ticket")
         normalize_ticket("queen", self.delegated_ticket, queen_validate=True)
         url = self._build_url(path, None)
@@ -870,13 +872,14 @@ class RestClient:
         return self.get_json("/v1/meta/status")
 
     def request_auth_headers(self) -> Dict[str, str]:
-        if self.request_auth_token is None:
-            return {}
-        token = resolve_secret(self.request_auth_token)
-        return {
-            "Authorization": f"Bearer {token}",
-            "x-cohesix-auth": token,
-        }
+        headers: Dict[str, str] = {}
+        if self.request_auth_token is not None:
+            token = resolve_secret(self.request_auth_token)
+            headers.update({"Authorization": f"Bearer {token}", "x-cohesix-auth": token})
+        if self.delegated_ticket:
+            normalize_ticket("queen", self.delegated_ticket, queen_validate=True)
+            headers["x-cohesix-ticket"] = self.delegated_ticket
+        return headers
 
     def _build_url(self, path: str, params: Optional[Dict[str, str]]) -> str:
         url = f"{self.rest_url}{path}"

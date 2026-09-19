@@ -43,11 +43,9 @@ pub fn validate(manifest: &Manifest) -> Result<()> {
         {
             bail!("production authority requires strict intents, fencing, execution WAL, audit/replay, and disabled raw debug/legacy control");
         }
-        if manifest.ecosystem.host.federation.enable {
-            bail!(
-                "Release A production federation requires separately accepted promotion evidence"
-            );
-        }
+        // M27b supplies the bounded durable host relay. Selecting it is not an
+        // execution/use-case claim; peer policy is validated by Manifest and
+        // each live relay resolves separately enrolled delegated credentials.
         for ticket in &manifest.tickets {
             if !ticket.secret.is_empty() || ticket.secret_ref.is_none() {
                 bail!("production tickets require secret_ref and forbid literal secrets");

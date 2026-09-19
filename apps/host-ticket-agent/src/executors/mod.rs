@@ -16,14 +16,24 @@ use crate::HostTicketSpec;
 
 /// Docker remediation executor.
 pub mod docker;
+/// Generated field-bus maps with remote ACK and durable replay fencing.
+pub mod field_bus;
 /// GPU lease executor.
 pub mod gpu;
 /// Kubernetes coexistence executor.
 pub mod k8s;
+/// Compiler-selected macOS service lifecycle.
+pub mod launchd;
+/// Compiler-selected macOS build, release and endpoint observations.
+pub mod mac_release;
+/// Durable bounded native evidence objects and compact ticket-result references.
+pub mod observation;
 /// PEFT lifecycle executor.
 pub mod peft;
 /// systemd remediation executor.
 pub mod systemd;
+/// Authenticated GPU workload IPC and root lease supervision.
+pub mod workload;
 
 /// Runtime configuration used by executors.
 #[derive(Debug, Clone)]
@@ -36,6 +46,22 @@ pub struct ExecutorConfig {
     pub export_root: PathBuf,
     /// Host root containing provider-produced adapter bundles.
     pub adapter_root: PathBuf,
+    /// Private host-owned content-addressed native observation store.
+    pub provider_evidence_root: PathBuf,
+    /// Explicit private field-bus WAL; absent disables bus ticket execution.
+    pub field_bus_state_root: Option<PathBuf>,
+    /// Optional independently enrolled signed operation bindings and custodian keys.
+    pub evidence_enrollment_dir: Option<PathBuf>,
+    /// Separate Worker witness key enrollment; cannot sign native execution or grants.
+    pub worker_evidence_enrollment_dir: Option<PathBuf>,
+    /// Startup measurement of this native agent, required for signed operations.
+    pub evidence_executable_sha256: Option<String>,
+    /// Explicit private host-local GPU executor socket; absent disables workloads.
+    pub gpu_executor_socket: Option<PathBuf>,
+    /// Secret reference held only by the ticket agent and GPU bridge.
+    pub gpu_executor_credential_ref: Option<String>,
+    /// Bounded immutable workload request CAS; paths never come from tickets.
+    pub gpu_request_root: Option<PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -45,6 +71,14 @@ impl Default for ExecutorConfig {
             registry_root: PathBuf::from("out/model_registry"),
             export_root: PathBuf::from("out/peft_exports"),
             adapter_root: PathBuf::from("out/peft_adapters"),
+            provider_evidence_root: PathBuf::from("out/provider-evidence"),
+            field_bus_state_root: None,
+            evidence_enrollment_dir: None,
+            worker_evidence_enrollment_dir: None,
+            evidence_executable_sha256: None,
+            gpu_executor_socket: None,
+            gpu_executor_credential_ref: None,
+            gpu_request_root: None,
         }
     }
 }
@@ -92,8 +126,12 @@ pub fn execute_action(
     config: &ExecutorConfig,
 ) -> Result<String> {
     crate::provider::validate(spec)?;
+    super::causal::preflight(config, spec)?;
     if spec.schema == crate::HOST_TICKET_V2_SCHEMA {
         crate::claim::validate_v2_action_args(spec)?;
+    }
+    if spec.action.starts_with("gpu.workload.") {
+        return workload::execute(transport, session, spec, config);
     }
     if spec.action.starts_with("gpu.lease.") {
         return gpu::execute(transport, session, spec, config);
@@ -104,11 +142,20 @@ pub fn execute_action(
     if spec.action.starts_with("systemd.") {
         return systemd::execute(transport, session, spec, config);
     }
+    if spec.action.starts_with("mac_release.") || spec.action.starts_with("endpoint_compliance.") {
+        return mac_release::execute(spec, config);
+    }
+    if spec.action.starts_with("launchd.") {
+        return launchd::execute(spec, config);
+    }
     if spec.action.starts_with("docker.") {
         return docker::execute(transport, session, spec, config);
     }
     if spec.action.starts_with("k8s.") {
         return k8s::execute(transport, session, spec, config);
+    }
+    if spec.action.starts_with("modbus.") || spec.action.starts_with("dnp3.") {
+        return field_bus::execute(spec, config);
     }
     Err(anyhow!("unsupported ticket action {}", spec.action))
 }
@@ -120,6 +167,12 @@ pub fn reconcile_action(
     spec: &HostTicketSpec,
     config: &ExecutorConfig,
 ) -> Result<ReconcileOutcome> {
+    if spec.action.starts_with("modbus.") || spec.action.starts_with("dnp3.") {
+        return field_bus::reconcile(spec, config);
+    }
+    if spec.action.starts_with("gpu.workload.") {
+        return workload::reconcile(spec, config);
+    }
     if spec.action.starts_with("gpu.lease.") {
         return gpu::reconcile(transport, session, spec, config);
     }

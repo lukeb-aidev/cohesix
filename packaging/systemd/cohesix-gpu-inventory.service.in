@@ -1,0 +1,50 @@
+# Author: Lukas Bower
+# Purpose: Publish expiring GPU identity from the pinned CUDA helper without admitting workloads.
+# Copyright 2026 Lukas Bower
+[Unit]
+Description=Cohesix native GPU inventory
+After=cohesix-gateway.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@STATE@
+ExecStart=@PREFIX@/bin/gpu-bridge-host --native-inventory-config @ENROLLMENT@/gpu-inventory.json --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000 --registry @STATE@/models
+LoadCredential=gpu_mac:@CREDENTIALS@/gpu_mac
+LoadCredential=request_auth:@CREDENTIALS@/request_auth
+LoadCredential=delegated_ticket:@CREDENTIALS@/gpu_inventory_ticket
+Environment=HIVE_GATEWAY_REQUEST_AUTH_TOKEN=file:%d/request_auth
+Environment=COH_REST_TICKET=file:%d/delegated_ticket
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=no
+DevicePolicy=closed
+@GPU_DEVICE_POLICY@
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=@STATE@
+LimitCORE=0
+TasksMax=128
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cohesix-gpu-inventory
+
+[Install]
+WantedBy=multi-user.target

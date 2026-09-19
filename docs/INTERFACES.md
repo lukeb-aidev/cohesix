@@ -10,6 +10,11 @@ interfaces: transport selection, target console framing, namespace paths,
 control files, and non-generated record schemas. It links to generated snippets
 for compiler-owned values instead of copying them.
 
+Manifest schema 1.26 retains compiler-selected macOS launchd service maps and
+adds exact Xcode/release/endpoint target maps and version-1 actions. Their target, process-identity,
+refusal and observation contracts are in [MACOS_PROVIDERS.md](MACOS_PROVIDERS.md).
+No macOS device access or native execution moves into the VM.
+
 Protocol internals belong in [SECURE9P.md](SECURE9P.md), role and ticket policy
 in [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md), system boundaries in
 [ARCHITECTURE.md](ARCHITECTURE.md), and operator command usage in
@@ -718,7 +723,11 @@ or `duplicate`, with the complete envelope and outcome. `/proc/authority` expose
 the selected identity class and writer fence; `/proc/queen/dedupe` is bounded
 NDJSON with retained result hashes. Optional `writer_epoch` and `admission`
 correlation are preserved in strict intents and host-ticket/v1/v2 receipts and
-WAL records. Writer ownership is checked independently of admission freshness;
+WAL records. Version-1 native requests accept the documented primitive `args`
+object; unknown or duplicate fields, nested argument values and null authority
+fields are refused. Production Root checks the selected writer epoch on both
+version-1 requests and results before retaining them. Writer ownership is
+checked independently of admission freshness.
 Writer fencing does not issue admission decisions. [M27a authority](M27A_AUTHORITY.md)
 defines the bounds and migration contract.
 
@@ -943,6 +952,24 @@ active adapter; clients must not silently create substitute paths.
 
 ## GPU publication
 
+The provider registry defines the selected `gpu.workload.submit|cancel|observe` action set.
+Submissions use `host-ticket/v2` with `receipt_mode=worker` and the existing
+root-pinned WorkerGpu identity. Submit arguments are exactly `lease_id`
+(a 1–32 byte token) and `request_sha256` (64 lowercase hex characters).
+Cancel/observe arguments are exactly `job_id` (the original submit ticket ID).
+The shared validator in `cohesix-authority::gpu` rejects paths, unknown fields,
+and caller-supplied admission identity before provider execution. Workload
+inputs reside in the host agent's explicit bounded CAS root. They name the
+compiled helper digest, physical UUID, topology digest, reference entrypoint,
+finite dimensions/repetitions/memory/runtime, and expected output digest.
+
+Worker ABI v2 keeps its fixed layout and existing action codes. New GPU codes
+`0x0204`, `0x0205`, and `0x0206` represent submit, cancel, and observe respectively;
+only schema-1.22 profiles selecting these actions may send them. The root and
+Worker images must be rebuilt together. A Worker receipt attests the correlated
+provider result; the Worker never runs CUDA or verifies provider-native facts.
+
+
 `/gpu/bridge/ctl` uses a bounded three-stage snapshot stream:
 
 ```text
@@ -956,7 +983,55 @@ The bridge validates decoded size and SHA-256 before publishing nodes.
 Lease and status breadcrumb formats are generated in
 [gpu_breadcrumbs.md](snippets/gpu_breadcrumbs.md).
 
+Native workload publication uses `gpu-bridge-host --publish
+--native-inventory-config /absolute/executor.json`. This selects the same pinned
+helper, CUDA UUID and provider graph as the local executor. The
+`cohesix-gpu-device/v1` `execution_identity` in `/gpu/<id>/info` carries the
+native topology digest and publisher epoch. `host-ticket-agent` checks it before
+execution and throughout lease renewal. Snapshot expiry withdraws the device;
+replacement or changed identity revokes an outstanding grant. Legacy inventory
+without this identity remains useful for discovery but cannot admit workloads.
+Model-catalog availability in `/gpu/bridge/status` is separate from physical
+GPU inventory: an empty catalog does not supply model or inference evidence.
+
+For one pending `gpu.workload.submit`, root can admit one matching
+`gpu.workload.cancel`, `gpu.workload.observe`, `gpu.lease.renew`, or
+`gpu.lease.release` at the same Worker identity. Workload controls name that
+job; lease controls name that job's lease. A second pending control, unrelated
+lease, or second workload is refused. Worker receipts still use one IPC call
+at a time. The agent reserves its control execution lane and rechecks the
+root-published memory/stream reservation along with the lease and device.
+
+Canonical Worker directories support `LS` at
+`/shard/<label>/worker/<id>` and expose `telemetry`. `CAT` of that leaf reads
+one bounded retained telemetry window using the same ring as `TAIL`; only
+`TAIL` carries the stream cursor. Missing Workers, incorrect shard labels,
+and attempts to list a telemetry leaf are refused. Target directories become
+visible only after the existing durable READY publication.
+
+Host deployment packaging uses compiler-owned
+`cohesix-host-package-profile/v1`, signed `cohesix-host-package/v1`, independent
+`cohesix-host-package-trust/v1`, and non-authoritative
+`cohesix-host-package-report/v1` records. Exact generated configuration hashes
+and the provider graph are checked together; an installed package is not an
+action receipt. The credential-ref map consumed by `coh doctor --package`
+contains exactly the selected profile's credential names and external `env:` or
+`file:` references. Environment references may resolve through one file
+reference for native service-manager credentials; further reference chains and
+fallbacks fail. REST resolves delegated ticket references before sending read
+or write headers, and the gateway separately resolves its upstream ticket.
+The [deployment contract](../packaging/README.md) documents canonical signing,
+file/architecture/SBOM bounds, service templates and explicit activation.
+
 ## Sidecar bus providers
+
+The live host client contract is [FIELD_BUS.md](FIELD_BUS.md): compiler-owned
+endpoint/point maps, `modbus.read/control` and `dnp3.read/control` host tickets,
+remote protocol ACKs, durable reconciliation and source-scoped TTL snapshots.
+Version-1 bus tickets use an endpoint id as target and exact endpoint/point args.
+They add no target listener or executable WorkerBus role. The `/bus` files below
+remain the historical coordination/model contract; `online` and spool drain
+records cannot attest native delivery or physical device behavior.
 
 Sidecar mounts exist only when the selected MODBUS or DNP3 `sidecars.*` gate is
 enabled. The compiler resolves adapter labels, including collision handling;
@@ -1009,6 +1084,13 @@ reads. Disabled or oversized providers fail explicitly and emit a
 replay these records, but they do not own their schema or mutation policy.
 
 ## Host service projections
+
+The selected manifest defines host snapshot source enrollment and bounded
+`/host/snapshots/<provider>/<source>/{ctl,status,snapshot}` publication. Native
+publisher wiring and end-to-end checks are still in progress; the receiver
+withdraws expired bytes using its monotonic timebase. The exact source, transfer
+and freshness contract is [Host snapshots](HOST_SNAPSHOTS.md).
+
 
 The host tree appears only when `ecosystem.host.enable` is selected; individual
 provider roots follow `ecosystem.host.providers[]`. These append-only nodes are
@@ -1070,6 +1152,14 @@ federated `id + idempotency_key + source_hive + target_hive`; it provides
 idempotency/evidence correlation, not additional authority. Relay queues, WAL,
 timeouts, peers, and credentials remain host-side and manifest-bounded.
 
+An explicitly selected production host relay operates under the existing
+strict-intent, writer-fencing, execution-WAL and audit/replay floor. The Release
+A profile generator still defaults federation off. Selection does not assert a
+production use case or Worker execution: the source retains the exact uniquely
+correlated target terminal before marking delivery, and independently resolves
+the peer request credential and delegated ticket. Missing credentials, stale
+epoch, conflicting results and exhausted durable capacity remain refusals.
+
 ## CAS updates
 
 CAS layout, fixed chunk size, delta references, signing requirement, and
@@ -1097,6 +1187,13 @@ preflight as target acceptance or answer that refusal by retrying, truncating,
 or changing payload identity.
 
 ## Policy, audit, and replay
+
+Mapped gateway issuance uses explicit ticket payload version 2 with canonical
+ULEB128 budget/time integers and the existing 224-byte envelope limit. Ordinary
+issuance and generated fixtures retain version 1. Both shared Rust and Python
+parsers accept the two versions; the mapped signing domain is gateway-only.
+See [identity exchange and ticket wire compatibility](IDENTITY_MAPPING.md).
+
 
 | Path | Mode | Contract |
 | --- | --- | --- |

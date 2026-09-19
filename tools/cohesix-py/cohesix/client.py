@@ -26,7 +26,7 @@ from .evidence import (
 )
 from .errors import CohesixError
 from .paths import validate_path
-from .receipts import build_lease_receipt, build_run_receipt, write_receipt_json
+from .receipts import build_lease_report, build_run_report, write_operation_report_json
 from .worker import (
     TargetProfileContract,
     WorkerClient,
@@ -148,6 +148,11 @@ class CohesixClient:
 
         return self.workers.teardown(role, public_instance_id)
 
+    def gpu_workload_ticket(self, spec: dict[str, object]) -> dict[str, object]:
+        """Submit an explicit WorkerGpu ticket; only root/provider results prove completion."""
+        from .workload import enqueue
+        return enqueue(self.backend, spec)
+
     def gpu_list(self, audit: Optional[CohesixAudit] = None) -> List[Dict[str, object]]:
         entries = self.backend.list_dir("/gpu")
         if audit is not None:
@@ -205,7 +210,7 @@ class CohesixClient:
                 f"lease requested gpu_id={args.gpu_id} mem_mb={args.mem_mb} streams={args.streams} ttl_s={args.ttl_s}"
             )
 
-    def gpu_lease_with_receipt(
+    def gpu_lease_with_report(
         self,
         args: GpuLeaseArgs,
         receipt_out: Path,
@@ -217,7 +222,7 @@ class CohesixClient:
         except Exception as exc:
             lease_error = exc
 
-        receipt = build_lease_receipt(
+        receipt = build_lease_report(
             backend=self.backend,
             defaults=self.defaults,
             args=args,
@@ -226,7 +231,7 @@ class CohesixClient:
             audit=audit,
         )
         try:
-            write_receipt_json(receipt_out, receipt)
+            write_operation_report_json(receipt_out, receipt)
         except Exception as exc:
             if lease_error is not None:
                 raise CohesixError(
@@ -236,6 +241,9 @@ class CohesixClient:
         if lease_error is not None:
             raise lease_error
         return receipt
+
+    # Compatibility method name; emitted artifacts are operation reports.
+    gpu_lease_with_receipt = gpu_lease_with_report
 
     def telemetry_pull(self, out_dir: Path, audit: Optional[CohesixAudit] = None) -> Tuple[int, int, int]:
         telemetry = self.policy.get("telemetry", {})
@@ -482,7 +490,7 @@ class CohesixClient:
         if result.returncode != 0:
             raise CohesixError(f"command exited with code {result.returncode}")
 
-    def run_command_with_receipt(
+    def run_command_with_report(
         self,
         gpu_id: str,
         command: List[str],
@@ -495,7 +503,7 @@ class CohesixClient:
         except Exception as exc:
             run_error = exc
 
-        receipt = build_run_receipt(
+        receipt = build_run_report(
             backend=self.backend,
             defaults=self.defaults,
             gpu_id=gpu_id,
@@ -505,7 +513,7 @@ class CohesixClient:
             audit=audit,
         )
         try:
-            write_receipt_json(receipt_out, receipt)
+            write_operation_report_json(receipt_out, receipt)
         except Exception as exc:
             if run_error is not None:
                 raise CohesixError(
@@ -515,6 +523,9 @@ class CohesixClient:
         if run_error is not None:
             raise run_error
         return receipt
+
+    # Compatibility method name; emitted artifacts are operation reports.
+    run_command_with_receipt = run_command_with_report
 
     def evidence_pack(
         self,

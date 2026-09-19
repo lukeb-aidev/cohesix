@@ -86,7 +86,7 @@ def run_lane(binary: Path, shell: Path, out: Path, count: int, delegated: bool) 
     ticket = None
     if delegated:
         args.extend(["--delegation-key-ref", "env:M27A_BENCH_ISSUER"])
-        minted = subprocess.run([str(shell), "--mint-ticket", "--role", "queen", "--ticket-subject", "probe", "--ticket-secret", "env:M27A_BENCH_ISSUER", "--ticket-write-scope", "/queen", "--ticket-ttl-s", "300", "--ticket-ops", str(count * 8)], env=env, capture_output=True, text=True, check=True)
+        minted = subprocess.run([str(shell), "--mint-ticket", "--role", "queen", "--ticket-subject", "probe", "--ticket-secret", "env:M27A_BENCH_ISSUER", "--ticket-write-scope", "/queen", "--ticket-read-scope", "/proc/gateway/status", "--ticket-ttl-s", "300", "--ticket-ops", str(count * 8)], env=env, capture_output=True, text=True, check=True)
         ticket = minted.stdout.strip()
     out.mkdir(parents=True, exist_ok=True)
     samples: dict[str, list[dict]] = {}
@@ -99,7 +99,7 @@ def run_lane(binary: Path, shell: Path, out: Path, count: int, delegated: bool) 
                 if process.poll() is not None:
                     raise RuntimeError(f"gateway exited during startup; see {out / 'gateway.log'}")
                 try:
-                    _, state = request(base + "/v1/meta/status", token, None)
+                    _, state = request(base + "/v1/meta/status", token, ticket)
                     if state.get("connected"):
                         break
                 except (OSError, urllib.error.URLError):
@@ -138,7 +138,7 @@ def run_lane(binary: Path, shell: Path, out: Path, count: int, delegated: bool) 
                 body["line"] = json.dumps(envelope, separators=(",", ":"))
                 measure("stale_writer", "/v1/fs/echo", body, 403)
                 measure("missing_delegation", "/v1/fs/echo", body, 403, None)
-            _, final = request(base + "/v1/meta/status", token, None)
+            _, final = request(base + "/v1/meta/status", token, ticket)
             result = {"schema": "gateway-authority-lane/v1", "backend": "host-model", "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "client_retries": 0, "initial_status": initial, "final_status": final, "scenarios": {name: summarize(rows) for name, rows in samples.items()}, "samples": samples}
             (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
             return result

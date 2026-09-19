@@ -5,13 +5,124 @@
 openapi: 3.1.0
 info:
   title: Cohesix Hive Gateway
-  version: 0.2.0
+  version: 0.4.0
   description: |-
     Host-only REST gateway that projects Cohesix console/file semantics into a
     JSON API. Responses mirror OK/ERR/END semantics and enforce manifest bounds.
 servers:
   - url: http://127.0.0.1:8080
 paths:
+  /v1/identity/exchange:
+    post:
+      summary: Exchange an enrolled external credential for a finite gateway-only ticket.
+      description: >-
+        Requires request authentication, one generated mapping id and a signed
+        JWT credential. Local uid assertions and client-selected roles, scopes,
+        keys, URLs or lifetime overrides are refused. The host applies pinned
+        keys and exact generated policy; no target or provider request occurs.
+        Body maximum is 9216 bytes and at most four verifications run concurrently.
+        Returned authority is gateway_enforced and does not prove execution.
+      security:
+        - bearerAuth: []
+        - requestAuthHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [mapping_id, credential]
+              properties:
+                mapping_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                credential:
+                  type: string
+                  minLength: 1
+                  maxLength: 8192
+                  writeOnly: true
+      responses:
+        "200":
+          description: Verified mapped credential, subject to gateway policy, finite lifetime and quotas.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [schema, status, authoritative, identity_class, mapping_id, provider_graph_sha256, credential_sha256, expires_unix_s, ticket]
+                properties:
+                  schema:
+                    const: cohesix-identity-exchange/v1
+                  status:
+                    const: OK
+                  authoritative:
+                    const: false
+                  identity_class:
+                    const: gateway_enforced
+                  mapping_id:
+                    type: string
+                  provider_graph_sha256:
+                    type: string
+                    pattern: '^[0-9a-f]{64}$'
+                  credential_sha256:
+                    type: string
+                    pattern: '^[0-9a-f]{64}$'
+                  expires_unix_s:
+                    type: integer
+                    minimum: 1
+                  ticket:
+                    type: string
+                    maxLength: 224
+        "400":
+          description: Malformed or bounded request.
+        "401":
+          description: Missing or invalid gateway request authentication.
+        "403":
+          description: Disabled, unmapped, forged, stale, overbroad or otherwise refused identity.
+        "413":
+          description: HTTP request body exceeds the route bound.
+        "429":
+          description: All four verification slots are occupied.
+        "503":
+          description: Identity clock or verification worker unavailable.
+  /v1/meta/providers:
+    get:
+      summary: Admin-only compiler-owned provider/action and integration-surface contracts.
+      description: Registration grants no authority and proves no live execution. The full registry includes enrolled identity mappings and requires request authentication plus a delegated read scope for /proc/providers/registry unless explicit single-caller read compatibility applies.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      responses:
+        "200":
+          description: Exact compiled registry with its stable integration graph hash and source bindings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema, graph_schema, graph_sha256, source_sha256, resolved_manifest_sha256, contract]
+                properties:
+                  schema:
+                    const: cohesix-provider-registry/v1
+                  graph_schema:
+                    const: host-integration-dependency/v1
+                  graph_sha256:
+                    type: string
+                    pattern: '^[a-f0-9]{64}$'
+                  source_sha256:
+                    type: string
+                    pattern: '^[a-f0-9]{64}$'
+                  resolved_manifest_sha256:
+                    type: string
+                    pattern: '^[a-f0-9]{64}$'
+                  contract:
+                    type: object
+                    description: Compiler-owned provider families, actions, exact profiles and integration surfaces.
   /v1/meta/bounds:
     get:
       summary: Manifest-derived bounds, paths, and optional Worker declarations.
@@ -24,6 +135,10 @@ paths:
                 $ref: "#/components/schemas/BoundsResponse"
   /v1/meta/status:
     get:
+      description: Non-public reads require request authentication and a delegated Read or ReadWrite scope. Unknown paths are admin-only; ticket-scoped reads require delegated identity even in explicit read compatibility mode.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
       summary: Gateway connection, backend class, optional Worker acceptance, and broker counters.
       responses:
         "200":
@@ -34,6 +149,10 @@ paths:
                 $ref: "#/components/schemas/GatewayStatusResponse"
   /v1/fs/ls:
     get:
+      description: Non-public reads require request authentication and a delegated Read or ReadWrite scope. Unknown paths are admin-only; ticket-scoped reads require delegated identity even in explicit read compatibility mode.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
       summary: List directory entries (LS).
       parameters:
         - in: query
@@ -74,6 +193,10 @@ paths:
                 $ref: "#/components/schemas/GatewayResponse"
   /v1/fs/cat:
     get:
+      description: Non-public reads require request authentication and a delegated Read or ReadWrite scope. Unknown paths are admin-only; ticket-scoped reads require delegated identity even in explicit read compatibility mode.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
       summary: Read file contents (CAT).
       parameters:
         - in: query
@@ -120,6 +243,10 @@ paths:
                 $ref: "#/components/schemas/GatewayResponse"
   /v1/fs/tail:
     get:
+      description: Non-public reads require request authentication and a delegated Read or ReadWrite scope. Unknown paths are admin-only; ticket-scoped reads require delegated identity even in explicit read compatibility mode.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
       summary: Tail file contents (TAIL).
       parameters:
         - in: query
@@ -321,7 +448,7 @@ components:
       in: header
       name: x-cohesix-ticket
       description: >
-        Required together with request authentication on every mutation. The
+        Required together with request authentication on mutations and non-public reads. The
         gateway verifies the existing ticket MAC, subject, scopes and quotas
         under its configured transport authority ceiling. Identity is
         gateway_enforced; the VM authenticates the gateway console session.
@@ -330,7 +457,7 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: >
-        Required for mutating endpoints. Supply `Authorization: Bearer <token>`.
+        Required for mutating endpoints and non-public reads. Supply `Authorization: Bearer <token>`.
     requestAuthHeader:
       type: apiKey
       in: header

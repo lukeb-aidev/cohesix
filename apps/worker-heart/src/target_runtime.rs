@@ -387,7 +387,10 @@ fn process_control(
         WorkerAction::HeartbeatPublish => {}
         WorkerAction::GpuLeaseGrant
         | WorkerAction::GpuLeaseRenew
-        | WorkerAction::GpuLeaseRelease => {
+        | WorkerAction::GpuLeaseRelease
+        | WorkerAction::GpuWorkloadSubmit
+        | WorkerAction::GpuWorkloadCancel
+        | WorkerAction::GpuWorkloadObserve => {
             let receipt = match GpuLeaseReceiptRecord::staged(control) {
                 Ok(receipt) => receipt,
                 Err(_) => publish_fault_and_trap(

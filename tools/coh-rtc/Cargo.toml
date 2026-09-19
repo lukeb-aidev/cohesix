@@ -9,6 +9,7 @@ publish = false
 default-run = "coh-rtc"
 
 [dependencies]
+cohesix-identity = { workspace = true }
 anyhow = { workspace = true }
 cohesix-authority = { workspace = true, features = ["std"] }
 clap = { workspace = true }

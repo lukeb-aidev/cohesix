@@ -331,6 +331,16 @@ struct RetryTomlSection {
 /// Return the default policy path under the working directory or bundle root.
 #[must_use]
 pub fn default_policy_path() -> PathBuf {
+    // A signed installation carries its exact policy beside its executable.
+    // Repository working-directory lookup remains the development fallback.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = exe.parent().and_then(Path::parent) {
+            let candidate = root.join("config/coh_policy.toml");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
     if let Ok(cwd) = std::env::current_dir() {
         let candidate = cwd.join("configs/generated/coh_policy.toml");
         if candidate.is_file() {

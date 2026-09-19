@@ -317,6 +317,10 @@ pub fn attach_artifacts(
     attestation_record: Option<&Path>,
 ) -> Result<()> {
     let snapshot = crate::operator::inspect_pack(root)?;
+    crate::operator::write_atomic(
+        &root.join("provider_registry.json"),
+        cohesix_authority::provider::registry_json().as_bytes(),
+    )?;
     write_json(
         &root.join("attestation.json"),
         &crate::operator::attest(&snapshot),
@@ -401,7 +405,6 @@ pub fn attach_artifacts(
         &root.join("summary.json"),
         crate::operator::MAX_BYTES,
     )?)?;
-    let mut checksums = std::collections::BTreeMap::new();
     let mut paths: std::collections::BTreeSet<String> = [
         "meta.json",
         "bounds.json",
@@ -434,19 +437,101 @@ pub fn attach_artifacts(
         }
     }
     for relative in paths {
-        let bytes = crate::operator::read_bounded(
-            &crate::operator::confined_path(root, &relative)?,
-            crate::operator::MAX_BYTES,
-        )?;
-        checksums.insert(relative, crate::operator::digest(&bytes));
+        let path = crate::operator::confined_path(root, &relative)?;
+        anyhow::ensure!(
+            fs::symlink_metadata(path)?.is_file(),
+            "pack-declared-file-missing"
+        );
     }
-    let bytes = serde_json::to_vec_pretty(&checksums)?;
+    // Include every retained file, including telemetry and derived timelines.
+    // Registered attachment checks above still reject missing declared objects.
+    seal_pack(root)?;
+    Ok(())
+}
+
+fn pack_files(root: &Path) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut files = std::collections::BTreeMap::new();
+    let mut entries_seen = 0usize;
+    let mut total = 0usize;
+    while let Some((directory, depth)) = pending.pop() {
+        anyhow::ensure!(depth <= 8, "pack-depth-bound");
+        anyhow::ensure!(
+            fs::symlink_metadata(&directory)?.is_dir(),
+            "pack-directory-kind"
+        );
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            entries_seen += 1;
+            anyhow::ensure!(entries_seen <= 512, "pack-file-count-bound");
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)?
+                .to_str()
+                .context("pack-path-utf8")?
+                .to_owned();
+            crate::operator::confined_path(root, &relative)?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                pending.push((path, depth + 1));
+            } else {
+                anyhow::ensure!(kind.is_file(), "pack-file-kind");
+                if matches!(relative.as_str(), "checksums.json" | "pack.sha256") {
+                    continue;
+                }
+                let bytes = crate::operator::read_bounded(&path, crate::operator::MAX_BYTES)?;
+                total = total.checked_add(bytes.len()).context("pack-total-bound")?;
+                anyhow::ensure!(total <= 64 * 1024 * 1024, "pack-total-bound");
+                files.insert(relative, crate::operator::digest(&bytes));
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// Seal all retained regular files. A content seal is integrity, not authority.
+pub fn seal_pack(root: &Path) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(&pack_files(root)?)?;
     crate::operator::write_atomic(&root.join("checksums.json"), &bytes)?;
     crate::operator::write_atomic(
         &root.join("pack.sha256"),
         format!("{}\n", crate::operator::digest(&bytes)).as_bytes(),
     )?;
     Ok(())
+}
+
+/// Reject missing, altered, unexpected or symlinked pack files before inspection.
+/// Older unsealed packs remain explicitly unverified input for historical review.
+pub fn verify_pack_integrity(root: &Path) -> Result<bool> {
+    if !root.join("checksums.json").exists() && !root.join("pack.sha256").exists() {
+        return Ok(false);
+    }
+    let bytes = crate::operator::read_bounded(&root.join("checksums.json"), 131_072)?;
+    let seal = crate::operator::read_bounded(&root.join("pack.sha256"), 65)?;
+    anyhow::ensure!(
+        seal == format!("{}\n", crate::operator::digest(&bytes)).as_bytes(),
+        "pack-seal-digest"
+    );
+    let expected: std::collections::BTreeMap<String, String> = serde_json::from_slice(&bytes)?;
+    anyhow::ensure!(
+        expected == pack_files(root)?,
+        "pack-file-digest-or-inventory"
+    );
+    Ok(true)
+}
+
+/// Attach a graph only after shared validation against separately supplied trust.
+pub fn attach_causal_graph(root: &Path, graph: &Path, trust: &Path, cas: &Path) -> Result<()> {
+    verify_pack_integrity(root)?;
+    let bytes = crate::operator::read_bounded(graph, cohesix_evidence::MAX_GRAPH_BYTES)?;
+    let trust: cohesix_evidence::Trust =
+        serde_json::from_slice(&crate::operator::read_bounded(trust, 65_536)?)?;
+    let verified = cohesix_evidence::verify(&bytes, &trust, |artifact| {
+        cohesix_evidence::verify_cas(cas, artifact)
+    })?;
+    crate::operator::write_atomic(&root.join("causal_graph.json"), &bytes)?;
+    write_json(&root.join("causal_verification.json"), &verified)?;
+    seal_pack(root)
 }
 
 fn capture_proc_schedule<C: CohAccess>(

@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.21"
+schema = "1.26"
 
 [root_task.affinity]
 enabled = true
@@ -1324,6 +1324,21 @@ mount_at = "/bus"
 enable = true
 providers = ["systemd", "k8s", "docker", "nvidia"]
 mount_at = "/host"
+
+[ecosystem.host.snapshots]
+enable = true
+max_bytes = 8192
+max_entries = 64
+max_value_bytes = 1024
+max_ttl_ms = 30000
+
+[[ecosystem.host.snapshots.publishers]]
+source_id = "linux-reference"
+providers = ["systemd", "docker", "k8s", "nvidia", "jetson", "network"]
+
+[[ecosystem.host.snapshots.publishers]]
+source_id = "mac-controller"
+providers = ["launchd", "network"]
 
 [ecosystem.host.tickets]
 enable = true
