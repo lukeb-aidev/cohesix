@@ -16,6 +16,8 @@
 mod cat_chunks;
 /// Cohesix Secure9P client helpers.
 pub mod client;
+/// Embedded operator manuals, resolved without a transport.
+pub mod manual;
 /// Manifest-derived client policy helpers for cohsh.
 pub mod policy;
 pub mod proto;
@@ -3896,63 +3898,25 @@ impl<T: Transport, W: Write> Shell<T, W> {
             return Ok(CommandStatus::Continue);
         };
         match cmd {
+            "man" => {
+                let topic = parts.next();
+                if parts.next().is_some() {
+                    return Err(anyhow!("usage: man [command]"));
+                }
+                let page = manual::render(topic)?;
+                for line in page.lines() {
+                    self.write_line(line)?;
+                }
+                Ok(CommandStatus::Continue)
+            }
             "help" => {
                 if parts.next().is_some() {
                     return Err(anyhow!("help does not take any arguments"));
                 }
                 self.write_line("Cohesix command surface:")?;
-                let console_lines = cohsh_core::help::COHSH_CONSOLE_HELP_LINES;
-                self.write_line(console_lines[0])?;
-                self.write_line(console_lines[1])?;
-                self.write_line("  bi                           - Show target bootinfo summary")?;
-                self.write_line("  caps                         - Show target capability slots")?;
-                self.write_line(
-                    "  caps mcs                     - Show target bounded MCS authority state",
-                )?;
-                self.write_line(
-                    "  smp [activity|dump]          - Show target activity or raw debug state",
-                )?;
-                self.write_line(
-                    "  smp mcs                      - Show target generated/live MCS topology",
-                )?;
-                self.write_line(
-                    "  smp poll-time                - Show Pi root poll elapsed-time observations",
-                )?;
-                self.write_line("  login <role> [ticket]        - Alias for attach")?;
-                self.write_line("  detach                       - Close the current session")?;
-                self.write_line(console_lines[2])?;
-                self.write_line(console_lines[3])?;
-                self.write_line(console_lines[4])?;
-                self.write_line(console_lines[5])?;
-                self.write_line(
-                    "  pool bench <opts>            - Run pooled throughput benchmark",
-                )?;
-                #[cfg(feature = "tcp")]
-                self.write_line(
-                    "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
-                )?;
-                self.write_line(console_lines[6])?;
-                self.write_line(
-                    "  log dump <file.txt> [--force] - Dump /log/queen.log to a local text file",
-                )?;
-                self.write_line(console_lines[7])?;
-                self.write_line(console_lines[8])?;
-                self.write_line(console_lines[9])?;
-                self.write_line(console_lines[10])?;
-                self.write_line(console_lines[11])?;
-                self.write_line(
-                    "  spawn <heartbeat|gpu|lora> [opts] - Submit Worker request (ACK is admission only)",
-                )?;
-                self.write_line(console_lines[13])?;
-                self.write_line("  bind <src> <dst>             - Bind namespace path")?;
-                self.write_line("  mount <service> <path>       - Mount service namespace")?;
-                self.write_line(
-                    "  lifecycle <cmd>              - Control node lifecycle (cordon/drain/resume/quiesce/reset)",
-                )?;
-                self.write_line(
-                    "  telemetry push <src> --device <id> - Push bounded telemetry segment",
-                )?;
-                self.write_line(console_lines[14])?;
+                for line in cohsh_core::help::COHSH_CONSOLE_HELP_LINES {
+                    self.write_line(line)?;
+                }
                 Ok(CommandStatus::Continue)
             }
             "bi" | "caps" | "smp" => {
@@ -5735,6 +5699,21 @@ mod tests {
         assert!(rendered.contains("detach"));
         assert!(rendered.contains("spawn <heartbeat|gpu|lora>"));
         assert!(rendered.contains("ACK is admission only"));
+    }
+
+    #[test]
+    fn manual_is_available_without_attachment_and_rejects_extra_arguments() {
+        let mut output = Vec::new();
+        let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+        shell.execute("man spawn").unwrap();
+        shell.execute("man login").unwrap();
+        assert!(shell.execute("man spawn extra").is_err());
+        assert!(shell.execute("man ../spawn").is_err());
+        assert_eq!(shell.transport.attaches, 0);
+        drop(shell);
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("budget_ttl_s=<u64>"));
+        assert!(rendered.contains("login <role> [ticket]"));
     }
 
     #[derive(Default)]

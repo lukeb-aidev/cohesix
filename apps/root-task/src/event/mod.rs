@@ -21015,14 +21015,13 @@ where
         for line in cohsh_core::help::ROOT_CONSOLE_HELP_LINES {
             self.emit_console_line(line);
         }
-        self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
-        self.emit_console_line("  nettest  - Run network self-test");
-        self.emit_console_line("  netstats - Show network counters");
+        for line in cohsh_core::help::ROOT_SESSION_HELP_LINES {
+            self.emit_console_line(line);
+        }
         #[cfg(feature = "kernel")]
         self.emit_usb_debug_help(false);
         #[cfg(feature = "kernel")]
         self.emit_wifi_debug_help(false);
-        self.emit_console_line("  quit  - Exit the console session");
     }
 
     fn emit_help_serial_only(&mut self) {
@@ -21030,14 +21029,13 @@ where
         for line in cohsh_core::help::ROOT_CONSOLE_HELP_LINES {
             self.emit_serial_line(line);
         }
-        self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
-        self.emit_serial_line("  nettest  - Run network self-test");
-        self.emit_serial_line("  netstats - Show network counters");
+        for line in cohsh_core::help::ROOT_SESSION_HELP_LINES {
+            self.emit_serial_line(line);
+        }
         #[cfg(feature = "kernel")]
         self.emit_usb_debug_help(true);
         #[cfg(feature = "kernel")]
         self.emit_wifi_debug_help(true);
-        self.emit_serial_line("  quit  - Exit the console session");
     }
 
     fn emit_help_serial_only_atomic(&mut self) {
@@ -21045,14 +21043,13 @@ where
         for line in cohsh_core::help::ROOT_CONSOLE_HELP_LINES {
             self.emit_serial_line_atomic(line);
         }
-        self.emit_serial_line_atomic("  test  - Self-test (host-only; use cohsh)");
-        self.emit_serial_line_atomic("  nettest  - Run network self-test");
-        self.emit_serial_line_atomic("  netstats - Show network counters");
+        for line in cohsh_core::help::ROOT_SESSION_HELP_LINES {
+            self.emit_serial_line_atomic(line);
+        }
         #[cfg(feature = "kernel")]
         self.emit_usb_debug_help_atomic();
         #[cfg(feature = "kernel")]
         self.emit_wifi_debug_help_atomic();
-        self.emit_serial_line_atomic("  quit  - Exit the console session");
     }
 
     #[cfg(feature = "kernel")]

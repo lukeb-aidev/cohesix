@@ -5,18 +5,6 @@
 
 # Security
 
-The M27a host authority floor combines MAC-verified REST delegation, bounded
-caller quota retention, strict Queen idempotency, and durable host executor
-recovery. It is `gateway_enforced`, not evidence of VM-verified REST caller
-identity. Release A requires provisioned `env:`/`file:` ticket secrets, a public
-CAS verification key distinct from the published fixture, enabled bounded
-audit/replay, and disabled arbitrary-memory diagnostics. The release assembler
-rejects development authority profiles and scans selected payloads for renamed
-private fixture keys and secret canaries. [M27a authority](M27A_AUTHORITY.md)
-records production gates and the separate, still-deferred 28b ledger/quarantine
-claims.
-
-
 Cohesix is a pre-production research operating system. Its design reduces and
 makes authority visible; it does not make the complete system formally verified
 or suitable for unattended production use. seL4's machine-checked proofs apply
@@ -98,9 +86,10 @@ and IPC through capabilities. Cohesix root-task remains trusted for bootstrap,
 HAL admission, manifest enforcement, namespace authority, tickets, lifecycle,
 and audit. Queen and Worker-role sessions receive only their generated
 namespace view; Worker tickets are mandatory and Queen ticket requirements are
-profile-controlled. Current profiles mark every target Worker role
-non-executable and disable Worker endpoint-cap and lifecycle-notification
-authority. Reserved generated badges are not installed capabilities.
+profile-controlled. Operational QEMU and Pi profiles declare Heartbeat, GPU and LoRA executable
+with compiler-owned endpoint and lifecycle authority. WorkerBus remains model-only.
+Declaration and reserved badges do not prove live capability installation or
+execution; READY and exact-target evidence remain separate.
 
 Physical devices run in manifest-declared, single-threaded Rust driver
 runtimes. HAL owns physical-address discovery, device-untyped admission, MMIO,
@@ -199,6 +188,17 @@ postpones. Reserved timeout identities remain accounted, but client timeouts,
 retry policy, public grammar, and fault authority are unchanged. Exact temporal
 values and response analysis belong to the selected generated profile and
 [Roles and Scheduling](ROLES_AND_SCHEDULING.md).
+
+The host authority floor combines MAC-verified REST delegation, bounded
+caller quota retention, strict Queen idempotency, and durable host executor
+recovery. It is `gateway_enforced`, not evidence of VM-verified REST caller
+identity. Release A requires provisioned `env:`/`file:` ticket secrets, a public
+CAS verification key distinct from the published fixture, enabled bounded
+audit/replay, and disabled arbitrary-memory diagnostics. The release assembler
+rejects development authority profiles and scans selected payloads for renamed
+private fixture keys and secret canaries. [M27a authority](M27A_AUTHORITY.md)
+records production gates and the separate, still-deferred 28b ledger/quarantine
+claims.
 
 ### Authentication and attachment
 
@@ -492,6 +492,26 @@ external host state, reverse a host side effect, or prove that an omitted event
 did not occur. Policy approvals are single-use; replaying a consumed approval
 fails deterministically and emits an audit record.
 
+### Operator evidence trust boundary
+
+The [operator evidence contract](OPERATOR_EVIDENCE.md) is host-side and
+read-only. Canonical trace digests bind retained bytes and redaction policy;
+they are integrity checks, not authenticated device signatures. Expected
+identity labels supplied by a caller remain non-attested. Replay permits only
+retained reads and rejects writes without opening a network connection.
+Pack and case readers enforce bounded regular files, confined paths, explicit
+inventory availability, and shared recursive secret-field redaction.
+
+The shared TPM2 verifier checks enrolled certificate chains, signatures,
+nonce/boot/artifact/PCR binding, time bounds and replay/reset data. Its policy
+comes from the verifier, never from target evidence. Offline PASS remains an
+explicit historical-signature result. The current Pi uses optional
+measurement-only mode; required or signed modes without an admitted provider
+are refused before generated development ticket registration. See
+[the signed-device contract](ATTESTATION.md) for the owner's stock-Pi exemption,
+trust enrollment, supported algorithms and unavailable device-runtime work.
+No Python projection, case outcome or trace label proves external execution.
+
 ## Sidecars and host actions
 
 Sidecar mounts and providers are manifest-gated. Namespace collisions receive
@@ -571,23 +591,3 @@ Current target status and proof boundaries are maintained in
 [Hardware bring-up](HARDWARE_BRINGUP.md) and the
 [Build plan](BUILD_PLAN.md). The NIST 800-53 crosswalk is an evidence index, not
 a certification; see [NIST mapping](SECURITY_NIST_800_53.md).
-
-## Milestone 27 operator evidence trust boundary
-
-The [operator evidence contract](OPERATOR_EVIDENCE.md) is host-side and
-read-only. Canonical trace digests bind retained bytes and redaction policy;
-they are integrity checks, not authenticated device signatures. Expected
-identity labels supplied by a caller remain non-attested. Replay permits only
-retained reads and rejects writes without opening a network connection.
-Pack and case readers enforce bounded regular files, confined paths, explicit
-inventory availability, and shared recursive secret-field redaction.
-
-The shared TPM2 verifier checks enrolled certificate chains, signatures,
-nonce/boot/artifact/PCR binding, time bounds and replay/reset data. Its policy
-comes from the verifier, never from target evidence. Offline PASS remains an
-explicit historical-signature result. The current Pi uses optional
-measurement-only mode; required or signed modes without an admitted provider
-are refused before generated development ticket registration. See
-[the signed-device contract](ATTESTATION.md) for the owner's stock-Pi exemption,
-trust enrollment, supported algorithms and unavailable device-runtime work.
-No Python projection, case outcome or trace label proves external execution.

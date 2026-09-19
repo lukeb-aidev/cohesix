@@ -84,6 +84,15 @@ impl TransportKind {
 #[derive(Debug, Parser)]
 #[command(author = "Lukas Bower", version, about = "Cohesix shell prototype", long_about = None)]
 struct Cli {
+    /// Read an embedded manual (or list topics) and exit without connecting.
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with_all = ["script", "check", "mint_ticket", "record_trace", "replay_trace"]
+    )]
+    man: Option<String>,
+
     /// Attach immediately as the supplied role.
     #[arg(long)]
     role: Option<RoleArg>,
@@ -464,6 +473,11 @@ fn build_mock_server(seed_gpu: bool) -> Result<NineDoor> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(topic) = cli.man.as_deref() {
+        let topic = if topic.is_empty() { None } else { Some(topic) };
+        println!("{}", cohsh::manual::render(topic)?);
+        return Ok(());
+    }
     init_logging(cli.verbose);
     let stdout = io::stdout();
     let writer = stdout.lock();

@@ -14066,6 +14066,23 @@ After Milestone 27b:
 - Executable Worker proof remains distinct from CUDA/NVML discovery, real GPU execution/isolation, PEFT training/reload, and service/federation side effects; each production use case names and proves every required layer.
 - Semantic extraction, 28a intent admission, AI run control, inference interoperability, and MCP/A2A interop can build on proven provider and integration schemas instead of inventing action catalogs or silently treating mock workflows as live.
 
+### Operator manuals and reference maintenance
+
+```text
+Title/ID: m27b-operator-manuals-and-reference-maintenance
+Milestone: Milestone 27b — Host Integration Registry + Provider/Executor + Use-Case Conformance / Operator manuals and reference maintenance
+Status: In Progress — implementation and scoped validation complete; shared M27b generated/provenance gate closure remains open.
+Goal: Provide complete local cohsh manuals, aligned SwarmUI guidance, concise root help, and integrated community documentation.
+Inputs: Current command handlers and generated contracts; origin/main operator guides; current M27b implementation.
+Changes:
+  - cohsh and SwarmUI — shared host-side manuals with explicit surface restrictions and complete examples.
+  - root console — complete, bounded help without duplicate entries.
+  - AGENTS.md and public references — require integrated current usage and organize authority/provider material by topic.
+Commands: Recorded in docs/audit/OPERATOR_MANUALS_RECORD.md.
+Checks: Manual lookup and examples agree with dispatch and policy; host builds and focused tests; generated and Test Plan consistency checks.
+Deliverables: Embedded manuals, aligned help, updated references, scoped validation record.
+```
+
 ## Milestone 27c — Persistent Semantic Object Fabric + Context Capsules (Host-Side) <a id="27c"></a>
 [Milestones](#Milestones)
 

@@ -5,10 +5,7 @@
 
 # Cohesix root shell and cohsh — user guide
 
-## Root Shell vs `cohsh`
-The root shell is the local interface to the Cohesix OS. Its primary purpose is system bring up and troubleshooting. Raspberry Pi exposes the root console over serial, as well as USB and HDMI - both can be used concurrently.
-
-`cohsh` is the command line client that is used to interact with Cohesix - and it is the primary user interface for actual work.
+## Choose your interface
 
 Use the **root shell** to bring up a Queen, check its hardware and network,
 and recover when a host connection is unavailable. Use **`cohsh` on your Mac or
@@ -537,7 +534,7 @@ is not proof that teardown has finished.
 Other accepted convenience forms are:
 
 ```text
-spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1
+spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1 budget_ttl_s=180 budget_ops=500
 spawn lora
 ```
 
@@ -830,6 +827,20 @@ inspection, attestation and evidence-pack contracts.
 
 ## Command reference
 
+Use `help` for a concise index and `man <command>` for the complete installed
+manual, including all arguments, examples, limits, authority and recovery.
+`man ls` includes the namespace tree; `man spawn` explains each Worker role,
+resource argument and readiness check; `man authority` gives the production
+strict-intent procedure. `man` lists all topics. `login` resolves to `attach`.
+
+From the **host terminal**, `cohsh --man spawn` works without credentials,
+configuration or a running Queen. `cohsh --man` lists topics, and
+`cohsh --man spawn | less` uses the host's pager. At `coh>`, type `man spawn`.
+Unknown topics and extra arguments are errors and send no target request.
+SwarmUI reads the same manuals; its own help describes its smaller command
+surface and gates, including its raw-JSON `spawn` syntax. The physical root
+console provides concise `help`; detailed manuals run on the host.
+
 ### Root console
 
 Run `help` on the active image for profile availability. These commands are
@@ -869,6 +880,7 @@ forwarded diagnostic still depends on the selected transport and target.
 
 | Command | Purpose |
 | --- | --- |
+| `man [command]` | Complete local manual or topic index; also `cohsh --man [command]` before connecting |
 | `help` | Local shell inventory; not the target's raw HELP response |
 | `attach <role> [ticket]`, `login ...` | Attach; roles are Queen, worker-heartbeat (alias worker), worker-gpu, worker-bus, worker-lora |
 | `detach`, `quit` | Close attachment and stay in the shell, or close and exit |
@@ -914,6 +926,9 @@ segmentation, not invented continuation syntax.
 ### Response and session rules
 
 Target acknowledgements use `OK <VERB>` and typed `ERR <VERB>` details.
+The acknowledgement is emitted before any payload. Bounded refusal and
+truncation records use `reason=<busy|quota|cut|policy>` where applicable;
+inspect that reason before selecting recovery or retry behavior.
 Streaming `LS`, `CAT` and `TAIL` responses complete with `END`. `cohsh` handles
 the transport framing and labels acknowledgements `[console]`; it also prints
 local status and payload lines. Do not send a plain terminal/netcat session to

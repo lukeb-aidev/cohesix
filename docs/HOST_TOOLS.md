@@ -437,6 +437,14 @@ capture accepts TCP or REST and explicit target/session identity fields;
 caller-supplied labels are not independently verified identity. `coh trace
 --input FILE` validates and summarises a saved trace without opening a target.
 
+#### Read the installed manual
+
+At `coh>`, use `man`, `man ls`, or `man spawn`. The manual covers complete
+arguments, namespace layout, production authority, examples and recovery.
+From the host terminal, `cohsh --man spawn` prints the same page and exits
+without opening a transport; `cohsh --man` lists topics. Use the host pager
+if desired: `cohsh --man spawn | less`.
+
 ### `coh`
 
 `coh` combines local diagnostics, target inspection, evidence export, FUSE,
@@ -1101,6 +1109,11 @@ result. The selected Worker's details refresh with live polling. Offline
 snapshots and replay overlays describe retained observations, not current
 readiness. Generated display/cache policy is documented in
 [SwarmUI defaults](snippets/swarmui_defaults.md).
+
+SwarmUI's console also supports `man [command]` using the same embedded source.
+Its own `help` lists its supported subset and write gates. Shared manuals do
+not enable host-only commands; SwarmUI uses raw JSON for `spawn`, while cohsh
+accepts the documented role and `key=value` arguments.
 
 ### Cohesix Python package
 

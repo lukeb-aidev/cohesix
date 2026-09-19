@@ -4,15 +4,6 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Python Support
 
-The M27a SDK adds `QueenIntent` and `AdmissionCorrelation`, delegated REST
-write credentials, strict-intent and writer-epoch validation, and bounded
-authority/dedupe snapshots in evidence packs. Generated
-`cohesix-python-profile/v2` adds selected authority policy; v1 contracts must be
-regenerated. Neither Python objects nor profile metadata constitute a VM
-admission grant. Missing production epoch/delegation fails before mutation,
-and REST writes have no automatic retry. See [M27a authority](M27A_AUTHORITY.md).
-
-
 The `cohesix` Python package is a host-side, non-authoritative client for the
 existing Cohesix file and console contracts. It validates inputs, applies
 generated bounds, and offers typed helpers; it does not add protocol verbs,
@@ -165,6 +156,14 @@ print(snapshot.lease_summary)
 ```
 
 ## Authentication
+
+The SDK provides `QueenIntent` and `AdmissionCorrelation`, delegated REST
+write credentials, strict-intent and writer-epoch validation, and bounded
+authority/dedupe snapshots in evidence packs. Generated
+`cohesix-python-profile/v2` adds selected authority policy; v1 contracts must be
+regenerated. Neither Python objects nor profile metadata constitute a VM
+admission grant. Missing production epoch/delegation fails before mutation,
+and REST writes have no automatic retry. See [M27a authority](M27A_AUTHORITY.md).
 
 ### REST
 
@@ -455,6 +454,23 @@ artifacts without creating a new target evidence channel.
 Examples live in [`tools/cohesix-py/examples/`](../tools/cohesix-py/examples/).
 Treat mock examples as functional demonstrations, not live acceptance proof.
 
+## Canonical evidence consumers
+
+`CohesixClient.evidence_case(pack_dir)` and
+`CohesixClient.attestation_result(pack_dir)` read bounded canonical Rust-produced
+artifacts offline. `cohesix.operator.trace_reference` supplies only an opaque
+hash/length reference. The generated diagnostic bounds and shared fixtures in
+`tests/fixtures/operator` govern path confinement, source-event identity,
+redaction (including embedded JSON), scenario and non-authoritative outcomes.
+Unknown additive fields are sanitized; malformed records fail deterministically.
+Missing optional records raise `CohesixError`. There is no Python trace parser or
+attestation verifier. PASS records require matching evidence class, proof scope
+and complete verification metadata; this is structural projection only. See
+[the signed evidence contract](ATTESTATION.md).
+The existing Python evidence producer remains compatible with legacy timeline
+consumers; generate the canonical case using `coh evidence timeline`.
+See [the operator contract](OPERATOR_EVIDENCE.md).
+
 ## Testing
 
 Run the package tests from the repository root:
@@ -510,20 +526,3 @@ with the repository generation workflow.
 - [INTERFACES.md](INTERFACES.md) — control and observability schemas.
 - [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) — canonical live setup.
 - [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) — evidence, mount, ticket, lifecycle, and PEFT procedures.
-
-## Canonical Milestone 27 evidence consumers
-
-`CohesixClient.evidence_case(pack_dir)` and
-`CohesixClient.attestation_result(pack_dir)` read bounded canonical Rust-produced
-artifacts offline. `cohesix.operator.trace_reference` supplies only an opaque
-hash/length reference. The generated diagnostic bounds and shared fixtures in
-`tests/fixtures/operator` govern path confinement, source-event identity,
-redaction (including embedded JSON), scenario and non-authoritative outcomes.
-Unknown additive fields are sanitized; malformed records fail deterministically.
-Missing optional records raise `CohesixError`. There is no Python trace parser or
-attestation verifier. PASS records require matching evidence class, proof scope
-and complete verification metadata; this is structural projection only. See
-[the signed evidence contract](ATTESTATION.md).
-The existing Python evidence producer remains compatible with legacy timeline
-consumers; generate the canonical case using `coh evidence timeline`.
-See [the operator contract](OPERATOR_EVIDENCE.md).

@@ -5,30 +5,6 @@
 
 # External Interfaces
 
-Schema 1.21 adds the generated authority policy and secret references.
-`/queen/intents/ctl` accepts `queen-intent/v1`: required `schema`, `id`,
-`idempotency_key`, `issued_unix_ms`, and `cmd` (the existing Queen command as a
-JSON string). `/queen/ctl` retains its existing raw JSON in compatibility
-profiles; provisioned production profiles disable it and the console
-`SPAWN`/`KILL` shortcuts. Strict terminal audit records carry `dedupe` as `fresh`
-or `duplicate`, with the complete envelope and outcome. `/proc/authority` exposes
-the selected identity class and writer fence; `/proc/queen/dedupe` is bounded
-NDJSON with retained result hashes. Optional `writer_epoch` and `admission`
-correlation are preserved in strict intents and host-ticket/v1/v2 receipts and
-WAL records. Writer ownership is checked independently of admission freshness;
-27a does not issue admission decisions. [M27a authority](M27A_AUTHORITY.md)
-defines the bounds and migration contract.
-
-The emergency bring-up `hexdump` command is unavailable in release profiles.
-When explicitly enabled outside release, HAL restricts it to 1–256 bytes in the
-immutable root executable code span. Refusals are `ERR EPERM
-memory-diagnostics-disabled`, `ERR ELIMIT memory-diagnostics-length`, or `ERR
-EPERM memory-diagnostics-unclassified`; extra arguments return `ERR EINVAL
-memory-diagnostics-arguments`. A bounded `[audit] memory-read` serial line records
-admission or range refusal. Normal console grammar and TCP/REST framing are
-unchanged by this early-shell contract.
-
-
 This document is the index and human-authored contract for Cohesix external
 interfaces: transport selection, target console framing, namespace paths,
 control files, and non-generated record schemas. It links to generated snippets
@@ -619,6 +595,17 @@ observability path rather than infer completion timing from a generic `OK`.
 Canonical transcripts and negative cases live in
 [`tests/integration`](../tests/integration) and the root-task tests.
 
+### Restricted memory diagnostics
+
+The emergency bring-up `hexdump` command is unavailable in release profiles.
+When explicitly enabled outside release, HAL restricts it to 1–256 bytes in the
+immutable root executable code span. Refusals are `ERR EPERM
+memory-diagnostics-disabled`, `ERR ELIMIT memory-diagnostics-length`, or `ERR
+EPERM memory-diagnostics-unclassified`; extra arguments return `ERR EINVAL
+memory-diagnostics-arguments`. A bounded `[audit] memory-read` serial line records
+admission or range refusal. Normal console grammar and TCP/REST framing are
+unchanged by this early-shell contract.
+
 ## Host Secure9P contract
 
 Host NineDoor accepts only `version`, `attach`, `walk`, `open`, `read`, `write`,
@@ -718,6 +705,22 @@ sharding state and feature gates are in
 Control parsers are strict: unknown operations, invalid transitions, unknown
 fields where the parser is strict, duplicate identifiers, out-of-range values,
 and capacity exhaustion are deterministic errors.
+
+### Strict Queen intents
+
+Generated authority policy defines secret references and strict Queen control.
+`/queen/intents/ctl` accepts `queen-intent/v1`: required `schema`, `id`,
+`idempotency_key`, `issued_unix_ms`, and `cmd` (the existing Queen command as a
+JSON string). `/queen/ctl` retains its existing raw JSON in compatibility
+profiles; provisioned production profiles disable it and the console
+`SPAWN`/`KILL` shortcuts. Strict terminal audit records carry `dedupe` as `fresh`
+or `duplicate`, with the complete envelope and outcome. `/proc/authority` exposes
+the selected identity class and writer fence; `/proc/queen/dedupe` is bounded
+NDJSON with retained result hashes. Optional `writer_epoch` and `admission`
+correlation are preserved in strict intents and host-ticket/v1/v2 receipts and
+WAL records. Writer ownership is checked independently of admission freshness;
+Writer fencing does not issue admission decisions. [M27a authority](M27A_AUTHORITY.md)
+defines the bounds and migration contract.
 
 ### Worker and mount control
 

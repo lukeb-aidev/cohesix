@@ -5,16 +5,11 @@
 
 # Cohesix Architecture
 
-Schema 1.21 adds a bounded root-owned Queen intent dedupe table without
-moving physical drivers or adding a VM listener. The host gateway verifies
-per-request capabilities and serializes admitted writes over its existing
-console session. `/proc/authority` reports `gateway_enforced` delegation;
-selected kernel production profiles and provisioned authority production
-profiles remain separate selections. Host-ticket writer fencing and provider
-execution WAL run on the host. The shared `cohesix-authority` crate is
-`no_std` on target and carries correlation only, not 28a admission evaluation.
-See [M27a authority](M27A_AUTHORITY.md).
-
+Cohesix is a seL4-based control-plane operating system for edge GPU nodes.
+A Queen admits and supervises bounded Worker tasks; host executors perform
+GPU and ecosystem operations through explicit, ticketed interfaces. Physical
+drivers run in isolated target runtimes, and the authenticated console is the
+only target TCP listener.
 
 This document owns the system-level view of Cohesix: trust boundaries, runtime
 components, principal control and data flows, and the selected direction for
@@ -370,6 +365,18 @@ over documented interfaces. They may validate, batch, perform host-only work,
 or render data, but they cannot introduce target authority unavailable through
 the underlying ticketed namespace or console operation.
 
+### 4.1 Delegated host authority
+
+Root owns a bounded Queen intent dedupe table without
+moving physical drivers or adding a VM listener. The host gateway verifies
+per-request capabilities and serializes admitted writes over its existing
+console session. `/proc/authority` reports `gateway_enforced` delegation;
+selected kernel production profiles and provisioned authority production
+profiles remain separate selections. Host-ticket writer fencing and provider
+execution WAL run on the host. The shared `cohesix-authority` crate is
+`no_std` on target and carries correlation only, not admission evaluation.
+See [M27a authority](M27A_AUTHORITY.md).
+
 ## 5. Boot flow
 
 The target boot sequence is profile-qualified:
@@ -486,6 +493,17 @@ each generated provider. Exact paths and formats are defined in
 [External Interfaces](INTERFACES.md); host UI and gateway consumers do not own
 those schemas or raise the evidence level of their source.
 
+### 6.5 Operator observations and retained evidence
+
+`apps/coh/src/operator.rs` owns bounded live and canonical-pack observations,
+exact diffs, and non-attested result classification. Existing evidence and
+timeline modules provide the pack layout and source-linked case summaries.
+`cohsh-core` owns both legacy fixture and live-capture versions of the canonical
+trace container; `cohsh::trace_capture` owns passive recording, shared redaction,
+and offline retained reads reused by coh-status and SwarmUI. These host modules
+add no target listeners, namespace writers, device ownership, or policy bypass.
+The [operator contract](OPERATOR_EVIDENCE.md) defines their authority limits.
+
 ## 7. Security invariants
 
 - All target physical-device authority passes through HAL.
@@ -539,14 +557,3 @@ those schemas or raise the evidence level of their source.
   [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md)
 - Manifest compiler: [`tools/coh-rtc`](../tools/coh-rtc)
 - Validation and acceptance: [TEST_PLAN.md](TEST_PLAN.md)
-
-## Milestone 27 operator interaction layer
-
-`apps/coh/src/operator.rs` owns bounded live and canonical-pack observations,
-exact diffs, and non-attested result classification. Existing evidence and
-timeline modules retain the pack layout and add source-linked case summaries.
-`cohsh-core` owns both legacy fixture and live-capture versions of the canonical
-trace container; `cohsh::trace_capture` owns passive recording, shared redaction,
-and offline retained reads reused by coh-status and SwarmUI. These host modules
-add no target listeners, namespace writers, device ownership, or policy bypass.
-The [operator contract](OPERATOR_EVIDENCE.md) defines their authority limits.

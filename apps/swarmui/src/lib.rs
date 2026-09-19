@@ -596,6 +596,10 @@ where
             return SwarmUiTranscript::ok(Vec::new());
         };
 
+        if verb.eq_ignore_ascii_case("man") {
+            return console_manual(tokens);
+        }
+
         if verb.eq_ignore_ascii_case("login") {
             let remainder = trimmed.strip_prefix(verb).unwrap_or_default().trim_start();
             let attach_line = if remainder.is_empty() {
@@ -1878,6 +1882,10 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let Some(verb) = tokens.next() else {
             return SwarmUiTranscript::ok(Vec::new());
         };
+
+        if verb.eq_ignore_ascii_case("man") {
+            return console_manual(tokens);
+        }
 
         if verb.eq_ignore_ascii_case("login") {
             let remainder = trimmed.strip_prefix(verb).unwrap_or_default().trim_start();
@@ -3488,24 +3496,48 @@ fn cache_key_for_path(prefix: &str, path: &str) -> String {
     format!("{prefix}{safe}")
 }
 
+fn console_manual<'a>(mut tokens: impl Iterator<Item = &'a str>) -> SwarmUiTranscript {
+    let topic = tokens.next();
+    if tokens.next().is_some() {
+        return SwarmUiTranscript::err(vec![render_parse_error_text("usage: man [command]")]);
+    }
+    match cohsh::manual::render(topic) {
+        Ok(page) => {
+            let mut lines = vec![
+                "Shared cohsh manual. SwarmUI supports only commands listed by its help.".to_owned(),
+                "Writes require an enabled console, role and profile; host-only commands run in cohsh.".to_owned(),
+                "SwarmUI spawn uses raw JSON; see the SWARMUI section in man spawn.".to_owned(),
+            ];
+            lines.extend(page.lines().map(str::to_owned));
+            SwarmUiTranscript::ok(lines)
+        }
+        Err(error) => SwarmUiTranscript::err(vec![render_parse_error_text(&error.to_string())]),
+    }
+}
+
 fn console_help_lines() -> Vec<String> {
     vec![
-        "SwarmUI console commands:".to_owned(),
-        "  help                         - Show this help message".to_owned(),
-        "  attach <role> [ticket]       - Attach to a NineDoor session".to_owned(),
-        "  login <role> [ticket]        - Alias for attach".to_owned(),
-        "  detach                       - Close the current session".to_owned(),
-        "  tail <path> [lines]          - Stream a bounded file tail via NineDoor".to_owned(),
-        "  log                          - Tail /log/queen.log (64 lines)".to_owned(),
-        "  ping                         - Report attachment status for health checks".to_owned(),
-        "  ls <path>                    - Enumerate directory entries".to_owned(),
-        "  cat <path>                   - Read file contents".to_owned(),
-        "  echo <text> > <path>         - Append to a file (adds newline)".to_owned(),
-        "  spawn <role> [opts]          - Queue worker spawn command".to_owned(),
-        "  kill <worker_id>             - Queue worker termination".to_owned(),
-        "  quit                         - Close the session".to_owned(),
-        "  Use cohsh for additional CLI commands (test, pool bench, tcp-diag).".to_owned(),
+        "SwarmUI console commands:",
+        "  help                         - Show this command index",
+        "  man [command]                - Read the shared cohsh manual locally",
+        "  attach <role> [ticket]        - Attach (login is an alias)",
+        "  detach                       - Close the current session",
+        "  quit                         - Close session; keep SwarmUI open",
+        "  ping                         - Check attached session liveness",
+        "  ls <path>                    - List a directory; man ls includes the tree",
+        "  cat <path>                   - Read a bounded file",
+        "  tail <path> [lines]           - Read a finite tail (1..256 lines)",
+        "  log                          - Tail /log/queen.log (64 lines)",
+        "Writes (require an enabled console and authorized role/profile):",
+        "  echo <text> > <path>          - Append one line",
+        "  spawn <JSON>                 - Compatibility Worker request; man spawn",
+        "  kill <worker_id>              - Compatibility termination request",
+        "  ACK confirms admission, not Worker readiness or execution.",
+        "Use host cohsh for log dump, diagnostics, test, pool, lifecycle and telemetry push.",
     ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
@@ -3868,6 +3900,43 @@ mod tests {
         let _ = backend.read_hive_status_cached(Role::Queen, None, 1000);
         let second_reads = reads.load(Ordering::SeqCst);
         assert_eq!(first_reads, second_reads);
+    }
+
+    #[test]
+    fn manual_is_local_in_both_console_backends() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = SwarmUiConfig::from_generated(temp_dir.path().to_path_buf());
+        config.offline = true;
+        let mut backend = SwarmUiBackend::new(config.clone(), RejectFactory);
+        let transcript = backend.console_command("man spawn");
+        assert!(transcript.ok);
+        assert!(transcript
+            .lines
+            .iter()
+            .any(|line| line.contains("spawn <JSON>")));
+        assert!(!backend.console_command("man spawn extra").ok);
+        assert!(!backend.console_command("man missing").ok);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut console =
+            SwarmUiConsoleBackend::with_transport(config, TestTransport::new(reads.clone()));
+        let transcript = console.console_command("man ls");
+        assert!(transcript.ok);
+        assert!(transcript
+            .lines
+            .iter()
+            .any(|line| line.contains("shard/<label>")));
+        assert!(!console.console_command("man ls extra").ok);
+        assert!(!console.console_command("man missing").ok);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ui_help_fixture_matches_the_supported_surface() {
+        let expected: Vec<String> = serde_json::from_str(include_str!(
+            "../../../tools/swarmui-ui-tests/tests/fixtures/help-lines.json"
+        ))
+        .unwrap();
+        assert_eq!(console_help_lines(), expected);
     }
 
     #[test]

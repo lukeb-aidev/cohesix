@@ -106,6 +106,18 @@ product implementation.
   kernel header, object-size, slot-layout, and configuration truth.
 - Documentation describes generated/as-built truth, not aspiration. Drift is a
   defect even when CI does not yet detect it.
+- Keep root-shell help, cohsh help and manuals, SwarmUI help, host-tool CLI help,
+  and public guides aligned with the current implementation in the same change.
+  Review every affected surface, including examples, arguments, defaults,
+  authority requirements, errors, and feature/transport restrictions. Shared
+  manual content has one source; surface-specific help may differ only to
+  describe that surface's actual capabilities and gates.
+- Write each reference for its purpose: architecture explains components and
+  trust boundaries; guides explain operations; help indexes commands; manuals
+  explain complete usage with realistic examples and recovery guidance. Integrate
+  new behavior into the relevant topic and replace obsolete explanations.
+  Do not append milestone updates or changelog entries to these references;
+  retain chronology and qualification history in build, audit, or release records.
 - Changes to console grammar, NineDoor errors, namespace or `/proc` formats,
   role authority, or generated interfaces are breaking. Update all affected
   fixtures, generated artifacts, tests, and canonical docs; bump the manifest

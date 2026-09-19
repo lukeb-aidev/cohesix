@@ -4,125 +4,6 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
-QEMU/Pi comparisons use the paired release kernels and common production
-manifest contract in [PRODUCTION_PROFILES.md](PRODUCTION_PROFILES.md).
-Retained Pi diagnostic-kernel results are a distinct baseline. Use
-`scripts/rest_perf_harness.py` for target throughput benchmarks; concurrent HTTP TAIL
-submission does not imply concurrent target commands. Report full-batch means
-separately from per-request latency and retain each selected manifest identity.
-
-Milestone 27a uses `scripts/ci/gateway_perf_probe.sh --scenario
-delegated-rest-authority --state-dir out/bench/m27a-gateway-authority` for the
-separate host gateway authority microbenchmark. Supply `--baseline-gateway`
-with the retained pre-change binary and `--gateway`/`--cohsh` with current
-binaries compiled from a selected manifest with `authority.writer_epoch >= 2`.
-The probe reads the compiled current epoch from gateway status and submits the
-immediately preceding epoch for its stale-writer scenario. A future-epoch
-refusal or invalid epoch zero cannot substitute for that measurement.
-The probe records every status read, strict delegated write, exact
-duplicate acknowledgement, idempotency conflict, stale-epoch refusal and missing
-delegation refusal. Measured operations never retry. Reports retain p50/p95,
-exact expected and observed HTTP status, broker queue counters, bounded ticket
-cache state and audit emission time. A host-model result proves no target
-throughput or Worker behavior. Retain the equivalent accepted 26d status-read
-comparison separately; missing or unlike-target evidence cannot establish that
-comparison. Classify any material regression before downstream authority users
-depend on it.
-
-For M27a completion only, Lukas Bower's 2026-09-14
-[owner decision](audit/M27A_COMPLETION_EVIDENCE.md#completion-decision) accepts
-M26d without recovering the missing JSON or performing that comparison. Its
-status remains NOT_PERFORMED. The retained pre-27a host-model comparison reports
-status/write p95 regressions of 0.273/1.118 ms with no retries, reconnects or
-backpressure. Milestone closure grants no performance-equivalence or target
-throughput claim and does not change future benchmark requirements.
-
-Mutating REST harness workloads require request authentication and
-`COH_REST_TICKET`. The request token may be an explicit `env:NAME` or absolute
-`file:` reference and is resolved for each operation. Missing delegation or an
-invalid selected credential fails before networking. Read-only workloads retain
-their existing request-auth posture. These rules do not alter raw TCP sampling,
-throughput thresholds or retry accounting.
-
-Use `--mode raw --raw-requests 64` for the raw framed console TCP baseline,
-with `--tcp-host`, `--benchmark-target`, `--benchmark-transport`, and `--timeout 10`.
-Supply authentication privately through `COH_AUTH_TOKEN` and `COH_TICKET`.
-This mode opens one connection, authenticates and attaches Queen, completes
-each PING through both `PONG` and its exact terminal, then requires QUIT and EOF.
-It uses TCP_NODELAY, no warmup, no retries, and no gateway. Throughput includes
-connect through QUIT/EOF; per-request p95 uses nearest rank over every PING.
-The separate `cohesix-raw-tcp-benchmark/v1` JSON preserves failed attempts and
-partial counts, and always has `claiming=false` and `proof_class=none`.
-Bind its timestamp and local endpoint to the selected boot and packet capture;
-it cannot replace exact-image target evidence or qualify Worker pressure.
-Existing REST modes, host clients, SDK, and target runtime contracts are unchanged.
-
-Executable QEMU qualification retains complete Worker observations through
-authenticated `/log/queen.log` exports. The canonical runner uses
-`scripts/lib/worker_log.py` before the gateway attaches and the existing gateway
-afterward. `--qemu-worker-log` binds those exports separately in
-`fault_artifacts["worker-log"]`; the runtime-evidence hash identifies that file,
-while UART and GDB retain their own hashes. The REST harness exports the bounded
-log every five seconds during pressure and once after the workload, through
-the same gateway. This observer adds real gateway load; its reads are not
-counted as benchmark operations. Missing, conflicting or incomplete target
-fragments invalidate the evidence. Existing Worker field schemas, fault
-outcomes, pressure thresholds and raw TCP workloads remain unchanged.
-Lifecycle Call admission records distinguish shutdown/revoke IPC from workload
-control receipts. Before timed pressure, the canonical runner fills the exact
-per-role executable slot counts through approved Queen requests and waits for
-actual READY projections. The benchmark independently verifies the complete
-generated population before and after measurement.
-
-Raw mode defaults to unpaced, sequential PINGs with one outstanding request.
-Use `--raw-requests 1024 --raw-request-rate 180` to measure controlled load
-with a ceiling of 180 request starts/s. The optional rate is finite and within
-1–1,000,000 requests/s. Each start is spaced from the previous actual start;
-a slow response or host sleep does not create catch-up bursts. This is a
-closed-loop rate ceiling, not an open-loop arrival generator: report the
-achieved throughput alongside latency so host undersupply is visible.
-PING latency excludes deliberate host waiting; throughput includes it
-and all connection overhead. Every sample, including slow responses, remains.
-Each blocking host sleep is at most 1 ms before the deadline is rechecked,
-limiting the effect of timer coalescing without spinning or issuing early
-requests. Host delays can still reduce the achieved rate and must be reported.
-
-The additive `offered_load` report object records mode, requested rate,
-minimum start interval, maximum host sleep, pacing policy and maximum
-outstanding count.
-`request_start_offsets_ns` records each attempted PING start relative to the
-session timer. Missing load metadata in older v1 reports means legacy unpaced
-operation. Compare controlled-load results only at the same recorded rate,
-request count, image and boot state; retain independent unpaced 1,024-request
-capacity and tail measurements. Neither mode measures concurrent command
-admission latency. The existing uncached medium/high REST workloads measure
-concurrent host submission and full-batch completion separately. A controlled
-latency pass cannot excuse a capacity regression, missing terminal, retry,
-reconnect, stale/cached read or loss of bounded operator liveness.
-
-The current Pi 4 GENET acceptance profile uses unpaced 1,024-request raw runs:
-at least 600 complete-session requests/s and at most 5 ms PING p95 on each of
-two boots of the same release image. Controlled 180/s latency is diagnostic;
-the former 1.845-ms limit is superseded. Run raw measurements before active
-diagnostics and retain all samples, including first-connection and maximum
-latency observations. This is a bounded control-plane performance target,
-not a general network-stack ranking. The full acceptance contract and
-unchanged WiFi requirements are owned by [TEST_PLAN.md](TEST_PLAN.md).
-
-Cohesix benchmarks measure a bounded control plane, not an unconstrained
-throughput service. A valid result preserves the same tickets, namespace
-semantics, audit behavior, backpressure, console grammar, and target ownership
-model used in normal operation.
-
-This document owns benchmark methodology and evidence qualification. Target
-boot and device proof belongs in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md),
-staged acceptance in [TEST_PLAN.md](TEST_PLAN.md), and scope and result history
-in [BUILD_PLAN.md](BUILD_PLAN.md). Exact measurements remain with their owning
-task and immutable evidence rather than being copied into this reference.
-
-See the [Glossary](GLOSSARY.md) for Cohesix-specific backend, role, and evidence
-terms.
-
 ## Scope and proof classes
 
 Cohesix performance evidence is classified by the system that produced it.
@@ -356,6 +237,123 @@ refusal as quota evidence; do not enlarge the ticket, rewind cursors or hide
 session rotation inside a run. Preserve the generated pool limits and report
 queue or timeout failures. These are medium/high read-concurrency diagnostics, not the
 mixed offered-load profiles below or 256-Worker acceptance.
+
+## Workload contracts and comparison boundaries
+
+QEMU/Pi comparisons use the paired release kernels and common production
+manifest contract in [PRODUCTION_PROFILES.md](PRODUCTION_PROFILES.md).
+Retained Pi diagnostic-kernel results are a distinct baseline. Use
+`scripts/rest_perf_harness.py` for target throughput benchmarks; concurrent HTTP TAIL
+submission does not imply concurrent target commands. Report full-batch means
+separately from per-request latency and retain each selected manifest identity.
+
+The gateway authority comparison uses `scripts/ci/gateway_perf_probe.sh --scenario
+delegated-rest-authority --state-dir out/bench/m27a-gateway-authority` for the
+separate host gateway authority microbenchmark. Supply `--baseline-gateway`
+with the retained pre-change binary and `--gateway`/`--cohsh` with current
+binaries compiled from a selected manifest with `authority.writer_epoch >= 2`.
+The probe reads the compiled current epoch from gateway status and submits the
+immediately preceding epoch for its stale-writer scenario. A future-epoch
+refusal or invalid epoch zero cannot substitute for that measurement.
+The probe records every status read, strict delegated write, exact
+duplicate acknowledgement, idempotency conflict, stale-epoch refusal and missing
+delegation refusal. Measured operations never retry. Reports retain p50/p95,
+exact expected and observed HTTP status, broker queue counters, bounded ticket
+cache state and audit emission time. A host-model result proves no target
+throughput or Worker behavior. Retain the equivalent accepted 26d status-read
+comparison separately; missing or unlike-target evidence cannot establish that
+comparison. Classify any material regression before downstream authority users
+depend on it.
+
+Historical qualification decisions and retained regressions are recorded in
+[the authority evidence record](audit/M27A_COMPLETION_EVIDENCE.md#completion-decision).
+They do not alter future benchmark requirements.
+
+Mutating REST harness workloads require request authentication and
+`COH_REST_TICKET`. The request token may be an explicit `env:NAME` or absolute
+`file:` reference and is resolved for each operation. Missing delegation or an
+invalid selected credential fails before networking. Read-only workloads retain
+their existing request-auth posture. These rules do not alter raw TCP sampling,
+throughput thresholds or retry accounting.
+
+Use `--mode raw --raw-requests 64` for the raw framed console TCP baseline,
+with `--tcp-host`, `--benchmark-target`, `--benchmark-transport`, and `--timeout 10`.
+Supply authentication privately through `COH_AUTH_TOKEN` and `COH_TICKET`.
+This mode opens one connection, authenticates and attaches Queen, completes
+each PING through both `PONG` and its exact terminal, then requires QUIT and EOF.
+It uses TCP_NODELAY, no warmup, no retries, and no gateway. Throughput includes
+connect through QUIT/EOF; per-request p95 uses nearest rank over every PING.
+The separate `cohesix-raw-tcp-benchmark/v1` JSON preserves failed attempts and
+partial counts, and always has `claiming=false` and `proof_class=none`.
+Bind its timestamp and local endpoint to the selected boot and packet capture;
+it cannot replace exact-image target evidence or qualify Worker pressure.
+Existing REST modes, host clients, SDK, and target runtime contracts are unchanged.
+
+Executable QEMU qualification retains complete Worker observations through
+authenticated `/log/queen.log` exports. The canonical runner uses
+`scripts/lib/worker_log.py` before the gateway attaches and the existing gateway
+afterward. `--qemu-worker-log` binds those exports separately in
+`fault_artifacts["worker-log"]`; the runtime-evidence hash identifies that file,
+while UART and GDB retain their own hashes. The REST harness exports the bounded
+log every five seconds during pressure and once after the workload, through
+the same gateway. This observer adds real gateway load; its reads are not
+counted as benchmark operations. Missing, conflicting or incomplete target
+fragments invalidate the evidence. Existing Worker field schemas, fault
+outcomes, pressure thresholds and raw TCP workloads remain unchanged.
+Lifecycle Call admission records distinguish shutdown/revoke IPC from workload
+control receipts. Before timed pressure, the canonical runner fills the exact
+per-role executable slot counts through approved Queen requests and waits for
+actual READY projections. The benchmark independently verifies the complete
+generated population before and after measurement.
+
+Raw mode defaults to unpaced, sequential PINGs with one outstanding request.
+Use `--raw-requests 1024 --raw-request-rate 180` to measure controlled load
+with a ceiling of 180 request starts/s. The optional rate is finite and within
+1–1,000,000 requests/s. Each start is spaced from the previous actual start;
+a slow response or host sleep does not create catch-up bursts. This is a
+closed-loop rate ceiling, not an open-loop arrival generator: report the
+achieved throughput alongside latency so host undersupply is visible.
+PING latency excludes deliberate host waiting; throughput includes it
+and all connection overhead. Every sample, including slow responses, remains.
+Each blocking host sleep is at most 1 ms before the deadline is rechecked,
+limiting the effect of timer coalescing without spinning or issuing early
+requests. Host delays can still reduce the achieved rate and must be reported.
+
+The additive `offered_load` report object records mode, requested rate,
+minimum start interval, maximum host sleep, pacing policy and maximum
+outstanding count.
+`request_start_offsets_ns` records each attempted PING start relative to the
+session timer. Missing load metadata in older v1 reports means legacy unpaced
+operation. Compare controlled-load results only at the same recorded rate,
+request count, image and boot state; retain independent unpaced 1,024-request
+capacity and tail measurements. Neither mode measures concurrent command
+admission latency. The existing uncached medium/high REST workloads measure
+concurrent host submission and full-batch completion separately. A controlled
+latency pass cannot excuse a capacity regression, missing terminal, retry,
+reconnect, stale/cached read or loss of bounded operator liveness.
+
+The current Pi 4 GENET acceptance profile uses unpaced 1,024-request raw runs:
+at least 600 complete-session requests/s and at most 5 ms PING p95 on each of
+two boots of the same release image. Controlled 180/s latency is diagnostic;
+the former 1.845-ms limit is superseded. Run raw measurements before active
+diagnostics and retain all samples, including first-connection and maximum
+latency observations. This is a bounded control-plane performance target,
+not a general network-stack ranking. The full acceptance contract and
+unchanged WiFi requirements are owned by [TEST_PLAN.md](TEST_PLAN.md).
+
+Cohesix benchmarks measure a bounded control plane, not an unconstrained
+throughput service. A valid result preserves the same tickets, namespace
+semantics, audit behavior, backpressure, console grammar, and target ownership
+model used in normal operation.
+
+This document owns benchmark methodology and evidence qualification. Target
+boot and device proof belongs in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md),
+staged acceptance in [TEST_PLAN.md](TEST_PLAN.md), and scope and result history
+in [BUILD_PLAN.md](BUILD_PLAN.md). Exact measurements remain with their owning
+task and immutable evidence rather than being copied into this reference.
+
+See the [Glossary](GLOSSARY.md) for Cohesix-specific backend, role, and evidence
+terms.
 
 ## Running a Mixed REST Benchmark
 
