@@ -63,15 +63,15 @@ product implementation.
 - The authenticated root-task console is the only in-VM TCP listener. Control
   uses documented Secure9P namespaces, console grammar, or compiler-declared
   driver/service ABIs with role-scoped capability authority.
-- All physical device discovery, mapping, DMA, IRQ, and resource admission goes
-  through HAL. Physical drivers run as manifest-declared isolated runtimes;
-  root may admit, supervise, and diagnose them but cannot own their steady-state
-  device path.
-- A compiler-declared owner is solely responsible for physical issue,
-  completion, retry, and recovery. DPCs, helpers, compatibility paths, and
+- All target physical device discovery, mapping, DMA, IRQ, and resource admission
+  goes through HAL. Target physical drivers run as manifest-declared isolated
+  runtimes; root may admit, supervise, and diagnose them but cannot own their
+  steady-state device path.
+- A compiler-declared target driver owner is solely responsible for physical
+  issue, completion, retry, and recovery. DPCs, helpers, compatibility paths, and
   fallbacks cannot operate the same device independently.
-- Hardware elapsed-time logic uses exported `CNTVCT_EL0` only when enabled by
-  the selected seL4 build and scales from generated `TIMER_CLOCK_HZ`. No
+- Target hardware elapsed-time logic uses exported `CNTVCT_EL0` only when enabled
+  by the selected seL4 build and scales from generated `TIMER_CLOCK_HZ`. No
   `CNTPCT_EL0`, EL0 timer-control access, dummy time, or CPU-speed spin timing.
 - Rootfs CPIO remains below 4 MiB. Secure9P remains 9P2000.L with
   `msize <= 8192`, walk depth <= 8, no `..`, and no fid reuse after clunk.
@@ -205,8 +205,12 @@ product implementation.
 - Non-claiming convergence diagnostics defined by TEST_PLAN may run early and
   stop at the first failed target proof layer. They never emit or replace
   acceptance evidence.
-- Milestone/release claims require the complete applicable staged Test Plan,
-  exact source/image/target provenance, and all required pressure,
+- Milestone closure requires every check assigned by BUILD_PLAN and the
+  applicable evidence in TEST_PLAN, retaining exact source and host/target
+  provenance. Focused component acceptance does not establish staged target or
+  release acceptance.
+- Release claims and staged target acceptance require the complete applicable
+  staged Test Plan, exact source/image/target provenance, and all required pressure,
   repeatability, hardware, due-diligence, and promotion evidence:
 
   ```sh

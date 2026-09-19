@@ -125,9 +125,13 @@ Documentation-only and non-Rust changes run their applicable documentation,
 metadata, generated-consistency, link, and surface checks; do not run unrelated
 Rust commands merely to satisfy a generic checklist.
 
+Focused component milestone closure follows all checks assigned by
+`docs/BUILD_PLAN.md` and the applicable `docs/TEST_PLAN.md` evidence; it does
+not establish staged target or release acceptance.
+
 Run the complete staged Test Plan with a unique evidence directory when the
-active task or `docs/TEST_PLAN.md` requires acceptance, and before any milestone
-or release claim:
+active task or `docs/TEST_PLAN.md` requires staged acceptance, and before any
+release claim:
 
 ```bash
 scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>
