@@ -34,11 +34,12 @@ pub const GPU_RECEIPT_ACTIONS: [&str; 6] = [
     "gpu.workload.observe",
 ];
 /// Exact PEFT actions that can produce a WorkerLora receipt.
-pub const PEFT_RECEIPT_ACTIONS: [&str; 4] = [
+pub const PEFT_RECEIPT_ACTIONS: [&str; 5] = [
     "peft.export",
     "peft.import",
     "peft.activate",
     "peft.rollback",
+    "peft.release",
 ];
 
 fn py_bool(value: bool) -> &'static str {
@@ -686,11 +687,12 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     .ok();
     writeln!(
         contents,
-        "PEFT_RECEIPT_ACTIONS = (\"{}\", \"{}\", \"{}\", \"{}\")",
+        "PEFT_RECEIPT_ACTIONS = (\"{}\", \"{}\", \"{}\", \"{}\", \"{}\")",
         PEFT_RECEIPT_ACTIONS[0],
         PEFT_RECEIPT_ACTIONS[1],
         PEFT_RECEIPT_ACTIONS[2],
-        PEFT_RECEIPT_ACTIONS[3]
+        PEFT_RECEIPT_ACTIONS[3],
+        PEFT_RECEIPT_ACTIONS[4]
     )
     .ok();
 
@@ -744,10 +746,11 @@ pub fn render_profile_contract(
         .iter()
         .map(|action| action.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    for action in GPU_RECEIPT_ACTIONS
-        .iter()
-        .chain(PEFT_RECEIPT_ACTIONS.iter())
-    {
+    for action in GPU_RECEIPT_ACTIONS.iter().chain(
+        PEFT_RECEIPT_ACTIONS
+            .iter()
+            .filter(|action| **action != "peft.release"),
+    ) {
         if !configured_actions.contains(action) {
             bail!("host ticket action allowlist is missing receipt action {action}");
         }
@@ -826,7 +829,7 @@ pub fn render_profile_contract(
         },
         "receipts": {
             "gpu_actions": GPU_RECEIPT_ACTIONS,
-            "peft_actions": PEFT_RECEIPT_ACTIONS,
+            "peft_actions": PEFT_RECEIPT_ACTIONS.iter().filter(|action| configured_actions.contains(**action)).collect::<Vec<_>>(),
             "max_control_inflight": manifest.worker_runtime.task_abi.max_control_inflight,
         },
         "bounds": {

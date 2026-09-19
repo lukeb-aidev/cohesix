@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "40de2b6636ac0e0e1397e95601aed533907b754d3af958ac0c52547db4e74e7a";
+    "a5388a4eacf4b004aa5c60851199e66e8aa88d4af458e4252631b978de162b1e";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9358,7 +9358,7 @@ pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Nvidia,
 ];
 
-pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 20] = [
+pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 21] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
@@ -9369,6 +9369,7 @@ pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 20] = [
     HostTicketAction::PeftImport,
     HostTicketAction::PeftActivate,
     HostTicketAction::PeftRollback,
+    HostTicketAction::PeftRelease,
     HostTicketAction::SystemdStart,
     HostTicketAction::SystemdStop,
     HostTicketAction::SystemdRestart,
@@ -9386,7 +9387,7 @@ pub const HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "
 pub const HOST_TICKET_ACCEPTED_RESULT_SCHEMAS: [&str; 2] =
     ["host-ticket-result/v1", "host-ticket-result/v2"];
 
-pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 10] = [
+pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 11] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
@@ -9397,6 +9398,7 @@ pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 10] = [
     HostTicketAction::PeftImport,
     HostTicketAction::PeftActivate,
     HostTicketAction::PeftRollback,
+    HostTicketAction::PeftRelease,
 ];
 
 pub const HOST_TICKET_LIFECYCLE: [HostTicketLifecycleState; 6] = [
@@ -9553,9 +9555,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 52] = [
-    "manifest.schema=1.26",
+    "manifest.schema=1.27",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
+    "manifest.sha256=33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

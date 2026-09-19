@@ -30,6 +30,8 @@ pub mod mac_release;
 pub mod observation;
 /// PEFT lifecycle executor.
 pub mod peft;
+/// Qualified native HF adapter release through the existing PEFT executor.
+pub mod peft_release;
 /// systemd remediation executor.
 pub mod systemd;
 /// Authenticated GPU workload IPC and root lease supervision.
@@ -62,6 +64,8 @@ pub struct ExecutorConfig {
     pub gpu_executor_credential_ref: Option<String>,
     /// Bounded immutable workload request CAS; paths never come from tickets.
     pub gpu_request_root: Option<PathBuf>,
+    /// Explicit pinned native HF profile; absent disables adapter release.
+    pub peft_release_config: Option<PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -79,6 +83,7 @@ impl Default for ExecutorConfig {
             gpu_executor_socket: None,
             gpu_executor_credential_ref: None,
             gpu_request_root: None,
+            peft_release_config: None,
         }
     }
 }
@@ -136,6 +141,9 @@ pub fn execute_action(
     if spec.action.starts_with("gpu.lease.") {
         return gpu::execute(transport, session, spec, config);
     }
+    if spec.action == "peft.release" {
+        return peft_release::execute(transport, session, spec, config);
+    }
     if spec.action.starts_with("peft.") {
         return peft::execute(transport, session, spec, config);
     }
@@ -175,6 +183,9 @@ pub fn reconcile_action(
     }
     if spec.action.starts_with("gpu.lease.") {
         return gpu::reconcile(transport, session, spec, config);
+    }
+    if spec.action == "peft.release" {
+        return peft_release::reconcile(transport, session, spec, config);
     }
     if spec.action.starts_with("peft.") {
         return peft::reconcile(transport, session, spec, config);

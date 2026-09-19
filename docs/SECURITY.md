@@ -14,6 +14,15 @@ userspace, host tools, firmware, drivers, or deployment policy.
 See the [Glossary](GLOSSARY.md) for Cohesix-specific authority, role, and
 evidence terms.
 
+Native private adapter release requires a configured profile, signed source
+provenance and a current root-admitted `peft.release` ticket. Candidate and
+baseline evaluation must share every configuration binding; a registry pointer
+alone is not native serving proof. Expiry/revocation stops phase execution;
+compensation requires current authority for the exact frozen rollback target.
+Fresh recovery-only tickets cannot train or promote and cannot overwrite an
+unrelated generation. Host systemd/CUDA limits, attestation custody and refusal
+semantics are specified in [Private LoRA release](PRIVATE_LORA_RELEASE.md).
+
 ## Reporting a vulnerability
 
 Do not disclose a suspected vulnerability, exploit, secret, or sensitive log in

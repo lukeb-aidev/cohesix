@@ -5,9 +5,9 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "282c0ec3635f0d3df7a6e4b325eae003c8e3f58bfb52cc74b07e0c1ccf204cbd",
-    "resolved_manifest_sha256": "ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
-    "implementation_surface_inventory_sha256": "2f510a5ee26c3be81255b3f55eb09d516573649d2649f1a818edacf87e1e1ec3"
+    "source_sha256": "f09e4950ae2f0c30dd51dcdb9a6366eae65d401b4f86005083827d2e0a1feb17",
+    "resolved_manifest_sha256": "33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
+    "implementation_surface_inventory_sha256": "1a23548c2ca0c74cc13da55067dc3581713620bd387caf767a03c5cb97008b30"
   },
   "host_profiles": [
     {
@@ -7468,6 +7468,106 @@
             ]
           },
           {
+            "id": "peft.release",
+            "legacy_argument_fields": [],
+            "effect": "mutation",
+            "target_grammar": "native_id",
+            "argument_schema_ref": "host-ticket/v2",
+            "receipt_schema_ref": "host-ticket-result/v2",
+            "evidence_profile": "bounded_native",
+            "read_visibility": "ticket_scoped",
+            "timeout_ms": 300000,
+            "maximum_request_bytes": 2048,
+            "idempotency_required": true,
+            "writer_epoch_required": true,
+            "operator_approval_required": true,
+            "admission_mode": "operator_approved",
+            "decision_requirement": "unavailable",
+            "intent_schema_ref": "host-ticket/v2",
+            "required_fact_schema_ref": "unavailable",
+            "policy_id": "delegated-host-ticket",
+            "maximum_grant_scope": [
+              "peft.release"
+            ],
+            "state_freshness_bound_ms": 5000,
+            "reservation_or_recheck_mode": "recheck_before_dispatch",
+            "decision_receipt_schema_ref": "unavailable",
+            "selected_governance_mode": "observe",
+            "supported_governance_modes": [
+              "observe",
+              "recommend"
+            ],
+            "authority_custodian": "root-admitted-ticket",
+            "credential_custodian": "host-ticket-agent",
+            "bypass_posture": "Native administrative access remains outside Cohesix authority.",
+            "failure_posture": "Refuse missing or ambiguous native evidence; never replay an ambiguous side effect.",
+            "redaction": [
+              "credentials",
+              "raw_ticket",
+              "private_key",
+              "payload"
+            ],
+            "native_identity_fields": [
+              "source_id",
+              "native_id",
+              "generation",
+              "observation_unix_ms",
+              "expires_unix_ms"
+            ],
+            "correlation_fields": [
+              "ticket_id",
+              "subject_id",
+              "action_id",
+              "idempotency_key",
+              "writer_epoch",
+              "evidence_id"
+            ],
+            "lifecycle": [
+              {
+                "id": "discover",
+                "owner": "host-ticket-agent",
+                "postcondition": "Native source identifies the exact object and observation expiry.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "preflight",
+                "owner": "host-ticket-agent",
+                "postcondition": "Validate ticket, subject, profile, target, bounds, approval and current writer epoch before dispatch.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "execute",
+                "owner": "host-ticket-agent",
+                "postcondition": "The admitted provider owns one bounded operation; dispatch alone is non-terminal.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "observe",
+                "owner": "host-ticket-agent",
+                "postcondition": "Read native object identity, invocation or generation, event cursor and terminal state.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "verify",
+                "owner": "host-ticket-agent",
+                "postcondition": "Bind observed postcondition and immutable output hashes to the admitted action and exact native identity.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "compensate",
+                "owner": "host-ticket-agent",
+                "postcondition": "Require a separately admitted exact compensation target; irreversible or ambiguous state is unavailable.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "export_evidence",
+                "owner": "host-ticket-agent",
+                "postcondition": "Export bounded source references with correlation and explicit missing evidence; labels never grant authority.",
+                "unavailable": "not_implemented"
+              }
+            ]
+          },
+          {
             "id": "peft.rollback",
             "legacy_argument_fields": [
               "registry_root",
@@ -8770,7 +8870,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -8778,7 +8878,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -8786,9 +8886,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26"
+            "schema_value": "1.27"
           },
           {
             "path": "contracts/provider_registry.json",
@@ -8976,7 +9076,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -8984,7 +9084,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -8992,9 +9092,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26"
+            "schema_value": "1.27"
           },
           {
             "path": "contracts/provider_registry.json",
@@ -9177,7 +9277,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -9185,7 +9285,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -9193,9 +9293,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26"
+            "schema_value": "1.27"
           },
           {
             "path": "contracts/provider_registry.json",
@@ -9361,7 +9461,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -9369,7 +9469,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -9377,9 +9477,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.26",
+            "version": "1.27",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26"
+            "schema_value": "1.27"
           },
           {
             "path": "contracts/provider_registry.json",

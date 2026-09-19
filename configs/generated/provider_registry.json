@@ -58,7 +58,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -66,15 +66,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26",
-            "version": "1.26"
+            "schema_value": "1.27",
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -259,7 +259,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -267,15 +267,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26",
-            "version": "1.26"
+            "schema_value": "1.27",
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -465,7 +465,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -473,15 +473,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26",
-            "version": "1.26"
+            "schema_value": "1.27",
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -650,7 +650,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -658,15 +658,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.26"
+            "version": "1.27"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.26",
-            "version": "1.26"
+            "schema_value": "1.27",
+            "version": "1.27"
           },
           {
             "executable": false,
@@ -4832,6 +4832,106 @@
             "effect": "mutation",
             "evidence_profile": "bounded_native",
             "failure_posture": "Refuse missing or ambiguous native evidence; never replay an ambiguous side effect.",
+            "id": "peft.release",
+            "idempotency_required": true,
+            "intent_schema_ref": "host-ticket/v2",
+            "legacy_argument_fields": [],
+            "lifecycle": [
+              {
+                "id": "discover",
+                "owner": "host-ticket-agent",
+                "postcondition": "Native source identifies the exact object and observation expiry.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "preflight",
+                "owner": "host-ticket-agent",
+                "postcondition": "Validate ticket, subject, profile, target, bounds, approval and current writer epoch before dispatch.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "execute",
+                "owner": "host-ticket-agent",
+                "postcondition": "The admitted provider owns one bounded operation; dispatch alone is non-terminal.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "observe",
+                "owner": "host-ticket-agent",
+                "postcondition": "Read native object identity, invocation or generation, event cursor and terminal state.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "verify",
+                "owner": "host-ticket-agent",
+                "postcondition": "Bind observed postcondition and immutable output hashes to the admitted action and exact native identity.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "compensate",
+                "owner": "host-ticket-agent",
+                "postcondition": "Require a separately admitted exact compensation target; irreversible or ambiguous state is unavailable.",
+                "unavailable": "not_implemented"
+              },
+              {
+                "id": "export_evidence",
+                "owner": "host-ticket-agent",
+                "postcondition": "Export bounded source references with correlation and explicit missing evidence; labels never grant authority.",
+                "unavailable": "not_implemented"
+              }
+            ],
+            "maximum_grant_scope": [
+              "peft.release"
+            ],
+            "maximum_request_bytes": 2048,
+            "native_identity_fields": [
+              "source_id",
+              "native_id",
+              "generation",
+              "observation_unix_ms",
+              "expires_unix_ms"
+            ],
+            "operator_approval_required": true,
+            "policy_id": "delegated-host-ticket",
+            "read_visibility": "ticket_scoped",
+            "receipt_schema_ref": "host-ticket-result/v2",
+            "redaction": [
+              "credentials",
+              "raw_ticket",
+              "private_key",
+              "payload"
+            ],
+            "required_fact_schema_ref": "unavailable",
+            "reservation_or_recheck_mode": "recheck_before_dispatch",
+            "selected_governance_mode": "observe",
+            "state_freshness_bound_ms": 5000,
+            "supported_governance_modes": [
+              "observe",
+              "recommend"
+            ],
+            "target_grammar": "native_id",
+            "timeout_ms": 300000,
+            "writer_epoch_required": true
+          },
+          {
+            "admission_mode": "operator_approved",
+            "argument_schema_ref": "host-ticket/v2",
+            "authority_custodian": "root-admitted-ticket",
+            "bypass_posture": "Native administrative access remains outside Cohesix authority.",
+            "correlation_fields": [
+              "ticket_id",
+              "subject_id",
+              "action_id",
+              "idempotency_key",
+              "writer_epoch",
+              "evidence_id"
+            ],
+            "credential_custodian": "host-ticket-agent",
+            "decision_receipt_schema_ref": "unavailable",
+            "decision_requirement": "unavailable",
+            "effect": "mutation",
+            "evidence_profile": "bounded_native",
+            "failure_posture": "Refuse missing or ambiguous native evidence; never replay an ambiguous side effect.",
             "id": "peft.rollback",
             "idempotency_required": true,
             "intent_schema_ref": "host-ticket/v2",
@@ -6042,7 +6142,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "21872201c677b5b704a0431c82e0dc33a13ee5637f791295b1e2586c8df530c7",
+  "graph_sha256": "499d8608dd9bd5a62fe6cd797d456fbd5752ab123a6de2e712cd16eb227aa97d",
   "playbooks": [
     {
       "dependencies": [
@@ -6987,9 +7087,9 @@
       }
     }
   ],
-  "resolved_manifest_sha256": "ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
+  "resolved_manifest_sha256": "33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "282c0ec3635f0d3df7a6e4b325eae003c8e3f58bfb52cc74b07e0c1ccf204cbd",
+  "source_sha256": "f09e4950ae2f0c30dd51dcdb9a6366eae65d401b4f86005083827d2e0a1feb17",
   "use_cases": [
     {
       "dependencies": [

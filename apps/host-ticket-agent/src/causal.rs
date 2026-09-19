@@ -17,19 +17,20 @@ pub(crate) fn open(config: &ExecutorConfig, spec: &HostTicketSpec) -> Result<Opt
     };
     ensure!(
         (spec.schema == "host-ticket/v1" || spec.schema == "host-ticket/v2")
-            && [
-                "systemd.",
-                "launchd.",
-                "mac_release.",
-                "endpoint_compliance.",
-                "docker.",
-                "k8s.",
-                "modbus.",
-                "dnp3.",
-                "gpu.workload."
-            ]
-            .iter()
-            .any(|prefix| spec.action.starts_with(prefix)),
+            && (spec.action == "peft.release"
+                || [
+                    "systemd.",
+                    "launchd.",
+                    "mac_release.",
+                    "endpoint_compliance.",
+                    "docker.",
+                    "k8s.",
+                    "modbus.",
+                    "dnp3.",
+                    "gpu.workload."
+                ]
+                .iter()
+                .any(|prefix| spec.action.starts_with(prefix))),
         "not_supported native signed provider action"
     );
     let operation = Operation::open(

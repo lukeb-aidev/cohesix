@@ -244,3 +244,36 @@ def test_recipe_lifecycle_preserves_deployment_and_cancellation_scope(tmp_path, 
                          deployment=deployment, recipe=True, cancel_stage="vadd")
     with pytest.raises(CohesixError, match="not_registered"):
         execute_workflow("shell", "plan", coh_binary=binary, recipe=True)
+
+
+def test_peft_release_uses_shared_cli_and_refuses_forged_authority(tmp_path, monkeypatch):
+    import pytest
+    from cohesix import native_providers
+    from cohesix.errors import CohesixError
+    from cohesix.playbooks import run_peft_release
+
+    binary = tmp_path / "coh"
+    binary.write_text("fixture executable not launched")
+    deployment = tmp_path / "deployment.json"
+    deployment.write_text("{}")
+    calls = []
+
+    def command(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return b'{"schema":"cohesix-peft-report/v1","authoritative":false,"production_use_case_accepted":false}'
+
+    monkeypatch.setattr(native_providers, "bounded_command", command)
+    run_peft_release("plan", coh_binary=binary, deployment=deployment)
+    assert calls[-1][0] == [str(binary), "peft", "release", "plan", "--deployment", str(deployment)]
+    run_peft_release("apply", coh_binary=binary, deployment=deployment,
+                     ticket_ref="file:/private/ticket", auth_ref="env:TEST_GATEWAY", rest_url="http://127.0.0.1:8080")
+    assert calls[-1][0][:3] == [str(binary), "--ticket-ref", "file:/private/ticket"]
+    assert calls[-1][1]["credential_refs"] == {"COH_REST_AUTH_TOKEN": "env:TEST_GATEWAY"}
+    with pytest.raises(CohesixError, match="not_enabled"):
+        run_peft_release("apply", coh_binary=binary, deployment=deployment)
+    with pytest.raises(CohesixError, match="invalid_credential_reference"):
+        run_peft_release("plan", coh_binary=binary, deployment=deployment, ticket_ref="raw-secret")
+    monkeypatch.setattr(native_providers, "bounded_command", lambda *a, **kw:
+                        b'{"schema":"cohesix-peft-report/v1","authoritative":true,"production_use_case_accepted":false}')
+    with pytest.raises(CohesixError, match="invalid_operation_report"):
+        run_peft_release("watch", coh_binary=binary, deployment=deployment)

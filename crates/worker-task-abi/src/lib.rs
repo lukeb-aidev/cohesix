@@ -489,6 +489,8 @@ pub enum WorkerAction {
     PeftActivate = 0x0303,
     /// Project a terminal `peft.rollback` result.
     PeftRollback = 0x0304,
+    /// Project one admitted private adapter release; native execution stays host-side.
+    PeftRelease = 0x0305,
 }
 
 impl WorkerAction {
@@ -506,6 +508,7 @@ impl WorkerAction {
             0x0302 => Ok(Self::PeftImport),
             0x0303 => Ok(Self::PeftActivate),
             0x0304 => Ok(Self::PeftRollback),
+            0x0305 => Ok(Self::PeftRelease),
             _ => Err(WorkerAbiError::InvalidAction),
         }
     }
@@ -521,9 +524,11 @@ impl WorkerAction {
             | Self::GpuWorkloadSubmit
             | Self::GpuWorkloadCancel
             | Self::GpuWorkloadObserve => WorkerRole::Gpu,
-            Self::PeftExport | Self::PeftImport | Self::PeftActivate | Self::PeftRollback => {
-                WorkerRole::Lora
-            }
+            Self::PeftExport
+            | Self::PeftImport
+            | Self::PeftActivate
+            | Self::PeftRollback
+            | Self::PeftRelease => WorkerRole::Lora,
         }
     }
 
@@ -541,12 +546,16 @@ impl WorkerAction {
         )
     }
 
-    /// Return true for the four receipt-bearing PEFT actions.
+    /// Return true for the receipt-bearing PEFT actions, including native release.
     #[must_use]
     pub const fn is_peft(self) -> bool {
         matches!(
             self,
-            Self::PeftExport | Self::PeftImport | Self::PeftActivate | Self::PeftRollback
+            Self::PeftExport
+                | Self::PeftImport
+                | Self::PeftActivate
+                | Self::PeftRollback
+                | Self::PeftRelease
         )
     }
 }
@@ -1935,13 +1944,14 @@ mod tests {
     }
 
     #[test]
-    fn peft_receipt_accepts_exactly_four_peft_actions() {
+    fn peft_receipt_accepts_exactly_five_peft_actions() {
         let lora_init = init(WorkerRole::Lora);
         for (sequence, action) in [
             WorkerAction::PeftExport,
             WorkerAction::PeftImport,
             WorkerAction::PeftActivate,
             WorkerAction::PeftRollback,
+            WorkerAction::PeftRelease,
         ]
         .into_iter()
         .enumerate()

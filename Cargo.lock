@@ -2340,6 +2340,7 @@ dependencies = [
  "gpu-bridge-host",
  "hex",
  "host-sidecar-bridge",
+ "libc",
  "nine-door",
  "serde",
  "serde_json",

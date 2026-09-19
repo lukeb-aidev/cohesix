@@ -22,6 +22,13 @@ With host integration adapters:
 python3 -m pip install -e 'tools/cohesix-py[integrations]'
 ```
 
+For the qualified native import/training workflow, see
+[Private LoRA release](../../docs/PRIVATE_LORA_RELEASE.md).
+`cohesix.playbooks.run_peft_release` routes plan/apply/watch/explain/verify/recover
+to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
+prepares the pinned native profile; `examples/private_lora_request.py` prepares
+subsequent requests from reviewed provenance. Preparation is not execution evidence.
+
 With PEFT/LoRA helper package probes:
 
 ```bash

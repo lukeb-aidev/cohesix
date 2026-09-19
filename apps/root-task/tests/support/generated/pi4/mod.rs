@@ -950,6 +950,7 @@ pub enum HostTicketAction {
     PeftImport,
     PeftActivate,
     PeftRollback,
+    PeftRelease,
     MacReleaseBuild,
     MacReleaseTest,
     MacReleaseArchive,
@@ -1111,9 +1112,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.26";
+pub const MANIFEST_SCHEMA: &str = "1.27";
 pub const MANIFEST_SHA256: &str =
-    "79681af9129fd8a18247acf4501d711db4c4851e816561d5c9885e1eb775dd55";
+    "e3175d4dc10ca9a872640336bcd7694d3f8137778adb9ab38bcf2c61cf95472b";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

@@ -177,6 +177,12 @@ generated profile is authoritative and the documentation drift must be fixed.
 
 ## 4. Publishing a snapshot
 
+The [private LoRA release recipe](PRIVATE_LORA_RELEASE.md) manages a separate,
+confined native HF runtime through admitted `peft.release` tickets. Its accepted
+generation requires comparable native evaluation, actual serving and canaries;
+its verified compensation preserves failed candidate outcomes. It does not write
+`/gpu/models/active` or change this snapshot publication contract.
+
 For a non-empty live registry, each
 `available/<model-id>/manifest.toml` contains a matching model id, a 64-digit
 `cas_sha256`, a non-empty format, and optionally a base id plus

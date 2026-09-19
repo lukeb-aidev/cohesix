@@ -71,8 +71,14 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
         ])
     );
     assert_eq!(
-        qemu["receipts"]["peft_actions"].as_array().unwrap().len(),
-        4
+        qemu["receipts"]["peft_actions"],
+        serde_json::json!([
+            "peft.export",
+            "peft.import",
+            "peft.activate",
+            "peft.rollback",
+            "peft.release"
+        ])
     );
     assert_eq!(
         qemu["proof_boundary"]["python_projection_is_authority"],
@@ -141,6 +147,7 @@ fn host_ticket_v2_schema_and_receipt_matrices_are_exact() {
             HostTicketAction::PeftImport,
             HostTicketAction::PeftActivate,
             HostTicketAction::PeftRollback,
+            HostTicketAction::PeftRelease,
         ]
     );
 

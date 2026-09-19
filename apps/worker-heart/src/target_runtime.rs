@@ -405,7 +405,8 @@ fn process_control(
         WorkerAction::PeftExport
         | WorkerAction::PeftImport
         | WorkerAction::PeftActivate
-        | WorkerAction::PeftRollback => {
+        | WorkerAction::PeftRollback
+        | WorkerAction::PeftRelease => {
             let receipt = match PeftReceiptRecord::staged(control) {
                 Ok(receipt) => receipt,
                 Err(_) => publish_fault_and_trap(

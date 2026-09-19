@@ -67,7 +67,7 @@ Registration declares bounded requirements and preserves each integration id. It
 | `nvidia` | `gpu-host-provider` | `not_implemented` | `nvidia.discover` |
 | `nvml` | `gpu-host-provider` | `not_implemented` | `nvml.discover` |
 | `otel` | `prometheus-otel-export` | `not_implemented` |  |
-| `peft` | `peft-host-provider` | `not_implemented` | `peft.activate`, `peft.export`, `peft.import`, `peft.rollback` |
+| `peft` | `peft-host-provider` | `not_implemented` | `peft.activate`, `peft.export`, `peft.import`, `peft.release`, `peft.rollback` |
 | `prometheus` | `prometheus-otel-export` | `not_implemented` |  |
 | `siem` | `siem-evidence-export` | `not_implemented` |  |
 | `systemd` | `systemd-provider` | `not_implemented` | `systemd.restart`, `systemd.start`, `systemd.status-check`, `systemd.stop` |

@@ -8893,6 +8893,7 @@ fn host_ticket_action_label(action: generated::HostTicketAction) -> &'static str
         generated::HostTicketAction::PeftImport => "peft.import",
         generated::HostTicketAction::PeftActivate => "peft.activate",
         generated::HostTicketAction::PeftRollback => "peft.rollback",
+        generated::HostTicketAction::PeftRelease => "peft.release",
         generated::HostTicketAction::MacReleaseBuild => "mac_release.build",
         generated::HostTicketAction::MacReleaseTest => "mac_release.test",
         generated::HostTicketAction::MacReleaseArchive => "mac_release.archive",
@@ -9095,6 +9096,13 @@ fn validate_host_ticket_v2_args(
             }
             Ok(())
         }
+        WorkerAction::PeftRelease => {
+            if cohesix_authority::peft::validate_release_args(args) {
+                Ok(())
+            } else {
+                Err(NineDoorBridgeError::InvalidPayload)
+            }
+        }
         WorkerAction::PeftExport | WorkerAction::PeftActivate | WorkerAction::PeftRollback => {
             validate_host_ticket_arg_keys(object, &[])
         }
@@ -9256,6 +9264,7 @@ fn host_ticket_action(action: &str) -> Result<WorkerAction, NineDoorBridgeError>
         "peft.import" => Ok(WorkerAction::PeftImport),
         "peft.activate" => Ok(WorkerAction::PeftActivate),
         "peft.rollback" => Ok(WorkerAction::PeftRollback),
+        "peft.release" => Ok(WorkerAction::PeftRelease),
         _ => Err(NineDoorBridgeError::InvalidPayload),
     }
 }
@@ -11829,6 +11838,18 @@ mod tests {
     #[test]
     fn host_ticket_v2_admission_is_strict_root_owned_and_stable() {
         let host = HostState::new();
+        let release = host_ticket_v2_request_fixture()
+            .replace("gpu.lease.grant", "peft.release")
+            .replace("worker-gpu", "worker-lora")
+            .replace(
+                "{\"ttl_s\":30}",
+                &format!("{{\"request_sha256\":\"{}\"}}", "a".repeat(64)),
+            );
+        assert!(parse_host_ticket_v2_spec(&release, &host).is_ok());
+        assert!(
+            parse_host_ticket_v2_spec(&release.replace("request_sha256", "receipt"), &host)
+                .is_err()
+        );
         let raw_line = host_ticket_v2_request_fixture();
         let raw = parse_host_ticket_v2_spec(raw_line.as_str(), &host).expect("strict raw v2");
         let admitted = admit_host_ticket_v2_spec(

@@ -450,6 +450,9 @@ impl HostTicketManifest {
             "gpu.workload.cancel",
             "gpu.workload.observe",
         ];
+        if actions.iter().any(|action| action == "peft.release") {
+            expected_receipt_actions.push("peft.release".to_owned());
+        }
         if workload_actions
             .iter()
             .any(|action| actions.iter().any(|selected| selected == action))

@@ -10,8 +10,13 @@ interfaces: transport selection, target console framing, namespace paths,
 control files, and non-generated record schemas. It links to generated snippets
 for compiler-owned values instead of copying them.
 
-Manifest schema 1.26 retains compiler-selected macOS launchd service maps and
-adds exact Xcode/release/endpoint target maps and version-1 actions. Their target, process-identity,
+Manifest schema 1.27 adds the explicitly selected `peft.release` action and
+WorkerLora receipt code `0x0305`. Its strict arguments are `request_sha256` and
+optional boolean `recovery_only` (default false); fresh recovery grants restore
+only the original frozen baseline. Native/controller records and public usage
+are defined in [Private LoRA release](PRIVATE_LORA_RELEASE.md).
+The schema retains compiler-selected macOS launchd service maps, exact
+Xcode/release/endpoint target maps and version-1 actions. Their target, process-identity,
 refusal and observation contracts are in [MACOS_PROVIDERS.md](MACOS_PROVIDERS.md).
 No macOS device access or native execution moves into the VM.
 

@@ -45,7 +45,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "virt-aarch64",
-  "manifest_sha256": "ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
+  "manifest_sha256": "33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
@@ -77,7 +77,8 @@
       "peft.export",
       "peft.import",
       "peft.activate",
-      "peft.rollback"
+      "peft.rollback",
+      "peft.release"
     ]
   },
   "schema": "cohesix-python-profile/v2",

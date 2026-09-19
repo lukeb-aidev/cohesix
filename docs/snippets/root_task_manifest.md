@@ -8,7 +8,7 @@
 - Host tickets confer host authority; model/session roles confer no VM authority. Accepted task/driver bundles retain their owning milestone evidence. Production Worker/driver ledgers and structured quarantine require Milestone 28b.
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.26`
+- `root_task.schema`: `1.27`
 - `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `64`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -235,7 +235,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df`
+- `manifest.sha256`: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -267,7 +267,7 @@
 - `ecosystem.host.tickets.request_schema`: `host-ticket/v1`
 - `ecosystem.host.tickets.result_schema`: `host-ticket-result/v1`
 - `ecosystem.host.tickets.max_line_bytes`: `2048`
-- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `gpu.workload.submit`, `gpu.workload.cancel`, `gpu.workload.observe`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
+- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `gpu.workload.submit`, `gpu.workload.cancel`, `gpu.workload.observe`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `peft.release`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
 - `ecosystem.host.tickets.lifecycle`: `queued`, `claimed`, `running`, `succeeded`, `failed`, `expired`
 - `ecosystem.host.federation.enable`: `true`
 - `ecosystem.host.federation.local_hive`: `hive-a`
@@ -297,4 +297,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df`)._
+_Generated from `configs/root_task.toml` (sha256: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`)._

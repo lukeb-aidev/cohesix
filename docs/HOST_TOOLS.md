@@ -777,6 +777,11 @@ or lease request does not establish CUDA execution or a Worker/provider receipt.
 
 #### Manage PEFT adapters
 
+For an admitted native HF import/training release with actual serving, evaluation
+and verified rollback, use [`coh peft release`](PRIVATE_LORA_RELEASE.md). It has
+`plan/apply/watch/explain/verify/recover` modes and shares the durable host journal
+and signed verifier. The file-registry commands below retain their existing scope.
+
 Use this on the host that owns the training outputs and model registry. It
 moves bounded job/registry information; training and inference remain outside
 the Queen. Before starting, confirm the selected manifest exposes the LoRA

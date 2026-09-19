@@ -343,8 +343,15 @@ establish authority outside the Python object.
 
 The exact receipt actions are:
 
-- GPU: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`;
-- PEFT: `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`.
+- GPU: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`,
+  `gpu.workload.submit`, `gpu.workload.cancel`, `gpu.workload.observe`;
+- PEFT: `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, and
+  explicitly selected `peft.release`. Existing profiles retain the four-action
+  PEFT contract until their manifest selects native release.
+
+The [native release recipe](PRIVATE_LORA_RELEASE.md) uses
+`cohesix.playbooks.run_peft_release`; Python validates and projects the same
+CLI report and never emits training scores or Worker receipts.
 
 The receipt identity is the full role, slot, lease epoch, supervisor
 generation, and capability generation. A mismatch with the expected identity

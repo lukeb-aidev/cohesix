@@ -20,6 +20,7 @@ cohesix-ticket = { workspace = true }
 cohsh = { path = "../cohsh", features = ["tcp", "rest"] }
 cohsh-core = { workspace = true }
 fs2 = "0.4.3"
+libc = "0.2.189"
 hex = { workspace = true }
 host-sidecar-bridge = { path = "../host-sidecar-bridge" }
 sidecar-bus = { path = "../sidecar-bus", features = ["live", "modbus", "dnp3"] }

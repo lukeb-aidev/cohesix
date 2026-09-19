@@ -284,6 +284,13 @@ struct PeftArgs {
 
 #[derive(Debug, Subcommand)]
 enum PeftCommand {
+    /// Plan, apply or verify a private adapter release through an admitted host ticket.
+    Release {
+        #[arg(value_parser = ["plan", "apply", "watch", "explain", "verify", "recover"])]
+        mode: String,
+        #[arg(long, value_name = "FILE")]
+        deployment: PathBuf,
+    },
     /// Export a LoRA job directory from /queen/export/lora_jobs.
     Export {
         #[arg(long)]
@@ -1199,6 +1206,23 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
 fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs) -> Result<()> {
     let mut audit = CohAudit::new();
     match args.command {
+        PeftCommand::Release { mode, deployment } => {
+            anyhow::ensure!(!args.connect.mock, "EPERM native-release-mock");
+            let deployment = peft::controller::load(&deployment)?;
+            let now = u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis(),
+            )?;
+            let report = if mode == "apply" {
+                let mut client = connect_access(&args.connect, policy, role, ticket)?;
+                peft::controller::advance(&deployment, &mode, Some(&mut client), now)?
+            } else {
+                peft::controller::advance(&deployment, &mode, None, now)?
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         PeftCommand::Export { job, out } => {
             if args.connect.mock {
                 let (server, mut client) = match connect_mock(role, ticket, true, false) {

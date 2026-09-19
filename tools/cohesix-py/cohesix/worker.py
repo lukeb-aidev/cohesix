@@ -412,9 +412,13 @@ def load_profile_contract(
         {"gpu_actions", "max_control_inflight", "peft_actions"},
         "profile contract receipts",
     )
-    if tuple(receipts.get("gpu_actions", ())) != tuple(GPU_RECEIPT_ACTIONS) or tuple(
-        receipts.get("peft_actions", ())
-    ) != tuple(PEFT_RECEIPT_ACTIONS):
+    # Release is explicitly selected per manifest. Legacy profiles retain the
+    # exact four-action contract; the extended profile adds only peft.release.
+    peft_actions = tuple(receipts.get("peft_actions", ()))
+    legacy_peft = tuple(action for action in PEFT_RECEIPT_ACTIONS if action != "peft.release")
+    if tuple(receipts.get("gpu_actions", ())) != tuple(GPU_RECEIPT_ACTIONS) or peft_actions not in (
+        legacy_peft, tuple(PEFT_RECEIPT_ACTIONS)
+    ):
         raise CohesixError("profile contract receipt action matrix is invalid")
     if receipts.get("max_control_inflight") != 1:
         raise CohesixError("profile contract must permit exactly one Worker control in flight")

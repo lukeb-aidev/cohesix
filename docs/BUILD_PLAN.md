@@ -119,7 +119,7 @@ owned by their specific contracts.
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Executable Host Foundation | Complete — selected foundation |
 | [27c](#27c) | Recoverable CUDA Recipes | Complete |
-| [27d](#27d) | Verified Private LoRA Release | Planned — next release |
+| [27d](#27d) | Verified Private LoRA Release | Complete |
 | [27e](#27e) | Installation, Adoption and CI | Planned — next release |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Planned — next release |
@@ -11484,7 +11484,12 @@ trials and corrections remain in the
 ## Milestone 27d — Verified Private LoRA Release <a id="27d"></a>
 [Milestones](#Milestones)
 
-**Status:** Planned — next-release scope.
+**Status:** Complete — 19 September 2026. Native import and HF training,
+comparable evaluation, real serving promotion, regression refusal and
+failed-canary verified rollback pass the focused acceptance contract. Exact
+host/QEMU builds, boundary/refusal tests, generated consistency and Test Plan
+checks are recorded in [the implementation record](audit/M27D_IMPLEMENTATION_RECORD.md).
+The full staged release campaign remains Milestone 27g.
 
 **Prerequisites:** completed 27b and 27c.
 

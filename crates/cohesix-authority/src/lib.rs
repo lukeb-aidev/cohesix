@@ -32,6 +32,8 @@ pub mod gpu;
 /// Host-only package requirements; never a VM installer or namespace.
 #[cfg(feature = "std")]
 pub mod package;
+/// Immutable host-side private adapter release requests.
+pub mod peft;
 pub mod policy;
 #[cfg(feature = "std")]
 pub mod secret;

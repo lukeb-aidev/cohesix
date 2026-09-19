@@ -472,6 +472,10 @@ execution. Those need independent host-runtime and target evidence.
 <a id="stage-and-reverse-a-private-adapter-rollout"></a>
 ## When a private adapter is ready: stage it with a rollback path
 
+For admitted HF training/import with actual evaluation, serving, canaries and
+verified rollback, follow [Private LoRA release](PRIVATE_LORA_RELEASE.md).
+The registry workflow below retains its separate file/publication contract.
+
 This recipe fits a private LoRA workflow in which training data and adapter
 bytes must remain on the AI host, while Cohesix retains bounded job, registry,
 activation, and evidence state. Rehearse the lifecycle first:
@@ -729,7 +733,7 @@ adding retries.
 | --- | --- | --- |
 | Checked `.coh` reads, target identity, scheduler/lease observations, and a complete evidence pack | Pre-change gates, incident comparison, support cases, and operator handoff | Whole-milestone, performance, or physical-hardware acceptance |
 | Real AArch64 NVIDIA inventory and bounded `/gpu` publication | Verifying that the intended accelerator host is present and visible to the control plane | CUDA execution, isolation, inference, PEFT training, or NeMo acceptance |
-| PEFT export/import/activate/rollback and WorkerLora receipt surfaces | Rehearsing and integrating a private adapter lifecycle with explicit rollback | Training provenance, evaluation, scan, inference reload, or successful canary |
+| Legacy PEFT export/import/activate/rollback and WorkerLora receipt surfaces | Rehearsing and integrating a private adapter lifecycle with explicit rollback | Training provenance, evaluation, scan, inference reload, or successful canary |
 | Host tickets and playbooks | Designing and testing an action airlock or sector workflow with explicit authority and receipts | Production provider behavior, sector certification, or safe autonomous operation |
 | The same script on QEMU and Pi | Comparing exact operator contracts while retaining two proof files | Treating VM evidence as physical-board evidence |
 

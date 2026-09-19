@@ -400,13 +400,9 @@ def test_exact_gpu_and_peft_receipt_actions_are_non_authoritative_projections() 
         ),
     )
     assert [case[0] for case in cases] == [
-        "gpu.lease.grant",
-        "gpu.lease.renew",
-        "gpu.lease.release",
-        "peft.export",
-        "peft.import",
-        "peft.activate",
-        "peft.rollback",
+        "gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release",
+        "gpu.workload.submit", "gpu.workload.cancel", "gpu.workload.observe",
+        "peft.export", "peft.import", "peft.activate", "peft.rollback", "peft.release",
     ]
     for action, role, schema in cases:
         payload = _worker_receipt(action, role, schema, contract.manifest_sha256)

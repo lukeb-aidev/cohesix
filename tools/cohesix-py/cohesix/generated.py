@@ -12,7 +12,7 @@ DEFAULTS = {
     ]},
     "contract_kind": "target-neutral-fallback",
     "manifest_sha256": None,
-    "generation_source_sha256": "ce7cb18a9a71d19cffe581a86570262dd3ace2a1c9c94c0a36a4dbee3bcbe5df",
+    "generation_source_sha256": "33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
     "execution_proof": "none",
     "diagnostic_artifacts": {"max_bytes": 1048576, "max_files": 682, "trace_max_duration_ms": 60000},
     "secure9p": {"msize": 8192, "walk_depth": 8},
@@ -162,4 +162,4 @@ PROFILE_SCHEMA = "cohesix-python-profile/v2"
 HOST_TICKET_REQUEST_SCHEMAS = ("host-ticket/v1", "host-ticket/v2")
 HOST_TICKET_RESULT_SCHEMAS = ("host-ticket-result/v1", "host-ticket-result/v2")
 GPU_RECEIPT_ACTIONS = ("gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release", "gpu.workload.submit", "gpu.workload.cancel", "gpu.workload.observe")
-PEFT_RECEIPT_ACTIONS = ("peft.export", "peft.import", "peft.activate", "peft.rollback")
+PEFT_RECEIPT_ACTIONS = ("peft.export", "peft.import", "peft.activate", "peft.rollback", "peft.release")

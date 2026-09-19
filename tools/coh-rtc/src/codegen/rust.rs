@@ -1127,6 +1127,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    PeftImport,")?;
     writeln!(mod_contents, "    PeftActivate,")?;
     writeln!(mod_contents, "    PeftRollback,")?;
+    writeln!(mod_contents, "    PeftRelease,")?;
     writeln!(mod_contents, "    MacReleaseBuild,")?;
     writeln!(mod_contents, "    MacReleaseTest,")?;
     writeln!(mod_contents, "    MacReleaseArchive,")?;
@@ -3274,6 +3275,7 @@ fn host_ticket_action_to_rust(action: HostTicketAction) -> &'static str {
         HostTicketAction::PeftImport => "HostTicketAction::PeftImport",
         HostTicketAction::PeftActivate => "HostTicketAction::PeftActivate",
         HostTicketAction::PeftRollback => "HostTicketAction::PeftRollback",
+        HostTicketAction::PeftRelease => "HostTicketAction::PeftRelease",
         HostTicketAction::MacReleaseBuild => "HostTicketAction::MacReleaseBuild",
         HostTicketAction::MacReleaseTest => "HostTicketAction::MacReleaseTest",
         HostTicketAction::MacReleaseArchive => "HostTicketAction::MacReleaseArchive",

@@ -300,10 +300,15 @@ pub fn load(path: &Path) -> Result<Deployment> {
 }
 
 fn lock(d: &Deployment, create: bool) -> Result<File> {
-    if create && !d.journal.try_exists()? {
-        fs::DirBuilder::new().mode(0o700).create(&d.journal)?;
+    lock_directory(&d.journal, create)
+}
+
+/// CUDA and PEFT phases share the same private exclusive journal ownership.
+pub(crate) fn lock_directory(directory: &Path, create: bool) -> Result<File> {
+    if create && !directory.try_exists()? {
+        fs::DirBuilder::new().mode(0o700).create(directory)?;
     }
-    let meta = fs::symlink_metadata(&d.journal)?;
+    let meta = fs::symlink_metadata(directory)?;
     ensure!(
         meta.is_dir() && !meta.file_type().is_symlink() && meta.permissions().mode() & 0o077 == 0,
         "EPERM recipe-journal-private-directory"
@@ -315,19 +320,25 @@ fn lock(d: &Deployment, create: bool) -> Result<File> {
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(d.journal.join("lock"))?;
+        .open(directory.join("lock"))?;
     file.try_lock_exclusive()
         .map_err(|_| anyhow!("EBUSY recipe-owner"))?;
     Ok(file)
 }
 fn save(d: &Deployment, journal: &Journal) -> Result<()> {
-    let bytes = serde_json::to_vec(journal)?;
+    save_record(&d.journal, "recipe.json", journal)
+}
+
+/// A native phase journal has the same atomic durability and finite bound as CUDA.
+pub(crate) fn save_record(directory: &Path, name: &str, record: &impl Serialize) -> Result<()> {
+    crate::validate_component(name)?;
+    let bytes = serde_json::to_vec(record)?;
     ensure!(
         bytes.len() <= limit("max_journal_bytes")? as usize,
         "ELIMIT recipe-journal"
     );
-    write_atomic(&d.journal.join("recipe.json"), &bytes)?;
-    File::open(&d.journal)?.sync_all()?;
+    write_atomic(&directory.join(name), &bytes)?;
+    File::open(directory)?.sync_all()?;
     Ok(())
 }
 fn journal(d: &Deployment) -> Result<Journal> {

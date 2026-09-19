@@ -4950,6 +4950,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/PRIVATE_LORA_RELEASE.md",
+      "kind": "tracked_surface",
+      "path": "docs/PRIVATE_LORA_RELEASE.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/PRODUCTION_PROFILES.md",
       "kind": "tracked_surface",
       "path": "docs/PRODUCTION_PROFILES.md",
@@ -5611,6 +5625,20 @@
       "id": "tracked:docs/audit/M27C_IMPLEMENTATION_RECORD.md",
       "kind": "tracked_surface",
       "path": "docs/audit/M27C_IMPLEMENTATION_RECORD.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:docs/audit/M27D_IMPLEMENTATION_RECORD.md",
+      "kind": "tracked_surface",
+      "path": "docs/audit/M27D_IMPLEMENTATION_RECORD.md",
       "implementation_class": "contract",
       "owner": "documentation",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -7778,6 +7806,20 @@
       "evidence_eligible": true
     },
     {
+      "id": "tracked:tools/cohesix-py/cohesix/hf_native.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/cohesix/hf_native.py",
+      "implementation_class": "production_live",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "Python package manifest; rule=cohesix-python-library",
+      "package_disposition": "release_python_library",
+      "evidence_requirement": "authenticated host integration and typed receipts",
+      "current_observed_mode": "live_host_adapter",
+      "evidence_eligible": true
+    },
+    {
       "id": "tracked:tools/cohesix-py/cohesix/identity.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/cohesix/identity.py",
@@ -8058,6 +8100,34 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:tools/cohesix-py/examples/private_lora_release.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/examples/private_lora_release.py",
+      "implementation_class": "diagnostic",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit examples directory; rule=cohesix-python-examples",
+      "package_disposition": "example_not_evidence",
+      "evidence_requirement": "cannot satisfy target or release acceptance",
+      "current_observed_mode": "example_playbook",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/examples/private_lora_request.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/examples/private_lora_request.py",
+      "implementation_class": "diagnostic",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit examples directory; rule=cohesix-python-examples",
+      "package_disposition": "example_not_evidence",
+      "evidence_requirement": "cannot satisfy target or release acceptance",
+      "current_observed_mode": "example_playbook",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:tools/cohesix-py/examples/siem_export_ndjson.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/examples/siem_export_ndjson.py",
@@ -8187,6 +8257,20 @@
       "id": "tracked:tools/cohesix-py/tests/test_generated_contract.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_generated_contract.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "source_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/tests/test_hf_native.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_hf_native.py",
       "implementation_class": "fixture",
       "owner": "python-client",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",

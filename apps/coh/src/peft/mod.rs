@@ -15,10 +15,16 @@ use anyhow::{anyhow, Context, Result};
 
 /// Activate and rollback helpers for PEFT models.
 pub mod activate;
+/// CLI/Python composition uses the existing recipe journal and causal verifier.
+pub mod controller;
 /// Export helpers for PEFT jobs.
 pub mod export;
 /// Import helpers for PEFT adapters.
 pub mod import;
+/// Comparable native evaluation and serving release contracts.
+pub mod release;
+/// Native release phases extend the existing recipe journal.
+pub mod transaction;
 
 pub use activate::{activate_model, rollback_model, PeftActivateSpec, PeftRollbackSpec};
 pub use export::{export_job, PeftExportSpec, PeftExportSummary};

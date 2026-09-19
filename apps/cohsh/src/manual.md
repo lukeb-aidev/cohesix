@@ -297,6 +297,13 @@ SWARMUI
   console, cohsh or SwarmUI console commands. See docs/HOST_TOOLS.md, Recoverable
   CUDA recipes, for exact tickets, signed output verification and cancellation.
 
+  Private LoRA releases also use the host coh CLI:
+    coh peft release plan --deployment /absolute/deployment.json
+  apply/watch/explain/verify/recover share the same retained release identity.
+  Native HF training and serving remain on the CUDA host. A failed canary with
+  verified rollback is a failed candidate. See docs/PRIVATE_LORA_RELEASE.md for
+  provenance, exact WorkerLora tickets and fresh-authority recovery.
+
 ## kill
 NAME
   kill — request Worker termination in compatibility mode.

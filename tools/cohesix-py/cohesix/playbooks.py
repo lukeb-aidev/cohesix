@@ -837,3 +837,46 @@ def execute_workflow(
     ):
         raise ProviderUnavailable("invalid_operation_report", "workflow")
     return result
+
+
+def run_peft_release(
+    lifecycle: str,
+    *,
+    deployment: Path,
+    coh_binary: Path,
+    rest_url: str | None = None,
+    host: str | None = None,
+    port: int = 31337,
+    auth_ref: str | None = None,
+    ticket_ref: str | None = None,
+) -> dict[str, object]:
+    """Use the Rust release journal and verifier; Python creates no receipts or scores."""
+    from .native_providers import bounded_command
+    from .providers import ProviderUnavailable
+
+    if lifecycle not in {"plan", "apply", "watch", "explain", "verify", "recover"}:
+        raise ProviderUnavailable("invalid_lifecycle", "peft_release")
+    if not coh_binary.is_absolute() or not deployment.is_absolute():
+        raise ProviderUnavailable("invalid_path", "peft_release")
+    command = [str(coh_binary.resolve(strict=True))]
+    if ticket_ref is not None:
+        if not ticket_ref.startswith("file:"):
+            raise ProviderUnavailable("invalid_credential_reference", "peft_release_ticket_requires_file")
+        command.extend(["--ticket-ref", ticket_ref])
+    command.extend(["peft", "release", lifecycle, "--deployment", str(deployment.resolve(strict=True))])
+    credentials = {}
+    if lifecycle == "apply":
+        if (rest_url is None) == (host is None) or auth_ref is None or ticket_ref is None:
+            raise ProviderUnavailable("not_enabled", "peft_release_endpoint")
+        if rest_url is not None:
+            command.extend(["--rest-url", rest_url])
+            credentials["COH_REST_AUTH_TOKEN"] = auth_ref
+        else:
+            command.extend(["--host", str(host), "--port", str(port)])
+            credentials["COH_AUTH_TOKEN"] = auth_ref
+    result = json.loads(bounded_command(command, timeout_s=30, credential_refs=credentials))
+    if (result.get("schema") != "cohesix-peft-report/v1"
+            or result.get("authoritative") is not False
+            or result.get("production_use_case_accepted") is not False):
+        raise ProviderUnavailable("invalid_operation_report", "peft_release")
+    return result

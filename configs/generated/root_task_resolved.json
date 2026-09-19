@@ -25,7 +25,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.26",
+    "schema": "1.27",
     "affinity": {
       "enabled": true,
       "max_cores": 4,
@@ -377,6 +377,7 @@
           "peft.import",
           "peft.activate",
           "peft.rollback",
+          "peft.release",
           "systemd.start",
           "systemd.stop",
           "systemd.restart",
@@ -398,7 +399,8 @@
           "peft.export",
           "peft.import",
           "peft.activate",
-          "peft.rollback"
+          "peft.rollback",
+          "peft.release"
         ],
         "lifecycle": [
           "queued",

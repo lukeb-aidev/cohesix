@@ -24,6 +24,16 @@ installation/CI, the full SwarmUI workbench, then integrated qualification. Broa
 scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
 planning, not implementation or evidence status.
 
+Milestone [27d](BUILD_PLAN.md#27d), **Verified Private LoRA Release**, is
+**Complete** as of 19 September 2026. Genuine native import and HF training pass
+comparable evaluation and actual serving promotion. A measured regression is
+refused, and a forced canary failure restores the exact previous adapter and
+generation while remaining a failed candidate. Focused boundary/refusal checks,
+exact macOS/Linux ARM64 and QEMU builds, independent WorkerLora receipts,
+cleanup and generated/Test Plan checks pass. See the
+[implementation record](audit/M27D_IMPLEMENTATION_RECORD.md). Full package/UI
+adoption and integrated release qualification remain later milestones.
+
 Milestone [27c](BUILD_PLAN.md#27c), **Recoverable CUDA Recipes**, is **Complete**
 as of 19 September 2026. The shared CLI/Python lifecycle persists identity and
 submission intent, reconciles lost ACKs without duplicate CUDA execution, reuses

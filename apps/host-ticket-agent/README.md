@@ -12,7 +12,12 @@ another authority path.
 Version 1 remains the compatibility path for `receipt_mode=none`, including its
 existing federation behavior. Version 2 is local-only and is accepted only for
 the generated GPU lease grant/renew/release and PEFT export/import/activate/
-rollback actions. Caller-authored version-2 lines on `/host/tickets/spec` are
+rollback and selected `peft.release` actions. The latter accepts a configured
+CAS request digest and optional `recovery_only`, requires
+`--peft-release-config`, and drives the confined native HF release through the
+existing journal and evidence custodians. See
+[Private LoRA release](../../docs/PRIVATE_LORA_RELEASE.md) for stack, limits,
+source attestations and fresh-authority compensation. Caller-authored version-2 lines on `/host/tickets/spec` are
 validated but never executed. Root must resolve the request and append the
 executable normalized record to `/host/tickets/spec.snapshot`.
 

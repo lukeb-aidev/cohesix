@@ -121,6 +121,9 @@ struct Args {
     /// Host-owned immutable workload request CAS.
     #[arg(long, requires = "gpu_executor_socket")]
     gpu_request_root: Option<PathBuf>,
+    /// Pinned native HF release profile; all artifacts remain under its private CAS root.
+    #[arg(long)]
+    peft_release_config: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -173,6 +176,7 @@ fn main() -> Result<()> {
         gpu_executor_socket: args.gpu_executor_socket.clone(),
         gpu_executor_credential_ref: args.gpu_executor_credential_ref.clone(),
         gpu_request_root: args.gpu_request_root.clone(),
+        peft_release_config: args.peft_release_config.clone(),
     };
     if args.mock && args.execution_lanes != 1 {
         return Err(anyhow::anyhow!(

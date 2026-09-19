@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.26";
+const SCHEMA_VERSION: &str = "1.27";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -1492,6 +1492,12 @@ impl Manifest {
             HostTicketAction::PeftRollback,
         ];
         let mut allowed_receipts = expected_receipt_actions.to_vec();
+        if tickets
+            .action_allowlist
+            .contains(&HostTicketAction::PeftRelease)
+        {
+            allowed_receipts.push(HostTicketAction::PeftRelease);
+        }
         let workload_actions = [
             HostTicketAction::GpuWorkloadSubmit,
             HostTicketAction::GpuWorkloadCancel,
@@ -8631,6 +8637,8 @@ pub enum HostTicketAction {
     PeftActivate,
     #[serde(rename = "peft.rollback")]
     PeftRollback,
+    #[serde(rename = "peft.release")]
+    PeftRelease,
     #[serde(rename = "mac_release.build")]
     MacReleaseBuild,
     #[serde(rename = "mac_release.test")]
@@ -8696,6 +8704,7 @@ impl HostTicketAction {
             Self::PeftImport => "peft.import",
             Self::PeftActivate => "peft.activate",
             Self::PeftRollback => "peft.rollback",
+            Self::PeftRelease => "peft.release",
             Self::MacReleaseBuild => "mac_release.build",
             Self::MacReleaseTest => "mac_release.test",
             Self::MacReleaseArchive => "mac_release.archive",

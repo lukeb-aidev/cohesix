@@ -192,6 +192,11 @@ pub fn validate_v2_action_args(spec: &HostTicketSpec) -> Result<()> {
                 validate_bounded_text_value(reason, "reason", MAX_REASON_BYTES)?;
             }
         }
+        "peft.release" => {
+            if !cohesix_authority::peft::validate_release_args(&spec.args) {
+                return Err(anyhow!("invalid bounded PEFT release arguments"));
+            }
+        }
         "peft.export" | "peft.activate" | "peft.rollback" => {
             validate_exact_keys(args, &[])?;
         }
@@ -249,7 +254,7 @@ pub fn expected_receipt_role(action: &str) -> Option<&'static str> {
         Some("worker-gpu")
     } else if matches!(
         action,
-        "peft.export" | "peft.import" | "peft.activate" | "peft.rollback"
+        "peft.export" | "peft.import" | "peft.activate" | "peft.rollback" | "peft.release"
     ) {
         Some("worker-lora")
     } else {
