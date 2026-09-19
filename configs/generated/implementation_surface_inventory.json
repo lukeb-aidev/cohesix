@@ -5216,6 +5216,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/audit/BUILD_PLAN_IMPLEMENTATION_HISTORY.md",
+      "kind": "tracked_surface",
+      "path": "docs/audit/BUILD_PLAN_IMPLEMENTATION_HISTORY.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/audit/CONTROL_TRACEABILITY.md",
       "kind": "tracked_surface",
       "path": "docs/audit/CONTROL_TRACEABILITY.md",
