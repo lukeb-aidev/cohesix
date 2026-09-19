@@ -13573,6 +13573,19 @@ review also exposed stale read-auth paragraphs and bare curl examples in the
 linked canonical guides. The same scoped change aligns those read instructions
 with the existing gateway read classifier and Rust/Python header handling.
 
+#### Benefit-led discovery correction — 19 September 2026
+
+The owner reopened this documentation task to replace unexplained terminology
+with user benefits and make every target playbook discoverable. `llms.txt` now
+leads with useful delegation, shared GPU coordination, reusable CUDA work and
+reviewable outcomes; defines Queen and Worker on first use; maps all six use
+cases and nine playbooks to plain-language goals; and invites a no-hardware
+inspection trial. Catalogue mappings were checked against the generated registry
+at `ff646848f`. Format, 26 unique HTTP links, local anchors, generated consistency,
+Test Plan integrity and `git diff --check` passed in isolation. This was a static
+copy/coverage review, not a new agent-adoption or live-execution trial. No command,
+interface, permission, benchmark or implementation changed.
+
 #### Compatibility and limits
 
 Reviewed all eight host tools: coh, cohsh, hive-gateway, gpu-bridge-host,

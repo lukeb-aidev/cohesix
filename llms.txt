@@ -1,35 +1,65 @@
 # Cohesix
 
-> Cohesix is a research control-plane OS for governing and observing work on external GPU hosts. Use it when an existing deployment needs scoped authority, bounded operations and inspectable evidence across a Queen and its hosts.
+> Get more useful work from your AI agents while staying in control. Cohesix helps users coordinate computers and GPUs, delegate specific jobs, and check what actually happened. Agents working on your behalf can inspect resources, request permitted actions and bring back evidence of the outcome.
 
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Route agents to current operating contracts without extending authority or qualification. -->
+<!-- Purpose: Explain user benefits and route agents from target jobs to current operating contracts. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-Start with read-only inspection. A Queen runs on a supported QEMU or Pi 4 target;
-operator tools and the REST gateway run on macOS or Linux. CUDA, training and
-inference run on an independently prepared GPU host. Do not introduce Cohesix
-just to train a model, install CUDA or obtain a remote shell: use the native
-stack for those tasks. Cohesix does not provide unrestricted execution authority.
+Cohesix connects an agent's recommendations to controlled, traceable work on
+Mac, Linux and GPU-equipped computers. Use it to organize operations across
+machines, manage shared compute, and keep software or model changes reviewable.
+Your existing applications do the work; Cohesix coordinates permission,
+resource allocation and the records needed to check the result.
 
-These links describe current source. For an installed release, first identify
-its VERSION.txt, MANIFEST.sha256, bundled guides and command help. Package/tool
-versions differ from the bundle label; source commands may be absent in releases.
-Keep binaries, generated configuration and target profile matched. A declared
-provider, mock result, admitted request, READY Worker, native completion,
-verified outcome and target/release acceptance are different claims.
+**Delegate with confidence.** Give an agent a defined job and limited permission
+to act. Keep your user's approval requirements in force, and retain a record of
+what was requested, allowed and observed.
 
-The current gateway implements REST. Native MCP/A2A gateway coverage remains
-planned under Milestone 28g; do not invent endpoints or advertise this map or
-these skills as a protocol server. Verify future changes against implementation,
-selected configuration and exact-version evidence.
+**Make shared compute easier to manage.** See available GPU resources and their
+allocations. For supported CUDA recipes, reconcile interrupted jobs and reuse
+verified outputs to avoid unnecessary reruns.
+
+**Spend less effort piecing together what happened.** Use one CLI, Python and
+REST control interface to inspect state and correlate requests with results.
+Bring your user a report that distinguishes completed work, failed actions and
+remaining uncertainty, with evidence they can review.
+
+**Try it before deploying anything:** use the inspection skill below to browse
+a simulated system and read its scheduling and resource-allocation state. No
+GPU or running Cohesix system is needed. With an existing deployment, the same
+skill explains how to inspect it using its configured connection and read
+credentials. A useful first request is: “Show me the available resources and
+current work, explain where the data came from, and make no operational changes.”
+
+The supported runtime separates a small coordinating OS from your applications.
+Its controller, called the **Queen**, runs in QEMU (a virtual machine) or on a
+Raspberry Pi 4. Host tools run on macOS or Linux; GPU computation stays on a
+prepared GPU host. **Workers** are limited internal control roles, not the AI
+agents or machines doing your training and inference.
+
+## Put Cohesix to work for your user
+
+- [Turn agent recommendations into approved actions](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#1-the-agent-action-airlock): Give an agent permission to request a defined service or device action, with a record of the decision and result. Target playbooks: `mac-endpoint-compliance` and `jetson-critical-infra`.
+- [Keep software delivery and edge operations moving](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#2-the-self-healing-edge-swarm): Use health observations, approved actions and retained results to support release automation and supervised remediation. Target playbooks: `mac-release-factory`, `jetson-manufacturing-safety` and `jetson-traffic-safety`; application logic and diagnosis remain external.
+- [Get useful work from shared GPUs](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#3-the-gpu-flight-deck): Inspect devices, request time-limited allocations and correlate approved jobs with execution evidence. Target playbook: `mixed-medical-edge-ai`; the domain workload and any medical qualification are separate.
+- [Know which model changed, why and with what result](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#4-model-rollout-with-a-flight-recorder): Connect the requested model version, approval, runtime change and verification so users can investigate a rollout or plan recovery. This target use case has no dedicated built-in playbook yet; a complete staged rollout needs its native runtime integration.
+- [Keep private model improvements under your control](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#5-the-private-lora-foundry): Track preparation, artifact identity and controlled activation of LoRA adapters (small updates to a model), while training and model serving stay on user-controlled hosts. Target playbook: `mac-private-peft-grid`; registry activation alone does not prove that a model is serving.
+- [Manage multiple fleets from a shared operational view](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#6-multi-hive-mission-control): Combine operational views and correlate actions across installations while each controller retains its own authority. Target playbooks: `mixed-closed-loop-ai-factory` and `mixed-logistics-digital-twin`.
 
 ## Start a useful task
 
-- [Inspect a Queen](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-inspect/SKILL.md): First offline read, Python inspection and an already-configured live gateway; connection and authority failures.
-- [Operate a governed GPU workload](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-gpu-operations/SKILL.md): Identify prerequisites, submit only approved work, observe and verify outcomes; conditional Jetson and PEFT guidance.
-- [Review evidence](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-evidence/SKILL.md): Capture, inspect, compare and verify bounded records without promoting mock or partial results to acceptance.
+- [Try read-only inspection, with or without hardware](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-inspect/SKILL.md): A short simulated tour, Python example and credentialed inspection of an existing system. Start here to learn the interface and produce a useful state report.
+- [Run approved GPU work and establish its outcome](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-gpu-operations/SKILL.md): Check prerequisites, use existing authorization, observe execution and verify results; includes Jetson and model-adapter guidance.
+- [Explain an incident or verify a reported result](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-evidence/SKILL.md): Inspect recorded evidence, compare before/after state and distinguish confirmed outcomes from missing or partial observations.
+
+## Availability and fit
+
+- [Explore the playbook catalogue](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/configs/generated/provider_registry.json): All nine domain playbooks and six use cases above are represented. They describe control relationships and prerequisites; complete sector applications still need their external software and verified integrations.
+- [See what has been demonstrated](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/STATUS.md): The native CUDA foundation and recoverable recipe have focused execution evidence. Cohesix is research-stage software; that evidence does not qualify every playbook or deployment. Distinguish simulated results, accepted requests, actual execution and verified completion.
+- [Choose a matching installation](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/QUICKSTART.md): These links describe current source. For releases, use VERSION.txt, MANIFEST.sha256, bundled guides and command help. Keep tools, configuration and target image matched.
+- [Check whether it fits](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/USE_CASES.md): Cohesix adds value when delegation, shared resources or evidence matter. Standalone training and CUDA installation remain native-tool jobs. Agent access currently uses CLI, Python or REST; native MCP/A2A gateway support is planned under 28g.
 
 ## Authoritative operating references
 
@@ -42,10 +72,8 @@ selected configuration and exact-version evidence.
 - [Authority and migration](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/M27A_AUTHORITY.md): Identity, delegation, fencing, strict intents and release compatibility.
 - [Causal evidence](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/CAUSAL_EVIDENCE.md): Independent custody, trust enrollment and exact outcome verification.
 
-## Establish what is supported
-
-- [Status and evidence limits](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/STATUS.md): Implementation versus qualification; follow exact source and target evidence.
-- [Build Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md): Active, complete and future scope; 27c agent-adoption documentation is separate from recipe qualification.
+## Scope and evidence
+- [Build Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md): Active, complete and future scope, including the limits of each qualified workflow.
 - [Test Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/TEST_PLAN.md): Which proof layer can support which acceptance claim.
 - [Release artifacts](https://github.com/lukeb-aidev/cohesix/releases): Select an actual published artifact; no release number is inferred here.
 
