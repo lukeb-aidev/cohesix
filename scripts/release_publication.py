@@ -25,6 +25,7 @@ DOCUMENTS = frozenset({
     "README.md", "docs/BUILD_PLAN.md", "docs/TEST_PLAN.md", "docs/FAILOVER.md",
     "docs/HOST_TOOLS.md", "docs/QUICKSTART.md", "docs/REPO_LAYOUT.md",
     "docs/STATUS.md", "releases/RELEASE_NOTES-1.1.0-beta.md",
+    "docs/audit/M27G_IMPLEMENTATION_RECORD.md",
 })
 FACTORY = frozenset({
     "scripts/release_bundle.sh", "scripts/release_inputs.py",

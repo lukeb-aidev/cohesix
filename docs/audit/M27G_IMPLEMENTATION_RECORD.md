@@ -61,7 +61,7 @@ Inputs: Integrated source 7d395cf751db9c64fd49c44148a3502167bf985c; configs/impl
 Changes:
   - configs/implementation_surfaces.toml — select 1.1.0-beta and its current notes; retain linked, immutable 1.0.0-beta notes as historical documentation; include current adoption/journey guides, maintained CI workflow and CUDA/provider/use-case contracts in the exact release inventory.
   - releases/RELEASE_NOTES-1.1.0-beta.md — describe implemented Release A workflows and explicitly pending assembled qualification.
-  - scripts/release_publication.py — permit current 1.1.0-beta note updates while refusing edits to historical or future release notes.
+  - scripts/release_publication.py — permit current 1.1.0-beta notes and this qualification record to be finalized after testing while refusing edits to historical or future release notes and prior milestone records.
   - tests/test_release_bundle.py — verify reserved version selection, exact note inventory and publication refusal boundaries.
   - compiler outputs — regenerate inventory and dependent host/provider bindings from the changed source.
 Commands:
