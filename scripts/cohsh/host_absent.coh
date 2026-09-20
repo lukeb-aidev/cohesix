@@ -1,9 +1,11 @@
 # Author: Lukas Bower
 # Purpose: Confirm /host entries are available when ecosystem.host.enable is true.
+# Copyright 2026 Lukas Bower
 attach queen
 EXPECT OK
 ls /host
 EXPECT OK
 EXPECT SUBSTR path=/host
-EXPECT SUBSTR entries=5
+# The selected profiles expose tickets, snapshots, systemd, k8s, docker and nvidia.
+EXPECT SUBSTR entries=6
 quit

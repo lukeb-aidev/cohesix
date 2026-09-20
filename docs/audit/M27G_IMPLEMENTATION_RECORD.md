@@ -222,3 +222,31 @@ The six Python-profile tests, formatting, generated consistency and Test Plan
 metadata checks pass. Fresh staged evidence for the repaired source is required.
 The independent Pi Stage 02 attempt stopped at an absent local U-Boot build;
 that is a checkout dependency preparation failure, not Pi execution evidence.
+
+On `0aeff41b0`, common Stage 01 passed all 22 actions and both QEMU and Pi
+Stage 02 passed. The Pi Stage 03 matrix completed all 17 scripts: 16 passed,
+and `host_absent.coh` retained an obsolete five-entry expectation. The selected
+manifests enable `/host/snapshots`, documented in `HOST_SNAPSHOTS.md`, alongside
+`tickets` and the four existing provider directories. The live transcript
+independently shows all six names. Correct that exact fixture expectation;
+the focused physical rerun passed against the unchanged image. This is a
+27g / `m27g-assembled-journeys-and-recovery` test restoration, with no runtime,
+namespace, policy, tool, Python SDK or benchmark implementation change.
+The complete fresh staged campaign remains required for the repaired source.
+
+The first `0aeff41b0` QEMU Stage 03 attempt built both variants but its selected
+Homebrew emulator aborted in `hvf_arch_init_vcpu` before root-console readiness.
+The local invocation now explicitly selects the QEMU 10.1 build already
+documented in `TOOLCHAIN_MAC_ARM64.md`; its SHA-256 matches the documented
+`a0471828f464116c51c1d29ebae12a2a0fc713b4edec5c52e81bd5388040135a`,
+and strict code-signature verification passed. The original emulator failure
+remains retained; changing this host selector does not establish target success.
+
+Pi transport collectors also retain non-claiming first-connection raw samples.
+The final base boot completed all 1,024 requests without a retry or reconnect,
+but measured 531.441 requests/s and 5.157291 ms p95 during concurrent host
+compilation. Those values miss the unchanged 600 requests/s and 5 ms performance
+bounds and are not performance acceptance. Host scheduling interference remains
+an unproven explanation; fresh controlled performance and repeatability evidence
+is still required. Neither this observation nor a repaired fixture promotes the
+failed Stage 03 attempt or changes the completed burn-in verdict.
