@@ -1,0 +1,74 @@
+# Author: Lukas Bower
+# Purpose: Demonstrate bounded scheduling, lease-gated maintenance and export windows.
+# Copyright 2026 Lukas Bower
+# MUTATES node lifecycle and control state. Use an idle disposable ONLINE Queen
+# with zero Workers and leases. Do not run on a shared or busy hive.
+# Scheduling admission and control leases do not prove native GPU execution.
+
+attach queen
+EXPECT OK
+WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=ONLINE
+EXPECT OK
+cat /proc/lease/active
+EXPECT OK
+
+# Submit bounded scheduling intent and inspect the resulting queue observations.
+echo '{"id":"demo-110-schedule","role":"worker-gpu","priority":2,"ticks":3,"budget_ms":120}' > /queen/schedule/ctl
+EXPECT OK
+cat /proc/schedule/summary
+EXPECT OK
+cat /proc/schedule/queue
+EXPECT OK
+
+# This lease represents a demo resource; it allocates no physical GPU memory.
+echo '{"op":"grant","id":"demo-110-lease","subject":"queen","resource":"demo-resource","ttl_s":300,"priority":1}' > /queen/lease/ctl
+EXPECT OK
+WAIT 2000 TAIL /proc/lease/by-id/demo-110-lease SUBSTR id=demo-110-lease
+EXPECT OK
+cat /proc/lease/summary
+EXPECT OK
+
+# Cordon refuses new work; draining must preserve the outstanding lease.
+lifecycle cordon
+EXPECT OK
+WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=DRAINING
+EXPECT OK
+lifecycle drain
+EXPECT ERR
+# Assert the preserved state and lease; host and target error prose can differ.
+WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=DRAINING
+EXPECT OK
+WAIT 2000 TAIL /proc/lease/by-id/demo-110-lease SUBSTR id=demo-110-lease
+EXPECT OK
+
+# Release only this demo's lease, then finish maintenance and restore service.
+echo '{"op":"preempt","id":"demo-110-lease","reason":"demo-complete"}' > /queen/lease/ctl
+EXPECT OK
+cat /proc/lease/preemptions
+EXPECT OK
+lifecycle drain
+EXPECT OK
+WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=QUIESCED
+EXPECT OK
+lifecycle resume
+EXPECT OK
+WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=ONLINE
+EXPECT OK
+lifecycle quiesce
+EXPECT OK
+lifecycle resume
+EXPECT OK
+
+# Open and close a bounded export window; no adapter is trained or activated.
+echo '{"op":"open","id":"demo-110-export","ttl_s":60}' > /queen/export/ctl
+EXPECT OK
+echo '{"op":"close","id":"demo-110-export","reason":"demo-complete"}' > /queen/export/ctl
+EXPECT OK
+cat /proc/lifecycle/state
+EXPECT OK
+cat /proc/lease/active
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
+quit
+EXPECT OK

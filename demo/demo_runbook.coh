@@ -1,6 +1,57 @@
+# Author: Lukas Bower
+# Purpose: Inspect the Cohesix 1.1.0-beta Queen and its bounded operator surfaces.
+# Copyright 2026 Lukas Bower
+# Read-only overview. Run from the checkout root; see demo/README.md.
+# Successful reads prove visibility, not Worker readiness or native execution.
+
 attach queen
+EXPECT OK
+# Identify the target and its selected authority before reviewing a change.
+cat /proc/boot
+EXPECT OK
+cat /proc/authority
+EXPECT OK
 cat /proc/lifecycle/state
-echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue
-spawn heartbeat ticks=100
-telemetry push demo/telemetry/demo.txt --device device-1
+EXPECT OK
+cat /proc/root/reachable
+EXPECT OK
+cat /proc/root/cut_reason
+EXPECT OK
+
+# Inspect bounded scheduling, leases and overload indicators.
+cat /proc/schedule/summary
+EXPECT OK
+cat /proc/schedule/queue
+EXPECT OK
+cat /proc/lease/summary
+EXPECT OK
+cat /proc/lease/active
+EXPECT OK
+cat /proc/pressure/busy
+EXPECT OK
+cat /proc/pressure/quota
+EXPECT OK
+cat /proc/pressure/cut
+EXPECT OK
+cat /proc/pressure/policy
+EXPECT OK
+
+# Discover actual published Workers and host integrations; never assume an ID.
+ls /shard
+EXPECT OK
+ls /worker
+EXPECT OK
+ls /host
+EXPECT OK
+ls /gpu
+EXPECT OK
+ls /queen/telemetry
+EXPECT OK
+
+# Retained observations support later investigation, not a success claim.
+cat /proc/queen/dedupe
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
 quit
+EXPECT OK

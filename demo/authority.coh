@@ -1,0 +1,35 @@
+# Author: Lukas Bower
+# Purpose: Inspect 1.1.0-beta authority and demonstrate fail-closed input validation.
+# Copyright 2026 Lukas Bower
+# The sole write is deliberately malformed: it contains no Queen command.
+# Valid production requests need fresh authority; see demo/README.md.
+
+attach queen
+EXPECT OK
+cat /proc/authority
+EXPECT OK
+cat /proc/queen/dedupe
+EXPECT OK
+cat /policy/rules
+EXPECT OK
+ls /actions
+EXPECT OK
+cat /audit/decisions
+EXPECT OK
+
+# A schema name alone cannot authorize or execute an operation.
+echo '{"schema":"queen-intent/v1"}' > /queen/intents/ctl
+EXPECT ERR
+EXPECT SUBSTR invalid-authority-envelope
+
+# The WorkerBus selector is model-only, not an executable Worker.
+spawn worker-bus
+EXPECT ERR
+EXPECT SUBSTR model-only
+
+cat /proc/queen/dedupe
+EXPECT OK
+tail /audit/decisions 8
+EXPECT OK
+quit
+EXPECT OK

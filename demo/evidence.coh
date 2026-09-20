@@ -1,0 +1,35 @@
+# Author: Lukas Bower
+# Purpose: Inspect bounded audit and replay state without replaying or fabricating work.
+# Copyright 2026 Lukas Bower
+# Read-only. These snapshots supplement the host evidence verifier and trace capture.
+
+attach queen
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+cat /proc/authority
+EXPECT OK
+cat /proc/lifecycle/state
+EXPECT OK
+cat /proc/queen/dedupe
+EXPECT OK
+cat /audit/journal
+EXPECT OK
+cat /audit/decisions
+EXPECT OK
+cat /audit/export
+EXPECT OK
+cat /replay/status
+EXPECT OK
+cat /host/tickets/status.snapshot
+EXPECT OK
+cat /host/tickets/deadletter.snapshot
+EXPECT OK
+cat /proc/pressure/cut
+EXPECT OK
+cat /proc/pressure/policy
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
+quit
+EXPECT OK

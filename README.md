@@ -324,6 +324,7 @@ the selected resolved manifest.
 | --- | --- |
 | [Quickstart](docs/QUICKSTART.md) | Set up Mac/Linux host tools, boot QEMU or install the Pi 4 image, and connect directly or through the gateway |
 | [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | Complete one end-to-end live workflow |
+| [1.1.0 demos (source checkout)](https://github.com/lukeb-aidev/cohesix/tree/main/demo) | Run comprehensive Queen scripts, retained Worker intents, CUDA/LoRA host workflows and evidence demonstrations |
 | [Operator recipes](docs/OPERATOR_RECIPES.md) | Perform advanced evidence, mount, lifecycle, ticket, federation, and PEFT tasks |
 | [Failure modes](docs/FAILURE_MODES.md) | Diagnose and recover from observable failures |
 | [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | Build, flash, boot, and prove QEMU or Pi 4 behavior |
