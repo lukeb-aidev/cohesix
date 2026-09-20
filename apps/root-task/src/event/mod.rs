@@ -52195,7 +52195,10 @@ mod tests {
         )
         .expect("serial output must be utf8");
         assert!(first_turn.contains("Commands:"), "{first_turn}");
-        assert!(!first_turn.contains("Show this help"), "{first_turn}");
+        assert!(
+            !first_turn.contains("Show commands available on this console"),
+            "{first_turn}"
+        );
 
         pump.local_seat
             .as_mut()
@@ -52226,7 +52229,10 @@ mod tests {
                 break;
             }
         }
-        assert!(later_output.contains("Show this help"), "{later_output}");
+        assert!(
+            later_output.contains("Show commands available on this console"),
+            "{later_output}"
+        );
         assert_eq!(
             pump.physical_response_barrier,
             PhysicalResponseBarrier::Idle

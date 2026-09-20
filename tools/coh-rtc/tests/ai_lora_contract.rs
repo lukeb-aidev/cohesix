@@ -118,20 +118,28 @@ fn selected_profile_timer_is_exact_in_resolved_and_rust_outputs() {
     assert!(format!("{error:#}").contains("timer_clock_hz must be nonzero"));
 }
 
+// The current schema is specified by INTERFACES.md, independently of the compiler constant.
+fn manifest_with_legacy_schema(schema: &str) -> String {
+    let source =
+        fs::read_to_string(repo_path("configs/root_task.toml")).expect("read default manifest");
+    let mut manifest: toml::Value = toml::from_str(&source).expect("parse default manifest");
+    assert_eq!(manifest["root_task"]["schema"].as_str(), Some("1.27"));
+    manifest["root_task"]["schema"] = toml::Value::String(schema.to_owned());
+    toml::to_string(&manifest).expect("serialize legacy-schema input")
+}
+
 #[test]
 fn schema_1_10_is_rejected_after_operator_serial_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.10.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.10\"", 1);
+    let manifest = manifest_with_legacy_schema("1.10");
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy"));
     let error = compile(&options).expect_err("schema 1.10 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.10 (expected 1.23)"),
+        message.contains("unsupported root_task.schema 1.10 (expected 1.27)"),
         "unexpected rejection: {message}"
     );
 }
@@ -140,16 +148,14 @@ fn schema_1_10_is_rejected_after_operator_serial_contract_change() {
 fn schema_1_11_is_rejected_after_publication_ack_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.11.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.11\"", 1);
+    let manifest = manifest_with_legacy_schema("1.11");
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-ack"));
     let error = compile(&options).expect_err("schema 1.11 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.11 (expected 1.23)"),
+        message.contains("unsupported root_task.schema 1.11 (expected 1.27)"),
         "unexpected rejection: {message}"
     );
 }
@@ -158,16 +164,14 @@ fn schema_1_11_is_rejected_after_publication_ack_contract_change() {
 fn schema_1_12_is_rejected_after_send_batch_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.12.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.12\"", 1);
+    let manifest = manifest_with_legacy_schema("1.12");
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-batch"));
     let error = compile(&options).expect_err("schema 1.12 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.12 (expected 1.23)"),
+        message.contains("unsupported root_task.schema 1.12 (expected 1.27)"),
         "unexpected rejection: {message}"
     );
 }
@@ -176,16 +180,14 @@ fn schema_1_12_is_rejected_after_send_batch_contract_change() {
 fn schema_1_13_is_rejected_after_natural_postpone_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.13.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.13\"", 1);
+    let manifest = manifest_with_legacy_schema("1.13");
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-timeout"));
     let error = compile(&options).expect_err("schema 1.13 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.13 (expected 1.23)"),
+        message.contains("unsupported root_task.schema 1.13 (expected 1.27)"),
         "unexpected rejection: {message}"
     );
 }
@@ -194,16 +196,14 @@ fn schema_1_13_is_rejected_after_natural_postpone_contract_change() {
 fn schema_1_14_is_rejected_after_worker_execution_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.14.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.14\"", 1);
+    let manifest = manifest_with_legacy_schema("1.14");
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-worker"));
     let error = compile(&options).expect_err("schema 1.14 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.14 (expected 1.23)"),
+        message.contains("unsupported root_task.schema 1.14 (expected 1.27)"),
         "unexpected rejection: {message}"
     );
 }
@@ -212,29 +212,25 @@ fn schema_1_14_is_rejected_after_worker_execution_contract_change() {
 fn schema_1_16_is_rejected_before_bounded_passive_timeout_policy() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.16.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.16\"", 1);
+    let manifest = manifest_with_legacy_schema("1.16");
     fs::write(&manifest_path, manifest).expect("write prior-schema manifest");
     let options = options_for(manifest_path, &temp_dir.path().join("prior-timeout-policy"));
     let error = compile(&options).expect_err("schema 1.16 must be rejected");
-    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.16 (expected 1.23)"));
+    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.16 (expected 1.27)"));
 }
 
 #[test]
 fn schema_1_17_is_rejected_before_explicit_worker_bootstrap_policy() {
     let temp_dir = TempDir::new().expect("create tempdir");
     let manifest_path = temp_dir.path().join("schema-1.17.toml");
-    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
-        .expect("read default manifest")
-        .replacen("schema = \"1.22\"", "schema = \"1.17\"", 1);
+    let manifest = manifest_with_legacy_schema("1.17");
     fs::write(&manifest_path, manifest).expect("write prior-schema manifest");
     let options = options_for(
         manifest_path,
         &temp_dir.path().join("prior-bootstrap-policy"),
     );
     let error = compile(&options).expect_err("schema 1.17 must be rejected");
-    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.17 (expected 1.23)"));
+    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.17 (expected 1.27)"));
 }
 
 #[test]
@@ -262,7 +258,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
 
         let resolved: Value = serde_json::from_str(&resolved)
             .unwrap_or_else(|error| panic!("parse resolved manifest for {profile}: {error}"));
-        assert_eq!(resolved["root_task"]["schema"], "1.22", "{profile}");
+        assert_eq!(resolved["root_task"]["schema"], "1.27", "{profile}");
         assert_eq!(
             resolved["console_network_service"]["abi_version"], 6,
             "{profile}"

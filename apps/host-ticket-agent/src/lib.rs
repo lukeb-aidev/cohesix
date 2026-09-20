@@ -2571,7 +2571,7 @@ mod tests {
     }
 
     #[test]
-    fn process_once_compacts_federated_results_for_echo_limit() {
+    fn process_once_refuses_federated_results_that_cannot_retain_identity() {
         let temp = tempfile::TempDir::new().unwrap_or_else(|err| unreachable!("temp dir: {err}"));
         let cursor = temp.path().join("cursor.json");
         let manifest = HostTicketManifest {
@@ -2621,18 +2621,28 @@ mod tests {
             ..ExecutorConfig::default()
         };
 
-        let summary = process_tickets_once_with_executor(
+        let mut executions = 0;
+        let error = process_tickets_once_with_executor(
             &mut transport,
             &session,
             &manifest,
             &cursor,
             &config,
             unix_time_ms_now(),
-            |_transport, _session, _spec, _config| Ok("ok".to_owned()),
+            |_transport, _session, _spec, _config| {
+                executions += 1;
+                Ok("ok".to_owned())
+            },
         )
-        .unwrap_or_else(|err| unreachable!("process pass: {err}"));
+        .expect_err("identity fields must not be dropped to fit the legacy envelope");
 
-        assert_eq!(summary.succeeded, 1);
+        assert_eq!(
+            error.to_string(),
+            "ticket result line exceeds max_line_bytes 224"
+        );
+        assert_eq!(executions, 0);
+        assert!(transport.files[&manifest.status_path()].is_empty());
+        assert!(transport.files[&manifest.deadletter_path()].is_empty());
     }
 
     fn v2_manifest() -> HostTicketManifest {

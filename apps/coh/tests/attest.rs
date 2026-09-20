@@ -81,7 +81,12 @@ fn canonical_pack_verifies_a_signed_record_without_claiming_live_hardware() {
     std::fs::write(pack.join("attachments/attestation-record.json"), b"{}").unwrap();
     let corrupted = run();
     assert!(!corrupted.status.success());
-    assert!(String::from_utf8_lossy(&corrupted.stderr).contains("inconsistent-evidence"));
+    // Pack digest validation rejects changed bytes before attestation parsing.
+    assert!(corrupted.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&corrupted.stderr),
+        "Error: pack-file-digest-or-inventory\n"
+    );
 }
 
 #[test]

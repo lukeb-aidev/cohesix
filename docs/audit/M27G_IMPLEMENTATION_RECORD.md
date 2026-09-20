@@ -126,3 +126,50 @@ providers remain outside the selected scope. No historical release evidence,
 benchmark threshold, quota or runtime timeout changed. Compatibility review of
 the complete host-tool suite, Python SDK and benchmark scripts finds no affected
 runtime or interface surface from the two borrowed test inputs.
+
+The second common-stage attempt retained a workspace-test failure at an older
+attestation expectation. A complete diagnostic workspace pass then identified
+five affected test targets. Contract review found stale tests and one stale
+current build-script pin, with these repairs:
+
+- Sealed-pack inspection has verified content integrity since `3452248de`.
+  Attestation and attachment corruption must fail at that boundary. The positive
+  diff test now exports two separately sealed observations and independently
+  verifies that mutating the original sealed pack is rejected.
+- `INTERFACES.md` and every checked-in selected manifest require schema 1.27.
+  Legacy-schema tests now parse and modify the schema field explicitly, so an
+  obsolete replacement string cannot silently leave the current schema intact.
+  The expected retired-version errors and current-profile output remain exact.
+- The same `3452248de` restoration forbids dropping federation identity to fit
+  the legacy envelope. The agent test now requires its exact 224-byte refusal,
+  no native dispatch and no published status/dead-letter result. The existing
+  serializer test independently verifies retained identity in a sufficient bound.
+- Canonical console help now says “Show commands available on this console.”
+  The local-seat test retains its exact early-output refusal and later-output
+  requirement using that current line; scheduling behavior is unchanged.
+- `9bffe4c86` added the native SwarmUI source/asset hash to its build script.
+  Review confirms sorted source paths/bytes produce the fixed hexadecimal
+  `SWARMUI_SOURCE_SHA256`; the existing Tauri build remains its only build
+  delegate. Refresh only that current script pin to
+  `e0a9efd6ecb57cc364e3a6fcc89fb426b0af3d78de06df3129ae49104102fd19`
+  in the scanner and matching baseline metadata. The historical pin, all risk
+  counts/ceilings and historical replay obligations remain unchanged.
+
+These repairs change test inputs/assertions and current audit metadata only;
+all burned-in runtime implementations remain unchanged. The first and second
+staged failures and the complete diagnostic failure are preserved under
+`out/m27g-integration/post-burn-*`. Fresh complete staged evidence is still
+required after focused verification and the repaired-source checkpoint.
+
+Focused verification passed with unchanged assertion limits:
+`cargo test -p coh --test attest --test operator` (14 tests),
+`cargo test -p coh-rtc --test ai_lora_contract` (11),
+`cargo test -p host-ticket-agent --lib` (70),
+`cargo test -p root-task --lib` (317), and
+`cargo test -p rust-risk-audit` (28). Strict workspace Clippy, formatting,
+generated consistency, Test Plan metadata and
+`env -u CARGO_HOME scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml`
+also passed. The risk gate reports no count increase: 234 `expect`, 99 `panic`,
+823 `unsafe` and 38 `unwrap`, each at or below its unchanged baseline. These
+focused results permit a fresh common-stage attempt; they do not complete the
+staged Test Plan or replace required human review.

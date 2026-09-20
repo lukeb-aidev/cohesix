@@ -124,7 +124,7 @@ const BUILD_SCRIPT_CONTRACTS: [(&str, &str, &str); 4] = [
     ),
     (
         "apps/swarmui/build.rs",
-        "63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
+        "e0a9efd6ecb57cc364e3a6fcc89fb426b0af3d78de06df3129ae49104102fd19",
         "63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
     ),
     (

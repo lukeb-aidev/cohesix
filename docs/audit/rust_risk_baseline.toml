@@ -61,7 +61,7 @@ out_dir_generator_contracts = [
 build_script_contracts = [
   "apps/pi4-driver-runtime/build.rs:f424066cecefb6ec3c2a974f47bde52785451b77d48ab0dd31fefc46ac8afec9:aa98e6fd87c6a6a72ccc01ff5332d068dc42cb30e6d95c0147ed27d7180a7975",
   "apps/root-task/build.rs:8b70f0ab92bbc18c4e63b25aedabd6527ab448d056f1eacd7fded42125463b14:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/swarmui/build.rs:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
+  "apps/swarmui/build.rs:e0a9efd6ecb57cc364e3a6fcc89fb426b0af3d78de06df3129ae49104102fd19:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
   "crates/sel4-sys/build.rs:f4f8758ff681abf47e1f3498ee2d0318bf6ee86332befe5add7737cf1b279112:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
 ]
 build_script_input_contracts = [

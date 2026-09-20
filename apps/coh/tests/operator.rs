@@ -251,14 +251,33 @@ fn canonical_pack_inspect_diff_roundtrip_is_readonly() -> Result<()> {
     )?;
     let original = operator::inspect_pack(temp.path())?;
     assert!(original.violations.is_empty());
-    fs::write(temp.path().join("proc/root/reachable"), b"reachable=no\n")?;
-    let changed = operator::inspect_pack(temp.path())?;
+    let changed_pack = TempDir::new()?;
+    client.0.insert(
+        "/proc/root/reachable".to_owned(),
+        b"reachable=no\n".to_vec(),
+    );
+    coh::evidence::export_pack(
+        &mut client,
+        &coh::policy::CohPolicy::from_generated(),
+        &coh::evidence::build_local_bounds(),
+        &coh::evidence::EvidencePackSpec {
+            out_dir: changed_pack.path().to_owned(),
+            with_telemetry: false,
+        },
+        &mut CohAudit::new(),
+    )?;
+    let changed = operator::inspect_pack(changed_pack.path())?;
     let diff = operator::diff(&original, &changed)?;
     assert_eq!(
         serde_json::to_value(diff)?,
         json!([{"field":"/proc/root/reachable/@content","before":"reachable=yes\n","after":"reachable=no\n"}])
     );
     assert_eq!(original.source_class, "offline-pack");
+    fs::write(temp.path().join("proc/root/reachable"), b"reachable=no\n")?;
+    assert_eq!(
+        operator::inspect_pack(temp.path()).unwrap_err().to_string(),
+        "pack-file-digest-or-inventory"
+    );
     Ok(())
 }
 
@@ -348,8 +367,9 @@ fn bundle_attachments_bind_sanitized_bytes_and_reject_corruption() -> Result<()>
         operator::digest(&fs::read(temp.path().join("checksums.json"))?)
     );
     fs::write(temp.path().join("attachments/manifest.json"), b"{}")?;
-    assert!(operator::inspect_pack(temp.path())?
-        .violations
-        .contains(&"attachment-identity:attachments/manifest.json".to_owned()));
+    assert_eq!(
+        operator::inspect_pack(temp.path()).unwrap_err().to_string(),
+        "pack-file-digest-or-inventory"
+    );
     Ok(())
 }
