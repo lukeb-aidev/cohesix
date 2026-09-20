@@ -1019,47 +1019,46 @@ Use the sidecar to publish observations of the host on which it runs. It does
 not execute service restarts, container changes or Kubernetes mutations; those
 belong to host-ticket execution.
 
-| Provider selector | What to provision | Continuous `--watch` |
-| --- | --- | --- |
-| `systemd` | Accessible systemd state on that host | Yes |
-| `docker` | Access to the intended Docker runtime | Yes |
-| `k8s` | The intended cluster context and permissions | Yes |
-| `nvidia` | The supported NVIDIA telemetry stack | Yes |
-| `jetson` | Jetson-specific host telemetry | No; one-shot |
-| `net` | Host network observations | No; one-shot |
+Live publication uses compiler-enrolled sources and provider names. Both the
+canonical QEMU and Pi profiles enroll these sources:
 
-The selected target manifest must expose the matching host namespace/provider.
-Choose a provider explicitly rather than assuming all providers are available:
+| Source | Native provider selectors | Host prerequisites |
+| --- | --- | --- |
+| `linux-reference` | `systemd`, `docker`, `k8s`, `nvidia`, `jetson`, `network` | The selected native APIs, devices and credentials |
+| `mac-controller` | `launchd`, `network`, `endpoint-compliance` | Enrolled launchd services and process helper; network helper; fixed read-only compliance queries |
+
+`network` is the native selector. `/host/net` belongs to the legacy fixture
+namespace and does not provide live network observations. Endpoint compliance
+uses the generated provider id `endpoint_compliance` in snapshot paths.
+
+Create a private publisher state directory once, retaining its durable cursor:
 
 ```bash
-"$COH_BIN/host-sidecar-bridge" --rest-url "$COH_REST_URL" --provider net
+mkdir -m 700 out/operator/mac-publisher
+"$COH_BIN/host-sidecar-bridge" --rest-url "$COH_REST_URL" \
+  --source-id mac-controller --state-dir out/operator/mac-publisher \
+  --provider network --provider endpoint-compliance --watch
 ```
 
-Inspect its projection with `cohsh`:
+Read current native data with `cohsh`, including its receiver freshness status:
 
 ```text
-ls /host
-ls /host/net
+cat /host/snapshots/network/mac-controller/snapshot
+cat /host/snapshots/network/mac-controller/status
 ```
 
-For an already working scheduled provider:
+Omitting `--provider` selects every provider enrolled for that source. Repeat it
+to select a subset; unknown or duplicate providers fail. `--watch` schedules all
+selected native providers. The generated telemetry policy sets the intervals
+for systemd, Docker, Kubernetes and NVIDIA; other providers use one second.
+`--policy FILE` selects polling policy, and `--mount PATH` must match the compiled
+namespace. One publisher owns each source/epoch state directory.
 
-```bash
-"$COH_BIN/host-sidecar-bridge" --rest-url "$COH_REST_URL" \
-  --provider docker --watch
-```
-
-Repeat `--provider` to select several. `--policy FILE` selects polling policy;
-`--mount PATH` changes the host namespace mount and must match the target.
-`net` and `jetson` are not scheduled in watch mode; selecting only those with
-`--watch` fails rather than providing continuous updates.
-
-The bridge needs write credentials for its selected publication paths. Provider
-failures may be represented as bounded unknown/error observations; a successful
-publication is not proof that the provider itself is healthy. In direct mode,
-pass the TCP endpoint and `--auth-token` explicitly; do not assume this CLI
-reads the same console-token aliases as `cohsh`. A direct watcher occupies the
-only console until it exits.
+The bridge needs delegated write authority for its selected snapshot control
+paths. Missing helpers, service enrollment, devices or credentials produce typed
+unavailability and withdraw old healthy observations. A successful publication
+is not execution proof. Use the shared gateway while other tools are connected;
+a direct TCP publisher occupies the sole console session.
 
 #### Native provider discovery
 
@@ -1651,7 +1650,7 @@ changing several settings at once. More detailed routing is in
 | `ELIMIT`, quota or bounded backpressure | Payload size, queued work, ticket operations/bytes and shared session usage | Respect the typed limit; pause producers and investigate before changing budgets. |
 | Timeout after a mutation | Whether the target/agent retained the original identity and result | Treat delivery as unconfirmed; inspect audit/status before any retry. |
 | GPU visible locally, absent on Queen | Whether a real publish ran, its credentials and target `/gpu` feature | Publish from the actual GPU host and inspect `/gpu/bridge/status`. |
-| Sidecar exits or reports unknown provider | Explicit provider selection, host access, manifest and watch support | Test one supported provider; `net`/`jetson` are one-shot. |
+| Sidecar exits or reports unknown provider | Source enrollment, explicit provider selection, host dependencies and durable state directory | Test one enrolled provider; use `network`, and inspect typed native unavailability before publishing. |
 | Agent exits zero without execution | `tickets disabled`, pending queue, matching manifest and cursor | Check each ticket's status/dead letter; do not delete durable state. |
 | PEFT command fails after changing the registry | Local pointer state versus target publication | Reconcile and publish the existing state; do not blindly activate/rollback again. |
 | CAS preflight passes but upload gets `buffer-full` | Independent target store occupancy | Preserve the partial outcome and use the documented update lifecycle. |

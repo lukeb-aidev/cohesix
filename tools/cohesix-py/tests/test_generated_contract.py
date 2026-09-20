@@ -85,7 +85,7 @@ def test_qemu_and_pi_contracts_are_independent_exact_targets() -> None:
     assert _payload(QEMU_CONTRACT)["receipts"]["peft_actions"] == [
         "peft.export", "peft.import", "peft.activate", "peft.rollback", "peft.release"]
     assert _payload(PI4_CONTRACT)["receipts"]["peft_actions"] == [
-        "peft.export", "peft.import", "peft.activate", "peft.rollback"]
+        "peft.export", "peft.import", "peft.activate", "peft.rollback", "peft.release"]
 
 
 def test_mapping_is_validation_input_not_target_identity() -> None:

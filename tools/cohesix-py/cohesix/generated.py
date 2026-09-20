@@ -8,11 +8,11 @@ DEFAULTS = {
     "authority": {"production": False, "delegated_rest": True, "identity_class": "gateway_enforced", "strict_queen_intents": True, "legacy_queen_ctl": True, "writer_epoch": 1, "writer_epoch_required": False, "queen_intent_schema": "queen-intent/v1", "queen_intent_path": "/queen/intents/ctl", "queen_dedupe_path": "/proc/queen/dedupe", "queen_intent_max_bytes": 2048},
     "host_snapshots": {"enable": True, "max_bytes": 8192, "max_entries": 64, "max_value_bytes": 1024, "max_ttl_ms": 30000, "publishers": [
         {"source_id": "linux-reference", "providers": ["systemd", "docker", "k8s", "nvidia", "jetson", "network"]},
-        {"source_id": "mac-controller", "providers": ["launchd", "network"]},
+        {"source_id": "mac-controller", "providers": ["launchd", "network", "endpoint_compliance"]},
     ]},
     "contract_kind": "target-neutral-fallback",
     "manifest_sha256": None,
-    "generation_source_sha256": "34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9",
+    "generation_source_sha256": "ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f",
     "execution_proof": "none",
     "diagnostic_artifacts": {"max_bytes": 1048576, "max_files": 682, "trace_max_duration_ms": 60000},
     "secure9p": {"msize": 8192, "walk_depth": 8},

@@ -63,7 +63,7 @@ Registration declares bounded requirements and preserves each integration id. It
 | `mig` | `gpu-host-provider` | `not_implemented` |  |
 | `modbus` | `sidecar-provider` | `candidate` | `modbus.control`, `modbus.read` |
 | `model_registry` | `peft-host-provider` | `not_implemented` | `model_registry.discover` |
-| `network` | `sidecar-provider` | `not_implemented` | `network.discover` |
+| `network` | `sidecar-provider` | `candidate` | `network.discover` |
 | `nvidia` | `gpu-host-provider` | `not_implemented` | `nvidia.discover` |
 | `nvml` | `gpu-host-provider` | `not_implemented` | `nvml.discover` |
 | `otel` | `prometheus-otel-export` | `not_implemented` |  |

@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "da980065dadf2847bc7444564116a9ce0ff8c6bd470aeb79ae140d4ef20276a3";
+    "42dbf8afd034adb162d8f2d0778283a589069c303adae63b0f1b2d8dc8653870";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9627,7 +9627,7 @@ pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Nvidia,
 ];
 
-pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 21] = [
+pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 26] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
@@ -9649,6 +9649,11 @@ pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 21] = [
     HostTicketAction::K8sCordon,
     HostTicketAction::K8sDrain,
     HostTicketAction::K8sLeaseSync,
+    HostTicketAction::LaunchdStart,
+    HostTicketAction::LaunchdStop,
+    HostTicketAction::LaunchdRestart,
+    HostTicketAction::LaunchdStatusCheck,
+    HostTicketAction::EndpointComplianceObserve,
 ];
 
 pub const HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "host-ticket/v2"];
@@ -9719,7 +9724,7 @@ pub const HOST_SNAPSHOT_PUBLISHERS: [HostSnapshotPublisher; 2] = [
     },
     HostSnapshotPublisher {
         source_id: "mac-controller",
-        providers: &["launchd", "network"],
+        providers: &["launchd", "network", "endpoint_compliance"],
     },
 ];
 
@@ -9826,7 +9831,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "manifest.schema=1.27",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=9231607e25b17791b8c097b25c8c084344c4b4b18b96b41b1733fe43c57b3993",
+    "manifest.sha256=980a5381a5999472bbccc13ff1e4bf8049424c2fdfd2aee3835950c72d9f98a7",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9878,7 +9883,7 @@ pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "attestation.mode=measurement_only",
     "attestation.signed_evidence=unavailable",
     "attestation.ticket_keys=development_static",
-    "measurement.bound_manifest_sha256=9231607e25b17791b8c097b25c8c084344c4b4b18b96b41b1733fe43c57b3993",
+    "measurement.bound_manifest_sha256=980a5381a5999472bbccc13ff1e4bf8049424c2fdfd2aee3835950c72d9f98a7",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

@@ -1604,7 +1604,7 @@ providers = ["systemd", "docker", "k8s", "nvidia", "jetson", "network"]
 
 [[ecosystem.host.snapshots.publishers]]
 source_id = "mac-controller"
-providers = ["launchd", "network"]
+providers = ["launchd", "network", "endpoint_compliance"]
 
 [ecosystem.host.tickets]
 enable = true
@@ -1635,6 +1635,11 @@ action_allowlist = [
   "k8s.cordon",
   "k8s.drain",
   "k8s.lease.sync",
+  "launchd.start",
+  "launchd.stop",
+  "launchd.restart",
+  "launchd.status-check",
+  "endpoint_compliance.observe",
 ]
 receipt_action_allowlist = [
   "gpu.lease.grant",

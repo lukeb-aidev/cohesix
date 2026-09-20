@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "82b0bd90b9b7db8b2cc875b190bb710d4e69dd78d72502ac573b076549c270e2";
+    "467550981b723f2f2b42b385c63b2b947ad27356512f359694133a57a9f6adbf";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9358,7 +9358,7 @@ pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Nvidia,
 ];
 
-pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 21] = [
+pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 26] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
@@ -9380,6 +9380,11 @@ pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 21] = [
     HostTicketAction::K8sCordon,
     HostTicketAction::K8sDrain,
     HostTicketAction::K8sLeaseSync,
+    HostTicketAction::LaunchdStart,
+    HostTicketAction::LaunchdStop,
+    HostTicketAction::LaunchdRestart,
+    HostTicketAction::LaunchdStatusCheck,
+    HostTicketAction::EndpointComplianceObserve,
 ];
 
 pub const HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "host-ticket/v2"];
@@ -9450,7 +9455,7 @@ pub const HOST_SNAPSHOT_PUBLISHERS: [HostSnapshotPublisher; 2] = [
     },
     HostSnapshotPublisher {
         source_id: "mac-controller",
-        providers: &["launchd", "network"],
+        providers: &["launchd", "network", "endpoint_compliance"],
     },
 ];
 
@@ -9557,7 +9562,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 52] = [
     "manifest.schema=1.27",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9",
+    "manifest.sha256=ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

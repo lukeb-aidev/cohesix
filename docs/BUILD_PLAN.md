@@ -12248,6 +12248,22 @@ Before the complete staged Test Plan, execute the two-hour Pi 4/Mac/Linux
 AArch64 NVIDIA operator burn-in below. Target-entry checks and focused defect
 checks may precede it; the full release test plan follows successful burn-in.
 
+The selected defaults enable the existing host-provider paths consistently on
+QEMU and Pi: Mac launchd actions remain bound to compiler-enrolled services,
+native network discovery uses its measured host helper, and read-only endpoint
+compliance is enrolled and published by default. M27g owns this assembled
+configuration and provisioning correction; it does not implement deferred 28a
+providers or claim their broader qualification. Retain existing admission,
+credential, exact native target and Worker-receipt boundaries.
+
+Compatibility review for these defaults covers coh/coh-status, cohsh,
+Hive Gateway, SwarmUI, host-ticket-agent, host-sidecar-bridge, gpu-bridge-host,
+cas-tool, sidecar-bus, the Python SDK and benchmark scripts. Regenerate their
+manifest/provider projections and rebuild the selected host packages. Existing
+CLI grammar, wire formats, GPU/PEFT receipt matrix, resource quotas and benchmark
+thresholds remain applicable; Mac service actions use the existing version-1
+host-ticket contract and do not acquire Worker receipt authority.
+
 Integrated cases cover interrupted execution, runner failure/lost ACK, stale or
 revoked authority, relevant resource refusal, changed inputs/cache invalidation,
 candidate regression, stale/incomparable/insufficient evaluation, failed canary,
@@ -12292,6 +12308,7 @@ Goal: Complete 120 minutes of useful operator work with the current Queen on Pi 
 Inputs: Exact current Pi image and boot identity, matching installed host packages and generated contracts, cohesix-release-burn-in and cohesix-pi4-wifi-hardware-loop skills, OPERATOR_WALKTHROUGH, OPERATOR_RECIPES, PRIVATE_LORA_RELEASE and TEST_PLAN.
 Changes:
   - run record and coverage matrix — freeze artifact/runtime/trust identities, sustainable workload, job counts, budgets, ownership and expected effects before timing begins.
+  - canonical host defaults and provisioning — keep QEMU/Pi host selections aligned, enable existing Mac service actions and read-only compliance, provision native helpers and exact owned services, and preserve typed unavailability for missing dependencies.
   - assembled workflows — exercise 27b-f CUDA and LoRA import/training, installed CLI/Python/CI and native SwarmUI alongside supported 1.0.0 operator, FUSE, host-provider, lifecycle and evidence workflows on both hosts.
   - recovery and defect closure — retain failures, reconcile ambiguous effects without duplicate work, repair their owning contracts and validate fresh artifacts before resuming.
 Commands: Execute the skills' physical-entry and operator-workflow procedures; retain exact per-host commands and protected credential references in out/burn-in/<run-id>; after successful burn-in, execute the complete applicable qemu/pi4 staged Test Plan and registered release lanes in fresh state directories.

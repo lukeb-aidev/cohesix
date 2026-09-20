@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 pub const MANIFEST_SHA256: &str =
-    "34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9";
+    "ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f";
 pub const SECURE9P_MSIZE: u32 = 8192;
 pub const SECURE9P_WALK_DEPTH: u8 = 8;
 pub const SWARMUI_TICKET_SCOPE: &str = "per-ticket";

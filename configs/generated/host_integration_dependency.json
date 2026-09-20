@@ -5,8 +5,8 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "8580bb0a03bab202f4cbaae54b052747a7c1f5dd655df2553e226f0c1cf62d6b",
-    "resolved_manifest_sha256": "34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9",
+    "source_sha256": "3793dfb71b23c9c9536b2510743ec5659be9e026c10417520211adec42820e9b",
+    "resolved_manifest_sha256": "ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f",
     "implementation_surface_inventory_sha256": "711cb66de827a7a6a21a06a4b247acd3c79fa2eb9f6eeb07a10f5a8fae738992"
   },
   "host_profiles": [
@@ -6800,7 +6800,7 @@
         "owner": "host-sidecar-bridge",
         "owning_task": "m28a-native-provider-discovery-and-actions",
         "required_for_release_a": true,
-        "availability": "not_implemented",
+        "availability": "candidate",
         "actions": [
           {
             "id": "network.discover",
@@ -6862,43 +6862,43 @@
                 "id": "discover",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "Native source identifies the exact object and observation expiry.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               },
               {
                 "id": "preflight",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "Validate ticket, subject, profile, target, bounds, approval and current writer epoch before dispatch.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               },
               {
                 "id": "execute",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "The admitted provider owns one bounded operation; dispatch alone is non-terminal.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               },
               {
                 "id": "observe",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "Read native object identity, invocation or generation, event cursor and terminal state.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               },
               {
                 "id": "verify",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "Bind observed postcondition and immutable output hashes to the admitted action and exact native identity.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               },
               {
                 "id": "compensate",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "Require a separately admitted exact compensation target; irreversible or ambiguous state is unavailable.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               },
               {
                 "id": "export_evidence",
                 "owner": "host-sidecar-bridge",
                 "postcondition": "Export bounded source references with correlation and explicit missing evidence; labels never grant authority.",
-                "unavailable": "not_implemented"
+                "unavailable": "not_enabled"
               }
             ]
           }
@@ -8786,6 +8786,14 @@
       ],
       "profile": "jetson-orin-nano-jp7"
     },
+    "macos_targets": [
+      {
+        "id": "local-endpoint-compliance",
+        "operation": {
+          "action": "endpoint_compliance.observe"
+        }
+      }
+    ],
     "deployment_profiles": [
       {
         "schema": "cohesix-host-package-profile/v1",

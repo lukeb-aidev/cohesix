@@ -1375,6 +1375,12 @@ expected_error = "wrong target"
 [providers]
 schema = "cohesix-provider-contract/v1"
 
+# Read-only host security observations require no service, path or credential enrollment.
+[[providers.macos_targets]]
+id = "local-endpoint-compliance"
+[providers.macos_targets.operation]
+action = "endpoint_compliance.observe"
+
 # Deployment enrollment replaces these disabled exact policies in compiler IR.
 # Public JWKS bytes are pinned by SHA-256; no remote discovery or token URLs.
 [[providers.identity_mappings]]
@@ -2312,7 +2318,7 @@ integration_id = "sidecar-provider"
 owner = "host-sidecar-bridge"
 owning_task = "m28a-native-provider-discovery-and-actions"
 required_for_release_a = true
-availability = "not_implemented"
+availability = "candidate"
 # Action requirements remain unavailable until their implementation and evidence exist.
 
 [[providers.families.actions]]
@@ -2347,13 +2353,13 @@ redaction = ["credentials", "raw_ticket", "private_key", "payload"]
 native_identity_fields = ["source_id", "native_id", "generation", "observation_unix_ms", "expires_unix_ms"]
 correlation_fields = ["ticket_id", "subject_id", "action_id", "idempotency_key", "writer_epoch", "evidence_id"]
 lifecycle = [
-  { id = "discover", owner = "host-sidecar-bridge", postcondition = "Native source identifies the exact object and observation expiry.", unavailable = "not_implemented" },
-  { id = "preflight", owner = "host-sidecar-bridge", postcondition = "Validate ticket, subject, profile, target, bounds, approval and current writer epoch before dispatch.", unavailable = "not_implemented" },
-  { id = "execute", owner = "host-sidecar-bridge", postcondition = "The admitted provider owns one bounded operation; dispatch alone is non-terminal.", unavailable = "not_implemented" },
-  { id = "observe", owner = "host-sidecar-bridge", postcondition = "Read native object identity, invocation or generation, event cursor and terminal state.", unavailable = "not_implemented" },
-  { id = "verify", owner = "host-sidecar-bridge", postcondition = "Bind observed postcondition and immutable output hashes to the admitted action and exact native identity.", unavailable = "not_implemented" },
-  { id = "compensate", owner = "host-sidecar-bridge", postcondition = "Require a separately admitted exact compensation target; irreversible or ambiguous state is unavailable.", unavailable = "not_implemented" },
-  { id = "export_evidence", owner = "host-sidecar-bridge", postcondition = "Export bounded source references with correlation and explicit missing evidence; labels never grant authority.", unavailable = "not_implemented" },
+  { id = "discover", owner = "host-sidecar-bridge", postcondition = "Native source identifies the exact object and observation expiry.", unavailable = "not_enabled" },
+  { id = "preflight", owner = "host-sidecar-bridge", postcondition = "Validate ticket, subject, profile, target, bounds, approval and current writer epoch before dispatch.", unavailable = "not_enabled" },
+  { id = "execute", owner = "host-sidecar-bridge", postcondition = "The admitted provider owns one bounded operation; dispatch alone is non-terminal.", unavailable = "not_enabled" },
+  { id = "observe", owner = "host-sidecar-bridge", postcondition = "Read native object identity, invocation or generation, event cursor and terminal state.", unavailable = "not_enabled" },
+  { id = "verify", owner = "host-sidecar-bridge", postcondition = "Bind observed postcondition and immutable output hashes to the admitted action and exact native identity.", unavailable = "not_enabled" },
+  { id = "compensate", owner = "host-sidecar-bridge", postcondition = "Require a separately admitted exact compensation target; irreversible or ambiguous state is unavailable.", unavailable = "not_enabled" },
+  { id = "export_evidence", owner = "host-sidecar-bridge", postcondition = "Export bounded source references with correlation and explicit missing evidence; labels never grant authority.", unavailable = "not_enabled" },
 ]
 
 [[providers.families]]

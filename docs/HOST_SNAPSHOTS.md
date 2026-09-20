@@ -14,7 +14,11 @@ entry count, value bytes, TTL and explicit publisher/source pairs. A maximum of
 eight sources and sixteen provider/source pairs is allowed. Each selected
 provider must exist in the compiler-owned provider registry. The default
 configuration enrolls `linux-reference` for systemd, Docker, Kubernetes, NVIDIA,
-Jetson and network observations, and `mac-controller` for launchd and network.
+Jetson and network observations, and `mac-controller` for launchd, network and
+endpoint-compliance observations. QEMU and Pi use the same host enrollment.
+The read-only `local-endpoint-compliance` target is selected by default;
+launchd still requires exact deployment-owned service identities, and macOS
+network discovery requires the native helper described below.
 The canonical provider id is `network`; the older `/host/net` fixture namespace
 is not an alias for this interface. Source ids may be customized only through
 compiler input. Distinct hosts publishing network state have distinct paths.
@@ -129,9 +133,11 @@ column arrays with their exact column names in `fields/interfaces` and
 `fields/addresses`. Every selected row is retained; `null` denotes a field the
 native API did not expose. This representation avoids repeating long counter
 names without dropping interfaces or counters. Native Darwin counters remain
-32-bit wrapping snapshots. launchd observations require an explicit JSON array
-of system service labels in `COHESIX_LAUNCHD_LABELS`; only selected public state
-fields leave `launchctl print`, and environment values are never published.
+32-bit wrapping snapshots. launchd observations require the compiler-selected
+`providers.launchd_targets` map and measured native process helper described in
+[macOS providers](MACOS_PROVIDERS.md). Environment label lists do not enroll
+services. Only selected public state fields leave `launchctl print`, and
+environment values are never published.
 Unsupported or unenrolled combinations remain typed unavailable.
 
 Python's `SnapshotReader(backend, resolved_manifest)` requires an independently

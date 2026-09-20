@@ -6,6 +6,7 @@
 use coh_rtc::codegen::{cohesix_py, hash_bytes};
 use coh_rtc::ir::HostTicketAction;
 use serde_json::Value;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
@@ -186,4 +187,70 @@ fn host_ticket_v2_schema_and_receipt_matrices_are_exact() {
     assert!(error
         .to_string()
         .contains("the existing GPU/PEFT actions and the complete selected workload action set"));
+}
+
+#[test]
+fn canonical_targets_share_enrolled_macos_defaults_without_worker_receipts() {
+    for name in ["root_task.toml", "root_task_pi4_uboot_aarch64.toml"] {
+        let manifest = coh_rtc::ir::load_manifest(&repo_root().join("configs").join(name))
+            .expect("load canonical target manifest");
+        let host = serde_json::to_value(&manifest.ecosystem.host).expect("serialize host contract");
+        let sources = host["snapshots"]["publishers"]
+            .as_array()
+            .expect("publisher array");
+        let mac = sources
+            .iter()
+            .find(|source| source["source_id"] == "mac-controller")
+            .expect("default Mac source");
+        assert_eq!(
+            mac["providers"],
+            serde_json::json!(["launchd", "network", "endpoint_compliance"])
+        );
+        for action in [
+            "launchd.start",
+            "launchd.stop",
+            "launchd.restart",
+            "launchd.status-check",
+            "endpoint_compliance.observe",
+        ] {
+            assert!(
+                host["tickets"]["action_allowlist"]
+                    .as_array()
+                    .expect("action array")
+                    .iter()
+                    .any(|selected| selected == action),
+                "missing {action} in {name}"
+            );
+            assert!(
+                !host["tickets"]["receipt_action_allowlist"]
+                    .as_array()
+                    .expect("receipt array")
+                    .iter()
+                    .any(|selected| selected == action),
+                "unsupported Worker receipt for {action}"
+            );
+        }
+    }
+    let source = fs::read_to_string(repo_root().join("configs/host_integration_acceptance.toml"))
+        .expect("read provider source");
+    let registry: toml::Value = toml::from_str(&source).expect("parse provider source");
+    assert_eq!(
+        registry["providers"]["macos_targets"]
+            .as_array()
+            .expect("macOS targets")
+            .len(),
+        1
+    );
+    assert_eq!(
+        registry["providers"]["macos_targets"][0]["id"].as_str(),
+        Some("local-endpoint-compliance")
+    );
+    assert_eq!(
+        registry["providers"]["macos_targets"][0]["operation"]["action"].as_str(),
+        Some("endpoint_compliance.observe")
+    );
+    assert!(
+        registry["providers"].get("launchd_targets").is_none(),
+        "services require exact deployment enrollment"
+    );
 }

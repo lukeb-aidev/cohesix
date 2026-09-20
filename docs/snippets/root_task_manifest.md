@@ -235,7 +235,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`
+- `manifest.sha256`: `ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -262,12 +262,12 @@
 - `ecosystem.host.providers`: `systemd`, `k8s`, `docker`, `nvidia`
 - `ecosystem.host.snapshots`: enable=`true`, max_bytes=`8192`, max_entries=`64`, max_value_bytes=`1024`, max_ttl_ms=`30000`; paths `/host/snapshots/<provider>/<source>/{ctl,status,snapshot}`.
 - Host snapshot publisher `linux-reference`: systemd, docker, k8s, nvidia, jetson, network.
-- Host snapshot publisher `mac-controller`: launchd, network.
+- Host snapshot publisher `mac-controller`: launchd, network, endpoint_compliance.
 - `ecosystem.host.tickets.enable`: `true`
 - `ecosystem.host.tickets.request_schema`: `host-ticket/v1`
 - `ecosystem.host.tickets.result_schema`: `host-ticket-result/v1`
 - `ecosystem.host.tickets.max_line_bytes`: `2048`
-- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `gpu.workload.submit`, `gpu.workload.cancel`, `gpu.workload.observe`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `peft.release`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
+- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `gpu.workload.submit`, `gpu.workload.cancel`, `gpu.workload.observe`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `peft.release`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`, `launchd.start`, `launchd.stop`, `launchd.restart`, `launchd.status-check`, `endpoint_compliance.observe`
 - `ecosystem.host.tickets.lifecycle`: `queued`, `claimed`, `running`, `succeeded`, `failed`, `expired`
 - `ecosystem.host.federation.enable`: `true`
 - `ecosystem.host.federation.local_hive`: `hive-a`
@@ -297,4 +297,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`)._
+_Generated from `configs/root_task.toml` (sha256: `ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f`)._

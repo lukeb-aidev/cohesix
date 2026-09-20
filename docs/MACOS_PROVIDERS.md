@@ -14,7 +14,9 @@ local NVML or creates a local Apple GPU executor.
 
 Manifest schema 1.25 adds `launchd.start`, `launchd.stop`, `launchd.restart` and
 `launchd.status-check` to the selectable host-ticket action vocabulary. The
-selected root manifest must explicitly allow an action. Configure each native
+selected root manifest must explicitly allow an action. The canonical QEMU and
+Pi manifests allow all four lifecycle actions; execution and discovery still
+require an exact enrolled service. Configure each native
 service in the host integration source, then regenerate all artifacts:
 
 ```toml
@@ -86,7 +88,11 @@ release packaging and use-case qualification. `--provider launchd` without
 Schema 1.26 adds optional `providers.macos_targets` entries. Each entry has a
 unique `id` and an `operation` table with one exact `action`. Tickets select
 only `args: {"target_id": "<compiled id>"}` and the same version-1 target id.
-An empty map is `not_enabled`; the default action allowlist is not widened.
+The default map selects only `local-endpoint-compliance`, with the read-only
+`endpoint_compliance.observe` action enabled in both canonical target manifests.
+It observes the local publishing/executing Mac. An empty map is `not_enabled`;
+Xcode, signing, notarization and upload require explicit deployment enrollment
+and action selection.
 
 `mac_release.build`, `.test` and `.archive` pin a source root/tree digest,
 relative `.xcodeproj` and scheme. The adapter verifies and copies the source
