@@ -250,3 +250,10 @@ bounds and are not performance acceptance. Host scheduling interference remains
 an unproven explanation; fresh controlled performance and repeatability evidence
 is still required. Neither this observation nor a repaired fixture promotes the
 failed Stage 03 attempt or changes the completed burn-in verdict.
+
+The first common-stage attempt after that fixture repair (`744b0a097`, including
+the owner's README reordering) caught its companion token-stream catalog pin.
+Refresh only `host_absent.coh`'s exact pin for the reviewed `entries=6` assertion;
+all other script hashes and the grammar feature inventory remain unchanged.
+The original failed attempt remains retained. This completes the fixture's
+same-change consistency work and does not alter executable product logic.

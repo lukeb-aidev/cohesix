@@ -293,7 +293,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "converge_worker.coh:a9f4037ae0a62bdf72fde0e809703a960f60e91e1bdc4e05c09b6ccb0444dd2a"
             .to_owned(),
-        "host_absent.coh:f86f0aee6f7199034b7414d55788edbe2900ac8754f68296edf975816a7919df"
+        "host_absent.coh:a3bec571415b309898a6219c553c90f1360523b72e9d46a6ce79a13d5a73a661"
             .to_owned(),
         "host_sidecar_mock.coh:9532e7596d512c9089359e569090316ebf54a03c5cb0b35ab26dd5b22acbf3cb"
             .to_owned(),
