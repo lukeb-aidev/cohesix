@@ -4,10 +4,14 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # M27g implementation and qualification record
 
-Milestone 27g remains In Progress. The required successful physical two-hour
-burn-in and subsequent complete staged Test Plan have not been established.
-Historical component acceptance and earlier failed attempts retain their original
-verdicts. The final release decision requires the named evidence and human review.
+Milestone 27g remains In Progress. The physical operator burn-in completed
+7,200.005 measured seconds in repaired segments on source `45408f51a`, with
+24 scheduled CUDA jobs, four scheduled LoRA workflows and native Mac/Jetson
+coverage supplements. Its operational verdict is PASS; it does not establish
+assembled release acceptance. The full post-burn staged Test Plan is now in
+progress. Historical acceptance and all failed attempts retain their original
+verdicts. The final release decision still requires exact current artifacts,
+all assigned gates and human review.
 
 ## Native CUDA refusal restoration
 
@@ -86,3 +90,39 @@ and qualification contract checks (28 tests), generated consistency and Test
 Plan metadata checks. The original missing-adoption-document failure remains
 retained in the local qualification logs. No staged target test or production
 release acceptance is implied by these focused checks.
+
+## Post-burn qualification entry
+
+```text
+Title/ID: m27g-post-burn-host-qualification
+Milestone: 27g / m27g-assembled-journeys-and-recovery
+Goal: Run the complete staged Test Plan after the successful operational burn-in and repair its first failed contract.
+Inputs: Checkpoint 9837b9400; out/burn-in/m27g-run-02/retained-final-03/index.json; Rust 1.97.1; fresh post-burn Stage 01 attempt.
+Changes:
+  - crates/cohesix-authority/src/{mac_release,macos}.rs — borrow single-element test inputs instead of cloning them; preserve every assertion and all runtime code.
+Commands:
+  - TP_HOST_JOBS=4 TP_UI_WORKERS=2 TP_PYTHON_BIN=/opt/homebrew/bin/python3 scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27g-post-burn-9837-qemu-01 --stage 1
+  - CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings
+  - CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo test -p cohesix-authority --features std --lib
+Checks: Preserve the original Stage 01 lint failure; strict lint and the existing authority contract tests must pass before a fresh source-bound staged attempt. This test-only repair changes no burned-in product behavior and does not require another two-hour session.
+Deliverables: Retained failure/repair command logs, fresh complete staged evidence and subsequent release qualification; milestone closure remains pending.
+```
+
+The operational closure is scoped to the frozen Pi manifest
+`e38454f6667d923fc6e3368ca2b9d44aba7ec5407fd9695e4aa526aec035dcaf`
+and unchanged installed packages. Two minor timed harness incidents retain their
+failed records and excluded repair intervals. Later native LoRA admission,
+recovery and replay write refusal passed on both hosts; the delayed Jetson UI
+observation was reconciled against the same signed nine-record graph and
+confirmed Worker receipt without resubmission. Native shutdown logs report no
+busy host operation. The exact supplemental Worker retired; Pi closure is
+QUIESCED with zero active leases, and owned serving/gateway/tunnel processes
+stopped. User-owned timestamped captures remain untouched.
+
+The current integrated release inventory has a different generated graph and
+requires its own assembled artifact qualification. Empty sidecar-bus endpoint
+maps retain typed NotEnabled, with no physical field-bus claim; deferred 28a
+providers remain outside the selected scope. No historical release evidence,
+benchmark threshold, quota or runtime timeout changed. Compatibility review of
+the complete host-tool suite, Python SDK and benchmark scripts finds no affected
+runtime or interface surface from the two borrowed test inputs.

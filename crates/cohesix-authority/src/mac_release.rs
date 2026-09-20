@@ -198,7 +198,7 @@ mod tests {
     fn release_map_rejects_escape_credentials_and_duplicate_targets() {
         let value = serde_json::json!({"id":"release","action":"mac_release.build","source":{"root":"/owned/source","project":"App.xcodeproj","scheme":"App","tree_sha256":"a".repeat(64)}});
         let t: Target = serde_json::from_value(nested(value.clone())).unwrap();
-        assert!(validate(&[t.clone()]).is_ok());
+        assert!(validate(core::slice::from_ref(&t)).is_ok());
         assert!(validate(&[t.clone(), t]).is_err());
         let mut escaped = value;
         escaped["source"]["project"] = "../Other.xcodeproj".into();

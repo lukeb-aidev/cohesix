@@ -101,7 +101,7 @@ mod tests {
             plist_sha256: "a".repeat(64),
             executable_sha256: "b".repeat(64),
         };
-        assert!(validate_launchd(&[target.clone()]).is_ok());
+        assert!(validate_launchd(core::slice::from_ref(&target)).is_ok());
         assert!(validate_launchd(&[target.clone(), target.clone()]).is_err());
         for domain in ["gui/0501", "gui/-1", "user/1/job", "pid/12", "system/root"] {
             let mut changed = target.clone();
