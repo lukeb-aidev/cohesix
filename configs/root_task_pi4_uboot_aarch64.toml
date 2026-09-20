@@ -1624,6 +1624,7 @@ action_allowlist = [
   "peft.import",
   "peft.activate",
   "peft.rollback",
+  "peft.release",
   "systemd.start",
   "systemd.stop",
   "systemd.restart",
@@ -1646,6 +1647,7 @@ receipt_action_allowlist = [
   "peft.import",
   "peft.activate",
   "peft.rollback",
+  "peft.release",
 ]
 lifecycle = ["queued", "claimed", "running", "succeeded", "failed", "expired"]
 

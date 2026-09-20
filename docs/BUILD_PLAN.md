@@ -12217,7 +12217,7 @@ Deliverables: Complete operator controls and accessibility evidence, alongside t
 ## Milestone 27g — Integrated Qualification and Next Release <a id="27g"></a>
 [Milestones](#Milestones)
 
-**Status:** Planned — next-release scope.
+**Status:** In Progress — integrated Release A qualification, started 20 September 2026.
 
 **Prerequisites:** completed 27b, 27c, 27d, 27e and 27f.
 
@@ -12234,6 +12234,10 @@ gateway. Include both native adapter import and training for LoRA. Native runtim
 and target proof stay separate. Apply the complete applicable staged TEST_PLAN,
 pressure/repeatability, due-diligence, human-review and promotion requirements;
 prior component success never substitutes for assembled release evidence.
+
+Before the complete staged Test Plan, execute the two-hour Pi 4/Mac/Linux
+AArch64 NVIDIA operator burn-in below. Target-entry checks and focused defect
+checks may precede it; the full release test plan follows successful burn-in.
 
 Integrated cases cover interrupted execution, runner failure/lost ACK, stale or
 revoked authority, relevant resource refusal, changed inputs/cache invalidation,
@@ -12270,6 +12274,20 @@ Changes:
 Commands: scripts/ci/test_plan_run.sh --list; select and execute the complete applicable qemu/pi4 staged gates and registered provider/native-app/release lanes with fresh exact-profile state directories under TEST_PLAN.
 Checks: All required assembled-path and staged gates pass for the exact release; ACK-only, recovery-only or fixture-only results cannot promote it.
 Deliverables: Integrated acceptance matrix, retained logs/evidence and honest release decision.
+```
+
+```text
+Title/ID: m27g-two-hour-pi4-operator-burn-in
+Milestone: 27g / two-hour-pi4-operator-burn-in
+Goal: Complete 120 minutes of useful operator work with the current Queen on Pi 4 GENET and native work on both the Mac and Linux AArch64 NVIDIA host.
+Inputs: Exact current Pi image and boot identity, matching installed host packages and generated contracts, cohesix-release-burn-in and cohesix-pi4-wifi-hardware-loop skills, OPERATOR_WALKTHROUGH, OPERATOR_RECIPES, PRIVATE_LORA_RELEASE and TEST_PLAN.
+Changes:
+  - run record and coverage matrix — freeze artifact/runtime/trust identities, sustainable workload, job counts, budgets, ownership and expected effects before timing begins.
+  - assembled workflows — exercise 27b-f CUDA and LoRA import/training, installed CLI/Python/CI and native SwarmUI alongside supported 1.0.0 operator, FUSE, host-provider, lifecycle and evidence workflows on both hosts.
+  - recovery and defect closure — retain failures, reconcile ambiguous effects without duplicate work, repair their owning contracts and validate fresh artifacts before resuming.
+Commands: Execute the skills' physical-entry and operator-workflow procedures; retain exact per-host commands and protected credential references in out/burn-in/<run-id>; after successful burn-in, execute the complete applicable qemu/pi4 staged Test Plan and registered release lanes in fresh state directories.
+Checks: 120 minutes of measured work with independently checked outcomes, complete feasible tool coverage, bounded freshness/liveness, planned maintenance/recovery, no duplicate or unauthorized effects, and reconciled final resources. Major repairs require a new complete 120-minute attempt. Minor repairs retain the original failure and use separately identified focused revalidation and continuation; never claim unchanged-artifact duration across a repair. Missing required capabilities or proof block completion.
+Deliverables: Immutable attempt logs, per-host coverage, early/middle/late reliability observations, defect/recovery records, verified offline handoff and explicit burn-in verdict before full release testing.
 ```
 
 ```text

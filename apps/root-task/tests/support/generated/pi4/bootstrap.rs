@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "a04e02f301acd6680c1eb23474c02dd1bdfaa9f114e9b328c187c6a8e0692382";
+    "da980065dadf2847bc7444564116a9ce0ff8c6bd470aeb79ae140d4ef20276a3";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9627,7 +9627,7 @@ pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Nvidia,
 ];
 
-pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 20] = [
+pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 21] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
@@ -9638,6 +9638,7 @@ pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 20] = [
     HostTicketAction::PeftImport,
     HostTicketAction::PeftActivate,
     HostTicketAction::PeftRollback,
+    HostTicketAction::PeftRelease,
     HostTicketAction::SystemdStart,
     HostTicketAction::SystemdStop,
     HostTicketAction::SystemdRestart,
@@ -9655,7 +9656,7 @@ pub const HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "
 pub const HOST_TICKET_ACCEPTED_RESULT_SCHEMAS: [&str; 2] =
     ["host-ticket-result/v1", "host-ticket-result/v2"];
 
-pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 10] = [
+pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 11] = [
     HostTicketAction::GpuLeaseGrant,
     HostTicketAction::GpuLeaseRenew,
     HostTicketAction::GpuLeaseRelease,
@@ -9666,6 +9667,7 @@ pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; 10] = [
     HostTicketAction::PeftImport,
     HostTicketAction::PeftActivate,
     HostTicketAction::PeftRollback,
+    HostTicketAction::PeftRelease,
 ];
 
 pub const HOST_TICKET_LIFECYCLE: [HostTicketLifecycleState; 6] = [
@@ -9824,7 +9826,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "manifest.schema=1.27",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=e92337506213efc55065bb7d104f496521f41ee20b8608b54ae8330eee2f99b9",
+    "manifest.sha256=9231607e25b17791b8c097b25c8c084344c4b4b18b96b41b1733fe43c57b3993",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9876,7 +9878,7 @@ pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "attestation.mode=measurement_only",
     "attestation.signed_evidence=unavailable",
     "attestation.ticket_keys=development_static",
-    "measurement.bound_manifest_sha256=e92337506213efc55065bb7d104f496521f41ee20b8608b54ae8330eee2f99b9",
+    "measurement.bound_manifest_sha256=9231607e25b17791b8c097b25c8c084344c4b4b18b96b41b1733fe43c57b3993",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

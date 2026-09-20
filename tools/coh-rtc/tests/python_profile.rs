@@ -84,6 +84,16 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
         qemu["proof_boundary"]["python_projection_is_authority"],
         false
     );
+    assert_eq!(
+        pi["receipts"]["peft_actions"],
+        serde_json::json!([
+            "peft.export",
+            "peft.import",
+            "peft.activate",
+            "peft.rollback",
+            "peft.release"
+        ])
+    );
 }
 
 #[test]

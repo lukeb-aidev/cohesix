@@ -10,8 +10,11 @@ host phase journal and signed verifier. Native import and native training
 converge on validation, evaluation, scan, stage, load, canary and promotion.
 Training inserts one native HF Trainer operation after validation. The Linux
 CUDA host owns every weight, dataset, checkpoint, evaluator and inference process.
-The selected QEMU profile declares the WorkerLora receipt action. Other profiles
-must explicitly select it before use; a Python projection never enables it.
+The QEMU and Pi 4 source profiles declare the WorkerLora receipt action. Each
+deployment still requires its exact generated policy and a fresh READY WorkerLora;
+profile selection alone does not establish physical Pi qualification. Other
+profiles must explicitly select the action before use; a Python projection never
+enables it.
 
 The older `coh peft export/import/activate/rollback` commands keep their existing
 file-registry and GPU snapshot contracts. Their pointer commits do not establish

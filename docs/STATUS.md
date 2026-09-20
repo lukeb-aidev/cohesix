@@ -24,6 +24,13 @@ installation/CI, the full SwarmUI workbench, then integrated qualification. Broa
 scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
 planning, not implementation or evidence status.
 
+Milestone [27g](BUILD_PLAN.md#27g), **Integrated Qualification and Next Release**,
+is **In Progress** as of 20 September 2026. Release A (`1.1.0-beta`) requires
+assembled CUDA and private LoRA journeys, a two-hour current-image Pi 4 GENET
+burn-in with Mac and Linux AArch64 NVIDIA work, followed by the complete
+applicable staged Test Plan and release gates. No new burn-in or release
+acceptance is claimed while that evidence is being collected.
+
 Milestone [27f](BUILD_PLAN.md#27f), **SwarmUI Community Showcase**, is
 **Complete** as of 20 September 2026. The native desktop connects to a Queen or
 Hive Gateway, exposes guided operations and installed host tools, and presents
