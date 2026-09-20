@@ -219,15 +219,23 @@ class SourceAndPublicationTests(unittest.TestCase):
                     self.assertRaises(release.AcceptanceError),
                 ):
                     release.validate_host_successor(root, today=date(2026, 9, 13))
-                def extra_product(_root: Path, *args: str) -> bytes:
-                    if args[0] == "ls-files":
-                        return b"apps/root-task/src/new_runtime.rs\n"
-                    return output(_root, *args)
-                with (
-                    mock.patch.object(release, "git", side_effect=extra_product),
-                    self.assertRaises(release.AcceptanceError),
-                ):
-                    release.validate_host_successor(root, today=date(2026, 9, 13))
+                for discovery in ("tracked", "untracked"):
+                    def extra_product(_root: Path, *args: str) -> bytes:
+                        if discovery == "tracked" and args[:2] == ("diff", "--name-only"):
+                            return output(_root, *args) + b"apps/root-task/src/kernel.rs\n"
+                        if discovery == "untracked" and args[0] == "ls-files":
+                            return b"apps/root-task/src/new_runtime.rs\n"
+                        return output(_root, *args)
+
+                    with (
+                        self.subTest(discovery=discovery),
+                        mock.patch.object(release, "git", side_effect=extra_product),
+                        self.assertRaisesRegex(
+                            release.AcceptanceError,
+                            "source delta contains unapproved implementation or configuration",
+                        ),
+                    ):
+                        release.validate_host_successor(root, today=date(2026, 9, 13))
                 path.write_bytes(b"later runtime bytes")
                 with self.assertRaises(release.AcceptanceError):
                     release.validate_host_successor(root, today=date(2026, 9, 13))
@@ -292,22 +300,6 @@ class SourceAndPublicationTests(unittest.TestCase):
                 (root / "Cargo.lock").write_bytes(b"later-lock")
                 with self.assertRaises(release.AcceptanceError):
                     release.advisory_binding(root, results)
-
-    def test_exact_host_addendum_does_not_cover_other_protected_files(self) -> None:
-        from test_due_diligence_lifecycle import ReleaseOwnerWaiverTests
-        import due_diligence_lifecycle as lifecycle
-
-        fixture = ReleaseOwnerWaiverTests()
-        fixture.setUp()
-        self.addCleanup(fixture.doCleanups)
-        (fixture.root / "apps/root-task/src/sel4.rs").write_bytes(b"approved successor")
-        with mock.patch.object(release, "validate_host_successor",
-                               return_value={"approval_sha256": "approved"}):
-            admission = fixture.validate()
-            self.assertIn("not release admission", admission.describe(admitted=False))
-            (fixture.root / "apps/root-task/src/kernel.rs").write_bytes(b"new runtime")
-            with self.assertRaisesRegex(lifecycle.LifecycleError, "source changed"):
-                fixture.validate()
 
     def test_release_publication_requires_all_unique_successful_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

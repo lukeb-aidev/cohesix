@@ -173,3 +173,27 @@ also passed. The risk gate reports no count increase: 234 `expect`, 99 `panic`,
 823 `unsafe` and 38 `unwrap`, each at or below its unchanged baseline. These
 focused results permit a fresh common-stage attempt; they do not complete the
 staged Test Plan or replace required human review.
+
+The third common-stage attempt exposed an invocation error: the local wrapper
+inherited `COH_AUTH_TOKEN_REF` into mock TCP CLI tests, where it correctly took
+precedence over their fixture token. Removing live target credentials from the
+common host-test environment restored all six TCP fixture checks without a
+product change. The subsequent clean-environment attempt passed every Rust
+action and reached the complete Python inventory: 2,643 passed, two skipped,
+110 subtests passed and one stale-fixture import failed.
+
+That Python test imported `ReleaseOwnerWaiverTests`, removed by `c1f6a0d97` when
+the owner permanently retired recurring DD30 acceptance. Consolidate its source
+scope protection into the existing direct `validate_host_successor` test:
+both an extra tracked implementation change and an untracked implementation
+file must fail with the exact source-delta refusal. The obsolete cross-fixture
+test is removed; the historical release's approved bytes, patch, path allowlist,
+dates and evidence checks are unchanged. This preserves protection without
+reintroducing the retired DD30 waiver or changing any historical decision.
+`python -m pytest -q scripts/ci/test_release_stage5_acceptance.py scripts/ci/test_due_diligence_lifecycle.py`
+passes 52 tests and 82 subtests. Python client/playbook example smokes also pass.
+All seven hostile Rust audit-bootstrap checks pass, as do generated consistency
+and Test Plan metadata checks.
+This test-only repair leaves the complete host-tool suite, Python SDK, native
+runtime behavior and performance contracts unchanged. A new clean-source
+Stage 01 attempt remains required; all previous failed records are retained.
