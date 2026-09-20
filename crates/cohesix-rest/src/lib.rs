@@ -442,6 +442,34 @@ pub struct BoundsResponse {
     pub worker_runtime: Option<WorkerRuntimeBounds>,
 }
 
+impl BoundsResponse {
+    /// Advertised byte bound for a bounded namespace projection.
+    ///
+    /// Clients cap their requested read window at this value. This does not
+    /// enable the path or grant read authority; the gateway still checks both.
+    pub fn path_byte_bound(&self, path: &str) -> Option<u32> {
+        if path.starts_with("/proc/lease/by-id/") {
+            return Some(self.observability.proc_lease.active_bytes);
+        }
+        match path {
+            "/proc/schedule/summary" => Some(self.observability.proc_schedule.summary_bytes),
+            "/proc/schedule/queue" => Some(self.observability.proc_schedule.queue_bytes),
+            "/proc/lease/summary" => Some(self.observability.proc_lease.summary_bytes),
+            "/proc/lease/active" => Some(self.observability.proc_lease.active_bytes),
+            "/proc/lease/preemptions" => Some(self.observability.proc_lease.preemptions_bytes),
+            _ if path == self.paths.queen_schedule_ctl => {
+                Some(self.control_plane.schedule.ctl_max_bytes)
+            }
+            _ if path == self.paths.queen_lease_ctl => Some(self.control_plane.lease.ctl_max_bytes),
+            _ if path == self.paths.queen_export_ctl => {
+                Some(self.control_plane.export.ctl_max_bytes)
+            }
+            _ if path == self.paths.policy_ctl => Some(self.policy.ctl_max_bytes),
+            _ => None,
+        }
+    }
+}
+
 /// Compiler-generated Worker runtime declaration and namespace bounds.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WorkerRuntimeBounds {
@@ -1189,6 +1217,22 @@ mod tests {
         assert_eq!(parsed.secure9p.msize, 8192);
         assert_eq!(parsed.observability.proc_schedule.queue_bytes, 256);
         assert!(parsed.worker_runtime.is_none());
+        for (path, expected) in [
+            ("/proc/schedule/summary", Some(128)),
+            ("/proc/schedule/queue", Some(256)),
+            ("/proc/lease/summary", Some(160)),
+            ("/proc/lease/active", Some(256)),
+            ("/proc/lease/by-id/example", Some(256)),
+            ("/proc/lease/preemptions", Some(256)),
+            ("/queen/schedule/ctl", Some(8192)),
+            ("/queen/lease/ctl", Some(8192)),
+            ("/queen/export/ctl", Some(2048)),
+            ("/policy/ctl", Some(2048)),
+            ("/proc/boot", None),
+            ("/proc/lease/by-id-other/example", None),
+        ] {
+            assert_eq!(parsed.path_byte_bound(path), expected, "{path}");
+        }
     }
 
     #[test]

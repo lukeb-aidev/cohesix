@@ -99,7 +99,7 @@ owned by their specific contracts.
 | [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Complete |
 | [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Complete |
 | [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Complete |
-| [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
+| [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Reopened — M27g REST mount path-bound restoration |
 | [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Complete |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
@@ -4790,7 +4790,7 @@ Deliverables:
 ## Milestone 24e — REST Multiplexer Transports + SwarmUI Gateway Mode <a id="24e"></a>
 [Milestones](#Milestones)
 
-**Status:** Complete.
+**Status:** Reopened — only `m24e-coh-rest-mount` path-bound restoration discovered during M27g burn-in preflight; prior transport completion evidence remains retained.
 
 **Why now (adoption):** Live multi-host publishing requires a single console client. We need host tools and SwarmUI to speak to the `hive-gateway` REST projection so multiple external workers can publish and observe without breaking the single-client console constraint.
 
@@ -4914,6 +4914,10 @@ Deliverables:
   - REST-capable cas-tool upload.
 
 Title/ID: m24e-coh-rest-mount
+Status: Reopened — M27g / m27g-two-hour-pi4-operator-burn-in found that REST FUSE reads exceeded advertised schedule and lease path bounds.
+Milestone: Reopened 24e / coh-rest-mount; discovery Milestone 27g / two-hour-pi4-operator-burn-in.
+Restoration: Share the existing bounded-path mapping with cohsh; cap coh read/tail requests and response checks at the advertised path bound, preserving caller limits and all gateway enablement/authority checks. Validate exact Mac and Linux mounts against the same current Pi; do not change target bounds or quotas.
+Compatibility: coh/coh-status and cohsh share the corrected REST mapping. Review Hive Gateway, SwarmUI, host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus, Python SDK and benchmark paths; wire formats and target policy remain unchanged.
 Goal: Add REST-backed CohAccess for `coh` and support `coh mount --rest-url`.
 Inputs: apps/coh/src/main.rs, apps/coh/src/mount.rs, apps/coh/src/rest.rs.
 Changes:

@@ -113,29 +113,7 @@ impl RestTransport {
     }
 
     fn bound_for_path(path: &str, bounds: &BoundsResponse) -> Option<u32> {
-        if path.starts_with("/proc/lease/by-id/") {
-            return Some(bounds.observability.proc_lease.active_bytes);
-        }
-        match path {
-            "/proc/schedule/summary" => Some(bounds.observability.proc_schedule.summary_bytes),
-            "/proc/schedule/queue" => Some(bounds.observability.proc_schedule.queue_bytes),
-            "/proc/lease/summary" => Some(bounds.observability.proc_lease.summary_bytes),
-            "/proc/lease/active" => Some(bounds.observability.proc_lease.active_bytes),
-            "/proc/lease/preemptions" => Some(bounds.observability.proc_lease.preemptions_bytes),
-            _ => {
-                if path == bounds.paths.queen_schedule_ctl {
-                    Some(bounds.control_plane.schedule.ctl_max_bytes)
-                } else if path == bounds.paths.queen_lease_ctl {
-                    Some(bounds.control_plane.lease.ctl_max_bytes)
-                } else if path == bounds.paths.queen_export_ctl {
-                    Some(bounds.control_plane.export.ctl_max_bytes)
-                } else if path == bounds.paths.policy_ctl {
-                    Some(bounds.policy.ctl_max_bytes)
-                } else {
-                    None
-                }
-            }
-        }
+        bounds.path_byte_bound(path)
     }
 
     fn read_max_bytes(&mut self, path: &str) -> u32 {

@@ -668,6 +668,10 @@ mount_dir="$PWD/out/mount/cohesix"
 sed -n '1,40p' "$mount_dir/proc/boot"
 ```
 
+REST file reads use the gateway-advertised per-path byte limits, including the
+small schedule and lease summaries. A larger host read buffer does not increase
+those limits; disabled paths and missing authority still return errors.
+
 The mount is private to the mounting host user. Only one REST mount may hold
 the host-side lock for a given gateway URL. Reads fetch current remote data;
 a remote error must not be mistaken for a successfully read empty file.
