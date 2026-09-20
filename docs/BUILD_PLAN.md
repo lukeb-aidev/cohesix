@@ -122,7 +122,7 @@ owned by their specific contracts.
 | [27d](#27d) | Verified Private LoRA Release | Complete |
 | [27e](#27e) | Installation, Adoption and CI | Complete |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
-| [27g](#27g) | Integrated Qualification and Next Release | Planned — next release |
+| [27g](#27g) | Integrated Qualification and Next Release | In Progress — Release A qualification and two-hour Pi burn-in |
 | [28](#28) | Formal Verification Baseline + Proof-Carrying Manifests | Planned — deferred |
 | [28a](#28a) | Broader Providers, Federation, Deployment and Domain Workflows | Planned — deferred |
 | [28b](#28b) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Planned — deferred |
