@@ -1,4 +1,9 @@
-# Lease -> run -> observe -> release (mock friendly)
+# Author: Lukas Bower
+# Purpose: Exercise historical GPU lease and breadcrumb serialization as a mock fixture.
+# Copyright 2026 Lukas Bower
+# FIXTURE ONLY: run with --transport mock --mock-seed-gpu.
+# START/EXIT below are synthetic writes, not executor observations or CUDA proof.
+# For 1.1.0-beta native CUDA/LoRA workflows, use demo/README.md and demo/host_tools.sh.
 
 attach queen
 EXPECT OK

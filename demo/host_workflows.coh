@@ -1,0 +1,46 @@
+# Author: Lukas Bower
+# Purpose: Inspect host-ticket ingress and outcomes around admitted CUDA and LoRA work.
+# Copyright 2026 Lukas Bower
+# Read-only. Run before and after the host workflow commands in demo/README.md.
+# Empty snapshots mean no retained observation, never successful native work.
+
+attach queen
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+cat /proc/authority
+EXPECT OK
+ls /host
+EXPECT OK
+ls /host/tickets
+EXPECT OK
+
+# Requests, status and dead letters have different owners and meanings.
+cat /host/tickets/spec.snapshot
+EXPECT OK
+cat /host/tickets/status.snapshot
+EXPECT OK
+cat /host/tickets/deadletter.snapshot
+EXPECT OK
+
+# Enumerate real published GPU/model state and actual Worker identities.
+ls /gpu
+EXPECT OK
+ls /shard
+EXPECT OK
+ls /worker
+EXPECT OK
+cat /proc/schedule/summary
+EXPECT OK
+cat /proc/lease/summary
+EXPECT OK
+cat /proc/lease/active
+EXPECT OK
+cat /proc/queen/dedupe
+EXPECT OK
+tail /audit/decisions 16
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
+quit
+EXPECT OK

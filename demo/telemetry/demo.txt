@@ -1,2 +1,6 @@
-telemetry demo line 1
-telemetry demo line 2
+# Author: Lukas Bower
+# Purpose: Supply synthetic, recognizable bytes for the 1.1.0-beta telemetry demo.
+# Copyright 2026 Lukas Bower
+release=1.1.0-beta mode=fixture source=demo proof=none
+sensor=demo-temperature value=42 unit=celsius sample=1
+sensor=demo-utilization value=25 unit=percent sample=2

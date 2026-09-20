@@ -1136,6 +1136,51 @@ evidence_requirement = "cannot satisfy target or release acceptance"
 current_observed_mode = "example_playbook"
 
 [[tracked_rules]]
+id = "demo-workflows"
+prefix = "demo/"
+exclude_prefix = ["demo/fixtures/", "demo/telemetry/", "demo/peft_adapter/"]
+class = "diagnostic"
+owner = "host-shell"
+production_reachable = false
+selection_source = "explicit source demo invocation under M27g"
+package_disposition = "source_demo_not_release_evidence"
+evidence_requirement = "exact target and independent native evidence remain required"
+current_observed_mode = "operator_demo"
+
+[[tracked_rules]]
+id = "demo-worker-fixtures"
+prefix = "demo/fixtures/"
+class = "fixture"
+owner = "host-shell"
+production_reachable = false
+selection_source = "explicit mock demo invocation"
+package_disposition = "source_fixture_only"
+evidence_requirement = "cannot satisfy native or target acceptance"
+current_observed_mode = "host_model_demo"
+
+[[tracked_rules]]
+id = "demo-telemetry-fixtures"
+prefix = "demo/telemetry/"
+class = "fixture"
+owner = "host-shell"
+production_reachable = false
+selection_source = "synthetic demo payload"
+package_disposition = "source_fixture_only"
+evidence_requirement = "ingest evidence only; not device measurements"
+current_observed_mode = "synthetic_telemetry"
+
+[[tracked_rules]]
+id = "demo-peft-fixtures"
+prefix = "demo/peft_adapter/"
+class = "fixture"
+owner = "host-shell"
+production_reachable = false
+selection_source = "historical file-registry demo fixture"
+package_disposition = "source_fixture_only"
+evidence_requirement = "not native safetensors, training, evaluation or serving evidence"
+current_observed_mode = "synthetic_registry_input"
+
+[[tracked_rules]]
 id = "coh-scripts"
 prefix = "scripts/cohsh/"
 suffix = ".coh"

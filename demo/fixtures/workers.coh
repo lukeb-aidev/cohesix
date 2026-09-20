@@ -1,0 +1,37 @@
+# Author: Lukas Bower
+# Purpose: Demonstrate all executable Worker role selectors in a fresh host model.
+# Copyright 2026 Lukas Bower
+# FIXTURE ONLY: cohsh --transport mock --mock-seed-gpu.
+# Production requires fresh strict Queen intents and actual observed identities.
+# Fixed worker IDs below are valid only in this fresh in-process fixture.
+
+attach queen
+EXPECT OK
+
+# Admit a heartbeat request, then observe its host-model telemetry.
+spawn heartbeat ticks=10 ttl_s=60
+EXPECT OK
+cat /shard/13/worker/worker-1/telemetry
+EXPECT OK
+
+# GPU and LoRA are control-plane roles; the mock launches no native job.
+spawn gpu gpu_id=GPU-0 mem_mb=1024 streams=1 ttl_s=60 priority=1
+EXPECT OK
+cat /shard/1c/worker/worker-2/telemetry
+EXPECT OK
+spawn lora
+EXPECT OK
+ls /worker
+EXPECT OK
+
+# Clean up only the Workers created in this fresh mock; never guess live IDs.
+kill worker-1
+EXPECT OK
+kill worker-2
+EXPECT OK
+kill worker-3
+EXPECT OK
+ls /worker
+EXPECT OK
+quit
+EXPECT OK

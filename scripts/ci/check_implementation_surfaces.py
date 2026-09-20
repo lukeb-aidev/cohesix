@@ -162,6 +162,7 @@ def _tracked_files(repo_root: Path) -> set[str]:
 def _required_tracked_surface(path: str) -> bool:
     return (
         path == "README.md"
+        or path.startswith("demo/")
         or (path.startswith(PUBLIC_PATH_PREFIXES) and path.endswith(".md"))
         or path.endswith(PUBLIC_PATH_SUFFIXES)
         or (

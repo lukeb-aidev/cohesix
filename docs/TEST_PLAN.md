@@ -1564,9 +1564,10 @@ performance claims. The CAS boundary and rejection cases below remain required.
   - `./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok`
   - `./bin/coh gpu status --host 127.0.0.1 --port 31337 --gpu GPU-0`
   - `./bin/coh telemetry pull --host 127.0.0.1 --port 31337 --out ./out/telemetry`
-  - Live PEFT flow (requires live GPU bridge publish):
+  - PEFT file-registry smoke (requires live GPU bridge publish; not native adapter execution):
+    - `demo/peft_adapter` is a documented placeholder fixture. Its synthetic metrics and text weights exercise only export/import/registry plumbing; use `coh peft release` with genuine enrolled native inputs for the separate 1.1.0 release journey in [PRIVATE_LORA_RELEASE.md](PRIVATE_LORA_RELEASE.md).
     - Preflight: `./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen -c "ls /queen/export/lora_jobs"`
-      - If `/queen/export/lora_jobs` is missing in dev-virt, **skip live PEFT** and rely on the mock PEFT tests above (this indicates no export job was seeded in the VM).
+      - If `/queen/export/lora_jobs` is missing in dev-virt, **skip this registry smoke** and retain the missing prerequisite (this indicates no export job was seeded in the VM). Mock PEFT tests remain a separate host-only result.
     - `./bin/coh --host 127.0.0.1 --port 31337 peft export --job job_0001 --out ./out/peft_export`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export --registry ./out/peft_registry`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry ./out/peft_registry`
@@ -1822,6 +1823,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
     - `./bin/coh gpu --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" lease --gpu GPU-0 --mem-mb 2048 --streams 1 --ttl-s 120`
     - `./bin/coh run --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --gpu GPU-0 -- echo ok`
     - `./bin/coh telemetry --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" pull --out ./out/telemetry-rest`
+    - The following PEFT commands are the same file-registry smoke as the TCP lane. The placeholder `demo/peft_adapter` and pointer activation do not prove native training, evaluation or serving.
     - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" export --job job_0001 --out ./out/peft_export_rest` (skip if no export job is seeded)
     - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export_rest --registry ./out/peft_registry_rest`
     - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" activate --model demo-model --registry ./out/peft_registry_rest`

@@ -42,6 +42,30 @@ def classification(
 
 
 class ImplementationSurfaceGuardTests(unittest.TestCase):
+    def test_demo_commands_and_payloads_require_inventory_rows(self) -> None:
+        paths = {
+            "demo/demo_runbook.coh",
+            "demo/host_tools.sh",
+            "demo/prepare_worker.py",
+            "demo/peft_adapter/adapter.safetensors",
+            "demo/telemetry/demo.txt",
+        }
+        with patch.object(SURFACES, "_tracked_files", return_value=paths):
+            errors = SURFACES.validate_tracked_coverage(Path("."), {})
+            for path in paths:
+                self.assertTrue(any(path in error for error in errors))
+            rows = []
+            for path in paths:
+                row = classification("tracked:" + path, "diagnostic", False)
+                row["path"] = path
+                rows.append(row)
+            self.assertEqual(
+                SURFACES.validate_tracked_coverage(
+                    Path("."), {"tracked_surfaces": rows}
+                ),
+                [],
+            )
+
     def test_python_source_tests_remain_classified_outside_release(self) -> None:
         path = "tools/cohesix-py/tests/test_authority.py"
         with patch.object(SURFACES, "_tracked_files", return_value={path}):

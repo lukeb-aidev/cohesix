@@ -1,0 +1,40 @@
+# Author: Lukas Bower
+# Purpose: Publish synthetic telemetry and read back bounded segment data.
+# Copyright 2026 Lukas Bower
+# MUTATES demo-110 telemetry. Use a fresh disposable namespace once per run.
+# Payloads are fixtures, not device measurements or Worker completion evidence.
+
+attach queen
+EXPECT OK
+telemetry push demo/telemetry/demo.txt --device demo-110
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000001
+cat /queen/telemetry/demo-110/latest
+EXPECT OK
+WAIT 2000 TAIL /queen/telemetry/demo-110/latest SUBSTR seg-000001
+EXPECT OK
+cat /queen/telemetry/demo-110/seg/seg-000001
+EXPECT OK
+WAIT 2000 TAIL /queen/telemetry/demo-110/seg/seg-000001 SUBSTR mode=fixture
+EXPECT OK
+
+# A second upload creates a new segment; the first remains independently readable.
+telemetry push demo/telemetry/demo.txt --device demo-110
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000002
+WAIT 2000 TAIL /queen/telemetry/demo-110/latest SUBSTR seg-000002
+EXPECT OK
+cat /queen/telemetry/demo-110/seg/seg-000001
+EXPECT OK
+cat /queen/telemetry/demo-110/seg/seg-000002
+EXPECT OK
+cat /proc/ingest/queued
+EXPECT OK
+cat /proc/ingest/dropped
+EXPECT OK
+cat /proc/ingest/backpressure
+EXPECT OK
+tail /proc/ingest/watch
+EXPECT OK
+quit
+EXPECT OK
