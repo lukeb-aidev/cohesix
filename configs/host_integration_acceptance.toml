@@ -5414,3 +5414,153 @@ executable = false
 version = "1"
 schema_pointer = "/schema"
 schema_value = "cohesix-implementation-surface-inventory/v1"
+
+# Desktop clients are optional packages; headless controller profiles stay unchanged.
+[[providers.deployment_profiles]]
+schema = "cohesix-host-package-profile/v1"
+id = "macos-desktop"
+os = "macos"
+architecture = "aarch64"
+version = "1.1.0-beta"
+integration_surfaces = ["coh", "evidence", "swarmui", "rest"]
+required_credentials = ["TCP_AUTH", "REQUEST_AUTH"]
+
+[[providers.deployment_profiles.artifacts]]
+path = "bin/coh"
+kind = "mach_o"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "bin/hive-gateway"
+kind = "mach_o"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "SwarmUI.app/Contents/MacOS/swarmui"
+kind = "mach_o"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/SWARMUI.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "LICENSE.txt"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "contracts/provider_registry.json"
+kind = "json"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "config/coh_policy.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "config/cohsh_policy.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "config/root_task_resolved.json"
+kind = "json"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "package.sbom.json"
+kind = "json"
+executable = false
+version = "1"
+schema_pointer = "/bomFormat"
+schema_value = "CycloneDX"
+
+[[providers.deployment_profiles.artifacts]]
+path = "SwarmUI.app/Contents/Info.plist"
+kind = "text"
+executable = false
+version = "1"
+
+# Desktop clients are optional packages; headless controller profiles stay unchanged.
+[[providers.deployment_profiles]]
+schema = "cohesix-host-package-profile/v1"
+id = "linux-aarch64-desktop"
+os = "linux"
+architecture = "aarch64"
+version = "1.1.0-beta"
+integration_surfaces = ["coh", "evidence", "swarmui", "rest"]
+required_credentials = ["TCP_AUTH", "REQUEST_AUTH"]
+
+[[providers.deployment_profiles.artifacts]]
+path = "bin/coh"
+kind = "elf"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "bin/hive-gateway"
+kind = "elf"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "bin/swarmui"
+kind = "elf"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "docs/SWARMUI.md"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "LICENSE.txt"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "contracts/provider_registry.json"
+kind = "json"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "config/coh_policy.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "config/cohsh_policy.toml"
+kind = "toml"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "config/root_task_resolved.json"
+kind = "json"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "package.sbom.json"
+kind = "json"
+executable = false
+version = "1"
+schema_pointer = "/bomFormat"
+schema_value = "CycloneDX"

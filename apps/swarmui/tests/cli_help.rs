@@ -19,6 +19,10 @@ Options:
       --ticket-config <FILE>      Ticket configuration for --mint-ticket
       --ticket-secret <SECRET>    Ticket signing secret for --mint-ticket
   -h, --help                      Print help
+
+Open Connect a hive to configure Queen TCP or Hive Gateway access in the app.
+Operations provides reviewed forms for installed coh commands. Settings selects
+matching installed tools. Existing SWARMUI_* environment inputs remain supported.
 ";
 
 #[test]

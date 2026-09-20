@@ -12,24 +12,7 @@ use serde::Serialize;
 use super::TimelineEvent;
 use crate::operator::{self, Availability};
 
-/// Review framing only; scenario selection cannot alter evidence or its authority.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub enum Scenario {
-    /// General evidence review.
-    #[default]
-    Generic,
-    /// Incident reconstruction.
-    Incident,
-    /// Configuration or policy change review.
-    Change,
-    /// Maintenance and lifecycle review.
-    Maintenance,
-    /// Model or software rollout review.
-    Rollout,
-    /// Cross-hive relay review.
-    Federation,
-}
+pub use coh_cli::Scenario;
 
 #[derive(Debug, Serialize)]
 struct SourceLink {

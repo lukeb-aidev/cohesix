@@ -36,6 +36,7 @@ members = [
     "crates/cohesix-ticket",
     "crates/cohesix-worker-evidence",
     "crates/cohsh-core",
+    "crates/coh-cli",
     "crates/pi4-driver-abi",
     "crates/worker-task-abi",
     "crates/console-network-abi",

@@ -15,5 +15,7 @@
   "  spawn <JSON>                 - Compatibility Worker request; man spawn",
   "  kill <worker_id>              - Compatibility termination request",
   "  ACK confirms admission, not Worker readiness or execution.",
-  "Use host cohsh for log dump, diagnostics, test, pool, lifecycle and telemetry push."
+  "Diagnostics: bi, caps [mcs], smp [activity|mcs|poll-time|dump], mem, cachelog [count],",
+  "  netstats, nettest, test and reboot use the authenticated console transport.",
+  "Use the Operations and Tickets & policy desks for guided host and control workflows."
 ]

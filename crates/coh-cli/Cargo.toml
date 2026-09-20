@@ -1,0 +1,15 @@
+# Author: Lukas Bower
+# Purpose: Share host command forms without linking host executors or HTTP clients into the UI.
+# Copyright 2026 Lukas Bower
+[package]
+name = "coh-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+[dependencies]
+clap = { workspace = true }
+cohesix-net-constants = { workspace = true }
+cohsh = { path = "../../apps/cohsh", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }

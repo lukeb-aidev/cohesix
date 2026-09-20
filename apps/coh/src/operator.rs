@@ -25,6 +25,73 @@ pub const MAX_FILES: usize = crate::MAX_DIR_LIST_BYTES / cohsh_core::MAX_PATH_LE
 /// Version of the additive observation saved inside the canonical evidence pack.
 pub const SNAPSHOT_SCHEMA: &str = "cohesix-evidence-pack/inspect-v1";
 
+/// Reverify the original graph and retain exact CAS references beside sanitized observations.
+/// Trust and verification time remain explicit; this never asserts current target readiness.
+pub fn story(input: &Path, trust: &Path, cas: &Path) -> Result<serde_json::Value> {
+    use cohesix_evidence::{verify, verify_cas, Trust, MAX_GRAPH_BYTES};
+    let bytes = read_bounded(input, MAX_GRAPH_BYTES)?;
+    let trust: Trust = serde_json::from_slice(&read_bounded(trust, 65_536)?)?;
+    let graph = verify(&bytes, &trust, |artifact| verify_cas(cas, artifact))?;
+    let projection = serde_json::to_value(&graph)?;
+    let original: cohesix_evidence::Graph = serde_json::from_slice(&bytes)?;
+    let mut artifacts = BTreeMap::new();
+    let mut remaining = MAX_BYTES;
+    for node in &original.records {
+        for artifact in &node.record.artifacts {
+            if artifacts.contains_key(&artifact.sha256) || artifact.media_type != "application/json"
+            {
+                continue;
+            }
+            let value = if artifact.bytes > remaining as u64 {
+                serde_json::json!({"status":"omitted", "reason":"artifact-display-bound"})
+            } else {
+                let content = read_bounded(&cas.join(&artifact.sha256), remaining)?;
+                // Recheck the bytes actually presented, closing replacement between verify and read.
+                ensure!(
+                    digest(&content) == artifact.sha256 && content.len() as u64 == artifact.bytes,
+                    "EPERM evidence-artifact-digest"
+                );
+                remaining -= content.len();
+                let sanitized = sanitize(&content)?;
+                let mut value: serde_json::Value = serde_json::from_str(&sanitized)?;
+                redact_display_content(&mut value);
+                serde_json::json!({"status":"observed", "redaction":"canonical-sensitive-fields", "value":value})
+            };
+            artifacts.insert(artifact.sha256.clone(), value);
+        }
+    }
+    Ok(
+        serde_json::json!({"source":input, "proof":"verified causal evidence at enrolled verification time; not current readiness", "graph":projection, "artifacts":artifacts}),
+    )
+}
+
+/// UI inspection excludes raw inference content in addition to canonical secret redaction.
+pub fn redact_display_content(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (key, child) in fields {
+                if matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "prompt"
+                        | "prompts"
+                        | "completion"
+                        | "completions"
+                        | "model_output"
+                        | "raw_output"
+                        | "retrieved_content"
+                        | "tool_calls"
+                ) {
+                    *child = serde_json::json!("<content omitted>");
+                } else {
+                    redact_display_content(child);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(redact_display_content),
+        _ => {}
+    }
+}
+
 const ROOTS: &[&str] = &[
     "/proc",
     "/proc/boot",

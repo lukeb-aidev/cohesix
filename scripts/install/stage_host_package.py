@@ -28,6 +28,7 @@ def stage(
     if len(matches) != 1:
         raise ValueError("select one registered deployment profile")
     sources = {
+        "SwarmUI.app/Contents/Info.plist": "packaging/swarmui/Info.plist",
         "config/coh_policy.toml": "configs/generated/coh_policy.toml",
         "config/cohsh_policy.toml": "configs/generated/cohsh_policy.toml",
         "config/root_task_resolved.json": "configs/generated/root_task_resolved.json",
@@ -41,8 +42,10 @@ def stage(
             continue
         if Path(name).is_absolute() or ".." in Path(name).parts:
             raise ValueError("unsafe registered path")
-        if name.startswith("bin/"):
+        if name.startswith("bin/") or name == "SwarmUI.app/Contents/MacOS/swarmui":
             source = binaries / Path(name).name
+        elif name == "SwarmUI.app/Contents/Info.plist":
+            source = repo / sources[name]
         elif name in sources:
             source = generated / sources[name]
         else:

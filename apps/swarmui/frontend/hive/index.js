@@ -26,6 +26,19 @@ export const createHiveController = (container, status, options = {}) => {
   const tokens = readHiveTokens();
   const style = buildHiveStyle(tokens);
   let world = new HiveWorld(style);
+  let reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  window.addEventListener("motion-preference", (event) => {
+    reducedMotion =
+      Boolean(event.detail) ||
+      matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+  matchMedia("(prefers-reduced-motion: reduce)").addEventListener(
+    "change",
+    (event) => {
+      reducedMotion =
+        event.matches || document.body.classList.contains("reduced-motion");
+    },
+  );
   const metrics = {
     frames: 0,
     renders: 0,
@@ -65,7 +78,7 @@ export const createHiveController = (container, status, options = {}) => {
       updateStatus("Hive render restored");
       lastFrame = performance.now();
       scheduleFrame();
-    }
+    },
   );
   let config = { ...defaultConfig };
   let pending = [];
@@ -214,9 +227,10 @@ export const createHiveController = (container, status, options = {}) => {
         lastQualityMode = nextQualityMode;
         lastBudgetScale = budgetScale;
       }
-      const targetFps = pressure >= config.degrade_pressure
-        ? Math.min(frameCap, frameCapDegraded)
-        : frameCap;
+      const targetFps =
+        pressure >= config.degrade_pressure
+          ? Math.min(frameCap, frameCapDegraded)
+          : frameCap;
       const frameInterval = 1000 / targetFps;
       let steps = 0;
       while (accumulator >= stepSeconds) {
@@ -227,12 +241,20 @@ export const createHiveController = (container, status, options = {}) => {
         if (count > 0) {
           applyHiveEventsRange(world, pending, pendingHead, count, pendingCap, {
             pressure,
-            spawnParticles: lodMode === "detail" && pressure < config.degrade_pressure,
+            spawnParticles:
+              !reducedMotion &&
+              lodMode === "detail" &&
+              pressure < config.degrade_pressure,
           });
           pendingHead = (pendingHead + count) % pendingCap;
           pendingSize -= count;
         }
-        world.update(stepSeconds);
+        if (reducedMotion) {
+          world.pollen.length = 0;
+          world.pulses.length = 0;
+          world.backpressurePollen.length = 0;
+          world.update(0);
+        } else world.update(stepSeconds);
         if (steps >= maxSteps) {
           accumulator = 0;
           break;
@@ -281,6 +303,7 @@ export const createHiveController = (container, status, options = {}) => {
       getMetrics: () => ({ ...metrics }),
       getState: () => ({
         running,
+        reducedMotion,
         scrollActive,
         renderActive,
         interactionActive,
@@ -308,7 +331,12 @@ export const createHiveController = (container, status, options = {}) => {
     ingest: (batch) => {
       if (Array.isArray(batch.agents)) {
         for (const agent of batch.agents) {
-          world.ensureAgent(agent.id, agent.namespace, agent.role, agent.worker);
+          world.ensureAgent(
+            agent.id,
+            agent.namespace,
+            agent.role,
+            agent.worker,
+          );
         }
       }
       pressure = batch.pressure ?? 0;

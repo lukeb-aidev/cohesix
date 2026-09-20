@@ -56,3 +56,22 @@ def test_only_registered_sources_are_staged_and_symlinks_fail(tmp_path: Path) ->
     (root / "README.md").symlink_to(root / "secret.private")
     with pytest.raises(ValueError, match="symlink"):
         stage.stage(root, generated, binaries, "unit", root / "rejected")
+
+
+def test_desktop_bundle_uses_selected_binary_and_launch_metadata(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    (root / "configs/generated").mkdir(parents=True)
+    (root / "packaging/swarmui").mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "bin/swarmui").write_bytes(b"native executable identity")
+    (root / "packaging/swarmui/Info.plist").write_text("launch metadata")
+    artifacts = [
+        {"path": "SwarmUI.app/Contents/MacOS/swarmui", "executable": True},
+        {"path": "SwarmUI.app/Contents/Info.plist", "executable": False},
+    ]
+    (root / "configs/generated/provider_registry.json").write_text(json.dumps({
+        "contract": {"deployment_profiles": [{"id": "desktop", "artifacts": artifacts}]}
+    }))
+    stage.stage(root, root, root / "bin", "desktop", root / "out")
+    assert (root / "out/SwarmUI.app/Contents/MacOS/swarmui").read_bytes() == b"native executable identity"
+    assert (root / "out/SwarmUI.app/Contents/Info.plist").read_text() == "launch metadata"

@@ -1747,6 +1747,7 @@ ui_assets = [
   "apps/swarmui/frontend/hive/index.js",
   "apps/swarmui/frontend/hive/palette.js",
   "apps/swarmui/frontend/hive/renderer.js",
+  "apps/swarmui/frontend/hive/story.js",
   "apps/swarmui/frontend/hive/style.js",
   "apps/swarmui/frontend/hive/tokens.js",
   "apps/swarmui/frontend/hive/world.js",
@@ -1758,10 +1759,21 @@ ui_assets = [
   "apps/swarmui/frontend/styles/hive.css",
   "apps/swarmui/frontend/styles/layout.css",
   "apps/swarmui/frontend/styles/tokens.css",
+  "apps/swarmui/frontend/styles/workbench.css",
   "apps/swarmui/frontend/vendor/PIXIJSLICENSE.txt",
   "apps/swarmui/frontend/vendor/pixi.min.js",
   "apps/swarmui/frontend/vendor/spectrum.bundle.entry.js",
   "apps/swarmui/frontend/vendor/spectrum.bundle.js",
+  "apps/swarmui/frontend/workbench/artifacts.js",
+  "apps/swarmui/frontend/workbench/controls.js",
+  "apps/swarmui/frontend/workbench/hive.js",
+  "apps/swarmui/frontend/workbench/namespace.js",
+  "apps/swarmui/frontend/workbench/navigation.js",
+  "apps/swarmui/frontend/workbench/operations.js",
+  "apps/swarmui/frontend/workbench/paths.js",
+  "apps/swarmui/frontend/workbench/session.js",
+  "apps/swarmui/frontend/workbench/state.js",
+  "apps/swarmui/frontend/workbench/story.js",
 ]
 
 support_files = [
@@ -1829,3 +1841,13 @@ selection_source = "documented host package service workflow"
 package_disposition = "repository_documentation"
 evidence_requirement = "must describe current signed package and service behavior"
 current_observed_mode = "operator_documentation"
+
+[[packages]]
+path = "crates/coh-cli"
+class = "contract"
+owner = "host-cli"
+production_reachable = true
+selection_source = "coh and SwarmUI share the same clap command schema"
+package_disposition = "linked_library"
+evidence_requirement = "canonical CLI parsing and desktop argument tests"
+current_observed_mode = "typed_host_command_contract"

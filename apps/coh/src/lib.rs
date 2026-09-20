@@ -11,6 +11,8 @@
 pub mod attestation;
 /// TCP console-backed helpers.
 pub mod console;
+/// Authoritative argument schema shared by CLI and desktop.
+pub use coh_cli as cli;
 /// Host environment doctor checks.
 pub mod doctor;
 /// Evidence pack and timeline helpers.

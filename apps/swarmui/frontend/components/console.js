@@ -2,6 +2,8 @@
 // Purpose: Wire the embedded SwarmUI console prompt and transcript playback.
 // Copyright 2026 Lukas Bower
 
+import { protect, sanitize } from "../workbench/state.js";
+
 const classifyLine = (line) => {
   if (line === "END") {
     return "end";
@@ -26,7 +28,7 @@ const createLineNode = (line) => {
   node.classList.add("console-line");
   const kind = classifyLine(line);
   node.classList.add(`console-${kind}`);
-  node.textContent = line;
+  node.textContent = sanitize(line);
   return node;
 };
 
@@ -139,7 +141,9 @@ export const setupConsole = (invoke) => {
     if (!trimmed) {
       return;
     }
-    appendLine(`coh> ${trimmed}`);
+    const attach = /^(?:attach|login)\s+\S+\s+(\S+)/i.exec(trimmed);
+    if (attach) protect(attach[1]);
+    appendLine(`coh> ${sanitize(trimmed)}`);
     if (stop) {
       stop.disabled = false;
     }
@@ -152,6 +156,7 @@ export const setupConsole = (invoke) => {
       return;
     }
     streamLines(res.result?.lines || []);
+    window.dispatchEvent(new Event("console-command-complete"));
   };
 
   const downloadText = (filename, text) => {

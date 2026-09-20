@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "SwarmUI",
-        "width": 1100,
-        "height": 720,
+        "width": 1360,
+        "height": 900,
         "resizable": true
       }
     ],

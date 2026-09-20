@@ -211,7 +211,7 @@ DESCRIPTION
   log is a bounded tail of /log/queen.log. log dump writes available log payload
   to a host file; it cannot recover evicted history. Save logs before disruptive
   operations. Output can contain deployment data; retain it appropriately.
-  SwarmUI supports log with 64 lines; local file dumping uses host cohsh.
+  SwarmUI supports log with 64 lines and its native Dump log action.
 SEE ALSO
   man tail
 
@@ -289,12 +289,14 @@ SWARMUI
   The console's write/role/profile gates still apply. Its raw spawn grammar is
   spawn <JSON>, for example spawn {"spawn":"heartbeat","ticks":100}.
   cohsh key=value convenience syntax is not SwarmUI spawn syntax. A disabled
-  console operation must use an authorized external cohsh workflow.
+  console operation must use the admitted workflow in Operations or Tickets &
+  policy, with the required role, transport and profile.
 
   Durable CUDA recipes use the separate host coh CLI:
     coh plan cuda-reference --recipe --deployment /absolute/recipe.json
   apply/watch/explain/verify/recover use that same journal. These are not root
-  console, cohsh or SwarmUI console commands. See docs/HOST_TOOLS.md, Recoverable
+  console, cohsh or SwarmUI console commands. SwarmUI Operations exposes these
+  installed host workflows as reviewed forms. See docs/HOST_TOOLS.md, Recoverable
   CUDA recipes, for exact tickets, signed output verification and cancellation.
 
   Private LoRA releases also use the host coh CLI:

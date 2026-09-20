@@ -12,7 +12,11 @@ mod cache;
 mod cbor;
 mod desktop;
 mod hive;
+pub mod native_evidence;
+pub mod reference;
 mod transport;
+/// Typed desktop connection, operation and artifact boundaries.
+pub mod workbench;
 
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
 pub use desktop::{
@@ -146,6 +150,7 @@ impl SwarmUiConfig {
             worker_root: generated::SWARMUI_WORKER_ROOT.to_owned(),
             namespace_roots: generated::SWARMUI_NAMESPACE_ROOTS
                 .iter()
+                .filter(|value| **value != "/worker" || generated::SWARMUI_WORKER_LEGACY_ALIAS)
                 .map(|value| (*value).to_owned())
                 .collect(),
         };
@@ -1836,7 +1841,21 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 Some("reason=offline"),
             )]);
         }
-        match self.ensure_session(role, ticket) {
+        let attached = self.ensure_session(role, ticket).and_then(|()| {
+            if self.transport.kind() == "rest" {
+                // REST attach is local bookkeeping. Authenticate and confirm the upstream
+                // gateway before exposing a connected desktop session.
+                let session = self.current_console_session()?;
+                let probe = self.transport.ping(&session.session);
+                let _ = self.transport.drain_acknowledgements();
+                if let Err(error) = probe {
+                    self.clear_console_session();
+                    return Err(SwarmUiError::Transport(format!("{error:#}")));
+                }
+            }
+            Ok(())
+        });
+        match attached {
             Ok(_) => {
                 let detail = format!("role={}", role_label(role));
                 let mut lines = vec![render_ack_line(
@@ -1957,11 +1976,45 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             | ConsoleCommand::NetTest
             | ConsoleCommand::NetStats
             | ConsoleCommand::Reboot
-            | ConsoleCommand::CacheLog { .. } => SwarmUiTranscript::err(vec![render_ack_line(
+            | ConsoleCommand::CacheLog { .. } => self.console_diagnostic(trimmed, verb_label),
+        }
+    }
+
+    fn console_diagnostic(&mut self, command: &str, verb: &str) -> SwarmUiTranscript {
+        if self.config.offline {
+            return SwarmUiTranscript::err(vec![render_ack_line(
                 AckStatus::Err,
-                verb_label,
-                Some("reason=unsupported"),
-            )]),
+                verb,
+                Some("reason=offline"),
+            )]);
+        }
+        let session = match self.current_console_session() {
+            Ok(session) => session,
+            Err(error) => {
+                return SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    verb,
+                    Some(&format!("reason={error}")),
+                )])
+            }
+        };
+        let result = self
+            .transport
+            .console_command(&session.session, command, verb);
+        let mut lines = self.transport.drain_acknowledgements();
+        match result {
+            Ok(output) => {
+                lines.extend(output);
+                SwarmUiTranscript::ok(lines)
+            }
+            Err(error) => {
+                lines.push(render_ack_line(
+                    AckStatus::Err,
+                    verb,
+                    Some(&format!("reason={error}")),
+                ));
+                SwarmUiTranscript::err(lines)
+            }
         }
     }
 
@@ -3533,7 +3586,9 @@ fn console_help_lines() -> Vec<String> {
         "  spawn <JSON>                 - Compatibility Worker request; man spawn",
         "  kill <worker_id>              - Compatibility termination request",
         "  ACK confirms admission, not Worker readiness or execution.",
-        "Use host cohsh for log dump, diagnostics, test, pool, lifecycle and telemetry push.",
+        "Diagnostics: bi, caps [mcs], smp [activity|mcs|poll-time|dump], mem, cachelog [count],",
+        "  netstats, nettest, test and reboot use the authenticated console transport.",
+        "Use the Operations and Tickets & policy desks for guided host and control workflows.",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -3602,11 +3657,15 @@ mod tests {
     #[derive(Clone)]
     struct TestTransport {
         reads: Arc<AtomicUsize>,
+        reject_probe: bool,
     }
 
     impl TestTransport {
         fn new(reads: Arc<AtomicUsize>) -> Self {
-            Self { reads }
+            Self {
+                reads,
+                reject_probe: false,
+            }
         }
     }
 
@@ -3616,10 +3675,17 @@ mod tests {
         }
 
         fn kind(&self) -> &'static str {
-            "test"
+            if self.reject_probe {
+                "rest"
+            } else {
+                "test"
+            }
         }
 
         fn ping(&mut self, _session: &CohshSession) -> Result<String> {
+            if self.reject_probe {
+                return Err(anyhow::anyhow!("EPERM read-request-auth"));
+            }
             Ok("pong".to_owned())
         }
 
@@ -3644,6 +3710,52 @@ mod tests {
         fn write(&mut self, _session: &CohshSession, _path: &str, _payload: &[u8]) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn rest_local_attach_is_not_authenticated_connection() {
+        let transport = TestTransport {
+            reads: Arc::new(AtomicUsize::new(0)),
+            reject_probe: true,
+        };
+        let mut backend = SwarmUiConsoleBackend::with_transport(
+            SwarmUiConfig::from_generated(std::env::temp_dir()),
+            transport,
+        );
+        let result = backend.attach(Role::Queen, None);
+        assert!(!result.ok);
+        assert_eq!(
+            result.lines,
+            vec!["ERR ATTACH reason=EPERM read-request-auth"]
+        );
+        assert!(backend.current_console_session().is_err());
+    }
+
+    #[test]
+    fn diagnostic_commands_forward_validated_grammar_and_preserve_transport_refusal() {
+        let mut backend = SwarmUiConsoleBackend::with_transport(
+            SwarmUiConfig::from_generated(std::env::temp_dir()),
+            TestTransport::new(Arc::new(AtomicUsize::new(0))),
+        );
+        assert!(backend.attach(Role::Queen, None).ok);
+        // The test transport deliberately has no root-console implementation. A valid
+        // diagnostic must reach that documented refusal, while invalid syntax cannot.
+        let result = backend.console_command("bi");
+        assert!(!result.ok);
+        assert!(
+            result
+                .lines
+                .join("\n")
+                .contains("transport 'test' does not support root console commands"),
+            "{:?}",
+            result.lines
+        );
+        assert!(backend.console_command("caps invalid").lines[0].starts_with("ERR PARSE"));
+        backend.set_offline(true);
+        assert_eq!(
+            backend.console_command("bi").lines,
+            vec!["ERR BOOTINFO reason=offline"]
+        );
     }
 
     struct RejectSecure9pTransport;
@@ -3962,7 +4074,10 @@ mod tests {
         let transcript = backend.console_command("reboot");
 
         assert!(!transcript.ok);
-        assert_eq!(transcript.lines, vec!["ERR REBOOT reason=unsupported"]);
+        assert_eq!(
+            transcript.lines,
+            vec!["ERR REBOOT reason=session unavailable"]
+        );
         assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 }

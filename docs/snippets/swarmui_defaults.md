@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`
-- `swarmui.defaults.sha256`: `19c6f20ea77937f3c15dcde445ffa96d4d49db6a667fefce661e858ce16c2b08`
+- `manifest.sha256`: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`
+- `swarmui.defaults.sha256`: `aec6677e8254e7e4f93ac0c7c070bd52b781c445c590fa43493e78fe5a7aae20`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -27,7 +27,7 @@
 - `swarmui.paths.telemetry_root`: `/worker`
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
 - `swarmui.paths.worker_root`: `/shard`
-- `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu, /host, /policy, /actions, /audit, /replay`
 - `swarmui.worker_runtime.maximum_live_tasks`: `256`
 - `swarmui.worker_runtime.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
 - `swarmui.worker_runtime.shard_bits`: `8`
@@ -38,4 +38,4 @@
 - `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`128`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`)._
+_Generated from `configs/root_task.toml` (sha256: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`)._

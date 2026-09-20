@@ -5,9 +5,9 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "705699a2afc5995fa68e9e069cbad28d0968337fe891417cabae61c73b4e3a6d",
-    "resolved_manifest_sha256": "33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
-    "implementation_surface_inventory_sha256": "e081f9cdf8fb9cbc5972c8b90a22080b7ea32a550c533474cab440b7b566a880"
+    "source_sha256": "8580bb0a03bab202f4cbaae54b052747a7c1f5dd655df2553e226f0c1cf62d6b",
+    "resolved_manifest_sha256": "34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9",
+    "implementation_surface_inventory_sha256": "122def66526be1df130f7206c527037c06556da4c9d05893d21672ad51318112"
   },
   "host_profiles": [
     {
@@ -10044,6 +10044,105 @@
       },
       {
         "schema": "cohesix-host-package-profile/v1",
+        "id": "linux-aarch64-desktop",
+        "os": "linux",
+        "architecture": "aarch64",
+        "version": "1.1.0-beta",
+        "integration_surfaces": [
+          "coh",
+          "evidence",
+          "rest",
+          "swarmui"
+        ],
+        "required_credentials": [
+          "REQUEST_AUTH",
+          "TCP_AUTH"
+        ],
+        "artifacts": [
+          {
+            "path": "LICENSE.txt",
+            "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "bin/coh",
+            "kind": "elf",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "bin/hive-gateway",
+            "kind": "elf",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "bin/swarmui",
+            "kind": "elf",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "config/coh_policy.toml",
+            "kind": "toml",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "config/cohsh_policy.toml",
+            "kind": "toml",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "config/root_task_resolved.json",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "contracts/provider_registry.json",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "docs/SWARMUI.md",
+            "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "package.sbom.json",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": "/bomFormat",
+            "schema_value": "CycloneDX"
+          }
+        ]
+      },
+      {
+        "schema": "cohesix-host-package-profile/v1",
         "id": "linux-x86-64-controller",
         "os": "linux",
         "architecture": "x86_64",
@@ -10816,6 +10915,113 @@
             "version": "1",
             "schema_pointer": null,
             "schema_value": null
+          }
+        ]
+      },
+      {
+        "schema": "cohesix-host-package-profile/v1",
+        "id": "macos-desktop",
+        "os": "macos",
+        "architecture": "aarch64",
+        "version": "1.1.0-beta",
+        "integration_surfaces": [
+          "coh",
+          "evidence",
+          "rest",
+          "swarmui"
+        ],
+        "required_credentials": [
+          "REQUEST_AUTH",
+          "TCP_AUTH"
+        ],
+        "artifacts": [
+          {
+            "path": "LICENSE.txt",
+            "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "SwarmUI.app/Contents/Info.plist",
+            "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "SwarmUI.app/Contents/MacOS/swarmui",
+            "kind": "mach_o",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "bin/coh",
+            "kind": "mach_o",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "bin/hive-gateway",
+            "kind": "mach_o",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "config/coh_policy.toml",
+            "kind": "toml",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "config/cohsh_policy.toml",
+            "kind": "toml",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "config/root_task_resolved.json",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "contracts/provider_registry.json",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "docs/SWARMUI.md",
+            "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "package.sbom.json",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": "/bomFormat",
+            "schema_value": "CycloneDX"
           }
         ]
       }

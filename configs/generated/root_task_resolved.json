@@ -10127,7 +10127,12 @@
         "/shard",
         "/worker",
         "/log",
-        "/gpu"
+        "/gpu",
+        "/host",
+        "/policy",
+        "/actions",
+        "/audit",
+        "/replay"
       ]
     }
   },

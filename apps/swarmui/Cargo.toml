@@ -21,6 +21,11 @@ offline-cache = []
 rest = ["cohsh/rest", "dep:cohesix-rest"]
 
 [dependencies]
+clap = { workspace = true }
+coh-cli = { path = "../../crates/coh-cli" }
+cohesix-authority = { workspace = true, features = ["std"] }
+url = "2.5.8"
+rfd = { version = "0.15.4", default-features = false, features = ["gtk3"] }
 cohsh = { path = "../cohsh", default-features = false, features = ["tcp"] }
 cohsh-core = { workspace = true }
 cohesix-ticket = { workspace = true }
@@ -35,6 +40,7 @@ log = "0.4.33"
 tauri = { version = "2.11.5", features = ["custom-protocol"] }
 
 [build-dependencies]
+sha2 = { workspace = true }
 tauri-build = { version = "2.6.3", default-features = false }
 
 [dev-dependencies]

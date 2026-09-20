@@ -8303,6 +8303,11 @@ impl Default for SwarmUiPathsConfig {
                 "/worker".to_owned(),
                 "/log".to_owned(),
                 "/gpu".to_owned(),
+                "/host".to_owned(),
+                "/policy".to_owned(),
+                "/actions".to_owned(),
+                "/audit".to_owned(),
+                "/replay".to_owned(),
             ],
         }
     }

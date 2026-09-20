@@ -1274,7 +1274,7 @@ degrade_pressure = 1.0
 telemetry_root = "/worker"
 proc_ingest_root = "/proc/ingest"
 worker_root = "/shard"
-namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"]
+namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu", "/host", "/policy", "/actions", "/audit", "/replay"]
 
 [ticket_limits]
 max_scopes = 8

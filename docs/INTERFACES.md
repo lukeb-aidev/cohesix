@@ -28,6 +28,21 @@ in [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md), system boundaries in
 See the [Glossary](GLOSSARY.md) for Cohesix-specific protocol, role, and
 authority terms.
 
+## Desktop projection
+
+[SwarmUI](SWARMUI.md) uses Rust-owned Queen console or Hive Gateway sessions.
+Editable connections and guided controls project existing console/namespace
+contracts; installed host forms share the `coh-cli` parser with `coh`. A single-use
+review binds the exact request and current connection context. Bounded subprocess
+execution uses argument arrays, never a shell. Timeout means an interrupted
+controller with unknown remote outcome, not cancellation.
+
+`coh evidence story` verifies canonical signed graphs and CAS against separate
+trust, then returns bounded redacted observations. It does not introduce a new
+pack, receipt or replay schema. Native file selection and optional acceptance
+metadata are desktop-local. Offline replay disconnects live authority; reference
+verification and presentation cannot create readiness or promote a failed run.
+
 ## Stability and authority
 
 The selected profile manifest, resolved manifest, generated tables, and

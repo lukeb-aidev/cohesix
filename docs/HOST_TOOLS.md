@@ -1325,21 +1325,20 @@ For direct upload, stop the gateway and use `--host`, `--port` and an explicit
 
 ### SwarmUI
 
-SwarmUI is a desktop application, so it needs a graphical session. A headless
-Jetson can run the gateway, publishers and CLI while the UI runs on your Mac
-through a secured REST connection.
+Open the native application and choose **Connect a hive** to configure a Queen
+TCP endpoint or shared Hive Gateway, authentication, role and delegated ticket.
+Named profiles save no credentials. **Operations** provides searchable forms
+from the owning `coh` schema, native path selection, exact review and bounded
+execution. **Tickets & policy** exposes existing validated control records;
+the namespace, evidence, replay and run-story desks keep their source and proof.
+See the [SwarmUI operator guide](SWARMUI.md) for the terminal-free walkthrough.
 
-To join the existing gateway without taking its TCP connection:
-
-```bash
-SWARMUI_TRANSPORT=rest SWARMUI_REST_URL="$COH_REST_URL" \
-  "$COH_BIN/swarmui"
-```
-
-Select the intended role/attachment in the UI. Use the namespace and console to
-verify `/proc/boot` before relying on the Live Hive display. Reading panels does
-not grant write authority; embedded console mutations still need the REST
-request token, delegated caller binding and target policy.
+SwarmUI needs a graphical session. A Jetson can run the Linux AArch64 desktop
+locally or through its existing remote desktop; a headless executor can instead
+be observed from a Mac through a secured gateway. Optional signed
+`macos-desktop` and `linux-aarch64-desktop` package profiles supply the matching
+app, `coh`, gateway and offline guide. Keep the package together, or choose its
+`bin` directory in Settings. Environment launch inputs remain compatible:
 
 | Configuration | Meaning |
 | --- | --- |
@@ -1351,8 +1350,8 @@ request token, delegated caller binding and target policy.
 | `--replay-trace FILE` | Load a retained trace for offline replay |
 
 SwarmUI does not accept `cohsh`'s `--transport` command-line option. Configure
-transport in the launching environment. Do not launch it in default direct mode
-while a gateway or direct publisher is connected.
+transport in **Connect a hive** or the launching environment. A direct session
+requires exclusive ownership; select the gateway while it owns the console.
 
 Worker discovery reads the generated shard addresses and actual Worker records;
 a bounded aggregate `/shard` listing is not a full fleet census. An empty shard
@@ -1366,6 +1365,14 @@ SwarmUI's console also supports `man [command]` using the same embedded source.
 Its own `help` lists its supported subset and write gates. Shared manuals do
 not enable host-only commands; SwarmUI uses raw JSON for `spawn`, while cohsh
 accepts the documented role and `key=value` arguments.
+
+The additive `coh evidence story --input GRAPH --trust TRUST --cas DIR` command
+verifies the existing signed causal graph and its CAS before returning redacted
+artifact observations. It adds no evidence format or readiness classifier.
+The desktop's internal `coh --ui-schema` handshake checks exact parser agreement;
+`coh --ui-read-report FILE` provides bounded redacted report inspection. These
+adapters do not grant target authority. Persistent FUSE, arbitrary shell-backed
+runs and identity administration explain their service boundary in the catalog.
 
 ### Cohesix Python package
 

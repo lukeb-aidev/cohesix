@@ -1,3 +1,6 @@
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Provide offline workbench navigation and action glyphs. -->
+<!-- Copyright 2026 Lukas Bower -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <symbol id="plug" viewBox="0 0 256 256">
     <path
@@ -47,4 +50,11 @@
       d="M245,110.64A16,16,0,0,0,232,104H216V88a16,16,0,0,0-16-16H130.67L102.94,51.2a16.14,16.14,0,0,0-9.6-3.2H40A16,16,0,0,0,24,64V208h0a8,8,0,0,0,8,8H211.1a8,8,0,0,0,7.59-5.47l28.49-85.47A16.05,16.05,0,0,0,245,110.64ZM93.34,64,123.2,86.4A8,8,0,0,0,128,88h72v16H69.77a16,16,0,0,0-15.18,10.94L40,158.7V64Zm112,136H43.1l26.67-80H232Z"
     />
   </symbol>
+<symbol id="hexagon" viewBox="0 0 256 256"><path d="M128 20 220 74v108l-92 54-92-54V74Z M128 79v98 M84 103l88 50 M172 103l-88 50" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="path" viewBox="0 0 256 256"><path d="M48 64h105a40 40 0 0 1 0 80H98a32 32 0 0 0 0 64h110 M178 178l30 30-30 30" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="key" viewBox="0 0 256 256"><path d="M96 156a60 60 0 1 1 40-40l88 88-28 28-24-24-18 18-26-26 18-18Z" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="shield-check" viewBox="0 0 256 256"><path d="M128 24 220 64v64c0 62-92 106-92 106S36 190 36 128V64Z M80 122l32 32 64-64" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="clock-counter-clockwise" viewBox="0 0 256 256"><path d="M44 85a92 92 0 1 1-7 62 M44 32v56h56 M128 68v60l-40 28" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="terminal" viewBox="0 0 256 256"><path d="M36 40h184v176H36Z M70 85l36 36-36 36 M131 172h50" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="gear" viewBox="0 0 256 256"><path d="M102 29h52l8 27 24 14 28-7 26 45-20 20v28l20 20-26 45-28-7-24 14-8 27h-52l-8-27-24-14-28 7-26-45 20-20v-28l-20-20 26-45 28 7 24-14Z M158 128a30 30 0 1 1-60 0 30 30 0 0 1 60 0" fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 </svg>

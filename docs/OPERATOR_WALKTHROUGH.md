@@ -20,14 +20,43 @@ control plane and can include a Jetson or another compatible Linux AArch64
 NVIDIA CUDA host as the external AI machine. The same sequence applies to a Pi
 Queen only after its independent physical acceptance gates pass.
 
-The walkthrough stops before changing a model or service. In current 26e,
-target control state, host GPU discovery, host-side AI execution, and physical
-target evidence remain separate proof classes. A deployment-specific executor
-must still prove the external change and return its result.
+The walkthrough stops before changing a model or service. Target control state,
+host GPU discovery, host-side AI execution, and physical target evidence remain
+separate proof classes. The admitted CUDA/LoRA executor must prove the external
+change and return its independently verified result.
 
 Complete the [Quickstart](QUICKSTART.md) first if the host tools are not built
 or the current QEMU profile has not booted. See the [Glossary](GLOSSARY.md) for
 Cohesix-specific terms.
+
+## Follow the same decision in SwarmUI
+
+Open the installed desktop application and choose **Connect a hive**. Select
+**Hive Gateway**, enter its base URL and session credentials or secret references,
+and connect. A direct **Queen** connection is also available when no gateway or
+other tool owns its console. Saved profiles retain no credentials.
+
+1. In **Namespaces**, browse `/shard`, then read `/proc/boot` and
+   `/proc/root/reachable`. Compare the exact target identity with the change record.
+2. In **Overview**, inspect scheduling, leases and pressure. A visible session
+   does not by itself establish an executable Worker or a completed GPU operation.
+3. In **Operations**, choose **Explore registered providers**, **Check your
+   environment**, or the admitted CUDA/adapter workflow. Named fields and native
+   file pickers build the existing host command; review it before running.
+4. In **Tickets & policy**, inspect the ticket status, approval queue and audit
+   decisions. Policy restrictions produce explicit refusals with their source.
+5. In **Evidence**, verify the canonical evidence pack or causal graph. In
+   **Run story**, select a native phase or evidence-ribbon segment to inspect its
+   exact source. The **GPU flight deck** identifies missing measurements explicitly.
+6. To understand the accepted journey before using hardware, open **Replay** and
+   select the CUDA, private-adapter or failed-canary reference. These signed
+   historical records disconnect the live session. A recovered failure remains
+   failed, and replay cannot submit a target control action.
+
+The [SwarmUI guide](SWARMUI.md) explains connection recovery, operation gates and
+installed tools. The [native screenshot gallery](SWARMUI_GALLERY.md) shows the
+same packaged interface, with its original mode and proof labels. The command-line
+walkthrough below remains useful when comparing transcripts or automating a check.
 
 ## The operational picture you are building
 

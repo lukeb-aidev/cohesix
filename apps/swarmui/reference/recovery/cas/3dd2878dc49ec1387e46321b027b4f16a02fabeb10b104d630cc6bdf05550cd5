@@ -1,0 +1,1 @@
+{"action":"peft.release","authority_custodian":"gateway-delegation","decision":"allowed","delegated_ticket_sha256":"6efc7fab9afcd1807ff07f6b99627cd73abb4ec09d3ececbbc9699fbc8eb8102","request_sha256":"62c163054b829b9ed8155e6eafb13baa22f8b28f2727cfcc63beefdf8170c0e6","schema":"cohesix-gateway-decision/v1","writer_epoch":7}

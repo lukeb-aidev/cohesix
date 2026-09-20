@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "a5388a4eacf4b004aa5c60851199e66e8aa88d4af458e4252631b978de162b1e";
+    "82b0bd90b9b7db8b2cc875b190bb710d4e69dd78d72502ac573b076549c270e2";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9557,7 +9557,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 52] = [
     "manifest.schema=1.27",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6",
+    "manifest.sha256=34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

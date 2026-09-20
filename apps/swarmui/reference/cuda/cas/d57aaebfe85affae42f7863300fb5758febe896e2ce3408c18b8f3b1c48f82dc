@@ -1,0 +1,1 @@
+{"action":"gpu.workload.submit","authority_custodian":"gateway-delegation","decision":"allowed","delegated_ticket_sha256":"21cfff0a01c65273a4cc1c9f8431437156dc1a884e8a6ba113fc7bd45da4fdb5","request_sha256":"1967d8df4564848b45f662fd1b6b2435965fb8322e65182086dce8a94ee391b1","schema":"cohesix-gateway-decision/v1","writer_epoch":7}

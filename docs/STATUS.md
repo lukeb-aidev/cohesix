@@ -24,6 +24,18 @@ installation/CI, the full SwarmUI workbench, then integrated qualification. Broa
 scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
 planning, not implementation or evidence status.
 
+Milestone [27f](BUILD_PLAN.md#27f), **SwarmUI Community Showcase**, is
+**Complete** as of 20 September 2026. The native desktop connects to a Queen or
+Hive Gateway, exposes guided operations and installed host tools, and presents
+namespace, authority, evidence and signed replay workflows without requiring a
+terminal. Concise contextual help uses plain English and supports keyboard access.
+Source and packaged Mac native checks, Linux AArch64 Jetson checks,
+focused browser/performance contracts and generated/Test Plan consistency pass.
+The [gallery](SWARMUI_GALLERY.md) contains actual native screenshots; the
+[implementation record](audit/M27F_IMPLEMENTATION_RECORD.md) records exact
+identities, scoped evidence and a retained WebKit shutdown observation. The
+public 1.0.0-beta archives are unchanged; integrated release qualification is 27g.
+
 Milestone [27e](BUILD_PLAN.md#27e), **Installation, Adoption and CI**, is
 **Complete** as of 20 September 2026. Selected signed Mac/Linux ARM64 packages
 include the explicit Python distribution sources, offline adoption guides and
@@ -33,8 +45,9 @@ outcome is verified. Focused package/service/lifecycle/CI tests, native host
 builds and clean SDK installs pass. Installed tools reverify the accepted native
 CUDA/LoRA evidence at its original identity; failed-canary rollback stays failed.
 See [Adoption](ADOPTION.md) and the
-[implementation record](audit/M27E_IMPLEMENTATION_RECORD.md). Native UI and
-fresh assembled release qualification remain 27f/27g.
+[implementation record](audit/M27E_IMPLEMENTATION_RECORD.md). Native UI is
+delivered by 27f;
+fresh assembled release qualification remains 27g.
 
 Milestone [27d](BUILD_PLAN.md#27d), **Verified Private LoRA Release**, is
 **Complete** as of 19 September 2026. Genuine native import and HF training pass
@@ -43,8 +56,9 @@ refused, and a forced canary failure restores the exact previous adapter and
 generation while remaining a failed candidate. Focused boundary/refusal checks,
 exact macOS/Linux ARM64 and QEMU builds, independent WorkerLora receipts,
 cleanup and generated/Test Plan checks pass. See the
-[implementation record](audit/M27D_IMPLEMENTATION_RECORD.md). Package adoption is delivered by 27e; native UI
-and integrated release qualification remain later milestones.
+[implementation record](audit/M27D_IMPLEMENTATION_RECORD.md). Package adoption
+and native UI are delivered by 27e/27f;
+integrated release qualification remains 27g.
 
 Milestone [27c](BUILD_PLAN.md#27c), **Recoverable CUDA Recipes**, is **Complete**
 as of 19 September 2026. The shared CLI/Python lifecycle persists identity and

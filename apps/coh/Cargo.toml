@@ -22,6 +22,7 @@ nvml = ["gpu-bridge-host/nvml"]
 cuda = ["gpu-bridge-host/cuda"]
 
 [dependencies]
+coh-cli = { path = "../../crates/coh-cli" }
 ed25519-dalek = { workspace = true }
 cohesix-identity = { workspace = true }
 cohesix-authority = { workspace = true, features = ["std"] }

@@ -197,7 +197,7 @@
 - `swarmui.paths.telemetry_root`: `/worker`
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
 - `swarmui.paths.worker_root`: `/shard`
-- `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu, /host, /policy, /actions, /audit, /replay`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -235,7 +235,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`
+- `manifest.sha256`: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -297,4 +297,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`)._
+_Generated from `configs/root_task.toml` (sha256: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`)._

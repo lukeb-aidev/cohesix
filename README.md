@@ -159,10 +159,18 @@ sequence, `OK`/`ERR` responses, and `END` stream terminator—not 9P frames on t
 wire. Host tools preserve the same namespace authority without creating a
 second control path.
 
-**SwarmUI** is the host-side desktop view of Cohesix telemetry and replay. It reuses
-the existing host transport semantics and adds no target authority.
+**SwarmUI** is the desktop workbench for Cohesix. Connect to a Queen or Hive
+Gateway, explore published state, run guided host workflows, and follow each
+result back to its evidence—all without command syntax or a terminal. Spectrum
+frames the controls; PixiJS renders the hive and recorded execution story.
 
-![SwarmUI replay showing Live Hive telemetry](docs/swarmui-replay.png)
+![SwarmUI showing a verified historical LoRA run with distinct evidence owners and a persistent REPLAY label](docs/images/swarmui/run-story.jpg)
+
+This is the native desktop candidate displaying a signed historical reference,
+not a new live execution. See the [SwarmUI guide](docs/SWARMUI.md),
+[native gallery](docs/SWARMUI_GALLERY.md), and
+[operator walkthrough](docs/OPERATOR_WALKTHROUGH.md). The workbench is available
+in current source; the existing 1.0.0-beta archives retain their original UI.
 
 ## Cohesix 1.0.0-beta
 

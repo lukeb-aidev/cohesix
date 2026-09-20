@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`
-- `policy.sha256`: `d29c3334b059890983960038ff116c262aadca5a8774c4178974fa85a2b3cdcf`
+- `manifest.sha256`: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`
+- `policy.sha256`: `52ecf974314871aab10f1db9d5f786569af6dab083de8b8efb7cb754aa93c552`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `24`
 - `cohsh.tail.poll_ms_default`: `1000`
@@ -22,4 +22,4 @@
 - `trace.max_bytes`: `1048576`
 - `trace.max_duration_ms`: `60000`
 
-_Generated from `configs/root_task.toml` (sha256: `33ac378131c163399b747dac5175baf2619a92674de81f5ed3f8cf4e649f4de6`)._
+_Generated from `configs/root_task.toml` (sha256: `34c427cfe60f8cd35f15539b01490e0e0d5e95ac01135cbb05be8af1eb4f6be9`)._

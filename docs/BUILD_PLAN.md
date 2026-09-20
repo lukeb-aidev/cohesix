@@ -11669,7 +11669,41 @@ Deliverables: Ordinary CI integration with stable identity and verified-outcome 
 ## Milestone 27f — SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive <a id="27f"></a>
 [Milestones](#Milestones)
 
-**Status:** Planned — required next-release workbench and showcase.
+**Status:** Complete (2026-09-20) — editable Queen/gateway connections, guided
+operations, installed host tools, namespace/evidence/replay desks, plain-English
+contextual help and the native Spectrum/PixiJS workbench are implemented.
+Focused source and packaged Mac checks, native Jetson checks, signed reference
+journeys, screenshots and capture pass. The
+[implementation record](audit/M27F_IMPLEMENTATION_RECORD.md) binds exact artifacts,
+final UI corrections and the retained Linux platform observation. Integrated
+release qualification remains 27g.
+
+**Operator experience contract:** A user can open the installed application,
+choose a Queen or Hive Gateway, enter the endpoint and protected credentials,
+connect, discover available operations and complete them without a terminal or
+knowledge of Cohesix command grammar. Connection settings are editable in the
+application; environment variables remain optional compatibility inputs.
+Named profiles retain endpoint and non-secret preferences only. Authentication,
+role, delegated scope, connection ownership, refusal and reconnect state are
+visible. Direct Queen connections explain exclusive console ownership; gateway
+connections explain shared access. Failed authentication never becomes connected.
+
+All currently supported Cohesix operations must be discoverable through labelled,
+validated forms, contextual actions and searchable help. Common journeys receive
+purpose-built entry points; advanced operations remain available through structured
+forms over the owning command schema. Users review consequential actions before
+submission and see progress, exact results, recovery and evidence. The console is
+an optional expert surface, never a prerequisite. Capability and profile limits
+explain why an operation is unavailable and the next supported step.
+
+Appropriate host tools run from the desktop through a Rust-owned, bounded bridge
+to installed tools or their shared libraries. Reuse their argument validation,
+admission, idempotency, cancellation, durable journals and evidence verification.
+Do not introduce a shell executor, arbitrary executable/argument runner, provider
+bypass or UI-owned success classifier. Credentials stay out of saved profiles,
+previews, transcripts, exports and showcase assets. Long-running work remains
+responsive, exposes uncertainty honestly and can be reconciled through the
+owning lifecycle after interruption.
 
 **Delivery posture:** Deliver the full Spectrum operator workbench and PixiJS
 showcase over the accepted CUDA/PEFT workflows. Namespace, tickets/approval,
@@ -11929,6 +11963,19 @@ components, without making 27f depend on its future transport.
 
 **Task Breakdown**
 ```
+Title/ID: m27f-connections-and-guided-operations
+Milestone: 27f / m27f-connections-and-guided-operations
+Goal: Make every supported operator journey discoverable and executable from the installed UI without terminal use or command-grammar knowledge.
+Inputs: Existing Rust console/session contracts, coh host-tool argument schemas and 27b-e lifecycle/evidence libraries, generated deployment policy, installed tool bundle.
+Changes:
+  - Rust session bridge and connection desk — editable Queen/gateway endpoints, protected credentials, role/ticket selection, non-secret profiles, explicit disconnect and recoverable reconnect.
+  - Guided operation catalog and contextual forms — searchable supported commands, field help, validation, exact review, authority/refusal explanations and evidence-linked results.
+  - Host-tool bridge — schema-bound installed tools/shared libraries, bounded output and process ownership, progress and durable lifecycle reconciliation, without a shell or provider shortcut.
+  - Native/fixture acceptance and guides — first-launch connection, both transport modes, invalid credentials/input, guided mutation refusal, canonical host workflows, recovery, keyboard navigation and secret non-persistence.
+Commands: Focused SwarmUI/owning-schema tests, exact affected host builds, desktop/narrow UI checks, packaged native source/candidate journeys, generated and Test Plan consistency; no duplicate or full-workspace suite.
+Checks: No supported operation requires the terminal; previews match the owning parser; invalid input/authority and offline mode fail closed; secrets are absent from persisted/exported UI state; native operations retain canonical outcome and evidence semantics.
+Deliverables: Terminal-free connection and operation workflows integrated into the complete 27f workbench.
+
 Title/ID: m27f-swarmui-scope-and-drift
 Goal: Establish the desktop-workbench scope and clear generated-doc/grammar drift before changing UI layout.
 Inputs: AGENTS.md, docs/BUILD_PLAN.md, docs/USERLAND_AND_CLI.md, docs/snippets/*.md, tools/coh-rtc/tests/swarmui_docs.rs, apps/swarmui/src/generated.rs, crates/cohsh-core/src/verb.rs, apps/cohsh/src/lib.rs, apps/swarmui/src/lib.rs
@@ -11962,6 +12009,16 @@ Checks:
   - No UI path synthesizes executable Worker, live provider/executor, production bundle, or production use-case state; absent/stale/mismatched evidence is visible and deterministic in live and replay modes.
 Deliverables:
   - SwarmUI communicates the real end-to-end integration state without collapsing independent proof layers.
+
+Title/ID: m27f-concise-contextual-help
+Goal: Help a novice or occasional operator understand the next step in plain English, without assuming Cohesix terminology or cluttering the workbench.
+Inputs: Existing inline guidance, shared command manuals, vendored Spectrum controls and the completed desktop desks.
+Changes:
+  - One discreet screen-help control plus brief hints for presentation, transcript, recent activity and snapshot naming.
+  - Spectrum-styled plain-text tooltips support hover, keyboard focus, Escape and touch; essential authority and input guidance remains visible inline.
+Commands: Focused help/accessibility browser cases; exact Mac and Jetson native builds and help smoke checks; generated consistency.
+Checks: Hints are concise, remain in the viewport, dismiss predictably, introduce no network dependency and never execute an operation.
+Deliverables: Discoverable contextual help and an updated operator guide.
 
 Title/ID: m27f-spectrum-desktop-shell
 Goal: Rebuild SwarmUI chrome around Spectrum-backed desktop primitives and split the frontend into maintainable workbench modules while preserving backend protocol semantics.
@@ -12051,7 +12108,7 @@ Commands:
   - cargo test -p swarmui --test live_ai_showcase
   - cd tools/swarmui-ui-tests && npm test -- --grep live-ai-showcase
   - scripts/ci/swarmui_native_e2e.sh --target qemu --state-dir out/swarmui-native/m27f
-  - scripts/ci/swarmui_showcase_capture.sh --source replay --state-dir out/swarmui-showcase/m27f
+  - scripts/ci/swarmui_showcase_capture.sh --result out/swarmui-native/m27f/result.json --out out/swarmui-showcase/m27f.html
 Checks:
   - A viewer can distinguish Queen, seL4 Worker, Pi/QEMU target, Jetson host,
     external AI runtime, artifact, and evidence ownership without opening a
