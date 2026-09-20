@@ -1420,8 +1420,19 @@ evidence_requirement = "exact output hash"
 current_observed_mode = "license_contract"
 
 [[tracked_rules]]
-id = "release-current-notes"
+id = "release-previous-notes"
 exact = "releases/RELEASE_NOTES-1.0.0-beta.md"
+class = "contract"
+owner = "release-tooling"
+production_reachable = false
+selection_source = "immutable prior release referenced by current documentation"
+package_disposition = "versioned_release_document"
+evidence_requirement = "historical version and exact output hash remain unchanged"
+current_observed_mode = "historical_release_notes"
+
+[[tracked_rules]]
+id = "release-current-notes"
+exact = "releases/RELEASE_NOTES-1.1.0-beta.md"
 class = "contract"
 owner = "release-tooling"
 production_reachable = false
@@ -1576,7 +1587,7 @@ expected_artifacts = [
 
 [release]
 schema = "cohesix-runtime-release-manifest/v2"
-version = "1.0.0-beta"
+version = "1.1.0-beta"
 host_tools = [
   "bin/cas-tool",
   "bin/coh",
@@ -1634,33 +1645,48 @@ generated_configs = [
   "configs/generated/cohesix_python_qemu_smp_production.json",
   "configs/generated/cohsh_policy.toml",
   "configs/generated/cohsh_policy.toml.sha256",
+  "configs/generated/cuda_recipe.json",
   "configs/generated/host_integration_dependency.json",
   "configs/generated/implementation_surface_inventory.json",
+  "configs/generated/provider_registry.json",
   "configs/generated/root_task_resolved.json",
   "configs/generated/root_task_resolved.json.sha256",
   "configs/generated/root_task_topology.json",
   "configs/generated/swarmui_defaults.toml",
   "configs/generated/swarmui_defaults.toml.sha256",
+  "configs/generated/use_case_evidence.json",
 ]
 public_documents = [
   "README.md",
+  "docs/ADOPTION.md",
   "docs/ARCHITECTURE.md",
+  "docs/CAUSAL_EVIDENCE.md",
+  "docs/CI_WORKFLOWS.md",
+  "docs/FAILOVER.md",
+  "docs/GLOSSARY.md",
   "docs/GPU_NODES.md",
   "docs/HARDWARE_BRINGUP.md",
   "docs/HOST_TOOLS.md",
   "docs/INTERFACES.md",
   "docs/NETWORK_CONFIG.md",
   "docs/OPERATOR_EVIDENCE.md",
+  "docs/OPERATOR_RECIPES.md",
+  "docs/OPERATOR_WALKTHROUGH.md",
   "docs/ATTESTATION.md",
   "docs/PYTHON_SUPPORT.md",
+  "docs/PRIVATE_LORA_RELEASE.md",
   "docs/QUICKSTART.md",
   "docs/ROLES_AND_SCHEDULING.md",
   "docs/SECURE9P.md",
   "docs/SECURITY.md",
+  "docs/STATUS.md",
+  "docs/SWARMUI.md",
+  "docs/SWARMUI_GALLERY.md",
   "docs/USERLAND_AND_CLI.md",
   "docs/USE_CASES.md",
   "docs/WORKER_TICKETS.md",
   "docs/M27A_AUTHORITY.md",
+  "packaging/README.md",
 ]
 host_assets = [
   "docs/COHESIX_LOGO.png",
@@ -1842,7 +1868,9 @@ support_files = [
   "scripts/driver_runtime_manifest.py",
   "scripts/worker_image_manifest.py",
   "configs/root_task.toml",
+  "packaging/ci/cohesix-journey.yml",
   "releases/RELEASE_NOTES-1.0.0-beta.md",
+  "releases/RELEASE_NOTES-1.1.0-beta.md",
   "scripts/ci/python_compat_run.sh",
   "scripts/setup_environment.sh",
 ]
@@ -1886,6 +1914,17 @@ selection_source = "documented host package service workflow"
 package_disposition = "repository_documentation"
 evidence_requirement = "must describe current signed package and service behavior"
 current_observed_mode = "operator_documentation"
+
+[[tracked_rules]]
+id = "packaging-journey-ci"
+exact = "packaging/ci/cohesix-journey.yml"
+class = "production_live"
+owner = "host-packaging"
+production_reachable = true
+selection_source = "maintained protected-runner journey workflow"
+package_disposition = "release_host_asset"
+evidence_requirement = "untrusted validation isolation and installed journey outcome checks"
+current_observed_mode = "protected_ci_workflow"
 
 [[packages]]
 path = "crates/coh-cli"

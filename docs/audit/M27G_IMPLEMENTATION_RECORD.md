@@ -50,3 +50,39 @@ consumers already reconcile failed jobs and preserve failed requested outcomes.
 No other implementation change is required; rebuild affected package dependencies
 and test their native composition. These focused checks do not replace the full
 post-burn staged target, pressure, due-diligence or release promotion gates.
+
+## Release A candidate selection
+
+```text
+Title/ID: m27g-release-a-candidate-selection
+Milestone: 27g / m27g-adoption-overhead-and-release-cut
+Goal: Select the reserved 1.1.0-beta candidate without modifying or promoting historical release evidence.
+Inputs: Integrated source 7d395cf751db9c64fd49c44148a3502167bf985c; configs/implementation_surfaces.toml; release factory and publication guard.
+Changes:
+  - configs/implementation_surfaces.toml — select 1.1.0-beta and its current notes; retain linked, immutable 1.0.0-beta notes as historical documentation; include current adoption/journey guides, maintained CI workflow and CUDA/provider/use-case contracts in the exact release inventory.
+  - releases/RELEASE_NOTES-1.1.0-beta.md — describe implemented Release A workflows and explicitly pending assembled qualification.
+  - scripts/release_publication.py — permit current 1.1.0-beta note updates while refusing edits to historical or future release notes.
+  - tests/test_release_bundle.py — verify reserved version selection, exact note inventory and publication refusal boundaries.
+  - compiler outputs — regenerate inventory and dependent host/provider bindings from the changed source.
+Commands:
+  - .venv/bin/python -m pytest tests/test_release_bundle.py -q
+  - .venv/bin/python -m pytest tests/test_release_inputs.py tests/test_release_qualify.py -q
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks: Candidate version and current notes agree; old release files remain byte-identical; publication reuse cannot accept changes to their notes or reserved future notes. These focused metadata checks do not start or replace the post-burn full Test Plan.
+Deliverables: Source-selected candidate identity, draft notes and focused command evidence; release acceptance remains pending.
+```
+
+Compatibility review covers coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
+the Python SDK and performance scripts. CLI grammar, namespaces, authority,
+runtime behavior, benchmark workloads and thresholds are unchanged. Packaging
+consumes the new release inventory; dependent generated host/provider identities
+must be rebuilt and qualified. Earlier default-profile builds of 7d395cf75 remain
+preparation evidence for that source, not builds of this revised inventory.
+
+The focused release-bundle checks passed (17 tests), as did the release-input
+and qualification contract checks (28 tests), generated consistency and Test
+Plan metadata checks. The original missing-adoption-document failure remains
+retained in the local qualification logs. No staged target test or production
+release acceptance is implied by these focused checks.

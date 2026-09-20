@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Verify exact Milestone 26e release, Pi 4 payload, and Worker acceptance gates.
+# Purpose: Verify release selection, publication immutability, Pi payloads and Worker gates.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
@@ -29,6 +29,55 @@ assert SPEC is not None and SPEC.loader is not None
 worker_support = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = worker_support
 SPEC.loader.exec_module(worker_support)
+
+
+def test_release_a_inventory_selects_current_notes_and_preserves_history() -> None:
+    """Release A selects 1.1.0 while keeping the linked prior notes immutable."""
+    inventory = tomllib.loads(
+        (ROOT / "configs/implementation_surfaces.toml").read_text()
+    )
+    release = inventory["release"]
+    assert release["version"] == "1.1.0-beta"
+    assert "releases/RELEASE_NOTES-1.1.0-beta.md" in release["support_files"]
+    assert "releases/RELEASE_NOTES-1.0.0-beta.md" in release["support_files"]
+    for contract in (
+        "cuda_recipe.json", "provider_registry.json", "use_case_evidence.json",
+    ):
+        assert f"configs/generated/{contract}" in release["generated_configs"]
+    assert "packaging/ci/cohesix-journey.yml" in release["support_files"]
+    for guide in (
+        "ADOPTION", "CI_WORKFLOWS", "PRIVATE_LORA_RELEASE", "SWARMUI",
+        "OPERATOR_WALKTHROUGH", "OPERATOR_RECIPES", "CAUSAL_EVIDENCE",
+    ):
+        assert f"docs/{guide}.md" in release["public_documents"]
+    current = next(
+        row for row in inventory["tracked_rules"]
+        if row["id"] == "release-current-notes"
+    )
+    assert current["exact"] == "releases/RELEASE_NOTES-1.1.0-beta.md"
+
+
+def test_publication_accepts_current_notes_and_refuses_historical_edits(
+    tmp_path: Path,
+) -> None:
+    """A current documentation update cannot authorize changes to old releases."""
+    spec = importlib.util.spec_from_file_location(
+        "release_publication_test", ROOT / "scripts/release_publication.py"
+    )
+    assert spec is not None and spec.loader is not None
+    publication = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publication)
+    assert publication.classify_change(
+        tmp_path, tmp_path, "releases/RELEASE_NOTES-1.1.0-beta.md", False
+    ) == "release-documentation"
+    for path in (
+        "releases/RELEASE_NOTES-1.0.0-beta.md",
+        "releases/RELEASE_NOTES-1.2.0-beta.md",
+    ):
+        with pytest.raises(
+            publication.evidence.EvidenceError, match="contract changed"
+        ):
+            publication.classify_change(tmp_path, tmp_path, path, False)
 
 
 @pytest.mark.parametrize("profile", [
