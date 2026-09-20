@@ -60,6 +60,12 @@ Command exit alone is not terminal evidence. KeepAlive, socket-activated and
 Mach-activated jobs are refused for lifecycle changes because independent
 activation would make the requested stop or invocation ambiguous.
 
+Native observation can encounter an intermediate launchd state such as
+`SIGTERMed`, or a state/PID pair crossing a process transition. Only these
+transitional observations are read again within the caller's existing deadline;
+the lifecycle command is never repeated. Invalid service identity, duplicate or
+malformed fields, owner mismatch and executable mismatch still fail immediately.
+
 The agent retains before/after native objects in its bounded evidence store.
 With separate enrolled signing keys, the gateway/native chain uses the shared
 causal verifier. The durable version-1 ticket journal prevents redispatch after

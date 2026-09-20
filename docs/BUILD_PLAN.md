@@ -12700,6 +12700,8 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Status:** Planned — deferred breadth; existing implementation remains preserved.
+The retained launchd observation defect is narrowly Reopened under
+`m28a-native-provider-discovery-and-actions` for M27g restoration only.
 
 **Prerequisites:** completed 27g and 28. This milestone extends the qualified
 27b foundation, 27c recipes, 27d LoRA transaction and 27e packaging. The complete
@@ -13284,10 +13286,12 @@ Checks: Live GPU execution names the device/MIG instance, topology generation, m
 Deliverables: Fail-closed external execution evidence tied to exact Worker receipts.
 
 Title/ID: m28a-native-provider-discovery-and-actions
+Status: Reopened only for the retained launchd transitional-observation defect found by M27g / m27g-two-hour-pi4-operator-burn-in. All broader provider implementation and qualification remains Planned. Restore observation within the existing native deadline, retain exact identity checks and single dispatch, and require focused parser plus real macOS start/restart/stop evidence.
 Milestone: 28a / m28a-native-provider-discovery-and-actions
 Goal: Complete and qualify broader macOS, Kubernetes and native-provider discovery/actions while retaining the working CUDA/systemd/Docker paths.
 Inputs: accepted 27b–27g implementation and exact evidence; provider/integration registries, apps/host-sidecar-bridge/**, apps/host-ticket-agent/**, tools/cohesix-py/cohesix/integrations.py, apps/gpu-bridge-host/**, macOS launchd/Xcode tooling, Linux systemd/Docker/Kubernetes APIs, Jetson host interfaces, docs/HOST_TOOLS.md, docs/USE_CASES.md.
 Changes:
+  - M27g retained-path restoration: retry only typed transitional observations within the existing caller deadline; preserve single dispatch, native identity and fail-closed parsing. Parser and native macOS lifecycle checks pass. Compatibility review: host-ticket-agent and host-sidecar-bridge consume the repaired observer; coh/coh-status, cohsh, Hive Gateway, SwarmUI, gpu-bridge-host, cas-tool, sidecar-bus, the Python SDK and performance scripts keep their existing authority, grammar, schemas, bounds and result contracts. No other implementation changes are needed.
   - host provider implementations — read systemd, launchd, Docker, Kubernetes, NVIDIA/CUDA/NVML, Jetson board/JetPack/power/thermal/clock, and macOS/Linux network interface/link/address/route/error-counter state from the selected host's native bounded APIs or allowlisted structured utilities; never treat target-preseeded `/host` data as discovery input.
   - systemd provider — use the Manager D-Bus API for discovery and lifecycle,
     support selected hardened transient units for bounded external work, bind

@@ -13,7 +13,18 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+#[derive(Debug)]
+struct TransientObservation(&'static str);
+
+impl std::fmt::Display for TransientObservation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for TransientObservation {}
 
 /// A libproc process incarnation; executable bytes are observed on its native path.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -185,22 +196,20 @@ fn parse_status(target: &LaunchdTarget, raw: &[u8]) -> Result<(String, u64, Opti
     let state = values
         .get("state")
         .ok_or_else(|| anyhow!("EPERM missing-launchd-state"))?;
-    ensure!(
-        matches!(
-            *state,
-            "running" | "not running" | "waiting" | "spawn scheduled"
-        ),
-        "unavailable launchd-transient-state"
-    );
     let runs = values
         .get("runs")
         .ok_or_else(|| anyhow!("EPERM missing-launchd-invocation"))?
         .parse()?;
     let pid = values.get("pid").map(|v| v.parse()).transpose()?;
-    ensure!(
-        (*state == "running") == pid.is_some(),
-        "unavailable launchd-process-transition"
-    );
+    if !matches!(
+        *state,
+        "running" | "not running" | "waiting" | "spawn scheduled"
+    ) {
+        return Err(TransientObservation("unavailable launchd-transient-state").into());
+    }
+    if (*state == "running") != pid.is_some() {
+        return Err(TransientObservation("unavailable launchd-process-transition").into());
+    }
     Ok(((*state).into(), runs, pid))
 }
 
@@ -208,9 +217,26 @@ fn parse_status(target: &LaunchdTarget, raw: &[u8]) -> Result<(String, u64, Opti
 pub fn observe(target: &LaunchdTarget, deadline: Instant) -> Result<Observation> {
     preflight(target, false, deadline)?;
     let service = format!("{}/{}", target.domain, target.label);
-    let raw =
-        crate::observations::command(Path::new("/bin/launchctl"), &["print", &service], deadline)?;
-    let (state, runs, pid) = parse_status(target, &raw)?;
+    let (state, runs, pid) = loop {
+        let raw = crate::observations::command(
+            Path::new("/bin/launchctl"),
+            &["print", &service],
+            deadline,
+        )?;
+        match parse_status(target, &raw) {
+            Ok(status) => break status,
+            Err(error) if error.is::<TransientObservation>() => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(error);
+                }
+                // launchctl can return during its SIGTERMed/spawn transition.
+                // Observe again within the caller's existing deadline; never redispatch.
+                std::thread::sleep(remaining.min(Duration::from_millis(25)));
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let process = pid.map(|pid| process(pid, deadline)).transpose()?;
     if let Some(identity) = &process {
         ensure!(
@@ -289,6 +315,46 @@ pub fn postcondition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transitional_status_is_distinct_from_identity_or_parse_failure() {
+        let target = LaunchdTarget {
+            id: "owned".into(),
+            domain: "gui/501".into(),
+            label: "org.cohesix.owned".into(),
+            plist: "/tmp/owned.plist".into(),
+            plist_sha256: "a".repeat(64),
+            executable_sha256: "b".repeat(64),
+        };
+        for body in [
+            "\tstate = SIGTERMed\n\truns = 2\n\tpid = 42\n",
+            "\tstate = running\n\truns = 2\n",
+            "\tstate = not running\n\truns = 2\n\tpid = 42\n",
+        ] {
+            let raw = format!("gui/501/org.cohesix.owned = {{\n{body}}}\n");
+            let error =
+                parse_status(&target, raw.as_bytes()).expect_err("transitional observation");
+            assert!(error.is::<TransientObservation>());
+        }
+        for raw in [
+            "gui/501/other = {\n\tstate = SIGTERMed\n}\n",
+            "gui/501/org.cohesix.owned = {\n\tstate = running\n\tstate = waiting\n}\n",
+            "gui/501/org.cohesix.owned = {\n\tstate = running\n\truns = malformed\n\tpid = 42\n}\n",
+            "gui/501/org.cohesix.owned = {\n\tstate = SIGTERMed\n\truns = malformed\n\tpid = 42\n}\n",
+        ] {
+            let error = parse_status(&target, raw.as_bytes()).expect_err("invalid native observation");
+            assert!(!error.is::<TransientObservation>());
+        }
+        assert_eq!(
+            parse_status(
+                &target,
+                b"gui/501/org.cohesix.owned = {\n\tstate = running\n\truns = 3\n\tpid = 43\n}\n"
+            )
+            .expect("stable native status"),
+            ("running".into(), 3, Some(43))
+        );
+    }
+
     #[test]
     fn native_incarnation_and_counter_are_required_for_lifecycle_proof() {
         let process = ProcessIdentity {
