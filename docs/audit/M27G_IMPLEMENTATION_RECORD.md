@@ -197,3 +197,28 @@ and Test Plan metadata checks.
 This test-only repair leaves the complete host-tool suite, Python SDK, native
 runtime behavior and performance contracts unchanged. A new clean-source
 Stage 01 attempt remains required; all previous failed records are retained.
+
+The clean `3010ec2ce` common Stage 01 passed all 22 actions, including the
+complete Rust checks and Python inventory (2,643 passed, two skipped, 112
+subtests). QEMU Stage 02 passed. Stage 03 then stopped before target launch:
+`root_task_regression.toml` omitted the three CUDA workload actions introduced
+in 27b, while the target-qualified Python contract correctly requires their
+complete receipt matrix. Add `gpu.workload.submit`, `gpu.workload.cancel` and
+`gpu.workload.observe` to that manifest's general and receipt allowlists. Extend
+the existing selected-profile contract check to render the regression profile
+and require the same independently specified six GPU actions on QEMU, Pi and
+the gated regression target. Preserve distinct manifest hashes, existing gated
+surfaces, default operational profiles and all bounds.
+
+This repair belongs to 27g / `m27g-assembled-journeys-and-recovery`. The compiler
+already generates the required host-tool and Python projections; fresh gated
+artifacts must now be generated and compiled by the canonical regression runner.
+Review of coh/coh-status, cohsh, Hive Gateway, SwarmUI, host-ticket-agent,
+host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus, the Python SDK and
+benchmark scripts found no additional implementation changes: only the gated
+regression manifest was missing the existing contract. The operational burn-in
+profile already contained these actions, so its runtime remains unchanged.
+The six Python-profile tests, formatting, generated consistency and Test Plan
+metadata checks pass. Fresh staged evidence for the repaired source is required.
+The independent Pi Stage 02 attempt stopped at an absent local U-Boot build;
+that is a checkout dependency preparation failure, not Pi execution evidence.

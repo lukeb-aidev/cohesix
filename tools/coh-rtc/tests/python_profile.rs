@@ -45,14 +45,16 @@ fn target_neutral_defaults_cannot_name_live_target_or_proof() {
 }
 
 #[test]
-fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
+fn qemu_pi_and_regression_contracts_bind_distinct_selected_manifests() {
     let (qemu_bytes, qemu) = render("root_task.toml", "qemu_smp_production", "qemu");
     let (pi_bytes, pi) = render("root_task_pi4_uboot_aarch64.toml", "pi4_production", "pi4");
+    let (_, regression) = render("root_task_regression.toml", "qemu_smp_production", "qemu");
 
     assert_eq!(qemu["schema"], "cohesix-python-profile/v2");
     assert_eq!(qemu["target"], "qemu");
     assert_eq!(pi["target"], "pi4");
     assert_ne!(qemu["manifest_sha256"], pi["manifest_sha256"]);
+    assert_ne!(qemu["manifest_sha256"], regression["manifest_sha256"]);
     assert_ne!(qemu_bytes, pi_bytes);
     assert_eq!(qemu["worker"]["maximum_live_tasks"], 256);
     assert_eq!(pi["worker"]["maximum_live_tasks"], 256);
@@ -60,17 +62,19 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
         pi["worker"]["executable_roles"],
         qemu["worker"]["executable_roles"]
     );
-    assert_eq!(
-        qemu["receipts"]["gpu_actions"],
-        serde_json::json!([
-            "gpu.lease.grant",
-            "gpu.lease.renew",
-            "gpu.lease.release",
-            "gpu.workload.submit",
-            "gpu.workload.cancel",
-            "gpu.workload.observe"
-        ])
-    );
+    for contract in [&qemu, &pi, &regression] {
+        assert_eq!(
+            contract["receipts"]["gpu_actions"],
+            serde_json::json!([
+                "gpu.lease.grant",
+                "gpu.lease.renew",
+                "gpu.lease.release",
+                "gpu.workload.submit",
+                "gpu.workload.cancel",
+                "gpu.workload.observe"
+            ])
+        );
+    }
     assert_eq!(
         qemu["receipts"]["peft_actions"],
         serde_json::json!([
