@@ -7817,7 +7817,9 @@ impl LeaseState {
     ) -> Result<(), NineDoorBridgeError> {
         output.clear();
         let mut used_bytes = 0usize;
-        for entry in &self.preemptions {
+        // The byte-limited view retains the newest complete records, just like
+        // the entry-limited history, while preserving chronological order.
+        for entry in self.preemptions.iter().rev() {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
             write!(
                 line,
@@ -7834,6 +7836,7 @@ impl LeaseState {
                 break;
             }
         }
+        output.reverse();
         Ok(())
     }
 }
@@ -13075,6 +13078,49 @@ mod tests {
         assert_eq!(
             preemptions[0].as_str(),
             "id=lease-1 subject=worker-1 resource=gpu0 reason=quota seq=2"
+        );
+    }
+
+    #[test]
+    fn lease_preemption_byte_view_keeps_latest_complete_chronological_records() {
+        let mut lease = LeaseState::new(
+            generated::LeaseControlConfig {
+                enable: true,
+                active_max_entries: 4,
+                preemptions_max_entries: 4,
+                ctl_max_bytes: 1024,
+            },
+            generated::ProcLeaseConfig {
+                summary: true,
+                active: true,
+                preemptions: true,
+                summary_bytes: 160,
+                active_bytes: 256,
+                preemptions_bytes: 128,
+            },
+        );
+        for index in 1..=3 {
+            lease
+                .append_ctl(&format!(
+                    r#"{{"op":"grant","id":"lease-{index}","subject":"worker-{index}","resource":"gpu0","ttl_s":30,"priority":7}}"#
+                ))
+                .expect("grant independently named lease");
+            lease
+                .append_ctl(&format!(
+                    r#"{{"op":"preempt","id":"lease-{index}","reason":"quota"}}"#
+                ))
+                .expect("preempt independently named lease");
+        }
+        assert_eq!(lease.preemptions.len(), 3);
+        let lines = lease.preemptions_lines().expect("bounded latest history");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].as_str(),
+            "id=lease-2 subject=worker-2 resource=gpu0 reason=quota seq=4"
+        );
+        assert_eq!(
+            lines[1].as_str(),
+            "id=lease-3 subject=worker-3 resource=gpu0 reason=quota seq=6"
         );
     }
 

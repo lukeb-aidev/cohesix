@@ -856,7 +856,11 @@ preemptions are bounded observation history: the newest
 successful preemption evicts the oldest record instead of refusing the lease
 transition. The `preemptions` value in `/proc/lease/summary` is the cumulative
 successful-preemption count, so saturation and eviction remain explicitly
-accounted even though record storage is fixed. Generated summaries are
+accounted even though record storage is fixed. The byte-bounded
+`/proc/lease/preemptions` view likewise selects the newest complete records
+that fit, including their newline bytes, and emits that suffix in chronological
+order. Older retained entries may be outside the view; its absence never proves
+that an operation did not happen. Generated summaries are
 available at `/proc/lease/*` when enabled.
 
 ### Export control

@@ -679,8 +679,10 @@ impl LeaseState {
     }
 
     pub(crate) fn preemptions_payload(&self) -> Result<Vec<u8>, NineDoorError> {
-        let mut out = String::new();
-        for entry in &self.preemptions {
+        let mut lines = VecDeque::new();
+        let mut used_bytes = 0usize;
+        // Byte truncation and entry eviction both retain the latest history.
+        for entry in self.preemptions.iter().rev() {
             let line = format!(
                 "id={} subject={} resource={} reason={} seq={}\n",
                 entry.id, entry.subject, entry.resource, entry.reason, entry.seq
@@ -690,9 +692,14 @@ impl LeaseState {
                 line.len(),
                 self.proc_preemptions_bytes,
             )?;
-            if out.len().saturating_add(line.len()) > self.proc_preemptions_bytes {
+            if used_bytes.saturating_add(line.len()) > self.proc_preemptions_bytes {
                 break;
             }
+            used_bytes += line.len();
+            lines.push_front(line);
+        }
+        let mut out = String::with_capacity(used_bytes);
+        for line in lines {
             out.push_str(&line);
         }
         Ok(out.into_bytes())
@@ -1163,6 +1170,43 @@ mod tests {
         assert_eq!(
             state.ctl_log,
             b"{\"op\":\"preempt\",\"id\":\"l1\",\"reason\":\"benchmark\"}\n"
+        );
+    }
+
+    #[test]
+    fn lease_preemption_byte_view_keeps_latest_complete_chronological_records() {
+        let mut state = LeaseState::new(
+            LeaseControlConfig {
+                enable: true,
+                active_max_entries: 4,
+                preemptions_max_entries: 4,
+                ctl_max_bytes: 1024,
+            },
+            ProcLeaseConfig {
+                summary: true,
+                active: true,
+                preemptions: true,
+                summary_bytes: 160,
+                active_bytes: 256,
+                preemptions_bytes: 128,
+            },
+        );
+        for index in 1..=3 {
+            state
+                .append_line(&format!(
+                    r#"{{"op":"grant","id":"lease-{index}","subject":"worker-{index}","resource":"gpu0","ttl_s":30,"priority":7}}"#
+                ))
+                .expect("grant independently named lease");
+            state
+                .append_line(&format!(
+                    r#"{{"op":"preempt","id":"lease-{index}","reason":"quota"}}"#
+                ))
+                .expect("preempt independently named lease");
+        }
+        assert_eq!(state.preemptions.len(), 3);
+        assert_eq!(
+            state.preemptions_payload().expect("bounded latest history"),
+            b"id=lease-2 subject=worker-2 resource=gpu0 reason=quota seq=4\nid=lease-3 subject=worker-3 resource=gpu0 reason=quota seq=6\n"
         );
     }
 

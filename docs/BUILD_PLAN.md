@@ -114,7 +114,7 @@ owned by their specific contracts.
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
-| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Complete |
+| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Reopened (bounded lease-history view) |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Executable Host Foundation | Complete — selected foundation |
@@ -8937,8 +8937,10 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 ## Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation <a id="26e"></a>
 [Milestones](#Milestones)
 
-**Status:** Complete — release-owner-approved closure for 1.0.0-beta on
-2026-09-14. The Stage 05 decision remains `PASS_WITH_RESIDUAL_RISK` under the
+**Status:** Reopened — only the bounded lease-history view restoration in
+`m26e-qemu-shared-control-path-performance`, discovered during M27g preflight.
+The release-owner-approved 1.0.0-beta closure on 2026-09-14 remains historical.
+Its Stage 05 decision remains `PASS_WITH_RESIDUAL_RISK` under the
 approved [evidence carry-forward](audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
 and [DD30 release waiver](audit/DD30_RELEASE_WAIVER.toml), preserving the
 original source/target evidence identities and accepted residual risks.
@@ -9815,6 +9817,7 @@ Checks:
 Deliverables: Restricted console/network child with bounded compact shared-page IPC, ABI v3 SendBatch plus explicit publication ACK, exact-identity bounded synchronous capture, a bounded authenticated response lane with ordinary-service debt, preserved external operator semantics, fixed response-matrix evidence, target-disassembly evidence, and live four-core GICv3 QEMU containment evidence.
 
 Title/ID: m26e-qemu-shared-control-path-performance
+Status: Reopened narrowly for the preemption-history byte-view restoration discovered by M27g / m27g-two-hour-pi4-operator-burn-in. Earlier release acceptance remains historical; this restoration requires focused host/model checks and fresh exact-image QEMU/Pi evidence before closure.
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / QEMU pressure validation and shared bounded service quanta
 Goal: Remove measured artificial service-turn, Worker-scan, activation, transport head-of-line, and per-instance-SC ceilings while preserving one bounded shared architecture across QEMU and Pi.
 Inputs: `m26e-console-network-service-isolation`, `m26e-worker-supervisor-child-isolation`, accepted executable-Worker pressure harness, ABI v3 SendBatch/publication-ACK boundary, configs/root_task*.toml, crates/{console-network-abi,worker-task-abi}/**, apps/{cohsh,console-network-runtime,hive-gateway,nine-door,root-task,worker-heart}/**, tools/{coh-rtc,cohesix-py}/**, scripts/m26e_qemu_pressure.sh, scripts/rest_perf_harness.py, docs/{INTERFACES,ROLES_AND_SCHEDULING,USERLAND_AND_CLI,TEST_PLAN,BENCHMARKS}.md.
@@ -9829,7 +9832,8 @@ Changes:
   - Fresh foreground CYW43-to-SDIO publication captures the complete parent/child/route/generation and recovery fences before sequence-last commit. Selected MCS atomically prompts slot 8 and waits on slot 3 before another semantic operation. The returned path reclassifies the durable child and first-owner receipt; it never sends a second prompt. SDIO seals fresh one-way work before wake telemetry/blocking while preserving physical IRQ priority. Inexact/classic paths retain their original bounded behavior.
   - Driver runtime ABI v13 gives asynchronous generic MCS commands one initial prompt and an exact 24-byte DROW/DROA continuation handshake. Sequence, action, runtime generation and strictly-next wait slice validate before acknowledgement and one child resume. Bootstrap calls retain supervised Call/Reply donation; CYW43/SDIO retain their hard source-yield boundary. No retry, queue, physical owner or SC numeric changes are implied by a scheduling hint.
   - Passive NineDoor remains local to its sole root-control donor, with release/acquire publication around exact request/response frames. CPU-only shared/control aliases use coherent Normal/XN memory and barriers; MMIO, framebuffer and private DMA retain their own admitted attributes. The root stack reservation is 1 MiB with independent layout/emitted-frame checks and the 2-MiB heap retained; an upper IPC gap is not a downward-overflow guard.
-  - Shared schedule dequeue is exact FIFO and rejects empty/stale/out-of-order IDs without mutation. Host-ticket compaction removes only terminal payloads after result publication and durable cursor advancement, retaining the cumulative admission fence. Completed preemptions use a fixed chronological ring whose oldest observation may be evicted without weakening active lease state.
+  - Shared schedule dequeue is exact FIFO and rejects empty/stale/out-of-order IDs without mutation. Host-ticket compaction removes only terminal payloads after result publication and durable cursor advancement, retaining the cumulative admission fence. Completed preemptions use a fixed chronological ring whose oldest observation may be evicted without weakening active lease state. Restore the byte-limited preemption view to the newest complete chronological suffix: selecting the oldest prefix hid recent release effects from host-ticket-agent reconciliation after ordinary history growth. Preserve all entry/byte bounds, record grammar, cumulative counts and fail-closed ambiguous outcomes; do not replay an already admitted release.
+  - M27g compatibility review: host-ticket-agent requires the matching retained release record; coh/cohsh, Hive Gateway, SwarmUI, coh-status, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus, the Python SDK and performance scripts retain their existing contracts. Only root and host-model history selection changes; readers keep the same schema and chronological ordering, and omitted history never establishes an outcome. Fresh target evidence remains required.
   - The compiler owns target population, runtime/console ABI, root fan-in, resource and temporal declarations. Worker and driver archives remain separate and hash-bound. Pi build compatibility derives from the selected SMP+MCS profile; the shared contract does not relabel earlier QEMU or classic evidence as Pi acceptance.
   - Host tools, Python, SwarmUI and evidence readers consume generated target identity and the complete 265-task QEMU/272-task Pi temporal seals while retaining three detailed role exemplars. Gateway metadata exposes configured-backend target_host/target_port for endpoint binding, not proof of a live target. TCP-only cohsh builds exclude model transport closure; CAS/UI test binary resolution and Python population checks retain portable host compatibility.
   - Benchmark comparison requires matched source, image, profile, target, population, harness, workload and error policy. It judges QEMU/Pi parity by successful throughput and errors while reporting physical latency separately. Exact-image diagnostics, scripts, raw TCP, pressure, operator liveness and repeatability determine Pi claims; successful builds, media verification, models and functional pressure alone do not.
