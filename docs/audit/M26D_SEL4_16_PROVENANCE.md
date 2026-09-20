@@ -34,9 +34,10 @@ linked images, and target-qualified evidence described below. A renamed
 directory, a retained CMake cache, or a v15 result stored under a v16 path is
 not v16 evidence.
 
-The existing `M26D_SEL4_15_PROVENANCE.md` and
-`M26D_SEL4_15_CAPABILITY_AUDIT.md` remain historical truth for the v15
-baseline. They must not be rewritten or cited as v16 build or runtime proof.
+The [seL4 15 provenance](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/audit/M26D_SEL4_15_PROVENANCE.md)
+and [capability audit](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md)
+remain available in Git history. They describe only the v15 baseline and do
+not establish v16 build or runtime proof.
 
 ## Exact official seL4Test source
 

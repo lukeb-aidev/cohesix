@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Generate Milestone 26c tracked-Markdown inventory artifacts.
+# Purpose: Classify tracked Markdown by ownership and maintenance rules.
 # Copyright 2026 Lukas Bower
 
-"""Generate the 26c Markdown disposition CSV and readable report."""
+"""Generate a Markdown disposition CSV and readable report for a supplied file list."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def write_csv(rows: list[tuple[str, str, str, str, str]], out: pathlib.Path) -> 
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8", newline="") as handle:
         handle.write("# Author: Lukas Bower\n")
-        handle.write("# Purpose: Inventory every tracked Markdown file for Milestone 26c disposition control.\n")
+        handle.write("# Purpose: Inventory tracked Markdown ownership and maintenance rules.\n")
         handle.write("# Copyright 2026 Lukas Bower\n")
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(["path", "disposition", "owner", "update_rule", "evidence_source"])
@@ -93,10 +93,10 @@ def write_report(rows: list[tuple[str, str, str, str, str]], out: pathlib.Path) 
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as handle:
         handle.write("<!-- Author: Lukas Bower -->\n")
-        handle.write("<!-- Purpose: Summarize the Milestone 26c tracked-Markdown inventory and dispositions. -->\n")
+        handle.write("<!-- Purpose: Summarize tracked-Markdown ownership and maintenance rules. -->\n")
         handle.write("<!-- Copyright 2026 Lukas Bower -->\n\n")
-        handle.write("# M26C Markdown Inventory\n\n")
-        handle.write("This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.\n\n")
+        handle.write("# Markdown Inventory\n\n")
+        handle.write("This report classifies the supplied tracked-Markdown file list.\n\n")
         handle.write("## Summary\n\n")
         handle.write(f"- tracked Markdown files: {len(rows)}\n")
         for disposition in sorted(counts):

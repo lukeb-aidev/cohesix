@@ -21,6 +21,9 @@ override selected generated truth or qualify a later image. Current milestone
 scope and status remain in the build plan. Release waivers, retirement decisions
 and evidence carry-forward remain governed by their canonical audit records.
 
+References to removed `M26C_*` documents in these literal excerpts resolve to
+the [pinned audit archive](https://github.com/lukeb-aidev/cohesix/tree/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/audit).
+
 - [26b qualification](#milestone-26b-summary) and [CYW43 closure](#m26b-wifi-sdio-notification-dpc-closure-changes).
 - [26c scope and evidence correction](#milestone-26c-summary).
 - [26d baseline](#milestone-26d-summary) and [hardware-free CYW43 work](#m26d-cyw43-hardware-free-closure-changes).

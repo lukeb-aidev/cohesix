@@ -207,7 +207,7 @@ mapping resolves those references without changing schema or evidence bytes.
 | 28 verification/NIST / `m28-*` | 28, unchanged complete assurance scope. |
 | 28a general admission / `m28a-*` | 28c / `m28c-*`. |
 | 28b production Worker binding/fault lifecycle / `m28b-*` | 28d / `m28d-*`; stable generated `m28b_production_bundle` label is not renamed here. |
-| 28c MCP/A2A / `m28c-*` | 28g / `m28g-*`; detailed companion retains filename `M28C_AGENT_PROTOCOLS.md` for incoming-link stability. |
+| 28c MCP/A2A / `m28c-*` | 28g / `m28g-*`; the [detailed contract](#28g) is preserved at a pinned Git revision. |
 | 29, 29a, 29b, 30, 30a, 30b, 31 | Same IDs: edge persistence, service-turn scheduling, operator scheduling, field status, hardware diagnostics, AI namespace projections and AWS; prospective references follow new owners. |
 
 The following task IDs are stable keys referenced by the existing compiler
@@ -1875,7 +1875,7 @@ elfloader images; the retired radio paths and identifiers are absent from those
 artifacts. Current source and canonical documentation scans contain only the AI
 LoRA meaning, intentional negative tests, and this correction record.
 Historical release snapshots remain unchanged and are explicitly superseded by
-`docs/audit/M26C_DOC_DRIFT_LEDGER.md` entry `M26C-DOC-019`.
+[historical drift ledger](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/audit/M26C_DOC_DRIFT_LEDGER.md) entry `M26C-DOC-019`.
 
 **Separate repository gate at that checkpoint:** On 2026-07-15, the regenerated
 `seL4/build_UBOOT/elfloader/archive.archive.o.cpio` was 5,001,728 bytes against
@@ -7642,8 +7642,16 @@ Worker isolation and SMP+MCS acceptance. Subsequent production binding belongs t
 to [29b](#29b); the roadmap mapping resolves historical numbers below.
 
 **Evidence:** [Original qualification and scope corrections](audit/BUILD_PLAN_IMPLEMENTATION_HISTORY.md#milestone-26c-summary),
-[documentation drift ledger](audit/M26C_DOC_DRIFT_LEDGER.md), and the task-owned
+[documentation drift ledger](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/audit/M26C_DOC_DRIFT_LEDGER.md), and the task-owned
 audit records retain the original test roots, source limits and dispositions.
+
+The completed milestone's `M26C_*` audit files are preserved in the
+[pinned audit archive](https://github.com/lukeb-aidev/cohesix/tree/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/audit).
+File names and commands below describe that historical checkout, not required
+files in the 1.1.0-beta source tree. Current risk and acceptance controls remain
+in `docs/audit/rust_risk_baseline.toml`, `docs/audit/findings.csv`,
+`docs/audit/EXCEPTIONS.md`, and `docs/TEST_PLAN.md`. Generate new documentation
+inventories under `out/` when needed.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior drift may hide under a "refactor", "cleanup", or "humanizing" label.
@@ -16379,10 +16387,12 @@ and A2A primitives under existing Cohesix authority:
    MCP mount exposes only read-only MCP-admitted context/catalogs.
 
 **Detailed contract**
-The [M28g agent protocol contract](M28C_AGENT_PROTOCOLS.md) is normative for
+The [archived M28g agent protocol contract](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/M28C_AGENT_PROTOCOLS.md) is normative for
 manifest controls, coverage, guidance, protocol/security requirements,
 implementation commands, definition of done, and compiler touchpoints.
-BUILD_PLAN retains task records and milestone authority.
+BUILD_PLAN retains task records and milestone authority. The specification is
+preserved at that revision outside the 1.1.0-beta documentation set; restore
+and reconcile it when this milestone is activated.
 
 **Acceptance gates**
 
@@ -16406,7 +16416,7 @@ BUILD_PLAN retains task records and milestone authority.
   reconnect/restart, cancellation, and ambiguous-outcome evidence.
 - Preserve every additional conformance, security, grammar, visibility,
   provenance, performance, and as-built documentation check in the
-  [complete definition of done](M28C_AGENT_PROTOCOLS.md#checks-definition-of-done).
+  [complete definition of done](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/M28C_AGENT_PROTOCOLS.md#checks-definition-of-done).
   Host, QEMU, Pi, and external-provider evidence retain their distinct authority.
 
 **Task Breakdown**
@@ -18133,6 +18143,11 @@ Milestone 31 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 `scripts/uefi/*` exist; AWS admission, `scripts/aws/*`, isolated ENA descriptors/
 images, outbound 9door mounts, and approved root-task TLS/HTTP/IMDS do not.
 Reconcile boot-chain and TCB contracts before depending on them.
+
+The [former AWS status placeholder](https://github.com/lukeb-aidev/cohesix/blob/9bffe4c860bacb6946e2d9d1e9d032537d4aca29/docs/AWS_AMI.md)
+is archived outside the 1.1.0-beta documentation set. References to
+`docs/AWS_AMI.md` below name a future implementation deliverable; create that
+guide with the accepted AWS behavior when this milestone is activated.
 
 **Prerequisites**
 - Milestone **26d** completed for the accepted seL4 16 provenance and timer/syscall baseline. Milestone 31 must still create and validate a separate AWS-selected seL4 build; Pi 4 or QEMU artifacts are not AWS boot proof.

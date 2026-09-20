@@ -23,5 +23,5 @@ ESP/
 The repository now ships a deterministic UEFI ESP packaging helper in
 `scripts/uefi/esp-build.sh`. This shim remains documentation-only; the
 authoritative plan for future platform-specific UEFI work lives in
-`docs/BUILD_PLAN.md`, while the current reference boot flows are documented in
-`docs/BOOT_REFERENCE.md` and `docs/AWS_AMI.md`.
+[the AWS milestone](../../../docs/BUILD_PLAN.md#31), while the current reference
+boot flows are documented in [the boot reference](../../../docs/BOOT_REFERENCE.md).

@@ -3,7 +3,7 @@
 <!-- Purpose: Summarize current Cohesix implementation and evidence status without duplicating planning or run history. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix 1.0.0-beta Status
+# Cohesix Release Status
 
 This page is the public snapshot of what the checked-in Cohesix source declares
 and what that declaration does—and does not—prove. It is intentionally short.
@@ -15,138 +15,38 @@ Status terms such as **source**, **configured**, **target-qualified**, and
 **accepted** are defined in the [Glossary](GLOSSARY.md). They are not
 interchangeable.
 
-## Current development state
+## Release 1.1.0-beta
 
-The next release follows
-[27b–27g](BUILD_PLAN.md#post-26e-investment-constrained-delivery-sequence): executable
-host foundation, recoverable CUDA recipes, Verified Private LoRA Release,
-installation/CI, the full SwarmUI workbench, then integrated qualification. Broader
-scope remains owned by [28 onward](BUILD_PLAN.md#roadmap-id-mapping). This order changes
-planning, not implementation or evidence status.
+Release A (`1.1.0-beta`) is being qualified under
+[Milestone 27g](BUILD_PLAN.md#27g). The assembled release requires complete
+CUDA and private LoRA journeys through CLI, Python, CI and native SwarmUI;
+a two-hour current-image Pi 4 GENET burn-in with Mac and Linux AArch64 NVIDIA
+hosts; and the applicable staged [Test Plan](TEST_PLAN.md) and release gates.
+Component completion does not establish assembled release acceptance.
 
-Milestone [27g](BUILD_PLAN.md#27g), **Integrated Qualification and Next Release**,
-is **In Progress** as of 20 September 2026. Release A (`1.1.0-beta`) requires
-assembled CUDA and private LoRA journeys, a two-hour current-image Pi 4 GENET
-burn-in with Mac and Linux AArch64 NVIDIA work, followed by the complete
-applicable staged Test Plan and release gates. No new burn-in or release
-acceptance is claimed while that evidence is being collected.
+The release's implemented workflows and their qualified component records are:
 
-Milestone [27f](BUILD_PLAN.md#27f), **SwarmUI Community Showcase**, is
-**Complete** as of 20 September 2026. The native desktop connects to a Queen or
-Hive Gateway, exposes guided operations and installed host tools, and presents
-namespace, authority, evidence and signed replay workflows without requiring a
-terminal. Concise contextual help uses plain English and supports keyboard access.
-Source and packaged Mac native checks, Linux AArch64 Jetson checks,
-focused browser/performance contracts and generated/Test Plan consistency pass.
-The [gallery](SWARMUI_GALLERY.md) contains actual native screenshots; the
-[implementation record](audit/M27F_IMPLEMENTATION_RECORD.md) records exact
-identities, scoped evidence and a retained WebKit shutdown observation. The
-public 1.0.0-beta archives are unchanged; integrated release qualification is 27g.
+| Workflow | Operator guide | Component evidence |
+| --- | --- | --- |
+| Admitted native CUDA execution and recoverable recipes | [GPU nodes](GPU_NODES.md) | [Host foundation](audit/M27B_IMPLEMENTATION_RECORD.md), [recovery and reuse](audit/M27C_IMPLEMENTATION_RECORD.md) |
+| Private LoRA import/training, evaluation, promotion and rollback | [Private LoRA release](PRIVATE_LORA_RELEASE.md) | [Native execution and recovery](audit/M27D_IMPLEMENTATION_RECORD.md) |
+| Signed package installation, Python and CI | [Adoption](ADOPTION.md), [CI workflows](CI_WORKFLOWS.md) | [Package and installation checks](audit/M27E_IMPLEMENTATION_RECORD.md) |
+| Native desktop operations, evidence and signed replay | [SwarmUI](SWARMUI.md), [gallery](SWARMUI_GALLERY.md) | [Native app and packaged checks](audit/M27F_IMPLEMENTATION_RECORD.md) |
+| Delegated authority, failover, inspection and evidence | [Authority](M27A_AUTHORITY.md), [operator evidence](OPERATOR_EVIDENCE.md) | [Authority qualification](audit/M27A_COMPLETION_EVIDENCE.md), [operator utilities](audit/M27_COMPLETION_EVIDENCE.md) |
 
-Milestone [27e](BUILD_PLAN.md#27e), **Installation, Adoption and CI**, is
-**Complete** as of 20 September 2026. Selected signed Mac/Linux ARM64 packages
-include the explicit Python distribution sources, offline adoption guides and
-CI example. The shared journey command preserves retry identity and durable
-state, reports doctor boundaries and returns success only after the requested
-outcome is verified. Focused package/service/lifecycle/CI tests, native host
-builds and clean SDK installs pass. Installed tools reverify the accepted native
-CUDA/LoRA evidence at its original identity; failed-canary rollback stays failed.
-See [Adoption](ADOPTION.md) and the
-[implementation record](audit/M27E_IMPLEMENTATION_RECORD.md). Native UI is
-delivered by 27f;
-fresh assembled release qualification remains 27g.
+These records retain exact source, package, target and trust identities,
+failures and accepted gaps. Fresh assembled qualification remains required;
+replay and component evidence retain their original scope.
 
-Milestone [27d](BUILD_PLAN.md#27d), **Verified Private LoRA Release**, is
-**Complete** as of 19 September 2026. Genuine native import and HF training pass
-comparable evaluation and actual serving promotion. A measured regression is
-refused, and a forced canary failure restores the exact previous adapter and
-generation while remaining a failed candidate. Focused boundary/refusal checks,
-exact macOS/Linux ARM64 and QEMU builds, independent WorkerLora receipts,
-cleanup and generated/Test Plan checks pass. See the
-[implementation record](audit/M27D_IMPLEMENTATION_RECORD.md). Package adoption
-and native UI are delivered by 27e/27f;
-integrated release qualification remains 27g.
+The published release remains [1.0.0-beta](../releases/RELEASE_NOTES-1.0.0-beta.md).
+Its acceptance and provenance exceptions remain in the
+[audit record](audit/AUDIT_REPORT_2026-09-13.md). The current
+[exceptions register](audit/EXCEPTIONS.md) records DD30 as an owner-accepted
+retired gap; dynamic fault/wake testing remains unexecuted.
 
-Milestone [27c](BUILD_PLAN.md#27c), **Recoverable CUDA Recipes**, is **Complete**
-as of 19 September 2026. The shared CLI/Python lifecycle persists identity and
-submission intent, reconciles lost ACKs without duplicate CUDA execution, reuses
-compatible verified stage outputs and retains cumulative resource accounting.
-A fresh admitted native recipe, focused refusal/recovery/reuse checks, macOS and
-Linux ARM64 builds, generated consistency and Test Plan checks pass. Its canonical
-diagnostic case preserves a partial lease-detail capture error; no complete
-release evidence, new Pi qualification or full-suite pass is claimed. See the
-[implementation record](audit/M27C_IMPLEMENTATION_RECORD.md).
-
-Milestone [27b](BUILD_PLAN.md#27b) is **Complete** as of 19 September 2026
-for the selected **Executable Host Foundation**. The macOS ARM64 controller and
-Linux AArch64 CUDA 13.2.2 host pass real vector-add and matrix-multiply through
-QEMU admission, the host-ticket agent and bounded GPU bridge under both hardened
-systemd and a digest-pinned NVIDIA container. Separately enrolled gateway,
-native and Worker custodians produce verified causal chains. Native manager
-identities match the signed results and measured memory/CPU/task controls;
-CUDA allocation admission is explicitly not a hard GPU partition.
-
-Focused authority/refusal, deadline/cancel/revoke, lost-ACK/restart, evidence
-integrity and safe OOM checks pass at their recorded proof layers. Exact host
-and QEMU builds, generated consistency and Test Plan checks pass. No full suite,
-new physical Pi qualification, production Worker ticket-to-bundle binding,
-Queen reboot persistence or complete use-case acceptance is claimed. See the
-[implementation record](audit/M27B_IMPLEMENTATION_RECORD.md#selected-executable-foundation-closure-19-september-2026)
-for exact identities, evidence reuse and the scoped compatibility review.
-
-Earlier broad 27b implementation remains available under the updated roadmap:
-identity/exporter/federation, native snapshots, FUSE and package foundations,
-field-bus references, launchd/Xcode adapters, MIG discovery and generated workflow
-stages. Their existing evidence stays at its original source/profile identity.
-Credentialed Apple release, broader native-provider/package integration and
-complete domain workflows remain unqualified under their later milestone owners.
-MIG is unsupported on Merlin; CUDA, data and artifacts remain host-side.
-
-Milestone [27a](BUILD_PLAN.md#27a) is **Complete**, approved on
-14 September 2026. The scoped `m27a-host-ticket-validation-replay` restoration
-found during M27b is also Complete: production Root now accepts strict native
-argument/correlation objects and enforces version-1 request/result writer epochs;
-focused QEMU/Merlin checks pass. The previous closure evidence is retained. Delegated REST identity, strict Queen intent replay,
-host execution recovery and production-secret enforcement are implemented.
-Focused host, QEMU and Pi authority/compatibility checks pass. The
-[27a task record](audit/M27A_COMPLETION_EVIDENCE.md) records the owner's approval
-to close without the missing M26d status-baseline comparison, candidate-F Rust
-sign-off and the separate DD30 accepted risk. The comparison and dynamic
-fault/wake test remain unexecuted; no performance equivalence or complete
-final-source five-stage chain is claimed.
-
-Milestones [26e](BUILD_PLAN.md#26e) and [27](BUILD_PLAN.md#27) are Complete
-under their recorded owner approvals. On 14 September 2026, Lukas Bower
-approved M27 closure at tested source `b54bdd2fc`: QEMU Stages 01–05 and live
-TCP/REST operator checks pass; Pi Stages 01–02 pass. The final-image Pi boot,
-live operator checks and Stages 03–05 remain unexecuted because serial recovery
-failed. The [M27 completion record](audit/M27_COMPLETION_EVIDENCE.md) retains
-the exact evidence and accepted gaps. This milestone decision does not establish
-full physical qualification or activate the next milestone.
-
-M27 delivers read-only inspect/diff utilities, canonical live trace capture and
-offline replay, evidence case summaries, a thin bundle alias, and a shared
-signed-evidence verifier. Stock Pi positive signed-device acceptance is excluded
-by owner approval; unavailable and measurement-only evidence remain non-attested.
-Human Rust review is approved. DD30 remains P1 / `ACCEPTED_RISK` under the
-separate [M27 approval](audit/DD30_M27_APPROVAL.toml) through 13 October 2026;
-dynamic fault/wake testing remains unexecuted.
-
-The 1.0.0-beta release consists of native Mac and Linux ARM64 host bundles and
-a separate Pi 4 SD-image bundle. The [release notes](../releases/RELEASE_NOTES-1.0.0-beta.md)
-describe changes since 0.9.0-beta. The 0.9.0-beta packages remain in `releases/`; earlier packages remain at their Git tags.
-
-As of 13 September 2026, audit findings DD26–29 are `CLOSED_VERIFIED`. DD30
-remains P1 / `ACCEPTED_RISK` for this release under the owner's source-bound
-waiver; dynamic fault/wake testing remains unexecuted. The
-[audit report](audit/AUDIT_REPORT_2026-09-13.md) records the evidence and limits.
-Release Stage 5 is accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588`.
-The owner approved carrying forward the original Stage 1–4 records and later
-scoped fix evidence; the current source's Stage 1–4 suite was not rerun. The
-original timed burn-in failure remains recorded alongside its focused repairs.
-The owner requested fresh release builds without additional tests. Bundle
-metadata records `NOT_RUN` for those artifacts while retaining exact source,
-native-profile and content integrity checks.
+Broader providers, agent protocols and other deferred features remain governed
+by the [Build Plan](BUILD_PLAN.md#roadmap-id-mapping). Their existing source or
+historical evidence does not establish release qualification.
 
 ## Capability snapshot
 
