@@ -344,7 +344,7 @@ pub fn execute(
             input: Box::new(input),
         },
     )
-    .map_err(|_| provider_pending("GPU submit outcome requires durable bridge reconciliation"))?;
+    .map_err(submit_error)?;
     if job.terminal_unix_ms.is_some() {
         return terminal(config, spec, &job);
     }
@@ -396,6 +396,17 @@ pub fn execute(
             return terminal(config, spec, &job);
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn submit_error(error: anyhow::Error) -> anyhow::Error {
+    if error
+        .downcast_ref::<workload::Refusal>()
+        .is_some_and(workload::Refusal::before_dispatch)
+    {
+        error
+    } else {
+        provider_pending("GPU submit outcome requires durable bridge reconciliation")
     }
 }
 
@@ -474,6 +485,19 @@ fn control_observation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unverified_errors_remain_pending_instead_of_claiming_refusal() {
+        for message in [
+            "GPU executor refusal: device_busy",
+            "response_unauthenticated",
+            "local_deadline",
+            "connection reset",
+        ] {
+            assert!(super::super::is_provider_pending(&submit_error(anyhow!(
+                message.to_owned()
+            ))));
+        }
+    }
     #[test]
     fn worker_resource_reservations_are_exact_and_checked() {
         let row = r#"{"schema":"gpu-lease/v1","state":"ACTIVE","gpu_id":"GPU-0","worker_id":"worker-1","mem_mb":2,"streams":1,"ttl_s":3600,"priority":0}"#;

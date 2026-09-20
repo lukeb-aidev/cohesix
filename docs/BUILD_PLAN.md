@@ -11225,6 +11225,13 @@ After Milestone 27a:
 
 **Status:** Complete — 19 September 2026; selected executable foundation.
 
+Retained-path restoration reopened for `m27b-provider-action-registry` only:
+M27g / `m27g-two-hour-pi4-operator-burn-in` exposed an explicit stale-input
+executor refusal becoming an ambiguous agent outcome. Preserve authenticated
+pre-dispatch refusals and durably retain bound input admission failures for
+lost-response reconciliation. Existing historical acceptance remains unchanged;
+fresh focused native/Worker refusal and successful-work evidence is required.
+
 **Prerequisites:** completed 26e, 27 and 27a.
 
 **Completion evidence:** [M27b implementation record](audit/M27B_IMPLEMENTATION_RECORD.md#selected-executable-foundation-closure-19-september-2026).
@@ -11302,6 +11309,7 @@ to 28a. Merely moving them does not disable working code or upgrade its proof.
 
 ```text
 Title/ID: m27b-provider-action-registry
+Status: Reopened — retained CUDA refusal/reconciliation defect discovered by M27g; no broader provider expansion.
 Milestone: 27b / provider-action-registry
 Goal: Qualify selected provider/action and native execution contracts from one compiler source.
 Inputs: 26e integration graph; 27a authority; actual coh-rtc, host-ticket-agent, gpu-bridge-host and native provider implementations.

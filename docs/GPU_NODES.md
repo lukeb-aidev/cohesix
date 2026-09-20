@@ -44,6 +44,13 @@ float output against the reference algebra, and retains its SHA-256 and
 native metadata. `--reference-cancel-after-ms` selects an explicit bounded
 diagnostic cancellation. Parent death kills the CUDA child.
 
+For a bound workload submission, stale inventory or insufficient remaining ticket
+time produces a durable failed job before native dispatch. Status and recovery
+return that same terminal result after a lost reply; they never refresh the input
+or repeat execution. Authenticated pre-dispatch capacity and identity refusals
+remain refusals at the agent. Transport failures, unverified replies and errors
+that may concern existing native work remain ambiguous and require reconciliation.
+
 These reference outputs distinguish native discovery from native execution
 and carry `authoritative=false` and `worker_proof=false`. They do not supply
 root admission, a production lease, MIG isolation or a Worker receipt.

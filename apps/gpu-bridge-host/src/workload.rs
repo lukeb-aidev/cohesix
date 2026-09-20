@@ -426,7 +426,11 @@ pub fn call(socket: &Path, credential_ref: &str, command: Command) -> Result<Job
     let mut stream = UnixStream::connect(socket).context("not_enabled GPU executor socket")?;
     write_frame(&mut stream, &bytes)?;
     let bytes = read_frame(&mut stream, Instant::now() + Duration::from_millis(500))?;
-    let signed: Value = serde_json::from_slice(&bytes)?;
+    decode_response(&bytes, &request_sha256, key.as_bytes())
+}
+
+fn decode_response(bytes: &[u8], request_sha256: &str, key: &[u8]) -> Result<Job> {
+    let signed: Value = serde_json::from_slice(bytes)?;
     let response = &signed["response"];
     ensure!(
         response["request_sha256"] == request_sha256,
@@ -439,19 +443,56 @@ pub fn call(socket: &Path, credential_ref: &str, command: Command) -> Result<Job
     )
     .map_err(|_| anyhow!("response_mac_invalid"))?;
     hmac::verify(
-        &hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes()),
+        &hmac::Key::new(hmac::HMAC_SHA256, key),
         &serde_json::to_vec(response)?,
         &mac,
     )
     .map_err(|_| anyhow!("response_unauthenticated"))?;
-    if response["ok"] != true {
-        bail!(
-            "GPU executor refusal: {}",
-            response["code"].as_str().unwrap_or("invalid_response")
-        );
+    if response["ok"] == false {
+        let code = response["code"]
+            .as_str()
+            .filter(|code| {
+                !code.is_empty()
+                    && code.len() <= 96
+                    && code
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            })
+            .ok_or_else(|| anyhow!("invalid_response"))?;
+        return Err(Refusal { code: code.into() }.into());
     }
+    ensure!(response["ok"] == true, "invalid_response");
     Ok(serde_json::from_value(response["job"].clone())?)
 }
+
+/// A request-bound, MAC-verified executor refusal; transport errors never have this type.
+#[derive(Debug)]
+pub struct Refusal {
+    code: String,
+}
+
+impl Refusal {
+    /// These codes identify rejection before the requested native work can start.
+    pub fn before_dispatch(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            "action_mismatch"
+                | "invalid_lease"
+                | "request_cas_mismatch"
+                | "device_busy"
+                | "job_retention_backpressure"
+                | "workload_identity_mismatch"
+        )
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "GPU executor refusal: {}", self.code)
+    }
+}
+
+impl std::error::Error for Refusal {}
 
 /// Own one CUDA context at a time. Pending jobs are never evicted or replayed.
 pub fn serve(config: Config) -> Result<()> {
@@ -679,6 +720,17 @@ fn handle(
     wal_path: &Path,
     active: &mut Option<Active>,
 ) -> Result<Job> {
+    handle_at(command, config, wal, wal_path, active, now_ms()?)
+}
+
+fn handle_at(
+    command: Command,
+    config: &Config,
+    wal: &mut Wal,
+    wal_path: &Path,
+    active: &mut Option<Active>,
+    now: u64,
+) -> Result<Job> {
     validate_control_action(&command)?;
     let dispatch_cancel = matches!(&command, Command::Cancel { .. });
     match command {
@@ -689,7 +741,7 @@ fn handle(
             request_sha256,
             input,
         } => {
-            binding.validate(config, now_ms()?)?;
+            binding.validate(config, now)?;
             ensure!(binding.action == "gpu.workload.submit", "action_mismatch");
             ensure!(
                 cohesix_authority::validate_id(&lease_id).is_ok()
@@ -729,16 +781,21 @@ fn handle(
                     && input.request.device_ordinal == 0,
                 "workload_identity_mismatch"
             );
-            input
+            // Retain a validly bound input's admission failure before replying.
+            // Losing that reply must still allow Status/Revoke to reconcile it
+            // without dispatching stale input or reserving an executor slot.
+            let admission = input
                 .request
-                .validate(now_ms()?, &config.provider_graph_sha256)?;
-            ensure!(
-                now_ms()?
-                    .checked_add(u64::from(input.request.deadline_ms))
-                    .is_some_and(|end| end < binding.expires_unix_ms),
-                "ticket_ttl_too_short"
-            );
-            let job = Job {
+                .validate(now, &config.provider_graph_sha256)
+                .and_then(|_| {
+                    ensure!(
+                        now.checked_add(u64::from(input.request.deadline_ms))
+                            .is_some_and(|end| end < binding.expires_unix_ms),
+                        "ticket_ttl_too_short"
+                    );
+                    Ok(())
+                });
+            let mut job = Job {
                 binding: binding.clone(),
                 lease_id,
                 lease_sequence,
@@ -748,6 +805,11 @@ fn handle(
                 observation: None,
                 terminal_unix_ms: None,
             };
+            if let Err(error) = admission {
+                job.state = "failed".into();
+                job.detail = failure_code(&error);
+                job.terminal_unix_ms = Some(now);
+            }
             let state = config.state_root.join(&binding.ticket_id);
             // Fresh directory and WAL precede every native call. A crash here is interrupted, never replayed.
             private_directory(&state)?;
@@ -761,6 +823,9 @@ fn handle(
             File::open(&state)?.sync_all()?;
             wal.jobs.insert(binding.ticket_id.clone(), job.clone());
             persist(wal_path, wal)?;
+            if job.terminal_unix_ms.is_some() {
+                return Ok(job);
+            }
             let cancel = Arc::new(AtomicBool::new(false));
             let flag = cancel.clone();
             let config = config.clone();
@@ -908,6 +973,129 @@ fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_authenticated_matching_refusals_prove_no_dispatch() {
+        let key = b"deterministic-unit-test-response-key";
+        for (code, before_dispatch) in [
+            ("device_busy", true),
+            ("job_retention_backpressure", true),
+            ("idempotency_conflict", false),
+            ("retained_output_mismatch", false),
+            ("provider_failure", false),
+        ] {
+            let response = serde_json::json!({"ok":false,"code":code,"request_sha256":"request"});
+            let mac = hmac::sign(
+                &hmac::Key::new(hmac::HMAC_SHA256, key),
+                &serde_json::to_vec(&response).unwrap(),
+            );
+            let bytes = serde_json::to_vec(
+                &serde_json::json!({"response":response,"mac":hex::encode(mac.as_ref())}),
+            )
+            .unwrap();
+            let error = decode_response(&bytes, "request", key).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<Refusal>().unwrap().before_dispatch(),
+                before_dispatch
+            );
+            for error in [
+                decode_response(&bytes, "different-request", key).unwrap_err(),
+                decode_response(&bytes, "request", b"different-key").unwrap_err(),
+            ] {
+                assert!(error.downcast_ref::<Refusal>().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn input_admission_failure_is_durable_and_never_starts_native_work() {
+        for (now, expiry, expected) in [
+            (6000, 9000, "invalid_request"),
+            (1000, 1500, "ticket_ttl_too_short"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut admission = binding();
+            admission.expires_unix_ms = expiry;
+            let config = Config {
+                schema: "cohesix-gpu-executor-config/v1".into(),
+                socket: directory.path().join("unused.sock"),
+                state_root: directory.path().into(),
+                helper: directory.path().join("must-not-execute"),
+                helper_sha256: "c".repeat(64),
+                credential_ref: "unused".into(),
+                writer_epoch: 1,
+                gpu_id: "GPU-0".into(),
+                device_uuid: "d".repeat(32),
+                provider_graph_sha256: admission.provider_graph_sha256.clone(),
+                mig: None,
+                execution_lane: None,
+            };
+            let input: Input = serde_json::from_value(serde_json::json!({
+                "schema":"cohesix-gpu-workload-input/v1", "artifact_sha256":"c".repeat(64),
+                "topology_sha256":"e".repeat(64), "expected_output_sha256":"f".repeat(64),
+                "request": {"schema":"cohesix-cuda-reference-request/v1", "ticket_id":"job",
+                    "entrypoint":"vadd", "dimension":32, "iterations":1, "device_ordinal":0,
+                    "device_uuid":"d".repeat(32), "inventory_observed_unix_ms":1000,
+                    "provider_graph_sha256":"a".repeat(64), "memory_budget_bytes":4096, "deadline_ms":1000}
+            })).unwrap();
+            let bytes = serde_json::to_vec(&input).unwrap();
+            let command = Command::Submit {
+                binding: admission.clone(),
+                lease_id: "lease".into(),
+                lease_sequence: 1,
+                request_sha256: digest(&bytes),
+                input: Box::new(input),
+            };
+            let encoded = serde_json::to_vec(&command).unwrap();
+            let mut wal = Wal {
+                schema: "cohesix-gpu-journal/v1".into(),
+                config_sha256: "b".repeat(64),
+                jobs: BTreeMap::new(),
+            };
+            let path = directory.path().join("jobs.json");
+            let mut active = None;
+            let failed = handle_at(command, &config, &mut wal, &path, &mut active, now).unwrap();
+            assert_eq!(failed.state, "failed");
+            assert_eq!(failed.detail, expected);
+            assert_eq!(failed.terminal_unix_ms, Some(now));
+            assert!(failed.observation.is_none());
+            assert!(active.is_none());
+            assert!(!directory.path().join("job/execution").exists());
+            assert_eq!(
+                fs::read(directory.path().join("job/input.json")).unwrap(),
+                bytes
+            );
+            let persisted = fs::read(&path).unwrap();
+            let mut reloaded: Wal = serde_json::from_slice(&persisted).unwrap();
+            let replayed = handle_at(
+                serde_json::from_slice(&encoded).unwrap(),
+                &config,
+                &mut reloaded,
+                &path,
+                &mut active,
+                now + 1,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_vec(&replayed).unwrap(),
+                serde_json::to_vec(&failed).unwrap()
+            );
+            let recovered = handle_at(
+                Command::Revoke { binding: admission },
+                &config,
+                &mut reloaded,
+                &path,
+                &mut active,
+                expiry + 1,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_vec(&recovered).unwrap(),
+                serde_json::to_vec(&failed).unwrap()
+            );
+            assert_eq!(fs::read(path).unwrap(), persisted);
+            assert!(active.is_none());
+        }
+    }
     fn binding() -> Binding {
         Binding {
             ticket_id: "job".into(),

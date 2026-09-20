@@ -1499,6 +1499,11 @@ one or more enrolled stage files and obtains the contract digest from the
 installed `coh`. Provision the native request CAS and independent graph trust
 through the existing provider workflow. Supply fresh inventory immediately before
 initial submission; the executor's five-second inventory freshness remains in force.
+Prepare desktop command inputs and review the operation before capturing that
+inventory. Plan the resulting exact deployment immediately before confirming
+admission. If an admitted request reaches the native bridge after freshness or
+ticket-time checks fail, its durable failed result supports reconciliation without
+retrying the stale input. A failed requested stage stays failed after recovery.
 
 ```sh
 coh plan cuda-reference --recipe --deployment /absolute/recipe.json
