@@ -10531,9 +10531,10 @@ Deliverables: Host collector correction and separate exact-image live evidence.
 
 Title/ID: m27-build-evidence-blockers
 Milestone: Milestone 27 — Operator Utilities / restoration of build and evidence prerequisites; discovery in m27-attestation-verifier, restoring the exact-source invariant of m26e-worker-target-evidence-promotion
-Status: Complete — approved evidence basis recorded above
+Status: Reopened — M27g assembled-journeys-and-recovery discovered that the Pi build's exact generated-output allowlist omits the current provider projections; restore only that build prerequisite, retaining the prior completion evidence.
 Goal: Restore canonical test and image-build prerequisites without relaxing source integrity, evidence bounds or target acceptance.
 Changes:
+  - scripts/pi4-image-build.sh + tests/test_pi4_image_build.py — recognize the exact compiler-emitted provider and recipe paths during temporary profile generation; continue refusing unrelated tracked or untracked changes and require canonical restoration after the build.
   - tests/test_linux_host_tools_sync.py, tests/test_release_bundle.py, tests/test_sel4_profile.py — exercise the existing exact tracked-tree archive and argument-driven packaging contracts; preserve export-ignore coverage and secret exclusion.
   - scripts/ci/test_run_regression_batch.py — explicitly select the QEMU fixture target and action so common-stage execution under Pi does not inherit physical transport requirements.
   - scripts/worker_task_evidence.py + tests/test_worker_task_evidence.py — stream every git-visible regular source file in at most 1 MiB reads, including shipped images larger than the evidence parser's 64 MiB allocation bound; retain exact extent, metadata, path-set and repeated-content checks. This restoration does not reopen M26e runtime or physical behavior.

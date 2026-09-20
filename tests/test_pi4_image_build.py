@@ -2146,6 +2146,37 @@ def test_repository_state_digest_binds_tracked_and_untracked_contents(
     assert untracked_first.stdout.strip() != untracked_second.stdout.strip()
 
 
+def test_codegen_guard_accepts_selected_provider_outputs_only(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Production provider projections may change; adjacent source may not."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    for relative in (
+        "configs/generated/provider_registry.json",
+        "configs/generated/use_case_evidence.json",
+        "crates/cohesix-authority/src/provider_generated.rs",
+        "tools/cohesix-py/cohesix/provider_generated.py",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("selected deployment projection\n", encoding="utf-8")
+    accepted = _source_function(script, "verify_only_codegen_repository_changes")
+    assert accepted.returncode == 0, accepted.stderr
+
+    unexpected = tmp_path / "configs/generated/unregistered.json"
+    unexpected.write_text("{}\n", encoding="utf-8")
+    refused = _source_function(script, "verify_only_codegen_repository_changes")
+    assert refused.returncode != 0
+    assert "configs/generated/unregistered.json" in refused.stderr
+    unexpected.unlink()
+
+    (tmp_path / "tracked.txt").write_text("changed source\n", encoding="utf-8")
+    refused = _source_function(script, "verify_only_codegen_repository_changes")
+    assert refused.returncode != 0
+    assert "tracked.txt" in refused.stderr
+
+
 def test_sel4_tree_state_digest_binds_bytes_modes_and_symlinks(
     tmp_path: pathlib.Path,
 ) -> None:
