@@ -8,8 +8,10 @@ Milestone 27g remains In Progress. The physical operator burn-in completed
 7,200.005 measured seconds in repaired segments on source `45408f51a`, with
 24 scheduled CUDA jobs, four scheduled LoRA workflows and native Mac/Jetson
 coverage supplements. Its operational verdict is PASS; it does not establish
-assembled release acceptance. The full post-burn staged Test Plan is now in
-progress. Historical acceptance and all failed attempts retain their original
+assembled release acceptance. Subsequent HDMI pressure checks found a major
+mixed physical-console/TCP stream stall. A repaired current image requires a
+fresh two-hour burn-in and then the full staged Test Plan. Historical acceptance
+and all failed attempts retain their original
 verdicts. The final release decision still requires exact current artifacts,
 all assigned gates and human review.
 
@@ -508,3 +510,68 @@ Plan metadata and formatting checks passed. Logs are retained as
 `namespace-identity-generated-01` and `namespace-identity-test-plan-01` in the
 repairs worktree. The original failing fixture proves the stale heading and is
 not promoted to native evidence.
+
+## Mixed physical console and TCP stream liveness restoration
+
+Title/ID: m27g-physical-prompt-stream-owner
+Milestone: 27g / m27g-assembled-journeys-and-recovery; narrowly reopened
+26e / m26e-console-network-service-isolation.
+Goal: Complete each physical prompt without borrowing an unrelated TCP stream's
+completion, preserving bounded response priority and display progress.
+
+A comprehensive HDMI check on source
+`f4730d39de591f2b8b02f59e0ca4cda0adff1051`, physical image
+`1d1e9ec5b3dfa1199370f16359cef5ea9feb57450d5a042dd6f01b8c98ba829f`,
+found a mixed-surface failure after repeated `netstats`, `help` and `ping`
+commands and concurrent authenticated `/proc/boot` reads. Serial retained
+`PONG` and `OK PING reply=pong` without the following prompt for 60 seconds.
+The TCP read timed out after its ACK and partial body. HDMI stopped partway
+through the preceding help text. A later passive observation and `usb status`
+received no bytes. The packet capture still shows the isolated TCP child
+acknowledging the client's FIN; this is not evidence that root resumed.
+
+The original two-hour burn-in PASS remains historical evidence for its recorded
+source and workload. This newly found control-plane liveness fault blocks
+release qualification. The confirmed prompt-ownership defect is a major
+operational issue requiring a fresh two-hour burn-in before the final full
+Test Plan.
+
+Evidence is retained in the Pi qualification worktree under
+`out/m27g-integration/hdmi-output-stress-f4730d39-05/` and
+`hdmi-mixed-console-first-fault-f4730d39-01/`. The latter holds first-fault and
+post-fault records, original OBS video custody, a screenshot reference and
+packet-header observations. The live user packet captures were preserved.
+The original video is protected qualification evidence, not a public asset.
+Earlier scratch attempts 01–03 failed their host invocation or script bounds;
+attempt 04 incorrectly treated the documented network-owner busy refusal as a
+product failure. Those attempts remain retained and do not establish a target
+fault or successful mixed-pressure qualification.
+
+The source defect was that `process_console_line` deferred a physical prompt
+whenever any stream had an outstanding `END`. A network-owned stream must not
+own that prompt. Physical response priority otherwise blocks the very
+network/runtime turns required to finish the stream. Both direct and deferred
+physical completion now wait only for their own stream. Deterministic regressions
+retain the TCP owner, complete serial and local-seat prompt tails, and retire
+the physical response barrier without advancing or falsely ending TCP output.
+The display renderer, driver grants and scheduling reservations remain unchanged.
+Fresh physical mixed-surface evidence is required after the focused regression.
+
+Compatibility review: coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
+`tools/cohesix-py` and benchmark scripts retain their protocol, grammar,
+authority, generated bounds and performance thresholds. The target fix restores
+existing terminal/prompt ownership; host implementations and benchmark schemas
+require no semantic change. Rebuild and qualify final exact-source artifacts.
+Root and host help continue to index the same commands; the operator guide and
+Test Plan describe the competing-surface refusal and independent PING contract.
+
+The retained `physical-prompt-owner-red-04.log` reproduces the missing prompt
+before the repair. Focused QEMU event tests (501) and Pi event tests (496),
+workspace Clippy, and generated-contract checks pass after the repair. Exact
+commands and exits are retained in
+`out/m27g-harness-repairs/physical-prompt-owner-focused-pipeline-01.json`;
+generated validation is in `physical-prompt-owner-generated-01.log`.
+
+Current status: deterministic repair validated; fresh physical proof pending;
+no fresh burn-in, final-source staged acceptance or release promotion claimed.

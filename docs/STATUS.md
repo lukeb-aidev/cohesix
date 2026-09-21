@@ -24,6 +24,11 @@ a two-hour current-image Pi 4 GENET burn-in with Mac and Linux AArch64 NVIDIA
 hosts; and the applicable staged [Test Plan](TEST_PLAN.md) and release gates.
 Component completion does not establish assembled release acceptance.
 
+Qualification currently includes restoration of a physical-console/TCP stream
+stall found during HDMI pressure checks. Release acceptance requires fresh
+mixed-surface proof, a new two-hour burn-in after the repair, and the subsequent
+full Test Plan; see the [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md).
+
 The release's implemented workflows and their qualified component records are:
 
 | Workflow | Operator guide | Component evidence |

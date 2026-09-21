@@ -11437,7 +11437,7 @@ where
         schedule_network_flush: bool,
     ) {
         if source.is_physical_console() && !self.reboot_pending {
-            if self.stream_end_pending {
+            if self.stream_end_pending && self.stream_output_source == Some(source) {
                 self.stream_prompt_pending = true;
             } else {
                 self.emit_prompt();
@@ -35232,7 +35232,11 @@ where
             && !self.reboot_pending
             && !self.pi_root_control_passive_admission_pending()
         {
-            if self.stream_end_pending {
+            // A physical response fences Network until its own prompt drains.
+            // Waiting for a different source's END would prevent the owner
+            // from running the turns needed to produce that END.
+            if self.stream_end_pending && self.stream_output_source == Some(self.last_input_source)
+            {
                 self.stream_prompt_pending = true;
             } else {
                 self.emit_prompt();
@@ -41012,6 +41016,97 @@ mod tests {
         let terminal: std::vec::Vec<&str> =
             net.terminal_sent.iter().map(|line| line.as_str()).collect();
         assert_eq!(terminal, ["END"], "only END may seal a streamed response");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn physical_ping_prompt_does_not_wait_for_an_unrelated_network_stream() {
+        for source in [ConsoleInputSource::Serial, ConsoleInputSource::LocalSeat] {
+            let driver = LoopbackSerial::<2048>::new();
+            let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+            let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+            let store: TicketTable<4> = TicketTable::new();
+            let mut audit = AuditLog::new();
+            let mut net = FakeNet::new();
+            net.active_conn_id = Some(7);
+            net.authenticated_conn_id = Some(7);
+            net.response_batch_capacity = Some(1);
+
+            {
+                let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+                    .with_network(&mut net);
+                pump.last_input_source = ConsoleInputSource::Net;
+                pump.begin_stream_output();
+                pump.emit_ack_ok("CAT", Some("path=/proc/demo"));
+                let mut pending = PendingStream::new();
+                pending
+                    .lines
+                    .push(HeaplessString::try_from("retained-network-record").unwrap())
+                    .unwrap();
+                pending.bandwidth_bytes = "retained-network-record".len() as u64;
+                pump.pending_stream = Some(pending);
+                pump.last_input_source = source;
+                pump.process_console_line(&HeaplessString::<32>::try_from("ping").unwrap());
+
+                assert!(pump.stream_end_pending, "PING cannot finish the TCP stream");
+                assert_eq!(pump.stream_output_source, Some(ConsoleInputSource::Net));
+                assert_eq!(pump.stream_net_conn_id, Some(7));
+                assert!(
+                    !pump.stream_prompt_pending,
+                    "physical prompt cannot depend on TCP END"
+                );
+                pump.flush_pending_console_output_if_idle();
+                let rendered = String::from_utf8(
+                    pump.serial_mut()
+                        .driver_mut()
+                        .drain_tx()
+                        .into_iter()
+                        .collect(),
+                )
+                .expect("physical PING response is utf8");
+                assert_eq!(rendered, "PONG\r\nOK PING reply=pong\r\ncohesix> ");
+                pump.reconcile_physical_response_barrier();
+                assert_eq!(
+                    pump.physical_response_barrier,
+                    PhysicalResponseBarrier::Idle
+                );
+
+                assert_eq!(pump.pending_stream.as_ref().unwrap().next_line, 0);
+            }
+            let sent: std::vec::Vec<&str> = net.sent.iter().map(|line| line.as_str()).collect();
+            assert_eq!(sent, ["OK CAT path=/proc/demo"]);
+            assert!(net.terminal_sent.is_empty());
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "release-pi4", feature = "net-console"))]
+    #[test]
+    fn deferred_physical_prompt_does_not_wait_for_an_unrelated_network_stream() {
+        for source in [ConsoleInputSource::Serial, ConsoleInputSource::LocalSeat] {
+            let driver = LoopbackSerial::<2048>::new();
+            let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+            let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+            let store: TicketTable<4> = TicketTable::new();
+            let mut audit = AuditLog::new();
+            let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+            pump.stream_end_pending = true;
+            pump.stream_output_source = Some(ConsoleInputSource::Net);
+            pump.last_input_source = source;
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+
+            pump.finish_pi_root_control_pending_response(source, false);
+
+            assert!(!pump.stream_prompt_pending);
+            assert!(pump.stream_end_pending);
+            assert_eq!(pump.stream_output_source, Some(ConsoleInputSource::Net));
+            pump.flush_pending_console_output_if_idle();
+            assert_eq!(pump.serial_mut().driver_mut().drain_tx(), b"cohesix> ");
+            pump.reconcile_physical_response_barrier();
+            assert_eq!(
+                pump.physical_response_barrier,
+                PhysicalResponseBarrier::Idle
+            );
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

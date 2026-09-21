@@ -2843,6 +2843,14 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       takeover, printable echo, one-row and ten-row scroll, visible final state,
       outstanding/deferral debt, and serial plus USB liveness under display
       pressure before polished or world-class performance is claimed.
+      Mixed-surface pressure must also retain physical `PING` completion and
+      its prompt while an authenticated TCP `CAT` stream remains open. The
+      physical prompt cannot wait for the unrelated network `END`, and the
+      physical response barrier must retire so Network and Display resume.
+      Preserve typed `network-response-pending` refusals for conflicting
+      physical producers as refusals; verify their normal completion after
+      the network stream finishes. Retain serial, TCP and live HDMI evidence;
+      a complete protocol ACK without the remaining stream is a failure.
       Independently, early-progress tests must render the fixed child-owned
       two-line `Cohesix starting...` / `Initializing services...` tile only
       after full resource/geometry admission, validate both rows before the

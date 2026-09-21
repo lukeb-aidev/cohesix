@@ -148,6 +148,14 @@ mismatch: one describes the profile and the other the selected physical path.
 direct-GENET implementation can perform a bounded causal owner refresh. Do not
 mix repeated diagnostic commands into a timed benchmark.
 
+While an authenticated TCP response owns the output stream, a competing
+physical `help`, `netstats` or namespace read may return
+`reason=busy detail=network-response-pending`. Wait for that response to finish
+before retrying the refused read. A physical `ping` remains available: its
+`PONG`, terminal and prompt complete independently of the TCP stream's `END`.
+Neither surface's response may leave the other, or queued HDMI output,
+permanently waiting for progress it prevents.
+
 A serial prompt does not prove the local USB/HDMI seat is ready. The Pi HDMI
 prompt is withheld until keyboard command admission and display readiness are
 established. For a local-seat check, type a real command on the **USB keyboard**
