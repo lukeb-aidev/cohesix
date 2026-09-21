@@ -665,7 +665,7 @@ Each summary also retains top-level `target_session_sha256` and
 READY/control/receipt/completion sequences, executor-lane SCs,
 per-instance Reply identities, and per-slot compiler-admission object bundles
 (not a claimed live retype census);
-five canonical `/proc` snapshots; bounded lifecycle cycles; live receipt
+five canonical `/proc` snapshots keyed by their full namespace paths (schedule and lease summaries remain nonempty; queue, active-lease and preemption collections may be empty with the exact empty-byte hash); bounded lifecycle cycles; live receipt
 operations; and exact UART plus any separately required fault-evidence hashes
 and marker index. Medium/high
 must have distinct intensities, a clean error budget, increasing GPU/LoRA

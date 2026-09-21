@@ -634,3 +634,24 @@ cas-tool, sidecar-bus, the Python SDK, or performance workloads/report schemas.
 The serial helper's command line and returned menu bytes are unchanged. Its
 physical revalidation must identify the repaired collector separately from the
 unchanged image; existing acceptance records retain their original source.
+
+## Pressure report validation restoration
+
+```text
+Title/ID: m27g-pressure-report-restoration
+Milestone: 27g / m27g-assembled-journeys-and-recovery
+Goal: Validate retained pressure using the existing benchmark marker and namespace snapshot contract.
+Inputs: Immutable 2796c0b6 medium/high pressure reports and raw fault logs; passing post-burn 482981ca staged QEMU evidence.
+Changes:
+  - scripts/worker_task_evidence.py — require the existing Heartbeat, GPU and LoRA ELF marker entries, exact canonical namespace paths, and hash-bound empty collection snapshots.
+  - tests/test_worker_task_evidence.py — use independent canonical role/path fixtures; reject missing roles, empty summaries and tampered empty-collection hashes.
+Commands: python -m pytest tests/test_worker_task_evidence.py -q; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; re-run collect-qemu over the immutable pressure inputs into a fresh output directory.
+Checks: Each role remains required; raw ELF/fault bytes, hashes, identities, outcomes, pressure thresholds and original failed collection remain unchanged.
+Deliverables: Focused regression results and a separately identified corrected collection; no new burn-in or target-pressure window is required for this collector-only repair.
+```
+
+Compatibility review covers coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
+the Python SDK and benchmark scripts. The benchmark producer already emits
+these role-qualified entries and full namespace paths. Schedule queues, active leases and preemptions may correctly be empty; their summary records remain mandatory. The corrected collection passes Worker-component and root-TCB acceptance on the untouched raw inputs; all 132 collector tests pass. No host implementation, runtime, generated
+contract, wire format, authority, workload, resource bound or threshold changes.

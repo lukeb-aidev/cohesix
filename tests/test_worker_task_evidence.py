@@ -1437,7 +1437,10 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         }
 
     proc = {}
-    for key in evidence.QEMU_PROC_KEYS:
+    for key in (
+        "/proc/schedule/summary", "/proc/schedule/queue", "/proc/lease/summary",
+        "/proc/lease/active", "/proc/lease/preemptions",
+    ):
         proc_raw = f"projection={key} state=live".encode("utf-8")
         proc[key] = {
             "lines": [proc_raw.decode("utf-8")],
@@ -1468,7 +1471,9 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         "uart:WORKER_TASK_COMPLETION",
         "uart:WORKER_TASK_FAULT",
         "uart:WORKER_TASK_TEARDOWN",
-        "gdb:M26E_GDB_ELF",
+        "gdb:M26E_GDB_ELF role=worker-heartbeat",
+        "gdb:M26E_GDB_ELF role=worker-gpu",
+        "gdb:M26E_GDB_ELF role=worker-lora",
         "gdb:M26E_GDB_INJECTION",
     ]
     pressure_paths: list[Path] = []
@@ -2263,6 +2268,50 @@ def test_pressure_receipt_timing_diagnostics_preserve_exact_proof(
     else:
         evidence._collect_qemu(inputs)
         assert (inputs.out_dir / "worker-task-evidence.json").is_file()
+
+
+@pytest.mark.parametrize(
+    ("path", "valid"),
+    [
+        ("/proc/schedule/queue", True),
+        ("/proc/lease/active", True),
+        ("/proc/lease/preemptions", True),
+        ("/proc/schedule/summary", False),
+        ("/proc/lease/summary", False),
+    ],
+)
+def test_pressure_proc_empty_collections_keep_exact_hashes(
+    tmp_path: Path, path: str, valid: bool,
+) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    summary = json.loads(inputs.pressure[0].read_text())
+    proc = summary["report"]["executable_state"]["pre"]["proc"]
+    proc[path] = {"lines": [], "bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()}
+    if not valid:
+        with pytest.raises(evidence.EvidenceError, match="lines are empty"):
+            evidence._pressure_proc(proc, "pressure pre")
+        return
+    evidence._pressure_proc(proc, "pressure pre")
+    proc[path]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="bytes/hash"):
+        evidence._pressure_proc(proc, "pressure pre")
+
+
+@pytest.mark.parametrize("role", ["worker-heartbeat", "worker-gpu", "worker-lora"])
+def test_pressure_fault_index_requires_each_role_elf(
+    tmp_path: Path, role: str,
+) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    pressure = inputs.pressure[0]
+    summary = json.loads(pressure.read_text())
+    markers = summary["report"]["executable_state"]["required_fault_markers"]
+    markers.remove(f"gdb:M26E_GDB_ELF role={role}")
+    markers.append("gdb:M26E_GDB_ELF")
+    pressure.write_text(json.dumps(summary))
+
+    with pytest.raises(evidence.EvidenceError, match="required fault marker index"):
+        evidence._collect_qemu(inputs)
+    assert not inputs.out_dir.exists()
 
 
 @pytest.mark.parametrize("retained_log", [False, True])

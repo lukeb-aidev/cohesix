@@ -241,11 +241,11 @@ SYSTEM_REQUIRED_OUTCOMES = (
     "worker-teardown-zero-leak",
 )
 QEMU_PROC_KEYS = (
-    "schedule_summary",
-    "schedule_queue",
-    "lease_summary",
-    "lease_active",
-    "lease_preemptions",
+    "/proc/schedule/summary",
+    "/proc/schedule/queue",
+    "/proc/lease/summary",
+    "/proc/lease/active",
+    "/proc/lease/preemptions",
 )
 QEMU_RECEIPT_ACTIONS = {
     0x0201: ("gpu.lease.grant", "worker-gpu"),
@@ -3453,7 +3453,7 @@ def _pressure_proc(value: Any, label: str) -> None:
         lines = row["lines"]
         if (
             not isinstance(lines, list)
-            or not lines
+            or (not lines and key.endswith("/summary"))
             or len(lines) > MAX_LIST_ITEMS
             or any(not isinstance(line, str) for line in lines)
         ):
@@ -3704,7 +3704,9 @@ def _pressure_reports(
                 f"{marker_source}:WORKER_TASK_COMPLETION",
                 f"{marker_source}:WORKER_TASK_FAULT",
                 f"{marker_source}:WORKER_TASK_TEARDOWN",
-                "gdb:M26E_GDB_ELF",
+                "gdb:M26E_GDB_ELF role=worker-heartbeat",
+                "gdb:M26E_GDB_ELF role=worker-gpu",
+                "gdb:M26E_GDB_ELF role=worker-lora",
                 "gdb:M26E_GDB_INJECTION",
             }.issubset(set(required_markers))
         ):
