@@ -210,12 +210,37 @@ build_selected_pressure_artifacts() {
         "$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
 }
 
+prove_selected_pressure_authentication() {
+    mkdir -m 0700 "$AUTH_STATE_DIR"
+    local run_id
+    run_id="$("$HARNESS_PYTHON" -c \
+        'import datetime, uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:12])')"
+    # The clean-build lane checks canonical projections before generating the
+    # selected profile. This canary must retain that profile and its AUTH.
+    COHSH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+    SEL4_BUILD_DIR="$SEL4_BUILD" \
+    TEST_PLAN_CONVERGENCE=1 \
+    TEST_PLAN_CONVERGENCE_STATE_DIR="$AUTH_STATE_DIR" \
+    TEST_PLAN_CONVERGENCE_RUN_ID="$run_id" \
+    TEST_PLAN_CONVERGENCE_FOCUS=ninedoor \
+    TEST_PLAN_CONVERGENCE_TARGET=qemu \
+    TEST_PLAN_TARGET_OBSERVATION="$AUTH_OBSERVATION" \
+    TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING=1 \
+    TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
+    TEST_PLAN_CONVERGENCE_QEMU_BIN="$QEMU_BIN" \
+        scripts/ci/test_plan_target_canary.sh --target qemu
+}
+
 restore_canonical_generated_outputs() {
     # The immutable pressure records already retain the selected profile.
     # Common staged checks must start from the committed canonical projections.
     cargo run -p coh-rtc -- configs/root_task.toml \
         --out apps/root-task/src/generated \
-        --manifest configs/generated/root_task_resolved.json
+        --manifest configs/generated/root_task_resolved.json \
+        --cas-manifest-template configs/generated/cas_manifest_template.json \
+        --cohsh-policy configs/generated/cohsh_policy.toml \
+        --coh-policy configs/generated/coh_policy.toml \
+        --swarmui-defaults configs/generated/swarmui_defaults.toml
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
         configs/root_task.toml --sel4-profiles configs/sel4/profiles.toml \
         --profile qemu_smp_production \
@@ -690,6 +715,8 @@ BUILD_ARGS=(
 )
 
 if (( REUSE_ARTIFACTS == 0 )); then
+    log "checking canonical generated contracts before selecting the pressure profile"
+    scripts/check-generated.sh
     export COHESIX_QEMU_ACCEL=hvf
     export COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off
     EXPECTED_QEMU_ACCEL=hvf
@@ -2835,32 +2862,13 @@ PY
 }
 
 log "proving one prior authenticated NineDoor operation on the exact artifacts"
-if (( REUSE_ARTIFACTS == 1 )); then
-    mkdir -m 0700 "$AUTH_STATE_DIR"
-    AUTH_RUN_ID="$("$HARNESS_PYTHON" -c \
-        'import datetime, uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:12])')"
-    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
-    TEST_PLAN_CONVERGENCE=1 \
-    TEST_PLAN_CONVERGENCE_STATE_DIR="$AUTH_STATE_DIR" \
-    TEST_PLAN_CONVERGENCE_RUN_ID="$AUTH_RUN_ID" \
-    TEST_PLAN_CONVERGENCE_FOCUS=ninedoor \
-    TEST_PLAN_CONVERGENCE_TARGET=qemu \
-    TEST_PLAN_TARGET_OBSERVATION="$AUTH_OBSERVATION" \
-    TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING=1 \
-    TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
-    TEST_PLAN_CONVERGENCE_QEMU_BIN="$QEMU_BIN" \
-    scripts/ci/test_plan_target_canary.sh --target qemu
-else
-    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
-    TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
-    "$HARNESS_PYTHON" scripts/ci/test_plan_converge.py \
-        --target qemu \
-        --focus ninedoor \
-        --state-dir "$AUTH_STATE_DIR" \
-        --launch-existing
-fi
+prove_selected_pressure_authentication
 [[ -s "$AUTH_OBSERVATION" && ! -L "$AUTH_OBSERVATION" ]] || \
     die "authenticated NineDoor target observation is missing or aliased"
+if (( REUSE_ARTIFACTS == 0 )); then
+    cargo test -p root-task --no-default-features \
+        --test ninedoor_service_isolation -- --test-threads=1
+fi
 verify_live_artifacts
 
 # Both services are terminal with no replacement after a delivered standard

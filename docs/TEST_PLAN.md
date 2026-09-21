@@ -2055,10 +2055,15 @@ Select a provisioned pressure manifest with `COH_RTC_MANIFEST`, outside the
 disposable checkout's cleaned `out/` and `target/` trees. Its secret references
 must resolve for the build. Select the subsequent staged plan's provisioned
 base and gated profiles with `COHSH_BASE_MANIFEST` and `COHSH_GATED_MANIFEST`.
-The pressure build uses the same selected manifest as authentication, freezes
-its resolved bytes with the collector inputs, and regenerates the canonical
-outputs before the common staged checks. Final pressure validation uses those
-frozen selected bytes even if later builds generate another profile.
+The clean-build lane checks canonical generated contracts before selecting the
+pressure profile. The pressure build uses the same selected manifest as
+authentication and freezes its resolved bytes with the collector inputs. Both
+hosts then run the retained-image target canary with that console credential
+and the selected seL4 build; its profile label comes from the verified launch
+record. The clean-build lane retains the focused NineDoor isolation guard after
+the live operation and regenerates canonical outputs before the common staged
+checks. Final pressure validation uses the frozen selected bytes even if later
+builds generate another profile.
 The separately supplied REST mutation bearer must be a fresh 64-character
 lowercase hexadecimal value and must not appear anywhere in retained evidence.
 Each pressure gateway lifetime mints its own bounded read/write caller ticket;

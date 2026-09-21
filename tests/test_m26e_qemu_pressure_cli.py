@@ -455,6 +455,49 @@ test "$HIVE_GATEWAY_DELEGATION_KEY_REF" = env:M26E_DELEGATION_SECRET
     ]
 
 
+def test_pressure_canary_receives_selected_artifacts_and_auth(tmp_path: Path) -> None:
+    """A provisioned image never falls back to the default console credential."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "prove_selected_pressure_authentication() {" + source.split(
+        "prove_selected_pressure_authentication() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    probe = tmp_path / "scripts/ci/test_plan_target_canary.sh"
+    probe.parent.mkdir(parents=True)
+    probe.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "names = ['COHSH_AUTH_TOKEN', 'SEL4_BUILD_DIR', "
+        "'TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING', "
+        "'TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR', "
+        "'TEST_PLAN_CONVERGENCE_QEMU_BIN', 'TEST_PLAN_CONVERGENCE_FOCUS']\n"
+        "print(json.dumps([sys.argv[1:], {n: os.environ[n] for n in names}]))\n",
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '''
+HARNESS_PYTHON="$1"
+AUTH_STATE_DIR="$PWD/observation"
+AUTH_OBSERVATION="$AUTH_STATE_DIR/result.json"
+M26E_CONSOLE_AUTH_TOKEN=provisioned-fixture-token
+SEL4_BUILD="$PWD/selected sel4"
+OUT_ROOT="$PWD/retained image"
+QEMU_BIN="$PWD/selected qemu"
+COHSH_AUTH_TOKEN=wrong-inherited-fixture
+prove_selected_pressure_authentication
+''', "selected-pressure-canary", sys.executable],
+        cwd=tmp_path, check=True, capture_output=True, text=True, timeout=10,
+    )
+    assert json.loads(result.stdout) == [["--target", "qemu"], {
+        "COHSH_AUTH_TOKEN": "provisioned-fixture-token",
+        "SEL4_BUILD_DIR": str(tmp_path / "selected sel4"),
+        "TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING": "1",
+        "TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR": str(tmp_path / "retained image"),
+        "TEST_PLAN_CONVERGENCE_QEMU_BIN": str(tmp_path / "selected qemu"),
+        "TEST_PLAN_CONVERGENCE_FOCUS": "ninedoor",
+    }]
+
+
 def test_unselected_checkout_cannot_enter_cleanup(checkout: Path) -> None:
     result = invoke(checkout)
     assert result.returncode == 2

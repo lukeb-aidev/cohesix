@@ -251,8 +251,7 @@ unexpected_faults() {
 }
 
 qemu_canary() {
-  profile="qemu_smp_production / configs/root_task.toml"
-  local sel4_build="${repo_root}/out/sel4/profile-v2/qemu-smp-production"
+  local sel4_build="${SEL4_BUILD_DIR:-${repo_root}/out/sel4/profile-v2/qemu-smp-production}"
   local qemu_bin="${TEST_PLAN_CONVERGENCE_QEMU_BIN:-${QEMU_BIN:-qemu-system-aarch64}}"
   local launch_existing=${TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING:-0}
   local qemu_out
@@ -294,6 +293,17 @@ PY
   image_identity_path="${qemu_out}/cohesix-qemu-launch-artifacts.json"
   [[ -f "${image_path}" && -f "${image_identity_path}" ]] || \
     die "canonical QEMU image or immutable launch record is missing"
+  # The verified launch record owns the selected host profile. A retained
+  # provisioned image need not have been built from the default manifest.
+  profile=$(python3 - "${image_identity_path}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(record["sel4_profile"] + " / immutable launch record")
+PY
+)
 
   current_layer="target-boot"
   serial_log="${state_dir}/uart.log"

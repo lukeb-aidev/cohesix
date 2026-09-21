@@ -238,6 +238,65 @@ class ConvergenceSelectionTests(unittest.TestCase):
         )
         self.assertIn('--qemu "${qemu_bin}"', source)
 
+    def test_retained_canary_uses_selected_build_and_record_profile(self) -> None:
+        """Retained HVF and KVM launches keep their own build and profile label."""
+        source = TARGET_CANARY.read_text(encoding="utf-8")
+        function = "qemu_canary() {" + source.split("qemu_canary() {", 1)[1].split(
+            "\n}\n", 1,
+        )[0] + "\n}\n"
+        for selected in ("qemu_smp_production", "qemu_smp_kvm_production"):
+            with self.subTest(profile=selected), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                artifacts = root / "retained image"
+                artifacts.mkdir()
+                (artifacts / "cohesix-system.cpio").write_bytes(b"fixture")
+                (artifacts / "cohesix-qemu-launch-artifacts.json").write_text(
+                    json.dumps({"sel4_profile": selected}), encoding="utf-8",
+                )
+                build = root / "scripts/cohesix-build-run.sh"
+                build.parent.mkdir()
+                build.write_text(
+                    f"#!{sys.executable}\n"
+                    "import json, pathlib, sys\n"
+                    "with pathlib.Path(__file__).with_suffix('.calls').open('a') as f:\n"
+                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n",
+                    encoding="utf-8",
+                )
+                build.chmod(0o700)
+                result = subprocess.run(
+                    ["bash", "-eu", "-c", function + '''
+repo_root="$1"
+state_dir="$1"
+focus=ninedoor
+SEL4_BUILD_DIR="$1/selected sel4"
+TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING=1
+TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$1/retained image"
+COHSH_AUTH_TOKEN=provisioned-fixture
+wait_for_marker() { return 0; }
+wait_for_port() { return 0; }
+cohsh_binary() { printf '%s' "$1"; }
+run_live_operation() { test "$4" = provisioned-fixture; }
+unexpected_faults() { return 1; }
+stop_qemu() { wait "$qemu_pid"; }
+write_observation() { printf '%s\\n' "$profile"; }
+qemu_canary
+''', "retained-canary", str(root)],
+                    check=True, capture_output=True, text=True, timeout=10,
+                )
+                self.assertEqual(
+                    result.stdout.strip(), selected + " / immutable launch record",
+                )
+                calls = [json.loads(line) for line in build.with_suffix(
+                    ".calls",
+                ).read_text(encoding="utf-8").splitlines()]
+                self.assertEqual(len(calls), 2)
+                for call in calls:
+                    self.assertEqual(
+                        call[call.index("--sel4-build") + 1],
+                        str(root / "selected sel4"),
+                    )
+                    self.assertIn("--launch-existing", call)
+
     def test_worker_operation_approves_each_governed_lifecycle_write(self) -> None:
         """The selected single-use gate needs a fresh approval per mutation."""
         manifest = tomllib.loads(
