@@ -104,8 +104,10 @@ readonly stage4_max_gateway_response_timeout_ms=1200000
 readonly stage4_max_rest_client_response_timeout_ms=1210000
 readonly stage4_context_environment_names=(
   COHESIX_GATEWAY_URL
+  COHSH_POLICY
   COHSH_REST_RESPONSE_TIMEOUT_MS
   COHSH_REST_URL
+  COH_POLICY
   COH_REST_URL
   COH_REST_TICKET
   HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS
@@ -284,6 +286,19 @@ stage4_resolve_timeout_contract() {
     HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS="${stage4_gateway_control_response_timeout_ms}" \
     HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS="${stage4_gateway_telemetry_response_timeout_ms}" \
     COHSH_REST_RESPONSE_TIMEOUT_MS="${stage4_rest_client_response_timeout_ms}"
+}
+
+stage4_select_artifact_policies() {
+  local artifact_dir="$1"
+  # The restored checkout can select a different profile from the retained
+  # Stage 03 binaries. Keep explicit operator selections subject to their
+  # normal hash checks; otherwise use the verified artifact's own policies.
+  export COHSH_POLICY="${COHSH_POLICY:-${artifact_dir}/evidence/cohsh_policy.toml}"
+  export COH_POLICY="${COH_POLICY:-${artifact_dir}/release-configs/configs/generated/coh_policy.toml}"
+  if [[ ! -f "${COHSH_POLICY}" || ! -f "${COH_POLICY}" ]]; then
+    tp_log "FAIL  Stage 04 requires the selected cohsh and coh policy files"
+    return 1
+  fi
 }
 
 stage4_process_tree() {
@@ -667,6 +682,7 @@ else
   stage3_artifact_dir="$(dirname "${stage3_artifact}")"
   cohsh_bin="${COHSH_BIN:-${stage3_artifact_dir}/host-tools/cohsh}"
   coh_bin="${TP_COH_BIN:-${stage3_artifact_dir}/host-tools/coh}"
+  stage4_select_artifact_policies "${stage3_artifact_dir}"
   if [[ -n "${gateway_url}" && -z "${target_evidence_input}" ]]; then
     tp_log "FAIL  external QEMU gateway requires machine-generated target evidence"
     tp_log "FAIL  set TEST_PLAN_TARGET_EVIDENCE_FILE with boot and Stage 03 artifact binding"

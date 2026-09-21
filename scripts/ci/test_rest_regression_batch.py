@@ -32,8 +32,10 @@ STAGE4_TIMEOUT_ENV_NAMES = (
 )
 STAGE4_CONTEXT_ENV_NAMES = (
     "COHESIX_GATEWAY_URL",
+    "COHSH_POLICY",
     "COHSH_REST_RESPONSE_TIMEOUT_MS",
     "COHSH_REST_URL",
+    "COH_POLICY",
     "COH_REST_URL",
     "COH_REST_TICKET",
     "HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS",
@@ -293,6 +295,8 @@ def test_stage4_restores_runner_owned_environment_before_final_context() -> None
         "export HIVE_GATEWAY_DELEGATION_KEY_REF=env:TP_STAGE4_DELEGATION_SECRET\n"
         "export TP_STAGE4_DELEGATION_SECRET=runner-issuer-secret\n"
         "export TP_STAGE4_FUSE_COH_BIN=/runner/coh\n"
+        "export COHSH_POLICY=/runner/cohsh-policy.toml\n"
+        "export COH_POLICY=/runner/coh-policy.toml\n"
         "stage4_restore_context_environment\n"
         "printf '%s\\n' \"${COHESIX_GATEWAY_URL}\"\n"
         "for name in COHSH_REST_RESPONSE_TIMEOUT_MS COHSH_REST_URL "
@@ -300,6 +304,7 @@ def test_stage4_restores_runner_owned_environment_before_final_context() -> None
         "HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS "
         "HIVE_GATEWAY_REQUEST_AUTH_TOKEN HIVE_GATEWAY_URL "
         "COH_REST_TICKET HIVE_GATEWAY_DELEGATION_KEY_REF "
+        "COHSH_POLICY COH_POLICY "
         "TP_STAGE4_DELEGATION_SECRET "
         "TP_STAGE4_FUSE_COH_BIN TP_STAGE4_FUSE_MOUNT_DIR "
         "TP_STAGE4_FUSE_MOUNT_LOG; do\n"
@@ -328,6 +333,50 @@ def test_stage4_restores_runner_owned_environment_before_final_context() -> None
     assert (
         "stage4_restore_context_environment\ntp_stage_complete 4" in source
     )
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_stage4_selects_retained_policies_and_preserves_overrides(
+    tmp_path: Path, explicit: bool,
+) -> None:
+    """REST uses its artifact's policies unless the operator selected others."""
+
+    artifact = tmp_path / "artifact"
+    selected = [
+        artifact / "evidence/cohsh_policy.toml",
+        artifact / "release-configs/configs/generated/coh_policy.toml",
+    ]
+    if explicit:
+        selected = [tmp_path / "explicit-cohsh.toml", tmp_path / "explicit-coh.toml"]
+    for path in selected:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# selected policy fixture\n", encoding="utf-8")
+    source = STAGE4_SCRIPT.read_text(encoding="utf-8")
+    helper = source[
+        source.index("stage4_select_artifact_policies() {"):
+        source.index("stage4_process_tree() {")
+    ]
+    environment = os.environ.copy()
+    for name in ("COHSH_POLICY", "COH_POLICY"):
+        environment.pop(name, None)
+    if explicit:
+        environment.update(COHSH_POLICY=str(selected[0]), COH_POLICY=str(selected[1]))
+    program = (
+        "set -euo pipefail\n"
+        "tp_log() { printf '%s\\n' \"$1\" >&2; }\n"
+        f"{helper}\n"
+        'stage4_select_artifact_policies "$1"\n'
+        'printf "%s\\n" "$COHSH_POLICY" "$COH_POLICY"\n'
+    )
+    command = ["bash", "--noprofile", "--norc", "-c", program, "test", str(artifact)]
+    completed = subprocess.run(command, env=environment, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [str(path) for path in selected]
+    selected[0].unlink()
+    missing = subprocess.run(command, env=environment, capture_output=True, text=True)
+    assert missing.returncode == 1
+    assert "requires the selected cohsh and coh policy files" in missing.stderr
+    assert missing.stdout == ""
 
 
 def test_stage4_delegation_secret_is_excluded_from_evidence(

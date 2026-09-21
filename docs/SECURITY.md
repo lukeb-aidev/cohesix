@@ -211,6 +211,12 @@ private fixture keys and secret canaries. [M27a authority](M27A_AUTHORITY.md)
 records production gates and the separate, still-deferred 28d ledger/quarantine
 claims.
 
+Ticket references are resolved into the target binary at build time. A privately
+provisioned image therefore belongs inside the credential boundary even though
+its resolved JSON contains references only. Public evaluation images must use
+separate explicitly shared credentials; private hive keys cannot be reused for
+their builds. Host-side credential changes do not rotate a compiled target key.
+
 ### External identity and read visibility
 
 External identity mapping is host-only. `coh identity --mapping ID`

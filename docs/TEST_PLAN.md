@@ -1963,6 +1963,12 @@ the same canonical Python 3.11+ selection as Stage 01.
   Stage 03 default artifact, then starts a fresh boot. Standalone Stage 04 may
   build its own canonical artifact. Set `COHESIX_GATEWAY_URL` or equivalent to
   target an existing gateway.
+- QEMU clients select the retained artifact's `cohsh` and `coh` policies by
+  default, including readiness and REST FUSE checks. Explicit `COHSH_POLICY`
+  and `COH_POLICY` selections remain subject to the clients' normal hash
+  validation. The runner restores both inherited selectors before finalizing
+  evidence; the checkout's restored default profile cannot replace the tested
+  artifact's policy.
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<token> scripts/cohsh/REST_regression_batch.sh`
 - Pass the token through the inherited environment. The runner records a
   redacted command and must not place the token value in retained logs.

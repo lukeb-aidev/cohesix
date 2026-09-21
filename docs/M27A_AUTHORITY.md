@@ -120,6 +120,13 @@ memory diagnostics and federation, and replaces ticket literals with
 `env:COH_TICKET_WORKER_GPU_KEY`, `env:COH_TICKET_WORKER_BUS_KEY`, and
 `env:COH_TICKET_WORKER_LORA_KEY`. Supply deployment secrets before compiling the
 root image. Secret references, not key values, appear in resolved JSON.
+The root binary nevertheless contains the resolved ticket credentials: references
+protect generated configuration, not the confidentiality of a compiled image.
+Keep privately provisioned target images within the deployment's credential
+boundary. Public evaluation images require a separate explicitly shared keyset;
+never publish an image compiled with an active private hive's keys. Credential
+rotation requires rebuilding and qualifying the target image, together with its
+matching host configuration.
 
 For `cohsh`, the GPU bridge and Python, TCP credential resolution is explicit
 input first, then `COH_AUTH_TOKEN_REF`, then `COH_AUTH_TOKEN`, then

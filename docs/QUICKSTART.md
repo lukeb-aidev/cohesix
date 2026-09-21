@@ -246,14 +246,22 @@ and follow [Hardware Bring-up](HARDWARE_BRINGUP.md) for capture and diagnostics.
 
 ## 5. Connect to your target
 
-In terminal 2, change into the **Mac or Linux host bundle**. For QEMU, the
-compiled Queen console credential is the `secret` in the `tickets` entry with
-`role` equal to `queen` in `configs/generated/root_task_resolved.json`. For Pi, use
-the credential from its card as described above. Open the manifest in a local
-editor; do not print secrets into shared logs. Credentials distributed in a
-public evaluation image are shared, not private deployment credentials.
-Changing a host environment variable or editing the copied manifest does not
-change the secret already compiled into the target.
+In terminal 2, change into the **Mac or Linux host bundle**. Obtain the Queen
+console credential from the provisioner of the exact target image. For QEMU,
+inspect the `queen` entry in `configs/generated/root_task_resolved.json`; for Pi,
+inspect the image's `cohesix-root-task-resolved.json`. Release A manifests retain
+a `secret_ref`, such as `env:COH_TICKET_QUEEN_KEY`, rather than the credential
+value. Use the value supplied through that reference when the image was built.
+An older development manifest may instead contain a literal `secret`; inspect
+it locally without printing it into shared logs. The Pi's `cohesix.env` network
+settings and Wi-Fi password are separate from console authentication.
+
+Ticket credentials are embedded in the target image. Treat an image built with
+private deployment credentials as private too. A public evaluation image must
+use a separate explicitly shared keyset, never keys used by a private hive.
+Changing a host environment variable or editing a copied manifest does not
+rotate the credential in an existing target image; rebuild and qualify the
+replacement image with the new credential.
 
 Enter the target credential without putting it in shell history (Bash):
 

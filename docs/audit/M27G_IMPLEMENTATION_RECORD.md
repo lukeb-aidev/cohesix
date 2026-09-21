@@ -325,3 +325,25 @@ the Python SDK and benchmark scripts. The host HTTP dependency closure changes;
 application grammar, generated authority, provider/Worker contracts, Python
 implementation, benchmark workloads and thresholds remain unchanged. Fresh
 native package builds and complete staged/release evidence remain required.
+
+The `40af32d76` QEMU campaign passed Stages 01–03. Stage 04 then refused its
+readiness probe because the retained `cohsh` expected its selected profile's
+policy while the harness loaded the restored checkout default. The gateway
+itself attached successfully. Stage 04 now defaults both client policy selectors
+to the verified Stage 03 artifact, retains explicit operator overrides and
+normal hash checks, and restores inherited selectors before finalizing evidence.
+Eighteen focused REST security/lifecycle tests pass, including retained-policy,
+explicit-override, missing-policy and environment-restoration checks. The failed
+attempt remains unchanged; this harness repair does not establish target or
+release acceptance.
+
+Release preparation also verified that compiled target binaries contain the
+resolved build-time ticket credentials, even when generated JSON exposes only
+secret references. Preparation images built with private burn-in credentials
+remain private and are excluded from public release selection. A separate
+five-role qualification keyset has been provisioned for fresh candidate builds;
+no key values are recorded here. The Quickstart, authority and security guides
+now explain exact-image credential provisioning, image confidentiality and
+rebuild-based rotation. Public evaluation delivery requires its own explicitly
+shared credentials and cannot reuse private hive keys. This is existing
+build-time behavior, not a newly introduced runtime or authority path.
