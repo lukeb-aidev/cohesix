@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f",
-  "topology_sha256": "504c640ec0deb57b6b213c600da610c1a83fea21384ab6ef6d62bfb8ba2cb83f",
+  "manifest_sha256": "d3029e105edb84e05b1377a6a479ae4e1e3bed555046e4606625644c95951aa5",
+  "topology_sha256": "925f8999ac65e5a76427e5126a769c7aac203a9ea58525c5081a65210cc180ed",
   "topology": {
     "console_network_service": {
       "abi_version": 6,
@@ -329,7 +329,7 @@
         ],
         "required": true
       },
-      "schema": "1.27"
+      "schema": "1.28"
     },
     "temporal_authority": {
       "admission_window_us": 10000,

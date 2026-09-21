@@ -382,6 +382,31 @@ mod tests {
     }
 
     #[test]
+    fn release_a_capacity_retains_all_512_outcomes_at_exhaustion() {
+        let mut table = IntentDedupe::new(512);
+        for index in 0..512 {
+            let request = intent(&format!("entry-{index}"), 1000 + index);
+            assert_eq!(table.reserve(&request), Ok(Reservation::Fresh));
+            table
+                .finish(&request, index, index % 2 == 0)
+                .expect("terminal outcome");
+        }
+        assert_eq!(table.snapshot().entries, 512);
+        assert_eq!(
+            table.reserve(&intent("overflow", 2000)),
+            Err(AuthorityError::Limit)
+        );
+        for index in 0..512 {
+            let mut request = intent(&format!("entry-{index}"), 1000 + index);
+            assert_eq!(table.reserve(&request), Ok(Reservation::Duplicate(index)));
+            request.writer_epoch = Some(2);
+            assert_eq!(table.reserve(&request), Err(AuthorityError::Conflict));
+        }
+        assert_eq!(table.snapshot().entries, 512);
+        assert_eq!(table.snapshot().duplicates, 512);
+    }
+
+    #[test]
     fn strict_fields_and_identifier_bounds_are_independent_of_transport() {
         for id in ["", "../x", "-option", "a/b", "x\ny", "a..b"] {
             assert_eq!(validate_id(id), Err(AuthorityError::Invalid));

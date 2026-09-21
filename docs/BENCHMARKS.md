@@ -4,6 +4,19 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
+Strict production pressure uses the frozen resolved manifest selected by
+`--authority-manifest` (or `COH_PRESSURE_AUTHORITY_MANIFEST`). The canonical
+QEMU collector sets it for every child, including direct-console fault setup.
+The selected live epoch and dedupe capacity must agree before mutation. Approvals
+still target `/queen/ctl`; production mutations use `/queen/intents/ctl` with one
+immutable operation identity and no fallback or automatic fresh-identity retry.
+The full 256-Worker boot reserves 291 distinct intents: 18 fault-preflight,
+253 population, 14 receiver retirement/recreation, four lifecycle/refusal, and
+two pressure lifecycle operations. Release A selects 512 on QEMU and Pi; all
+other workload sizes, error budgets and performance thresholds are unchanged.
+An ambiguous strict mutation stops for reconciliation instead of being replayed
+as new work.
+
 ## Scope and proof classes
 
 Cohesix performance evidence is classified by the system that produced it.

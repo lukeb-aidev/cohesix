@@ -20,7 +20,7 @@ fn base_manifest(extra: &str) -> String {
 # Author: Lukas Bower
 # Purpose: CAS validation test manifest.
 [root_task]
-schema = "1.27"
+schema = "1.28"
 
 [profile]
 name = "virt-aarch64"

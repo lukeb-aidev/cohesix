@@ -3650,7 +3650,8 @@ def test_read_only_perf_accepts_console_projection_without_population_admission(
 
     client = ConsoleProjectionClient()
     markers: list[str] = []
-    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args: client)
+    client.queen_authority = None
+    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args, **_kwargs: client)
     monkeypatch.setattr(rest_perf, "fetch_json", lambda *_args: {})
     monkeypatch.setattr(rest_perf, "build_status_specs", lambda _bounds: [])
     monkeypatch.setattr(rest_perf, "measure", lambda *_args: ([0.01], [0.01]))
@@ -3774,7 +3775,8 @@ def test_run_simulation_rejects_backend_before_marker_or_discovery(
             }
 
     client = ConsoleProjectionClient()
-    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args: client)
+    client.queen_authority = None
+    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args, **_kwargs: client)
     monkeypatch.setattr(rest_perf, "wait_for_gateway", lambda *_args: {})
     monkeypatch.setattr(
         rest_perf,
@@ -3843,6 +3845,7 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(
             pass
 
     class HostModelClient:
+        queen_authority = None
         def status(self) -> dict:
             return {"connected": True, "backend_class": "host-model"}
 
@@ -3868,7 +3871,7 @@ def test_managed_gateway_mock_skips_target_tcp_preflight(
         lambda command, _env, _log: launched.append(list(command)) or object(),
     )
     monkeypatch.setattr(rest_perf, "terminate_process", lambda *_args: None)
-    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args: HostModelClient())
+    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args, **_kwargs: HostModelClient())
     monkeypatch.setattr(rest_perf, "wait_for_gateway", lambda *_args: {})
     monkeypatch.setattr(
         rest_perf,
@@ -7126,3 +7129,115 @@ def test_raw_invalid_credentials_are_refused_before_any_connection(monkeypatch, 
     report = json.loads((tmp_path / "raw.raw-summary.json").read_text())
     assert report["phase"] == "credential-preflight"
     assert report["connection_attempts"] == report["requests_completed"] == 0
+
+
+def strict_pressure_policy() -> dict:
+    """Release A fixture independent of generated SDK compatibility defaults."""
+    return {
+        "production": True, "strict_queen_intents": True, "legacy_queen_ctl": False,
+        "queen_dedupe_entries": 512, "queen_intent_max_bytes": 2048,
+        "queen_intent_schema": "queen-intent/v1", "writer_epoch": 9,
+        "writer_epoch_required": True,
+    }
+
+
+def test_pressure_full_boot_budget_counts_faults_and_refusals() -> None:
+    assert rest_perf.pressure_intent_budget(256) == {
+        "fault_preflight": 18, "population": 253, "retired_receivers": 14,
+        "operator_lifecycle_and_refusals": 4, "pressure_lifecycle": 2,
+    }
+    assert sum(rest_perf.pressure_intent_budget(256).values()) == 291
+    for invalid in (True, 0, 2, 257):
+        with pytest.raises(rest_perf.RestError):
+            rest_perf.pressure_intent_budget(invalid)
+
+
+def test_pressure_authority_refuses_insufficient_or_mismatched_live_capacity() -> None:
+    policy = strict_pressure_policy()
+    authority = {
+        "schema": "authority/v1", "identity": "gateway_enforced", "writer_epoch": 9,
+        "epoch_required": True, "production": True, "strict_intents": True,
+    }
+    dedupe = {"schema": "queen-dedupe/v1", "capacity": 512, "entries": 221}
+    rest_perf.validate_queen_authority(policy, authority, dedupe, 291)
+    for change in ({"entries": 222}, {"entries": -1}, {"capacity": 64}, {"entries": False}):
+        with pytest.raises(rest_perf.RestError):
+            rest_perf.validate_queen_authority(policy, authority, {**dedupe, **change}, 291)
+    for change in ({"writer_epoch": 8}, {"strict_intents": False}, {"production": 1}):
+        with pytest.raises(rest_perf.RestError):
+            rest_perf.validate_queen_authority(policy, {**authority, **change}, dedupe, 291)
+
+
+@pytest.mark.parametrize("control_status", ["OK", "ERR"])
+def test_strict_pressure_approval_keeps_policy_target_and_never_falls_back(control_status: str) -> None:
+    calls = []
+    control = rest_perf.GatewayResponse(
+        status=control_status, verb="ECHO", path="/queen/intents/ctl", end=True,
+        lines=[], bytes=None, error="authority-capacity" if control_status == "ERR" else None,
+    )
+
+    def echo(path, line):
+        calls.append((path, json.loads(line)))
+        return replace(control, status="OK", error=None) if path == "/actions/queue" else control
+
+    client = SimpleNamespace(echo=echo, queen_authority=strict_pressure_policy())
+    assert rest_perf.queen_control_with_approval(client, '{"kill":"worker-1"}', "once-1") is control
+    assert [row[0] for row in calls] == ["/actions/queue", "/queen/intents/ctl"]
+    assert calls[0][1]["target"] == "/queen/ctl"
+    assert calls[1][1]["writer_epoch"] == 9
+    assert calls[1][1]["id"] == calls[1][1]["idempotency_key"] == "once-1"
+    assert json.loads(calls[1][1]["cmd"]) == {"kill": "worker-1"}
+
+
+def test_strict_pressure_validates_envelope_before_consuming_approval() -> None:
+    calls = []
+    client = SimpleNamespace(echo=lambda *args: calls.append(args), queen_authority=strict_pressure_policy())
+    with pytest.raises(Exception, match="Queen control command"):
+        rest_perf.queen_control_with_approval(client, '{"kill":"a","kill":"b"}', "once-1")
+    assert calls == []
+    first = rest_perf.queen_control_wire('{"kill":"worker-1"}', "op-1", strict_pressure_policy(), 1000)
+    assert first == rest_perf.queen_control_wire('{"kill":"worker-1"}', "op-1", strict_pressure_policy(), 1000)
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("spawn heartbeat ticks=100 ttl_s=120 ops=500", {"spawn":"heartbeat", "ticks":100, "budget":{"ttl_s":120,"ops":500}}),
+    ("spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1", {"spawn":"gpu", "gpu_id":"GPU-0", "mem_mb":4096, "streams":2,"ttl_s":120,"priority":1}),
+    ("spawn lora", {"spawn":"lora"}),
+    ("kill worker-42", {"kill":"worker-42"}),
+])
+def test_pressure_fault_commands_use_the_same_strict_contract(command, expected) -> None:
+    encoded = rest_perf.pressure_fault_command(command, "fault-1", strict_pressure_policy())
+    assert encoded.startswith("echo '") and encoded.endswith("' > /queen/intents/ctl")
+    envelope = json.loads(encoded.split("'", 2)[1])
+    assert envelope["writer_epoch"] == 9
+    assert json.loads(envelope["cmd"]) == expected
+    for invalid in ("kill ../../worker-1", "kill worker-1'", "spawn unknown"):
+        with pytest.raises(Exception):
+            rest_perf.pressure_fault_command(invalid, "fault-1", strict_pressure_policy())
+
+
+@pytest.mark.parametrize("auto_approve", [False, True])
+def test_strict_pressure_lost_ack_bypasses_outer_retry(auto_approve: bool) -> None:
+    state = rest_perf.SimState(
+        bounds={}, rest_url="http://127.0.0.1:8080", rng=rest_perf.random.Random(0),
+        entropy=0.0, tail_bytes=0, policy_enabled=True, actions_enabled=True,
+        telemetry_enabled=False, include_lifecycle=False, auto_approve=auto_approve,
+        transient_retries=True, strict_control_errors=False,
+    )
+    calls = []
+
+    def echo(path, line):
+        calls.append(path)
+        if path == "/actions/queue":
+            return rest_perf.GatewayResponse("OK", "ECHO", path, True, [], None, None)
+        raise rest_perf.RestError("connection reset after mutation; ACK unknown")
+
+    client = SimpleNamespace(echo=echo, queen_authority=strict_pressure_policy(), verify_queen_authority=lambda: None)
+    with pytest.raises(rest_perf.RestError, match="ACK unknown") as result:
+        rest_perf.run_with_retry_policy(
+            lambda: rest_perf.echo_with_policy_retry(client, "/queen/ctl", '{"kill":"worker-1"}', state),
+            state, 1.0, "strict mutation",
+        )
+    assert not rest_perf.is_transient_error(result.value)
+    assert calls == (["/actions/queue"] if auto_approve else []) + ["/queen/intents/ctl"]
+    assert state.queen_intent_seq == 1

@@ -807,3 +807,34 @@ production controls, masking refusals or lowering the required population is
 not a passing result. Physical Wi-Fi/repeatability, complete target acceptance,
 matched native pressure and final promotion remain open. No release archive has
 been promoted and Milestone 27g remains In Progress.
+
+
+## Approved Release A intent capacity and pressure restoration
+
+The user approved 512 retained outcomes and matching QEMU/Pi manifests on
+22 September 2026. Discovery is M27g assembled qualification; the narrowly
+reopened owner is `m27a-queen-ctl-idempotency`. Manifest schema 1.28 permits at
+most 512 entries and the shared Release A materializer selects 512 on both
+boards. Compatibility defaults remain 64. No identity is evicted, no consumed
+approval is recycled, and no Worker population or benchmark threshold changes.
+The complete pressure boot requires 291 identities, including fault injection
+and expected refusals; preflight checks remaining live capacity before mutation.
+The SDK projects the bound. The harness uses that selected policy and immutable
+strict envelopes for direct-console and REST lifecycle operations, with no
+legacy fallback or automatic fresh-identity retry after a refusal or lost ACK.
+
+Compatibility review covers coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
+the Python SDK and pressure/raw benchmark scripts. The existing console ECHO
+and SDK QueenIntent contracts carry the envelope unchanged; only the SDK's
+capacity projection and benchmark routing need changes. Generated contracts
+and exact host/target builds must be refreshed; old 1.27 artifacts are retained
+under their original identities and cannot be relabelled as 1.28 qualification.
+
+The existing physical timer backend summary is retained in the bounded trusted
+boot reserve. This fixes loss of required evidence under startup log pressure;
+it changes no timer source, period, elapsed-time arithmetic or driver ownership.
+The prior two-hour burn remains sealed against its original 64-entry profile.
+These bounded capacity/collector/diagnostic corrections do not justify another
+full two-hour run; fresh affected target and post-burn full-plan evidence is
+still required before milestone closure.

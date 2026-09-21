@@ -54,6 +54,7 @@ except ImportError:  # Direct script execution.
 # workflow uses the checkout's SDK so a separately installed version cannot drift.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools/cohesix-py"))
 from cohesix.auth import resolve_secret  # noqa: E402
+from cohesix.authority import QueenIntent, authority_id  # noqa: E402
 from cohesix.ticket import normalize_ticket  # noqa: E402
 
 DEFAULT_REST_URL = "http://127.0.0.1:8080"
@@ -734,6 +735,7 @@ class SimState:
     worker_cap: Optional[int] = None
     next_worker_seq: int = 1
     approval_seq: int = 0
+    queen_intent_seq: int = 0
     policy_lock: threading.Lock = field(default_factory=threading.Lock)
     schedule_lock: threading.Lock = field(default_factory=threading.Lock)
     lease_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -804,7 +806,11 @@ class RestClient:
     def __init__(
         self, rest_url: str, timeout: float, request_auth_token: Optional[str] = None,
         delegated_ticket: Optional[str] = None,
+        authority_manifest: Optional[str] = None,
     ):
+        selected = authority_manifest or os.environ.get("COH_PRESSURE_AUTHORITY_MANIFEST")
+        self.queen_authority = load_queen_authority(selected) if selected else None
+        self.queen_authority_verified = False
         self.rest_url = normalize_rest_url(rest_url)
         self.timeout = timeout
         token = (request_auth_token or "").strip()
@@ -867,6 +873,21 @@ class RestClient:
     def echo(self, path: str, line: str) -> GatewayResponse:
         payload = {"path": path, "line": line}
         return parse_gateway_response(self.post_json("/v1/fs/echo", payload))
+
+    def verify_queen_authority(self) -> None:
+        """Bind control to the selected live epoch and non-evicting table."""
+        if self.queen_authority is None or self.queen_authority_verified:
+            return
+        authority = self.cat("/proc/authority", 8192)
+        dedupe = self.cat("/proc/queen/dedupe", 8192)
+        if any(row.status != "OK" or not row.end or not row.lines for row in (authority, dedupe)):
+            raise RestError("selected Queen authority snapshot unavailable")
+        validate_queen_authority(
+            self.queen_authority,
+            parse_strict_json_object("\n".join(authority.lines).encode(), "authority snapshot"),
+            parse_strict_json_object(dedupe.lines[0].encode(), "dedupe snapshot"),
+        )
+        self.queen_authority_verified = True
 
     def status(self) -> dict:
         return self.get_json("/v1/meta/status")
@@ -5806,6 +5827,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--authority-manifest",
+        default=os.environ.get("COH_PRESSURE_AUTHORITY_MANIFEST"),
+        help="Frozen resolved manifest for strict Queen control; also COH_PRESSURE_AUTHORITY_MANIFEST.",
+    )
+    parser.add_argument(
         "--benchmark-target",
         choices=(BENCHMARK_TARGET_QEMU, BENCHMARK_TARGET_PI4),
         default=BENCHMARK_TARGET_QEMU,
@@ -6844,6 +6870,88 @@ def telemetry_ingest_enabled(client: RestClient) -> bool:
     return response.status == "OK"
 
 
+def pressure_intent_budget(maximum_workers: int) -> Dict[str, int]:
+    """Count all distinct canonical pressure intents, including expected refusals."""
+    if type(maximum_workers) is not int or not 3 <= maximum_workers <= 256:
+        raise RestError("invalid full pressure Worker population")
+    return {
+        "fault_preflight": 18, "population": maximum_workers - 3,
+        "retired_receivers": 14, "operator_lifecycle_and_refusals": 4,
+        "pressure_lifecycle": 2,
+    }
+
+
+def load_queen_authority(path: str) -> dict:
+    """Read the frozen resolved manifest, never ambient SDK policy defaults."""
+    raw, _ = read_frozen_artifact(path, "authority manifest", 8 * 1024 * 1024)
+    manifest = parse_strict_json_object(raw, "authority manifest")
+    policy = manifest.get("authority")
+    if not isinstance(policy, dict):
+        raise RestError("resolved manifest lacks Queen authority")
+    for key in ("production", "legacy_queen_ctl", "strict_queen_intents", "writer_epoch_required"):
+        if type(policy.get(key)) is not bool:
+            raise RestError(f"invalid Queen authority {key}")
+    for key, maximum in (("queen_dedupe_entries", 512), ("queen_intent_max_bytes", 2048), ("writer_epoch", 2**64 - 1)):
+        if type(policy.get(key)) is not int or not 1 <= policy[key] <= maximum:
+            raise RestError(f"invalid Queen authority {key}")
+    if (policy["production"] and (policy["legacy_queen_ctl"] or not policy["writer_epoch_required"])) or (not policy["legacy_queen_ctl"] and not policy["strict_queen_intents"]):
+        raise RestError("invalid selected Queen control mode")
+    return {**policy, "queen_intent_schema": "queen-intent/v1"}
+
+
+def validate_queen_authority(policy: dict, authority: dict, dedupe: dict, required: int = 0) -> None:
+    """Refuse mismatched live policy or insufficient remaining intent capacity."""
+    expected = {
+        "schema": "authority/v1", "identity": "gateway_enforced",
+        "writer_epoch": policy["writer_epoch"],
+        "epoch_required": policy["writer_epoch_required"],
+        "production": policy["production"], "strict_intents": policy["strict_queen_intents"],
+    }
+    if any(type(authority.get(k)) is not type(v) or authority[k] != v for k, v in expected.items()):
+        raise RestError("live Queen authority differs from selected manifest")
+    capacity, entries = dedupe.get("capacity"), dedupe.get("entries")
+    if (dedupe.get("schema") != "queen-dedupe/v1" or type(capacity) is not int
+            or capacity != policy["queen_dedupe_entries"] or type(entries) is not int
+            or not 0 <= entries <= capacity or type(required) is not int or required < 0):
+        raise RestError("invalid or mismatched Queen dedupe snapshot")
+    if not policy["legacy_queen_ctl"] and capacity - entries < required:
+        raise RestError(f"Queen intent budget requires {required} entries; only {capacity - entries} remain")
+
+
+def queen_control_wire(line: str, operation_id: str, policy: Optional[dict], issued_unix_ms: Optional[int] = None) -> Tuple[str, str]:
+    """Freeze one operation's identity before approval; never change it on refusal."""
+    if policy is None or policy["legacy_queen_ctl"]:
+        return "/queen/ctl", line
+    cmd = parse_strict_json_object(line.encode("utf-8"), "Queen control command")
+    envelope = QueenIntent(
+        id=operation_id, idempotency_key=operation_id,
+        issued_unix_ms=issued_unix_ms if issued_unix_ms is not None else time.time_ns() // 1_000_000,
+        writer_epoch=policy["writer_epoch"], cmd=cmd,
+    )
+    return "/queen/intents/ctl", envelope.encode(policy).decode("utf-8")
+
+
+def pressure_fault_command(command: str, operation_id: str, policy: dict) -> str:
+    """Encode the finite canonical fault-preflight commands for cohsh."""
+    if policy["legacy_queen_ctl"]:
+        return command
+    payloads = {
+        "spawn heartbeat ticks=100 ttl_s=120 ops=500": {"spawn": "heartbeat", "ticks": 100, "budget": {"ttl_s": 120, "ops": 500}},
+        "spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1": {"spawn": "gpu", "gpu_id": "GPU-0", "mem_mb": 4096, "streams": 2, "ttl_s": 120, "priority": 1},
+        "spawn lora": {"spawn": "lora"},
+    }
+    if command.startswith("kill "):
+        payload = {"kill": authority_id(command[5:])}
+    elif command in payloads:
+        payload = payloads[command]
+    else:
+        raise RestError("unsupported pressure fault command")
+    if policy["legacy_queen_ctl"]:
+        return command
+    path, wire = queen_control_wire(json.dumps(payload), operation_id, policy)
+    return f"echo '{wire}' > {path}"
+
+
 def queen_control_with_approval(
     client: RestClient, line: str, approval_id: str,
 ) -> GatewayResponse:
@@ -6852,6 +6960,9 @@ def queen_control_with_approval(
     Qualification setup is sequential and owns its approval IDs. A refusal to
     admit the single-use approval prevents the control write entirely.
     """
+    path, wire = queen_control_wire(line, approval_id, getattr(client, "queen_authority", None))
+    if isinstance(client, RestClient):
+        client.verify_queen_authority()
     approval = json.dumps(
         {"id": approval_id, "target": "/queen/ctl", "decision": "approve"},
         separators=(",", ":"),
@@ -6859,7 +6970,7 @@ def queen_control_with_approval(
     response = client.echo("/actions/queue", approval)
     if response.status != "OK":
         raise RestError(f"Queen approval failed: {response.error}", response)
-    return client.echo("/queen/ctl", line)
+    return client.echo(path, wire)
 
 
 def queue_approval(client: RestClient, target: str, state: SimState) -> None:
@@ -6923,6 +7034,25 @@ def echo_with_policy_retry(
     line: str,
     state: SimState,
 ) -> GatewayResponse:
+    policy = getattr(client, "queen_authority", None)
+    if path == "/queen/ctl" and policy is not None and not policy["legacy_queen_ctl"]:
+        with state.policy_lock:
+            state.queen_intent_seq += 1
+            identity = f"pressure-{state.run_token}-{state.queen_intent_seq:06d}"
+            try:
+                if state.auto_approve:
+                    response = queen_control_with_approval(client, line, identity)
+                else:
+                    target, wire = queen_control_wire(line, identity, policy)
+                    client.verify_queen_authority()
+                    response = client.echo(target, wire)
+                if response.status != "OK":
+                    raise _StrictControlRefusal(f"strict Queen control failed: {response.error}", response)
+                return response
+            except RestError as exc:
+                # Even a lost ACK must not trigger an outer retry with a new
+                # identity. The caller retains the failure for reconciliation.
+                raise _StrictControlRefusal(str(exc), exc.response) from exc
     if path == "/queen/ctl" and state.auto_approve:
         with state.policy_lock:
             return _echo_with_policy_retry_inner(client, path, line, state)
@@ -8545,8 +8675,10 @@ def run_simulation(args: argparse.Namespace) -> int:
                 args.gateway_log,
             )
 
-        client = RestClient(rest_url, args.timeout, args.request_auth_token)
+        client = RestClient(rest_url, args.timeout, args.request_auth_token, authority_manifest=getattr(args, "authority_manifest", None))
         bounds = wait_for_gateway(client, args.ready_timeout_secs)
+        if client.queen_authority is not None:
+            client.verify_queen_authority()
         if args.population_mode == POPULATION_HOST_MODEL:
             # A target-backed console projection owns only compiler-admitted
             # executable slots. Synthetic 24..120 Worker populations belong to

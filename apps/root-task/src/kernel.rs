@@ -6475,8 +6475,11 @@ impl KernelTimer {
                 baseline
             }
         };
-        log::info!(
-            target: "root_task::kernel::timer",
+        // Timer selection is physical boot evidence. Keep this bounded summary
+        // in the trusted reserve so network startup cannot evict its backend.
+        let mut timer_summary = heapless::String::<192>::new();
+        if write!(
+            timer_summary,
             "[timers] summary backend={} counter={} timer_freq_hz={} period_cycles={}",
             match backend {
                 TimerBackend::ArchCounterPollOnly => "arch-counter",
@@ -6488,7 +6491,11 @@ impl KernelTimer {
             },
             freq_hz,
             period_cycles,
-        );
+        )
+        .is_ok()
+        {
+            crate::bootstrap::log::retain_bootstrap_audit_line(timer_summary.as_str());
+        }
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: done; timers online (non-blocking)",

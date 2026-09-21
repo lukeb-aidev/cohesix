@@ -13,7 +13,7 @@ pub fn validate(manifest: &Manifest) -> Result<()> {
     }
     if !(1..=4096).contains(&policy.delegated_ticket_entries)
         || !(1..=86400).contains(&policy.delegated_ticket_max_ttl_s)
-        || !(1..=256).contains(&policy.queen_dedupe_entries)
+        || !(1..=512).contains(&policy.queen_dedupe_entries)
         || !(256..=2048).contains(&policy.queen_intent_max_bytes)
         || !(256..=8192).contains(&policy.gpu_frame_max_bytes)
         || policy.writer_epoch == 0
@@ -85,6 +85,7 @@ pub fn release_a(
         bail!("writer epoch must be nonzero");
     }
     manifest.authority.production = true;
+    manifest.authority.queen_dedupe_entries = 512;
     manifest.authority.legacy_queen_ctl = false;
     manifest.authority.strict_queen_intents = true;
     manifest.authority.writer_epoch_required = true;

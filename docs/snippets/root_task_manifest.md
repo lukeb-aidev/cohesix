@@ -8,7 +8,7 @@
 - Host tickets confer host authority; model/session roles confer no VM authority. Accepted task/driver bundles retain their owning milestone evidence. Production Worker/driver ledgers and structured quarantine require Milestone 28b.
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.27`
+- `root_task.schema`: `1.28`
 - `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `64`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -235,7 +235,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f`
+- `manifest.sha256`: `d3029e105edb84e05b1377a6a479ae4e1e3bed555046e4606625644c95951aa5`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -297,4 +297,4 @@
 - `ecosystem.models.enable`: `true`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `ed21f37f944afb14bf4e47d7ec5a602a9e4ace5f55a0fadb722f9353352da37f`)._
+_Generated from `configs/root_task.toml` (sha256: `d3029e105edb84e05b1377a6a479ae4e1e3bed555046e4606625644c95951aa5`)._

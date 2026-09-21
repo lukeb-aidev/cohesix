@@ -10,7 +10,11 @@ interfaces: transport selection, target console framing, namespace paths,
 control files, and non-generated record schemas. It links to generated snippets
 for compiler-owned values instead of copying them.
 
-Manifest schema 1.27 adds the explicitly selected `peft.release` action and
+Manifest schema 1.28 permits at most 512 retained Queen intent outcomes and
+selects 512 in both QEMU and Pi Release A profiles. Compatibility policy defaults
+remain 64; the Python projection includes the selected `queen_dedupe_entries`.
+Exhaustion refuses new identities without eviction or repeated effects.
+The schema retains the explicitly selected `peft.release` action and
 WorkerLora receipt code `0x0305`. Its strict arguments are `request_sha256` and
 optional boolean `recovery_only` (default false); fresh recovery grants restore
 only the original frozen baseline. Native/controller records and public usage

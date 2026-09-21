@@ -749,8 +749,10 @@ def test_control_script_approves_only_mutations(tmp_path: Path, command: str) ->
     subprocess.run(
         ["bash", "-eu", "-c", function + '\nGATEWAY_PID=\n'
          'HOST_TOOLS="$1"\nM26E_CONSOLE_AUTH_TOKEN=fixture\n'
+         'REPO_ROOT="$4"\nHARNESS_PYTHON="$5"\n'
+         'export COH_PRESSURE_AUTHORITY_MANIFEST="$4/configs/generated/root_task_resolved.json"\n'
          'run_cohsh_command "$2" "$3" 17\n',
-         "qualification-test", str(host_tools), str(tmp_path), command],
+         "qualification-test", str(host_tools), str(tmp_path), command, str(ROOT), sys.executable],
         check=True, timeout=10, capture_output=True, text=True,
     )
     lines = (tmp_path / "cohsh-command-17.coh").read_text(encoding="utf-8").splitlines()

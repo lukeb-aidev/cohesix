@@ -3980,7 +3980,7 @@ version = "0.1.0"
 path = "config/coh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/coh/run/lease/schema"
 schema_value = "gpu-lease/v1"
 
@@ -3988,15 +3988,15 @@ schema_value = "gpu-lease/v1"
 path = "config/cohsh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "config/root_task_resolved.json"
 kind = "json"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/root_task/schema"
-schema_value = "1.27"
+schema_value = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "contracts/provider_registry.json"
@@ -4419,7 +4419,7 @@ version = "0.1.0"
 path = "config/coh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/coh/run/lease/schema"
 schema_value = "gpu-lease/v1"
 
@@ -4427,15 +4427,15 @@ schema_value = "gpu-lease/v1"
 path = "config/cohsh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "config/root_task_resolved.json"
 kind = "json"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/root_task/schema"
-schema_value = "1.27"
+schema_value = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "contracts/provider_registry.json"
@@ -4870,7 +4870,7 @@ version = "0.1.0"
 path = "config/coh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/coh/run/lease/schema"
 schema_value = "gpu-lease/v1"
 
@@ -4878,15 +4878,15 @@ schema_value = "gpu-lease/v1"
 path = "config/cohsh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "config/root_task_resolved.json"
 kind = "json"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/root_task/schema"
-schema_value = "1.27"
+schema_value = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "contracts/provider_registry.json"
@@ -5013,7 +5013,7 @@ version = "0.1.0"
 path = "config/coh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/coh/run/lease/schema"
 schema_value = "gpu-lease/v1"
 
@@ -5021,15 +5021,15 @@ schema_value = "gpu-lease/v1"
 path = "config/cohsh_policy.toml"
 kind = "toml"
 executable = false
-version = "1.27"
+version = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "config/root_task_resolved.json"
 kind = "json"
 executable = false
-version = "1.27"
+version = "1.28"
 schema_pointer = "/root_task/schema"
-schema_value = "1.27"
+schema_value = "1.28"
 
 [[providers.deployment_profiles.artifacts]]
 path = "contracts/provider_registry.json"

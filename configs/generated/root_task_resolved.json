@@ -25,7 +25,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.27",
+    "schema": "1.28",
     "affinity": {
       "enabled": true,
       "max_cores": 4,

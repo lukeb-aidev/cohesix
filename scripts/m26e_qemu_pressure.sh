@@ -1067,6 +1067,8 @@ PY
 FROZEN_TARGET_SESSION="$FROZEN_COLLECTOR_DIR/target-session.json"
 FROZEN_GENERATED_INVENTORY="$FROZEN_COLLECTOR_DIR/generated-topology.json"
 FROZEN_RESOLVED_MANIFEST="$FROZEN_COLLECTOR_DIR/resolved-manifest.json"
+# Every subprocess uses the same immutable selected authority, including simulation.
+export COH_PRESSURE_AUTHORITY_MANIFEST="$FROZEN_RESOLVED_MANIFEST"
 FROZEN_WORKER_ARCHIVE="$FROZEN_COLLECTOR_DIR/worker-images.cpio"
 FROZEN_DRIVER_ARCHIVE="$FROZEN_COLLECTOR_DIR/driver-runtimes.cpio"
 FROZEN_WORKER_MANIFEST="$FROZEN_COLLECTOR_DIR/worker-image-manifest.json"
@@ -1229,6 +1231,16 @@ run_cohsh_command() {
             spawn\ *|kill\ *)
                 printf "echo '{\"id\":\"m26e-control-%s\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}' > /actions/queue\n" "$ordinal"
                 printf 'EXPECT SUBSTR path=/actions/queue\n'
+                command=$("$HARNESS_PYTHON" - "$REPO_ROOT" "$command" "$ordinal" <<'PY_CONTROL'
+import os
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+from scripts.rest_perf_harness import load_queen_authority, pressure_fault_command
+policy = load_queen_authority(os.environ["COH_PRESSURE_AUTHORITY_MANIFEST"])
+print(pressure_fault_command(sys.argv[2], f"m26e-control-{sys.argv[3]}", policy))
+PY_CONTROL
+                )
                 ;;
         esac
         printf '%s\n' "$command"
@@ -2709,6 +2721,40 @@ run_service_fault_boot() {
     verify_live_artifacts
 }
 
+check_pressure_intent_budget() {
+    local boot_dir=$1
+    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" "$HARNESS_PYTHON" - \
+        "$REPO_ROOT" "$boot_dir" <<'PY_BUDGET'
+import json
+import os
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+from scripts import rest_perf_harness as rest
+from cohesix.backends import TcpBackend
+manifest = Path(os.environ["COH_PRESSURE_AUTHORITY_MANIFEST"])
+raw, _ = rest.read_frozen_artifact(manifest, "authority manifest", 8 * 1024 * 1024)
+selected = rest.parse_strict_json_object(raw, "authority manifest")
+policy = rest.load_queen_authority(str(manifest))
+# Three roles, four spawns and two disposable shutdowns each. All refused
+# intents also retain their identity; no reservation is subtracted on teardown.
+maximum = selected["worker_runtime"]["max_workers"]
+budget = rest.pressure_intent_budget(maximum)
+backend = TcpBackend("127.0.0.1", 31337, os.environ["COH_AUTH_TOKEN"], "queen", None, timeout_s=10.0)
+try:
+    authority = rest.parse_strict_json_object(backend.read_file("/proc/authority", 8192), "authority snapshot")
+    dedupe = rest.parse_strict_json_object(backend.read_file("/proc/queen/dedupe", 8192).splitlines()[0], "dedupe snapshot")
+finally:
+    backend.close()
+rest.validate_queen_authority(policy, authority, dedupe, sum(budget.values()))
+(Path(sys.argv[2]) / "queen-intent-budget.json").write_text(json.dumps({
+    "schedule": budget, "required": sum(budget.values()), "authority": authority,
+    "dedupe": dedupe, "manifest_sha256": rest.hashlib.sha256(raw).hexdigest(),
+}, indent=2) + "\n")
+PY_BUDGET
+}
+
+
 run_pressure_boot() {
     local label=$1
     local intensity=$2
@@ -2738,6 +2784,7 @@ run_pressure_boot() {
     # Three role-specific GDB plans use only the qemu-evidence symbols and the
     # existing spawn/fault/recreate lifecycle. They run before the first
     # gateway attach so one live boot never changes console owner mid-session.
+    check_pressure_intent_budget "$boot_dir"
     drive_worker_fault_plan "$boot_dir" worker-heartbeat 100
     drive_worker_fault_plan "$boot_dir" worker-gpu 200
     drive_worker_fault_plan "$boot_dir" worker-lora 300

@@ -123,7 +123,7 @@ fn manifest_with_legacy_schema(schema: &str) -> String {
     let source =
         fs::read_to_string(repo_path("configs/root_task.toml")).expect("read default manifest");
     let mut manifest: toml::Value = toml::from_str(&source).expect("parse default manifest");
-    assert_eq!(manifest["root_task"]["schema"].as_str(), Some("1.27"));
+    assert_eq!(manifest["root_task"]["schema"].as_str(), Some("1.28"));
     manifest["root_task"]["schema"] = toml::Value::String(schema.to_owned());
     toml::to_string(&manifest).expect("serialize legacy-schema input")
 }
@@ -139,7 +139,7 @@ fn schema_1_10_is_rejected_after_operator_serial_contract_change() {
     let error = compile(&options).expect_err("schema 1.10 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.10 (expected 1.27)"),
+        message.contains("unsupported root_task.schema 1.10 (expected 1.28)"),
         "unexpected rejection: {message}"
     );
 }
@@ -155,7 +155,7 @@ fn schema_1_11_is_rejected_after_publication_ack_contract_change() {
     let error = compile(&options).expect_err("schema 1.11 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.11 (expected 1.27)"),
+        message.contains("unsupported root_task.schema 1.11 (expected 1.28)"),
         "unexpected rejection: {message}"
     );
 }
@@ -171,7 +171,7 @@ fn schema_1_12_is_rejected_after_send_batch_contract_change() {
     let error = compile(&options).expect_err("schema 1.12 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.12 (expected 1.27)"),
+        message.contains("unsupported root_task.schema 1.12 (expected 1.28)"),
         "unexpected rejection: {message}"
     );
 }
@@ -187,7 +187,7 @@ fn schema_1_13_is_rejected_after_natural_postpone_contract_change() {
     let error = compile(&options).expect_err("schema 1.13 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.13 (expected 1.27)"),
+        message.contains("unsupported root_task.schema 1.13 (expected 1.28)"),
         "unexpected rejection: {message}"
     );
 }
@@ -203,7 +203,7 @@ fn schema_1_14_is_rejected_after_worker_execution_contract_change() {
     let error = compile(&options).expect_err("schema 1.14 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.14 (expected 1.27)"),
+        message.contains("unsupported root_task.schema 1.14 (expected 1.28)"),
         "unexpected rejection: {message}"
     );
 }
@@ -216,7 +216,7 @@ fn schema_1_16_is_rejected_before_bounded_passive_timeout_policy() {
     fs::write(&manifest_path, manifest).expect("write prior-schema manifest");
     let options = options_for(manifest_path, &temp_dir.path().join("prior-timeout-policy"));
     let error = compile(&options).expect_err("schema 1.16 must be rejected");
-    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.16 (expected 1.27)"));
+    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.16 (expected 1.28)"));
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn schema_1_17_is_rejected_before_explicit_worker_bootstrap_policy() {
         &temp_dir.path().join("prior-bootstrap-policy"),
     );
     let error = compile(&options).expect_err("schema 1.17 must be rejected");
-    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.17 (expected 1.27)"));
+    assert!(format!("{error:#}").contains("unsupported root_task.schema 1.17 (expected 1.28)"));
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
 
         let resolved: Value = serde_json::from_str(&resolved)
             .unwrap_or_else(|error| panic!("parse resolved manifest for {profile}: {error}"));
-        assert_eq!(resolved["root_task"]["schema"], "1.27", "{profile}");
+        assert_eq!(resolved["root_task"]["schema"], "1.28", "{profile}");
         assert_eq!(
             resolved["console_network_service"]["abi_version"], 6,
             "{profile}"

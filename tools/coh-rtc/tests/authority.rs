@@ -96,3 +96,25 @@ fn published_cas_key_is_not_a_production_trust_root() {
         .expect_err("published fixture must fail");
     assert!(error.to_string().contains("published fixture"));
 }
+
+#[test]
+fn release_a_matches_qemu_and_pi_with_512_retained_outcomes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let key = root.join("resources/keys/cas_verification_key.hex");
+    let qemu = authority::release_a(manifest(), &key, 9).expect("QEMU profile");
+    let pi = ir::load_manifest(&root.join("configs/root_task_pi4_uboot_aarch64.toml"))
+        .expect("Pi source");
+    let pi = authority::release_a(pi, &key, 9).expect("Pi profile");
+    assert_eq!(qemu.authority, pi.authority);
+    assert_eq!(qemu.authority.queen_dedupe_entries, 512);
+    assert_eq!(manifest().authority.queen_dedupe_entries, 64);
+    assert_eq!(
+        serde_json::to_value(&qemu.ecosystem.host).expect("QEMU host policy"),
+        serde_json::to_value(&pi.ecosystem.host).expect("Pi host policy"),
+    );
+    for entries in [0, 513, u16::MAX] {
+        let mut invalid = qemu.clone();
+        invalid.authority.queen_dedupe_entries = entries;
+        assert!(authority::validate(&invalid).is_err(), "capacity {entries}");
+    }
+}

@@ -11071,11 +11071,12 @@ Checks: Writes without delegated ticket fail deterministically; writes with scop
 Deliverables: Gateway writes are caller-scoped and attributable without overstating the identity visible to the VM.
 
 Title/ID: m27a-queen-ctl-idempotency
+Status: Reopened — M27g pressure composition restoration; user approved 512 retained entries on 22 September 2026.
 Goal: Add deterministic idempotency for Queen intents without silently breaking legacy /queen/ctl fixtures.
 Inputs: apps/root-task, apps/nine-door, docs/INTERFACES.md
 Changes:
   - apps/root-task/src/control/queen_ctl.rs — strict envelope parser with required id/idempotency_key, bounded optional future admission correlation (`admission_id`, `intent_hash`, `policy_hash`, `state_epoch`, `resource_generation`, `decision_expiry`), and dedupe guard for the versioned intent path or compatibility-gated /queen/ctl mode.
-  - apps/root-task/src/control/dedupe.rs — bounded dedupe table with deterministic eviction and audit lines that preserve admission correlation when present without treating it as the dedupe key or a locally issued decision.
+  - apps/root-task/src/control/dedupe.rs — bounded non-evicting dedupe table with deterministic capacity refusal and audit lines that preserve admission correlation when present without treating it as the dedupe key or a locally issued decision.
   - apps/nine-door/src/host/proc.rs — read-only dedupe status surface for operators.
 Commands: cargo test -p root-task && cargo test -p nine-door
 Checks: Duplicate intent never repeats side effects; deterministic audit and /proc visibility prove dedupe behavior; admission correlation cannot change across a duplicate; legacy raw /queen/ctl behavior is either preserved or changed only with schema-bump fixtures.
@@ -12284,8 +12285,11 @@ Compatibility review for these defaults covers coh/coh-status, cohsh,
 Hive Gateway, SwarmUI, host-ticket-agent, host-sidecar-bridge, gpu-bridge-host,
 cas-tool, sidecar-bus, the Python SDK and benchmark scripts. Regenerate their
 manifest/provider projections and rebuild the selected host packages. Existing
-CLI grammar, wire formats, GPU/PEFT receipt matrix, resource quotas and benchmark
-thresholds remain applicable; Mac service actions use the existing version-1
+CLI grammar, wire formats, GPU/PEFT receipt matrix and benchmark thresholds
+remain applicable. The user-approved M27a restoration permits and selects 512
+non-evicting Queen intent entries in matching QEMU/Pi Release A profiles under
+manifest schema 1.28; compatibility policy defaults and all other quotas remain
+unchanged. Include fault-preflight reservations in the frozen pressure budget; Mac service actions use the existing version-1
 host-ticket contract and do not acquire Worker receipt authority.
 
 Integrated cases cover interrupted execution, runner failure/lost ACK, stale or
@@ -12321,6 +12325,8 @@ Changes:
   - evidence/acceptance — independently verify every requested outcome, correlate target and provider proofs and preserve blockers/non-claims and historical exceptions.
   - walkthrough/replay/showcase — qualify shipped instructions and native assets against the same accepted execution graph.
   - delegated pressure evidence — preserve each caller's delegated authority through the retired-result test proxy and Worker-log export, including missing-ticket refusal; gateway authentication and Worker retirement boundaries remain unchanged.
+  - physical timer evidence — retain the existing selected-backend summary in the trusted bounded boot reserve so startup log pressure cannot erase physical acceptance evidence; timer mechanics and thresholds remain unchanged.
+  - strict pressure authority — under reopened m27a-queen-ctl-idempotency, select 512 retained outcomes on both Release A targets, route all pressure mutations through strict intents, budget the complete boot before mutation, and preserve duplicate/refusal/fencing semantics and unchanged workload thresholds.
   - provisioned pressure preflight — check canonical generated contracts before selecting the image profile; retain the authenticated canary, selected seL4 build, immutable launch identity and focused NineDoor guard. Bind canary labels and service evidence to the host-specific profile and timer in that identity. Isolate common test credentials from the live credentials supplied to subsequent target stages. The complete host-tool suite, Python SDK and benchmark workloads keep their existing contracts; these collector corrections change no runtime, bounds, thresholds or burn-in outcome.
 Commands: scripts/ci/test_plan_run.sh --list; select and execute the complete applicable qemu/pi4 staged gates and registered provider/native-app/release lanes with fresh exact-profile state directories under TEST_PLAN.
 Checks: All required assembled-path and staged gates pass for the exact release; ACK-only, recovery-only or fixture-only results cannot promote it.
