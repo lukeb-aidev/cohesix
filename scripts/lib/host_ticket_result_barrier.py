@@ -58,6 +58,10 @@ class TerminalResultBarrier:
                     if self.headers.get("Authorization") != f"Bearer {barrier.token}":
                         self.send_error(401)
                         return
+                    tickets = self.headers.get_all("x-cohesix-ticket", [])
+                    if len(tickets) > 1:
+                        self.send_error(400)
+                        return
                     if not self.path.startswith(("/v1/fs/", "/v1/meta/")):
                         self.send_error(404)
                         return
@@ -83,10 +87,13 @@ class TerminalResultBarrier:
                                 if barrier.held != 1:
                                     raise ValueError("terminal result was published more than once")
                                 barrier.retire(result)
+                    headers = {"Authorization": f"Bearer {barrier.token}",
+                               "Content-Type": "application/json"}
+                    if tickets:
+                        headers["x-cohesix-ticket"] = tickets[0]
                     request = urllib.request.Request(
                         barrier.upstream + self.path, data=body,
-                        headers={"Authorization": f"Bearer {barrier.token}",
-                                 "Content-Type": "application/json"},
+                        headers=headers,
                         method=self.command,
                     )
                     try:

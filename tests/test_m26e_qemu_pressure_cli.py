@@ -6,6 +6,7 @@
 
 import ast
 import hashlib
+import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
@@ -158,6 +159,72 @@ def test_terminal_result_barrier_orders_retirement_before_unchanged_publication(
 def test_terminal_result_barrier_requires_local_gateway(upstream: str) -> None:
     with pytest.raises(ValueError, match="loopback"):
         TerminalResultBarrier(upstream, "test-token", "ticket-1", lambda _: None)
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("ticket", [None, "exact-caller-ticket"])
+def test_result_barrier_preserves_caller_delegation_and_gateway_refusal(
+    method: str, ticket: str | None,
+) -> None:
+    """The barrier forwards authority unchanged and never supplies a missing ticket."""
+    observed = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            self.reply()
+
+        def do_POST(self) -> None:
+            self.reply()
+
+        def reply(self) -> None:
+            observed.append((self.command, self.headers.get_all("x-cohesix-ticket")))
+            self.send_response(200 if self.headers.get("x-cohesix-ticket") else 403)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    upstream = HTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with TerminalResultBarrier(
+            f"http://127.0.0.1:{upstream.server_port}", "test-token", "held-result",
+            lambda _: pytest.fail("this request must not retire a Worker"),
+        ) as barrier:
+            request = urllib.request.Request(
+                barrier.url + "/v1/fs/cat?path=/host/tickets/spec.snapshot",
+                headers={"Authorization": "Bearer test-token"}, method=method,
+            )
+            if ticket:
+                request.add_header("x-cohesix-ticket", ticket)
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    assert response.status == 200
+            else:
+                with pytest.raises(urllib.error.HTTPError) as refused:
+                    urllib.request.urlopen(request, timeout=5)
+                assert refused.value.code == 403
+            assert observed == [(method, [ticket] if ticket else None)]
+            connection = http.client.HTTPConnection("127.0.0.1", barrier.server.server_port)
+            try:
+                connection.putrequest(method, "/v1/fs/cat?path=/host/tickets/spec.snapshot")
+                connection.putheader("Authorization", "Bearer test-token")
+                connection.putheader("x-cohesix-ticket", "first")
+                connection.putheader("x-cohesix-ticket", "second")
+                connection.endheaders()
+                response = connection.getresponse()
+                assert response.status == 400
+                response.read()
+            finally:
+                connection.close()
+            assert observed == [(method, [ticket] if ticket else None)]
+            assert barrier.held == 0
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.mark.parametrize("status", [0, 7])
