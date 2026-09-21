@@ -1,16 +1,64 @@
 # Author: Lukas Bower
-# Purpose: Preserve strict target Worker fragment bounds, ordering and overlap semantics.
+# Purpose: Preserve delegated Worker exports and strict fragment bounds, ordering and overlap semantics.
 # Copyright 2026 Lukas Bower
 
-import unittest
+import argparse
+import io
+import json
 from pathlib import Path
 import tempfile
+import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
 
-from scripts.lib.worker_log import ExportMonitor, record_matches, records
+from scripts.lib.worker_log import ExportMonitor, capture, record_matches, records
 
 
 class WorkerLogTests(unittest.TestCase):
+    def test_rest_export_requires_caller_delegation_before_retaining_evidence(self):
+        fragment = ("WORKER_LOG id=4 part=0 last=1 data=WORKER_TASK_READY "
+                    "role=worker-heartbeat slot=0 supervisor_generation=7 sequence=1")
+
+        def gateway(request, *, timeout):
+            self.assertEqual(timeout, 30)
+            self.assertEqual(request.get_method(), "GET")
+            url = urlsplit(request.full_url)
+            self.assertEqual(url.path, "/v1/fs/cat")
+            self.assertEqual(parse_qs(url.query), {
+                "path": ["/log/queen.log"], "max_bytes": ["524288"],
+            })
+            self.assertEqual(request.get_header("Authorization"), "Bearer test-bearer")
+            if request.get_header("X-cohesix-ticket") != "test-caller-ticket":
+                raise HTTPError(request.full_url, 403, "delegated-ticket-required", {}, None)
+            return io.BytesIO(json.dumps({
+                "status": "OK", "end": True, "path": "/log/queen.log",
+                "verb": "CAT", "lines": [fragment],
+            }).encode())
+
+        for ticket in (None, "test-caller-ticket"):
+            with self.subTest(delegated=ticket is not None), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "worker.log"
+                args = argparse.Namespace(
+                    rest_url="http://127.0.0.1:8080", out=path,
+                    timeout=0, wait_marker=None,
+                )
+                environment = {"HIVE_GATEWAY_REQUEST_AUTH_TOKEN": "test-bearer"}
+                if ticket is not None:
+                    environment["COH_REST_TICKET"] = ticket
+                with patch.dict("os.environ", environment, clear=True), patch(
+                    "scripts.lib.worker_log.urllib.request.urlopen", side_effect=gateway,
+                ) as request:
+                    if ticket is None:
+                        with self.assertRaises(HTTPError) as error:
+                            capture(args)
+                        self.assertEqual(error.exception.code, 403)
+                        self.assertFalse(path.exists())
+                    else:
+                        capture(args)
+                        self.assertEqual(path.read_text(), fragment + "\n")
+                    request.assert_called_once()
+
     def test_checkpoint_retains_original_fragments_once_before_later_eviction(self):
         line = ("WORKER_LOG id=4 part=0 last=1 data=WORKER_TASK_READY "
                 "role=worker-heartbeat slot=0 supervisor_generation=7 sequence=1")

@@ -2077,6 +2077,8 @@ its issuer remains in process environment. No read-compatibility bypass is used.
 The terminal-result barrier forwards the caller's delegated-ticket header
 unchanged for both reads and writes, rejects duplicate headers, and preserves
 the gateway's refusal when a caller omits delegation.
+The Worker-log REST collector sends the same separate caller ticket and retains
+no log evidence after a refused export.
 
 For the AArch64 Linux KVM comparison, transfer the exact source and reviewed
 patch, build the selected `qemu_smp_kvm_production` seL4 profile, and run the

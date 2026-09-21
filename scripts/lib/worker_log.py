@@ -339,6 +339,9 @@ def capture(args: argparse.Namespace) -> None:
             token = os.environ.get("HIVE_GATEWAY_REQUEST_AUTH_TOKEN", "")
             if token:
                 request.add_header("Authorization", f"Bearer {token}")
+            ticket = os.environ.get("COH_REST_TICKET", "")
+            if ticket:
+                request.add_header("x-cohesix-ticket", ticket)
             with urllib.request.urlopen(request, timeout=30) as response:
                 raw = response.read(2 * 1024 * 1024 + 1)
             if len(raw) > 2 * 1024 * 1024:
