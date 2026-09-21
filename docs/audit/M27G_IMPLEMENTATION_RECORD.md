@@ -655,3 +655,25 @@ host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
 the Python SDK and benchmark scripts. The benchmark producer already emits
 these role-qualified entries and full namespace paths. Schedule queues, active leases and preemptions may correctly be empty; their summary records remain mandatory. The corrected collection passes Worker-component and root-TCB acceptance on the untouched raw inputs; all 132 collector tests pass. No host implementation, runtime, generated
 contract, wire format, authority, workload, resource bound or threshold changes.
+
+
+```text
+Title/ID: m27g-provisioned-python-contract-packaging
+Milestone: 27g / m27g-adoption-overhead-and-release-cut
+Goal: Retain the Python Pi contract from the same provisioned manifest as the selected release image.
+Inputs: Native release builds, selected QEMU/Pi manifests and installed-wheel smoke records.
+Changes:
+  - scripts/cohesix-build-run.sh — select the companion Pi source through COH_RTC_PI4_MANIFEST before retaining generated release files; preserve canonical defaults and native QEMU profile selection.
+  - tests/test_release_bundle.py — exercise both native host selections, explicit/default Pi routing and missing-input refusal.
+  - docs/TOOLCHAIN_MAC_ARM64.md — document provisioned companion selection.
+Commands: python -m pytest -q tests/test_release_bundle.py tests/test_release_inputs.py; bash -n scripts/cohesix-build-run.sh; scripts/check-generated.sh; scripts/ci/check_test_plan.sh.
+Checks: Generated projections remain compiler-owned and bound to tested artifacts; no post-test replacement or evidence relabeling.
+Deliverables: Focused checks and fresh affected native artifacts retained with their exact sources.
+```
+
+Compatibility review: coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool and sidecar-bus
+retain their runtime and authority contracts. The target-neutral Python wheel
+is unchanged; its selected Pi projection now follows the provisioned image.
+Performance scripts, workloads, bounds and thresholds are unchanged. This build
+input correction does not invalidate the completed operational burn-in.

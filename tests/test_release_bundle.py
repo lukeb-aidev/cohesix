@@ -31,6 +31,54 @@ sys.modules[SPEC.name] = worker_support
 SPEC.loader.exec_module(worker_support)
 
 
+@pytest.mark.parametrize("profile", [
+    "qemu_smp_production", "qemu_smp_kvm_production",
+])
+@pytest.mark.parametrize("selected_pi", [False, True])
+def test_build_retains_selected_python_contract_sources(tmp_path, profile, selected_pi):
+    """Provisioned Pi contracts follow the Pi image without changing host selection."""
+    pi_manifest = tmp_path / "provisioned pi.toml"
+    pi_manifest.write_text("# compiler input routed separately from QEMU\n")
+    qemu_manifest = tmp_path / "provisioned qemu.toml"
+    script = ROOT / "scripts/cohesix-build-run.sh"
+    result = subprocess.run([
+        "bash", "-c",
+        'source "$1"; RTC_MANIFEST=$2; COH_RTC_PI4_MANIFEST=$3; '
+        'SEL4_PROFILE=$4; cargo() { printf "%s\\0" CALL "$@"; }; '
+        'generate_python_profile_contracts',
+        "projection-test", str(script), str(qemu_manifest),
+        str(pi_manifest) if selected_pi else "", profile,
+    ], capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr.decode()
+    calls = result.stdout.decode().split("CALL\0")[1:]
+    expected_pi = (
+        pi_manifest if selected_pi
+        else ROOT / "configs/root_task_pi4_uboot_aarch64.toml"
+    )
+    assert len(calls) == 2
+    for call, manifest, target in zip(
+        calls, (qemu_manifest, expected_pi), (profile, "pi4_production")
+    ):
+        args = call.rstrip("\0").split("\0")
+        assert args[args.index("--") + 1] == str(manifest)
+        assert args[args.index("--profile") + 1] == target
+
+
+def test_missing_selected_pi_contract_manifest_fails_before_generation(tmp_path):
+    """A typo must not silently retain a default Pi projection."""
+    result = subprocess.run([
+        "bash", "-c",
+        'source "$1"; COH_RTC_PI4_MANIFEST=$2; '
+        'cargo() { printf "unexpected compiler call"; }; '
+        'generate_python_profile_contracts',
+        "projection-test", str(ROOT / "scripts/cohesix-build-run.sh"),
+        str(tmp_path / "missing.toml"),
+    ], capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "Pi Python contract manifest is missing" in result.stderr
+    assert "unexpected compiler call" not in result.stdout
+
+
 def test_release_a_inventory_selects_current_notes_and_preserves_history() -> None:
     """Release A selects 1.1.0 while keeping the linked prior notes immutable."""
     inventory = tomllib.loads(

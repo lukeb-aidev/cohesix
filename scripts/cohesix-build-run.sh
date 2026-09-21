@@ -830,6 +830,26 @@ launch_qemu_artifacts() {
     fi
 }
 
+generate_python_profile_contracts() {
+    local python_qemu_profile="$CANONICAL_QEMU_PROFILE"
+    local python_pi4_manifest="${COH_RTC_PI4_MANIFEST:-$PROJECT_ROOT/configs/root_task_pi4_uboot_aarch64.toml}"
+    [[ -f "$python_pi4_manifest" ]] || fail \
+        "Pi Python contract manifest is missing: $python_pi4_manifest"
+    if [[ "$SEL4_PROFILE" == "$CANONICAL_QEMU_KVM_PROFILE" ]]; then
+        python_qemu_profile="$CANONICAL_QEMU_KVM_PROFILE"
+    fi
+    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+        "$RTC_MANIFEST" \
+        --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
+        --profile "$python_qemu_profile" \
+        --out "$GENERATED_CONFIG_DIR/cohesix_python_qemu_smp_production.json"
+    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+        "$python_pi4_manifest" \
+        --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
+        --profile pi4_production \
+        --out "$GENERATED_CONFIG_DIR/cohesix_python_pi4_production.json"
+}
+
 main() {
     cd "$PROJECT_ROOT" || fail "cannot enter repository root: $PROJECT_ROOT"
     SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-$CANONICAL_QEMU_BUILD_DIR}}"
@@ -1274,20 +1294,7 @@ PY
         "$SEL4_BUILD_DIR/kernel/gen_headers/plat/platform_gen.h"
 
     log "Regenerating target-qualified Python projection contracts"
-    local python_qemu_profile="$CANONICAL_QEMU_PROFILE"
-    if [[ "$SEL4_PROFILE" == "$CANONICAL_QEMU_KVM_PROFILE" ]]; then
-        python_qemu_profile="$CANONICAL_QEMU_KVM_PROFILE"
-    fi
-    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
-      "$RTC_MANIFEST" \
-        --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
-        --profile "$python_qemu_profile" \
-        --out "$GENERATED_CONFIG_DIR/cohesix_python_qemu_smp_production.json"
-    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
-        "$PROJECT_ROOT/configs/root_task_pi4_uboot_aarch64.toml" \
-        --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
-        --profile pi4_production \
-        --out "$GENERATED_CONFIG_DIR/cohesix_python_pi4_production.json"
+    generate_python_profile_contracts
 
     SEL4_COMPONENT_PACKAGES=(nine-door-runtime console-network-runtime worker-heart worker-gpu worker-lora pi4-driver-runtime)
     HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool hive-gateway host-ticket-agent swarmui)

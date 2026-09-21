@@ -380,6 +380,12 @@ requires GICv3, emits `virt,gic-version=3`, and rejects machine/GIC overrides
 from environment or forwarded QEMU arguments. The build regenerates the full
 compiler-owned Rust, policy, host-integration, implementation-surface, and
 QEMU/Pi Python-contract set before compiling selected artifacts.
+For a provisioned release, set `COH_RTC_MANIFEST` to its QEMU source manifest
+and `COH_RTC_PI4_MANIFEST` to the source manifest used for its Pi image. The
+retained Python contracts must match those selected targets before native
+testing and packaging. Omitting the Pi override selects the repository's
+`configs/root_task_pi4_uboot_aarch64.toml`; an explicit missing path fails the
+build.
 
 Use `--no-run` to stage artifacts without claiming a boot. Use `--transport
 qemu` when `cohsh` should own QEMU without exposing the guest TCP listener.
