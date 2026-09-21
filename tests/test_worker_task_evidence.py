@@ -1088,7 +1088,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "target": "qemu",
             "focus": "ninedoor",
             "run_id": "fixture-auth-pass",
-            "profile": evidence.QEMU_AUTH_OBSERVATION_PROFILE,
+            "profile": "qemu_smp_production / immutable launch record",
             "serial_log": observation_file(auth_uart_path),
             "serial_source_log": str(auth_uart_path.resolve()),
             "built_image": observation_file(qemu_out / "cohesix-system.cpio"),
@@ -2726,6 +2726,71 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
     assert critical_output.read_text(encoding="utf-8").count(
         "M26E_GDB_CRITICAL_OBSERVATION"
     ) == 4
+
+
+@pytest.mark.parametrize(
+    ("host", "label", "profile", "timer", "error"),
+    [
+        ("Darwin", "qemu_smp_production / immutable launch record",
+         "qemu_smp_production", 24_000_000, None),
+        ("Darwin", "qemu_smp_production / configs/root_task.toml",
+         "qemu_smp_production", 24_000_000, None),
+        ("Linux", "qemu_smp_kvm_production / immutable launch record",
+         "qemu_smp_kvm_production", 31_250_000, None),
+        ("Linux", "qemu_smp_production / configs/root_task.toml",
+         "qemu_smp_kvm_production", 31_250_000, "profile differs"),
+        ("Darwin", "qemu_smp_kvm_production / immutable launch record",
+         "qemu_smp_production", 24_000_000, "profile differs"),
+        ("Linux", "qemu_smp_kvm_production / immutable launch record",
+         "qemu_smp_production", 31_250_000, "claiming envelope"),
+        ("Linux", "qemu_smp_kvm_production / immutable launch record",
+         "qemu_smp_kvm_production", 24_000_000, "claiming envelope"),
+        ("Darwin", "qemu_smp_production / immutable launch record",
+         "qemu_smp_production", 31_250_000, "claiming envelope"),
+    ],
+)
+def test_authenticated_qemu_profile_matches_the_native_launch_contract(
+    tmp_path: Path, host: str, label: str, profile: str, timer: int,
+    error: str | None,
+) -> None:
+    """Labels cannot cross the documented HVF/KVM profile and timer boundary."""
+    inputs = _live_qemu_inputs(tmp_path)
+    launch_path = inputs.qemu_out / "cohesix-qemu-launch-artifacts.json"
+    launch = json.loads(launch_path.read_bytes())
+    launch["sel4_profile"] = profile
+    launch["qemu"].update(host_system=host, timer_clock_hz=timer)
+    if host == "Linux":
+        launch["qemu"].update(accelerator="kvm", cpu="host", machine_extra="")
+    launch_raw = _write(launch_path, launch)
+    observation = json.loads(inputs.auth_observation.read_bytes())
+    observation["profile"] = label
+    observation["image_identity"].update(
+        size_bytes=len(launch_raw), sha256=hashlib.sha256(launch_raw).hexdigest(),
+    )
+    _write(inputs.auth_observation, observation)
+    session_raw = inputs.target_session.read_bytes()
+    arguments = (inputs.auth_observation, inputs.qemu_out, inputs.target_session,
+                 json.loads(session_raw), session_raw)
+    if error:
+        with pytest.raises(evidence.EvidenceError, match=error):
+            evidence._validate_authenticated_qemu_observation(*arguments)  # noqa: SLF001
+    else:
+        auth, artifacts = evidence._validate_authenticated_qemu_observation(  # noqa: SLF001
+            *arguments,
+        )
+        assert auth["launch_record_sha256"] == hashlib.sha256(launch_raw).hexdigest()
+        assert artifacts["authenticated-qemu-launch-record"] == launch_raw
+
+
+def test_qemu_launch_validation_rejects_a_changed_observed_record(tmp_path: Path) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    launch_path = inputs.qemu_out / "cohesix-qemu-launch-artifacts.json"
+    observed = launch_path.read_bytes()
+    launch_path.write_bytes(observed + b"\n")
+    with pytest.raises(evidence.EvidenceError, match="changed during observation"):
+        evidence._validate_qemu_launch_artifacts(  # noqa: SLF001
+            inputs.qemu_out, expected_record=observed,
+        )
 
 
 def test_qemu_service_evidence_rejects_auth_bypass_and_copied_session(

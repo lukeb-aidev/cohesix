@@ -115,7 +115,7 @@ TARGET_SESSION_KEYS = {
 }
 QEMU_LAUNCH_SCHEMA = "cohesix-qemu-launch-artifacts/v2"
 QEMU_AUTH_OBSERVATION_SCHEMA = "cohesix-target-observation/v2"
-QEMU_AUTH_OBSERVATION_PROFILE = "qemu_smp_production / configs/root_task.toml"
+QEMU_AUTH_OBSERVATION_LEGACY_PROFILE = "qemu_smp_production / configs/root_task.toml"
 QEMU_AUTH_OPERATION_MARKERS = (
     "[cohsh][tcp] remote NineDoor ready as role Queen",
     "[console] OK AUTH",
@@ -2348,13 +2348,17 @@ def _classic_pcap_identity(raw: bytes) -> tuple[str, int, int, int]:
 
 def _validate_qemu_launch_artifacts(
     qemu_out: Path,
+    *,
+    expected_record: bytes | None = None,
 ) -> dict[str, bytes]:
     record_path = _bounded_artifact_path(
         qemu_out,
         Path("cohesix-qemu-launch-artifacts.json"),
         "QEMU launch record",
     )
-    record, _ = _load_frozen_json(record_path, "QEMU launch record")
+    record, record_raw = _load_frozen_json(record_path, "QEMU launch record")
+    if expected_record is not None and record_raw != expected_record:
+        raise EvidenceError("QEMU launch record changed during observation validation")
     _exact_keys(
         record,
         {
@@ -2376,7 +2380,6 @@ def _validate_qemu_launch_artifacts(
         or record["profile"] != "release"
         or record["cargo_target"] != "aarch64-unknown-none"
         or record["root_task_features"] != "release-qemu,bootstrap-trace"
-        or record["sel4_profile"] != "qemu_smp_production"
         or record["gic_version"] != "3"
     ):
         raise EvidenceError("QEMU launch record is not the exact pressure profile")
@@ -2416,6 +2419,13 @@ def _validate_qemu_launch_artifacts(
     expected_cpu = {"Darwin": "cortex-a57", "Linux": "host"}.get(
         qemu["host_system"]
     )
+    expected_profile = {
+        "Darwin": "qemu_smp_production",
+        "Linux": "qemu_smp_kvm_production",
+    }.get(qemu["host_system"])
+    expected_timer = {"Darwin": 24_000_000, "Linux": 31_250_000}.get(
+        qemu["host_system"]
+    )
     if (
         expected_accelerator is None
         or qemu["accelerator"] != expected_accelerator
@@ -2423,7 +2433,8 @@ def _validate_qemu_launch_artifacts(
         or qemu["virtualization"] != "off"
         or qemu["machine_extra"] != expected_machine_extra
         or qemu["cpu"] != expected_cpu
-        or qemu["timer_clock_hz"] != 24_000_000
+        or record["sel4_profile"] != expected_profile
+        or qemu["timer_clock_hz"] != expected_timer
         or qemu["smp"] != "4,cores=4,threads=1,sockets=1"
         or qemu["net_backend"] != "virtio"
     ):
@@ -5265,16 +5276,6 @@ def _validate_authenticated_qemu_observation(
     """Bind service injection to one prior authenticated exact-artifact PASS."""
 
     qemu_out = _resolved_directory(qemu_out_path, "authenticated QEMU output")
-    launch_artifacts = _validate_qemu_launch_artifacts(qemu_out)
-    if (
-        _sha256(launch_artifacts["kernel"]) != session["kernel_sha256"]
-        or _sha256(launch_artifacts["rootserver"])
-        != session["root_image_sha256"]
-    ):
-        raise EvidenceError(
-            "authenticated QEMU launch bytes differ from the emitted target session"
-        )
-
     observation, observation_raw = _load_frozen_json(
         observation_path, "authenticated QEMU target observation"
     )
@@ -5308,7 +5309,6 @@ def _validate_authenticated_qemu_observation(
         or observation["first_failing_proof_layer"] is not None
         or observation["target"] != "qemu"
         or observation["focus"] != "ninedoor"
-        or observation["profile"] != QEMU_AUTH_OBSERVATION_PROFILE
         or not isinstance(observation["run_id"], str)
         or not observation["run_id"]
         or not isinstance(observation["detail"], str)
@@ -5328,6 +5328,24 @@ def _validate_authenticated_qemu_observation(
         "launch identity",
         expected=launch_record,
     )
+    launch_artifacts = _validate_qemu_launch_artifacts(
+        qemu_out, expected_record=launch_record_raw
+    )
+    launch_identity = _strict_json_loads(launch_record_raw, "QEMU launch identity")
+    selected_profile = launch_identity["sel4_profile"]
+    accepted_labels = [f"{selected_profile} / immutable launch record"]
+    if selected_profile == "qemu_smp_production":
+        accepted_labels.append(QEMU_AUTH_OBSERVATION_LEGACY_PROFILE)
+    if observation["profile"] not in accepted_labels:
+        raise EvidenceError("authenticated QEMU profile differs from launch identity")
+    if (
+        _sha256(launch_artifacts["kernel"]) != session["kernel_sha256"]
+        or _sha256(launch_artifacts["rootserver"])
+        != session["root_image_sha256"]
+    ):
+        raise EvidenceError(
+            "authenticated QEMU launch bytes differ from the emitted target session"
+        )
     if built_raw != launch_artifacts["initrd"]:
         raise EvidenceError("authenticated QEMU image differs from launch record bytes")
     serial_path, serial_raw = _observation_file(

@@ -2060,7 +2060,10 @@ pressure profile. The pressure build uses the same selected manifest as
 authentication and freezes its resolved bytes with the collector inputs. Both
 hosts then run the retained-image target canary with that console credential
 and the selected seL4 build; its profile label comes from the verified launch
-record. The clean-build lane retains the focused NineDoor isolation guard after
+record. The service-evidence consumer binds that label to the same immutable
+record, including the host-specific production profile and counter frequency.
+Historical default-profile labels remain readable only with the matching Mac
+profile. The clean-build lane retains the focused NineDoor isolation guard after
 the live operation and regenerates canonical outputs before the common staged
 checks. Final pressure validation uses the frozen selected bytes even if later
 builds generate another profile.
