@@ -24,19 +24,29 @@ AUTH_TOKEN = "qemu-tcp-response-matrix-fixture"
 HELP_BODY = [
     "Commands:",
     "  help  - Show this help",
+    "  ping  - Check console liveness",
     "  bi    - Show bootinfo summary",
     "  caps  - Show capability slots",
     "  caps mcs - Show bounded live MCS authority and object counts",
+    "  mem   - Show untyped summary",
     "  smp [activity|dump] - Show activity or raw debug scheduler state",
     "  smp mcs - Show generated and live MCS admission state",
     "  smp poll-time - Show Pi root poll elapsed-time observations",
-    "  mem   - Show untyped summary",
-    "  ping  - Respond with pong",
     "  cachelog [n] - Dump recent cache operations",
-    "  test  - Self-test (host-only; use cohsh)",
+    "Session and namespace (role/profile restrictions apply):",
+    "  attach <role> [ticket] - Select an authorized session",
+    "  ls <path> - List a namespace directory",
+    "  cat <path> - Read a bounded namespace file",
+    "  tail <path> [lines] - Read a finite tail (1..256 lines)",
+    "  log - Tail /log/queen.log",
+    "  echo <path> <payload> - Append one line (root uses path-first syntax)",
+    "  spawn <JSON> - Compatibility Worker request; not production",
+    "  kill <worker_id> - Compatibility termination; not production",
     "  nettest  - Run network self-test",
     "  netstats - Show network counters",
+    "  reboot - Request Queen-authorized platform restart",
     "  quit  - Exit the console session",
+    "Use host cohsh for test and man <command>; ACK means admission, not completion.",
 ]
 NETSTATS_BODY = [
     "netstats: rx_pkts=1 tx_pkts=2 rx_used=3 tx_used=4 polls=5",
@@ -65,8 +75,13 @@ CACHELOG_BODY = [
         HELP_BODY[:4] + [HELP_BODY[3]] + HELP_BODY[5:],
         HELP_BODY[:4] + [HELP_BODY[5], HELP_BODY[4]] + HELP_BODY[6:],
         HELP_BODY + ["  unknown - Unexpected command"],
+        HELP_BODY[:11] + ["Session:"] + HELP_BODY[12:],
+        HELP_BODY[:-1] + ["ACK means completion."],
     ],
-    ids=("empty", "no-header", "missing", "duplicate", "reordered", "unexpected"),
+    ids=(
+        "empty", "no-header", "missing", "duplicate", "reordered", "unexpected",
+        "session-header", "footer",
+    ),
 )
 def test_help_rejects_incomplete_or_changed_command_surface(body: list[str]) -> None:
     """Frame count alone must not admit missing, duplicate, or reordered commands."""
@@ -152,6 +167,7 @@ def test_matrix_preserves_complete_body_first_responses_on_one_connection() -> N
     assert port, f"matrix fixture failed before bind: {server_errors!r}"
 
     environment = os.environ.copy()
+    environment.pop("COH_AUTH_TOKEN_REF", None)
     environment["COHSH_AUTH_TOKEN"] = AUTH_TOKEN
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--host", "127.0.0.1", "--port", str(port[0])],
@@ -170,7 +186,7 @@ def test_matrix_preserves_complete_body_first_responses_on_one_connection() -> N
     assert result.stderr == ""
     assert commands == [entry[0] for entry in responses]
     assert result.stdout.splitlines() == [
-        "PASS HELP body_frames=15 ack=OK_HELP",
+        "PASS HELP body_frames=25 ack=OK_HELP",
         "PASS NETSTATS body_frames=19 ack=OK_NETSTATS",
         "PASS SMP body_frames=16 ack=OK_SMP_mode=activity",
         "PASS CACHELOG body_frames=9 ack=OK_CACHELOG",

@@ -31,21 +31,33 @@ CACHELOG_MATRIX_COUNT = 9
 # Ordered public command labels; descriptions remain presentation text.
 HELP_COMMANDS = (
     "help",
+    "ping",
     "bi",
     "caps",
     "caps mcs",
+    "mem",
     "smp [activity|dump]",
     "smp mcs",
     "smp poll-time",
-    "mem",
-    "ping",
     "cachelog [n]",
-    "test",
+    "attach <role> [ticket]",
+    "ls <path>",
+    "cat <path>",
+    "tail <path> [lines]",
+    "log",
+    "echo <path> <payload>",
+    "spawn <JSON>",
+    "kill <worker_id>",
     "nettest",
     "netstats",
+    "reboot",
     "quit",
 )
-HELP_BODY_FRAMES = 1 + len(HELP_COMMANDS)
+HELP_SESSION_HEADER = "Session and namespace (role/profile restrictions apply):"
+HELP_FOOTER = (
+    "Use host cohsh for test and man <command>; ACK means admission, not completion."
+)
+HELP_BODY_FRAMES = 3 + len(HELP_COMMANDS)
 NETSTATS_BODY_FRAMES = 19
 SMP_ACTIVITY_BODY_FRAMES = 16
 
@@ -207,9 +219,14 @@ def exchange(
 def validate_help(body: Sequence[str]) -> None:
     """Require the complete ordered QEMU command surface without duplicates."""
 
-    if not body or body[0] != "Commands:":
+    if len(body) != HELP_BODY_FRAMES or body[0] != "Commands:":
         raise MatrixError("HELP body is missing the canonical command surface")
-    commands = tuple(line.split(" - ", maxsplit=1)[0].strip() for line in body[1:])
+    if body[11] != HELP_SESSION_HEADER or body[-1] != HELP_FOOTER:
+        raise MatrixError(
+            "HELP session header or host-command guidance is missing or changed"
+        )
+    command_lines = (*body[1:11], *body[12:-1])
+    commands = tuple(line.split(" - ", maxsplit=1)[0].strip() for line in command_lines)
     if commands != HELP_COMMANDS:
         raise MatrixError("HELP command surface is missing, duplicated, reordered, or unexpected")
 

@@ -257,3 +257,24 @@ Refresh only `host_absent.coh`'s exact pin for the reviewed `entries=6` assertio
 all other script hashes and the grammar feature inventory remain unchanged.
 The original failed attempt remains retained. This completes the fixture's
 same-change consistency work and does not alter executable product logic.
+
+On `06e895348`, common Stage 01 and both target Stage 02 checks passed. The
+separate production HVF guest reached the console, then the direct TCP matrix
+rejected its complete help response because that test retained the pre-manual
+15-frame command index. The published root-console surface now has 25 frames:
+the command header, ten diagnostics, the session header, twelve session commands
+and the host-command guidance. Restore that exact ordered expectation, including
+the section and guidance lines. Keep the response-frame ceiling, ACK order,
+same-connection requirement and QUIT/EOF checks unchanged. The host fixture
+independently specifies the surface and rejects changed headers or guidance;
+its local server credential is isolated from inherited authentication references.
+
+This is a test restoration under 27g / `m27g-assembled-journeys-and-recovery`.
+Ten focused host tests pass. A diagnostic replay of the corrected harness
+against the unchanged `06e895348` production guest passes the complete response
+matrix and all ten base scripts. It remains diagnostic evidence because the
+harness changed after that guest's source identity was frozen; the original
+failed run is retained. Product behavior, all host tools, the Python SDK,
+generated contracts and benchmark thresholds are unchanged. No additional
+implementation change was needed across those reviewed surfaces, and this
+repair does not require repeating the successful operator burn-in.
