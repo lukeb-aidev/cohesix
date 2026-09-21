@@ -1312,11 +1312,14 @@ def read_menu_snapshot(
     if not snapshot:
         snapshot = controller.read_until(MENU_MARKERS, timeout_s, label=label)
     if CHOICE_PROMPT not in snapshot:
-        snapshot += controller.read_until(
+        prefix = snapshot[-(len(CHOICE_PROMPT) - 1) :]
+        continuation = controller.read_until(
             (CHOICE_PROMPT,),
             min(timeout_s, 20),
             label=f"{label} choice prompt",
+            stream_prefix=prefix,
         )
+        snapshot += continuation[len(prefix) :]
     return snapshot
 
 

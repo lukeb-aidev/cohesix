@@ -594,6 +594,26 @@ def test_serial_read_rejects_noncontiguous_prompt_tail(
         )
 
 
+@pytest.mark.parametrize("split", range(1, len(b"Select option [")))
+@pytest.mark.parametrize("initial", [False, True])
+def test_menu_choice_prompt_survives_read_boundary(split: int, initial: bool) -> None:
+    """A menu read must preserve a split prompt without duplicating its bytes."""
+
+    prefix = b"[cohesix] Cohesix boot menu\n" + b"Select option ["[:split]
+    suffix = b"Select option ["[split:] + b"1]: "
+    controller = FakeController([suffix] if initial else [prefix, suffix])
+
+    snapshot = pi4_serial_reboot.read_menu_snapshot(
+        controller,
+        20,
+        label="test boot menu",
+        initial_snapshot=prefix if initial else b"",
+    )
+
+    assert snapshot == b"[cohesix] Cohesix boot menu\nSelect option [1]: "
+    assert controller.reads == []
+
+
 def test_saved_wifi_uses_old_root_menu_option_one() -> None:
     """Saved Wi-Fi proof must use the saved-settings root path."""
 

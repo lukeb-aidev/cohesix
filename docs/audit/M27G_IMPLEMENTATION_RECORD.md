@@ -575,3 +575,31 @@ generated validation is in `physical-prompt-owner-generated-01.log`.
 
 Current status: deterministic repair validated; fresh physical proof pending;
 no fresh burn-in, final-source staged acceptance or release promotion claimed.
+
+## Serial menu prompt collection after the completed burn-in
+
+```text
+Title/ID: m27g-serial-menu-fragment-restoration
+Milestone: 27g / m27g-assembled-journeys-and-recovery
+Goal: Preserve a U-Boot choice prompt split across consecutive host serial reads.
+Inputs: b8321450 unchanged Pi image; post-burn pi4-entry-post-burn-b8321450-02 serial transcript and RAM transfer receipt.
+Changes:
+  - scripts/pi4_serial_reboot.py — carry the bounded prompt suffix into the next read, then append only newly observed bytes.
+  - tests/test_pi4_serial_reboot.py — check each prompt split with an initial snapshot and a newly read menu; require the exact original byte sequence.
+Commands: /Users/lukasbower/GitHub/cohesix/.venv/bin/python -m pytest -q tests/test_pi4_serial_reboot.py
+Checks: 144 tests passed; fragmented prompts match without duplicate bytes or relaxed markers/timeouts.
+Deliverables: Parser repair, deterministic regression, and separately retained physical collector revalidation.
+```
+
+The first read ended with `Se` and the second contained `lect option [1]:`.
+The collector had discarded the matching context between its two waits. The
+original failure remains retained; the target was waiting at its valid menu.
+This changes host evidence collection only. It changes no target binary,
+authority, timeout, performance threshold, or measured burn-in interval.
+
+Compatibility review found no changes needed in coh/coh-status, cohsh, Hive
+Gateway, SwarmUI, host-ticket-agent, host-sidecar-bridge, gpu-bridge-host,
+cas-tool, sidecar-bus, the Python SDK, or performance workloads/report schemas.
+The serial helper's command line and returned menu bytes are unchanged. Its
+physical revalidation must identify the repaired collector separately from the
+unchanged image; existing acceptance records retain their original source.
