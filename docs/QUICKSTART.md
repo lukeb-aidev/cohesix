@@ -181,8 +181,8 @@ sudo cmp -n "$IMAGE_BYTES" image/cohesix-pi4-sd.img /dev/rdiskN
 
 Readback succeeds only if `cmp` exits zero without output. Do not boot on a
 write or comparison error. Before ejecting, mount the new boot partition with
-`diskutil mountDisk /dev/diskN` if you need the console credential described
-below. Then unmount and eject:
+`diskutil mountDisk /dev/diskN` if you need to inspect the target's credential
+reference described below. Then unmount and eject:
 
 ```bash
 diskutil eject /dev/diskN
@@ -202,19 +202,19 @@ IMAGE_BYTES=$(stat -c %s image/cohesix-pi4-sd.img)
 sudo cmp -n "$IMAGE_BYTES" image/cohesix-pi4-sd.img /dev/sdX
 ```
 
-Require a successful write and a zero-exit, silent comparison. If you need the
-console credential below, reinsert the reader so the new partition table is
+Require a successful write and a zero-exit, silent comparison. To inspect the
+target's credential reference, reinsert the reader so the new partition table is
 recognised, then mount the FAT partition using your desktop disk utility.
 Unmount it after reading and eject or safely remove the card. Do not use a
 partition such as `/dev/sdX1` as the destination for the raw image.
 
 ### First boot and network configuration
 
-Before removing the card from the workstation, obtain the target's console
-credential from the mounted FAT volume: in `cohesix-root-task-resolved.json`,
-find the `tickets` entry with `role` equal to `queen` and retain its `secret`
-securely for step 5. This is distinct from the Wi-Fi password. The Pi image's
-credential can differ from the QEMU bundle's; use the Pi's own manifest.
+Before booting, obtain the exact Pi image's Queen console credential from its
+provisioner as described in step 5. The `queen` ticket entry in the card's
+`cohesix-root-task-resolved.json` identifies its `secret_ref`; the reference is
+not the credential value. The Pi credential can differ from the QEMU bundle's
+and is separate from the Wi-Fi password.
 
 Insert the ejected card into the Pi, attach HDMI and the USB keyboard, then
 power it on. The image stops at **Cohesix boot menu**; it does not automatically
@@ -365,7 +365,7 @@ unset COHSH_AUTH_TOKEN COH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 | HVF/KVM unavailable, or TCG fallback | Check native architecture, QEMU accelerator support and Linux `/dev/kvm` permissions. Keep the guest's declared timer profile. |
 | Pi remains in the menu | Select the displayed boot action after saving/restarting. Check whether the menu reports saved or default settings. |
 | TCP refused or timeout | Keep QEMU running, check its forwarded port, or verify the Pi's selected interface/IP and host route. Check for a previous direct client. |
-| Missing credential or `ERR AUTH` | Use the Queen secret from the exact target manifest. Placeholder credentials are rejected; gateway request tokens and Wi-Fi passwords are different credentials. |
+| Missing credential or `ERR AUTH` | Obtain the Queen credential used to build the exact image; its manifest may contain only a `secret_ref`. Placeholder credentials are rejected; gateway request tokens and Wi-Fi passwords are different credentials. |
 | Busy console or gateway disconnected | Quit direct clients, leave one gateway as TCP owner, and connect additional clients through REST. |
 
 See [Userland and CLI](USERLAND_AND_CLI.md) for commands,
