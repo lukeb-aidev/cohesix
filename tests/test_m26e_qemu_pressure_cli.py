@@ -638,7 +638,7 @@ def test_pressure_stages_isolate_credentials_and_stop_on_failure(
     names = [
         "COH_AUTH_TOKEN", "COH_AUTH_TOKEN_REF", "COHSH_AUTH_TOKEN",
         "HIVE_GATEWAY_REQUEST_AUTH_TOKEN", "COH_REST_AUTH_TOKEN",
-        "COHSH_REST_AUTH_TOKEN", "COH_REST_TICKET",
+        "COHSH_REST_AUTH_TOKEN", "COH_REST_TICKET", "COH_PRESSURE_AUTHORITY_MANIFEST",
     ]
     probe.write_text(
         f"#!{sys.executable}\n"

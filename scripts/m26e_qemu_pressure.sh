@@ -255,6 +255,7 @@ run_pressure_staged_plan() {
     # Common tests use their own local credentials, while target stages need
     # the selected deployment. Never let a live alias override a test fixture.
     (
+        unset COH_PRESSURE_AUTHORITY_MANIFEST
         unset COH_AUTH_TOKEN COH_AUTH_TOKEN_REF COHSH_AUTH_TOKEN
         unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN COH_REST_AUTH_TOKEN
         unset COHSH_REST_AUTH_TOKEN COH_REST_TICKET
@@ -264,6 +265,7 @@ run_pressure_staged_plan() {
     local stage
     for stage in 2 3 4 5; do
         (
+            unset COH_PRESSURE_AUTHORITY_MANIFEST
             unset COH_AUTH_TOKEN COH_AUTH_TOKEN_REF
             unset COH_REST_AUTH_TOKEN COHSH_REST_AUTH_TOKEN COH_REST_TICKET
             COHSH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
