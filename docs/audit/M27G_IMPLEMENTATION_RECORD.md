@@ -347,3 +347,27 @@ now explain exact-image credential provisioning, image confidentiality and
 rebuild-based rotation. Public evaluation delivery requires its own explicitly
 shared credentials and cannot reuse private hive keys. This is existing
 build-time behavior, not a newly introduced runtime or authority path.
+
+The `1593b3dee` QEMU campaign passed Stages 01–02 and stopped in Stage 03
+at `shard_1k.coh`: the first telemetry write followed spawn admission before
+the executable Worker reached READY. The target correctly refused it. The
+script now observes the existing bounded READY condition on each Worker before
+writing either its sharded path or legacy alias. Both existing host namespace
+tests pass, including alias-disabled refusal; a diagnostic replay against the
+unchanged `1593b3dee` guest also passes. Admission, target readiness and host-model
+observations retain their distinct proof classes. No runtime change, retry of a
+write, longer deadline or relaxed assertion was introduced.
+
+Candidate assembly independently rejected an interface-documentation example
+whose illustrative policy digest repeated the published CAS test signing key.
+The example now uses an unrelated illustrative digest and explicitly requires
+the real policy-revision digest. The canonical private-fixture/canary scanner
+remains unchanged; its four focused tests pass and the corrected document passes
+the scanner. The original rejected payload is retained. Because this interface
+document is outside the publication-only allowlist, qualification restarts from
+a fresh source identity instead of expanding that allowlist or rebinding old
+artifacts. These two restorations belong to 27g /
+`m27g-assembled-journeys-and-recovery`; the operational burn-in verdict and
+original identities remain unchanged. Compatibility review found no changes to
+the complete host-tool suite, Python SDK, provider/Worker implementation or
+benchmark workloads and thresholds.

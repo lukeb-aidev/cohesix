@@ -1267,10 +1267,11 @@ The fixed 64-frame response capacity,
 AuditFS retention sizes and ticket byte quotas still apply. An over-capacity
 snapshot is refused explicitly; it is never truncated into a successful export.
 
-Representative strict control records are:
+Representative strict control records are shown below. Replace the illustrative
+`sha256` value with the digest of the policy revision being applied:
 
 ```json
-{"op":"apply","id":"rev-1","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+{"op":"apply","id":"rev-1","sha256":"c993339d28114525ca9bb006ee6529cc7c7d0c2793986a10c76296e5ad9ac067"}
 {"op":"rollback","id":"rev-1"}
 {"id":"approve-1","target":"/queen/ctl","decision":"approve"}
 {"from":42}
