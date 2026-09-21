@@ -2061,6 +2061,8 @@ outputs before the common staged checks. Final pressure validation uses those
 frozen selected bytes even if later builds generate another profile.
 The separately supplied REST mutation bearer must be a fresh 64-character
 lowercase hexadecimal value and must not appear anywhere in retained evidence.
+Each pressure gateway lifetime mints its own bounded read/write caller ticket;
+its issuer remains in process environment. No read-compatibility bypass is used.
 
 For the AArch64 Linux KVM comparison, transfer the exact source and reviewed
 patch, build the selected `qemu_smp_kvm_production` seL4 profile, and run the

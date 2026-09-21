@@ -1431,11 +1431,25 @@ if not any("virtio-net-device" in token for token in tokens):
 PY
 }
 
+mint_pressure_delegation() {
+    # Each gateway lifetime gets a finite caller and an environment-only issuer.
+    M26E_DELEGATION_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    export M26E_DELEGATION_SECRET
+    export HIVE_GATEWAY_DELEGATION_KEY_REF=env:M26E_DELEGATION_SECRET
+    COH_REST_TICKET="$("$HOST_TOOLS/cohsh" --mint-ticket --role queen \
+        --ticket-subject m26e-pressure --ticket-config "$SOURCE_MANIFEST" \
+        --ticket-secret "$HIVE_GATEWAY_DELEGATION_KEY_REF" \
+        --ticket-read-scope / --ticket-write-scope / \
+        --ticket-ttl-s 3600 --ticket-ops 1000000)"
+    export COH_REST_TICKET
+}
+
 start_gateway() {
     local boot_dir=$1
     local evidence=${2:-}
     local target_session=${3:-}
     stop_gateway
+    mint_pressure_delegation
     local gateway_args=(--bind 127.0.0.1:8080)
     if [[ -n "$evidence" ]]; then
         gateway_args+=(
@@ -2979,6 +2993,7 @@ fi
 log "running the canonical five-stage QEMU test plan after immutable pressure capture"
 verify_frozen_collector_artifacts
 restore_canonical_generated_outputs
+unset COH_REST_TICKET HIVE_GATEWAY_DELEGATION_KEY_REF M26E_DELEGATION_SECRET
 COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
 scripts/ci/test_plan_run.sh \

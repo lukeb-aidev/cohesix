@@ -416,6 +416,45 @@ build_selected_pressure_artifacts
     ]]
 
 
+def test_pressure_gateway_mints_a_finite_caller(tmp_path: Path) -> None:
+    """The REST caller is scoped, bounded and separate from request AUTH."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "mint_pressure_delegation() {" + source.split(
+        "mint_pressure_delegation() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    tools = tmp_path / "host tools"
+    tools.mkdir()
+    probe = tools / "cohsh"
+    probe.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "key = os.environ['M26E_DELEGATION_SECRET']\n"
+        "assert len(key) == 64 and all(c in '0123456789abcdef' for c in key)\n"
+        "pathlib.Path(__file__).with_suffix('.json').write_text(json.dumps(sys.argv[1:]))\n"
+        "print('finite-test-caller')\n",
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '''
+HOST_TOOLS="$1"
+SOURCE_MANIFEST="$2"
+mint_pressure_delegation
+test "$COH_REST_TICKET" = finite-test-caller
+test "$HIVE_GATEWAY_DELEGATION_KEY_REF" = env:M26E_DELEGATION_SECRET
+''', "pressure-delegation", str(tools), str(tmp_path / "selected.toml")],
+        check=True, capture_output=True, text=True, timeout=10,
+    )
+    assert result.stdout == ""
+    assert json.loads(probe.with_suffix(".json").read_text()) == [
+        "--mint-ticket", "--role", "queen", "--ticket-subject", "m26e-pressure",
+        "--ticket-config", str(tmp_path / "selected.toml"),
+        "--ticket-secret", "env:M26E_DELEGATION_SECRET",
+        "--ticket-read-scope", "/", "--ticket-write-scope", "/",
+        "--ticket-ttl-s", "3600", "--ticket-ops", "1000000",
+    ]
+
+
 def test_unselected_checkout_cannot_enter_cleanup(checkout: Path) -> None:
     result = invoke(checkout)
     assert result.returncode == 2

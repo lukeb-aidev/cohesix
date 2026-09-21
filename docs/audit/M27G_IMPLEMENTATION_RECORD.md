@@ -38,6 +38,14 @@ the Python SDK and benchmark runners. Only the pressure runner's manifest
 handoff and evidence retention require changes; tool protocols, generated
 interfaces and benchmark thresholds retain their existing contracts.
 
+The same review found the pressure lane omitted the caller delegation now
+required by protected REST reads and writes. Each owned gateway lifetime now
+mints a finite read/write caller using an ephemeral environment-only issuer,
+following the existing Stage 04 provisioning contract. The standard SDK and
+host tools consume `COH_REST_TICKET`; no compatibility mode, authority check or
+workload bound changes. Focused shell execution verifies the caller's declared
+scope, lifetime, operation budget and issuer reference without real credentials.
+
 ## Native CUDA refusal restoration
 
 ```text
