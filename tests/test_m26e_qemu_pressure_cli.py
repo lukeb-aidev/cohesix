@@ -827,3 +827,32 @@ trigger_disposable_worker_control "$1" worker-heartbeat 1
     )
     assert result.returncode == 2
     assert "requires the pre-gateway phase" in result.stderr
+
+
+def test_strict_fault_encoding_failure_cannot_execute_approval(tmp_path: Path) -> None:
+    """A fault caller's expected-error branch must not disable encoding failure."""
+    source = (ROOT / 'scripts/m26e_qemu_pressure.sh').read_text()
+    function = 'run_cohsh_command() {' + source.split('run_cohsh_command() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+    selected = json.loads((ROOT / 'configs/generated/root_task_resolved.json').read_text())
+    selected['authority'].update(production=True, legacy_queen_ctl=False,
+                                 writer_epoch_required=True, queen_dedupe_entries=512)
+    manifest = tmp_path / 'selected.json'
+    manifest.write_text(json.dumps(selected))
+    fake = tmp_path / 'cohsh'
+    fake.write_text('#!/bin/sh\nprintf invoked > "$CONTROL_CALLED"\n')
+    fake.chmod(0o700)
+    result = subprocess.run([
+        'bash', '-eu', '-c', function + '''
+GATEWAY_PID=
+REPO_ROOT="$1"
+HARNESS_PYTHON="$2"
+HOST_TOOLS="$3"
+M26E_CONSOLE_AUTH_TOKEN=fixture
+export COH_PRESSURE_AUTHORITY_MANIFEST="$4"
+export CONTROL_CALLED="$3/invoked"
+if run_cohsh_command "$3" 'kill ../../worker1' 17 NONE; then exit 99; fi
+''', 'strict-encoding', str(ROOT), sys.executable, str(tmp_path), str(manifest),
+    ], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0
+    assert 'invalid-authority-identifier' in result.stderr
+    assert not (tmp_path / 'invoked').exists()

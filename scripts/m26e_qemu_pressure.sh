@@ -1242,7 +1242,7 @@ from scripts.rest_perf_harness import load_queen_authority, pressure_fault_comma
 policy = load_queen_authority(os.environ["COH_PRESSURE_AUTHORITY_MANIFEST"])
 print(pressure_fault_command(sys.argv[2], f"m26e-control-{sys.argv[3]}", policy))
 PY_CONTROL
-                )
+                ) || return $?
                 ;;
         esac
         printf '%s\n' "$command"
