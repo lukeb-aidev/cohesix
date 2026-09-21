@@ -4758,8 +4758,9 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     assert source.index("gateway request secret must be 64 lowercase") < preserve
 
 
+@pytest.mark.parametrize("tampered_id", ["root-elf", "resolved-manifest"])
 def test_m26e_qemu_pressure_freezes_collector_inputs_by_hash(
-    tmp_path: pathlib.Path,
+    tmp_path: pathlib.Path, tampered_id: str,
 ) -> None:
     blocks = embedded_python_blocks(pressure_runner_source())
     freezer = next(
@@ -4778,6 +4779,7 @@ def test_m26e_qemu_pressure_freezes_collector_inputs_by_hash(
         "worker-abi-identity": "worker-abi-identity.json",
         "qemu-cyw43-coexistence": "qemu-cyw43-coexistence.json",
         "generated-topology": "generated-topology.json",
+        "resolved-manifest": "resolved-manifest.json",
         "worker-archive": "worker-images.cpio",
         "driver-archive": "driver-runtimes.cpio",
         "worker-manifest": "worker-image-manifest.json",
@@ -4852,10 +4854,10 @@ def test_m26e_qemu_pressure_freezes_collector_inputs_by_hash(
         )
 
     assert verify().returncode == 0
-    (frozen_dir / "root-task.elf").write_bytes(b"tampered\n")
+    (frozen_dir / filenames[tampered_id]).write_bytes(b"tampered\n")
     tampered = verify()
     assert tampered.returncode != 0
-    assert "frozen collector artifact bytes differ: root-elf" in tampered.stderr
+    assert f"frozen collector artifact bytes differ: {tampered_id}" in tampered.stderr
 
 
 def test_m26e_qemu_pressure_derives_exact_manifest_queen_token(

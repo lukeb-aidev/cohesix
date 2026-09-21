@@ -340,6 +340,11 @@ def checkout(tmp_path: Path) -> Path:
     repo = tmp_path.resolve() / "checkout"
     (repo / "scripts").mkdir(parents=True)
     shutil.copy2(ROOT / "scripts/m26e_qemu_pressure.sh", repo / "scripts")
+    (repo / "configs").mkdir()
+    (repo / "configs/root_task.toml").write_text(
+        '[[tickets]]\nrole = "queen"\nsecret_ref = "env:PRESSURE_TEST_KEY"\n',
+        encoding="utf-8",
+    )
     subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
     for name in ("out", "target"):
         (repo / name).mkdir()
@@ -367,6 +372,48 @@ def invoke(checkout: Path, *options: str) -> subprocess.CompletedProcess[str]:
     for name in ("out", "target"):
         assert (checkout / name / "retained").read_text(encoding="utf-8") == "keep\n"
     return result
+
+
+@pytest.mark.parametrize("directory", ["out", "target"])
+def test_pressure_manifest_cannot_be_cleaned(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch, directory: str,
+) -> None:
+    """An explicit manifest must survive the destructive output cleanup."""
+    monkeypatch.setenv("COH_RTC_MANIFEST", str(checkout / directory / "retained"))
+    result = invoke(checkout, "--clean-root", str(checkout))
+    assert result.returncode == 2
+    assert "manifest must be outside the cleaned" in result.stderr
+
+
+def test_pressure_build_receives_selected_manifest(tmp_path: Path) -> None:
+    """The compiler receives the same profile chosen before environment cleanup."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "build_selected_pressure_artifacts() {" + source.split(
+        "build_selected_pressure_artifacts() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    selected = tmp_path / "selected profile.toml"
+    selected.write_text("profile identity\n", encoding="utf-8")
+    build = tmp_path / "build probe"
+    build.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "print(json.dumps([os.environ['COH_RTC_MANIFEST'], sys.argv[1:]]))\n",
+        encoding="utf-8",
+    )
+    build.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '''
+SOURCE_MANIFEST="$1"
+BUILD_RUN="$2"
+BUILD_ARGS=(--profile release --transport tcp)
+unset COH_RTC_MANIFEST
+build_selected_pressure_artifacts
+''', "selected-pressure-build", str(selected), str(build)],
+        check=True, capture_output=True, text=True, timeout=10,
+    )
+    assert json.loads(result.stdout) == [str(selected), [
+        "--clean", "--no-run", "--profile", "release", "--transport", "tcp",
+    ]]
 
 
 def test_unselected_checkout_cannot_enter_cleanup(checkout: Path) -> None:

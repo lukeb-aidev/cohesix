@@ -2051,6 +2051,14 @@ build output the staged plan may update. Retries remain disabled, control
 errors remain strict, and in-flight work remains bounded.
 The runner derives and revalidates the compiler-owned Queen console token from
 the source and resolved manifests; an optional `COH_AUTH_TOKEN` must match it.
+Select a provisioned pressure manifest with `COH_RTC_MANIFEST`, outside the
+disposable checkout's cleaned `out/` and `target/` trees. Its secret references
+must resolve for the build. Select the subsequent staged plan's provisioned
+base and gated profiles with `COHSH_BASE_MANIFEST` and `COHSH_GATED_MANIFEST`.
+The pressure build uses the same selected manifest as authentication, freezes
+its resolved bytes with the collector inputs, and regenerates the canonical
+outputs before the common staged checks. Final pressure validation uses those
+frozen selected bytes even if later builds generate another profile.
 The separately supplied REST mutation bearer must be a fresh 64-character
 lowercase hexadecimal value and must not appear anywhere in retained evidence.
 

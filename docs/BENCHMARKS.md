@@ -461,6 +461,13 @@ backed by that target. A target gateway reports
 Pi additionally requires a target-neutral fresh-Pi runtime, network, and image
 proof chain and cannot reuse QEMU fault/GDB evidence.
 
+Provision the pressure and staged-test manifests with secret references before
+running. Set `COH_RTC_MANIFEST` to the pressure profile and
+`COHSH_BASE_MANIFEST`/`COHSH_GATED_MANIFEST` to the staged profiles. Keep them
+outside the selected checkout's cleaned `out/` and `target/` directories.
+The runner preserves the pressure profile's resolved identity through the
+subsequent staged builds; a default placeholder credential is rejected.
+
 ```bash
 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$(openssl rand -hex 32)"
 export HIVE_GATEWAY_REQUEST_AUTH_TOKEN

@@ -4,16 +4,39 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # M27g implementation and qualification record
 
-Milestone 27g remains In Progress. The physical operator burn-in completed
-7,200.005 measured seconds in repaired segments on source `45408f51a`, with
-24 scheduled CUDA jobs, four scheduled LoRA workflows and native Mac/Jetson
-coverage supplements. Its operational verdict is PASS; it does not establish
-assembled release acceptance. Subsequent HDMI pressure checks found a major
-mixed physical-console/TCP stream stall. A repaired current image requires a
-fresh two-hour burn-in and then the full staged Test Plan. Historical acceptance
-and all failed attempts retain their original
-verdicts. The final release decision still requires exact current artifacts,
-all assigned gates and human review.
+Milestone 27g remains In Progress. The major mixed physical-console/TCP stall
+was repaired in `b832145070b708a0bfb1c7d430275c940adb40af`. That image completed
+a fresh 7,200.000637-second operator burn-in, including 24 scheduled CUDA jobs,
+four LoRA workflows, native Mac/Jetson coverage and reconciled incident segments.
+Its sealed operational verdict is PASS. Both full staged Test Plans and both
+source-native desktop walkthroughs subsequently passed for their recorded
+profiles. Minor qualification-collector repairs retain those records and require
+focused revalidation and exact final-source qualification, not another burn-in.
+The release decision still requires the remaining pressure, physical media,
+repeatability, assembled-artifact and human-review gates. Historical acceptance
+and failed attempts retain their original verdicts.
+
+## Pressure profile restoration
+
+```text
+Title/ID: m27g-pressure-profile-restoration
+Milestone: 27g / assembled-journeys-and-recovery
+Goal: Keep pressure authentication, compilation and final verification bound to the same provisioned manifest.
+Inputs: out/m27g/pressure-25277757-01/runner.log; scripts/m26e_qemu_pressure.sh; TEST_PLAN Conditional B2.
+Changes:
+  - scripts/m26e_qemu_pressure.sh — retain the selected manifest through environment cleanup, exclude it from deleted output trees, freeze its resolved bytes, regenerate canonical projections before common checks, and verify the frozen pressure profile after staged builds.
+  - tests/test_m26e_qemu_pressure_cli.py + tests/test_rest_perf_harness.py — cover selected-profile forwarding, cleanup exclusion and frozen-manifest tampering.
+  - docs/TEST_PLAN.md + docs/BENCHMARKS.md — document provisioned pressure and staged profile selection.
+Commands: .venv/bin/python -m pytest -q tests/test_m26e_qemu_pressure_cli.py tests/test_rest_perf_harness.py; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; rerun canonical pressure with explicit provisioned manifests.
+Checks: No placeholder accepted, no profile discarded or deleted, and no final claim derived from a later build's manifest. Runtime, authority, workloads and thresholds are unchanged.
+Deliverables: Focused host checks, retained failed preflight and fresh canonical pressure evidence.
+```
+
+Compatibility review covers coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
+the Python SDK and benchmark runners. Only the pressure runner's manifest
+handoff and evidence retention require changes; tool protocols, generated
+interfaces and benchmark thresholds retain their existing contracts.
 
 ## Native CUDA refusal restoration
 

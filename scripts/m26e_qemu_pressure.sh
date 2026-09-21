@@ -51,6 +51,11 @@ Required environment (values are never printed):
                          A fresh 64-character lowercase hexadecimal REST bearer.
 
 Optional environment:
+  COH_RTC_MANIFEST       Provisioned pressure manifest (default: configs/root_task.toml).
+                         Keep it outside this checkout's out/ and target/;
+                         use secret references, not literal credentials.
+  COHSH_BASE_MANIFEST / COHSH_GATED_MANIFEST
+                         Provisioned manifests for the subsequent staged plan.
   COH_AUTH_TOKEN         When set, it must equal the compiler-generated Queen
                          ticket secret. The runner always derives the console
                          token from the selected manifest and never compiles an
@@ -193,10 +198,32 @@ PY
 
 validate_resolved_console_token() {
     local resolved
-    resolved="$(queen_console_token "$RESOLVED_MANIFEST" json)"
+    resolved="$(queen_console_token "${1:-$RESOLVED_MANIFEST}" json)"
     [[ "$resolved" == "$M26E_CONSOLE_AUTH_TOKEN" ]] || \
         die "generated Queen console token differs from the selected source manifest"
     unset resolved
+}
+
+build_selected_pressure_artifacts() {
+    # Environment cleanup must not discard the manifest used to derive AUTH.
+    COH_RTC_MANIFEST="$SOURCE_MANIFEST" \
+        "$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
+}
+
+restore_canonical_generated_outputs() {
+    # The immutable pressure records already retain the selected profile.
+    # Common staged checks must start from the committed canonical projections.
+    cargo run -p coh-rtc -- configs/root_task.toml \
+        --out apps/root-task/src/generated \
+        --manifest configs/generated/root_task_resolved.json
+    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+        configs/root_task.toml --sel4-profiles configs/sel4/profiles.toml \
+        --profile qemu_smp_production \
+        --out configs/generated/cohesix_python_qemu_smp_production.json
+    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+        configs/root_task_pi4_uboot_aarch64.toml \
+        --sel4-profiles configs/sel4/profiles.toml --profile pi4_production \
+        --out configs/generated/cohesix_python_pi4_production.json
 }
 
 RUN_DIR="out/m26e-qemu-pressure"
@@ -263,6 +290,11 @@ OUT_DIR="$(canonical_existing_dir "$REPO_ROOT/out" "$REPO_ROOT")"
 TARGET_DIR="$(canonical_existing_dir "$REPO_ROOT/target" "$REPO_ROOT")"
 [[ "$OUT_DIR" == "$REPO_ROOT/out" && "$TARGET_DIR" == "$REPO_ROOT/target" ]] || \
     die "out/ and target/ must resolve to the exact repository directories"
+SOURCE_MANIFEST="$(canonical_existing_file "$SOURCE_MANIFEST" "" no)"
+if (( REUSE_ARTIFACTS == 0 )); then
+    [[ "$SOURCE_MANIFEST" != "$OUT_DIR"/* && "$SOURCE_MANIFEST" != "$TARGET_DIR"/* ]] || \
+        die "selected pressure manifest must be outside the cleaned out/ and target/ directories"
+fi
 RUN_DIR="$(canonical_future_dir "$RUN_DIR" "$OUT_DIR")"
 [[ "$(dirname "$RUN_DIR")" == "$OUT_DIR" ]] || \
     die "--run-dir must be a fresh direct child of the repository out directory"
@@ -710,7 +742,7 @@ if (( REUSE_ARTIFACTS == 0 )); then
     [[ "$(python3 scripts/lib/detect_gic_version.py "$SEL4_BUILD/kernel/gen_config/kernel/gen_config.h")" == "3" ]] || \
         die "selected seL4 build is not GICv3"
     log "building canonical release-qemu,bootstrap-trace artifacts"
-    "$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
+    build_selected_pressure_artifacts
 else
     export COHESIX_QEMU_ACCEL=kvm
     export COHESIX_QEMU_MACHINE_EXTRA=
@@ -870,6 +902,7 @@ python3 - "$ARTIFACT_BINDINGS" "$FROZEN_COLLECTOR_BINDINGS" \
     worker-abi-identity=worker-abi-identity.json \
     qemu-cyw43-coexistence=qemu-cyw43-coexistence.json \
     generated-topology=generated-topology.json \
+    resolved-manifest=resolved-manifest.json \
     worker-archive=worker-images.cpio \
     driver-archive=driver-runtimes.cpio \
     worker-manifest=worker-image-manifest.json \
@@ -979,6 +1012,7 @@ PY
 
 FROZEN_TARGET_SESSION="$FROZEN_COLLECTOR_DIR/target-session.json"
 FROZEN_GENERATED_INVENTORY="$FROZEN_COLLECTOR_DIR/generated-topology.json"
+FROZEN_RESOLVED_MANIFEST="$FROZEN_COLLECTOR_DIR/resolved-manifest.json"
 FROZEN_WORKER_ARCHIVE="$FROZEN_COLLECTOR_DIR/worker-images.cpio"
 FROZEN_DRIVER_ARCHIVE="$FROZEN_COLLECTOR_DIR/driver-runtimes.cpio"
 FROZEN_WORKER_MANIFEST="$FROZEN_COLLECTOR_DIR/worker-image-manifest.json"
@@ -1015,6 +1049,7 @@ expected = {
     "worker-abi-identity": "worker-abi-identity.json",
     "qemu-cyw43-coexistence": "qemu-cyw43-coexistence.json",
     "generated-topology": "generated-topology.json",
+    "resolved-manifest": "resolved-manifest.json",
     "worker-archive": "worker-images.cpio",
     "driver-archive": "driver-runtimes.cpio",
     "worker-manifest": "worker-image-manifest.json",
@@ -2942,14 +2977,16 @@ PY
     exit 0
 fi
 log "running the canonical five-stage QEMU test plan after immutable pressure capture"
+verify_frozen_collector_artifacts
+restore_canonical_generated_outputs
 COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
 scripts/ci/test_plan_run.sh \
     --target qemu \
     --state-dir "$TEST_PLAN_STATE_DIR"
 require_quiescent_host
-validate_resolved_console_token
 verify_frozen_collector_artifacts
+validate_resolved_console_token "$FROZEN_RESOLVED_MANIFEST"
 
 FINAL_DIR="$RUN_DIR/final"
 mkdir -p "$FINAL_DIR"
