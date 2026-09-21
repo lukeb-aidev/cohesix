@@ -251,6 +251,29 @@ restore_canonical_generated_outputs() {
         --out configs/generated/cohesix_python_pi4_production.json
 }
 
+run_pressure_staged_plan() {
+    # Common tests use their own local credentials, while target stages need
+    # the selected deployment. Never let a live alias override a test fixture.
+    (
+        unset COH_AUTH_TOKEN COH_AUTH_TOKEN_REF COHSH_AUTH_TOKEN
+        unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN COH_REST_AUTH_TOKEN
+        unset COHSH_REST_AUTH_TOKEN COH_REST_TICKET
+        scripts/ci/test_plan_run.sh --target qemu \
+            --state-dir "$TEST_PLAN_STATE_DIR" --stage 1
+    ) || return $?
+    local stage
+    for stage in 2 3 4 5; do
+        (
+            unset COH_AUTH_TOKEN COH_AUTH_TOKEN_REF
+            unset COH_REST_AUTH_TOKEN COHSH_REST_AUTH_TOKEN COH_REST_TICKET
+            COHSH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+            HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+                scripts/ci/test_plan_run.sh --target qemu \
+                    --state-dir "$TEST_PLAN_STATE_DIR" --stage "$stage"
+        ) || return $?
+    done
+}
+
 RUN_DIR="out/m26e-qemu-pressure"
 SEL4_SOURCE="out/sel4/source-v16-clean"
 SEL4_BUILD="out/sel4/profile-v2/qemu-smp-production"
@@ -3002,11 +3025,7 @@ log "running the canonical five-stage QEMU test plan after immutable pressure ca
 verify_frozen_collector_artifacts
 restore_canonical_generated_outputs
 unset COH_REST_TICKET HIVE_GATEWAY_DELEGATION_KEY_REF M26E_DELEGATION_SECRET
-COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
-HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
-scripts/ci/test_plan_run.sh \
-    --target qemu \
-    --state-dir "$TEST_PLAN_STATE_DIR"
+run_pressure_staged_plan
 require_quiescent_host
 verify_frozen_collector_artifacts
 validate_resolved_console_token "$FROZEN_RESOLVED_MANIFEST"

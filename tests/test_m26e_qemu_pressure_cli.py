@@ -504,6 +504,58 @@ def test_unselected_checkout_cannot_enter_cleanup(checkout: Path) -> None:
     assert "refusing to clean an unexpected repository root" in result.stderr
 
 
+@pytest.mark.parametrize("failed_stage", [0, 1, 3])
+def test_pressure_stages_isolate_credentials_and_stop_on_failure(
+    tmp_path: Path, failed_stage: int,
+) -> None:
+    """Common fixtures stay hermetic and every target stage keeps selected AUTH."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "run_pressure_staged_plan() {" + source.split(
+        "run_pressure_staged_plan() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    probe = tmp_path / "scripts/ci/test_plan_run.sh"
+    probe.parent.mkdir(parents=True)
+    names = [
+        "COH_AUTH_TOKEN", "COH_AUTH_TOKEN_REF", "COHSH_AUTH_TOKEN",
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN", "COH_REST_AUTH_TOKEN",
+        "COHSH_REST_AUTH_TOKEN", "COH_REST_TICKET",
+    ]
+    probe.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "stage = int(sys.argv[sys.argv.index('--stage')+1])\n"
+        "with pathlib.Path('calls.jsonl').open('a') as output:\n"
+        f"    output.write(json.dumps([sys.argv[1:], {{n: os.environ.get(n) for n in {names!r}}}])+'\\n')\n"
+        "sys.exit(17 if stage == int(os.environ['FAILED_STAGE']) else 0)\n",
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+    assignments = "\n".join(f"export {name}=inherited-fixture" for name in names)
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + assignments + '''
+export FAILED_STAGE="$1"
+TEST_PLAN_STATE_DIR="$PWD/fresh state"
+M26E_CONSOLE_AUTH_TOKEN=selected-console-fixture
+M26E_REST_AUTH_TOKEN=selected-rest-fixture
+run_pressure_staged_plan
+''', "pressure-stage-credentials", str(failed_stage)],
+        cwd=tmp_path, capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == (17 if failed_stage else 0)
+    calls = [json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert len(calls) == (failed_stage or 5)
+    for stage, (arguments, environment) in enumerate(calls, start=1):
+        assert arguments == [
+            "--target", "qemu", "--state-dir", str(tmp_path / "fresh state"),
+            "--stage", str(stage),
+        ]
+        expected = dict.fromkeys(names)
+        if stage > 1:
+            expected.update(COHSH_AUTH_TOKEN="selected-console-fixture",
+                            HIVE_GATEWAY_REQUEST_AUTH_TOKEN="selected-rest-fixture")
+        assert environment == expected
+
+
 @pytest.mark.parametrize("selection", ["parent", "relative", "alias"])
 def test_clean_root_must_be_the_exact_checkout(checkout: Path, selection: str) -> None:
     selected = {"parent": str(checkout.parent), "relative": "."}.get(selection)

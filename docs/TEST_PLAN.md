@@ -2064,6 +2064,9 @@ record. The clean-build lane retains the focused NineDoor isolation guard after
 the live operation and regenerates canonical outputs before the common staged
 checks. Final pressure validation uses the frozen selected bytes even if later
 builds generate another profile.
+The complete staged plan runs in order in one fresh state directory. Stage 1
+uses its own local test credentials; live console and REST aliases are removed
+from its environment. Stages 2–5 receive the selected deployment credentials.
 The separately supplied REST mutation bearer must be a fresh 64-character
 lowercase hexadecimal value and must not appear anywhere in retained evidence.
 Each pressure gateway lifetime mints its own bounded read/write caller ticket;
