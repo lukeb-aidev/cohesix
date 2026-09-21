@@ -85,8 +85,10 @@ def run_lane(binary: Path, shell: Path, out: Path, count: int, delegated: bool) 
     args = [str(binary), "--mock", "--bind", f"127.0.0.1:{port}"]
     ticket = None
     if delegated:
+        # This isolated mock needs the /proc prefix; a longer leaf exceeds
+        # the production ticket byte bound when combined with write authority.
         args.extend(["--delegation-key-ref", "env:M27A_BENCH_ISSUER"])
-        minted = subprocess.run([str(shell), "--mint-ticket", "--role", "queen", "--ticket-subject", "probe", "--ticket-secret", "env:M27A_BENCH_ISSUER", "--ticket-write-scope", "/queen", "--ticket-read-scope", "/proc/gateway/status", "--ticket-ttl-s", "300", "--ticket-ops", str(count * 8)], env=env, capture_output=True, text=True, check=True)
+        minted = subprocess.run([str(shell), "--mint-ticket", "--role", "queen", "--ticket-subject", "probe", "--ticket-secret", "env:M27A_BENCH_ISSUER", "--ticket-write-scope", "/queen", "--ticket-read-scope", "/proc", "--ticket-ttl-s", "300", "--ticket-ops", str(count * 8)], env=env, capture_output=True, text=True, check=True)
         ticket = minted.stdout.strip()
     out.mkdir(parents=True, exist_ok=True)
     samples: dict[str, list[dict]] = {}

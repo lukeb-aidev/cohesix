@@ -677,3 +677,11 @@ retain their runtime and authority contracts. The target-neutral Python wheel
 is unchanged; its selected Pi projection now follows the provisioned image.
 Performance scripts, workloads, bounds and thresholds are unchanged. This build
 input correction does not invalidate the completed operational burn-in.
+
+The retained host gateway cost attempt stopped before gateway startup because
+its combined leaf read scope and write scope exceeded the compiled transport
+ticket bound. The isolated benchmark now grants its fresh run-owned issuer
+read scope `/proc` and write scope `/queen`. No production credentials, target
+access, thresholds, operation counts or measured scenarios change. Validation
+runs the canonical delegated-authority probe against the retained production
+binaries; the original failed attempt remains preserved.
