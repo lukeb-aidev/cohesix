@@ -503,6 +503,28 @@ test("Namespace file navigation clears stale entries and preserves refusal bound
   await expect(page.locator("#transcript-drawer")).not.toContainText("cat /proc/denied");
 });
 
+test("Namespace direct reads and refusals identify their own response path", async ({ page }) => {
+  await page.locator('[data-view="namespaces"]').click();
+  await page.locator("#namespace-path").fill("/shard");
+  await page.locator("#namespace-go").click();
+  await expect(page.locator("#namespace-title")).toHaveText("/shard");
+  for (const [path, action, output, crumbs] of [
+    ["/proc/boot", "read", "boot_identity=fixture", ["proc /", "boot /"]],
+    ["/log/queen.log", "tail", "OK TAIL", ["log /", "queen.log /"]],
+    ["/proc/denied", "read", "ERR AUTH forbidden", ["proc /", "denied /"]],
+  ]) {
+    await page.locator("#namespace-path").fill(path);
+    await page.locator(`#namespace-${action}`).click();
+    await expect(page.locator("#namespace-output")).toContainText(output);
+    await expect(page.locator("#namespace-title")).toHaveText(path);
+    await expect(page.locator("#namespace-breadcrumbs button")).toHaveText(crumbs);
+    await expect(page.locator("#namespace-entries button")).toHaveCount(0);
+  }
+  await expect(page.locator("#namespace-kind")).toHaveText(
+    "Unavailable or refused · inspect exact reason",
+  );
+});
+
 test("Concise contextual help is keyboard accessible, bounded and dismissible", async ({ page }) => {
   const help = page.getByRole("button", { name: "Help with this screen" });
   const tooltip = page.getByRole("tooltip");

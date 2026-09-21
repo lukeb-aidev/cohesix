@@ -59,6 +59,8 @@ files open as bounded reads. **Read file** and **Recent activity** remain above 
 listing. A path-kind refusal permits a read-only file probe; authentication and
 capability refusals stop immediately. The transcript retains both operations, and
 new selections clear the previous listing so it cannot be mistaken for new state.
+The preview heading and breadcrumb identify the path of the displayed response,
+including direct reads, recent activity and refusals.
 
 ## Choose an operation
 

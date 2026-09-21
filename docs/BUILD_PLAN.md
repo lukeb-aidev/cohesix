@@ -12067,6 +12067,7 @@ Deliverables:
   - Spectrum-backed SwarmUI workbench shell.
 
 Title/ID: m27f-namespace-explorer
+Status: Reopened narrowly — M27g / m27g-assembled-journeys-and-recovery observed a native file preview under the previous directory's heading and breadcrumb. Bind visible path metadata to each read response, including refusals, and require focused presentation plus native revalidation.
 Goal: Replace the root picker with a desktop namespace explorer that makes Secure9P paths familiar and safe.
 Inputs: apps/swarmui/src/lib.rs, apps/swarmui/src-tauri/main.rs, apps/swarmui/frontend/**, configs/root_task.toml, docs/ROLES_AND_SCHEDULING.md, docs/SECURE9P.md, tests/fixtures/traces/trace_v0.trace
 Changes:

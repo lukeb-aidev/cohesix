@@ -463,3 +463,48 @@ after a paced serial `ping` on that same 6c67 Pi. Both serial and live HDMI show
 `out/m27g-integration/hdmi-capture-6c67-01` in the Pi worktree. This is display
 responsiveness evidence only; physical keyboard input and later-image HDMI
 qualification remain separate.
+
+Fresh physical validation on `97ff6274d` passed the canonical driver gate for
+image `ed46513479f451f057feb35af890cbf5740e75c43694e2966bd5bf907e20deb5`:
+all five constructor affinities match, all five current descriptor seals qualify,
+and no ring call or timeout remains outstanding. Original evidence is
+`pi4-runtime-97ff6274-01` in the Pi qualification worktree. Paired live OBS frames
+in `hdmi-capture-97ff-01` show U-Boot, root startup and final operator diagnostics
+without observed display corruption. This closes the focused logging/decoder
+restoration, not the remaining staged, pressure, media or release obligations.
+
+## Native namespace response identity restoration
+
+Title/ID: m27g-native-namespace-response-identity
+Milestone: 27g / m27g-assembled-journeys-and-recovery; restoration: 27f / m27f-namespace-explorer.
+
+The exact source desktop package at `6c67f58b9` passed the canonical native
+Mac walkthrough through a real isolated HVF guest and authenticated gateway.
+Credentials were refused correctly, live reads and Providers completed, reconnect
+worked, retained LoRA/recovery references preserved their outcomes, and offline
+control was refused. Evidence is `mac-native-source-6c67-01` in the native release
+worktree. It is focused native evidence, not assembled release acceptance.
+
+Visual inspection additionally found that direct `cat /proc/boot` after browsing
+`/shard` displayed the correct response beneath the stale `/shard` heading and
+breadcrumb. The shared read renderer now binds the preview identity to each
+response for list, cat, tail and refusal paths. Original failed browser checks
+and screenshots remain under `namespace-identity-*` in the repairs worktree.
+Their bridge is explicitly a fixture; native verification of the corrected app
+remains required before closure.
+
+Compatibility review: this repairs frontend response presentation only. coh,
+coh-status, cohsh, Hive Gateway, host-ticket-agent, host-sidecar-bridge,
+gpu-bridge-host, cas-tool, sidecar-bus, the Python SDK and performance workloads
+retain their command, authority, data and measurement contracts. Generated
+contracts require no changes. Packaged SwarmUI must be rebuilt on each native
+host because its embedded frontend identity changes.
+
+Validation: the full source presentation matrix passed 90 checks with 12
+configured skips; the final focused namespace matrix passed nine checks across
+desktop WebKit, narrow WebKit and Chromium tablet. Generated consistency, Test
+Plan metadata and formatting checks passed. Logs are retained as
+`namespace-identity-full-ui-01`, `namespace-identity-final-focused-01`,
+`namespace-identity-generated-01` and `namespace-identity-test-plan-01` in the
+repairs worktree. The original failing fixture proves the stale heading and is
+not promoted to native evidence.

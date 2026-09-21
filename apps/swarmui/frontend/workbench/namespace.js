@@ -18,6 +18,10 @@ export async function readNamespace(verb, path, quiet = false) {
   const result = response.ok
     ? response.result
     : { ok: false, lines: [response.error] };
+  // Bind the visible identity to the response being rendered, including refusals.
+  // The input may already contain a different draft while this read is pending.
+  showResponsePath(path);
+  entries.replaceChildren();
   transcript(`${verb} ${path}`, result);
   document.getElementById("namespace-output").textContent = (
     result.lines || []
@@ -56,19 +60,7 @@ export async function readNamespace(verb, path, quiet = false) {
   }
   return result;
 }
-async function browse() {
-  const path = pathInput.value.trim();
-  const kind =
-    path === "/worker" || path.startsWith("/worker/")
-      ? "Legacy alias · profile dependent"
-      : path.endsWith("/ctl")
-        ? "Control file · explicit append only"
-        : path.startsWith("/policy")
-          ? "Generated policy · scoped read"
-          : /\/(queue|journal|decisions|log)$/.test(path)
-            ? "Bounded journal · scoped read"
-            : "Scoped · read only";
-  document.getElementById("namespace-kind").textContent = kind;
+function showResponsePath(path) {
   document.getElementById("namespace-title").textContent = path;
   const crumbs = document.getElementById("namespace-breadcrumbs");
   crumbs.replaceChildren();
@@ -83,6 +75,20 @@ async function browse() {
     });
     crumbs.append(button);
   }
+}
+async function browse() {
+  const path = pathInput.value.trim();
+  const kind =
+    path === "/worker" || path.startsWith("/worker/")
+      ? "Legacy alias · profile dependent"
+      : path.endsWith("/ctl")
+        ? "Control file · explicit append only"
+        : path.startsWith("/policy")
+          ? "Generated policy · scoped read"
+          : /\/(queue|journal|decisions|log)$/.test(path)
+            ? "Bounded journal · scoped read"
+            : "Scoped · read only";
+  document.getElementById("namespace-kind").textContent = kind;
   const result = await readNamespace("ls", path, true);
   if (!result.ok) {
     // Only a typed path-kind refusal permits a read-only file probe.
