@@ -3222,7 +3222,7 @@ executable final verifier and requires all three installation result records.
 Extract each archive into a fresh directory outside the source checkout and
 outside `releases/`. Keep the original tarball beside its extracted folder.
 Do not reuse repository binaries, a prior release extraction, or a rebuilt guest.
-Prepare Python/pytest and the existing Playwright dependencies on each host;
+Prepare Python and the existing Playwright dependencies on each host;
 Linux also requires `xvfb-run`. Configure `COH_AUTH_TOKEN` or
 `COHSH_AUTH_TOKEN` securely in the environment; it is never recorded in argv.
 
@@ -3237,7 +3237,8 @@ python3 scripts/release_qualify.py host \
 
 The command checks the exact manifest and archive, executes all eight native
 binaries, checks replay, installs the packaged wheel into an isolated temporary
-venv, runs `python/cohesix-py/tests`, boots the packaged `qemu/run.sh`, runs its
+venv, runs the canonical `scripts/ci/python_wheel_smoke.py` against both packaged
+profile contracts, boots the packaged `qemu/run.sh`, runs its
 packaged authenticated TCP EXPECT script, and runs the existing SwarmUI replay
 presentation suite against the extraction. The selected TCP port and its next
 two ports must be free. The Linux image uses the native KVM timer/profile;

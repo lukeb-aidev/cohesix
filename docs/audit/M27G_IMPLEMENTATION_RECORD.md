@@ -685,3 +685,46 @@ read scope `/proc` and write scope `/queen`. No production credentials, target
 access, thresholds, operation counts or measured scenarios change. Validation
 runs the canonical delegated-authority probe against the retained production
 binaries; the original failed attempt remains preserved.
+
+## Extracted-package and Linux replay collector restoration
+
+```text
+Title/ID: m27g-extracted-package-collector-restoration
+Milestone: 27g / m27g-assembled-journeys-and-recovery; m27g-adoption-overhead-and-release-cut
+Goal: Exercise the shipped artifacts with the existing installation and evidence contracts.
+Inputs: Immutable a3217e25 native archives and retained failed installation attempts; matched 2796c0b6 Linux replay preparation failure.
+Changes:
+  - scripts/release_qualify.py — include the factory-bound public CAS key in exact provenance; use the shared installed-wheel smoke for both shipped profiles; let boot_v0 own its single ATTACH; allow capture drainage before forceful group cleanup.
+  - scripts/ci/python_wheel_smoke.py and python_compat_run.sh — share the existing public API, target-neutrality and selected-authority checks without shipping development tests or importing the source package.
+  - scripts/m26e_qemu_pressure.sh — preserve the original host launch record outside the not-yet-created session; move it into the exclusively created collector output afterwards.
+  - focused tests and TEST_PLAN — preserve exact missing/extra/tampered payload refusal, exclusive output custody, strict intent serialization, single attachment and orderly capture shutdown.
+Commands: python -m pytest -q tests/test_m26e_qemu_pressure_cli.py tests/test_release_qualify.py tests/test_python_package.py tests/test_release_bundle.py tests/test_release_inputs.py; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; fresh extracted-native qualification.
+Checks: 106 focused tests pass. Runtime source, archive bytes, authority, workloads and thresholds remain unchanged. Failed attempts remain retained; corrected live qualification is recorded separately.
+Deliverables: Tested collector repairs and fresh artifact-bound results; no repeated operational burn-in is warranted by these collector defects.
+```
+
+Compatibility review: coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus
+and the Python SDK preserve their implementation and authority contracts.
+The benchmark's pressure, population, receipt and performance criteria are
+unchanged. The installed-wheel lane now uses the already-maintained smoke
+against the two packaged contracts; neither its mock lifecycle nor strict
+request serialization establishes target execution. Development tests remain
+in the source tree under the full staged plan.
+
+Fresh physical SD qualification additionally exposed a collector-only readiness
+mismatch: production Pi serial emits `Cohesix console ready`, while the old
+installation collector required the QEMU-only trace marker. The collector now
+requires exactly one selected BUILD line followed by exactly one physical
+console-ready line; repeated, stale, missing and reversed boot evidence fails.
+The target code and its emitted bytes are unchanged.
+
+The corrected extracted Mac attempt is retained at
+`out/m27g/macos-package-a3217e25-06` in the development checkout: native tool,
+replay, both installed-wheel profiles, packaged QEMU/TCP and 90 presentation
+checks pass (12 existing optional snapshot skips). Its packet capture closes
+cleanly. The preceding attempt is invalidated by an explicit cleanup-defect
+record: the shell exited before its children and its logs were not final when
+hashed. Graceful QEMU monitor exit now precedes capture drainage; failed
+shutdown is a qualification failure. This is installation/presentation proof,
+not native desktop workflow or pressure acceptance.

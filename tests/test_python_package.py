@@ -148,11 +148,8 @@ def test_wheel_smoke_respects_selected_worker_authority(
             returncode=0, stdout="mac-release-factory"
         ),
     )
-    source = (root / "scripts/ci/python_compat_run.sh").read_text()
-    smoke = source.split('"$state_dir/mock-$label" <<\'PY\'\n', 1)[1].split(
-        "\nPY\n", 1
-    )[0]
-    exec(compile(smoke, "python_compat_run.sh:run_smoke", "exec"), {})
+    smoke = (root / "scripts/ci/python_wheel_smoke.py").read_text()
+    exec(compile(smoke, "python_wheel_smoke.py", "exec"), {})
     report = json.loads(output.read_text())
     assert report["result"] == "PASS"
     assert report["worker_control_proof"] == (

@@ -801,12 +801,11 @@ else
     EXPECTED_QEMU_MACHINE=virt,gic-version=3,virtualization=off
     EXPECTED_QEMU_CPU=host
     mkdir -m 0700 "$RUN_DIR"
-    mkdir -m 0700 "$RUN_DIR/session"
     LAUNCH_ARTIFACT_TOOL="$REPO_ROOT/scripts/lib/qemu_launch_artifacts.py"
     "$HARNESS_PYTHON" "$LAUNCH_ARTIFACT_TOOL" verify-artifacts \
         --out-dir "$OUT_ROOT" >/dev/null
     cp "$OUT_ROOT/cohesix-qemu-launch-artifacts.json" \
-        "$RUN_DIR/session/source-host-launch-record.json"
+        "$RUN_DIR/source-host-launch-record.json"
     [[ "$(python3 scripts/lib/detect_gic_version.py "$SEL4_BUILD/kernel/gen_config/kernel/gen_config.h")" == "3" ]] || \
         die "transferred seL4 build is not GICv3"
     log "building native Linux pressure host tools without rebuilding guest inputs"
@@ -876,6 +875,11 @@ TARGET_SESSION="$RUN_DIR/session/target-session.json"
     --resolved-manifest "$RESOLVED_MANIFEST" \
     --topology "$GENERATED_INVENTORY" \
     --out-dir "$RUN_DIR/session"
+
+if (( REUSE_ARTIFACTS != 0 )); then
+    mv "$RUN_DIR/source-host-launch-record.json" \
+        "$RUN_DIR/session/source-host-launch-record.json"
+fi
 
 log "target session emitted: $TARGET_SESSION"
 AUTH_STATE_DIR="$RUN_DIR/authenticated-ninedoor"

@@ -65,6 +65,20 @@ def test_readback_rejects_an_ordinary_image_file(tmp_path: Path) -> None:
         qualify.media_readback(argparse.Namespace(bundle=tmp_path, device=image), {})
 
 
+def test_pi_boot_requires_the_exact_build_then_physical_console_readiness() -> None:
+    marker = b"[BUILD] selected-release image-id=exact-image"
+    ready = b"Cohesix console ready\r\n"
+    boot = marker + b"\r\nBOOT_TIMING stage=root-console-ready elapsed_us=729875 source=cntvct-el0\r\n" + ready
+    qualify.verify_pi_boot(boot, marker)
+    for invalid in (
+        boot.replace(marker, b"[BUILD] another image"),
+        marker + b"\r\n[mark] root-console.start.ok\r\n",
+        ready + marker + b"\r\n", boot + ready, boot + boot,
+    ):
+        with pytest.raises(ValueError, match="exactly one fresh boot"):
+            qualify.verify_pi_boot(invalid, marker)
+
+
 @pytest.fixture
 def bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Create an independently specified minimal host packaging contract."""
@@ -85,7 +99,12 @@ def bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "schema": "cohesix-release-build-provenance/v1",
                 "host": "macos",
                 "source_commit": "c" * 40,
-                "files": {},
+                "files": {
+                    "resources/keys/cas_verification_key.hex": {
+                        "sha256": "sha256:" + qualify.digest(bundle / key_paths[0]),
+                        "size": (bundle / key_paths[0]).stat().st_size,
+                    },
+                },
             }
         )
     )
@@ -120,6 +139,31 @@ def test_extracted_bundle_and_archive_must_match(bundle_fixture) -> None:
     assert record["version"] == "1.0.0-beta"
     (bundle / "VERSION.txt").write_text("0.1.0-alpha1\n")
     with pytest.raises(ValueError, match="VERSION"):
+        qualify.inspect_bundle(bundle, archive)
+
+
+@pytest.mark.parametrize("change", ["missing", "extra", "wrong-hash"])
+def test_native_provenance_requires_the_exact_public_key_record(
+    bundle_fixture, change: str,
+) -> None:
+    """A consistent archive manifest cannot conceal missing or false build custody."""
+    bundle, archive = bundle_fixture
+    path = bundle / "BUILD_PROVENANCE.json"
+    record = json.loads(path.read_text())
+    key = "resources/keys/cas_verification_key.hex"
+    if change == "missing":
+        del record["files"][key]
+    elif change == "extra":
+        record["files"]["undeclared"] = record["files"][key]
+    else:
+        record["files"][key]["sha256"] = "sha256:" + "0" * 64
+    path.write_text(json.dumps(record))
+    manifest = bundle / "MANIFEST.sha256"
+    names = [line.split("  ", 1)[1] for line in manifest.read_text().splitlines()]
+    manifest.write_text("".join(f"{qualify.digest(bundle / name)}  {name}\n" for name in names))
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name)
+    with pytest.raises((ValueError, qualify.evidence.EvidenceError), match="provenance|hash mismatch"):
         qualify.inspect_bundle(bundle, archive)
 
 
@@ -177,6 +221,55 @@ def test_failed_check_cannot_emit_a_passing_command_log(tmp_path: Path) -> None:
             {},
             timeout=5,
         )
+
+
+def test_tcp_smoke_lets_the_packaged_script_attach_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """boot_v0 owns ATTACH; a CLI auto-attach would reject its first operation."""
+    commands = []
+    monkeypatch.setattr(qualify, "run", lambda command, *_args: commands.append(command))
+    qualify.tcp_smoke(tmp_path, "127.0.0.1", 31337, tmp_path / "tcp.log",
+                      {"COH_AUTH_TOKEN": "test-only-token"})
+    command, = commands
+    assert "--role" not in command
+    assert command[-2:] == ["--script", str(tmp_path / "scripts/cohsh/boot_v0.coh")]
+    assert "test-only-token" not in command
+
+
+def test_qemu_launcher_receives_graceful_shutdown_before_group_kill(monkeypatch) -> None:
+    """Capture descendants must drain rather than receive the first termination signal."""
+    from types import SimpleNamespace
+
+    events = []
+    process = SimpleNamespace(
+        pid=123, poll=lambda: None,
+        stdin=SimpleNamespace(write=lambda value: events.append(value),
+                              flush=lambda: events.append("flush")),
+        wait=lambda **_kwargs: events.append("drained"),
+    )
+    monkeypatch.setattr(qualify.os, "killpg", lambda *_args: events.append("group-kill"))
+    qualify.stop_process(process)
+    assert events == [b"\x01x", "flush", "drained"]
+
+
+def test_failed_qemu_shutdown_cannot_leave_a_passing_qualification(monkeypatch) -> None:
+    """Forceful cleanup remains scoped to the owned group and fails the check."""
+    from types import SimpleNamespace
+
+    events = []
+    waits = iter([qualify.subprocess.TimeoutExpired("qemu", 10), None])
+
+    def wait(**_kwargs):
+        error = next(waits)
+        if error is not None:
+            raise error
+
+    process = SimpleNamespace(pid=123, poll=lambda: None, stdin=io.BytesIO(), wait=wait)
+    monkeypatch.setattr(qualify.os, "killpg", lambda pid, sig: events.append((pid, sig)))
+    with pytest.raises(ValueError, match="did not shut down cleanly"):
+        qualify.stop_process(process)
+    assert events == [(123, qualify.signal.SIGKILL)]
 
 
 def test_installation_checks_cannot_change_qualified_payload(bundle_fixture) -> None:

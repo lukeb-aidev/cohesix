@@ -135,7 +135,9 @@ def inspect_bundle(bundle: Path, archive: Path) -> dict[str, Any]:
             raise ValueError("bundle has invalid native build provenance")
         required = set(release["host_tools"]) | (
             set(release["target_images"]) - {"image/gic-version.txt"}
-        ) | set(release.get("generated_configs", []))
+        ) | set(release.get("generated_configs", [])) | {
+            "resources/keys/cas_verification_key.hex",
+        }
         if set(provenance["files"]) != required:
             raise ValueError(
                 "build provenance does not cover every native tool and guest image"
@@ -235,8 +237,6 @@ def tcp_smoke(
             host,
             "--tcp-port",
             str(port),
-            "--role",
-            "queen",
             "--script",
             str(bundle / "scripts/cohsh/boot_v0.coh"),
         ],
@@ -247,14 +247,20 @@ def tcp_smoke(
 
 
 def stop_process(process: subprocess.Popen[bytes]) -> None:
-    """Terminate only the process group created by this qualification run."""
+    """Let the launcher drain its captures before force-stopping its owned group."""
     if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
         try:
+            if process.stdin is None:
+                raise ValueError("QEMU launcher has no monitor input")
+            # The shipped launcher uses -serial mon:stdio. Its documented
+            # escape exits QEMU and lets the shell/capture children drain.
+            process.stdin.write(b"\x01x")
+            process.stdin.flush()
             process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
+        except (BrokenPipeError, OSError, subprocess.TimeoutExpired, ValueError):
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
+            raise ValueError("QEMU launcher did not shut down cleanly")
 
 
 def qualify_host(args: argparse.Namespace, record: dict[str, Any]) -> None:
@@ -292,7 +298,7 @@ def qualify_host(args: argparse.Namespace, record: dict[str, Any]) -> None:
     with tempfile.TemporaryDirectory(prefix="cohesix-release-python-") as directory:
         venv = Path(directory) / "venv"
         run(
-            [sys.executable, "-m", "venv", "--system-site-packages", str(venv)],
+            [sys.executable, "-m", "venv", str(venv)],
             bundle,
             output / "python-venv.log",
             env,
@@ -328,20 +334,19 @@ def qualify_host(args: argparse.Namespace, record: dict[str, Any]) -> None:
             output / "python-wheel-import.log",
             python_env,
         )
-        run(
-            [
-                python,
-                "-I",
-                "-m",
-                "pytest",
-                "--import-mode=importlib",
-                "-q",
-                str(bundle / "python/cohesix-py/tests"),
-            ],
-            Path(directory),
-            output / "python-tests.log",
-            python_env,
-        )
+        for target, profile in (
+            ("qemu", "cohesix_python_qemu_smp_production.json"),
+            ("pi4", "cohesix_python_pi4_production.json"),
+        ):
+            run(
+                [
+                    python, "-I", str(ROOT / "scripts/ci/python_wheel_smoke.py"),
+                    str(bundle / "configs/generated" / profile), target,
+                    str(output / f"python-{target}-smoke.json"),
+                    str(Path(directory) / f"mock-{target}"),
+                ],
+                Path(directory), output / f"python-{target}-smoke.log", python_env,
+            )
     # These ports are explicit operator inputs; an occupied port must fail.
     env.update(
         TCP_PORT=str(args.port),
@@ -454,6 +459,19 @@ def read_result(path: Path, kind: str) -> dict[str, Any]:
     return value
 
 
+def verify_pi_boot(serial: bytes, marker: bytes) -> None:
+    """Require one identified physical boot followed by its console-ready line."""
+    lines = serial.splitlines()
+    ready = b"Cohesix console ready"
+    if (
+        lines.count(marker) != 1 or lines.count(ready) != 1
+        or lines.index(ready) < lines.index(marker)
+    ):
+        raise ValueError(
+            "serial evidence must contain exactly one fresh boot of the released image"
+        )
+
+
 def qualify_pi(args: argparse.Namespace, record: dict[str, Any]) -> None:
     """Join exact media readback, one fresh serial boot and packaged-client TCP."""
     if not args.provisioning_verified:
@@ -467,10 +485,7 @@ def qualify_pi(args: argparse.Namespace, record: dict[str, Any]) -> None:
     metadata = evidence.read_json(args.bundle / "image/cohesix-pi4-sd.json")
     marker = metadata["boot_identity"]["build_marker"].encode()
     serial = args.serial_log.read_bytes()
-    if serial.count(marker) != 1 or serial.count(b"[mark] root-console.start.ok") != 1:
-        raise ValueError(
-            "serial evidence must contain exactly one fresh boot of the released image"
-        )
+    verify_pi_boot(serial, marker)
     if media.get("image_sha256") != metadata["image_sha256"]:
         raise ValueError(
             "media receipt image digest differs from the distributed image"

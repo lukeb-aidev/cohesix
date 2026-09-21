@@ -27,6 +27,59 @@ from scripts.lib.host_ticket_result_barrier import TerminalResultBarrier
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_linux_replay_preserves_source_record_and_exclusive_session(tmp_path: Path) -> None:
+    """Replay custody must not precreate the collector's exclusively owned output."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    preparation = source.split('else\n    export COHESIX_QEMU_ACCEL=kvm', 1)[1].split(
+        '\nfi\nvalidate_resolved_console_token', 1
+    )[0]
+    emission = source.split('TARGET_SESSION="$RUN_DIR/session/target-session.json"', 1)[1].split(
+        '\nlog "target session emitted:', 1
+    )[0]
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    original = b'{"host":"macos","identity":"original guest custody"}\n'
+    launch = artifact / "cohesix-qemu-launch-artifacts.json"
+    launch.write_bytes(original)
+    tools = tmp_path / "target/release"
+    tools.mkdir(parents=True)
+    for name in ("cohsh", "hive-gateway", "gpu-bridge-host", "host-ticket-agent"):
+        path = tools / name
+        path.write_text("#!/bin/sh\nexit 0\n")
+        path.chmod(0o755)
+    shim = tmp_path / "collector"
+    shim.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib,sys\n"
+        "args=sys.argv[1:]\n"
+        "if 'write' in args:\n"
+        " p=pathlib.Path(args[args.index('--out-dir')+1])\n"
+        " (p/'cohesix-qemu-launch-artifacts.json').write_text('native Linux envelope')\n"
+        "if 'emit-qemu-target-session' in args:\n"
+        " p=pathlib.Path(args[args.index('--out-dir')+1])\n"
+        " p.mkdir(mode=0o700,exist_ok=False)\n"
+        " (p/'target-session.json').write_text('{}')\n"
+    )
+    shim.chmod(0o755)
+    run = tmp_path / "run"
+    result = subprocess.run(
+        ["bash", "-eu", "-c",
+         'RUN_DIR="$1" OUT_ROOT="$2" TARGET_DIR="$3" HARNESS_PYTHON="$4"\n'
+         'REPO_ROOT="$5" SEL4_BUILD="$5" SEL4_PROFILE=qemu_smp_kvm_production\n'
+         'QEMU_BIN=qemu REUSE_ARTIFACTS=1 RESOLVED_MANIFEST=manifest GENERATED_INVENTORY=topology\n'
+         'cargo() { :; }; log() { :; }; python3() { echo 3; }\n'
+         'die() { echo "$*" >&2; exit 1; }\n'
+         + preparation + '\n' + emission,
+         "replay-session-test", str(run), str(artifact), str(tools.parent), str(shim), str(tmp_path)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (run / "session/target-session.json").is_file()
+    assert (run / "session/source-host-launch-record.json").read_bytes() == original
+    assert launch.read_text() == "native Linux envelope"
+    assert not (run / "source-host-launch-record.json").exists()
+
+
 def test_pressure_helpers_preserve_sealed_preflight_agent_state(tmp_path: Path) -> None:
     """Pressure resumes the completed WAL without changing the sealed copy."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
