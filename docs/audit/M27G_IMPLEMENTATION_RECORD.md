@@ -371,3 +371,12 @@ artifacts. These two restorations belong to 27g /
 original identities remain unchanged. Compatibility review found no changes to
 the complete host-tool suite, Python SDK, provider/Worker implementation or
 benchmark workloads and thresholds.
+
+The sharding-script restoration also updates its canonical token-stream
+fingerprint. The full host workspace test lane (excluding the separately owned
+SwarmUI and physical driver-runtime lanes), workspace Clippy with warnings denied,
+and formatting checks pass with that companion fixture. The previous frozen
+attempt remains failed at the stale fingerprint; no target artifact from it is
+silently rebound. The earlier `1593b3dee` Pi campaign passed all 17 TCP scripts,
+the REST gate and due-diligence checks, but final Stage 05 attestation refused the
+missing fresh runtime/DMA proof. That required physical proof remains outstanding.
