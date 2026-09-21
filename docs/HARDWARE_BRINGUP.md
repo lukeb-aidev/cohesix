@@ -865,6 +865,14 @@ owner-state/counter evidence from the same boot.
 
 ### 6. Normalize Without Overclaiming
 
+Quiet Pi builds retain detailed driver receipts in `/log/queen.log`. Export the
+complete authenticated log before pressure traffic can evict those observations.
+Keep its original `DRIVER_LOG` fragments in the serial capture: the normalizer
+checks whole boot-local records before interpreting their fields. Missing or
+conflicting fragments cannot establish driver proof. Preserve the existing
+first-connection measurement order and keep separate proof boots identified;
+never splice records from different boots into one capture.
+
 Inspect the latest boot slice:
 
 ```bash

@@ -430,7 +430,22 @@ fn console_ordering_suffix(
     suffix
 }
 
+fn ordered_driver_record(line: &str, suffix: &str) -> Option<HeaplessString<1024>> {
+    let mut record = HeaplessString::new();
+    record.push_str(line).ok()?;
+    record.push_str(suffix).ok()?;
+    Some(record)
+}
+
 fn append_ordered_log_line(line: &str, suffix: &str) {
+    if log_buffer::is_driver_proof_line(line) {
+        if let Some(record) = ordered_driver_record(line, suffix) {
+            log_buffer::append_driver_record(record.as_str());
+        } else {
+            log_buffer::append_log_line("DRIVER_LOG_ERROR reason=invalid-record");
+        }
+        return;
+    }
     let mut ordered = HeaplessString::<ORDERED_LOG_LINE_CAPACITY>::new();
     let _ = ordered.push_str(line);
     let _ = ordered.push_str(suffix);
@@ -838,6 +853,19 @@ fn send_frame_with_stub(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ordered_driver_receipt_keeps_long_payload_and_suffix_or_fails_whole() {
+        let payload = "x".repeat(900);
+        let suffix = " console_seq=17 telemetry_sinks=queen-log prompt_refresh=no";
+        assert_eq!(
+            super::ordered_driver_record(&payload, suffix)
+                .as_ref()
+                .map(|record| record.as_str()),
+            Some(format!("{payload}{suffix}").as_str()),
+        );
+        assert!(super::ordered_driver_record(&"x".repeat(1024), suffix).is_none());
+    }
+
     use super::*;
 
     #[cfg(feature = "kernel")]

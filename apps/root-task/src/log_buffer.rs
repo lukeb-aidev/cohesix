@@ -75,11 +75,39 @@ impl LogRing {
         if line.is_empty() {
             return;
         }
+        if line.len() > DEFAULT_LINE_CAPACITY && is_driver_proof_line(line) {
+            if line.len() > WORKER_RECORD_BYTES || line.contains(['\r', '\n']) {
+                self.push_line("DRIVER_LOG_ERROR reason=invalid-record");
+            } else {
+                self.append_fragmented_record(line, "DRIVER_LOG");
+            }
+            return;
+        }
         let mut entry: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
         let _ = entry.push_str(line);
         if self.lines.is_full() {
-            let _ = self.lines.pop_front();
-            self.evicted = self.evicted.saturating_add(1);
+            if let Some(discarded) = self.lines.pop_front() {
+                self.evicted = self.evicted.saturating_add(1);
+                // Keep a driver's retained observation all-or-nothing. At
+                // most five further fragments share this boot-local id.
+                if let Some((identity, _)) = discarded.line.split_once(" part=") {
+                    if identity.starts_with("DRIVER_LOG id=") {
+                        for _ in 0..5 {
+                            let same_record = self.lines.front().is_some_and(|entry| {
+                                entry
+                                    .line
+                                    .split_once(" part=")
+                                    .is_some_and(|(next, _)| next == identity)
+                            });
+                            if !same_record {
+                                break;
+                            }
+                            let _ = self.lines.pop_front();
+                            self.evicted = self.evicted.saturating_add(1);
+                        }
+                    }
+                }
+            }
         }
         let seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1);
@@ -151,6 +179,10 @@ impl LogRing {
     /// Keep every fragment of one bounded Worker proof adjacent in the ring.
     /// The first sequence identifies the record across overlapping LOG exports.
     fn append_worker_record(&mut self, record: &str) {
+        self.append_fragmented_record(record, "WORKER_LOG");
+    }
+
+    fn append_fragmented_record(&mut self, record: &str, envelope: &str) {
         let id = self.next_seq;
         let mut remaining = record;
         let mut part = 0u8;
@@ -164,7 +196,8 @@ impl LogRing {
             // the existing 256-byte log line. No global log bound is enlarged.
             let _ = write!(
                 line,
-                "WORKER_LOG id={} part={} last={} data={}",
+                "{} id={} part={} last={} data={}",
+                envelope,
                 id,
                 part,
                 u8::from(end == remaining.len()),
@@ -477,6 +510,27 @@ pub(crate) fn append_worker_record(args: fmt::Arguments<'_>) {
     ring.append_worker_record(record.as_str());
 }
 
+/// Identify existing internal driver proof records, without adding authority.
+pub(crate) fn is_driver_proof_line(line: &str) -> bool {
+    line.starts_with("DRIVER_TASK ")
+        || line.starts_with("DRIVER_TASK_")
+        || line.starts_with("SCHED_CONTRACT ")
+}
+
+/// Retain a complete internal driver proof in the existing bounded log ring.
+/// Readers must validate the whole fragment set before using any proof field.
+pub(crate) fn append_driver_record(record: &str) {
+    if record.is_empty() || record.len() > WORKER_RECORD_BYTES || record.contains(['\r', '\n']) {
+        append_log_line("DRIVER_LOG_ERROR reason=invalid-record");
+        return;
+    }
+    let Some(mut ring) = LOG_RING.try_lock() else {
+        LOG_CONTENTION_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    ring.append_fragmented_record(record, "DRIVER_LOG");
+}
+
 /// Attempt one complete qlog line without waiting behind a preempted owner.
 ///
 /// Mandatory callers retain their own bounded record until this returns true;
@@ -607,6 +661,57 @@ mod tests {
             .iter()
             .all(|row| !row.line.is_empty() && row.line.len() <= DEFAULT_LINE_CAPACITY));
         assert!(guard.lines.back().unwrap().line.contains("part=5 last=1"));
+    }
+
+    #[test]
+    fn driver_fragments_preserve_a_complete_long_observation() {
+        let mut guard = TEST_RING.lock();
+        guard.clear_for_test();
+        let record = format!(
+            "DRIVER_TASK_DMA_PROOF contract=serial detail={}",
+            "é".repeat(300)
+        );
+        guard.push_line(&record);
+        let lines: std::vec::Vec<_> = guard.lines.iter().map(|row| row.line.clone()).collect();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].starts_with("DRIVER_LOG id=0 part=0 last=0 data="));
+        assert!(lines[3].starts_with("DRIVER_LOG id=0 part=3 last=1 data="));
+        let rebuilt: std::string::String = lines
+            .iter()
+            .map(|line| line.split_once(" data=").unwrap().1)
+            .collect();
+        assert_eq!(rebuilt, record);
+    }
+
+    #[test]
+    fn ordinary_eviction_retires_the_entire_driver_observation() {
+        let mut guard = TEST_RING.lock();
+        guard.clear_for_test();
+        guard.push_line(&format!("DRIVER_TASK_BOOT {}", "x".repeat(300)));
+        assert_eq!(guard.lines.len(), 2);
+        for _ in 0..2046 {
+            guard.push_line("ordinary");
+        }
+        guard.push_line("newest");
+        assert_eq!(guard.evicted(), 2);
+        assert_eq!(guard.lines.len(), 2047);
+        assert!(guard
+            .lines
+            .iter()
+            .all(|entry| !entry.line.starts_with("DRIVER_LOG ")));
+        assert_eq!(guard.lines.back().unwrap().line.as_str(), "newest");
+    }
+
+    #[test]
+    fn oversized_driver_record_keeps_an_explicit_failure_instead_of_partial_proof() {
+        let mut guard = TEST_RING.lock();
+        guard.clear_for_test();
+        guard.push_line(&format!("DRIVER_TASK_BOOT {}", "x".repeat(1024)));
+        assert_eq!(guard.lines.len(), 1);
+        assert_eq!(
+            guard.lines.front().unwrap().line.as_str(),
+            "DRIVER_LOG_ERROR reason=invalid-record"
+        );
     }
 
     #[test]

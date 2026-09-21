@@ -9646,6 +9646,7 @@ Checks: the maximum generated role mix fits exact selected-kernel object/untyped
 Deliverables: Compiler-proven executable resource pools, generated fault capacity, and independent temporal reserves required before any 26e child is trusted to run.
 
 Title/ID: m26e-driver-runtime-mcs-port-and-cyw43-coexistence
+Status: Reopened narrowly — M27g / m27g-assembled-journeys-and-recovery found that long driver proof records become blank in the bounded Queen log. Restore complete bounded receipt retention and fail-closed decoding; fresh exact-image physical proof remains required.
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / linked-driver MCS port and behavioral coexistence proof
 Goal: Replace the current MCS driver stubs with the real seL4 16 MCS command, Reply, notification, fault, active-SC, and faulted-call recovery paths for every linked Pi driver while preserving CYW43/SDIO behavior and re-proving it under the new binary identity.
 Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, crates/pi4-driver-abi/**, apps/pi4-driver-runtime/**, apps/root-task/src/kernel.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task_pi4_uboot_aarch64.toml, scripts/cohesix-build-run.sh, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, the accepted classic driver archive/hash and exact CYW43 evidence, and selected QEMU/Pi MCS generated headers.

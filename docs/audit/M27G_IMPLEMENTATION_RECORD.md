@@ -380,3 +380,58 @@ attempt remains failed at the stale fingerprint; no target artifact from it is
 silently rebound. The earlier `1593b3dee` Pi campaign passed all 17 TCP scripts,
 the REST gate and due-diligence checks, but final Stage 05 attestation refused the
 missing fresh runtime/DMA proof. That required physical proof remains outstanding.
+
+
+## Bounded driver proof retention restoration
+
+Title/ID: m27g-driver-proof-log-retention
+Milestone: 27g / m27g-assembled-journeys-and-recovery; restoration: 26e / m26e-driver-runtime-mcs-port-and-cyw43-coexistence.
+
+The dedicated e571 Pi boot retained early bootstrap history but exported blank
+lines in place of detailed scheduling, owner-state and DMA receipts. Inspection
+confirmed that `LogRing::push_line` ignored a failed insertion of records larger
+than 256 bytes. Some producer formatting buffers also could not hold their
+complete record. The canonical normalizer correctly refused acceptance; the
+unsupported `hdmi status` collector command is retained as a separate harness
+failure. Evidence is in `pi4-runtime-e571-01` under the Pi qualification worktree.
+
+Restore the existing boot-record producer and ordered-log handoff with checked
+1024-byte formatting and
+the existing bounded fragment mechanism, using a distinct `DRIVER_LOG` envelope.
+Keep the 2048 ordinary entries, 256-byte entry bound, nonblocking lock, UART
+ownership, scheduling and DMA behavior unchanged. Decode only complete,
+boot-local driver observations. Required physical evidence remains pending.
+This is an observability repair, not evidence of a workload execution defect;
+the earlier two-hour run retains its original source identity and verdict.
+
+Compatibility review: coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus and
+the Python SDK transport the unchanged log stream. Their command and authority
+contracts need no changes. Pi qualification and benchmark proof readers use the
+canonical normalizer, updated alongside the producer. Worker fragments retain
+their exact envelope and decoder. Benchmark workloads and thresholds are unchanged.
+
+Jetson Remote Desktop recovery is verified separately: authentication with the
+existing VNC credential, a fresh desktop clock and a remote mouse action passed.
+The Linux account password was not the VNC credential. No password was reset;
+protected temporary credential copies were removed. Capture and result are in
+`out/m27g/jetson-desktop-recovery-20260921` in the user checkout.
+
+
+Focused validation: the Pi-feature driver subset passed 725 tests; the final
+bounded-log suite passed 15 tests; the Pi normalizer and gate wrapper passed
+1023 tests. `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all -- --check`, `scripts/check-generated.sh`, and
+`scripts/ci/check_test_plan.sh` passed. Logs are under
+`out/m27g-harness-repairs/driver-fragments-*`. An additional, noncanonical
+`cargo clippy -p root-task --no-default-features --features driver-tests-pi4
+--lib -- -D warnings` invocation reported 372 diagnostics in that broader
+feature closure; its failed log remains retained and no lint suppression was
+introduced. The canonical workspace lane above is the merge-required lane.
+
+The prior e571 checkpoint completed all five QEMU Test Plan stages at
+`out/test-plan/m27g-post-burn-e571-qemu-01` in the integration worktree.
+Its native HVF build/base execution, KVM build, strict Pi build, and all eight
+native Linux host-tool builds also passed their named scopes. These results
+remain bound to e571 and do not qualify this later driver-log repair or complete
+Milestone 27g.

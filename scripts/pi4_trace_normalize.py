@@ -2665,11 +2665,69 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
     )
 
 
+DRIVER_LOG_FRAGMENT = re.compile(
+    r"DRIVER_LOG id=([0-9]+) part=([0-9]+) last=([01]) data=(.*)$"
+)
+
+
+def expand_driver_records(lines: Iterable[str]) -> list[str]:
+    """Decode complete driver observations within one boot, retaining line offsets.
+
+    Original capture bytes remain unchanged. ACK previews and partial records
+    never supply proof fields; conflicting or malformed target frames fail closed.
+    """
+    source = list(lines)
+    output = ["" if "DRIVER_LOG" in line else line for line in source]
+    for start, boot in boot_slices(source):
+        grouped: dict[int, dict[int, tuple[bool, str]]] = {}
+        terminals: dict[int, int] = {}
+        for offset, raw in enumerate(boot, start=start):
+            line = ANSI_RE.sub("", raw).rstrip("\r\n")
+            if "DRIVER_LOG" not in line:
+                continue
+            # CAT's acknowledgement previews its first bytes. Only standalone
+            # target data lines participate in the bounded observation stream.
+            output[offset] = ""
+            if not line.startswith("DRIVER_LOG"):
+                continue
+            if line.startswith("DRIVER_LOG_ERROR "):
+                raise ValueError("target could not retain a complete driver record")
+            match = DRIVER_LOG_FRAGMENT.fullmatch(line)
+            if match is None:
+                raise ValueError("malformed driver fragment envelope")
+            identity, part = int(match[1]), int(match[2])
+            if (
+                identity > 2**64 - 1
+                or part > 5
+                or not match[4]
+                or len(match[4].encode()) > 176
+            ):
+                raise ValueError("driver fragment exceeds target bounds")
+            value = (match[3] == "1", match[4])
+            fragments = grouped.setdefault(identity, {})
+            previous = fragments.setdefault(part, value)
+            if previous != value:
+                raise ValueError("conflicting driver fragment for the same record")
+            if value[0]:
+                terminals.setdefault(identity, offset)
+        for identity, fragments in grouped.items():
+            last = [part for part, (terminal, _) in fragments.items() if terminal]
+            if len(last) != 1 or set(fragments) != set(range(last[0] + 1)):
+                raise ValueError("incomplete driver observation")
+            record = "".join(fragments[part][1] for part in range(last[0] + 1))
+            if len(record.encode()) > 1024 or not record.startswith(
+                ("DRIVER_TASK ", "DRIVER_TASK_", "SCHED_CONTRACT ")
+            ):
+                raise ValueError("driver record violates the target record contract")
+            output[terminals[identity]] = record
+    return output
+
+
 def parse_events(lines: Iterable[str], line_base: int = 0) -> list[TraceEvent]:
     """Parse all relevant trace lines from an iterable of log lines."""
 
     events: list[TraceEvent] = []
-    for line_number, line in enumerate(lines, start=line_base + 1):
+    for line_number, line in enumerate(expand_driver_records(lines), start=line_base + 1):
         if is_host_annotation(line):
             continue
         raw_clean = ANSI_RE.sub("", line).replace("\r", "").strip()

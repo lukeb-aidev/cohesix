@@ -692,6 +692,16 @@ fragments cannot establish a complete observation. Formatting overflow emits
 dropped-write counter. Worker logging does not perform synchronous UART I/O.
 Authentication and role checks for log reads remain unchanged.
 
+Driver boot observations use the same bounds with a distinct
+`DRIVER_LOG id=<u64> part=<0..5> last=<0|1> data=<text>` envelope. Only complete
+`DRIVER_TASK...` and `SCHED_CONTRACT` records are driver proof. The Pi trace
+normalizer validates complete fragments within each boot, rejects conflicting,
+missing, malformed or oversized records, ignores CAT acknowledgement previews,
+and retains the terminal fragment's original line number. Formatting failure
+emits `DRIVER_LOG_ERROR reason=invalid-record`. These observations use the
+ordinary ring and can be evicted as whole records; collect the authenticated log
+before pressure traffic. Repeated exports keep the first terminal line location. Fragmentation does not change driver ownership or acceptance predicates.
+
 The Queen log also preserves up to 63 trusted bootstrap audit records, each at
 most 256 bytes, plus one reserved failure record, beyond ordinary eviction.
 Only explicit internal boot emitters can use this reserve; user messages and

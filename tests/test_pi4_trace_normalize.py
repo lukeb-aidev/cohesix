@@ -21346,3 +21346,46 @@ def test_usb_runtime_skip_after_first_byte_is_scheduler_telemetry() -> None:
     assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
     assert record["USB_ACTIVE_BLOCKER_SEEN"] == "no"
     assert record["USB_BUSY_AFTER_READY"] == "no"
+
+
+def test_driver_fragments_preserve_complete_proof_and_original_line_number() -> None:
+    record = "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console status=ready " + "x" * 400
+    fragments = [record[index:index + 176] for index in range(0, len(record), 176)]
+    lines = [f"DRIVER_LOG id=7 part={part} last={int(part == len(fragments) - 1)} data={text}"
+             for part, text in enumerate(fragments)]
+    expanded = normalizer.expand_driver_records(lines)
+    assert expanded == ["", "", record]
+    events = normalizer.parse_events(lines, line_base=10)
+    assert len(events) == 1
+    assert events[0].line == 13
+    assert events[0].fields["contract"] == "serial"
+
+
+@pytest.mark.parametrize("lines", [
+    ["DRIVER_LOG id=7 part=1 last=1 data=DRIVER_TASK_ACCEPTANCE dedicated_ready=yes"],
+    ["DRIVER_LOG id=7 part=0 last=0 data=DRIVER_TASK_ACCEPTANCE dedicated_ready=yes"],
+    ["DRIVER_LOG id=7 part=0 last=1 data=DRIVER_TASK_DEFAULT requested=dedicated",
+     "DRIVER_LOG id=7 part=0 last=1 data=DRIVER_TASK_DEFAULT requested=compatibility"],
+    ["DRIVER_LOG id=7 part=6 last=1 data=DRIVER_TASK_DEFAULT requested=dedicated"],
+    ["DRIVER_LOG id=7 part=0 last=1 data=" + "x" * 177],
+    ["DRIVER_LOG id=7 part=0 last=1 data=NOT_DRIVER_PROOF"],
+    ["DRIVER_LOG_ERROR reason=invalid-record"],
+])
+def test_driver_fragments_fail_closed(lines: list[str]) -> None:
+    with pytest.raises(ValueError):
+        normalizer.parse_events(lines)
+
+
+def test_driver_fragments_do_not_join_across_boots_or_credit_ack_previews() -> None:
+    preview = "OK CAT path=/log/queen.log data=DRIVER_LOG id=0 part=0 last=1 data=DRIVER_TASK_ACCEPTANCE dedicated_ready=yes"
+    assert normalizer.parse_events([preview]) == []
+    first = "DRIVER_LOG id=0 part=0 last=1 data=DRIVER_TASK_DEFAULT requested=dedicated"
+    second = "DRIVER_LOG id=0 part=0 last=1 data=DRIVER_TASK_DEFAULT requested=compatibility"
+    lines = ["U-Boot 2025.01", first, "U-Boot 2025.01", second]
+    assert normalizer.expand_driver_records(lines) == [
+        lines[0], "DRIVER_TASK_DEFAULT requested=dedicated",
+        lines[2], "DRIVER_TASK_DEFAULT requested=compatibility",
+    ]
+    assert normalizer.expand_driver_records([first, first]) == [
+        "DRIVER_TASK_DEFAULT requested=dedicated", "",
+    ]

@@ -28988,17 +28988,37 @@ const fn driver_task_boot_contract_proof_line_uses_raw(emission_index: u32) -> b
 
 #[cfg(feature = "kernel")]
 fn emit_driver_task_boot_contract_line(line: &str, use_raw_uart: bool) {
-    if cfg!(feature = "release-pi4")
-        && (!use_raw_uart || !pi4_boot_contract_line_is_decision_bearing(line))
-    {
-        crate::log_buffer::append_log_line(line);
-        return;
+    if cfg!(feature = "release-pi4") {
+        crate::log_buffer::append_driver_record(line);
+        if !use_raw_uart || !pi4_boot_contract_line_is_decision_bearing(line) {
+            return;
+        }
     }
     if use_raw_uart {
         crate::bootstrap::log::force_uart_line_raw(line);
     } else {
         crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
     }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_boot_contract_record(args: core::fmt::Arguments<'_>, use_raw_uart: bool) {
+    let Some(line) = format_driver_task_boot_contract_record(args) else {
+        crate::log_buffer::append_log_line("DRIVER_LOG_ERROR reason=invalid-record");
+        return;
+    };
+    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
+}
+
+#[cfg(feature = "kernel")]
+fn format_driver_task_boot_contract_record(
+    args: core::fmt::Arguments<'_>,
+) -> Option<heapless::String<1024>> {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::new();
+    line.write_fmt(args).ok()?;
+    Some(line)
 }
 
 #[cfg(feature = "kernel")]
@@ -29013,12 +29033,14 @@ fn pi4_boot_contract_line_is_decision_bearing(line: &str) -> bool {
 
 #[cfg(feature = "kernel")]
 pub fn emit_boot_contract_proof() {
-    use core::fmt::Write;
-
-    use heapless::String;
-
     let emission_index = DRIVER_TASK_BOOT_CONTRACT_PROOF_EMISSIONS.fetch_add(1, Ordering::AcqRel);
     let use_raw_uart = driver_task_boot_contract_proof_line_uses_raw(emission_index);
+    macro_rules! emit {
+        ($($args:tt)*) => {
+            emit_driver_task_boot_contract_record(format_args!($($args)*), use_raw_uart)
+        };
+    }
+
     let proof = driver_task_runtime_proof();
     let proof_ipc_abi = if proof.pointer_free_ipc_proof {
         DriverTaskIpcAbi::SharedRingCommand
@@ -29029,9 +29051,7 @@ pub fn emit_boot_contract_proof() {
     let required_hot_path_mask = current_pi4_acceptance_hot_path_mask();
     let required_hot_path_count = current_pi4_acceptance_hot_path_count();
     let net_selection = pi4_pre_root_net_bootstrap_selection();
-    let mut line = String::<192>::new();
-    let _ = write!(
-        line,
+    emit!(
         "DRIVER_TASK_DEFAULT requested={} required={} substrate_active={} live_hot_paths={}",
         if DEDICATED_DRIVER_TASKS_DEFAULT_ENABLED {
             "dedicated"
@@ -29050,11 +29070,8 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
     );
-    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
-    let mut line = String::<512>::new();
-    let _ = write!(
-        line,
+    emit!(
         "DRIVER_TASK_SELECTED profile={} selection={} active_net={} required_roles=0x{:x} required_hot_paths=0x{:x} required_tasks={}",
         CURRENT_DRIVER_TASK_RUNTIME_PROFILE.as_str(),
         net_selection.as_str(),
@@ -29063,11 +29080,8 @@ pub fn emit_boot_contract_proof() {
         required_hot_path_mask,
         required_hot_path_count,
     );
-    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
-    let mut line = String::<384>::new();
-    let _ = write!(
-        line,
+    emit!(
         "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} live_hot_paths={}",
         if proof.substrate_active { "yes" } else { "no" },
         proof.configured_count,
@@ -29095,12 +29109,10 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
     );
-    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
         if !driver_task_contract_active_for_current_profile(*contract) {
             continue;
         }
-        let mut line = String::<384>::new();
         let status = if contract.validate().is_ok() {
             "valid"
         } else {
@@ -29111,8 +29123,7 @@ pub fn emit_boot_contract_proof() {
         let hot_path = role_bit != 0 && proof.hot_path_role_mask & role_bit != 0;
         let observed_service_us = observed_service_us_for_contract(*contract);
         if observed_service_us == 0 {
-            let _ = write!(
-                line,
+            emit!(
                 "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={} vspace={} ipc_abi={} pointer_free_ipc={}",
                 contract.name,
                 status,
@@ -29140,8 +29151,7 @@ pub fn emit_boot_contract_proof() {
                 },
             );
         } else {
-            let _ = write!(
-                line,
+            emit!(
                 "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={} observed_service_us={} vspace={} ipc_abi={} pointer_free_ipc={}",
                 contract.name,
                 status,
@@ -29170,11 +29180,8 @@ pub fn emit_boot_contract_proof() {
                 },
             );
         }
-        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
-        let mut line = String::<320>::new();
-        let _ = write!(
-            line,
+        emit!(
             "DRIVER_TASK role={} contract={} isolation={} requested_isolation={} live_tcb={} hot_path={} capset={} fault_probe={} revoke_ready={} priority={} vspace={} ipc_abi={} pointer_free_ipc={}",
             contract.kind.proof_role(),
             contract.name,
@@ -29198,7 +29205,6 @@ pub fn emit_boot_contract_proof() {
                 "no"
             },
         );
-        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
         if let Some(line) = driver_task_counter_line(*contract) {
             emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
@@ -29206,9 +29212,7 @@ pub fn emit_boot_contract_proof() {
     }
 
     let summary = active_builtin_isolation_summary();
-    let mut line = String::<320>::new();
-    let _ = write!(
-        line,
+    emit!(
         "DRIVER_TASK_SUMMARY contracts={} requested_dedicated={} dedicated={} compatibility={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} shared_ring_roles=0x{:x} owner_state_roles=0x{:x} owner_state_hot_paths=0x{:x} compatibility_roles=0x{:x}",
         summary.contracts,
         summary.requested_dedicated_sel4_tasks,
@@ -29221,7 +29225,6 @@ pub fn emit_boot_contract_proof() {
         proof.owner_state_hot_path_mask,
         proof.compatibility_service_role_mask,
     );
-    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
     for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
         if required_hot_path_mask & hot_path.owner_state_bit() == 0 {
@@ -29242,9 +29245,7 @@ pub fn emit_boot_contract_proof() {
         } else {
             "unknown"
         };
-        let mut line = String::<512>::new();
-        let _ = write!(
-            line,
+        emit!(
             "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} hardware_owner={} descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} root_authority=admission-descriptor-diagnostics-only proof_effect={}",
             contract.name,
             hot_path.as_str(),
@@ -29266,7 +29267,6 @@ pub fn emit_boot_contract_proof() {
                 "owner-state-missing"
             },
         );
-        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
         let spec = pi4_driver_task_runtime_image_spec(hot_path);
         let counters = driver_task_counter_snapshot(contract);
@@ -29292,9 +29292,7 @@ pub fn emit_boot_contract_proof() {
         } else {
             "owner-state-missing"
         };
-        let mut line = String::<1024>::new();
-        let _ = write!(
-            line,
+        emit!(
             "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=coherent-shared-plus-barriers cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
             contract.name,
             hot_path.as_str(),
@@ -29324,10 +29322,8 @@ pub fn emit_boot_contract_proof() {
                 "runtime-dma-proof-red"
             },
         );
-        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
     }
 
-    let mut line = String::<512>::new();
     let ready = dedicated_driver_task_acceptance_ready();
     let reason = if ready {
         "dedicated-sel4-substrate-active"
@@ -29350,8 +29346,7 @@ pub fn emit_boot_contract_proof() {
     } else {
         "insufficient-dedicated-driver-tasks"
     };
-    let _ = write!(
-        line,
+    emit!(
         "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} active_net={} root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime proof_effect={} next_action={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
@@ -29384,7 +29379,6 @@ pub fn emit_boot_contract_proof() {
         proof.hot_path_role_mask,
         proof.compatibility_service_role_mask,
     );
-    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 }
 
 #[cfg(feature = "kernel")]
@@ -30110,6 +30104,19 @@ mod tests {
             assert!(missing.contains("bus_link_seal=missing"));
             assert!(missing.contains("root_pointer=unknown"));
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_proof_formatting_preserves_the_complete_bounded_record() {
+        let exact = "x".repeat(1024);
+        assert_eq!(
+            format_driver_task_boot_contract_record(format_args!("{exact}"))
+                .as_ref()
+                .map(|line| line.as_str()),
+            Some(exact.as_str()),
+        );
+        assert!(format_driver_task_boot_contract_record(format_args!("{exact}x")).is_none());
     }
 
     #[cfg(feature = "kernel")]
