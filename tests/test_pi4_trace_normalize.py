@@ -70,7 +70,7 @@ def descriptor_seal_suffix(hot_path: str) -> str:
         "valid" if hot_path in {"usb-keyboard", "cyw43-wifi", "sdio-host"} else "none"
     )
     return (
-        "descriptor_version=8 descriptor_seal=valid "
+        "descriptor_version=13 descriptor_seal=valid "
         f"artifact_hash=nonzero bus_link_seal={bus_link_seal}"
     )
 
@@ -105,7 +105,7 @@ def strip_driver_task_runtime_descriptor_seals(lines: list[str]) -> list[str]:
     stripped: list[str] = []
     for line in lines:
         for token in (
-            " descriptor_version=8",
+            " descriptor_version=13",
             " descriptor_seal=valid",
             " artifact_hash=nonzero",
             " bus_link_seal=valid",
@@ -354,27 +354,27 @@ def retained_wifi_oldgood_receipt_lines() -> list[str]:
 
     return [
         "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
-        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "owner_state=driver-owned descriptor=present descriptor_version=13 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none "
         "root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
-        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "owner_state=driver-owned descriptor=present descriptor_version=13 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid "
         "root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
-        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "owner_state=driver-owned descriptor=present descriptor_version=13 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none "
         "root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
-        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "owner_state=driver-owned descriptor=present descriptor_version=13 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none "
         "root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
-        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "owner_state=driver-owned descriptor=present descriptor_version=13 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid "
         "root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
-        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "owner_state=driver-owned descriptor=present descriptor_version=13 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid "
         "root_pointer=no",
         "WIFI_OLDGOOD_RETAINED_BEGIN id=1 attempt=1 pair_epoch=1 "
@@ -2710,11 +2710,12 @@ def test_gate_summary_rejects_pre_seal_runtime_dma_as_fresh_pi() -> None:
     )
 
 
-def test_gate_summary_rejects_v7_runtime_descriptor_as_stale() -> None:
-    """ABI v7 owner proof remains historical and cannot satisfy v8 closure."""
+@pytest.mark.parametrize("version", [7, 8, 12, 14])
+def test_gate_summary_rejects_noncurrent_runtime_descriptor(version: int) -> None:
+    """Historical and unknown ABI versions cannot satisfy the v13 contract."""
 
     stale_lines = [
-        line.replace("descriptor_version=8", "descriptor_version=7")
+        line.replace("descriptor_version=13", f"descriptor_version={version}")
         for line in strict_wired_boot_proof_lines()
     ]
     record = normalizer.summarize_gates(

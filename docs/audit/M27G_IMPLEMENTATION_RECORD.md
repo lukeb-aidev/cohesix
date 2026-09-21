@@ -435,3 +435,31 @@ Its native HVF build/base execution, KVM build, strict Pi build, and all eight
 native Linux host-tool builds also passed their named scopes. These results
 remain bound to e571 and do not qualify this later driver-log repair or complete
 Milestone 27g.
+
+The fresh `6c67f58b9` physical attempt (`pi4-runtime-6c67f58b-01`) recovered
+complete driver records and reached all five linked runtimes. Its canonical gate
+still failed: constructor affinity records had expired during ordinary boot log
+traffic, and the host checker required descriptor ABI 8 while the target's
+`pi4-driver-abi` emits ABI 13. Preserve that failed result unchanged. The follow-up
+retains one compact original constructor identity per admitted driver through
+the existing trusted boot-audit slots; it does not reconstruct records after
+boot, expand ring bounds or claim DMA readiness from constructor identity. The
+normalizer and synthetic current-ABI fixtures select exactly version 13 and
+reject historical or unknown versions. The complete host-tool, Python and
+benchmark compatibility review above applies; their transport and authority
+contracts remain unchanged. Fresh target qualification remains required.
+
+Follow-up focused validation passed the constructor identity test, all 1026 Pi
+normalizer/gate tests, canonical workspace Clippy, generated consistency and Test
+Plan metadata checks (`driver-identity-*` logs in the repairs worktree). The first
+Rust compile exposed a capability pointer type mismatch, corrected to
+`seL4_CPtr`; its failed log is retained. Diagnostic replay of the unchanged 6c67
+capture recognizes all five ABI-13 descriptor seals, but remains short of
+constructor affinity proof and cannot qualify the repair.
+
+The newly installed HDMI capture card supplied original OBS frames before and
+after a paced serial `ping` on that same 6c67 Pi. Both serial and live HDMI show
+`PONG` followed by the prompt, with no observed display corruption. Evidence is
+`out/m27g-integration/hdmi-capture-6c67-01` in the Pi worktree. This is display
+responsiveness evidence only; physical keyboard input and later-image HDMI
+qualification remain separate.

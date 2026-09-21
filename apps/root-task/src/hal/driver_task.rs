@@ -28987,6 +28987,29 @@ const fn driver_task_boot_contract_proof_line_uses_raw(emission_index: u32) -> b
 }
 
 #[cfg(feature = "kernel")]
+pub(crate) fn driver_task_boot_identity_line(
+    contract: DriverTaskContract,
+    tcb: sel4_sys::seL4_CPtr,
+    started: bool,
+    affinity_core: Option<u8>,
+) -> Option<heapless::String<256>> {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::new();
+    write!(
+        line,
+        "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} started={} affinity_core={} source=constructor capture=compact-identity",
+        contract.name,
+        contract.kind.proof_role(),
+        tcb,
+        if started { "yes" } else { "no" },
+        affinity_core.map_or(-1, i32::from),
+    )
+    .ok()?;
+    Some(line)
+}
+
+#[cfg(feature = "kernel")]
 fn emit_driver_task_boot_contract_line(line: &str, use_raw_uart: bool) {
     if cfg!(feature = "release-pi4") {
         crate::log_buffer::append_driver_record(line);
@@ -30117,6 +30140,19 @@ mod tests {
             Some(exact.as_str()),
         );
         assert!(format_driver_task_boot_contract_record(format_args!("{exact}x")).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_boot_identity_preserves_constructor_observation() {
+        let line =
+            driver_task_boot_identity_line(SERIAL_DRIVER_TASK_CONTRACT, 0x1234, true, Some(2))
+                .unwrap();
+        assert_eq!(line.as_str(), "DRIVER_TASK_BOOT contract=serial role=serial tcb=0x1234 started=yes affinity_core=2 source=constructor capture=compact-identity");
+        let unknown =
+            driver_task_boot_identity_line(SERIAL_DRIVER_TASK_CONTRACT, 0x4321, false, None)
+                .unwrap();
+        assert_eq!(unknown.as_str(), "DRIVER_TASK_BOOT contract=serial role=serial tcb=0x4321 started=no affinity_core=-1 source=constructor capture=compact-identity");
     }
 
     #[cfg(feature = "kernel")]

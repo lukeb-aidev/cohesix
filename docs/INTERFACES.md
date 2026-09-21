@@ -705,7 +705,12 @@ before pressure traffic. Repeated exports keep the first terminal line location.
 The Queen log also preserves up to 63 trusted bootstrap audit records, each at
 most 256 bytes, plus one reserved failure record, beyond ordinary eviction.
 Only explicit internal boot emitters can use this reserve; user messages and
-Worker fragments remain in the ordinary 2048-line ring. Full CAT export presents
+Worker fragments remain in the ordinary 2048-line ring. Driver construction uses
+one slot per successfully admitted driver for a compact `DRIVER_TASK_BOOT` record
+containing its observed contract, role, TCB, started state and affinity. It carries
+`source=constructor capture=compact-identity`; the remaining verbose inventory
+still uses ordinary retention. This compact record does not prove descriptor,
+DMA or runtime readiness. Full CAT export presents
 the saved records and ordinary ring in original sequence order, emitting each
 sequence once. Its byte admission and frozen end sequence cover that logical
 union. TAIL still selects the latest requested records, defaulting to 64 and

@@ -193,7 +193,7 @@ WIFI_OLDGOOD_COMPACT_OWNER_RE = re.compile(
     r"contract=(?P<contract>[a-z0-9-]+) "
     r"hot_path=(?P<hot_path>[a-z0-9-]+) "
     r"owner_state=driver-owned descriptor=present "
-    r"descriptor_version=8 descriptor_seal=valid "
+    r"descriptor_version=13 descriptor_seal=valid "
     r"artifact_hash=nonzero bus_link_seal=(?P<bus_link_seal>valid|none) "
     r"root_pointer=no$"
 )
@@ -13132,7 +13132,9 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
     return explicit.lower() == "driver-owned"
 
 
-RUNTIME_DESCRIPTOR_SEAL_VERSION = 8
+# Exact current seal ABI: crates/pi4-driver-abi DRIVER_RUNTIME_INIT_VERSION.
+# Historical and future descriptor versions remain ineligible for this gate.
+RUNTIME_DESCRIPTOR_SEAL_VERSION = 13
 SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS = frozenset(
     {"usb-keyboard", "cyw43-wifi", "sdio-host"}
 )

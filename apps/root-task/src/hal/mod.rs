@@ -4453,6 +4453,22 @@ impl<'a> KernelHal<'a> {
                         continue;
                     }
                     add_driver_task_handle_to_report(&mut report, &handle);
+                    // Preserve the constructor's actual affinity before ordinary
+                    // Worker admission traffic can evict the verbose record.
+                    // This explicit boot-only emitter uses one existing audit
+                    // slot per driver; no user-selected prefix gets retention.
+                    if let Some(identity) = driver_task::driver_task_boot_identity_line(
+                        handle.contract,
+                        handle.tcb,
+                        handle.started,
+                        handle.affinity_core,
+                    ) {
+                        crate::bootstrap::log::retain_bootstrap_audit_line(identity.as_str());
+                    } else {
+                        crate::bootstrap::log::retain_bootstrap_audit_line(
+                            "DRIVER_TASK_BOOT status=failed reason=identity-format",
+                        );
+                    }
                     let runtime_owner_state_registered =
                         handle.runtime_image_spec.is_some_and(|spec| {
                             driver_task::driver_task_runtime_owner_state_registered(spec.hot_path)

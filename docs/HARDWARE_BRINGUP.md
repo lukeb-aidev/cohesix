@@ -873,6 +873,12 @@ conflicting fragments cannot establish driver proof. Preserve the existing
 first-connection measurement order and keep separate proof boots identified;
 never splice records from different boots into one capture.
 
+Driver-construction identity and actual affinity survive ordinary eviction in
+the existing trusted boot-audit reserve, one compact record per admitted driver.
+Export the full log to obtain that original observation. Runtime descriptor proof
+must match ABI version 13 from `pi4-driver-abi`; older or unknown versions remain
+diagnostic and cannot satisfy the current gate.
+
 Inspect the latest boot slice:
 
 ```bash
