@@ -3125,7 +3125,14 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     assert '--artifact "$artifact" ${result_args[@]+"${result_args[@]}"}' in release
     assert 'result_args=(--result "$result")' in release
 
-    for relative in entrypoints[2:]:
+    # The canary labels the verified retained image's native profile. Its
+    # executed HVF/KVM coverage lives in test_test_plan_converge.py; requiring a
+    # fixed label here would contradict a valid Linux KVM launch record.
+    for relative in (
+        "scripts/m26e_qemu_pressure.sh",
+        "scripts/cohsh/run_regression_batch.sh",
+        "configs/test_plan_actions.toml",
+    ):
         source = (sel4_profile.ROOT / relative).read_text(encoding="utf-8")
         assert "qemu_smp_production" in source, relative
 
