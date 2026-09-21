@@ -8,8 +8,13 @@ import csv
 import hashlib
 import importlib.util
 import io
+import json
 from pathlib import Path
+import platform
+import subprocess
+import sys
 import tarfile
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -103,3 +108,71 @@ def test_sdist_rejects_traversal_special_files_and_unlisted_sources(tmp_path: Pa
     path.symlink_to(original)
     with pytest.raises(ValueError, match="regular file"):
         package.read_regular(path)
+
+
+@pytest.mark.parametrize("production", [False, True])
+def test_wheel_smoke_respects_selected_worker_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, production: bool
+) -> None:
+    """Production smoke retains intent bytes without inventing mock execution."""
+    root = MODULE.parents[2]
+    monkeypatch.syspath_prepend(str(root / "tools/cohesix-py"))
+    import cohesix.integrations
+    from importlib import metadata
+
+    contract = json.loads(
+        (root / "configs/generated/cohesix_python_qemu_smp_production.json").read_text()
+    )
+    contract["authority"].update(
+        production=production, legacy_queen_ctl=not production,
+        strict_queen_intents=True, writer_epoch=9,
+        writer_epoch_required=production, execution_wal_required=production,
+        debug_memory=False,
+    )
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(contract))
+    output = tmp_path / "smoke.json"
+    mock = tmp_path / "mock"
+    monkeypatch.setattr(
+        sys, "argv", ["wheel-smoke", str(path), "qemu", str(output), str(mock)]
+    )
+    monkeypatch.setattr(metadata, "version", lambda name: "0.2.0a2")
+    monkeypatch.setattr(platform, "platform", lambda: "controlled-package-test")
+    monkeypatch.setattr(
+        cohesix.integrations, "probe_peft_runtime",
+        lambda: SimpleNamespace(status="unavailable"),
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="mac-release-factory"
+        ),
+    )
+    source = (root / "scripts/ci/python_compat_run.sh").read_text()
+    smoke = source.split('"$state_dir/mock-$label" <<\'PY\'\n', 1)[1].split(
+        "\nPY\n", 1
+    )[0]
+    exec(compile(smoke, "python_compat_run.sh:run_smoke", "exec"), {})
+    report = json.loads(output.read_text())
+    assert report["result"] == "PASS"
+    assert report["worker_control_proof"] == (
+        "strict-request-serialization"
+        if production else "compatibility-host-model-lifecycle"
+    )
+    for role, worker in (
+        ("heartbeat", "smoke-heart"), ("gpu", "smoke-gpu"), ("lora", "smoke-lora")
+    ):
+        control = mock / worker / "queen/ctl"
+        strict = mock / worker / "queen/intents/ctl"
+        if production:
+            assert not control.exists()
+            envelope = json.loads(strict.read_bytes())
+            assert envelope["schema"] == "queen-intent/v1"
+            assert envelope["writer_epoch"] == 9
+            assert json.loads(envelope["cmd"]) == {
+                "spawn": role, "worker_id": worker, "slot": 0
+            }
+        else:
+            assert not strict.exists()
+            assert b'"spawn"' in control.read_bytes()
+            assert b'"kill"' in control.read_bytes()

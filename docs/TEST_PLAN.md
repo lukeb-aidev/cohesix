@@ -996,6 +996,14 @@ observation remains host-model compatibility evidence, not target authority,
 READY proof, provider completion, runtime release acceptance, or production
 use-case acceptance.
 
+The smoke follows the selected authority policy. Compatibility profiles exercise
+mock spawn, READY observation and teardown. Strict profiles require refusal of
+an identity-free spawn and exact serialization of a versioned Queen intent with
+the selected writer epoch for each executable role. MockBackend retains those
+bytes without executing strict intents; its smoke therefore reports
+`strict-request-serialization` and does not claim READY or completed teardown.
+The separate live target projection and release lanes retain those obligations.
+
 After the direct QEMU role gate has emitted an accepted, live
 `cohesix-worker-integration-evidence/v1` record for `worker-control`,
 `gpu-receipt-path`, or `peft-receipt-path`, run the QEMU projection lane:

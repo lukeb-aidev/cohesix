@@ -280,6 +280,7 @@ output = Path(sys.argv[3])
 mock_root = Path(sys.argv[4])
 import cohesix
 from cohesix import CohesixClient, CohesixError, MockBackend, load_profile_contract
+from cohesix.authority import QueenIntent
 from cohesix.generated import DEFAULTS
 from cohesix.integrations import probe_peft_runtime
 
@@ -299,8 +300,41 @@ if not required_exports.issubset(set(cohesix.__all__)):
 if DEFAULTS.get("manifest_sha256") is not None or DEFAULTS.get("execution_proof") != "none":
     raise SystemExit("python-compat: installed wheel defaults are not target-neutral")
 contract = load_profile_contract(contract_path, expected_target=expected_target)
-client = CohesixClient(MockBackend(str(mock_root)), profile_contract=contract)
+strict = not contract.authority["legacy_queen_ctl"]
 for role, worker_id in (("heartbeat", "smoke-heart"), ("gpu", "smoke-gpu"), ("lora", "smoke-lora")):
+    worker_root = mock_root / worker_id
+    client = CohesixClient(MockBackend(str(worker_root)), profile_contract=contract)
+    if strict:
+        try:
+            client.worker_spawn(role, worker_id)
+        except CohesixError as error:
+            if str(error) != "strict Queen intent identity is required by selected profile":
+                raise
+        else:
+            raise SystemExit("python-compat: production spawn omitted its strict identity")
+        command = {"spawn": role, "worker_id": worker_id, "slot": 0}
+        intent = QueenIntent(
+            worker_id, worker_id + "-retry", 1000, command,
+            writer_epoch=contract.authority["writer_epoch"],
+        )
+        admitted = client.workers.spawn(role, worker_id, intent=intent)
+        retained = (worker_root / "queen/intents/ctl").read_bytes()
+        envelope = json.loads(retained)
+        if (
+            not admitted.request_admitted or admitted.lifecycle != "queued"
+            or admitted.bytes_written != len(retained)
+            or envelope["schema"] != "queen-intent/v1"
+            or envelope["id"] != worker_id
+            or envelope["idempotency_key"] != worker_id + "-retry"
+            or envelope["issued_unix_ms"] != 1000
+            or envelope["writer_epoch"] != contract.authority["writer_epoch"]
+            or json.loads(envelope["cmd"]) != command
+            or (worker_root / "queen/ctl").exists()
+        ):
+            raise SystemExit("python-compat: strict request serialization drift")
+        # MockBackend retains strict bytes but does not execute Queen intents.
+        # Readiness, teardown and target execution require their live lanes.
+        continue
     if not client.worker_spawn(role, worker_id).request_admitted:
         raise SystemExit("python-compat: mock spawn admission failed")
     observation = client.worker_wait_ready(role, worker_id, timeout_s=0.2)
@@ -335,6 +369,9 @@ record = {
     "target_defaults": "neutral",
     "optional_peft_status": probe.status,
     "worker_roles": ["worker-gpu", "worker-heartbeat", "worker-lora"],
+    "worker_control_proof": (
+        "strict-request-serialization" if strict else "compatibility-host-model-lifecycle"
+    ),
     "worker_bus": "model-only-refused",
     "result": "PASS",
 }

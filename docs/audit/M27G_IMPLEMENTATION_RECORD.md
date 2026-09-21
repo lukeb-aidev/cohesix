@@ -278,3 +278,50 @@ failed run is retained. Product behavior, all host tools, the Python SDK,
 generated contracts and benchmark thresholds are unchanged. No additional
 implementation change was needed across those reviewed surfaces, and this
 repair does not require repeating the successful operator burn-in.
+
+The `06e895348` physical campaign subsequently passed all 17 Stage 03 scripts
+and the complete Stage 04 REST gate. Stage 05 stopped at eight dependency
+advisories in `aws-lc-sys`, `quinn-proto` and `rustls`; no ordinary Stage 05 PASS
+was emitted. The reviewed lockfile update selects `aws-lc-rs 1.18.1`,
+`aws-lc-sys 0.45.0`, `quinn-proto 0.11.15`, `rustls 0.23.45` and its required
+`rustls-webpki 0.103.15`. No advisory suppression or exception is added.
+`cargo audit --json` reports zero vulnerabilities against advisory database
+commit `d5c17953a895cf19e8d3ce66eaa42b6fcfe1fb16`; `cargo deny check advisories`
+passes with the existing warning policy.
+
+This dependency restoration belongs to 27g /
+`m27g-assembled-journeys-and-recovery`. The exact Pi production normal-dependency
+tree contains none of those libraries, and Quinn is absent from the normal host
+dependency graph. Host HTTPS clients do use rustls through reqwest/ureq, so
+fresh host builds and transport checks remain required. The rustls advisory
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) concerns
+TLS encryption-level enforcement while retaining transcript authentication.
+The timed burn-in used the private HTTP gateway, local provider endpoints and
+native CUDA/LoRA execution. Its original artifact identities and duration remain
+unchanged; the dependency repair requires focused revalidation and the current
+full release gates rather than relabelling that run as time on new binaries.
+No major Cohesix execution defect has been identified in this advisory closure.
+The focused cohesix-rest, attestation, coh and host-sidecar-bridge suite passes
+127 tests with the updated dependencies. Generated consistency and Test Plan
+metadata checks also pass; these focused results do not replace Stage 05.
+
+Production-profile wheel qualification also exposed a stale smoke workflow:
+it attempted the compatibility-only Worker spawn without a strict Queen intent.
+The SDK correctly refused it. The repaired package gate checks that refusal and
+the exact versioned intent bytes, identity, command and selected writer epoch
+for all three executable roles. It explicitly reports serialization only:
+MockBackend retains those bytes and does not execute strict intents. The
+compatibility profile retains its spawn/READY/teardown checks, while live target
+and release gates retain all execution obligations. Twenty-two focused package
+and bundle tests pass. The unchanged target-neutral wheel, SHA-256
+`ece24d1ac24147cd818cce93c93bc2797c375f7b3384662d8e4503fe542cb12f`,
+passes the repaired gate on native macOS and Linux AArch64 with both
+CPython 3.11.13 and 3.13.7. Those records retain the exact repaired harness and
+profile hashes; they are package evidence only.
+
+Compatibility review covers coh/coh-status, cohsh, Hive Gateway, SwarmUI,
+host-ticket-agent, host-sidecar-bridge, gpu-bridge-host, cas-tool, sidecar-bus,
+the Python SDK and benchmark scripts. The host HTTP dependency closure changes;
+application grammar, generated authority, provider/Worker contracts, Python
+implementation, benchmark workloads and thresholds remain unchanged. Fresh
+native package builds and complete staged/release evidence remain required.
