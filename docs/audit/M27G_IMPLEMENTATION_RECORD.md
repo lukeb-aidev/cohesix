@@ -750,3 +750,60 @@ The Darwin baseline is unchanged byte-for-byte; Linux has its own reviewed
 header image. No product code, native font choice or comparison tolerance changes.
 Compatibility review: all host tools, Python SDK and benchmark workloads retain
 their existing interfaces and behavior; only the package presentation test changes.
+
+## Release installation and physical input follow-through
+
+Title/ID: m27g-release-installation-follow-through
+Milestone: 27g / m27g-assembled-journeys-and-recovery; m27g-adoption-overhead-and-release-cut
+Goal: Validate delivered native archives and first-install SD behavior after the successful burn-in.
+Inputs: Immutable a3217e25 artifacts; afc37390 and 156a69ce collectors; retained b832 burn and post-burn staged results.
+Changes: Record completed installation, physical input and review evidence, and the remaining qualification frontier.
+Commands: Native `scripts/release_qualify.py host` on Mac and Linux; `media` raw readback; `pi4` first-boot/TCP qualification; current Pi trace normalization; generated/Test Plan checks.
+Checks: Archive/result/attachment digests verify; native installation and fresh exact SD boot pass; no broader release claim.
+Deliverables: Immutable results under the paths below and an updated public status.
+
+- `out/m27g/macos-package-a3217e25-06/qualification/result.json`: PASS,
+  including native HVF/TCP, both packaged Python contracts and 90 UI checks.
+- `out/m27g/linux-package-a3217e25-03/qualification/result.json`: PASS on
+  Merlin2's native AArch64/KVM host, including both Python contracts and 90 UI
+  checks. Twelve project-specific presentation skips remain explicit on each host.
+  Attempt 02 retains its failed cross-platform header comparison.
+- `out/m27g/sd-write-a3217e25-02/readback/result.json`: independent raw
+  readback PASS before provisioning. Attempt 01 failed after macOS automatically
+  mounted and modified the FAT image; a temporary device-specific mount guard
+  protected the successful write/readback. It changed no global mount policy.
+- `out/m27g/pi4-sd-package-a3217e25-01/qualification/result.json`: PASS for
+  first-install provisioning, saved settings, exact a321 boot and packaged TCP.
+- `out/m27g/pi4-sd-first-boot-a3217e25-01/physical-input-result.json`:
+  149 physical keyboard bytes accepted, drained and echoed with zero drops;
+  linked-runtime parser and post-diag liveness pass. The operator confirmed
+  successful up/down arrows. The retained HDMI recording and stills show legible
+  output. Current normalization yields five owner/descriptor/DMA proofs and zero
+  invalid counter records. Missing timer-summary proof and under-load input
+  coverage are not inferred from these observations.
+- `out/m27g/installation-qualification-a3217e25-01/result.json` independently
+  revalidates all three canonical result records and every retained attachment.
+- `out/m27g/release-report-b832-02/` adds measured verification, delegated
+  gateway and provider dry-run costs to the retained native/workflow report, with
+  separate claim classes and source hashes. Interrupted maintainer preparation
+  is not presented as a novice first-use timing study.
+
+The first SD boot completed 1,024 raw requests with no errors: 663.179 requests/s
+and 4.49725 ms p95. This is one observed GENET run, not the required multi-boot
+performance or full pressure/repeatability result. Its preceding ICMP check
+proved reachability, not the separate cold-neighbor ARP gate. Dedicated en8
+capture succeeded; the attempted en0 capture failed on bpf3 permissions.
+
+Lukas Bower confirmed human reviewer sign-off for the exact main-to-156a69ce
+Rust diff in `out/m27g/release-review-156a69ce-01/human-review.json`. This does
+not approve incomplete release gates. The successful b832 two-hour runtime and
+post-burn staged results remain unchanged; collector fixes do not restart it.
+
+Remaining blockers include strict-profile pressure setup: the legacy control
+path used by population/lifecycle setup is disabled in production, while its
+253 population admissions exceed the selected 64-entry intent table. This
+mismatch requires explicit authority/profile/harness reconciliation; disabling
+production controls, masking refusals or lowering the required population is
+not a passing result. Physical Wi-Fi/repeatability, complete target acceptance,
+matched native pressure and final promotion remain open. No release archive has
+been promoted and Milestone 27g remains In Progress.

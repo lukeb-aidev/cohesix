@@ -12247,6 +12247,11 @@ Deliverables: Complete operator controls and accessibility evidence, alongside t
 
 **Status:** In Progress — integrated Release A qualification, started 20 September 2026.
 
+The repaired two-hour burn-in and subsequent five-stage QEMU/Pi plans pass.
+Extracted Mac/Linux installation, SD readback and fresh physical USB/HDMI checks
+pass. Pressure/profile integration, remaining hardware/repeatability and final
+release promotion remain open; these partial results do not close the milestone.
+
 **Prerequisites:** completed 27b, 27c, 27d, 27e and 27f.
 
 **Goal:** Qualify the exact assembled next release across complete CUDA and
