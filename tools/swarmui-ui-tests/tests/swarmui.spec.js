@@ -907,7 +907,8 @@ test("Replay header snapshot matches baseline", async ({ page }, testInfo) => {
   );
   const banner = page.locator("header.appbar");
   await expect(banner).toBeVisible();
-  await expect(banner).toHaveScreenshot("swarmui-banner.png");
+  // Spectrum inherits the native system font stack on each supported host.
+  await expect(banner).toHaveScreenshot(`swarmui-banner-${process.platform}.png`);
 });
 
 test("Responsive topbar snapshot matches baseline", async ({

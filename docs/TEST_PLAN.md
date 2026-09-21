@@ -3223,6 +3223,10 @@ Extract each archive into a fresh directory outside the source checkout and
 outside `releases/`. Keep the original tarball beside its extracted folder.
 Do not reuse repository binaries, a prior release extraction, or a rebuilt guest.
 Prepare Python and the existing Playwright dependencies on each host;
+The WebKit desktop header uses separately reviewed macOS and Linux image
+baselines because Spectrum inherits each host's native font stack. Keep the
+existing pixel tolerance and shared responsive baselines; review text, controls,
+clipping and alignment before accepting a new platform baseline.
 Linux also requires `xvfb-run`. Configure `COH_AUTH_TOKEN` or
 `COHSH_AUTH_TOKEN` securely in the environment; it is never recorded in argv.
 

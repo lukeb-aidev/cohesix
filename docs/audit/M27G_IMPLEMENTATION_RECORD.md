@@ -728,3 +728,25 @@ record: the shell exited before its children and its logs were not final when
 hashed. Graceful QEMU monitor exit now precedes capture drainage; failed
 shutdown is a qualification failure. This is installation/presentation proof,
 not native desktop workflow or pressure acceptance.
+
+## Native Linux package header baseline
+
+Title/ID: m27g-native-package-header-baseline
+Milestone: 27g / m27g-assembled-journeys-and-recovery
+Goal: Compare the packaged header against its supported native host rendering.
+Inputs: Exact a3217e25 Mac/Linux archives; Linux package attempt 02; afc37390 collector.
+Changes: The desktop header snapshot selects a reviewed Darwin or Linux baseline.
+Commands: Native Playwright header tests on both hosts, followed by the exact Linux archive qualifier.
+Checks: Existing 1% pixel tolerance, viewport and responsive checks remain unchanged.
+Deliverables: Native platform baselines and retained package qualification logs.
+
+Linux attempt 02 passed 89 UI checks and failed the shared header image by 870
+pixels. The packaged font assets loaded on both hosts. Computed styles selected
+Spectrum's native system font stack; measured button widths differed by about
+five pixels between macOS and Linux. Visual review found the same text, controls,
+height and layout without clipping. Preserve the failed comparison and its
+font/geometry probes under `out/m27g/linux-package-a3217e25-02/ui-failure/`.
+The Darwin baseline is unchanged byte-for-byte; Linux has its own reviewed
+header image. No product code, native font choice or comparison tolerance changes.
+Compatibility review: all host tools, Python SDK and benchmark workloads retain
+their existing interfaces and behavior; only the package presentation test changes.
