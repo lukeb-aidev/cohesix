@@ -155,6 +155,14 @@ product implementation.
 - Narrow lint allowances to the smallest justified scope and document the
   reason. Use `cfg` for genuine target/feature differences; do not suppress
   diagnostics to conceal unexplained dead code or incomplete integration.
+- Use unambiguous encodings for composite identity, deduplication, and
+  correlation keys. Preserve persisted identity semantics when formats change.
+- Distinguish confirmed success, already-satisfied state, deterministic refusal,
+  and uncertain outcome using the provider contract and observed state. Do not
+  invent transition evidence or blindly replay uncertain side effects.
+- Keep terminal execution status separate from outstanding recovery or
+  result-delivery obligations. Preserve those obligations durably across
+  restarts and retention cleanup; retry delivery without repeating side effects.
 
 ## Atomic work
 
