@@ -157,12 +157,23 @@ successful command or test count is not a coverage argument.
   milestone/release selection, whole-file hashes or expiry. `DD_MILESTONE_ID`
   is obsolete. No other finding, target evidence or staged prerequisite is
   waived; a demonstrated IPC regression follows the ordinary finding lifecycle.
-- Human Rust review remains separate. The historical [M27](audit/DD30_M27_APPROVAL.toml)
-  and [M27a](audit/DD30_M27A_APPROVAL.toml) approvals can be checked explicitly
-  with `scripts/ci/due_diligence_gate.sh --check-rust-review 27|27a`. The check
-  binds review to the original implementation and ignores historical DD30
-  expiry. Future implementation requires its own normal review, with no new
-  DD30 approval record. A finding preflight alone establishes no Rust sign-off.
+- Technical Rust review remains required and may be agent-led, including
+  independent review where required. Individual changes, commits, merges and
+  component/milestone acceptance do not require human sign-off. Follow the
+  [validation matrix and merge baseline](../CONTRIBUTING.md#5-validate-locally)
+  and [Test Discipline](CODING_GUIDELINES.md#test-discipline); existing safety,
+  scope, exception and evidence controls remain mandatory.
+- Only an overall assembled Cohesix release requires explicit approval by a
+  named human release owner before publication or promotion. Bind approval to
+  the exact source/artifacts, evidence, limitations and residual risks. Agent
+  review or a passing gate cannot supply release approval. Runtime capability,
+  deployment and physical-operation authority checks remain unchanged.
+- Historical [M27](audit/DD30_M27_APPROVAL.toml) and
+  [M27a](audit/DD30_M27A_APPROVAL.toml) human approvals can be checked explicitly
+  with `scripts/ci/due_diligence_gate.sh --check-rust-review 27|27a`. This binds
+  only their original implementations and ignores historical DD30 expiry; it
+  is not a recurring per-change or milestone gate. No new DD30 approval record
+  is required. A finding preflight is neither code review nor release sign-off.
 - For this M27a completion run, the owner's later instruction is: “Only run
   tests required to mark this milestone ‘Complete’, not the full suite”.
   [M27A_COMPLETION_EVIDENCE.md](audit/M27A_COMPLETION_EVIDENCE.md) maps the

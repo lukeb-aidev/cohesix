@@ -20,13 +20,18 @@ evidence terms.
 
 Read these sources in order:
 
-1. [`AGENTS.md`](AGENTS.md) — normative build charter and merge blockers.
+1. [`AGENTS.md`](AGENTS.md) — normative build charter and task routing.
 2. [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) — active milestones and task
    authorization.
 3. The contract document for the surface being changed, starting from the
-   [README documentation map](README.md#documentation).
+   charter's task routes or [README documentation map](README.md#documentation).
 4. The selected source manifest, resolved manifest, and generated outputs when
    behavior is profile-controlled.
+
+Confirm the requested branch, worktree changes and exact execution profile before
+editing. Preserve unrelated changes and retained evidence. Read applicable local
+instructions and use an existing relevant skill or maintained workflow; neither
+can waive the charter or substitute for actual verification.
 
 Every contribution must cite the exact active milestone or submilestone and
 task title/ID that authorizes it. If no active task covers the change, update
@@ -34,9 +39,11 @@ and review the build plan first. Do not present cleanup, preparation, or future
 work as authorization. A direct governance-repair task may reconcile canonical
 documents without authorizing unrelated product implementation.
 
-Use the task template in `AGENTS.md` without changing its fields. Keep the
-change atomic: one stated goal, its applicable tests/evidence, any required
-regeneration, and the matching documentation.
+Use the [task record](#task-record) without changing its fields. Keep the change
+atomic: one stated goal, its applicable tests/evidence, any required regeneration,
+and matching documentation. Explain the changed invariants and rationale, not
+just the files. Record material AI assistance in the task/review record, not
+source headers, and preserve licensing and provenance.
 
 ## 2. Preserve Cohesix invariants
 
@@ -55,7 +62,7 @@ particular:
 - CUDA, NVML, model runtimes, training, and inference remain host-side.
 - Memory, queues, retries, timeouts, and work are explicitly bounded.
 - User-controlled frames, paths, JSON, tokens, and configuration are validated
-  and fail with typed, deterministic errors.
+  before their resource use and fail with typed, deterministic errors.
 - Secrets are supplied through deployment configuration or environment
   variables; examples must not normalize placeholder credentials.
 
@@ -82,31 +89,69 @@ faithful to the existing protocol and authority model.
 ## 4. Implement and document the change
 
 - Follow idiomatic Rust, Python PEP 8 with type hints, and the repository's
-  existing patterns.
-- Add or update tests only for distinct touched invariants under the Test
-  Discipline in `AGENTS.md`, including relevant invalid and boundary inputs.
-  Do not duplicate target behavior in host mocks merely because code changed.
-- Keep `unsafe` use exceptional and document each block with a precise
-  `SAFETY:` invariant. Do not increase risk indicators without the exception
-  process defined in `AGENTS.md`.
+  existing patterns. Apply [Coding Guidelines](docs/CODING_GUIDELINES.md).
+- Add or update tests only for distinct touched invariants under
+  [Test Discipline](docs/CODING_GUIDELINES.md#test-discipline), including relevant
+  invalid and boundary inputs. Do not duplicate target behavior in host mocks.
+- Keep `unsafe` exceptional and apply the complete
+  [safety and risk controls](docs/CODING_GUIDELINES.md#safety-and-risk-controls).
+  The findings/exception ratchet is unchanged; counts are not optimisation targets.
 - Preserve `ACK`/`ERR`/`END`, NineDoor errors, namespace layouts, and `/proc`
   formats unless the full breaking-change process is authorized.
-- Update public docs in the same change as public behavior. Describe what the
-  selected profiles build today, and keep planned work clearly labelled.
-- Retain concise author, purpose, and current-year Lukas Bower copyright
-  metadata in human-authored, comment-capable files. Do not make commentless
-  formats invalid or invent metadata sidecars solely to satisfy this rule.
+- Any material change requires the charter's complete host-tool, Python and
+  benchmark compatibility review. Record reviewed surfaces needing no change;
+  update every affected implementation, contract, test/fixture and reference.
 - Remove only artifacts made obsolete by the scoped change. Do not fold
   unrelated cleanup into the contribution.
 
+### Documentation and metadata
+
+Write each reference for its purpose: architecture explains components and trust
+boundaries; guides explain operations; help indexes commands; manuals explain full
+usage, realistic examples and recovery. Integrate changed behavior into its topic
+and replace obsolete explanations. Keep milestone chronology and qualification
+history in build, audit or release records, not appended to user references.
+
+Update affected root-shell/cohsh help, manuals, SwarmUI help, host CLI help and
+public guides in the same change as public behavior. Review examples, arguments,
+defaults, authority, errors and feature/transport restrictions. Shared manual
+content has one source; surface-specific text differs only for real capabilities.
+
+Human-authored, comment-capable files retain concise Author, Purpose and
+current-year Lukas Bower copyright metadata. Keep Purpose informative, not a
+restatement of the filename. Do not add invalid comments, invented fields or
+metadata sidecars to commentless formats; use existing package metadata or the
+owning documentation. Generated, vendored and immutable release files retain
+their authoritative format. Preserve useful API and safety documentation;
+explain contracts, constraints and non-obvious choices rather than narrating
+syntax or inventing design history. Do not credit tools in file headers.
+
+### Script lifecycle
+
+Tracked `scripts/` must implement a documented community/developer workflow,
+a canonical CI/test/evidence gate, or support invoked by a tracked build,
+release or operator entry point. Temporary probes, one-off reproducers, scratch
+generators and ad-hoc wrappers belong in ignored `out/scripts/` or an OS temporary
+directory. Promote a script only with its owning call site or documentation,
+focused tests where its logic merits them, and removal of the superseded path
+in the same change.
+
 ## 5. Validate locally
 
-During target development, use the non-claiming convergence workflow and
-changed-path selection defined by `docs/TEST_PLAN.md` before broad closure.
-Convergence evidence never replaces acceptance evidence.
+The matrix below owns contribution-level validation. TEST_PLAN's
+[action catalog](docs/TEST_PLAN.md#canonical-action-catalog) owns staged commands,
+claim selection and evidence; it is not replaced by a second command inventory.
+
+| Stage or change | Required work | What it cannot establish |
+| --- | --- | --- |
+| Development iteration | Select the smallest meaningful checks for every affected contract/profile. For target work, follow non-claiming target-first convergence and its stop-at-first-failure rule. | Merge, milestone or release acceptance by itself. |
+| Rust merge acceptance | Code review, the complete baseline below, exact affected host/target compilation and required changed-surface evidence. | Target or release claims not exercised by that evidence. |
+| Documentation/policy-only or non-Rust change | Applicable documentation, metadata, generated-consistency, link and surface checks. No unrelated Rust compilation requirement. | Runtime verification or a waiver of applicable checks. |
+| Component/milestone acceptance | Every BUILD_PLAN definition-of-done check and the applicable TEST_PLAN evidence at exact source/profile identity. | Acceptance of untested targets or of the assembled release. |
+| Overall release | Complete applicable staged, conditional, hardware, pressure/repeatability, due-diligence and bundle/promotion evidence, then named human release-owner sign-off. | Approval of unsupported claims or fabricated/relabeled evidence. |
 
 Before merging AI-assisted Rust, run the repository baseline from the workspace
-root:
+root. The charter's relocation does not remove or change these gates:
 
 ```bash
 cargo fmt --all -- --check
@@ -121,45 +166,84 @@ scripts/ci/test_plan_run.sh --list
 git diff --check
 ```
 
-Documentation-only and non-Rust changes run their applicable documentation,
-metadata, generated-consistency, link, and surface checks; do not run unrelated
-Rust commands merely to satisfy a generic checklist.
+`scripts/check-generated.sh` invokes the Test Plan consistency check; record that
+invocation rather than rerunning an identical check only to satisfy both listings.
+Any evidence reuse must follow TEST_PLAN's immutable source/profile/resume rules.
+A subset used during development does not waive final merge obligations.
 
-Focused component milestone closure follows all checks assigned by
-`docs/BUILD_PLAN.md` and the applicable `docs/TEST_PLAN.md` evidence; it does
-not establish staged target or release acceptance.
+The current GitHub `ci` workflow is a smaller health check, not execution of this
+entire baseline. Its weekly/manual dependency audit does not silently waive the
+pre-merge audit requirement. Complete and record the required checks not performed
+by CI; do not describe unexecuted checks as passing. The actual division is in
+[GitHub Actions gate mapping](docs/TEST_PLAN.md#github-actions-gate-mapping).
 
 Run the complete staged Test Plan with a unique evidence directory when the
-active task or `docs/TEST_PLAN.md` requires staged acceptance, and before any
-release claim:
+active task or TEST_PLAN requires staged acceptance, and before any release claim:
 
 ```bash
-scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>
+scripts/ci/test_plan_run.sh --list
+scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>
+scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>
 ```
 
-Examples of additional evidence include QEMU transcripts for target behavior,
-Pi 4 serial and packet captures for hardware claims, `.coh` fixtures for
-console grammar, negative Secure9P tests for protocol changes, and release
-checks for bundle changes. Repository-only tests are not Pi 4 hardware proof.
+Select the applicable targets; these examples do not turn a host-only change into
+a physical-Pi claim. All targets required for an overall release remain mandatory.
+Examples of additional evidence include QEMU transcripts, fresh Pi serial/packet
+captures, `.coh` fixtures, negative Secure9P tests and bundle checks. Repository-only
+tests are not Pi proof. Preserve exact source/image/target provenance and original
+failed attempts.
 
-If a baseline command fails for a pre-existing reason, record the exact command
-and failure separately. A new failure in the changed surface blocks review.
+If a baseline fails for a pre-existing reason, record its exact command and failure
+separately. A new failure in the changed surface blocks review. Missing hardware,
+credentials or tooling leaves the corresponding check blocked/unexecuted; disclose
+it rather than weakening assertions or claiming acceptance.
 
 ## 6. Submit a reviewable change
 
 The pull request description should include:
 
 - exact milestone/submilestone and task title/ID;
-- goal and user-visible behavior;
+- goal, changed invariants, rationale and user-visible behavior;
 - files and generated artifacts changed;
-- authority, attack-surface, memory-bound, and determinism impact;
-- commands run and durable evidence paths;
-- known limitations or proof boundaries.
+- authority, attack-surface, memory-bound and determinism impact;
+- commands run, actual results and durable evidence paths;
+- known limitations, proof boundaries and material AI assistance.
 
-Keep commits intentional and do not include local build products, credentials,
-or unrelated worktree changes. Release-bundle source changes must follow the
-versioning rule in `AGENTS.md`.
+Individual changes, commits, merges and component/milestone acceptance do not
+require human sign-off. Technical review may be agent-led, including an independent
+review where required. Safety arguments, test evidence, scope and exception controls
+remain mandatory. No agent may invent an approval or mark its own output as human-reviewed.
+
+Only the overall assembled Cohesix release needs explicit approval by a named human
+release owner before publication or promotion. Bind that approval to the exact
+source/artifact identities, evidence, limitations and residual risks. No separate
+human approval of each constituent change is required. Historical approvals remain
+valid only as records of their original scope. This policy does not remove runtime
+capability, deployment-credential or physical-operation authority checks.
+
+Keep commits intentional and do not include local build products, credentials or
+unrelated worktree changes. Code changes under `releases/` increment the minor
+version and update release directory/tarball names under AGENTS.
 
 Use GitHub Issues for reproducible, non-sensitive defects and scoped design
 discussion. Include the smallest reproduction, selected profile, manifest
 fingerprint where relevant, and evidence that another contributor can verify.
+
+### Task record
+
+Use these unchanged fields, formerly printed in the root charter. Record rationale,
+AI assistance and proof limits within the appropriate fields or review description.
+Planner, Builder and Auditor are contribution roles; Queen and Workers are system
+roles. BUILD_PLAN must explicitly introduce any additional role.
+
+```text
+Title/ID: <slug>
+Milestone: <exact milestone/submilestone and task title/ID>
+Goal: <one sentence>
+Inputs: <artifacts, versions, paths>
+Changes:
+  - <file> — <summary>
+Commands: <exact shell commands for the scoped host/target>
+Checks: <deterministic success criteria>
+Deliverables: <files, logs, doc updates>
+```

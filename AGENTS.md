@@ -1,338 +1,197 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Define the normative Cohesix build charter, scope, and guardrails for contributors. -->
+<!-- Purpose: Define the normative Cohesix charter and route contributors to task-specific contracts. -->
 <!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter
-You are an OS designer and expert in seL4 and Rust on aarch64.
 
-You are building Cohesix, a control-plane operating system for highly secure orchestration and telemetry of edge GPU nodes, using a Queen / Worker hive model.
+Cohesix is a Rust/seL4 control-plane OS for bounded, capability-scoped orchestration
+and telemetry of edge GPU nodes, using a Queen / Worker hive model. This charter
+sets repository-wide invariants; the linked owners supply mandatory detail for
+the affected work. A prose requirement is not evidence that CI enforces it.
 
-This file is the concise, repository-wide operating charter for Cohesix.
-Violations block merge. Detailed contracts live in the authoritative documents
-listed below; this file routes to them instead of duplicating them.
+## Start here
+
+1. Confirm the requested branch, worktree changes, affected component and exact
+   host/target profile. Preserve unrelated edits, logs and immutable evidence;
+   do not reset, clean, switch branches or overwrite artifacts to simplify a task.
+2. Read the relevant [BUILD_PLAN](docs/BUILD_PLAN.md) task and selected manifest.
+   Implementation must cite its exact active milestone/submilestone and task ID.
+   Read applicable local instructions and the contracts below, not every document.
+3. Follow [CONTRIBUTING](CONTRIBUTING.md) for atomic changes and validation, and
+   [Coding Guidelines](docs/CODING_GUIDELINES.md) for Rust and test discipline.
+   Reuse an applicable repository skill or maintained entry point; neither can
+   waive the charter, task scope or evidence requirements.
+4. Choose the validation lane before editing. Use the Test Plan's action catalog
+   and changed-path selection; report commands, results, proof limits and blockers.
+
+| Work | Required starting points |
+| --- | --- |
+| Host tools, Python or UI | [HOST_TOOLS](docs/HOST_TOOLS.md), affected surface contract, focused host checks in [TEST_PLAN](docs/TEST_PLAN.md) |
+| Root, service or Worker runtime | [ARCHITECTURE](docs/ARCHITECTURE.md), [ROLES_AND_SCHEDULING](docs/ROLES_AND_SCHEDULING.md), exact-profile target convergence |
+| Drivers, timers, DMA or physical Pi | [DRIVERS](docs/DRIVERS.md), [HARDWARE_BRINGUP](docs/HARDWARE_BRINGUP.md), fresh Pi evidence for physical claims |
+| Generated contracts or protocols | Selected `configs/root_task*.toml`, resolved manifest, compiler IR and [INTERFACES](docs/INTERFACES.md) |
+| Docs, policy or overall release | [CONTRIBUTING validation](CONTRIBUTING.md#5-validate-locally), [TEST_PLAN](docs/TEST_PLAN.md); no unrelated Rust build for documentation-only work |
 
 ## Authority and conflict resolution
 
-Apply the authority that owns the question; no lower-level source can waive a
-repository-wide invariant or act outside its stated domain:
+Use the authority that owns the question; lower-level guidance cannot waive
+repository invariants or act outside its domain:
 
-1. **Repository invariants:** this charter. **Scope and milestone legality:**
-   this charter and
-   [BUILD_PLAN.md](docs/BUILD_PLAN.md). Cite the exact active
-   milestone/submilestone and task title/ID for implementation work.
-2. **Generated/as-built behavior:** the selected `configs/root_task*.toml`
-   source manifest, its resolved manifest, selected seL4 build outputs, and
-   `coh-rtc` generated artifacts.
-3. **Surface contracts:** the most specific document for the affected
-   architecture, interface, driver, security, scheduling, or operator surface.
-4. **Testing and evidence:** [TEST_PLAN.md](docs/TEST_PLAN.md) governs selection,
-   execution order, target authority, provenance, convergence, and acceptance.
+1. This charter owns invariants; it and BUILD_PLAN own milestone legality.
+2. The selected source/resolved manifest, seL4 build outputs and `coh-rtc`
+   artifacts own generated/as-built behavior.
+3. The most specific architecture, interface, driver, security, scheduling or
+   operator document owns that surface's contract.
+4. TEST_PLAN owns test selection, execution order, target authority, provenance,
+   convergence and acceptance.
 
-Generated output cannot waive this charter or activate milestone scope; surface
-documents cannot contradict selected generated/as-built truth; test
-documentation cannot override BUILD_PLAN milestone legality. If canonical
-authorities disagree, stop and reconcile them in the same scoped change before
-implementation or claims; do not choose whichever rule is more convenient.
-
-A direct task to repair canonical governance or resolve a contradiction may
-change the governing documents atomically. It does not authorize unrelated
-product implementation.
+Generated output cannot activate scope or waive this charter. Surface documents
+cannot contradict selected as-built truth; test documents cannot override
+milestone legality. Stop and reconcile conflicting canonical authorities in the
+same scoped change, rather than choosing the convenient rule. A direct task to
+repair governance may change those documents atomically, not unrelated product code.
 
 ## Scope and targets
 
-- Primary development host: macOS 26 on Apple Silicon, using
-  [TOOLCHAIN_MAC_ARM64.md](docs/TOOLCHAIN_MAC_ARM64.md).
-- Target VM: QEMU `aarch64/virt` with GICv3.
-- Target hardware: Raspberry Pi 4 via Pi firmware -> U-Boot -> seL4 binary
-  image -> root task. UEFI/AWS work is inactive unless BUILD_PLAN authorizes it.
-- Kernel: upstream seL4, external and never vendored.
-- Userspace: pure Rust root task, compiler-declared isolated driver/service/
-  Worker images, NineDoor, and host-side tools.
-- `In Progress` tasks are active. `Reopened` tasks authorize only the defect,
-  regression, and evidence closure needed to restore their stated definition of
-  done. Use the most specific active task; a downstream-discovered defect cites
-  both its discovery milestone and the reopened restoration task.
-  Pending/future tasks are inactive.
-- Do not disguise cleanup, preparation, refactoring, or future-proofing as
-  milestone authority. Do not perform unrelated cleanup.
+- Primary development host: Apple Silicon/macOS 26 under
+  [TOOLCHAIN_MAC_ARM64](docs/TOOLCHAIN_MAC_ARM64.md). Confirm the actual environment.
+- VM: QEMU `aarch64/virt`, GICv3. Hardware: Pi 4 firmware -> U-Boot -> seL4 -> root.
+  UEFI/AWS work is inactive unless BUILD_PLAN authorizes it. seL4 stays external.
+- `In Progress` tasks are active. `Reopened` permits only the stated defect,
+  regression and evidence restoration. Cite both discovery and restoration tasks
+  for downstream-discovered defects. Pending/future tasks are inactive.
+- Cleanup, refactoring, preparation or future-proofing creates no scope authority.
 
 ## Durable architecture and security boundaries
 
-- VM artifacts remain `no_std`; no POSIX or libc façade, in-VM CUDA/NVML,
-  hidden RPC, or undeclared shared-memory authority is permitted.
-- The authenticated root-task console is the only in-VM TCP listener. Control
-  uses documented Secure9P namespaces, console grammar, or compiler-declared
-  driver/service ABIs with role-scoped capability authority.
-- All target physical device discovery, mapping, DMA, IRQ, and resource admission
-  goes through HAL. Target physical drivers run as manifest-declared isolated
-  runtimes; root may admit, supervise, and diagnose them but cannot own their
-  steady-state device path.
-- A compiler-declared target driver owner is solely responsible for physical
-  issue, completion, retry, and recovery. DPCs, helpers, compatibility paths, and
-  fallbacks cannot operate the same device independently.
-- Target hardware elapsed-time logic uses exported `CNTVCT_EL0` only when enabled
-  by the selected seL4 build and scales from generated `TIMER_CLOCK_HZ`. No
-  `CNTPCT_EL0`, EL0 timer-control access, dummy time, or CPU-speed spin timing.
-- Rootfs CPIO remains below 4 MiB. Secure9P remains 9P2000.L with
-  `msize <= 8192`, walk depth <= 8, no `..`, and no fid reuse after clunk.
-- Worker behavior must be documented as built. Worker GPU access remains
-  host-side; target Workers handle only declared ticket, lease, and telemetry
-  contracts.
-- Validate all user-controlled input before using it. Check nested lengths,
-  counts, offsets, arithmetic, and resource limits before the allocation, copy,
-  indexing, or work they control; outer frame bounds do not validate inner
-  fields. Fail with typed deterministic errors that identify the actual failure.
-  Never hard-code secrets.
-- Scheduling budgets, namespaces, driver mechanics, and Pi evidence follow
-  their owning documents in the map below.
-- Without an authenticated `cohsh`/TCP session, service physical operator input
-  first: serial, then local-seat USB keyboard, then HDMI feedback when present.
-- With an authenticated `cohsh`/TCP session, give that primary shell bounded
-  response-flush priority without starving serial/local-seat input, emergency
-  diagnostics, or fatal status.
-- Under load, preserve command liveness and bounded `ACK`/`ERR`/`END` on every
-  active operator surface. Reduce only nonessential mirroring, redraws,
-  progress breadcrumbs, verbose telemetry, and large tails.
-- Keep serial and local-seat operators informed with rate-limited, bounded
-  `idle`, `busy`, `high-load`, or `overload` summaries and the strongest known
-  blocker; status reporting cannot create unbounded queues.
-- Prefer the simplest design that preserves seL4 semantics, deterministic
-  bounds, and manifest fidelity. Prevent stack overflow and memory corruption;
-  reuse existing instrumentation before adding carefully bounded diagnostics.
+- VM artifacts remain pure Rust and `no_std`: no POSIX/libc facade, in-VM CUDA/NVML,
+  hidden RPC or undeclared shared-memory authority. GPU access remains host-side;
+  target Workers serve only their declared ticket, lease and telemetry contracts.
+- The authenticated console is the sole in-VM TCP listener. Control uses documented
+  Secure9P namespaces, console grammar or compiler-declared driver/service ABIs
+  with role-scoped capabilities.
+- Physical discovery, mapping, DMA, IRQ and admission go through HAL. Manifest-
+  declared isolated runtimes own steady-state devices; root admits, supervises
+  and diagnoses. Only the declared owner may issue, complete, retry or recover
+  device operations; helpers and fallbacks cannot become competing owners.
+- Target elapsed time uses exported `CNTVCT_EL0` only when the selected seL4 build
+  enables it, scaled by generated `TIMER_CLOCK_HZ`. No `CNTPCT_EL0`, EL0 timer
+  control, dummy time or CPU-speed spin timing.
+- Rootfs CPIO stays below 4 MiB. Secure9P stays 9P2000.L: `msize <= 8192`, walk
+  depth <= 8, no `..`, and no fid reuse after clunk.
+- Validate nested lengths, counts, offsets, arithmetic and resource limits before
+  the allocation, copy, indexing or work they control. Outer bounds do not validate
+  inner fields. Return typed deterministic errors; never hard-code secrets.
+- Without authenticated cohsh/TCP, prioritise serial, then local-seat USB input,
+  then HDMI feedback. With authenticated cohsh/TCP, give its response flush bounded
+  priority without starving physical input, emergency diagnostics or fatal status.
+- Under load, preserve command liveness and bounded ACK/ERR/END on every active
+  surface. Reduce only nonessential mirroring, redraws, progress, verbose telemetry
+  and large tails. Report bounded, rate-limited idle/busy/high-load/overload status
+  and the strongest known blocker to serial/local-seat operators.
+- Preserve seL4 semantics, manifest fidelity and deterministic bounds. Prevent
+  stack overflow and memory corruption; reuse existing bounded diagnostics.
 
 ## Compiler truth, interfaces, and documentation
 
-- Never hand-edit generated code, manifests, policy, scripts, or generated
-  documentation blocks. Change IR, validate it, regenerate every output, and
-  update affected source, fixtures, and docs together.
-- The selected `SEL4_BUILD_DIR` or equivalent profile build directory defines
-  kernel header, object-size, slot-layout, and configuration truth.
-- Documentation describes generated/as-built truth, not aspiration. Drift is a
-  defect even when CI does not yet detect it.
-- Keep root-shell help, cohsh help and manuals, SwarmUI help, host-tool CLI help,
-  and public guides aligned with the current implementation in the same change.
-  Review every affected surface, including examples, arguments, defaults,
-  authority requirements, errors, and feature/transport restrictions. Shared
-  manual content has one source; surface-specific help may differ only to
-  describe that surface's actual capabilities and gates.
-- Write each reference for its purpose: architecture explains components and
-  trust boundaries; guides explain operations; help indexes commands; manuals
-  explain complete usage with realistic examples and recovery guidance. Integrate
-  new behavior into the relevant topic and replace obsolete explanations.
-  Do not append milestone updates or changelog entries to these references;
-  retain chronology and qualification history in build, audit, or release records.
-- Changes to console grammar, NineDoor errors, namespace or `/proc` formats,
-  role authority, or generated interfaces are breaking. Update all affected
-  fixtures, generated artifacts, tests, and canonical docs; bump the manifest
-  schema when the changed contract is manifest/generated controlled.
-- Human-authored files in comment-capable formats retain concise Author,
-  Purpose, and current-year Lukas Bower copyright metadata. Do not add invalid
-  comments, invented fields, or sidecars to commentless formats; use existing
-  package metadata or the governing documentation instead. Generated, vendored,
-  and immutable release files retain their authoritative format.
-- Comments and documentation must describe contracts, invariants, authority, or
-  failure behavior—not generic file-summary boilerplate. Explain non-obvious
-  choices and limits; retain useful public API and safety documentation. Do not
-  narrate syntax or invent design history. Do not credit OpenAI, Codex, or other
-  tools in file headers.
-- `.coh` scripts follow [USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md).
-- Any code change under `releases/` increments the minor version and updates
-  the release directory and tarball names.
+- Never hand-edit generated code, manifests, policy, scripts or documentation
+  blocks. Change IR, validate, regenerate every output and update affected
+  implementations, fixtures and docs together. The selected `SEL4_BUILD_DIR`
+  owns kernel headers, object sizes, slot layout and configuration truth.
+- Documentation describes as-built behavior, not aspiration; drift is a defect.
+  Keep affected CLI/UI help, manuals and public guides aligned. Shared manual
+  content has one source; only genuine surface differences justify variation.
+- Console grammar, NineDoor errors, namespaces, `/proc` formats, role authority
+  and generated-interface changes are breaking. Update all affected surfaces;
+  bump the manifest schema when the contract is manifest/generated controlled.
+- Follow [documentation and metadata rules](CONTRIBUTING.md#documentation-and-metadata).
+  Explain contracts and non-obvious decisions, not syntax or invented history.
+  Keep useful API/safety documentation; do not credit tools in source headers.
+- `.coh` grammar is owned by [USERLAND_AND_CLI](docs/USERLAND_AND_CLI.md).
+  Code changes under `releases/` increment the minor version and update directory
+  and tarball names; do not rewrite immutable release evidence.
 
-## Reviewable engineering
+<a id="reviewable-engineering"></a>
+## Code Review Rules
 
-- Optimise for correctness, maintainability, and review cost—not apparent human
-  authorship, code volume, or AI-detector scores. Cosmetic "humanisation" is not
-  an engineering objective and does not authorize cleanup outside task scope.
-- Code and repository-local rationale must make ownership, state transitions,
-  bounds, failure behavior, and non-obvious decisions understandable without
-  chat history. Prefer domain-specific names and the simplest idiomatic Rust
-  that preserves target constraints.
-- Introduce abstractions, traits, macros, dependencies, or new types only for a
-  concrete current need: enforcing an invariant, clarifying ownership, or
-  materially simplifying the implementation. Explicit repetition is acceptable
-  when it makes protocol layout or control flow easier to review.
-- Narrow lint allowances to the smallest justified scope and document the
-  reason. Use `cfg` for genuine target/feature differences; do not suppress
-  diagnostics to conceal unexplained dead code or incomplete integration.
-- Use unambiguous encodings for composite identity, deduplication, and
-  correlation keys. Preserve persisted identity semantics when formats change.
-- Distinguish confirmed success, already-satisfied state, deterministic refusal,
-  and uncertain outcome using the provider contract and observed state. Do not
-  invent transition evidence or blindly replay uncertain side effects.
-- Keep terminal execution status separate from outstanding recovery or
-  result-delivery obligations. Preserve those obligations durably across
-  restarts and retention cleanup; retry delivery without repeating side effects.
+- Report actionable correctness, security, reliability and compatibility issues.
+  Identify the failure condition, affected path and impact; distinguish demonstrated
+  failures from risks. Leave mechanical style to tooling; avoid speculative rewrites.
+- Optimise for correctness, maintainability and review cost, not apparent human
+  authorship, code volume or detector scores. Code and repository-local rationale
+  must explain ownership, state transitions, bounds and failures without chat history.
+- Use the simplest idiomatic Rust preserving target constraints. Add abstractions,
+  traits, macros, dependencies or types only for a current invariant, ownership
+  boundary or material simplification. Explicit protocol/control-flow repetition
+  is acceptable when easier to review. Narrow and justify lint allowances; use
+  `cfg` for genuine profile differences, not suppression to hide unfinished work.
+- Use unambiguous composite identity/deduplication/correlation encodings and
+  preserve persisted meaning when formats change.
+- Distinguish success, already-satisfied state, deterministic refusal and uncertain
+  outcome using provider contracts and observations. Never invent transition
+  evidence or blindly replay uncertain side effects.
+- Keep terminal execution separate from pending recovery/result delivery. Preserve
+  those obligations durably across restarts and retention; retry delivery, not effects.
+- Safe APIs must uphold internal unsafe preconditions. Every unsafe block and trait
+  implementation needs a precise safety argument, not a ceremonial comment. Apply
+  the full [Rust safety rules](docs/CODING_GUIDELINES.md#safety-and-risk-controls),
+  including Send/Sync evidence, transmute equivalence and the unchanged risk ratchet.
 
 ## Atomic work
 
-- Keep each change within one authorized goal. Partial or speculative changes
-  are not mergeable. The task or review record must explain changed invariants
-  and rationale, not just list files. Record material AI assistance there, not
-  in source headers; preserve licensing and provenance.
-- Tracked files under `scripts/` must implement a documented community or
-  developer workflow, a canonical CI/test/evidence gate, or support invoked by
-  a tracked build, release, or operator entry point. Temporary probes,
-  one-off reproducers, scratch generators, and ad-hoc test wrappers belong
-  under ignored `out/scripts/` (or an operating-system temporary directory),
-  never in the tracked `scripts/` tree. Promote a temporary script only with
-  its owning call site or documentation, focused tests where its logic merits
-  them, and removal of the superseded path in the same change.
-- Compile every affected implementation for its exact host/target profile.
-  Documentation-only or policy-only changes run their applicable documentation,
-  metadata, generated-consistency, and link checks; they do not invent a Rust
-  compilation requirement.
-- Add or update only the tests and target evidence required by Test Discipline
-  and TEST_PLAN. Update public documentation with public behavior or interface
-  changes.
-- Any material Cohesix change—including generated/as-built interfaces, schemas,
-  defaults, bounds, namespaces, authority, lifecycle or evidence semantics,
-  supported workflows, or performance-relevant behavior—requires a same-change
-  compatibility review of the complete host-tool suite, `tools/cohesix-py`
-  library, and performance benchmark scripts.
-- Update every affected implementation, generated contract, test or fixture,
-  benchmark workload or report schema, and document together. Record reviewed
-  surfaces requiring no change; unexplained cross-surface drift blocks merge.
+- One authorised goal per complete change. No speculative or unrelated cleanup.
+  Follow the [task record](CONTRIBUTING.md#task-record) and explain changed
+  invariants and rationale; record material AI assistance there, preserving provenance.
+- Only maintained workflows/gates or invoked support belong in tracked `scripts/`.
+  Scratch probes belong in ignored `out/scripts/` or temporary storage. Follow
+  [script lifecycle rules](CONTRIBUTING.md#script-lifecycle) before promotion.
+- Any material behavior, interface, schema, bound, authority, lifecycle, evidence,
+  workflow or performance change requires a complete host-tool, `tools/cohesix-py`
+  and benchmark compatibility review. Use the generated inventory; record unaffected
+  surfaces, and update all affected implementations, contracts, tests and docs together.
 
 ## Test Discipline
 
-- Tests preserve distinct, independently known contracts. Do not add a test
-  merely because code changed or optimize for test count.
-- Prefer small deterministic tests for parsing, bounds, arithmetic, ABI/layout,
-  serialization, policy predicates, state machines, and other pure behavior.
-- For defect fixes, seek the smallest safe reproducer or independent
-  counterexample before changing code. Exercise relevant malformed and boundary
-  inputs; resource-boundary tests must check rejection before excessive
-  allocation or work. Record when reproduction is infeasible, and distinguish
-  source-review findings from reproduced failures and verified fixes.
-- Match authority to execution: pure contracts use deterministic unit tests;
-  host-component contracts use focused host tests; QEMU-target seL4 behavior
-  requires QEMU evidence; physical Pi behavior requires fresh Pi evidence.
-  Each layer proves only what it exercises.
-- Do not model more target scheduling, IPC, capability, IRQ, DMA/cache, or
-  driver behavior in a host test than a genuine host-testable contract needs.
-  A green host simulation is not target acceptance, and target evidence does
-  not replace an unexercised pure contract test.
-- If host simulation and target evidence disagree, investigate the simulation
-  before changing target code merely to satisfy it.
-- After a target-discovered defect, add a host regression only when the cause is
-  a useful deterministic host-testable invariant. Preserve the smallest
-  independently understood invariant; do not recreate the full target scenario
-  in mocks or require a host test for every target defect.
-- Tests cannot depend on uncontrolled wall-clock time, sleeps, randomness,
-  execution order, external networks, or shared mutable state/environment
-  unless that behavior is the contract under test. Prefer fixed or injected
-  inputs; controlled time, randomness, network, filesystem, and mocks remain
-  legitimate.
-- Prefer exact assertions for exact contracts. Do not loosen assertions, widen
-  accepted outcomes, increase arbitrary retries/polling, or change expected
-  values merely to obtain PASS. Predicates, ranges, and set membership remain
-  valid when they are the contract.
-- Production constants, tables, or implementation logic are not independent
-  test oracles. Expected truth comes from an independent specification,
-  generated contract, ABI, fixture, protocol, or other authoritative source.
-- A directly affected test may be simplified, consolidated, replaced, or
-  removed only when its protection is demonstrably redundant,
-  implementation-coupled, misleading, obsolete, or superseded by stronger
-  evidence. Canonical protocol/as-built fixtures remain authoritative unless
-  their governing contract intentionally changes.
+- Preserve distinct independently known contracts, not test counts. Cover relevant
+  malformed/boundary inputs; never weaken expectations, add arbitrary retries or
+  change truth to obtain PASS. Seek a safe minimal reproducer for defects.
+- Match proof to execution: pure tests for pure contracts, host tests for host
+  behavior, QEMU for seL4 VM behavior and fresh Pi evidence for physical behavior.
+  Mocks cannot accept a target. Do not recreate the target in host simulations.
+- Apply the complete [Test Discipline](docs/CODING_GUIDELINES.md#test-discipline)
+  before changing tests; TEST_PLAN owns commands and acceptance, not those simulations.
 
 ## Convergence, acceptance, and audit closure
 
-- Non-claiming convergence diagnostics defined by TEST_PLAN may run early and
-  stop at the first failed target proof layer. They never emit or replace
-  acceptance evidence.
-- Milestone closure requires every check assigned by BUILD_PLAN and the
-  applicable evidence in TEST_PLAN, retaining exact source and host/target
-  provenance. Focused component acceptance does not establish staged target or
-  release acceptance.
-- Release claims and staged target acceptance require the complete applicable
-  staged Test Plan, exact source/image/target provenance, and all required pressure,
-  repeatability, hardware, due-diligence, and promotion evidence:
-
-  ```sh
-  scripts/ci/test_plan_run.sh --list
-  scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>
-  scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>
-  ```
-
-- Before merge, run `scripts/check-generated.sh` and
-  `scripts/ci/check_test_plan.sh`.
-- AI-assisted Rust is untrusted. Before merge, it requires code review,
-  command evidence, and:
-
-  ```sh
-  cargo fmt --all -- --check
-  cargo clippy --workspace --all-targets -- -D warnings
-  cargo check --workspace
-  cargo test --workspace
-  cargo audit
-  cargo deny check advisories
-  ```
-
-- Individual changes, commits, merges, and component or milestone acceptance do
-  not require human sign-off. Reviews may be agent-led; required independent
-  review, safety arguments, tests, evidence, and scope/exception controls remain
-  mandatory. Historical human approvals remain evidence of their original scope,
-  not a recurring per-change requirement.
-- Only an overall Cohesix release requires explicit sign-off by a named human
-  release owner before publication or promotion as a release. Approval covers
-  the assembled release, its evidence, known limitations, and residual risks,
-  and is bound to the exact source and artifact identities being released; it
-  does not require separate human approval of every constituent change. AI
-  review and automated checks cannot supply this release approval. Never
-  fabricate approvals or verification; evidence must be accessible to reviewers.
-- Every `unsafe` block and unsafe trait implementation has a precise `SAFETY:`
-  argument stating the applicable validity, lifetime, ownership, aliasing, and
-  synchronisation obligations and why they hold. Safe APIs must enforce their
-  internal unsafe preconditions; otherwise expose an explicit unsafe caller
-  contract. Comments alone do not establish safety. Every unsafe `Send`/`Sync`
-  implementation also requires concurrency evidence. `transmute` requires
-  documented ABI/layout equivalence.
-- Non-test `unwrap()` is prohibited unless impossible by construction.
-  Non-test `expect()` is limited to invariant boundaries with a precise
-  message. User input returns typed errors; do not hide failures with lossy
-  defaults.
-- Never hold a lock across `.await`. Control-plane channels require bounded
-  backpressure; spawned tasks define ownership, cancellation, and shutdown.
-- Non-test `unsafe`, `unwrap`, `expect`, and `panic!` counts cannot
-  increase without a finding in `docs/audit/findings.csv` and an approved
-  exception in `docs/audit/EXCEPTIONS.md`. Counts are risk signals, not targets;
-  do not hide operations, weaken checks, or widen unsafe scopes to improve them.
+- Use [CONTRIBUTING validation](CONTRIBUTING.md#5-validate-locally) for iteration,
+  merge, documentation-only and release obligations. All existing merge baseline,
+  generated-consistency, risk and target gates remain required; relocation is no waiver.
+- Non-claiming convergence may stop at the first failed proof layer; it never
+  supplies acceptance. Component/milestone closure requires BUILD_PLAN checks and
+  applicable TEST_PLAN evidence. Staged/release claims require the complete applicable
+  staged, pressure, repeatability, hardware, due-diligence and promotion evidence
+  with exact source/image/target identity. A green health-check CI is not that proof.
+- Individual changes, commits, merges and component/milestone acceptance need no
+  human sign-off. Reviews may be agent-led; required independent technical review,
+  safety arguments, tests, evidence and scope/exception controls remain mandatory.
+- Only an overall Cohesix release requires explicit approval by a named human
+  release owner before publication or promotion. Approval covers the assembled
+  release's exact source/artifacts, evidence, limitations and residual risks,
+  not separate approval of every change. AI and automated checks cannot provide it.
+- Preserve historical approvals at their original scope; never fabricate approvals
+  or verification. Make evidence accessible and disclose unexecuted or blocked checks.
 
 ## Task record
 
-Planner, Builder, and Auditor are the contribution roles; Queen and Workers are
-system roles. BUILD_PLAN must explicitly introduce any additional role.
-
-```text
-Title/ID: <slug>
-Milestone: <exact milestone/submilestone and task title/ID>
-Goal: <one sentence>
-Inputs: <artifacts, versions, paths>
-Changes:
-  - <file> — <summary>
-Commands: <exact shell commands for the scoped host/target>
-Checks: <deterministic success criteria>
-Deliverables: <files, logs, doc updates>
-```
+Use the unchanged fields in [CONTRIBUTING's task record](CONTRIBUTING.md#task-record).
+Planner, Builder and Auditor are contribution roles; Queen and Workers are system
+roles. BUILD_PLAN must explicitly introduce any additional role.
 
 ## Authoritative document map
 
-- Scope and milestone tasks: [BUILD_PLAN.md](docs/BUILD_PLAN.md)
-- Architecture and TCB boundaries: [ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Drivers, HAL, DMA/IRQ/cache, and timers: [DRIVERS.md](docs/DRIVERS.md)
-- Physical build/flash/acceptance: [HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md)
-- Roles, scheduling, namespaces, and operator priority:
-  [ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md)
-- External interfaces and breaking changes:
-  [INTERFACES.md](docs/INTERFACES.md),
-  [SECURE9P.md](docs/SECURE9P.md), and
-  [USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md)
-- Security and threat boundaries: [SECURITY.md](docs/SECURITY.md)
-- Host-tool catalog and composition: [HOST_TOOLS.md](docs/HOST_TOOLS.md)
-- Performance methodology and reports: [BENCHMARKS.md](docs/BENCHMARKS.md)
-- Testing and evidence: [TEST_PLAN.md](docs/TEST_PLAN.md)
-- Contribution and language guidance: [CONTRIBUTING.md](CONTRIBUTING.md),
-  [CODING_GUIDELINES.md](docs/CODING_GUIDELINES.md), and
-  [API_GUIDELINES.md](docs/API_GUIDELINES.md)
+In addition to the task routes above, consult the relevant owners:
+[SECURITY](docs/SECURITY.md) for trust boundaries;
+[SECURE9P](docs/SECURE9P.md) and [INTERFACES](docs/INTERFACES.md) for protocols;
+[BENCHMARKS](docs/BENCHMARKS.md) for measurement;
+[API_GUIDELINES](docs/API_GUIDELINES.md) for public APIs.
+Read linked contracts when their surface is affected; do not duplicate them here.
