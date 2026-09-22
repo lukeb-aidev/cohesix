@@ -88,6 +88,18 @@ def test_qemu_and_pi_contracts_are_independent_exact_targets() -> None:
         "peft.export", "peft.import", "peft.activate", "peft.rollback", "peft.release"]
 
 
+@pytest.mark.parametrize("path", [QEMU_CONTRACT, PI4_CONTRACT])
+@pytest.mark.parametrize("entries", [0, 1, 64, 512, 513, True])
+def test_profile_contract_enforces_approved_intent_capacity(path: Path, entries: int) -> None:
+    payload = _payload(path)
+    payload["authority"]["queen_dedupe_entries"] = entries
+    if type(entries) is int and entries in (1, 64, 512):
+        load_profile_contract(payload)
+    else:
+        with pytest.raises(CohesixError, match="queen_dedupe_entries"):
+            load_profile_contract(payload)
+
+
 def test_mapping_is_validation_input_not_target_identity() -> None:
     mapped = load_profile_contract(_payload(), expected_target="qemu")
     assert not mapped.establishes_target_identity

@@ -26,7 +26,7 @@ def validate_policy(manifest: dict[str, Any], *, require_production: bool = True
         raise ValueError("delegation claim class must be gateway_enforced")
     for name, low, high in (
         ("writer_epoch", 1, 2**64 - 1), ("delegated_ticket_entries", 1, 4096),
-        ("delegated_ticket_max_ttl_s", 1, 86400), ("queen_dedupe_entries", 1, 256),
+        ("delegated_ticket_max_ttl_s", 1, 86400), ("queen_dedupe_entries", 1, 512),
         ("queen_intent_max_bytes", 256, 2048), ("gpu_frame_max_bytes", 256, 8192),
     ):
         value = policy.get(name)

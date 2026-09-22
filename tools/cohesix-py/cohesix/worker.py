@@ -522,7 +522,7 @@ def load_profile_contract(
     }, "authority")
     for key, value in authority.items():
         if key in {"writer_epoch", "delegated_ticket_entries", "delegated_ticket_max_ttl_s", "queen_dedupe_entries", "queen_intent_max_bytes", "gpu_frame_max_bytes"}:
-            _bounded_int(value, key, 1, {"delegated_ticket_entries": 4096, "delegated_ticket_max_ttl_s": 86400, "queen_dedupe_entries": 256, "queen_intent_max_bytes": 2048, "gpu_frame_max_bytes": 8192}.get(key, 2**64 - 1))
+            _bounded_int(value, key, 1, {"delegated_ticket_entries": 4096, "delegated_ticket_max_ttl_s": 86400, "queen_dedupe_entries": 512, "queen_intent_max_bytes": 2048, "gpu_frame_max_bytes": 8192}.get(key, 2**64 - 1))
         elif type(value) is not bool:
             raise CohesixError("authority policy flags must be boolean")
     if not authority["delegated_rest"] or any(authority[key] for key in ("vm_verified_delegation", "production_worker_ledger", "production_driver_ledger", "structured_quarantine", "host_ai", "production_failover")):

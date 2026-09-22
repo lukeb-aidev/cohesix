@@ -39,6 +39,17 @@ def production_manifest():
     }
 
 
+@pytest.mark.parametrize("entries", [0, 1, 64, 512, 513, True])
+def test_release_intent_capacity_matches_approved_bound(entries):
+    manifest = production_manifest()
+    manifest["authority"]["queen_dedupe_entries"] = entries
+    if type(entries) is int and entries in (1, 64, 512):
+        gate.validate_policy(manifest)
+    else:
+        with pytest.raises(ValueError, match="queen_dedupe_entries"):
+            gate.validate_policy(manifest)
+
+
 def test_production_floor_and_secret_sources_fail_closed():
     manifest = production_manifest()
     gate.validate_policy(manifest)

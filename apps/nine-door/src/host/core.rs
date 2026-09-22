@@ -463,7 +463,7 @@ impl ServerCore {
     ) -> Result<(), NineDoorError> {
         if !self.sessions.is_empty()
             || policy.queen_dedupe_entries == 0
-            || policy.queen_dedupe_entries > 256
+            || policy.queen_dedupe_entries > 512
         {
             return Err(NineDoorError::protocol(
                 ErrorCode::Permission,
@@ -5207,6 +5207,36 @@ mod tests {
             .contains("audit capacity"));
         assert!(queen
             .walk(1, 3, &worker_telemetry_path("worker-1"))
+            .is_err());
+    }
+
+    #[test]
+    fn authority_capacity_matches_approved_release_a_bound() {
+        use cohesix_authority::policy::AuthorityPolicy;
+
+        for entries in [1, 64, 512] {
+            NineDoor::new()
+                .configure_authority(AuthorityPolicy {
+                    queen_dedupe_entries: entries,
+                    ..Default::default()
+                })
+                .expect("approved capacity before sessions");
+        }
+        for entries in [0, 513, u16::MAX] {
+            assert!(NineDoor::new()
+                .configure_authority(AuthorityPolicy {
+                    queen_dedupe_entries: entries,
+                    ..Default::default()
+                })
+                .is_err());
+        }
+        let server = NineDoor::new();
+        let _queen = attach_queen(&server);
+        assert!(server
+            .configure_authority(AuthorityPolicy {
+                queen_dedupe_entries: 512,
+                ..Default::default()
+            })
             .is_err());
     }
 

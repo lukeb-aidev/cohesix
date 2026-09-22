@@ -856,3 +856,12 @@ against both available and exhausted capacity; all 50 CLI harness tests pass.
 `strict-budget-diagnostic-03` independently read the live 512-entry contract,
 validated the 291-intent budget, and observed a strict Heartbeat admission reach
 READY. This bounded diagnostic does not replace full pressure qualification.
+
+Attempt `capacity-pressure-bb42de946-06` passed service faults, critical duties,
+and the complete live intent budget, then exposed an old 256-entry bound in the
+SDK profile reader. A repository-wide consumer check also found that old bound
+in the host NineDoor model and production release validator. All three now
+enforce the approved 1..=512 contract, with independent endpoint, overflow and
+type checks and the host's existing pre-session restriction retained. This
+completes the capacity compatibility correction across runtime, compiler, SDK,
+host model, benchmark and release validation; it does not raise other quotas.
