@@ -78,7 +78,10 @@ product implementation.
 - Worker behavior must be documented as built. Worker GPU access remains
   host-side; target Workers handle only declared ticket, lease, and telemetry
   contracts.
-- Validate all user-controlled input and fail with typed deterministic errors.
+- Validate all user-controlled input before using it. Check nested lengths,
+  counts, offsets, arithmetic, and resource limits before the allocation, copy,
+  indexing, or work they control; outer frame bounds do not validate inner
+  fields. Fail with typed deterministic errors that identify the actual failure.
   Never hard-code secrets.
 - Scheduling budgets, namespaces, driver mechanics, and Pi evidence follow
   their owning documents in the map below.
@@ -128,16 +131,37 @@ product implementation.
   package metadata or the governing documentation instead. Generated, vendored,
   and immutable release files retain their authoritative format.
 - Comments and documentation must describe contracts, invariants, authority, or
-  failure behavior—not generic file-summary boilerplate. Do not credit OpenAI,
-  Codex, or other tools in file headers.
+  failure behavior—not generic file-summary boilerplate. Explain non-obvious
+  choices and limits; retain useful public API and safety documentation. Do not
+  narrate syntax or invent design history. Do not credit OpenAI, Codex, or other
+  tools in file headers.
 - `.coh` scripts follow [USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md).
 - Any code change under `releases/` increments the minor version and updates
   the release directory and tarball names.
 
+## Reviewable engineering
+
+- Optimise for correctness, maintainability, and review cost—not apparent human
+  authorship, code volume, or AI-detector scores. Cosmetic "humanisation" is not
+  an engineering objective and does not authorize cleanup outside task scope.
+- Code and repository-local rationale must make ownership, state transitions,
+  bounds, failure behavior, and non-obvious decisions understandable without
+  chat history. Prefer domain-specific names and the simplest idiomatic Rust
+  that preserves target constraints.
+- Introduce abstractions, traits, macros, dependencies, or new types only for a
+  concrete current need: enforcing an invariant, clarifying ownership, or
+  materially simplifying the implementation. Explicit repetition is acceptable
+  when it makes protocol layout or control flow easier to review.
+- Narrow lint allowances to the smallest justified scope and document the
+  reason. Use `cfg` for genuine target/feature differences; do not suppress
+  diagnostics to conceal unexplained dead code or incomplete integration.
+
 ## Atomic work
 
 - Keep each change within one authorized goal. Partial or speculative changes
-  are not mergeable.
+  are not mergeable. The task or review record must explain changed invariants
+  and rationale, not just list files. Record material AI assistance there, not
+  in source headers; preserve licensing and provenance.
 - Tracked files under `scripts/` must implement a documented community or
   developer workflow, a canonical CI/test/evidence gate, or support invoked by
   a tracked build, release, or operator entry point. Temporary probes,
@@ -168,6 +192,11 @@ product implementation.
   merely because code changed or optimize for test count.
 - Prefer small deterministic tests for parsing, bounds, arithmetic, ABI/layout,
   serialization, policy predicates, state machines, and other pure behavior.
+- For defect fixes, seek the smallest safe reproducer or independent
+  counterexample before changing code. Exercise relevant malformed and boundary
+  inputs; resource-boundary tests must check rejection before excessive
+  allocation or work. Record when reproduction is infeasible, and distinguish
+  source-review findings from reproduced failures and verified fixes.
 - Match authority to execution: pure contracts use deterministic unit tests;
   host-component contracts use focused host tests; QEMU-target seL4 behavior
   requires QEMU evidence; physical Pi behavior requires fresh Pi evidence.
@@ -233,9 +262,17 @@ product implementation.
   cargo deny check advisories
   ```
 
-- Every `unsafe` block has a precise `SAFETY:` invariant. Every unsafe
-  `Send`/`Sync` implementation also requires concurrency evidence.
-  `transmute` requires documented ABI/layout equivalence.
+- Human sign-off means a named human reviewer understands the changed code and
+  its safety arguments and has assessed the applicable evidence. AI review may
+  assist but is not human sign-off; never fabricate approvals or verification.
+  Evidence must be accessible to the intended reviewer.
+- Every `unsafe` block and unsafe trait implementation has a precise `SAFETY:`
+  argument stating the applicable validity, lifetime, ownership, aliasing, and
+  synchronisation obligations and why they hold. Safe APIs must enforce their
+  internal unsafe preconditions; otherwise expose an explicit unsafe caller
+  contract. Comments alone do not establish safety. Every unsafe `Send`/`Sync`
+  implementation also requires concurrency evidence. `transmute` requires
+  documented ABI/layout equivalence.
 - Non-test `unwrap()` is prohibited unless impossible by construction.
   Non-test `expect()` is limited to invariant boundaries with a precise
   message. User input returns typed errors; do not hide failures with lossy
@@ -244,7 +281,8 @@ product implementation.
   backpressure; spawned tasks define ownership, cancellation, and shutdown.
 - Non-test `unsafe`, `unwrap`, `expect`, and `panic!` counts cannot
   increase without a finding in `docs/audit/findings.csv` and an approved
-  exception in `docs/audit/EXCEPTIONS.md`.
+  exception in `docs/audit/EXCEPTIONS.md`. Counts are risk signals, not targets;
+  do not hide operations, weaken checks, or widen unsafe scopes to improve them.
 
 ## Task record
 
