@@ -250,8 +250,8 @@ product implementation.
 
 - Before merge, run `scripts/check-generated.sh` and
   `scripts/ci/check_test_plan.sh`.
-- AI-assisted Rust is untrusted. Before merge, it requires command evidence,
-  human reviewer sign-off, and:
+- AI-assisted Rust is untrusted. Before merge, it requires code review,
+  command evidence, and:
 
   ```sh
   cargo fmt --all -- --check
@@ -262,10 +262,18 @@ product implementation.
   cargo deny check advisories
   ```
 
-- Human sign-off means a named human reviewer understands the changed code and
-  its safety arguments and has assessed the applicable evidence. AI review may
-  assist but is not human sign-off; never fabricate approvals or verification.
-  Evidence must be accessible to the intended reviewer.
+- Individual changes, commits, merges, and component or milestone acceptance do
+  not require human sign-off. Reviews may be agent-led; required independent
+  review, safety arguments, tests, evidence, and scope/exception controls remain
+  mandatory. Historical human approvals remain evidence of their original scope,
+  not a recurring per-change requirement.
+- Only an overall Cohesix release requires explicit sign-off by a named human
+  release owner before publication or promotion as a release. Approval covers
+  the assembled release, its evidence, known limitations, and residual risks,
+  and is bound to the exact source and artifact identities being released; it
+  does not require separate human approval of every constituent change. AI
+  review and automated checks cannot supply this release approval. Never
+  fabricate approvals or verification; evidence must be accessible to reviewers.
 - Every `unsafe` block and unsafe trait implementation has a precise `SAFETY:`
   argument stating the applicable validity, lifetime, ownership, aliasing, and
   synchronisation obligations and why they hold. Safe APIs must enforce their
