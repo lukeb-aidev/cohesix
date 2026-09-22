@@ -2736,7 +2736,7 @@ sys.path.insert(0, sys.argv[1])
 from scripts import rest_perf_harness as rest
 from cohesix.backends import TcpBackend
 manifest = Path(os.environ["COH_PRESSURE_AUTHORITY_MANIFEST"])
-raw, _ = rest.read_frozen_artifact(manifest, "authority manifest", 8 * 1024 * 1024)
+raw, _ = rest.read_frozen_artifact(str(manifest), "authority manifest", 8 * 1024 * 1024)
 selected = rest.parse_strict_json_object(raw, "authority manifest")
 policy = rest.load_queen_authority(str(manifest))
 # Three roles, four spawns and two disposable shutdowns each. All refused

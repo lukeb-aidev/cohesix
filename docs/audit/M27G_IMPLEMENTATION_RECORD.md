@@ -847,3 +847,12 @@ explicit debugger-ready barrier instead of a one-second delay, and preserves
 raw failed debugger output. Injection and teardown requirements are unchanged.
 This collector correction belongs to `m27g-assembled-journeys-and-recovery`;
 all runtime, host-tool, SDK and benchmark contracts remain unchanged.
+
+Attempt `capacity-pressure-645dc47fd-05` passed all three service injections
+and the critical-duty observation, then stopped before pressure mutation on a
+collector `Path`/string mismatch in the new capacity preflight. Its path is now
+converted at the helper boundary. The actual embedded preflight is exercised
+against both available and exhausted capacity; all 50 CLI harness tests pass.
+`strict-budget-diagnostic-03` independently read the live 512-entry contract,
+validated the 291-intent budget, and observed a strict Heartbeat admission reach
+READY. This bounded diagnostic does not replace full pressure qualification.

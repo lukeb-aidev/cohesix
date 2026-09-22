@@ -811,6 +811,65 @@ drive_worker_fault_plan "$1" "$2" 100
     ]
 
 
+@pytest.mark.parametrize("used", [0, 222])
+def test_live_budget_preflight_reads_frozen_manifest_and_refuses_exhaustion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, used: int,
+) -> None:
+    """Exercise the actual shell-embedded preflight with read-only backend data."""
+    from cohesix import backends
+    from scripts import rest_perf_harness as rest
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "authority": {
+            "production": True, "legacy_queen_ctl": False,
+            "strict_queen_intents": True, "writer_epoch_required": True,
+            "queen_dedupe_entries": 512, "queen_intent_max_bytes": 2048,
+            "writer_epoch": 9,
+        },
+        "worker_runtime": {"max_workers": 256},
+    }))
+    reads = []
+
+    class Backend:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def read_file(self, path, maximum):
+            reads.append(path)
+            data = {
+                "/proc/authority": {
+                    "schema": "authority/v1", "identity": "gateway_enforced",
+                    "writer_epoch": 9, "epoch_required": True,
+                    "production": True, "strict_intents": True,
+                },
+                "/proc/queen/dedupe": {
+                    "schema": "queen-dedupe/v1", "capacity": 512, "entries": used,
+                },
+            }[path]
+            return json.dumps(data).encode() + b"\n"
+
+        def close(self):
+            reads.append("closed")
+
+    monkeypatch.setattr(backends, "TcpBackend", Backend)
+    monkeypatch.setenv("COH_PRESSURE_AUTHORITY_MANIFEST", str(manifest))
+    monkeypatch.setenv("COH_AUTH_TOKEN", "test-only")
+    monkeypatch.setattr(sys, "argv", ["preflight", str(ROOT), str(tmp_path)])
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    body = source.split("<<'PY_BUDGET'\n", 1)[1].split("\nPY_BUDGET", 1)[0]
+    if used == 222:
+        with pytest.raises(rest.RestError, match="only 290 remain"):
+            exec(compile(body, "pressure-budget-preflight", "exec"), {})
+        assert not (tmp_path / "queen-intent-budget.json").exists()
+    else:
+        exec(compile(body, "pressure-budget-preflight", "exec"), {})
+        result = json.loads((tmp_path / "queen-intent-budget.json").read_text())
+        assert result["required"] == 291
+        assert result["manifest_sha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert reads == ["/proc/authority", "/proc/queen/dedupe", "closed"]
+
+
 def test_service_fault_waits_for_armed_debugger_before_operator(tmp_path: Path) -> None:
     """A service fault cannot race an uninstalled breakpoint."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
