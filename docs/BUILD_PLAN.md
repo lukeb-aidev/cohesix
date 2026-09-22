@@ -5,6 +5,16 @@
 
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
 
+> **Current post-27g plan — 23 September 2026:**
+> [28x and later](BUILD_PLAN_28_PLUS.md) is the canonical continuation of this
+> build plan. It replaces the former prospective 28–31 bodies and their future
+> mapping, catalogue gates and blanket dependencies; those retained sections are
+> historical design proposals, not additive implementation requirements.
+> [Current ownership mapping](BUILD_PLAN_28_PLUS.md#mapping) resolves old numbers
+> and immutable task/schema identifiers. Milestones 0–27g, active qualification,
+> narrow reopenings, implementation, evidence and exceptions remain unchanged.
+> New 28x work is Planned; this documentation edit activates no runtime work.
+
 This build plan records what Cohesix has implemented, what remains to be built,
 and the conditions for completing each milestone. It defines scope, dependencies,
 deliverables, acceptance criteria, and known limitations so users and contributors
@@ -123,21 +133,25 @@ owned by their specific contracts.
 | [27e](#27e) | Installation, Adoption and CI | Complete |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | In Progress — Release A qualification and two-hour Pi burn-in |
-| [28](#28) | Formal Verification Baseline + Proof-Carrying Manifests | Planned — deferred |
-| [28a](#28a) | Broader Providers, Federation, Deployment and Domain Workflows | Planned — deferred |
-| [28b](#28b) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Planned — deferred |
-| [28c](#28c) | Machine-Checked Intent Admission + Decision-Bound Authority | Planned — deferred |
-| [28d](#28d) | Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle | Planned — deferred |
-| [28e](#28e) | Advanced Agent Orchestration, Experiments, Attention/KV and NeMo | Planned — deferred |
-| [28f](#28f) | Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) | Planned — deferred |
-| [28g](#28g) | MCP/A2A Gateway Coverage + Governed Autonomous Workflows | Planned — deferred |
-| [29](#29) | Bounded VM-Local Persistence: Spool Stores + Settings | Planned — deferred |
-| [29a](#29a) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Planned — deferred |
-| [29b](#29b) | Operator-Lane Scheduler + Multi-Surface Responsiveness | Planned — deferred |
-| [30](#30) | Edge Local Status (Pi 4 Host Tool) | Planned — deferred |
-| [30a](#30a) | Pi 4 Root-Shell Hardware Status (`hw-status`) | Planned — deferred |
-| [30b](#30b) | AI-Native Namespace Surfaces (Control-Plane Only) | Planned — deferred |
-| [31](#31) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Planned — deferred |
+| [28](BUILD_PLAN_28_PLUS.md#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
+| [28a](BUILD_PLAN_28_PLUS.md#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
+| [28b](BUILD_PLAN_28_PLUS.md#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
+| [28c](BUILD_PLAN_28_PLUS.md#28c) | macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows | Planned |
+| [28d](BUILD_PLAN_28_PLUS.md#28d) | MCP Access to Complete Selected Workflows | Planned |
+| [28e](BUILD_PLAN_28_PLUS.md#28e) | A2A Delegation of Durable Selected Jobs | Planned |
+| [28f](BUILD_PLAN_28_PLUS.md#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
+| [28g](BUILD_PLAN_28_PLUS.md#28g) | Installation, Integrated User Qualification and Release B | Planned |
+| [29](BUILD_PLAN_28_PLUS.md#29) | Extended Formal Assurance and NIST Evidence | Deferred — explicit activation |
+| [30](BUILD_PLAN_28_PLUS.md#30) | Full Production Bundle Binding and Quarantine Inventory | Deferred — explicit activation |
+| [31](BUILD_PLAN_28_PLUS.md#31) | VM-Local Persistence and Reboot Recovery | Deferred — explicit activation |
+| [32](BUILD_PLAN_28_PLUS.md#32) | Broader Enterprise, Industry and Protocol Integration | Deferred — explicit activation |
+| [33](BUILD_PLAN_28_PLUS.md#33) | Semantic Objects and Context Capsules | Deferred — explicit activation |
+| [34](BUILD_PLAN_28_PLUS.md#34) | Advanced Agent Orchestration and Context Optimisation | Deferred — explicit activation |
+| [35](BUILD_PLAN_28_PLUS.md#35) | General Inference Gateway and Advanced Routing | Deferred — explicit activation |
+| [36](BUILD_PLAN_28_PLUS.md#36) | Broader NeMo Training, Evaluation and Serving Families | Deferred — explicit activation |
+| [37](BUILD_PLAN_28_PLUS.md#37) | Measured Target Scheduling and Responsiveness Improvements | Deferred — explicit activation |
+| [38](BUILD_PLAN_28_PLUS.md#38) | Local Hardware Status and Additional Namespace Projections | Deferred — explicit activation |
+| [39](BUILD_PLAN_28_PLUS.md#39) | AWS Deployment | Deferred — explicit activation |
 
 ---
 
