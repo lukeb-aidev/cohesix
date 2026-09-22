@@ -3133,6 +3133,7 @@ M26E_SCAN_REST_TOKEN="$M26E_REST_AUTH_TOKEN" \
 python3 - "$RUN_DIR" <<'PY'
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 
@@ -3151,7 +3152,27 @@ for directory, names, files in os.walk(root, followlinks=False):
         path = Path(directory) / name
         info = path.lstat()
         if stat.S_ISLNK(info.st_mode):
-            raise SystemExit(f"retained evidence contains an unexpected symlink: {path}")
+            # The staged Test Plan creates compatibility links to its immutable
+            # attempt logs. Accept only those confined, regular stage logs.
+            if (
+                path.parent != root / "test-plan/logs"
+                or re.fullmatch(r"stage-0[1-5]-[a-z0-9-]+\.log", name) is None
+                or path.readlink().is_absolute()
+            ):
+                raise SystemExit(f"retained evidence contains an unexpected symlink: {path}")
+            target = path.resolve(strict=True)
+            expected_stage = name[:8]
+            try:
+                relative = target.relative_to((root / "test-plan/evidence/attempts").resolve())
+            except ValueError:
+                raise SystemExit(f"retained evidence link escapes attempts: {path}") from None
+            if (
+                len(relative.parts) != 3
+                or relative.parts[0] != expected_stage
+                or relative.parts[2] != "stage.log"
+                or not target.is_file()
+            ):
+                raise SystemExit(f"retained evidence link is not a stage log: {path}")
         if stat.S_ISREG(info.st_mode):
             raw = path.read_bytes()
             if rest in raw:
