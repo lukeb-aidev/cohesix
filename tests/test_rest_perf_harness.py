@@ -3266,7 +3266,10 @@ def test_executable_receipt_lanes_bound_roles_independently() -> None:
 
 
 @pytest.mark.parametrize("capture_failure", [False, True])
-def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane(capture_failure: bool) -> None:
+@pytest.mark.parametrize("writer_epoch", [None, 9])
+def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane(
+    capture_failure: bool, writer_epoch: Optional[int],
+) -> None:
     state = rest_perf.SimState(
         bounds=executable_bounds(),
         rest_url="http://127.0.0.1:8080",
@@ -3321,10 +3324,23 @@ def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane(capture_failure: bool
     class ImmediateReceiptClient:
         def __init__(self) -> None:
             self.payloads: list[dict[str, object]] = []
+            self.queen_authority = (
+                {"writer_epoch": writer_epoch} if writer_epoch is not None else None
+            )
+            self.authority_verified = False
+
+        def verify_queen_authority(self) -> None:
+            self.authority_verified = True
 
         def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
             assert path == "/host/tickets/spec"
-            self.payloads.append(json.loads(line))
+            payload = json.loads(line)
+            if writer_epoch is None:
+                assert "writer_epoch" not in payload
+            else:
+                assert self.authority_verified
+                assert payload["writer_epoch"] == 9
+            self.payloads.append(payload)
             return rest_perf.GatewayResponse("OK", "ECHO", path, True, [], len(line), None)
 
         def cat(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:

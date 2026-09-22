@@ -2318,6 +2318,7 @@ def submit(action, role, args, subject, expected, operation_id):
     ticket_id = f"m26e-{sequence:03d}-{expected}"
     payload = {
         "schema": "host-ticket/v2",
+        **rest.host_ticket_authority_fields(client),
         "id": ticket_id,
         "idempotency_key": f"m26e-idem-{sequence:03d}",
         "action": action,
@@ -2453,6 +2454,7 @@ for index, (action, role, args_value, subject, _) in enumerate(expired, 1):
     key = f"m26e-retired-idem-{index:03d}"
     payload = {
         "schema": "host-ticket/v2", "id": ticket, "idempotency_key": key,
+        **rest.host_ticket_authority_fields(client),
         "action": action, "args": args_value, "receipt_mode": "worker",
         "operation_id": f"m26e-retired-op-{index:03d}", "subject_ref": subject,
         "receipt_worker_role": role, "receipt_worker_id": before.worker_id,

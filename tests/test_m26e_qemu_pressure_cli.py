@@ -417,7 +417,7 @@ def test_expired_receipt_keeps_the_admitted_worker_alive(worker_completed: bool)
             lifecycle="ready", receipt_sequence=int(worker_completed),
             completion_sequence=int(worker_completed),
             control_sequence=0,
-        )),
+        ), host_ticket_authority_fields=lambda client: {"writer_epoch": 9}),
     }
     exec(compile(ast.Module(body=[submit], type_ignores=[]), "receipt-submit", "exec"), scope)
     if not worker_completed:
@@ -428,6 +428,7 @@ def test_expired_receipt_keeps_the_admitted_worker_alive(worker_completed: bool)
     assert len(writes) == 1
     assert writes[0][0] == "/host/tickets/spec"
     assert writes[0][1]["expires_unix_ms"] == 1
+    assert writes[0][1]["writer_epoch"] == 9
     assert writes[0][1]["receipt_worker_id"] == "worker7"
     assert writes[0][1]["receipt_supervisor_generation"] == 3
     assert writes[0][1]["receipt_cap_generation"] == 4

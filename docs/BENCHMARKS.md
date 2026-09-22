@@ -8,8 +8,11 @@ Strict production pressure uses the frozen resolved manifest selected by
 `--authority-manifest` (or `COH_PRESSURE_AUTHORITY_MANIFEST`). The canonical
 QEMU collector sets it for every child, including direct-console fault setup.
 The selected live epoch and dedupe capacity must agree before mutation. Approvals
-still target `/queen/ctl`; production mutations use `/queen/intents/ctl` with one
+still target `/queen/ctl`; Queen control mutations use `/queen/intents/ctl` with one
 immutable operation identity and no fallback or automatic fresh-identity retry.
+Receipt tickets sent to `/host/tickets/spec` carry that verified writer epoch
+through preflight, receiver retirement and the timed workload. A missing or
+mismatched epoch remains a refusal; the harness cannot relax the target fence.
 The full 256-Worker boot reserves 291 distinct intents: 18 fault-preflight,
 253 population, 14 receiver retirement/recreation, four lifecycle/refusal, and
 two pressure lifecycle operations. Release A selects 512 on QEMU and Pi; all

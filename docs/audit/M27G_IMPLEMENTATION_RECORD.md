@@ -865,3 +865,13 @@ enforce the approved 1..=512 contract, with independent endpoint, overflow and
 type checks and the host's existing pre-session restriction retained. This
 completes the capacity compatibility correction across runtime, compiler, SDK,
 host model, benchmark and release validation; it does not raise other quotas.
+
+Attempt `capacity-pressure-1b73402b8-07` passed all service and Worker fault
+checks, then correctly refused the harness's first receipt ticket because its
+writer epoch was absent. Preflight, retired-receiver and timed receipt payloads
+now bind the selected live-verified epoch. Compatibility-mode payloads retain
+their existing optional field behavior; strict refusal and identity semantics
+are unchanged. The focused harness suite passes 322 tests. This is a benchmark
+producer correction under `m27g-assembled-journeys-and-recovery`; host tools,
+SDK, target parsers and generated authority already enforce the intended
+contract and require no implementation changes.

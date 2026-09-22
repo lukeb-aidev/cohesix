@@ -6918,6 +6918,15 @@ def validate_queen_authority(policy: dict, authority: dict, dedupe: dict, requir
         raise RestError(f"Queen intent budget requires {required} entries; only {capacity - entries} remain")
 
 
+def host_ticket_authority_fields(client: RestClient) -> Dict[str, int]:
+    """Bind benchmark admissions to the selected, live-verified writer fence."""
+    policy = getattr(client, "queen_authority", None)
+    if policy is None:
+        return {}
+    client.verify_queen_authority()
+    return {"writer_epoch": policy["writer_epoch"]}
+
+
 def queen_control_wire(line: str, operation_id: str, policy: Optional[dict], issued_unix_ms: Optional[int] = None) -> Tuple[str, str]:
     """Freeze one operation's identity before approval; never change it on refusal."""
     if policy is None or policy["legacy_queen_ctl"]:
@@ -7466,6 +7475,7 @@ def run_v2_receipt_operation(
         resolved_operation_id = operation_id or f"op-{state.run_token}-{sequence:06d}"
         payload = {
             "schema": "host-ticket/v2",
+            **host_ticket_authority_fields(client),
             "id": ticket_id,
             "idempotency_key": idempotency_key,
             "action": action,
