@@ -5512,10 +5512,12 @@ set architecture aarch64
 file {_gdb_file_argument(command_file)}
 target remote {args.remote}
 delete breakpoints
-{command_body}continue
+{command_body}printf "M26E_GDB_SERVICE_ARMED service={args.service} mode={args.mode} result=ready\\n"
+continue
 """
     completed = _run_gdb_batch(
-        gdb, command_text, args.timeout_secs, "cohesix-m26e-service-gdb-"
+        gdb, command_text, args.timeout_secs, "cohesix-m26e-service-gdb-",
+        diagnostic_path=args.out.with_name(args.out.name + ".debug.log"),
     )
     header = [
         _qemu_session_header(session, generated),

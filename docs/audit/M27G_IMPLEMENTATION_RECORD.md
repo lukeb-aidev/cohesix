@@ -838,3 +838,12 @@ The prior two-hour burn remains sealed against its original 64-entry profile.
 These bounded capacity/collector/diagnostic corrections do not justify another
 full two-hour run; fresh affected target and post-burn full-plan evidence is
 still required before milestone closure.
+
+Strict-pressure attempt `capacity-pressure-df4063578-04` booted and answered
+authenticated control but missed its service fault injection. The non-claiming
+`service-race-diagnostic-03` injected and contained that fault after observing
+the installed breakpoint. Service setup now uses the existing Worker runner's
+explicit debugger-ready barrier instead of a one-second delay, and preserves
+raw failed debugger output. Injection and teardown requirements are unchanged.
+This collector correction belongs to `m27g-assembled-journeys-and-recovery`;
+all runtime, host-tool, SDK and benchmark contracts remain unchanged.

@@ -811,6 +811,30 @@ drive_worker_fault_plan "$1" "$2" 100
     ]
 
 
+def test_service_fault_waits_for_armed_debugger_before_operator(tmp_path: Path) -> None:
+    """A service fault cannot race an uninstalled breakpoint."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "drive_service_fault_plan() {" + source.split(
+        "drive_service_fault_plan() {", 1,
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    (tmp_path / "uart.live.log").write_text("")
+    result = subprocess.run(
+        ["bash", "-eu", "-c", function + '''
+HARNESS_PYTHON=true GDB_BIN=fixture TARGET_SESSION=fixture
+GENERATED_INVENTORY=fixture OUT_ROOT=fixture AUTH_OBSERVATION=fixture
+sleep() { exit 42; }
+wait_for_marker_count() { printf 'wait %s\n' "$2"; }
+run_cohsh_command() { printf 'operator %s\n' "$2"; }
+drive_service_fault_plan "$1" ninedoor-service during-call-standard fixture TEARDOWN 350
+''', "service-fault-test", str(tmp_path)],
+        check=True, capture_output=True, text=True, timeout=10,
+    )
+    assert result.stdout.splitlines() == [
+        "wait M26E_GDB_SERVICE_ARMED service=ninedoor-service mode=during-call-standard result=ready",
+        "operator ls /", "wait TEARDOWN",
+    ]
+
+
 def test_fault_control_refuses_an_existing_gateway_owner(tmp_path: Path) -> None:
     """A phase error must stop before attempting direct TCP authentication."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text(encoding="utf-8")

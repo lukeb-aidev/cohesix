@@ -2026,7 +2026,8 @@ drive_service_fault_plan() {
     "${runner[@]}" &
     local gdb_pid=$!
     GDB_RUNNER_PID=$gdb_pid
-    sleep 1
+    wait_for_marker_count "$gdb_log.debug.log" \
+        "M26E_GDB_SERVICE_ARMED service=$service mode=$mode result=ready" 1 30
     run_cohsh_command "$boot_dir" 'ls /' "$ordinal" NONE || true
     wait_for_marker_count "$boot_dir/uart.live.log" "$teardown_marker" $(( teardown_before + 1 )) 120
     if ! wait "$gdb_pid"; then

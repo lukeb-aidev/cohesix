@@ -2667,6 +2667,7 @@ def test_rust_symbol_lookup_accepts_deliberately_local_evidence_symbols(
 
 def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inputs = _live_qemu_inputs(tmp_path)
     service_paths = dict(value.split("=", maxsplit=1) for value in inputs.service_elf)
@@ -2693,6 +2694,19 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
         encoding="utf-8",
     )
     fake_nm.chmod(0o755)
+
+    run_gdb = evidence._run_gdb_batch
+
+    def check_service_arm(gdb, commands, timeout, prefix, diagnostic_path=None):
+        if prefix == "cohesix-m26e-service-gdb-":
+            # Admission requires an installed handler and a durable ready line
+            # before execution resumes; the subsequent injection stays mandatory.
+            assert commands.index("commands 1") < commands.index("M26E_GDB_SERVICE_ARMED")
+            assert commands.endswith('result=ready\\n"\ncontinue\n')
+            assert diagnostic_path is not None
+        return run_gdb(gdb, commands, timeout, prefix, diagnostic_path)
+
+    monkeypatch.setattr(evidence, "_run_gdb_batch", check_service_arm)
 
     for service, mode in evidence.QEMU_SERVICE_EVIDENCE_PLAN:
         handler = evidence.QEMU_SERVICE_SYMBOLS[service][0]
