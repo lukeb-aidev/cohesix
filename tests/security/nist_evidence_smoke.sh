@@ -61,7 +61,7 @@ check "Attach grammar" "attach <role> \\[ticket\\]" "$userland_doc"
 
 # Console-only TCP listener guidance
 check "Console-only TCP listener" \
-  "The authenticated root-task console is the only in-VM TCP listener\\." \
+  "The authenticated console is the sole in-VM TCP listener\\." \
   "$agents_doc"
 
 if [[ "$fail" -ne 0 ]]; then
