@@ -193,8 +193,10 @@ Historical releases and evidence keep original names, IDs and proof classes.
 
 ### Milestone ownership and historical references <a id="roadmap-id-mapping"></a>
 
-The 23 September 2026 revision keeps 0–27g and their evidence, status and
-qualification requirements unchanged. New 28–28g are the bounded Release B
+The 23 September 2026 revision keeps 0–27g scope, evidence, status and
+qualification requirements unchanged. Prospective owner references in those
+sections use the current numbering; historical task/evidence identifiers remain
+unchanged. New 28–28g are the bounded Release B
 implementation scopes in this file. No deferred milestone gates that release.
 The old blanket assurance/provider/semantic/agent dependency chain is removed.
 
@@ -3557,13 +3559,13 @@ retain terminal evidence and all lifecycle, policy, and admission contracts.
 - Every transition emits an audit record in `/log/queen.log` with old/new state and reason.
 - Tickets, telemetry ingest, worker authority, and host sidecar publishes are gated by lifecycle state.
 
-### Telemetry Spool Policy (Addendum to Milestones 21a & 29)
+### Telemetry Spool Policy (Addendum to Milestones 21a & 37)
 
-**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 29 persistent spool store; it does **not** retroactively change 21a's completed behavior.
+**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 37 persistent spool store; it does **not** retroactively change 21a's completed behavior.
 
 #### Policy surface (alignment)
 - **Telemetry ingest (21a):** keep `telemetry_ingest.eviction_policy` (`refuse` | `evict-oldest`) as the source of truth for per-device segment limits.
-- **Persistent spool (29):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a's refusal/eviction semantics while remaining crash-safe.
+- **Persistent spool (37):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a's refusal/eviction semantics while remaining crash-safe.
 
 **Manifest example (bytes only)**
 ```toml
@@ -3583,15 +3585,15 @@ mode = "refuse" # or "overwrite_acked"
 - `/proc/spool/status` MUST expose policy and pressure fields (used_bytes, max_bytes, records, dropped, pressure, mode, ack_cursor).
 - If additional nodes are required for UI providers, add `/proc/spool/policy` and `/proc/spool/pressure` **only** with corresponding updates to `ARCHITECTURE.md` and `INTERFACES.md`.
 
-#### CLI surface (host-only, target milestone 29 or later)
+#### CLI surface (host-only, target milestone 37 or later)
 - `cohsh telemetry status` — read spool/ingest status and render policy + pressure.
 - `cohsh telemetry explain` — summarize current policy and refusal/eviction outcomes.
 
 #### Mandatory regression cases
-- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (29).
-- Ack cursor behind overwrite window (29).
-- Record-too-large rejection (29).
-- Offline accumulation → online drain (21a + 29).
+- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (37).
+- Ack cursor behind overwrite window (37).
+- Record-too-large rejection (37).
+- Offline accumulation → online drain (21a + 37).
 
 #### Invariants
 - All drops are auditable.
@@ -7673,9 +7675,10 @@ inventories under `out/` when needed.
   notification-lifecycle, and MCS tasks are inactive historical proposals. No
   26c behavior change is authorized by this truth-correction reopening.
 - Future Worker/root-task isolation and the one SMP+MCS QEMU/Pi transition must
-  land and obtain target acceptance in Milestone 26e. Milestone 29b optimizes
-  that accepted scheduler with core-local service buckets, Milestone 27d proves
-  mixed-load operator responsiveness on it, and Milestone 27e binds production
+  land and obtain target acceptance in Milestone 26e. Milestone 38 (`m29a-core-local-event-pumps`) optimizes
+  that accepted scheduler with core-local service buckets, Milestone 39
+  (`m29b-event-pump-qos`) proves mixed-load operator responsiveness on it, and
+  Milestone 33 (`m28b-production-worker-ticket-driver-inventory`) binds production
   Worker ticket/lease ledgers, projects the already complete driver inventory,
   and adds structured quarantine/evidence. Each requires its own post-behavior
   external-contract baseline.
@@ -7705,7 +7708,7 @@ Later phases may start only when earlier phase gates are complete for the touche
 | --- | --- | --- | --- |
 | 0 | Scope, ownership, blockers | `m26c-as-built-blocker-ledger`, `m26c-target-qualified-runner-baseline`, `m26c-refactor-map-and-risk-ratchet`, lane setup in `M26C_AGENT_HANDOFFS.md` | No unowned files, hidden blockers, missing target-qualified runner contract, missing sub-agent lanes, or unmeasured simplification targets. |
 | 1 | Documentation and provenance truth | `m26c-authoring-charter-and-header-rules`, `m26c-ai-fingerprint-authorship-review`, `m26c-markdown-inventory-and-disposition`, `m26c-mermaid-as-built-diagram-audit`, `m26c-docs-as-built-audit`, `m26c-runtime-boundary-and-semantic-parity-audit` | Inventories, drift ledger, AI-fingerprint audit, parity matrix, and generated-source dispositions are complete. |
-| 2 | Accepted runtime additions and superseded Worker proposals | Accepted: `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, and the non-Worker baseline evidence. Inactive history: `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, and `m26c-worker-driver-mcs-budget-evidence`. | Accepted Pi/runtime behavior remains compiler-declared and tested. Inactive Worker proposals supply no implementation claim; 26e owns complete Worker isolation plus linked-driver SMP+MCS authority, 29b owns later core-local optimization, and 27e owns production Worker ledger binding, driver-inventory projection, and structured quarantine/evidence. |
+| 2 | Accepted runtime additions and superseded Worker proposals | Accepted: `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, and the non-Worker baseline evidence. Inactive history: `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, and `m26c-worker-driver-mcs-budget-evidence`. | Accepted Pi/runtime behavior remains compiler-declared and tested. Inactive Worker proposals supply no implementation claim; 26e owns complete Worker isolation plus linked-driver SMP+MCS authority, 38 (`m29a-core-local-event-pumps`) owns later core-local optimization, and 33 (`m28b-production-worker-ticket-driver-inventory`) owns production Worker ledger binding, driver-inventory projection, and structured quarantine/evidence. |
 | 3 | Refactor safety gates | `m26c-characterization-gates-before-refactor`, `m26c-no-std-boundary-gates` | Cleanup-sensitive behavior and VM dependency closures are pinned before structural edits. |
 | 4 | Humanization and structural cleanup | `m26c-low-risk-surface-cleanup`, `m26c-host-tool-structural-cleanup`, `m26c-root-task-runtime-decomposition`, `m26c-hal-network-and-local-seat-decomposition` | Each cleanup wave is bisectable and starts only after its characterization artifact, preserved-contract list, owner, scorecard entry, and target test subset are recorded; risk-ratchet does not regress and HAL/no_std/protocol boundaries hold. |
 | 5 | Closure | `m26c-full-test-plan-qemu-and-pi4` | QEMU and Pi 4 staged Test Plan runs pass with target-qualified artifacts and no incomplete markers. |
@@ -8465,7 +8468,7 @@ criteria below and the selected as-built contracts define the accepted result.
   ABI, generated policy, and exact-target acceptance after 26d closes.
 - The seL4 16 refresh must preserve the Pi 4 hardware-counter contract used by isolated runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
 - Performance tuning is permitted in 26d only when tied to a measured same-harness regression, regression-risk, or drift exposed by the seL4 16 refresh. Allowed tuning includes bounded scheduler/budget constants, driver-runtime service-turn cadence, cache-maintenance batching thresholds, TCP/REST gateway timeout plumbing, harness provenance/reporting fixes, and comparator hygiene. Tuning must preserve Secure9P semantics, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, root/driver-task ownership boundaries, no-retry benchmark accounting, and the documented Pi 4 wired/GENET versus Wi-Fi proof split.
-- 26d tuning must not become service-bucket/core-local redesign, new protocol work, new namespace or telemetry grammar, relaxed error budgets, retry masking, root-owned physical-driver shortcuts, larger unbounded queues, or a reclassification of Wi-Fi stress diagnostics as production parity. Those remain outside accepted 26b and belong only to 29b or later explicitly scoped work.
+- 26d tuning must not become service-bucket/core-local redesign, new protocol work, new namespace or telemetry grammar, relaxed error budgets, retry masking, root-owned physical-driver shortcuts, larger unbounded queues, or a reclassification of Wi-Fi stress diagnostics as production parity. Those remain outside accepted 26b and belong only to 38 (`m29a-core-local-event-pumps`) or later explicitly scoped work.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
 ### Prerequisite
@@ -9061,7 +9064,7 @@ operator-visible contract explicit.
   kernel object actually used by a 26e service, Worker, or linked driver belongs
   to a complete 26e instance bundle and teardown/containment path. No live 26e
   child may depend on
-  Milestone 28b to become safely revocable. Milestone 28b binds these already
+  Milestone 33 to become safely revocable. Milestone 33 binds these already
   complete Worker bundles to production ticket/lease ledgers, projects the
   already complete driver authority inventory into production ledgers, and
   adds structured quarantine/evidence plus fresh-ticket Worker restart; it does
@@ -9307,7 +9310,7 @@ operator-visible contract explicit.
   `(role, slot, lease_epoch, supervisor_generation, cap_generation)`. In 26e, `lease_epoch` is logical
   lifecycle/session metadata used for stale-instance rejection; it is not yet
   a claim that a production ticket is bound one-to-one to the live cap bundle.
-  Milestone 28b adds that production ledger binding. A Worker-to-supervisor endpoint
+  Milestone 33 adds that production ledger binding. A Worker-to-supervisor endpoint
   cap is minted once with a badge that uniquely resolves that tuple; ABI action
   is carried by a validated message label, never by synthesizing a new badge at
   send time. Standard-fault and timeout-fault badges also identify the complete
@@ -9400,7 +9403,7 @@ operator-visible contract explicit.
   slot and advance generation.
 - Fresh supervisor-generation recreation repeats full allocation, image
   verification, configuration, admission, and READY. It never resumes a
-  faulted TCB or reuses stale caps. Milestone 28b later adds fresh-ticket/lease
+  faulted TCB or reuses stale caps. Milestone 33 later adds fresh-ticket/lease
   binding; it is not required to make this 26e teardown safe.
 
 ### Host integration and use-case acceptance contract
@@ -9451,9 +9454,9 @@ provider and product projections that later use it:
 
 | Integration family | 26e acceptance obligation | Dependent role or release claim | Later production ownership |
 | --- | --- | --- | --- |
-| Direct `cohsh` control/observation, root Worker supervisor, shared evidence validator, and release verification | `role_required` with `live` QEMU and Pi target modes | Heartbeat, GPU, and LoRA runtime acceptance | Milestone 28b later binds production ticket/lease ledgers to the already accepted task bundle. |
+| Direct `cohsh` control/observation, root Worker supervisor, shared evidence validator, and release verification | `role_required` with `live` QEMU and Pi target modes | Heartbeat, GPU, and LoRA runtime acceptance | Milestone 33 later binds production ticket/lease ledgers to the already accepted task bundle. |
 | `host-ticket-agent` v2 result-to-root-to-Worker receipt path | `role_required` with a bounded fixture provider result for each generated GPU and PEFT action; this proves the live VM path, not the external side effect | WorkerGpu and WorkerLora runtime acceptance | Milestones 27a/27b add crash-safe production execution, writer fencing, and live provider conformance. |
-| `coh`, console/direct transport, `hive-gateway`, REST/OpenAPI, Python, SwarmUI, and the `coh-status` library/offline fixtures | `release_required` compatibility and false-promotion tests; optional projections preserve or lower the source claim and cannot block otherwise valid direct runtime proof | Packaged host projections of all three roles | Milestone 27a adds delegated multi-caller hardening; 27b adds production identity/read-visibility and deployment profiles; Milestone 30 adds the standalone `coh-status` CLI. |
+| `coh`, console/direct transport, `hive-gateway`, REST/OpenAPI, Python, SwarmUI, and the `coh-status` library/offline fixtures | `release_required` compatibility and false-promotion tests; optional projections preserve or lower the source claim and cannot block otherwise valid direct runtime proof | Packaged host projections of all three roles | Milestone 27a adds delegated multi-caller hardening; 27b adds production identity/read-visibility and deployment profiles; Milestone 40 adds the standalone `coh-status` CLI. |
 | `gpu-bridge-host`, real NVML/CUDA inventory, GPU executor/device-isolation behavior, telemetry, and lease side effects | `use_case_required`; 26e proves only all three result labels through the live receipt path and classifies mock/dry-run/live provider availability separately | GPU Flight Deck and GPU-backed playbooks | Milestone 27b supplies live provider/version/package and external-executor conformance; 27d adds governed inference-provider run contracts, not GPU authority to the VM. |
 | PEFT/model-registry export/import/activate/rollback provider transactions, training/evaluation/scanning, runtime reload, and canary health | `use_case_required`; 26e proves all four action/result shapes through WorkerLora but cannot promote a real PEFT data plane from fixture results | Model rollout, Private LoRA Foundry, and PEFT-backed playbooks | Milestone 27d owns transactional host lifecycle, provenance, framework/training/evaluation adapters, runtime-reload receipts, and production AI-use-case acceptance. |
 | `coh mount` direct and REST FUSE, including Linux FUSE and packaged macOS MacFUSE where advertised | `release_required` compatibility for canonical `/shard` paths and `use_case_required` for live mounted-namespace workflows; never a Worker readiness source | Host filesystem clients | Milestone 27b adds live package/deployment conformance and delegated read visibility. |
@@ -9461,7 +9464,7 @@ provider and product projections that later use it:
 | Evidence packs/timelines, SIEM NDJSON, CAS/model-artifact refs, and release bundles | `release_required` schema/projection compatibility; Worker and integration evidence stays distinct from target task evidence and secrets remain redacted | All release and audit claims | Milestone 27b adds live package conformance, Prometheus/OpenTelemetry, and provider-wide evidence reconstruction. |
 | Host-ticket federation and fleet fan-in | `use_case_required`; version-2 Worker receipts remain local-hive-only in 26e and cannot be relayed or rebound | Multi-Hive Mission Control | Milestones 27a/27b provide production delegated identity, provider conformance, and deployment posture. |
 | MODBUS/DNP3/other sidecars and WorkerBus session/model state | Regression-only in 26e; no provider `ready` record may parse as executable Worker readiness | No executable 26e Worker role; WorkerBus remains model-only | Reopened Milestone 18 supplies real MODBUS/DNP3 host protocol I/O and durable acknowledgement; Milestone 27b registers, packages, and proves it while later industry providers remain explicitly unavailable until implemented. |
-| Semantic extractors/stores, general CUDA jobs, model training/inference runtime adapters, NeMo, MCP, A2A, Prometheus/OpenTelemetry, and not-yet-built industry providers | `future`; the matrix must name the owning milestone and reject production claims now | Use-case-specific host data planes, not the VM Worker task contract | Milestones 27b, 27c, 27d, 27e, 28c, and 30b as explicitly assigned. |
+| Semantic extractors/stores, general CUDA jobs, model training/inference runtime adapters, NeMo, MCP, A2A, Prometheus/OpenTelemetry, and not-yet-built industry providers | `future`; the matrix must name the owning milestone and reject production claims now | Use-case-specific host data planes, not the VM Worker task contract | Accepted 27b–27d remain at their qualified scope; selected CUDA/PEFT/Apple/MCP/A2A/NeMo extensions belong to 28a–28f; broader providers, semantics, AI frameworks, inference and namespaces belong to 30/31/34/35/42 under the ownership map. |
 
 The generated graph covers all six scenarios in `docs/USE_CASES.md`, every
 built-in `cohesix-playbook` id, and every host integration or host-facing binary
@@ -9604,7 +9607,7 @@ Changes:
   - apps/root-task/src/{kernel.rs,userland/mod.rs,serial/**,console/**,uart/**,trace.rs} — make missing operational serial or real time a fatal profile/construction error; keep emergency serial live; remove/profile-exclude the null serial and dummy/bypass clock from target closures; ensure early help exposes only implemented pre-auth diagnostics; return a typed authorization/unavailable refusal for pre-auth reboot instead of a stub; eliminate duplicate legacy bootstrap entrypoints from selected artifacts; and remove the unused `TraceSink::Ipc` alias unless it is wired to the generated bounded service IPC and proven as such.
   - apps/root-task/src/ninedoor.rs + generated host/GPU contracts — operational target state starts `unavailable source=none`, with no predefined units, nodes, temperatures, GPUs, models, lease, or active model. Populate it only from authenticated, versioned, sequence/epoch/time/TTL/manifest-bound host snapshots; atomically replace a provider generation, reject stale/forged snapshots, and withdraw expired data. Explicit dev-virt/mock profiles may retain clearly labelled fixture topology that never produces live evidence.
   - apps/gpu-bridge-host/** — live mode requires a validated real registry/CAS source or publishes an explicit empty/unavailable registry; invalid/missing state never installs fixture models or selects the first model as active. Model/source identity, sequence, epoch, observation time, TTL, manifest/CAS/base-adapter compatibility, activation generation, and receipt are explicit. Placeholder auth fails before connection outside explicit fixture mode.
-  - binary/workspace disposition — stop building or staging the current spinning target `nine-door` binary; the later `nine-door-runtime` child is the only selected target namespace-service image. Make the host NineDoor crate library-only unless 27b supplies a real bounded host-service use case. Remove the unused all-mock `domain-intents` crate from the Cohesix workspace/release (optionally preserving deterministic records under test fixtures) rather than inventing media/finance authority. Label `coh-status` deferred to Milestone 30, not implemented.
+  - binary/workspace disposition — stop building or staging the current spinning target `nine-door` binary; the later `nine-door-runtime` child is the only selected target namespace-service image. Make the host NineDoor crate library-only unless 27b supplies a real bounded host-service use case. Remove the unused all-mock `domain-intents` crate from the Cohesix workspace/release (optionally preserving deterministic records under test fixtures) rather than inventing media/finance authority. Label `coh-status` deferred to Milestone 40, not implemented.
   - packaging/release gate — replace non-empty-directory and wildcard-copy acceptance with the inventory's exact expected-artifact set for 26e runtime releases; reject unexpected/missing/wrong-kind/wrong-architecture/wrong-hash binaries, compiled stubs, mock-only configuration, placeholder tokens, private fixture signing keys, synthetic proof, and historical assets presented as current. Linux ARM64 host tools and the final Linux tarball are built on one explicitly selected remote ARM64 builder whose host, user, authentication, cargo, build, release, GLIBC ceiling, and local output locations are command-line inputs; release tooling never embeds a site-specific host, user, home, or NVMe path. The exact canonical Pi 4 SD staging file set is compiler-selected and converted into a peer `<release-name>-Pi4` bundle containing a compact raw MBR/FAT32 image, hash, layout/provenance metadata, documentation, and exact bundle manifest. Image size derives from the payload, and the metadata declares the minimum target byte capacity so the image works on any sufficiently large SD card without inheriting a build card's geometry. Packaging remains build proof only and cannot promote media, boot, network, performance, or Pi acceptance. Historical releases remain immutable and receive errata only.
   - Release-readiness closure for 1.0.0-beta — bind each host bundle to its native Mac/HVF or Linux/KVM accepted artifact and TCP result; retain source/profile/tool/image identities in BUILD_PROVENANCE.json; include all generated compile-time contracts in remote source transfer; require the executable Conditional G three-archive installation gate, exact Pi raw-image readback and observed fresh provisioning before publication. The complete host suite, target-neutral Python package and benchmark contracts receive the same-change compatibility review recorded in HOST_TOOLS.md. Historical release snapshots are unchanged.
   - Release source-identity repair — the staged runner's metadata-only source hash differs from the standalone artifact/factory hash for the same clean commit, rejecting passing native TCP evidence at assembly. Use the existing complete checkout/Git/mode/submodule digest for staged context v2 as well; retain the original metadata fingerprint as a separate source-state binding and bind the shared helper in the action digest. Preserve historical evidence without translation or relabeling. An end-to-end producer/factory regression must accept unchanged source and reject changed bytes or executable modes before fresh qualification; dirty submodule state must still invalidate staged resume.
@@ -10021,7 +10024,7 @@ Commands:
   - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --matrix-only --state-dir out/host-integration/m26e-matrix
   - scripts/check-generated.sh
   - scripts/ci/check_test_plan.sh
-Checks: Duplicate ids, unknown action/path/schema refs, missing owners, unclassified host binaries/docs/playbooks, circular dependencies, a role-required integration with no live runtime lane, fixture/mock/dry-run satisfying a provider-live row, a release-required surface with no package/evidence rule, a use case promoted with an unsatisfied dependency, a future provider selected as live, secret-bearing evidence, and host/provider readiness interpreted as Worker READY all fail deterministically; the resulting graph assigns every integration gap to exactly one task-owning milestone id that exists in this plan, including the distinct 27c semantic, 27e inference, 28c MCP/A2A, 28b production-bundle, and 27f UI owners, with no ambiguous or compound deferral.
+Checks: Duplicate ids, unknown action/path/schema refs, missing owners, unclassified host binaries/docs/playbooks, circular dependencies, a role-required integration with no live runtime lane, fixture/mock/dry-run satisfying a provider-live row, a release-required surface with no package/evidence rule, a use case promoted with an unsatisfied dependency, a future provider selected as live, secret-bearing evidence, and host/provider readiness interpreted as Worker READY all fail deterministically; the resulting graph assigns every integration gap to exactly one task-owning milestone id that exists in this plan, including the distinct 31 semantic, 35 inference, 28d/28e selected MCP/A2A, 36 extended protocol, 33 production-bundle, and 27f UI owners under the ownership map, with no ambiguous or compound deferral.
 Deliverables: One compiler-owned host-integration/use-case dependency graph, exhaustive inventory guard, strict per-row Worker-integration evidence schema, and exact milestone ownership for every dependency needed by fully functional Workers and their documented use cases.
 
 Title/ID: m26e-host-worker-integration
@@ -10060,7 +10063,7 @@ Changes:
   - tools/cohesix-py/cohesix/backends.py + orchestration.py + playbooks.py + tests/examples/docs — classify MockBackend as `host-model`, REST from gateway `backend_class`, and TCP/filesystem as projection/unknown; model Heartbeat/GPU/LoRA lifecycle/receipts and reject WorkerBus in mocks; keep high-count playbooks explicitly control-model rather than task-creation proof; expose the typed API and host-only PEFT boundary.
   - apps/nine-door/src/host/** + Hive Gateway mock — mirror the generated Heartbeat/GPU/LoRA grammar and structured lifecycle/receipt records for compatibility tests, reject WorkerBus spawn, and mark every mock Worker `host-model`. Generic provider records such as `/host/... state=ready` cannot parse as Worker READY and mocks claim no image/task/MCS/fault/QEMU/Pi execution.
   - apps/host-sidecar-bridge/** + apps/sidecar-bus/** — keep provider/link readiness and WorkerBus session/model state independent of executable Worker lifecycle. These are regression-only surfaces in 26e: add no task-creation path, and prove their `ready`/linked/provider records cannot parse as Worker READY or target proof.
-  - apps/coh-status/src/lib.rs + read-only tests — keep 26e to the existing library/replay surface: consume the shared Worker validator and generated canonical paths, replace the current generic `/queen/ctl`/legacy-`/worker` transcript with read-only canonical `/shard` and evidence fixtures, and prove no authority command or inferred proof exists. Do not add or claim a live `coh-status` binary here; Milestone 30 owns that standalone read-only CLI.
+  - apps/coh-status/src/lib.rs + read-only tests — keep 26e to the existing library/replay surface: consume the shared Worker validator and generated canonical paths, replace the current generic `/queen/ctl`/legacy-`/worker` transcript with read-only canonical `/shard` and evidence fixtures, and prove no authority command or inferred proof exists. Do not add or claim a live `coh-status` binary here; Milestone 40 owns that standalone read-only CLI.
   - scripts/rest_perf_harness.py + tests/test_rest_perf_harness.py — add explicit `host-model` and `executable` population modes. Synthetic high-count workloads remain host-model; executable mode obeys generated `max_live_tasks`, discovers real structured READY instances through canonical `/shard` paths, forbids synthetic id expansion, records requested/discovered/READY populations plus backend/proof class, and calls a control write `admitted` rather than `accepted`. Starting QEMU alone never yields QEMU proof.
   - scripts/cohesix-build-run.sh + scripts/ci/host_integration_run.sh + scripts/release_bundle.sh — add `host-ticket-agent` and every selected-profile host tool explicitly to source-build/staging lists; execute selected target-session dependency rows and emit strict Worker-integration records; add verification-only `--verify-worker-acceptance`, Worker QEMU/Pi component, root-TCB QEMU/Pi, and full-system QEMU/Pi evidence inputs. Generate an exact named host-tool/image/evidence manifest and require externally supplied host-tool directories to match it; a missing required binary, Worker image, schema, or evidence file fails rather than being silently skipped or accepted because the directory is non-empty. Hash-validate the dependency graph and every role/release-required integration record plus `cohesix-worker-images.cpio`, its image manifest, ABI versions, MCS driver archive/manifest, CYW43 coexistence record, and every target acceptance input for selected executable 26e profiles. The release manifest selects the complete canonical Pi 4 SD stage by an exact compiler-owned file list, validates the sealed primary/fallback image identity against the current source commit, and rejects omitted, extra, linked, or stale stage files. Linux release production requires an argument-selected remote ARM64 builder, a source-bound exact host-tool provenance manifest, and remote creation plus local byte verification of the final tarball. Packaging alone yields artifact `verified` and execution proof `none`; it may report Worker-runtime release eligibility only after the matching integration/component/root/system graph exists, and it cannot emit the final release-accepted record before `m26e-mcs-smp-target-acceptance` or copy stale evidence onto a different host profile, provider, kernel, root image, driver archive, Worker archive, manifest, dependency graph, or CYW43 record.
   - canonical host/Worker/PEFT/interface/release docs and fixtures — document the shared state axes, existing-authority projections, host-only GPU/PEFT boundary, canonical sharded paths, evidence promotion, replay migration, and release requirements. No CYW43/SDIO timing, state-machine, restart, packaging, image-build, trace-normalization, or proof-classification file may be edited; this task consumes only its frozen artifact identity.
@@ -10161,7 +10164,7 @@ Commands:
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-root-tcb-pi4
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26e-root-tcb-qemu
 Checks: generated and observed cap/SC/Reply inventories agree; root-control, root-fault, root-emergency, root-worker-supervisor, root-driver-supervisor, root-worker-executor-gpu, and root-worker-executor-lora each retain independent admitted progress; each child runs in the selected image, contains injected faults/timeouts, completes its 26e teardown/containment, loses stale authority, returns or revokes any service-only donated time, and cannot bypass serialized policy; QEMU and fresh Pi evidence preserve console/network/driver/operator behavior and separated proof lanes; the accepted split measurably reduces root authority without an unbounded latency, temporal-reserve, or TCB regression; each root-TCB acceptance record validates only against the exact immutable artifacts it names.
-Deliverables: Separate hash-bound QEMU/Pi root-TCB acceptance records closing the reopened Milestone 25 root-service/Worker task-isolation claims and establishing the prerequisite for final 26e and Milestone 28b acceptance.
+Deliverables: Separate hash-bound QEMU/Pi root-TCB acceptance records closing the reopened Milestone 25 root-service/Worker task-isolation claims and establishing the prerequisite for final 26e and Milestone 33 acceptance.
 
 Title/ID: m26e-mcs-smp-target-acceptance
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / full-system SMP+MCS target acceptance
@@ -10216,21 +10219,21 @@ Cadence by milestone family:
   benchmark, timeout/fault-containment, admission, and operator-liveness gates
   because root-service IPC, network parsing, Worker execution, and the kernel
   scheduling model change together.
-- **29 persistence:** targeted QEMU/Pi spool/settings and block-pressure gates;
+- **37 persistence (`m29-target-acceptance`):** targeted QEMU/Pi spool/settings and block-pressure gates;
   final Pi acceptance also reruns the established CYW43 same-harness workload
-  against the exact accepted pre-29 baseline, first with persistence idle and
+  against the exact accepted pre-persistence baseline, first with persistence idle and
   then under representative storage load. QEMU does not qualify Pi storage or
-  Wi-Fi behavior, and 29 does not create a broader benchmark framework.
-- **28 verification:** no runtime benchmark; track verification-gate runtime and proof reproducibility only.
-- **29a core-local scheduling:** full same-harness QEMU/Pi benchmark gate with service-bucket counters and fresh target evidence.
-- **29b operator lanes:** full latency/fairness gate under mixed serial, USB local-seat, TCP console, HDMI, diagnostics, network, telemetry, and persistence pressure; throughput claims remain tied to 26d/29a baselines and must not collapse separated proof lanes.
+  Wi-Fi behavior, and 37 does not create a broader benchmark framework.
+- **29 verification (`m28-verification-ci`):** no runtime benchmark; track verification-gate runtime and proof reproducibility only.
+- **38 core-local scheduling (`m29a-pressure-and-target-proof`):** full same-harness QEMU/Pi benchmark gate with service-bucket counters and fresh target evidence.
+- **39 operator lanes (`m29b-pressure-and-target-proof`):** full latency/fairness gate under mixed serial, USB local-seat, TCP console, HDMI, diagnostics, network, telemetry, and persistence pressure; throughput claims remain tied to 26d/38 baselines and must not collapse separated proof lanes.
 - **27 read-only utilities:** no full benchmark; require bounded command latency for inspect/diff/attest over representative evidence packs.
-- **27a/28c gateway authority/protocol work:** gateway-focused latency/backpressure benchmarks for REST delegated writes, MCP resources/tools, and A2A task flows; full Pi hardware benchmark only if gateway results expose runtime-path regression.
-- **27b/27c/27d/27e/28b:** targeted provider/exporter, semantic extraction/capsule, AI-run-cost, inference, or fault-recovery timing where the milestone changes those paths; no full Pi/QEMU throughput gate by default.
+- **27a/28/28d/28e gateway authority/protocol work:** gateway-focused latency/backpressure benchmarks for REST delegated writes, MCP resources/tools, and A2A task flows; full Pi hardware benchmark only if gateway results expose runtime-path regression.
+- **27b–27e, 28a–28c and deferred 30–35:** targeted provider/exporter, semantic extraction/capsule, AI-run-cost, inference, or fault-recovery timing where the milestone changes those paths; no full Pi/QEMU throughput gate by default.
 - **27f UI workbench:** UI render/backlog benchmark gate for Live Hive, replay, and inactive-view polling behavior.
-- **30/30a field status:** bounded command-latency checks only.
-- **30b AI namespace:** namespace-scale microbenchmarks for high-churn job/run roots; no full hardware benchmark unless the namespace provider changes hot runtime paths.
-- **31 AWS/ENA:** new-target benchmark gates; single-queue first-link evidence is not peak performance, and peak ENA claims require archived EC2 evidence tied to generated queue and service-bucket policy.
+- **40/41 field status (`m30-readonly-regressions`, `m30a-hw-status-regressions`):** bounded command-latency checks only.
+- **42 AI namespace (`m30b-ai-regressions`):** namespace-scale microbenchmarks for high-churn job/run roots; no full hardware benchmark unless the namespace provider changes hot runtime paths.
+- **43 AWS/ENA (`m31-ena-performance-closure`):** new-target benchmark gates; single-queue first-link evidence is not peak performance, and peak ENA claims require archived EC2 evidence tied to generated queue and service-bucket policy.
 
 ---
 
@@ -10259,7 +10262,7 @@ After Milestone 26e closes the selected task/topology and evidence baseline,
 Cohesix needs deterministic tools to understand, reproduce, compare, and
 explain system behavior before it adds more production AI authority. Milestone
 27 is deliberately read-only and does not wait for downstream
-Milestone 28 or conditional Milestones 29, 29a, or 29b. When persistence, proof witnesses, service buckets,
+Milestone 29 assurance or conditional Milestones 37 persistence, 38 service-turn scheduling, or 39 operator lanes. When persistence, proof witnesses, service buckets,
 operator-lane counters, or signed attestation are absent, the tools report
 typed unavailable or unknown state and preserve the source evidence class.
 Mutating authority hardening remains Milestone 27a, not a hidden prerequisite
@@ -10676,9 +10679,10 @@ result. Release A operator admission means authenticated explicit human
 approval plus generated allowlist, bounded ticket, idempotency/writer state,
 and receipt under 27a; it is recorded as
 `admission_mode=operator_approved`/`admission_id=unavailable` and cannot be
-described as 28c machine-checked admission. Release B governed or autonomous
-admission means the accepted 28c typed-intent, authoritative-fact,
-decision-bound-grant path. A profile cannot silently switch between them.
+described as general machine-checked admission under 32. Release B governed or
+autonomous admission means the accepted 28 `m28-standing-authority-and-admission`
+typed-intent, authoritative-fact and state-bound decision path. General proof
+artefacts remain 32 (`m28c-admission-verdict-engine`). A profile cannot silently switch between them.
 Host APIs, OpenAI-compatible endpoints, MCP/A2A, Python, FUSE, exporters, and
 SwarmUI are replaceable projections over this lifecycle, not independent
 authority planes.
@@ -10734,15 +10738,15 @@ evidence is advisory and cannot satisfy external-execution, Worker, hardware,
 or production-use-case proof by itself.
 
 The seL4 target must remain outside token streams, bulk artifacts, hot telemetry,
-and provider-native data planes. Milestone 28f first proves exact per-request
-operator approval or, where selected, 28c governed admission plus durable
+and provider-native data planes. Milestone 35 (`m28f-gateway-admission-and-streaming`) must preserve exact per-request
+operator approval or, where selected, accepted 28 governed admission plus durable
 reconciliation. A later optimization may introduce a
 short-lived multi-request routing or budget grant only through a separately
 versioned compiler-owned contract with one spender, exact policy/identity/
 provider bounds, expiry and revocation, monotonic accounting, overspend
 prevention, crash reconciliation, mandatory receipts, and measured need. A
 generic host-local authority envelope or an optimization that weakens exact
-admission is not authorized by Milestone 28f.
+admission is not authorized by Milestone 35.
 
 ## Milestone 27a — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="27a"></a>
 [Milestones](#Milestones)
@@ -10777,7 +10781,14 @@ This milestone closes those gaps using existing as-built mechanisms (`hive-gatew
 
 **As-built alignment note:** Mutating REST requests now require request authentication and a MAC-validated caller ticket. The gateway intersects caller role, scope, mount, expiry and quotas with its configured upstream authority and retains bounded quota state. The upstream console still authenticates as the gateway principal, so this is **gateway-enforced caller delegation**; no **VM-verified caller identity** is claimed. Strict Queen intent identities reserve bounded dedupe entries before effects, retain duplicate terminal results, and reject changed envelopes or non-current writer epochs. Host execution and relay journals preserve durable dedupe and writer fences. The Release A production profile requires strict intents, secret references and bounded audit/replay, disables legacy Queen control and memory diagnostics, and keeps production failover/federation and future VM authority gates disabled. Completion follows the evidence requirements and scoped owner decision below.
 
-**Sequencing note:** Milestone 27a closes the host/gateway authority floor required by the Milestone 27b coexistence gate, Milestone 28a per-intent admission, and Milestones 27d, 28c, and 30b. Milestone 26e owns complete live Worker and baseline linked-driver cap authority and basic containment; a persistence-enabled Milestone 29 profile must also have accepted its `driver-storage` bundle under that same contract. Production Worker ticket/lease ledger binding, complete driver-inventory projection for every selected accepted runtime, and structured worker/driver quarantine evidence are split into Milestone 28b so the host actuation floor can ship without bundling that production ledger work into the same atomic gate.
+**Current follow-on task owners:** shared admission is 28
+(`m28-standing-authority-and-admission`); selected protocols are 28d
+(`m28d-mcp-selected-workflows`) and 28e (`m28e-a2a-durable-jobs`); production
+binding is 33 (`m28b-production-worker-ticket-driver-inventory`); storage is 37
+(`m29-contract-baseline-admission`); AI namespaces are 42 (`m30b-ai-ir`).
+These references update prospective ownership only, not accepted 27a evidence.
+
+**Sequencing note:** Milestone 27a closes the host/gateway authority floor required by the Milestone 27b coexistence gate, Milestone 28 per-intent admission, and Milestones 27d, 28d/28e, and 42. Milestone 26e owns complete live Worker and baseline linked-driver cap authority and basic containment; a persistence-enabled Milestone 37 profile must also have accepted its `driver-storage` bundle under that same contract. Production Worker ticket/lease ledger binding, complete driver-inventory projection for every selected accepted runtime, and structured worker/driver quarantine evidence are split into Milestone 33 so the host actuation floor can ship without bundling that production ledger work into the same atomic gate.
 
 ---
 
@@ -10788,10 +10799,10 @@ Strengthen authority and failover guarantees while preserving current transport 
 3. Add explicit writer-epoch fencing for failover and relay paths.
 4. Eliminate fixture/bootstrap secret usage from release profiles.
 5. Ship production profiles with audit/replay enabled and bounded by manifest limits.
-6. Establish the mandatory authority floor for Milestone 27b provider conformance, Milestone 27d host-side AI actuation, and Milestone 30b AI namespace projections.
+6. Establish the mandatory authority floor for Milestone 27b provider conformance, Milestone 27d host-side AI actuation, and Milestone 42 AI namespace projections.
 7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
 8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
-9. Leave production Worker ticket/lease ledger binding, complete driver-inventory projection, and structured quarantine/evidence as the explicit Milestone 28b follow-on, not a hidden prerequisite inside the host/gateway write-safety gate or a reason to deny accepted pre-28b live cap authority from 26e and any selected, independently accepted Milestone 29 storage runtime.
+9. Leave production Worker ticket/lease ledger binding, complete driver-inventory projection, and structured quarantine/evidence as the explicit Milestone 33 follow-on, not a hidden prerequisite inside the host/gateway write-safety gate or a reason to deny accepted pre-33 live cap authority from 26e and any selected, independently accepted Milestone 37 storage runtime.
 
 ---
 
@@ -10937,27 +10948,27 @@ Implementation requirements:
   - the complete isolated Heartbeat/GPU/LoRA task-instance authority accepted by
     Milestone 26e, including basic fault containment and teardown but not
     production ticket/lease binding;
-  - any selected Milestone 29 `driver-storage` bundle only after its own
+  - any selected Milestone 37 `driver-storage` bundle only after its own
     complete authority inventory, fault containment, teardown, and
     fresh-generation evidence is accepted;
   - production Worker ticket/lease binding, projection of the already complete
     applicable driver MMIO/DMA/shared-ring inventory, and structured quarantine/evidence as
-    Milestone 28b requirements.
+    Milestone 33 requirements.
 - Target profiles must fail validation if they claim production ticket/lease
   cap-bundle binding or structured production fault/quarantine evidence before
-  Milestone 28b evidence exists. They may describe accepted pre-28b task/driver
+  Milestone 33 evidence exists. They may describe accepted pre-33 task/driver
   authority only with the exact acceptance records from the milestone that
   owns each selected bundle.
-- Milestones 27d, 28c, and 30b may depend on 27a host/gateway delegated identity,
+- Milestones 27d, 28d/28e, and 42 may depend on 27a host/gateway delegated identity,
   idempotency, fencing, audit/replay, and host-ticket durability, and may consume
-  accepted 26e Worker behavior where explicitly needed, but must not cite 28b
-  production VM ticket/lease binding or quarantine closure before 28b completes.
+  accepted 26e Worker behavior where explicitly needed, but must not cite 33
+  production VM ticket/lease binding or quarantine closure before 33 completes.
 
 As-built leverage:
 - Reuse the accepted 26e isolated-task/acceptance terminology, any selected
-  accepted Milestone 29 storage-runtime evidence, current driver
+  accepted Milestone 37 storage-runtime evidence, current driver
   applied-scheduling evidence, and 27a audit/replay profile gates without
-  overclaiming 28b production ticket/lease binding.
+  overclaiming 33 production ticket/lease binding.
 
 ---
 
@@ -10975,7 +10986,7 @@ Implementation requirements:
 
 ### 10) Durable admission-correlation substrate
 **Purpose:** Preserve the durable identity, replay, idempotency, and fencing
-fields that Milestone 28a will bind to a machine-checked decision without
+fields that Milestone 28 will bind to a bounded current-state decision without
 overloading writer ownership as state freshness.
 
 Implementation requirements:
@@ -10987,8 +10998,8 @@ Implementation requirements:
 - Keep `writer_epoch` as the writer/authority-owner fence. It must not be
   replaced by, derived from, or overloaded as `state_epoch` or a resource
   generation.
-- Pre-28a compatibility actions retain their explicitly generated posture;
-  27a does not create or simulate an admission decision. Milestone 28a owns
+- Pre-28 compatibility actions retain their explicitly generated posture;
+  27a does not create or simulate an admission decision. Milestone 28 owns
   exact per-intent policy/state evaluation and decision-bound grant issuance.
 
 ---
@@ -11021,7 +11032,7 @@ Implementation requirements:
 - Strict intent, WAL, receipt, audit, and evidence schemas preserve bounded
   optional correlation for `admission_id`, `intent_hash`, `policy_hash`,
   `state_epoch`, `resource_generation`, and `decision_expiry` without treating
-  missing pre-28a fields as a fabricated admission.
+  missing pre-28 fields as a fabricated admission.
 - `writer_epoch` remains the writer fence and is checked independently from
   decision state freshness and resource generations.
 - Host ticket targets and args are provider-validated before side effects; unsupported or ambiguous values fail deterministically with no executor call.
@@ -11029,10 +11040,10 @@ Implementation requirements:
 - `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
 - Root-console arbitrary memory diagnostics are unavailable in release/production profiles or constrained to HAL-classified diagnostic ranges.
 - Generated profiles and docs may claim exact accepted 26e Worker/baseline-driver
-  live cap authority and accepted Milestone 29 storage-runtime authority and
+  live cap authority and accepted Milestone 37 storage-runtime authority and
   basic containment only with matching owner-milestone evidence; they do
   not claim production Worker ticket/lease binding, complete driver-inventory
-  ledger projection, or structured quarantine evidence until 28b exists.
+  ledger projection, or structured quarantine evidence until 33 exists.
 - Milestone 27d host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Applicable regression pack preserves compatibility-mode contract outputs; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 - Gateway authority benchmark evidence shows delegated REST identity, idempotency, writer-epoch refusal, and audit/replay emission stay bounded; any material status/read or write-path regression is classified before downstream MCP/A2A or AI host-control milestones depend on the gateway.
@@ -11048,14 +11059,14 @@ Implementation requirements:
   - bounded future admission correlation fields (`admission_id`,
     `intent_hash`, `policy_hash`, `state_epoch`, `resource_generation`, and
     `decision_expiry`) in strict intent, WAL, receipt, audit, and evidence
-    schemas without implementing 28a evaluation,
+    schemas without implementing 28 evaluation,
   - production secret references,
   - audit/replay required defaults for release profiles,
   - host-ticket provider target/arg grammars and execution WAL policy,
   - live host-bridge auth and frame-length limits,
   - profile-gated debug diagnostic policy,
-  - deferred production Worker ticket/lease, driver-inventory projection, and structured-quarantine profile gates consumed by Milestone 28b,
-  - provider-registry and host-AI enablement dependency gates consumed by Milestone 27b, Milestone 27d, and Milestone 30b.
+  - deferred production Worker ticket/lease, driver-inventory projection, and structured-quarantine profile gates consumed by Milestone 33,
+  - provider-registry and host-AI enablement dependency gates consumed by Milestone 27b, Milestone 27d, and Milestone 42.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
   - `docs/ARCHITECTURE.md`
@@ -11184,19 +11195,18 @@ Checks: Production console cannot read arbitrary memory; bring-up diagnostics ar
 Deliverables: Debug memory access is no longer an unbounded operator surface.
 
 Title/ID: m27a-deferred-vm-authority-gates
-Goal: Add explicit validation/docs gates that separate model-only, accepted pre-28b task/driver authority, and 28b production ticket/lease plus driver-bundle/quarantine claims.
-Inputs: accepted 26e Worker/linked-driver evidence, conditional accepted Milestone 29 storage-runtime evidence, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/BUILD_PLAN.md.
+Goal: Add explicit validation/docs gates that separate model-only, accepted pre-33 task/driver authority, and 33 production ticket/lease plus driver-bundle/quarantine claims.
+Inputs: accepted 26e Worker/linked-driver evidence, conditional accepted Milestone 37 storage-runtime evidence, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/BUILD_PLAN.md.
 Changes:
-  - tools/coh-rtc/src/** — profile states for model/session-only roles, accepted 26e isolated-task and linked-driver authority, conditional accepted Milestone 29 storage-runtime authority, 27a host-authority readiness, and 28b production Worker ticket/lease binding plus driver-inventory/structured-quarantine closure; no active endpoint-only compatibility tier.
-  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/TEST_PLAN.md — document that 26e owns complete Worker task containment and baseline linked-driver authority and Milestone 29 owns its selected storage-runtime containment, while production Worker ledger binding, complete selected-driver inventory projection, and structured quarantine remain pending until 28b evidence exists.
+  - tools/coh-rtc/src/** — profile states for model/session-only roles, accepted 26e isolated-task and linked-driver authority, conditional accepted Milestone 37 storage-runtime authority, 27a host-authority readiness, and 33 production Worker ticket/lease binding plus driver-inventory/structured-quarantine closure; no active endpoint-only compatibility tier.
+  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/TEST_PLAN.md — document that 26e owns complete Worker task containment and baseline linked-driver authority and Milestone 37 owns its selected storage-runtime containment, while production Worker ledger binding, complete selected-driver inventory projection, and structured quarantine remain pending until 33 evidence exists.
 Commands:
   - cargo test -p coh-rtc
   - scripts/check-generated.sh
 Checks:
-  - Profiles cannot claim 28b production Worker ticket/lease binding, driver-inventory ledger projection, or structured quarantine authority from 27a alone, cannot reduce executable 26e Worker/driver authority to endpoint-only metadata compatibility, and cannot select a Milestone 29 storage runtime without its owner-milestone containment evidence.
+  - Profiles cannot claim 33 production Worker ticket/lease binding, driver-inventory ledger projection, or structured quarantine authority from 27a alone, cannot reduce executable 26e Worker/driver authority to endpoint-only metadata compatibility, and cannot select a Milestone 37 storage runtime without its owner-milestone containment evidence.
 Deliverables:
-  - Honest dependency gate for 27c/27d/27e/28c/30b host semantic,
-    inference, and actuation work plus 28b VM authority closure.
+  - Honest dependency gate for selected 28a–28f host work, deferred 31/34/35/42 semantic/inference/AI work, and 33 VM authority closure.
 
 Title/ID: m27a-gateway-authority-performance
 Goal: Prove delegated REST identity, idempotency, writer-epoch fencing, and audit/replay emission stay bounded in the gateway path.
@@ -11207,7 +11217,7 @@ Changes:
 Commands:
   - scripts/ci/gateway_perf_probe.sh --scenario delegated-rest-authority --state-dir out/bench/m27a-gateway-authority
 Checks:
-  - Read/status latency, delegated write latency, refusal counts, broker queue depth, ticket-cache behavior, and audit emission cost remain bounded or are classified before 27c/27d/27e/28c depend on the gateway.
+  - Read/status latency, delegated write latency, refusal counts, broker queue depth, ticket-cache behavior, and audit emission cost remain bounded or are classified before 27c/27d/27e/28d/28e depend on the gateway.
   - Probe evidence preserves no-retry accounting and does not count as fresh Pi hardware throughput proof unless it exposes a runtime-path regression that triggers the full REST harness.
 Deliverables:
   - Gateway authority performance ledger for downstream MCP/A2A and AI-host-control milestones.
@@ -11223,12 +11233,12 @@ After Milestone 27a:
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 - Production coexistence is still not complete until Milestone 27b turns the hardened authority floor into provider schemas, identity mapping, deployment artifacts, and conformance evidence.
 - Host-side AI supervisors gain no special bypass: they inherit delegated identity, idempotency, fencing, and audit/replay before any live actuation is allowed.
-- Milestone 28a can bind its per-intent decisions to durable 27a identity,
+- Milestone 28 can bind its per-intent decisions to durable 27a identity,
   idempotency, fencing, WAL, audit, and replay records without overloading
   `writer_epoch` as state freshness.
 - Production Worker ticket/lease bundle binding, projection of the already
   complete applicable driver MMIO/DMA/shared-ring inventory, and structured quarantine/evidence remain
-  explicitly pending for Milestone 28b rather than being buried inside the
+  explicitly pending for Milestone 33 rather than being buried inside the
   host/gateway authority floor; complete basic Worker task containment already
   belongs to 26e.
 
@@ -11316,7 +11326,8 @@ Worker ticket-to-bundle binding is not claimed.
 All original local implementation and historical evidence remain owned and
 preserved; inventory what already works before changing it. Broad provider
 completion, ecosystem-wide live qualification and domain playbooks are assigned
-to 28a. Merely moving them does not disable working code or upgrade its proof.
+to 30 (`m28a-native-provider-discovery-and-actions`); selected useful CUDA
+workload extensions belong to 28a (`m28a-approved-user-workloads`). Merely moving them does not disable working code or upgrade its proof.
 
 
 ```text
@@ -11508,7 +11519,8 @@ to user goals, and offers a no-hardware inspection trial.
 Guidance preserves scoped read credentials, exact request identity, bounded
 ticket status/deadletter recovery, independent verification and the distinction
 between registry updates, native serving and verified deployment. MCP/A2A remains
-planned [28g](#28g) scope; these entry points use current CLI, Python and REST.
+planned [28d](#28d)/[28e](#28e) scope under `m28d-mcp-selected-workflows` and
+`m28e-a2a-durable-jobs`; these entry points use current CLI, Python and REST.
 
 Documentation, links, generated consistency, CLI/parser checks and explicit
 mock/localhost-fixture exercises qualified the guidance. No live Queen/GPU/Jetson,
@@ -11904,8 +11916,10 @@ and legible presentation-scale rendering are release requirements.
 controls, showcase assets, replay, performance checks, and packaged native
 application evidence. Policy/manifest restrictions may disable an operation in
 a deployment; placeholders do not satisfy its implementation requirement.
-Protocol-specific UI integration belongs to 28g and consumes these workbench
-components, without making 27f depend on its future transport.
+Selected protocol integration belongs to 28d (`m28d-mcp-selected-workflows`)
+and 28e (`m28e-a2a-durable-jobs`), with assembled views in 28g
+(`m28g-installation-and-integrated-adoption`). It consumes these workbench
+components without making 27f depend on a future transport.
 
 **Deliverables**
 - Live AI Hive, Run Story, Jetson Flight Deck, Evidence Ribbon,
@@ -11930,7 +11944,7 @@ components, without making 27f depend on its future transport.
 - Live Hive desktop integration:
   - preserve PixiJS renderer and replay fixtures;
   - update canvas framing, toolbar, inspector, worker selection, canonical shard path display, and `No telemetry yet` remediation flow.
-  - render declaration, session, executable lifecycle, provider receipt, external-executor result, 26e target proof as separate fields; production-binding/quarantine inspectors belong to 28d. Missing or mock integration rows display their generated mode and never collapse into a generic healthy/ready badge.
+  - render declaration, session, executable lifecycle, provider receipt, external-executor result, 26e target proof as separate fields; production-binding/quarantine inspectors belong to 33 (`m28d-production-binding-workbench-inspector`). Missing or mock integration rows display their generated mode and never collapse into a generic healthy/ready badge.
 - UI performance gate:
   - add deterministic source and release-bundle checks for Live Hive frame cadence, pending-event backlog, inactive-view polling, replay rendering, and layout thrash under fixture load;
   - record UI render/backlog metrics separately from REST or Pi hardware performance; UI regressions do not reopen driver/runtime performance unless the transcript or gateway evidence shows backend slowdown.
@@ -12286,8 +12300,9 @@ The selected defaults enable the existing host-provider paths consistently on
 QEMU and Pi: Mac launchd actions remain bound to compiler-enrolled services,
 native network discovery uses its measured host helper, and read-only endpoint
 compliance is enrolled and published by default. M27g owns this assembled
-configuration and provisioning correction; it does not implement deferred 28a
-providers or claim their broader qualification. Retain existing admission,
+configuration and provisioning correction; it does not implement deferred 30
+providers (`m28a-native-provider-discovery-and-actions`) or claim their broader
+qualification. Retain existing admission,
 credential, exact native target and Worker-receipt boundaries.
 
 Compatibility review for these defaults covers coh/coh-status, cohsh,
@@ -12433,7 +12448,90 @@ The release must deliver three complete user journeys:
   changes and milestone acceptance need no human sign-off. Only overall release
   publication/promotion requires the named human release owner's approval.
 
+### Execution and evidence contract <a id="release-b-execution-evidence"></a>
+
+Each milestone below is Planned until explicitly activated. Component checks use
+accepted earlier contracts; downstream clients cannot become hidden prerequisites.
+M28 tests authority and lifecycle through existing CLI/REST/Python consumers.
+M28d and M28e independently prove protocol integration; M28f proves NeMo
+composition; M28g proves cross-client release integration. Fixtures cannot close
+live client acceptance. Both protocols consume M28 controls independently.
+
+Task commands are future implementation instructions, not executed evidence.
+Existing Cargo/Python tests are starting points to extend. New tests, native
+packages and cases named below are **planned outputs** of their named owner.
+Missing tests or empty selections cannot pass. Use the existing conformance
+runner and TEST_PLAN catalog, not a second acceptance or execution system.
+
+`m28-selected-job-contract` owns planned `--case <id>` and
+`--reference-config <path>` options for `scripts/ci/provider_conformance_run.sh`;
+these options do not exist yet. Extend its existing matrix/runner and tests,
+preserving current modes. Reject unknown, duplicate and incompatible selections.
+Validate the reference file's installed binary/package paths, source/generated
+profile digests, endpoints, secret references, device/runtime versions, approved
+workload/model/data hashes, resource caps and evidence paths. It contains no
+credential values and cannot widen generated authority. Cases invoke maintained
+installed clients and provider observers, never raw effects. Each implementing
+task registers its cases in `configs/provider_conformance.toml` and
+`configs/test_plan_actions.toml`, with proof layers in `docs/TEST_PLAN.md`.
+
+For live commands, set `RELEASE_B_REFERENCE` to that validated file,
+`RELEASE_B_HOST_PROFILE` to its selected host profile, and `RELEASE_B_EVIDENCE`
+to a fresh evidence directory. These are operator-supplied paths/identifiers,
+not secrets. Run CUDA/PEFT observations on the Linux AArch64 NVIDIA reference
+and Apple checks on the supported Mac; record remote client/executor topology.
+Each case retains command/exit status, case ID, source/package/manifest/runtime
+identities, bounds, raw observation hashes, logical/native job and receipt links,
+expected/observed results and proof class. Preserve failures and unresolved
+outcomes. Reports reference existing signed evidence, not a new receipt authority.
+
+Every task also runs `scripts/check-generated.sh` (including its Test Plan check)
+and `git diff --check`, plus applicable charter merge gates. Changed-path
+selection determines target checks; host tests cannot qualify QEMU/Pi. Component
+closure links each check to retained evidence in the planned
+`docs/audit/M28_IMPLEMENTATION_RECORD.md`, populated by the implementing owners.
+M28g separately binds assembled evidence. Select exact platform/model/protocol
+versions before their implementation or live qualification; do not infer them
+from old proposals.
+
+`m28-agent-protocol-controls` owns compiler-controlled
+`[gateway.agent_protocols].enabled`, `[gateway.mcp].enabled` and
+`[gateway.a2a].enabled`, all default false. Effective enablement is master AND
+protocol. CLI, environment, desktop launch and clients cannot raise this ceiling.
+Disabled protocols start no listener, handler, discovery/card/catalogue, stream
+or background work. Disabling access preserves underlying jobs and pending
+delivery; it never silently cancels or replays effects. Existing authenticated
+REST/CLI recovery remains usable.
+
+### Planning maintenance record
+
+```text
+Title/ID: m28-release-b-plan-readiness
+Milestone: 28 / m28-release-b-plan-readiness (documentation-only owner request)
+Goal: Make Release B milestones actionable and consistently reviewable without activating runtime work.
+Inputs: AGENTS.md; CONTRIBUTING.md task format; docs/TEST_PLAN.md; current source paths and milestone ownership map.
+Changes:
+  - docs/BUILD_PLAN.md — expand owners, commands, bounds and evidence; retain protocol controls in Release B; reconcile prospective references while preserving historical IDs and evidence.
+Commands:
+  - scripts/check-generated.sh
+  - git diff --check
+Checks: Unique task IDs/anchors and valid local links; consistent Planned sections and task fields; no downstream foundation gates; future commands explicitly labelled.
+Deliverables: Planning revision with AI-assisted analysis and drafting; no runtime, platform compatibility, milestone closure or release acceptance claim.
+```
+
+**Planning validation (23 September 2026):** `scripts/check-generated.sh`
+passed, including Test Plan catalog/cross-file integrity and NIST evidence
+checks; `git diff --check` passed. Structural review found 488 unique task IDs
+and 108 unique explicit anchors, preserving every prior ID/anchor. All eight
+sections have the required task fields and consistent milestone structure;
+added local links and exact task/case references resolve. The 15 retained design
+inventories are unchanged. No product runtime or hardware qualification was run.
+
 ## Milestone 28 — Shared Governed Jobs and Bounded Unattended Authority <a id="28"></a>
+
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
 
 **Value:** every client safely operates the same durable job without granting
 unrestricted host access or repeatedly asking permission inside valid policy.
@@ -12456,32 +12554,94 @@ and model assertions are not grants. Administrative changes require separate
 authority; escalation cannot approve itself. General solvers/proofs stay in
 29/32, not on the critical path.
 
+Before implementation, enumerate existing persisted job/WAL schemas and the
+specific extensions needed. Distinguish execution state from delivery state;
+terminal execution with pending delivery remains a retained obligation. Declare
+finite journal/evidence/queue limits and deterministic full/corrupt-state errors.
+Reservation, dispatch and settlement share one durable identity: reserve before
+effects, recheck current authority at dispatch, settle confirmed usage once,
+and retain uncertain allocations until native reconciliation establishes safety.
+Revocation prevents new effects but does not invent termination of existing work.
+Persisted schema evolution must preserve old identity and replay meaning.
+
+**Deliverables:** Versioned job/authority contracts, durable accounting, generated protocol controls, client/help updates and focused recovery evidence.
+
+**Task breakdown**
+
 ```text
 Title/ID: m28-selected-job-contract
-Milestone: 28 / shared governed jobs
-Goal: Extend the accepted lifecycle for selected ecosystem clients without a second execution or evidence path.
-Inputs: 27a–27g; coh; host-ticket-agent; cohesix Python; coh-rtc; provider and receipt contracts.
-Changes: Exact job/action/input bindings; shared status/cancel/reconcile; separate pending delivery; bounded evidence and client parity.
-Commands: Existing focused coh, host-ticket-agent, Python and coh-rtc TEST_PLAN actions; scripts/check-generated.sh; git diff --check.
-Checks: Duplicate, lost-response, restart, wrong-target and uncertain-outcome cases preserve identity and never blindly repeat effects.
-Deliverables: Shared job contract, affected clients and focused recovery evidence.
+Milestone: 28 / m28-selected-job-contract
+Goal: Extend the accepted durable job lifecycle once for all selected ecosystem clients.
+Inputs: Accepted 27a–27g; configs/root_task*.toml; configs/cuda_recipe.toml; docs/HOST_TOOLS.md; docs/INTERFACES.md; docs/SECURITY.md; existing signed provider/receipt contracts.
+Changes:
+  - tools/coh-rtc/src/{ir,recipe,authority}.rs + codegen — version exact subject/action/target/input/policy/state-generation/deadline bindings, generated bounds and backward-compatible persisted decoding or an explicit migration refusal.
+  - apps/coh/src/{run,recipe,workflow}.rs + apps/host-ticket-agent/src/{wal,status}.rs — reuse existing identities/journals; distinguish submission intent, native execution, cancellation requested/confirmed, uncertain result, terminal verification and pending result delivery.
+  - tools/cohesix-py/cohesix/{orchestration,workload,client}.py + apps/hive-gateway/src/main.rs — shared status/cancel/reconcile semantics and scoped evidence visibility; no second scheduler or native executor.
+  - scripts/ci/provider_conformance_run.py + scripts/ci/provider_matrix.py + tests/test_provider_matrix.py — implement the bounded case/reference selection contract above; preserve current modes and reject missing or empty case execution.
+  - configs/provider_conformance.toml + configs/test_plan_actions.toml + docs/TEST_PLAN.md — register m28-jobs-live; extend existing recovery fixtures and installed-client observations; docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md describe the same lifecycle.
+Commands:
+  - cargo test --locked -p coh --test recipe --test run --test workflow
+  - cargo test --locked -p host-ticket-agent --lib
+  - cargo test --locked -p coh-rtc
+  - python3 -m pytest -q tools/cohesix-py/tests/test_orchestration.py tools/cohesix-py/tests/test_workload.py tests/test_provider_matrix.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28-jobs-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28-jobs-live"
+Checks:
+  - Crash before dispatch, after native start and after terminal observation preserves original identity; lost replies reconcile without a second effect.
+  - Pending delivery survives execution completion, restart and retention; acknowledged delivery can retire only under declared bounds. A corrupt/full journal refuses new work without evicting unresolved obligations.
+  - Wrong subject/target/input and stale generations refuse; old persisted records retain meaning or receive an explicit supported migration/refusal. Existing CLI/REST/Python prove parity without future protocol clients.
+Deliverables: Versioned shared job contract, updated clients/manuals, journal compatibility fixtures and m28-jobs-live case report with original/native identities and outcome/delivery evidence.
 
 Title/ID: m28-standing-authority-and-admission
-Milestone: 28 / bounded unattended authority
-Goal: Authorise unattended effects only within current revocable policy and shared durable limits.
-Inputs: Existing delegation, fencing, journal, policy and target checks; m28-selected-job-contract.
-Changes: Narrow current-state admission; standing scopes and cumulative accounting; expiry/revocation; separate administration; clear denials.
-Commands: Focused policy/executor race and restart actions; exact QEMU/Pi checks only where target behaviour changes.
-Checks: Scope widening, stale generations, forged facts, budget reset, replay and cross-protocol bypass fail before effects; required approval remains enforced.
-Deliverables: Tested authority primitive, policy examples and exact enforcement/non-claims.
+Milestone: 28 / m28-standing-authority-and-admission
+Goal: Admit unattended effects only within revocable current policy and durable cumulative limits.
+Inputs: m28-selected-job-contract; crates/cohesix-authority; 27a delegation/fencing; generated action policies; target ticket/lease checks.
+Changes:
+  - tools/coh-rtc/src/{authority,ir,lib}.rs + crates/cohesix-authority/src/ — declare scope, delegation attenuation, authoritative fact sources/freshness, decision expiry, budget units, concurrency and bounded retention; generate the narrow evaluator contract.
+  - apps/hive-gateway/src/{auth,identity}.rs + apps/host-ticket-agent/src/{claim,wal,provider}.rs — one budget identity across clients; atomic reservation before dispatch, generation/revocation recheck, cancellation/compensation authority and confirmed settlement.
+  - apps/coh/src/policy.rs + tools/cohesix-py/cohesix/authority.py — inspect/revoke standing scopes and explain deterministic denials; administration requires separate authority.
+  - configs/provider_conformance.toml + configs/test_plan_actions.toml + docs/TEST_PLAN.md — m28-authority-live and focused concurrent spend/crash tests; docs/SECURITY.md + docs/HOST_API.md record enforcement custody and bypass limits.
+Commands:
+  - cargo test --locked -p cohesix-authority
+  - cargo test --locked -p coh-rtc
+  - cargo test --locked -p hive-gateway
+  - cargo test --locked -p host-ticket-agent --lib
+  - python3 -m pytest -q tools/cohesix-py/tests/test_authority.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28-authority-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28-authority-live"
+Checks:
+  - Concurrent requests cannot overspend or evade shared concurrency limits; restart, changed client and retry cannot reset accounting. Unknown native termination retains its reservation; confirmed settlement is applied once.
+  - Stale/contradictory facts, expired/revoked/attenuated scopes, changed resource generations, clock invalidity and forged grants refuse before effects; dispatch races and policy-required approvals are exercised.
+  - One admitted GPU action and one enrolled service-recovery action execute and verify within standing policy; escalation cannot approve itself. Real MCP/A2A parity belongs to their later owners.
+Deliverables: Generated authority primitive, bounded policy examples, denial/accounting evidence and m28-authority-live report; no general proof or non-bypassable privileged-host claim.
+
+Title/ID: m28-agent-protocol-controls
+Milestone: 28 / m28-agent-protocol-controls
+Goal: Establish shared fail-closed manifest controls before either protocol is implemented.
+Inputs: m28-selected-job-contract; tools/coh-rtc; configs/root_task*.toml; apps/hive-gateway; retained m28g-manifest-protocol-controls design in deferred 36.
+Changes:
+  - tools/coh-rtc/src/{ir,lib}.rs + codegen + configs/root_task*.toml — schema-versioned false-default master/MCP/A2A flags, effective conjunctions and disabled-profile dependency validation; regenerate all affected consumers.
+  - apps/hive-gateway/src/main.rs + apps/coh/src/doctor.rs — enforce and explain the generated enablement ceiling before credentials, transport startup or discovery; preserve REST and existing job recovery.
+  - apps/hive-gateway/tests/agent_protocol_controls.rs (planned) + compiler tests — all eight flag combinations, invalid/missing configuration, CLI/env widening and existing-job preservation; M28d/e extend these tests with their real endpoints.
+  - docs/HOST_API.md + docs/HOST_TOOLS.md + docs/SECURITY.md + docs/TEST_PLAN.md — safe enable/disable and restart semantics, no active disabled surfaces, unchanged underlying effect/delivery obligations.
+Commands:
+  - cargo test --locked -p coh-rtc
+  - cargo test --locked -p hive-gateway --test agent_protocol_controls
+  - cargo test --locked -p coh --lib doctor::
+Checks:
+  - All combinations enforce master AND protocol and refuse runtime widening; absent configuration defaults disabled.
+  - Foundation closure proves generated policy and existing startup/recovery boundaries only. It does not claim absent MCP/A2A listener conformance; each protocol owner must prove no disabled handlers, discovery, streams or background tasks.
+Deliverables: Shared generated controls and truth table, focused compiler/startup evidence and operator documentation; no dependency on either downstream protocol.
 ```
 
-**Done:** a bounded GPU action and one existing allowlisted service-recovery
+**Checks / definition of done:** shared controls pass their truth table, and a bounded GPU action and one existing allowlisted service-recovery
 action execute within standing policy, refuse invalid/stale requests and survive
 interrupted result delivery with inspectable outcomes. Selected-path safety
 checks are mandatory; broad formal assurance is not.
 
 ## Milestone 28a — Useful CUDA Workloads and Reliable GPU Operations <a id="28a"></a>
+
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
 
 **Value:** users run their own approved useful workload, not only diagnostic kernels.
 **Prerequisites:** 28 and accepted 27b/27c CUDA/executor/recipe foundations.
@@ -12502,31 +12662,60 @@ GPU execution. Retain advertised native/container paths, without rebuilding them
 Jetson is required; discrete GPU, MIG, distributed placement and deep profiling
 are independent later claims, not silent substitutes or new baseline scope.
 
+**Deliverables:** Workload registration and useful recipes, GPU diagnostics, installed client views and exact-device execution/recovery evidence.
+
+**Task breakdown**
+
 ```text
 Title/ID: m28a-approved-user-workloads
-Milestone: 28a / useful CUDA execution
-Goal: Run a user-configured approved workload through the existing governed executor.
-Inputs: 27c recipes; 28; gpu-bridge-host; host-cuda; host-ticket-agent; coh/Python; generated profiles.
-Changes: Workload registration, typed parameters, digest/entrypoint/device binding, verified outputs and useful reference recipe.
-Commands: Focused CUDA/provider/recipe checks and selected live TEST_PLAN actions; scripts/check-generated.sh.
-Checks: Genuine execution and verified outputs on the admitted device; arbitrary command/path/credential injection and stale inventory refuse.
-Deliverables: Installable recipe, adaptation guide, CLI/Python/SwarmUI operation and live evidence.
+Milestone: 28a / m28a-approved-user-workloads
+Goal: Run approved user workloads through the existing native/container executor without Cohesix source edits.
+Inputs: 28; accepted 27c recipes; configs/cuda_recipe.toml; crates/host-cuda; apps/gpu-bridge-host; apps/host-ticket-agent/src/executors/workload.rs.
+Changes:
+  - tools/coh-rtc/src/recipe.rs + configs/cuda_recipe.toml — bounded registration schema: package/container digest, fixed entrypoint, typed parameter limits, declared input/output roots, secret references, memory/disk/deadline limits and selected device compatibility.
+  - apps/coh/src/{recipe,run}.rs + apps/host-ticket-agent/src/executors/workload.rs — privileged register/validate flow, immutable workload identity and existing executor dispatch; reject unapproved executables, traversal/symlink escapes and parameter-to-shell injection.
+  - tools/cohesix-py/examples/cuda_recipe.py + tools/cohesix-py/cohesix/workload.py — useful pinned batch inference or embedding reference, a second user adaptation and an independent bounded output validator; freeze model/data/expected tolerances before the live run.
+  - apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — registration/preflight/run/result views and installed-native/container instructions; conformance matrix/catalog gain m28a-workloads-live.
+Commands:
+  - cargo test --locked -p coh --test recipe --test run
+  - cargo test --locked -p host-ticket-agent --lib executors::workload
+  - cargo test --locked -p coh-rtc
+  - python3 -m pytest -q tools/cohesix-py/tests/test_workload.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-workloads-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28a-workloads-live"
+Checks:
+  - Reference and independently configured adaptation run on the admitted Jetson GPU with verified output hashes and task-specific tolerances, not only a zero exit code.
+  - Each advertised native/container lane is exercised; stale device inventory, altered digests, unsafe paths/credentials and parameter bound violations refuse before native start.
+Deliverables: Versioned registration contract, installable reference/adaptation and m28a-workloads-live evidence identifying each supported lane, GPU and output verifier.
 
 Title/ID: m28a-cuda-operations-and-recovery
-Milestone: 28a / GPU operations
-Goal: Make capacity, cancellation, failure and recovery safe and understandable.
-Inputs: m28a-approved-user-workloads; doctor; telemetry; executor journal; shared verifier.
-Changes: Memory/health diagnostics, exact-owner cancellation, checkpoint capability and interrupted-job reconciliation.
-Commands: Selected live and deterministic timeout/cancel/stale-inventory/OOM/restart/lost-response cases.
-Checks: No unrelated process is killed or uncertain effect replayed; unsupported resume/isolation/telemetry is explicit.
-Deliverables: Diagnostic views, recovery walkthrough and exact-profile failure evidence.
+Milestone: 28a / m28a-cuda-operations-and-recovery
+Goal: Make resource refusal, cancellation and interrupted CUDA recovery safe and understandable.
+Inputs: m28a-approved-user-workloads; executor WAL/native identity; apps/coh/src/doctor.rs; gpu-bridge-host telemetry; existing shared verifier.
+Changes:
+  - apps/gpu-bridge-host/src/ + apps/coh/src/doctor.rs — freshness-aware device/memory/health diagnostics with separate estimates, measurements and enforced caps.
+  - apps/host-ticket-agent/src/executors/workload.rs + apps/coh/src/recipe.rs — exact-owner cancellation, bounded cleanup and runtime-supported checkpoint validation; reconcile uncertain work before any newly authorised restart.
+  - tools/cohesix-py/cohesix/workload.py + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — consistent interruption, unsupported-resume and unresolved-outcome guidance; matrix/catalog gain m28a-recovery-live.
+Commands:
+  - cargo test --locked -p gpu-bridge-host --lib
+  - cargo test --locked -p coh --test recipe
+  - cargo test --locked -p host-ticket-agent --lib executors::workload
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-recovery-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28a-recovery-live"
+Checks:
+  - Timeout, revoke/cancel, runner restart and lost-response cases preserve native identity, never kill unrelated processes and release capacity only after observed termination.
+  - Exercise OOM mapping with a capped child or deterministic injection, never shared-host exhaustion. Corrupt/incompatible checkpoints refuse; unsupported resume is distinguished from explicit restart.
+  - Live recovery shows a verified output or retained uncertainty with bounded resource accounting; no retry masks the failed attempt.
+Deliverables: Actionable diagnostics/recovery guide and m28a-recovery-live report including cancellation timing, native cleanup and reservation settlement.
 ```
 
-**Done:** a newcomer configures useful work without patching Cohesix and handles
+**Checks / definition of done:** a newcomer configures useful work without patching Cohesix and handles
 an interruption from published instructions, obtaining verified outputs or an
 explicit unresolved outcome rather than invented success.
 
 ## Milestone 28b — Deeper PEFT Lifecycle and Verified Serving <a id="28b"></a>
+
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
 
 **Value:** genuine adapters progress from training/import to measured, reversible serving.
 **Prerequisites:** 28, 28a and accepted 27d LoRA transaction; extend its journal,
@@ -12556,35 +12745,66 @@ verified deployment. Keep general API cloning/proxying/routing in 35. HF, MLX an
 NeMo adapters interoperate only for actually qualified format/model/runtime pairs;
 no blanket compatibility or general conversion programme.
 
+**Deliverables:** Configurable training/import, fixed evaluation and serving contracts, runtime canaries and verified promotion/rollback evidence.
+
+**Task breakdown**
+
 ```text
 Title/ID: m28b-configurable-peft-training-and-import
-Milestone: 28b / native PEFT depth
-Goal: Extend accepted training/import with useful configuration and truthful checkpoint recovery.
-Inputs: 27d; 28/28a; HF PEFT artifacts; existing CAS, registry, executor and validators.
-Changes: Pinned recipe inputs, bounded training parameters, provenance/format checks, supported checkpoints and genuine import.
-Commands: Focused PEFT transaction/provider checks and exact-reference train/import/resume actions.
-Checks: Real compatible artifacts and observed outcomes required; unsafe/corrupt inputs, path races, duplicates and stale generations fail safely.
-Deliverables: Configurable train/import workflow, recovery guide and genuine adapter evidence.
+Milestone: 28b / m28b-configurable-peft-training-and-import
+Goal: Extend accepted HF PEFT training/import with bounded configuration and truthful checkpoint recovery.
+Inputs: 28/28a; accepted 27d; tools/cohesix-py/cohesix/hf_native.py; apps/coh/src/peft/; existing CAS/registry and peft executors.
+Changes:
+  - tools/cohesix-py/cohesix/hf_native.py + examples/private_lora_release.py — select and pin one Jetson-feasible base/tokenizer, training and disjoint held-out datasets, framework/runtime and independent adapter source before qualification; declare memory/disk caps and licence/credential references.
+  - apps/coh/src/peft/{import,transaction,release}.rs + apps/host-ticket-agent/src/executors/{peft,peft_release}.rs — bounded parameter schema, safe artifact parsing, exact base/config compatibility and provenance; imported artifacts retain unknown training provenance.
+  - tools/coh-rtc/src/ + configs/root_task*.toml + configs/cuda_recipe.toml — generate supported training/import/checkpoint capabilities; admit QLoRA only for an explicitly qualified pair, not as implicit extra scope.
+  - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + matrix/catalog — supported full-state resume versus adapter-only restart, independent import instructions and m28b-peft-live.
+Commands:
+  - cargo test --locked -p coh --test peft_import --test peft_release
+  - cargo test --locked -p host-ticket-agent --lib executors::peft
+  - python3 -m pytest -q tools/cohesix-py/tests/test_hf_native.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-peft-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28b-peft-live"
+Checks:
+  - Real training and independent compatible import both complete; checkpoint evidence explicitly binds optimizer/scheduler/RNG/data position where the selected runtime supports full resume.
+  - Corrupt/oversize/unsafe artifacts, path races, wrong base/tokenizer, stale generations and duplicate submissions fail safely; no arbitrary remote-code loading or invented provenance.
+  - Record actual runtime checkpoint support before execution; an unsupported checkpoint cannot pass a resume claim, and adapter restart cannot be relabelled full training resume.
+Deliverables: Pinned model/data/runtime selection, configurable train/import instructions, safe format/checkpoint fixtures and genuine adapter/recovery evidence in m28b-peft-live.
 
 Title/ID: m28b-evaluate-canary-promote-rollback
-Milestone: 28b / verified serving
-Goal: Compare and deploy through one real application-facing runtime with reversible promotion.
-Inputs: m28b-configurable-peft-training-and-import; existing 27d evaluation/serving/rollback contract.
-Changes: Fixed held-out comparisons, runtime identity/readiness, real canary requests, promotion recheck and rollback views.
-Commands: Focused evaluator/activation tests and live serving, rejected-candidate, failed-canary, interrupted-promotion and rollback cases.
-Checks: Failed/stale candidates cannot promote; served behaviour and identity are observed; rollback restores the accepted generation without fabricated receipts.
-Deliverables: Usable endpoint, comparison results, complete release guide and recoverable deployment evidence.
+Milestone: 28b / m28b-evaluate-canary-promote-rollback
+Goal: Measure candidate quality and deploy through one real application-facing runtime with reversible promotion.
+Inputs: m28b-configurable-peft-training-and-import; accepted 27d evaluator/activation/journal; base and incumbent artifacts; docs/BENCHMARKS.md.
+Changes:
+  - apps/coh/src/peft/{controller,activate,release}.rs + tools/cohesix-py/cohesix/hf_native.py — select the supported native serving endpoint and predeclare held-out task metric, quality floor, latency/resource caps and comparison procedure before candidate evaluation.
+  - apps/host-ticket-agent/src/executors/peft_release.rs — runtime readiness/model-adapter observations and real inference canaries, fenced generation promotion, interrupted transition reconciliation and verified rollback.
+  - apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/BENCHMARKS.md — base/incumbent/candidate comparison and rejection/recovery views; matrix/catalog gain m28b-serving-live.
+Commands:
+  - cargo test --locked -p coh --test peft_release
+  - cargo test --locked -p host-ticket-agent --lib executors::peft_release
+  - python3 -m pytest -q tools/cohesix-py/tests/test_hf_native.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-serving-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28b-serving-live"
+Checks:
+  - Base/incumbent/candidate use the same held-out inputs and declared thresholds; failed quality/canary or stale generation cannot promote.
+  - A real application request observes the serving identity and output; interrupt promotion, reconcile the generation and prove rollback restores the incumbent using another inference request.
+  - Publish negative comparisons and stochastic settings; HTTP success, registry publication and judge scores alone cannot qualify deployment.
+Deliverables: Usable native endpoint, fixed evaluation configuration, comparison/canary/rollback guide and m28b-serving-live report with observed served generations.
 ```
 
-**Done:** both genuine training and independent import work; a real client uses
+**Checks / definition of done:** both genuine training and independent import work; a real client uses
 the canary and accepted deployment; rejection and rollback are demonstrated.
 Judge depth by this lifecycle, not the number of supported frameworks.
 
 ## Milestone 28c — macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows <a id="28c"></a>
 
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
+
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.
 
+Run `m28c-apple-platform-feasibility` first; its support/signing decision gates
+all three Apple implementation tasks without activating deferred frameworks.
 Target macOS 27 on the supported Apple-silicon reference. Verify and pin public
 Xcode/SDK APIs, OS build, device/language/region availability before implementation;
 no invented private Siri API or assumption that Siri speaks MCP/A2A. Preserve
@@ -12616,43 +12836,95 @@ CPU/remote fallback or universal HF/NeMo-to-MLX format claim. MPS/Core ML and
 mobile/watch/visionOS companions are deferred. Include signing/notarisation for
 the chosen distribution channel; missing credentials block that validation.
 
+**Deliverables:** Public-SDK feasibility matrix, signed native actions, Foundation Models assistance, MLX provider and device-qualified journeys.
+
+**Task breakdown**
+
 ```text
+Title/ID: m28c-apple-platform-feasibility
+Milestone: 28c / m28c-apple-platform-feasibility
+Goal: Resolve public SDK, actual device and signed distribution feasibility before building Apple integrations.
+Inputs: 28/28b; supported Apple-silicon Mac; public Xcode/macOS 27 SDK documentation; existing SwarmUI app/signing pipeline; docs/TOOLCHAIN_MAC_ARM64.md.
+Changes:
+  - apps/swarmui/native/apple/ (planned) + scripts/install/stage_swarmui.py — minimal public-API probe and selected App Intents extension/app packaging experiment; choose signing/entitlement/notarisation integration with the existing application.
+  - docs/TOOLCHAIN_MAC_ARM64.md + docs/HOST_TOOLS.md + planned M28 implementation record — exact OS/Xcode/SDK/device/memory/language/region matrix, Siri/App Intents/Foundation Models availability, MLX prerequisites and distribution channel.
+  - configs/provider_conformance.toml + TEST_PLAN catalog — m28c-platform-live collects actual native probe, signing and availability observations; absent credentials/APIs are explicit blockers.
+Commands:
+  - sw_vers
+  - xcodebuild -version
+  - xcrun --sdk macosx --show-sdk-version
+  - swift test --package-path apps/swarmui/native/apple
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-platform-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-platform-live"
+Checks:
+  - A minimal signed packaged action is discovered on the actual supported device; SDK compile success alone cannot establish Siri or Foundation Models availability.
+  - Record public API references, required entitlements, credential availability and selected notarisation command path before dependent implementation; do not substitute private APIs or a second desktop product.
+Deliverables: Native feasibility probe and m28c-platform-live support/blocker matrix; no full workflow acceptance from the probe alone.
+
 Title/ID: m28c-native-apple-actions
-Milestone: 28c / native entry points
+Milestone: 28c / m28c-native-apple-actions
 Goal: Expose selected governed jobs through App Intents, Shortcuts and Siri without new authority.
-Inputs: Pinned public SDK; existing SwarmUI package; 28 schemas; delegated credentials; recipes/run views.
-Changes: Minimal native actions/entities, secure credential handoff, scoped discovery, durable links and availability diagnostics.
-Commands: Native build/signing and intent tests; public Shortcuts/live Siri walkthroughs; shared authority negatives.
-Checks: Same jobs/receipts across clients; ambiguous/unauthenticated/stale input cannot act; jobs survive client exit; disabled Intelligence leaves core operation usable.
-Deliverables: Packaged actions, real Siri/Shortcuts examples and exact-device availability evidence.
+Inputs: m28c-apple-platform-feasibility; 28 schemas; selected 28a/28b operations; SwarmUI packaging; delegated credentials.
+Changes:
+  - apps/swarmui/native/apple/ (planned Swift package/native integration) — typed entities/actions for hive/recipe/run/deployment, secure credential handoff, scope-filtered indexing, prompt return of durable job references and deep links.
+  - apps/swarmui/src/workbench.rs + scripts/install/stage_swarmui.py — integrate the native component with the existing signed app and Rust-owned job views; implement chosen entitlements/signing/notarisation and installed discovery checks.
+  - docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md + matrix/catalog — exact build/install/sign commands, Siri/Shortcuts walkthrough and m28c-actions-live with an observed speech-driven invocation, cancellation and revoked-entity checks.
+Commands:
+  - swift test --package-path apps/swarmui/native/apple
+  - cargo test --locked -p swarmui --lib
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-actions-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-actions-live"
+Checks:
+  - Actual Siri and Shortcuts submit/inspect/cancel permitted work and return the same durable identity/receipts visible in CLI/SwarmUI; long work survives extension exit.
+  - Ambiguous/unauthenticated/stale entities cannot cause effects; revoked entries disappear; platform-required confirmation and Cohesix policy remain enforced.
+  - Collect signing/notarisation result for the selected distribution channel and actual device observations; unit or Shortcuts tests alone cannot pass Siri acceptance.
+Deliverables: Packaged native actions, exact installation/distribution instructions and m28c-actions-live evidence with per-surface proof limits.
 
 Title/ID: m28c-mlx-metal-provider
-Milestone: 28c / local compute
-Goal: Run a genuine small-model MLX inference and LoRA lifecycle through existing jobs/deployment.
-Inputs: 28b; pinned MLX/MLX-LM; supported model/data; exact Mac memory and Metal capabilities.
-Changes: One bounded Apple provider, explicit topology, format/runtime checks, GPU observations and resource-safe recovery.
-Commands: Focused adapter checks and live Mac infer/train/evaluate/canary/rollback/cancel actions.
-Checks: Local GPU execution observed; no hidden CPU/remote fallback; memory/format failures safe; no universal adapter-portability claim.
-Deliverables: Installable MLX profile, complete local journey and per-backend evidence.
+Milestone: 28c / m28c-mlx-metal-provider
+Goal: Run small-model MLX inference and LoRA training/serving through the shared jobs and deployment lifecycle.
+Inputs: m28c-apple-platform-feasibility; 28b lifecycle; pinned MLX/MLX-LM; supported Mac memory/GPU and selected model/adapter formats.
+Changes:
+  - tools/cohesix-py/cohesix/mlx_native.py (planned) + apps/host-ticket-agent/src/executors/ + generated provider source — one bounded MLX adapter using existing authority/journal, typed configuration and observed native identity.
+  - tools/cohesix-py/examples/mlx_lora_release.py (planned) — pin small base/tokenizer/data, unified-memory cap, actual Metal execution observer and quality/latency thresholds before live inference/train/evaluate/serve.
+  - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — separate local MLX, remote CUDA and Foundation Models assistance; matrix/catalog gain m28c-mlx-live and format/memory/checkpoint failure cases.
+Commands:
+  - python3 -m pytest -q tools/cohesix-py/tests/test_mlx_native.py
+  - cargo test --locked -p host-ticket-agent --lib
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-mlx-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-mlx-live"
+Checks:
+  - Inference and genuine LoRA training use the observed Metal GPU; canary/promotion/rollback follow 28b and compare predeclared quality/resource thresholds.
+  - Cancellation and interruption preserve job identity and bounded accounting; incompatible format/checkpoint and memory limits fail safely. No silent CPU/remote fallback or universal format portability.
+Deliverables: Installable MLX profile, complete local journey and m28c-mlx-live GPU/quality/recovery evidence.
 
 Title/ID: m28c-foundation-models-assistance
-Milestone: 28c / evidence-grounded Apple AI
-Goal: Explain operations and propose valid next actions without model authority.
-Inputs: Public pinned Foundation Models SDK; scoped evidence; shared typed actions; native app.
-Changes: One assistance flow, labelled interpretation/source links, typed proposals, availability/privacy posture and deterministic fallback.
-Commands: Native model/tool tests; supported-device exercise; unavailable/disabled/injection/unauthorised-action cases.
-Checks: Prose cannot invent operational success or execute without admission; only scoped evidence supplied; model unavailability never blocks manual operation.
-Deliverables: Useful native assistance with tested limits, not another general-purpose assistant.
+Milestone: 28c / m28c-foundation-models-assistance
+Goal: Explain scoped operational evidence and propose typed next actions without model authority.
+Inputs: m28c-apple-platform-feasibility; public pinned Foundation Models SDK; shared action schema; existing evidence verifier/native app.
+Changes:
+  - apps/swarmui/native/apple/ — one bounded assistance flow with scoped evidence retrieval, source links, labelled interpretations and schema-validated action proposals; model tool output never bypasses admission.
+  - apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — availability/privacy diagnostics and deterministic manual operation; exclude Personal Context and undisclosed remote fallback.
+  - Native Swift fixtures + matrix/catalog — m28c-assistance-live and disabled/unavailable, prompt-injection, cross-subject evidence and unauthorised-proposal refusal cases.
+Commands:
+  - swift test --package-path apps/swarmui/native/apple
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-assistance-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-assistance-live"
+Checks:
+  - Supported-device assistance explains a real run/refusal with inspectable sources and a typed proposal; no prose or tool response becomes an operational receipt.
+  - Injected evidence cannot access other subjects, widen authority or submit unadmitted actions; missing/disabled Intelligence preserves all manual core operations.
+Deliverables: Native assistance/help and m28c-assistance-live report preserving model interpretation versus verified outcome.
 ```
 
-**Done:** actual supported-device Siri/Shortcuts operation, evidence-grounded
+**Checks / definition of done:** actual supported-device Siri/Shortcuts operation, evidence-grounded
 assistance and local Metal work are exercised. Unit tests or Shortcuts alone
 cannot establish live Siri acceptance; unresolved platform availability is explicit.
 
 ## Milestone 28d — MCP Access to Complete Selected Workflows <a id="28d"></a>
 
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
+
 **Value:** ordinary agents use useful Cohesix workflows without learning its namespaces.
-**Prerequisites:** 28 and selected 28a/28b actions; Apple providers only when exposed.
+**Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected
+28a/28b actions; Apple providers only when exposed.
 
 Use a pinned MCP revision and maintained SDK where suitable. Provide the network
 transport needed by NeMo and a packaged local desktop-client path, reusing transport
@@ -12668,25 +12940,60 @@ applicable, pin negotiation/errors and scope discovery. Never forward caller
 credentials to providers or execute model-returned calls. Independently disabling
 MCP must not break REST, A2A or existing jobs.
 
+**Deliverables:** Generated controls/catalogue, authenticated network/local transports, standard-client configuration and live workflow evidence.
+
+**Task breakdown**
+
 ```text
+Title/ID: m28d-mcp-policy-and-transport
+Milestone: 28d / m28d-mcp-policy-and-transport
+Goal: Implement bounded MCP transports under shared generated controls and delegated authentication.
+Inputs: m28-agent-protocol-controls; 28 job/authority schema; hive-gateway auth; public MCP specification and maintained SDK; 28f native-client transport requirements.
+Changes:
+  - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin one MCP revision, selected network/local transports, schemas, negotiation/error mapping, input/response/queue/session/concurrency/stream timeout bounds and availability gates.
+  - apps/hive-gateway/src/mcp/ (planned) + src/main.rs — network transport required by the selected NeMo client plus packaged local desktop path; delegated identity, Origin/auth validation and lifecycle before tool dispatch.
+  - apps/hive-gateway/tests/{agent_protocol_controls,mcp_protocol}.rs (planned) — real enabled/disabled endpoints, local stdout protocol integrity, auth/Origin failures, malformed/oversize messages and bounded disconnect cleanup.
+  - docs/HOST_API.md + docs/SECURITY.md + docs/TEST_PLAN.md — transport selection and control matrix; generated docs updated atomically. Selecting NeMo requirements is a version/configuration check, not a dependency on M28f implementation.
+Commands:
+  - cargo test --locked -p coh-rtc
+  - cargo test --locked -p hive-gateway --test agent_protocol_controls --test mcp_protocol
+Checks:
+  - All master/MCP combinations enforce policy on both transports, with no disabled listeners/handlers/discovery/streams/tasks and no CLI/env override.
+  - Unauthenticated/bad-Origin/incompatible-revision/oversize traffic fails deterministically; bounded cleanup preserves underlying accepted jobs and REST/A2A independence.
+Deliverables: Pinned transport/configuration contract, packaged launch paths and focused protocol/auth/control evidence; live useful-work closure remains the next task.
+
 Title/ID: m28d-mcp-selected-workflows
-Milestone: 28d / MCP integration
-Goal: Let ordinary MCP clients discover and complete selected governed CUDA/PEFT jobs.
-Inputs: 28; accepted providers; hive-gateway; maintained SDK; NeMo transport requirements.
-Changes: Pinned transports, curated catalog/guidance, scoped auth/discovery, job mapping, independent controls and package/doctor support.
-Commands: Protocol conformance, shared authority negatives and ordinary-client live submit/observe/recover/evidence walkthroughs.
-Checks: No direct executors, arbitrary writes or client-authored success; a consequential workflow works inside standing authority; disabled mode stays coherent.
-Deliverables: Usable integration, versioned client configuration and live recovery evidence.
+Milestone: 28d / m28d-mcp-selected-workflows
+Goal: Let an ordinary MCP client discover, complete and recover the selected CUDA/PEFT workflows.
+Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions; shared generated registry; maintained SDK and named standard client.
+Changes:
+  - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors and bounded resources.
+  - apps/hive-gateway/tests/{mcp_protocol,mcp_workflows}.rs (planned) — mapping parity, visibility, required fields and cross-client idempotency; no direct provider calls or model-authored success.
+  - docs/HOST_TOOLS.md + docs/HOST_API.md + installation/doctor owners — versioned ordinary-client setup and recovery examples; matrix/catalog gain m28d-mcp-live.
+Commands:
+  - cargo test --locked -p hive-gateway --test mcp_protocol --test mcp_workflows
+  - cargo test --locked -p host-ticket-agent --lib
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28d-mcp-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28d-mcp-live"
+Checks:
+  - Named ordinary client and exact version complete a useful CUDA job and PEFT comparison/deployment operation inside standing authority; refusal and lost-response recovery preserve original identities.
+  - Each selected operation has generated input/output/authority/lifecycle/evidence mapping; scoped discovery hides inaccessible records. Credential forwarding, arbitrary writes and caller-supplied receipts refuse.
+  - MCP-only operation works; read-only conformance cannot close mutating acceptance. Real shared-budget/revocation tests use CLI/REST and MCP without requiring A2A.
+Deliverables: Generated selected catalogue, client configuration/guide and m28d-mcp-live outcome/recovery evidence.
 ```
 
-**Done:** a standard client completes useful work from published discovery and
+**Checks / definition of done:** a standard client completes useful work from published discovery and
 configuration, including refusal/recovery. Read-only success is intermediate;
 full administrative parity and MCP FUSE remain deferred to 36.
 
 ## Milestone 28e — A2A Delegation of Durable Selected Jobs <a id="28e"></a>
 
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
+
 **Value:** agents delegate long GPU/adapter jobs and reconnect to their actual result.
-**Prerequisites:** 28 and selected providers; shared gateway code may be reused,
+**Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected
+providers; shared gateway code may be reused,
 but MCP enablement/conformance is not required.
 
 Implement one pinned A2A revision/binding using a maintained SDK: scoped Agent
@@ -12699,21 +13006,39 @@ Map terminal/failed/cancelled/ambiguous states from observed provider outcomes.
 Arbitrary push callbacks, extra bindings and generic multi-agent coordination
 stay in 36/34.
 
+**Deliverables:** Pinned task/job state mapping, independently controlled A2A service, peer configuration and reconnect/cancellation evidence.
+
+**Task breakdown**
+
 ```text
 Title/ID: m28e-a2a-durable-jobs
-Milestone: 28e / A2A delegation
-Goal: Delegate and recover selected long-running jobs through a standard peer.
-Inputs: 28 job/authority/receipts; selected providers; shared gateway primitives; pinned SDK and NeMo peer.
-Changes: Card/skills, task/job mapping, scoped auth, progress/artifacts, cancellation, reconnect and independent enablement.
-Commands: Selected-binding conformance, shared-budget negatives and live peer delegation/reconnect/cancel/recovery.
-Checks: A2A-only works; task IDs cannot widen scope or disclose another caller's evidence; restart/ambiguity never causes blind re-execution.
-Deliverables: A2A service, peer configuration, lifecycle guide and independently observed outcomes.
+Milestone: 28e / m28e-a2a-durable-jobs
+Goal: Delegate and recover long-running selected jobs through a standard A2A peer.
+Inputs: 28 job/authority/control contracts; selected 28a/28b providers; shared gateway; pinned public A2A revision/binding and maintained SDK; no MCP dependency.
+Changes:
+  - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency.
+  - apps/hive-gateway/src/a2a/ (planned) — canonical task-to-job ID correlation; map pending/running/input-required/terminal/cancel-requested/cancel-confirmed/uncertain states to the selected binding without inventing terminal success.
+  - apps/hive-gateway/tests/{agent_protocol_controls,a2a_protocol,a2a_jobs}.rs (planned) — scoped task/artifact access, stream backpressure and cursor expiry, cancellation race, restart/reconnect and independently disabled endpoints.
+  - docs/HOST_API.md + docs/HOST_TOOLS.md + matrix/catalog — named standard peer configuration and m28e-a2a-live; disabled A2A leaves underlying jobs recoverable through existing authenticated surfaces.
+Commands:
+  - cargo test --locked -p coh-rtc
+  - cargo test --locked -p hive-gateway --test agent_protocol_controls --test a2a_protocol --test a2a_jobs
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28e-a2a-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28e-a2a-live"
+Checks:
+  - A2A-only peer delegates a real job, disconnects, reconnects after gateway restart and obtains the correct scoped provider outcome/artifact references without re-execution.
+  - Pending cancellation never means confirmed termination; ambiguous native outcomes remain explicitly uncertain and accounted. Stale/expired cursors return a bounded resynchronisation path.
+  - All master/A2A flag combinations, cross-subject reads, unauthorised sub-actions, malformed/oversize traffic, slow consumers and revoked scopes fail safely; no push callbacks or second scheduler.
+Deliverables: Pinned state-mapping table, service/peer package, lifecycle/recovery guide and m28e-a2a-live evidence separate from MCP acceptance.
 ```
 
-**Done:** a named standard peer delegates a real CUDA/PEFT job, disconnects and
+**Checks / definition of done:** a named standard peer delegates a real CUDA/PEFT job, disconnects and
 reconnects to its correct scoped outcome. Discovery or mock task completion is insufficient.
 
 ## Milestone 28f — NeMo Agent Toolkit Adoption Kit and Live Integration <a id="28f"></a>
+
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
 
 **Value:** NeMo developers can use Cohesix inside a normal workflow, not only read a compatibility claim.
 **Prerequisites:** 28, selected CUDA/PEFT providers, 28d and 28e. Apple is optional
@@ -12745,30 +13070,53 @@ correlation never substitutes for authoritative provider outcomes. External
 upstream catalog acceptance is not a release gate; publication requires owner
 authorisation/credentials. Broad NeMo families remain deferred to 34.
 
+**Deliverables:** Locked installable NeMo kit, two native-client workflows, reproducible setup and measured recovery/value evidence.
+
+**Task breakdown**
+
 ```text
 Title/ID: m28f-nemo-agent-toolkit-kit
-Milestone: 28f / ecosystem entry
-Goal: Expose useful Cohesix tools/jobs from a normal pinned NeMo installation without a fork.
-Inputs: Verified Toolkit MCP/A2A clients; 28d/28e; selected recipes; existing Python and evidence interfaces.
-Changes: Minimal integration kit, native config, scoped auth, exact version matrix, useful examples and only necessary correlation helpers.
-Commands: Clean-environment install and ordinary Toolkit workflow/config tests using exact candidate/released artifacts.
-Checks: No editable repository install, private setup knowledge, raw executor credentials or parallel registry; optional services explicitly unavailable when absent.
-Deliverables: Versioned kit, quick start, support matrix and packaging evidence.
+Milestone: 28f / m28f-nemo-agent-toolkit-kit
+Goal: Provide useful Cohesix tools/jobs in an ordinary pinned NeMo Toolkit installation without a fork.
+Inputs: 28d/28e; verified Toolkit native MCP/A2A clients; installed coh/Python/evidence interfaces; selected 28a/28b recipes.
+Changes:
+  - integrations/nemo-agent-toolkit/ (planned) — exact dependency lock/version constraints, native MCP/A2A configurations, secret references, typed result/correlation mapping and two runnable workflows; add a plugin only for a demonstrated native-configuration gap.
+  - scripts/install/ + docs/HOST_TOOLS.md + tools/cohesix-py/README.md — distributable kit and clean-environment setup/doctor instructions; identify Toolkit host, model endpoint, Pi Queen and separate GPU executor.
+  - tests/test_nemo_agent_toolkit.py (planned) + matrix/catalog — config validation, dependency/optional-service refusal, installed artifact provenance and m28f-nemo-install.
+Commands:
+  - python3 -m pytest -q tests/test_nemo_agent_toolkit.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28f-nemo-install --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28f-nemo-install"
+Checks:
+  - Clean installation uses locked candidate/released artifacts without editable checkout or private steps; actual Toolkit native client compatibility is verified before configuring a fallback plugin.
+  - No raw executor credentials, parallel action registry, mandatory Apple dependency or implicit NIM/Framework/Triton/Kubernetes deployment; optional services report unavailable when absent.
+Deliverables: Versioned kit/lockfile, documented reference topology/client matrix, quick start and m28f-nemo-install evidence.
 
 Title/ID: m28f-nemo-live-workflows-and-value
-Milestone: 28f / live qualification
-Goal: Demonstrate useful CUDA and adapter jobs, bounded autonomy and recovery through both standard clients.
-Inputs: Integration kit; real providers and configured model endpoint; reference data/incumbent; native profiling/evaluation.
-Changes: MCP CUDA and A2A adapter journeys, denied/failed/interrupted cases, direct comparison and portable receipt links.
-Commands: Live Toolkit runs and focused failure injections in their owning TEST_PLAN layers; capture exact toolkit/protocol/provider/target versions.
-Checks: Both protocols cause and observe permitted work; denial has no effect; retry/reconnect preserves identity; overhead/limitations measured rather than invented.
-Deliverables: Reproducible examples, live recovery evidence and practical integration assessment.
+Milestone: 28f / m28f-nemo-live-workflows-and-value
+Goal: Demonstrate useful CUDA and adapter work, bounded autonomy and recovery through both native Toolkit clients.
+Inputs: m28f-nemo-agent-toolkit-kit; real selected CUDA/PEFT providers; configured model endpoint; fixed task data/incumbent; native Toolkit evaluation/profiling.
+Changes:
+  - integrations/nemo-agent-toolkit/ — MCP CUDA preflight/submit/inspect and A2A adapter evaluate/canary/release workflows, failed-candidate and interruption recovery; NeMo retains its own planner/checkpoint state.
+  - Existing conformance collector + docs/BENCHMARKS.md — same-input direct versus Cohesix-backed procedure with fixed quality/control-latency budgets, setup/credential/manual-intervention measures and native Toolkit trace references.
+  - docs/HOST_TOOLS.md + matrix/catalog — m28f-nemo-live with denied action, cross-protocol retry/budget exhaustion, reconnect and portable evidence links.
+Commands:
+  - python3 -m pytest -q tests/test_nemo_agent_toolkit.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28f-nemo-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28f-nemo-live"
+Checks:
+  - Both ordinary native clients cause and observe real permitted work; a denied action causes no effect; failed candidate cannot promote and interruption preserves the original job identity.
+  - One shared subject/workflow budget survives MCP/A2A retry and restart; traces correlate with verified outcomes but do not replace them.
+  - Comparison uses identical tasks/data and predeclared budgets, recording adverse/unknown results; another person or agent reproduces the instructions with evaluator identity disclosed.
+Deliverables: Two reproducible workflows and m28f-nemo-live report with actual outcomes, failures, control overhead and practical setup/evidence assessment.
 ```
 
-**Done:** another developer uses the kit with ordinary pinned Toolkit and a
+**Checks / definition of done:** another developer uses the kit with ordinary pinned Toolkit and a
 configured Cohesix deployment, reproducing both workflows from public instructions.
 
 ## Milestone 28g — Installation, Integrated User Qualification and Release B <a id="28g"></a>
+
+[Milestones](#Milestones)
+
+**Status:** Planned — implementation not activated.
 
 **Value:** complete capabilities form an adoptable release rather than disconnected adapters.
 **Prerequisites:** every required 28–28f outcome with exact-profile evidence;
@@ -12805,25 +13153,76 @@ must fail closed and reconcile safely; automatic VM-local durable resumption
 remains 37, not a Release B claim. A missing required API/package/credential/
 hardware/evidence is a named blocker, not permission to lower the release promise.
 
+**Deliverables:** Installable candidate and guides, integrated acceptance matrix, exact release evidence and approval-ready release notes.
+
+**Task breakdown**
+
 ```text
 Title/ID: m28g-installation-and-integrated-adoption
-Milestone: 28g / integrated user qualification
-Goal: Make complete CUDA, PEFT, Apple and NeMo journeys installable from public instructions.
-Inputs: Accepted 28–28f artifacts; 27e install; 27f workbench; existing doctor/release machinery.
-Changes: Exact packages, minimal configuration, task views/help, actionable diagnostics and independent clean-environment walkthroughs.
-Commands: Existing package/install/doctor checks and the three full journeys; applicable generated/link checks.
-Checks: No repository patches, undisclosed credentials, mock outcomes or unrelated stack; topology/proof limits explicit; all protocol-control configurations coherent.
-Deliverables: Installable candidate, newcomer guides, native/agent configurations and measured adoption evidence.
+Milestone: 28g / m28g-installation-and-integrated-adoption
+Goal: Make CUDA, PEFT, Apple and NeMo journeys installable and operable from public instructions.
+Inputs: Accepted 28–28f artifacts/evidence; 27e installation; 27f workbench; scripts/install/; docs/HOST_TOOLS.md; release matrix below.
+Changes:
+  - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — assemble candidate Mac/Linux packages, Python/NeMo kit, native Apple integration, client configs and recipes with hashes/signatures/SBOMs.
+  - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — actionable capability/credential/storage/protocol/Apple diagnostics and one coherent job/evidence view.
+  - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and independent evaluator walkthrough; explicit downloads and private-data/licence choices.
+Commands:
+  - python3 -m pytest -q tests/test_host_package_stage.py tests/test_python_package.py tests/test_release_bundle.py
+  - cargo test --locked -p coh --lib doctor::
+  - cargo test --locked -p swarmui --lib
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28g-adoption-live"
+Checks:
+  - All acceptance-matrix journeys run from installed candidate artifacts with no source patches, hidden credentials or developer-only setup; same job/outcome is inspectable across applicable clients.
+  - At least one independent person or agent completes clean installation and useful work; record identity, assistance, steps/time/downloads and blockers against frozen adoption budgets.
+  - Install rollback/uninstall preserves declared user data and revokes/removes owned services/credentials safely; no hidden model downloads or automatic loss of active job evidence.
+Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and m28g-adoption-live evidence for the integrated matrix.
 
 Title/ID: m28g-release-b-qualification
-Milestone: 28g / assembled qualification
-Goal: Qualify the bounded ecosystem release without reintroducing deferred catalogues.
-Inputs: Exact candidate, TEST_PLAN evidence, fixed user/overhead budgets and existing evidence/exception rules.
-Changes: Integrated security/failure/recovery, compatibility review, supported-claim matrix, bounded evidence and Release B notes.
-Commands: Complete applicable staged, pressure/repeatability, target and release gates under TEST_PLAN; no unrelated catalogue qualification.
-Checks: Required live workflows, authority negatives, recovery and budgets pass at exact source/profile identity; missing checks remain blockers; no deferred claim promoted.
-Deliverables: Qualified 1.2.0-beta candidate/evidence; publish or promote only with named human release-owner approval.
+Milestone: 28g / m28g-release-b-qualification
+Goal: Qualify the assembled ecosystem release with complete applicable target and release evidence.
+Inputs: Exact candidate; accepted component case reports; TEST_PLAN catalog; fixed adoption/quality/overhead budgets; release evidence/exception rules.
+Changes:
+  - scripts/release_qualify.py + tests/test_release_qualify.py — verify the required matrix and exact source/package/profile/target bindings; missing live/platform evidence cannot promote.
+  - Existing conformance cases + configs/test_plan_actions.toml + docs/TEST_PLAN.md — m28g-integration-live for four effective protocol modes, master override negatives, cross-client identity/budget/revocation, Queen loss and host-process recovery.
+  - docs/BENCHMARKS.md + planned M28 implementation record + release notes/status — retained baseline and fixed thresholds, compatibility/non-impact review, exact evidence index, limitations and named release-owner approval binding.
+Commands:
+  - python3 -m pytest -q tests/test_release_qualify.py tests/test_release_bundle.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-integration-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28g-integration-live"
+  - scripts/ci/test_plan_run.sh --list
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir "${RELEASE_B_EVIDENCE}/qemu"
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir "${RELEASE_B_EVIDENCE}/pi4"
+Checks:
+  - All required matrix rows and applicable staged/conditional pressure, repeatability, hardware, due-diligence and promotion gates pass at exact assembled identity; component reports alone cannot qualify the release.
+  - Freeze baseline IDs, metric definitions, sample/window selection and numeric quality/resource/latency/adoption thresholds before integrated runs; retain failures without post-failure threshold relaxation.
+  - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
+Deliverables: Qualified 1.2.0-beta candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
 ```
+
+
+**Acceptance matrix:** Each live row binds exact candidate/reference identities,
+case reports and raw evidence using the shared execution contract. Repeat a
+journey only where a client/platform/configuration changes its contract; do not
+multiply every workload by every flag combination. Protocol-control tests cover
+all eight master/MCP/A2A combinations; live checks cover the four effective modes.
+
+| Required row / owning case | Profile and clients | Deterministic acceptance / retained evidence |
+| --- | --- | --- |
+| User CUDA / `m28a-workloads-live`, `m28a-recovery-live` | Pi Queen + Jetson GPU; installed CLI/Python and Mac-originated SwarmUI | Useful reference and independent adaptation, each advertised execution lane, device/output verification, bounded cancel/lost-response recovery; native IDs and signed outcomes. |
+| PEFT lifecycle / `m28b-peft-live`, `m28b-serving-live` | Pi Queen + Jetson; installed training/import and real serving client | Both training and independent import, fixed held-out comparison, actual canary, rejected candidate, interrupted promotion and verified incumbent rollback. |
+| Native Apple / `m28c-platform-live`, `m28c-actions-live`, `m28c-assistance-live` | Exact macOS 27/SDK/device/language/region; signed SwarmUI, actual Siri and Shortcuts | Availability/signing evidence, speech-driven admitted action and durable result, scoped assistance/proposal; unavailable/disabled Intelligence preserves manual operations. |
+| Local Apple compute / `m28c-mlx-live` | Same supported Mac; pinned MLX/Metal model/data/runtime | Observed local GPU inference/train/evaluate/serve/rollback and bounded cancellation/recovery; no implicit CPU/remote fallback. |
+| Ordinary protocols / `m28d-mcp-live`, `m28e-a2a-live` | Standard named/versioned MCP client and A2A peer; Linux-hosted gateway/provider path without Apple | MCP-only and A2A-only complete selected real work; scoped discovery, denial, cancel and reconnect resolve native outcomes. |
+| NeMo / `m28f-nemo-install`, `m28f-nemo-live` | Clean pinned Toolkit host and configured model endpoint; Pi/Jetson; Apple absent | Native MCP CUDA and A2A adapter journeys, denied/failed/interrupted cases, same-input direct comparison and reproducible configuration. |
+| Protocol composition / `m28g-integration-live` | MCP-only, A2A-only, both, neither; each advertised gateway host | Live endpoint/disabled-surface checks, shared identity/budget/revocation, disable/restart with existing jobs retained and authenticated CLI/REST recovery. Master false defeats every subordinate flag/override. |
+| Installation / `m28g-adoption-live` | Clean supported Mac and Linux host environments; packaged Python/NeMo/native app | All three published journeys, explicit downloads, doctor remedies, rollback/uninstall and independent evaluator walkthrough within frozen step/time/size/intervention budgets. |
+| Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |
+
+**Checks / definition of done:** Every required row passes with exact artifact
+and profile identity, fixed budgets and accessible retained evidence. Component,
+host, QEMU, physical Pi, model-quality and release proof remain separate. Missing
+required evidence blocks closure; optional/deferred capabilities cannot substitute.
+The qualified candidate is ready for named human release-owner approval; milestone
+completion itself is not publication approval.
 
 ## Deferred milestones — preserved designs, separate activation <a id="deferred-milestones"></a>
 
@@ -17008,6 +17407,12 @@ implementation/evidence, and specify only the unfulfilled tasks and exact
 acceptance claims. Preserve the safety constraints below, but reconcile its
 former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
+
+Selected Release B manifest controls are owned by 28
+(`m28-agent-protocol-controls`) and exercised against real endpoints in 28d/28e.
+The retained `m28g-manifest-protocol-controls` task below is historical design
+input; at activation reuse those accepted controls and scope only remaining
+extended-protocol gaps. It cannot defer or duplicate Release B safety controls.
 
 <details>
 <summary>Retained design inventory — former Milestone 28g; current owner 36</summary>
