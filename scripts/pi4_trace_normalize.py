@@ -511,6 +511,7 @@ UBOOT_WIFI_POLICY_MISSING_MARKERS = (
 )
 BOOT_CHAIN_ROOT_MARKERS = (
     "u-boot ",
+    "run coh_boot_loaded_image",
 )
 BOOT_CHAIN_CONTINUATION_MARKERS = (
     "starting kernel ...",

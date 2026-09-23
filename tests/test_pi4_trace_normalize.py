@@ -1713,6 +1713,19 @@ def test_boot_slices_ignore_uboot_menu_text() -> None:
     assert [offset for offset, _ in slices] == [0, 4]
 
 
+def test_ram_boot_handoff_retains_uboot_usb_cold_proof() -> None:
+    lines = [
+        "run coh_boot_loaded_image",
+        "[cohesix] USB host stop requested; xHCI trust tokens cleared before Cohesix cold boot",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+    ]
+
+    assert normalizer.boot_slices(lines) == [(0, lines)]
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    assert normalizer.summarize_gates(events).to_record()["USB_COLD_BOOT_SEEN"] == "yes"
+
+
 def test_boot_summary_skips_uboot_save_reset_menu_slice() -> None:
     lines = [
         "U-Boot 2026.01-dirty",

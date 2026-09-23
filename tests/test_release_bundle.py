@@ -125,8 +125,10 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
     for path in (
         "scripts/pi4_gate_proof.sh",
         "scripts/pi4_serial_reboot.py",
+        "scripts/pi4_trace_normalize.py",
         "tests/test_pi4_gate_proof.py",
         "tests/test_pi4_serial_reboot.py",
+        "tests/test_pi4_trace_normalize.py",
     ):
         assert publication.classify_change(
             tmp_path, tmp_path, path, False

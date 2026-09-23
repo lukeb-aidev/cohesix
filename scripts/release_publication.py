@@ -34,7 +34,8 @@ FACTORY = frozenset({
 })
 PHYSICAL_PROOF = frozenset({
     "scripts/pi4_gate_proof.sh", "scripts/pi4_serial_reboot.py",
-    "tests/test_pi4_gate_proof.py", "tests/test_pi4_serial_reboot.py",
+    "scripts/pi4_trace_normalize.py", "tests/test_pi4_gate_proof.py",
+    "tests/test_pi4_serial_reboot.py", "tests/test_pi4_trace_normalize.py",
 })
 HELP_ONLY = frozenset({
     "scripts/failover_watchdog.py", "scripts/rest_perf_harness.py",
