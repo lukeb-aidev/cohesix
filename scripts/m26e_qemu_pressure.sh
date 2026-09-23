@@ -2313,6 +2313,10 @@ def capture_worker_records():
 
 def submit(action, role, args, subject, expected, operation_id):
     global sequence
+    if action.startswith("gpu."):
+        # Mock GPU snapshots live for 15 seconds. Keep the subject enrolled
+        # through the receipt matrix on slower hosts as well as macOS.
+        republish()
     sequence += 1
     before = ready(role)
     ticket_id = f"m26e-{sequence:03d}-{expected}"
