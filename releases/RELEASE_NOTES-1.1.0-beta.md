@@ -49,9 +49,9 @@ retains the attempts, source/image identities, failures and proof limits.
 
 | Archive | Contents |
 | --- | --- |
-| [MacOS](Cohesix-1.1.0-beta-MacOS.tar.gz) | Apple Silicon tools, HVF QEMU guest, Python and desktop assets |
-| [Linux](Cohesix-1.1.0-beta-linux.tar.gz) | Linux AArch64 tools, KVM QEMU guest, Python and desktop assets |
-| [Pi 4](Cohesix-1.1.0-beta-Pi4.tar.gz) | Complete SD image, checksum and first-boot guidance |
+| `Cohesix-1.1.0-beta-MacOS.tar.gz` | Apple Silicon tools, HVF QEMU guest, Python and desktop assets |
+| `Cohesix-1.1.0-beta-linux.tar.gz` | Linux AArch64 tools, KVM QEMU guest, Python and desktop assets |
+| `Cohesix-1.1.0-beta-Pi4.tar.gz` | Complete SD image, checksum and first-boot guidance |
 
 Extract each archive fresh and verify its manifest using the
 [quickstart](../docs/QUICKSTART.md). Keep the Mac HVF and Linux KVM guests with
