@@ -25,15 +25,18 @@ passed after that burn-in. Subsequent changes received focused source and
 physical checks; the unchanged staged and pressure records retain their exact
 source identities rather than being relabelled as new-image runs.
 
-The distributed Pi SD image passed an independent raw readback, fresh numbered
-U-Boot-menu boots with GENET static, GENET DHCP and Wi-Fi DHCP, and packaged
-authenticated TCP checks. Mac and Linux archives passed independent extracted
-installation checks, and the three-archive verifier passed. The HDMI output was
+The physically installed candidate Pi SD image passed independent raw
+readback, fresh numbered U-Boot-menu boots with GENET static, GENET DHCP and
+Wi-Fi DHCP, packaged authenticated TCP checks, and a final GENET cold boot.
+The final archive's raw SD image differs in FAT metadata but contains the same
+27 embedded files; its exact raw bytes were not written and read back. Mac and
+Linux archives passed independent extracted installation checks. The final
+three-archive verifier therefore has no passing result. The HDMI output was
 visually checked through the capture card. Earlier physical USB keypress and
 Wi-Fi repeatability records remain at their original image identities; this
-release does not claim a new 512-entry-image Wi-Fi repeatability series; the
-release owner selected a fresh GENET cold boot as the final physical check.
-This does not extend the earlier Wi-Fi hardware acceptance to the new image. The
+release does not claim a new 512-entry-image Wi-Fi repeatability series. Lukas
+Bower accepted these disclosed release limits after selecting the final GENET
+cold boot; they do not extend earlier Wi-Fi hardware acceptance to the new image. The
 [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md) identifies each
 proof, limitation and carried-forward result.
 
@@ -68,7 +71,7 @@ historical evidence does not establish release qualification.
 | Workers | Passive `worker-heartbeat`, `worker-gpu`, and `worker-lora` instances use two bounded executor lanes; QEMU and Pi each declare 1/127/128 instances. `worker-bus` remains model/session-only. | Target-qualified QEMU evidence covers the selected 256-Worker population and receipt path; the Pi configuration still requires separate fresh physical evidence. |
 | Physical drivers | Pi 4 serial, display, USB, GENET, SDIO, and CYW43 paths use manifest-declared isolated runtimes admitted through HAL. | Board evidence from another source tree or image does not qualify a newly composed image. |
 | QEMU | `aarch64/virt` with GICv3 is the reference target on macOS HVF and AArch64 Linux KVM. | Target-qualified evidence applies only to the exact VM artifacts and proof lanes exercised; see the [Milestone 26e result record](BUILD_PLAN.md#26e). It is not Pi 4 hardware proof. |
-| Raspberry Pi 4 | Pi firmware → numbered U-Boot menu → seL4 binary image → root task is the supported hardware boot path. | The distributed image passed raw SD readback, GENET static/DHCP, Wi-Fi DHCP and packaged TCP checks. Earlier keyboard and Wi-Fi repeatability evidence remains source-bound; no new full-image repeatability claim is made. |
+| Raspberry Pi 4 | Pi firmware → numbered U-Boot menu → seL4 binary image → root task is the supported hardware boot path. | The installed candidate image passed raw SD readback, GENET static/DHCP, Wi-Fi DHCP and packaged TCP checks; the final archive has identical embedded files but lacks exact-byte card readback. Earlier keyboard and Wi-Fi repeatability evidence remains source-bound. |
 | Host tools | `cohsh`, `coh`, Hive Gateway, SwarmUI, Python, GPU, sidecar, ticket, CAS, and evidence tools run beside the target on macOS or Linux. | Host, mock, fixture, and package success cannot create target Worker, driver, or use-case acceptance. |
 | GPU and AI execution | GPU drivers, CUDA/NVML, model training, inference, PEFT execution, and deployment-specific automation remain host-side. | Cohesix records bounded authority, lifecycle, telemetry, and receipts; it does not execute GPU workloads in the VM. |
 | AWS/UEFI | Planned only. | No current Cohesix AWS target or production-use claim. |

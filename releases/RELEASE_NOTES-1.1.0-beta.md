@@ -48,7 +48,10 @@ network checks. These are control-plane measurements, not GPU speedups. The
 retains the attempts, source/image identities, failures and proof limits.
 Fresh Wi-Fi DHCP operation was verified on the release image; a new 10-cold/
 10-warm Wi-Fi repeatability series was not run on that image. Release A makes
-no new Wi-Fi reliability or performance claim from that functional boot.
+no new Wi-Fi reliability or performance claim from that functional boot. The
+final packaged SD image contains the same 27 files as the image written and
+read back on a card, but its raw FAT bytes differ and were not independently
+read back from physical media.
 
 ## Install and upgrade
 
