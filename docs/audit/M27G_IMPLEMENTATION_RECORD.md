@@ -4,17 +4,18 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # M27g implementation and qualification record
 
-Milestone 27g remains In Progress. The major mixed physical-console/TCP stall
+Milestone 27g is Complete under the limited Release A owner decision recorded
+below. The major mixed physical-console/TCP stall
 was repaired in `b832145070b708a0bfb1c7d430275c940adb40af`. That image completed
 a fresh 7,200.000637-second operator burn-in, including 24 scheduled CUDA jobs,
 four LoRA workflows, native Mac/Jetson coverage and reconciled incident segments.
 Its sealed operational verdict is PASS. Both full staged Test Plans and both
 source-native desktop walkthroughs subsequently passed for their recorded
-profiles. Minor qualification-collector repairs retain those records and require
-focused revalidation and exact final-source qualification, not another burn-in.
-The release decision still requires the remaining pressure, physical media,
-repeatability, assembled-artifact and human-review gates. Historical acceptance
-and failed attempts retain their original verdicts.
+profiles. Minor qualification-collector repairs retain those records and received
+focused revalidation rather than another burn-in. The final distribution has
+an owner-approved exact-media, repeatability and three-archive-verifier proof
+limit; none of those omitted results is represented as PASS. Historical
+acceptance and failed attempts retain their original verdicts.
 
 ## Pressure profile restoration
 
@@ -941,3 +942,61 @@ The release publication bridge records these non-runtime physical collector
 and test files separately from the frozen `6f6726ed2` target source; it still
 rejects arbitrary runtime drift. Fresh post-repair canonical physical proof
 remains required and is not inferred from the diagnostic.
+
+## Release A closing decision — 23 September 2026
+
+The frozen release runtime is `7b4a08d95cd27e92bb998202f1ca7ea4da0db5d4`.
+The publication-only source snapshot is
+`8d8784a1d72c47b20244b33b5c6a2459be40c245`; the release factory's
+`--qualified-source-root` bridge accepted its documentation delta and did not
+substitute the publication commit for the tested target source. The selected
+QEMU and Pi manifests retain matching 512-entry Queen intent capacity. The
+`7b4a08d95` merge baseline passed at
+`out/m27g/merge-baseline-7b4a08d95-01/result.json`. The prior measured burn-in
+PASS, post-burn staged plans and QEMU pressure retain their original source,
+image, claim and attempt identities. User-directed cancellation of a later
+redundant full-plan attempt is retained as interrupted, not PASS.
+
+The installed candidate raw Pi image had SHA-256
+`15fbf4ee322fe3eb10ed92f5dc617adbace2afc00ee644ee87cc858724bba25c`.
+Its independent whole-card readback passed at
+`out/m27g/sd-write-7b4a08d95-01/readback/result.json`. Numbered Cohesix
+U-Boot-menu boots on that card passed static GENET, DHCP GENET and Wi-Fi DHCP
+provisioning and packaged TCP checks. The final Apple Home power-cycled GENET
+boot passed the packaged check at
+`out/m27g/release-genet-cold-7b4a08d95-20260923T113654Z/package/result.json`;
+its serial log, 85-packet GENET capture with zero kernel drops and readable
+OBS HDMI screenshot remain in that run directory. The final release Pi archive
+has raw image SHA-256
+`73158d690d5482a8f5e64be285044e2975430c67f44784635357c7d680ab3105`.
+The archive manifest, image layout and every one of its 27 embedded file
+hashes match the physically read-back candidate at
+`out/m27g/pi4-final-offline-8d8784a1d-01/result.json`. FAT metadata changes
+the raw image hash; content equivalence is not exact final-media readback or
+final-image boot proof.
+
+Fresh, independently extracted Mac and Jetson Linux AArch64 qualifications
+passed at `out/m27g/release-qualification-8d8784a1d-final-01/{macos,linux}/result.json`.
+Each result verifies its retained native-tool, replay, Python, QEMU/TCP and
+native SwarmUI logs. The selected Mac QEMU is the validated HVF-compatible
+build under `~/cohesix`; Linux used native KVM and `xvfb-run`. The final
+archive identities are:
+
+| Archive | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `Cohesix-1.1.0-beta-MacOS.tar.gz` | 26,501,100 | `024fb4f6d2491df105e7d5680e628b716b8f2f96ec23128cc8f92755fbf7cd36` |
+| `Cohesix-1.1.0-beta-linux.tar.gz` | 28,513,510 | `698519584e6501006c877ada721f963da1d7056830ff0d0595c8ebebf9762779` |
+| `Cohesix-1.1.0-beta-Pi4.tar.gz` | 13,168,967 | `3ef3c5454d835ac1bd5f3e0eed69739579271e4aa6854ed30b25be3264123532` |
+
+Lukas Bower selected one final cold GENET boot instead of a current-image
+10-cold/10-warm Wi-Fi repeatability series, then explicitly approved release
+without another final SD write/readback and boot. The current-image Wi-Fi
+series, final raw-media readback and final raw-image boot are `NOT_RUN`. The
+canonical three-archive verifier has **no PASS**: when supplied the prior Pi
+qualification, it correctly refused `pi4 archive changed after qualification`
+at `out/m27g/release-qualification-8d8784a1d-final-01/verify-expected-refusal.log`.
+This owner decision accepts a limited `1.1.0-beta` publication with the
+disclosed proof gap; it does not relabel the refusal or extend M26e hardware,
+Wi-Fi reliability, performance or repeatability acceptance. No full staged
+plan was repeated after this decision; only the exact archive, content,
+GENET cold-boot and documentation checks needed for the scoped decision ran.

@@ -1,0 +1,188 @@
+{
+  "authority": {
+    "debug_memory": false,
+    "delegated_rest": true,
+    "delegated_ticket_entries": 256,
+    "delegated_ticket_max_ttl_s": 3600,
+    "execution_wal_required": true,
+    "gpu_frame_max_bytes": 8192,
+    "host_ai": false,
+    "legacy_queen_ctl": false,
+    "production": true,
+    "production_driver_ledger": false,
+    "production_failover": false,
+    "production_worker_ledger": false,
+    "queen_dedupe_entries": 512,
+    "queen_intent_max_bytes": 2048,
+    "strict_queen_intents": true,
+    "structured_quarantine": false,
+    "vm_verified_delegation": false,
+    "writer_epoch": 9,
+    "writer_epoch_required": true
+  },
+  "bounds": {
+    "console_max_json_bytes": 192,
+    "console_max_line_bytes": 2304,
+    "console_max_path_bytes": 96,
+    "secure9p_msize": 8192,
+    "secure9p_walk_depth": 8,
+    "worker_ready_timeout_ms": 5000,
+    "worker_receipt_label_bytes": 24,
+    "worker_shared_page_bytes": 4096,
+    "worker_shutdown_grace_ms": 1000
+  },
+  "host_integration": {
+    "modes": [
+      "unknown",
+      "missing",
+      "disabled",
+      "fixture",
+      "mock",
+      "dry-run",
+      "live"
+    ],
+    "python_dependency_id": "python-sdk-projection",
+    "schema": "host-integration-dependency/v1"
+  },
+  "manifest_profile": "virt-aarch64",
+  "manifest_sha256": "5508274d8ff5780a7188bced7a4edbc9db56dedcea962b9b747346d3bd757ec8",
+  "meta": {
+    "author": "Lukas Bower",
+    "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
+  },
+  "namespace": {
+    "legacy_telemetry_path_template": "/worker/<id>/telemetry",
+    "legacy_worker_alias": true,
+    "shard_bits": 8,
+    "sharding_enabled": true,
+    "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry"
+  },
+  "proof_boundary": {
+    "profile_contract_establishes_execution_proof": false,
+    "profile_contract_establishes_target_identity": true,
+    "python_projection_is_authority": false,
+    "static_defaults_establish_execution_proof": false
+  },
+  "receipts": {
+    "gpu_actions": [
+      "gpu.lease.grant",
+      "gpu.lease.renew",
+      "gpu.lease.release",
+      "gpu.workload.submit",
+      "gpu.workload.cancel",
+      "gpu.workload.observe"
+    ],
+    "max_control_inflight": 1,
+    "peft_actions": [
+      "peft.export",
+      "peft.import",
+      "peft.activate",
+      "peft.rollback",
+      "peft.release"
+    ]
+  },
+  "schema": "cohesix-python-profile/v2",
+  "schemas": {
+    "host_ticket_accepted": [
+      "host-ticket/v1",
+      "host-ticket/v2"
+    ],
+    "host_ticket_result_accepted": [
+      "host-ticket-result/v1",
+      "host-ticket-result/v2"
+    ],
+    "worker_gpu_receipt": "worker-gpu-receipt/v1",
+    "worker_integration_evidence": "cohesix-worker-integration-evidence/v1",
+    "worker_lora_receipt": "worker-lora-receipt/v1",
+    "worker_observation": "cohesix-worker-observation/v1"
+  },
+  "target": "qemu",
+  "target_profile": "qemu_smp_production",
+  "vocabularies": {
+    "artifact": [
+      "missing",
+      "verified",
+      "mismatch"
+    ],
+    "execution_proof": [
+      "none",
+      "host-model",
+      "qemu",
+      "fresh-pi"
+    ],
+    "integration_obligation": [
+      "role_required",
+      "release_required",
+      "use_case_required",
+      "optional",
+      "future"
+    ],
+    "integration_observed_mode": [
+      "unknown",
+      "missing",
+      "disabled",
+      "fixture",
+      "mock",
+      "dry-run",
+      "live"
+    ],
+    "lifecycle": [
+      "absent",
+      "queued",
+      "starting",
+      "ready",
+      "closing",
+      "faulted",
+      "terminal"
+    ],
+    "receipt": [
+      "none",
+      "pending",
+      "confirmed",
+      "rejected",
+      "stale"
+    ]
+  },
+  "worker": {
+    "implementation_epoch": 26,
+    "maximum_live_tasks": 256,
+    "namespace_capacity_per_role": 256,
+    "roles": [
+      {
+        "declaration": "executable",
+        "executable_slots": 1,
+        "lease_path_template": "",
+        "role": "worker-heartbeat",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/worker"
+      },
+      {
+        "declaration": "executable",
+        "executable_slots": 127,
+        "lease_path_template": "/gpu/<id>/lease",
+        "role": "worker-gpu",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/gpu"
+      },
+      {
+        "declaration": "model-only",
+        "executable_slots": 0,
+        "lease_path_template": "",
+        "role": "worker-bus",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/bus"
+      },
+      {
+        "declaration": "executable",
+        "executable_slots": 128,
+        "lease_path_template": "",
+        "role": "worker-lora",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/worker"
+      }
+    ],
+    "scheduling_profile": "mcs-passive",
+    "task_abi_schema": "worker-task-abi/v2",
+    "task_abi_version": 2
+  }
+}

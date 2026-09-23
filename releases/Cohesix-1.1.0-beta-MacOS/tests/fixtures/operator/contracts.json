@@ -1,0 +1,36 @@
+{
+  "attestation": [
+    {
+      "evidence_class": "measurement-only",
+      "reason": "unsigned-measurement",
+      "schema": "cohesix-attestation-result/v1",
+      "source_class": "offline-pack",
+      "verdict": "FAIL"
+    },
+    {
+      "evidence_class": "unavailable",
+      "reason": "signed-evidence-contract-unavailable",
+      "schema": "cohesix-attestation-result/v1",
+      "source_class": "host-projection",
+      "verdict": "UNAVAILABLE"
+    }
+  ],
+  "redaction": {
+    "expected": {
+      "count": 5,
+      "credentials": "<redacted>",
+      "future": {
+        "api_key": "<redacted>"
+      },
+      "payload": "{\"keep\":7,\"secret\":\"<redacted>\"}"
+    },
+    "input": {
+      "count": 5,
+      "credentials": "CANARY",
+      "future": {
+        "api_key": "CANARY"
+      },
+      "payload": "{\"secret\":\"CANARY\",\"keep\":7}"
+    }
+  }
+}

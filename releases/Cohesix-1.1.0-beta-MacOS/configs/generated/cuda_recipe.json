@@ -1,0 +1,28 @@
+{
+  "schema": "cohesix-cuda-recipe-contract/v1",
+  "id": "cuda-reference",
+  "stages": [
+    "plan",
+    "authorise",
+    "execute",
+    "observe",
+    "verify",
+    "recover"
+  ],
+  "entrypoints": [
+    "vadd",
+    "matmul"
+  ],
+  "submit_action": "gpu.workload.submit",
+  "cancel_action": "gpu.workload.cancel",
+  "max_stages": 8,
+  "max_attempts": 32,
+  "max_journal_bytes": 262144,
+  "max_artifact_bytes": 262144,
+  "max_retained_bytes": 8388608,
+  "max_parallel": 1,
+  "max_reuse_age_ms": 3600000,
+  "automatic_retries": 0,
+  "recovery": "reconcile-before-dispatch; current exact authority; ambiguous work retains reservations",
+  "data": "cohesix-cuda-reference/v1 deterministic vector or matrix inputs"
+}

@@ -1,0 +1,848 @@
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Frame terminal-free connection, governed operations and evidence in the SwarmUI workbench. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cohesix · SwarmUI</title>
+    <link
+      rel="icon"
+      href="assets/icons/cohesix-icon.svg"
+      type="image/svg+xml"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <sp-theme class="app-theme" system="spectrum" color="dark" scale="medium">
+      <div class="workbench">
+        <aside class="dock" aria-label="Workbench navigation">
+          <a class="wordmark" href="#hive" aria-label="Cohesix home"
+            ><img src="assets/icons/cohesix-icon.svg" alt="" /><span
+              >cohesix<span class="wordmark-sub">SWARMUI</span></span
+            ></a
+          >
+          <div class="dock-caption">WORKSPACE</div>
+          <nav id="navigation">
+            <button data-view="hive" aria-current="page">
+              <span data-icon="hexagon"></span>Overview
+              <span class="nav-key">1</span>
+            </button>
+            <button data-view="operations">
+              <span data-icon="play"></span>Operations
+              <span class="nav-key">2</span>
+            </button>
+            <button data-view="namespaces">
+              <span data-icon="folder-open"></span>Namespaces
+              <span class="nav-key">3</span>
+            </button>
+            <button data-view="story">
+              <span data-icon="path"></span>Run story
+            </button>
+            <button data-view="flight">
+              <span data-icon="pulse"></span>GPU flight deck
+            </button>
+            <div class="dock-caption">AUTHORITY &amp; EVIDENCE</div>
+            <button data-view="tickets">
+              <span data-icon="key"></span>Tickets &amp; policy
+            </button>
+            <button data-view="evidence">
+              <span data-icon="shield-check"></span>Evidence
+            </button>
+            <button data-view="replay">
+              <span data-icon="clock-counter-clockwise"></span>Replay
+            </button>
+            <button data-view="console">
+              <span data-icon="terminal"></span>Console
+            </button>
+          </nav>
+          <div class="dock-bottom">
+            <button data-view="settings">
+              <span data-icon="gear"></span>Settings
+            </button>
+            <div class="dock-footnote">
+              Queen decides.<br />Workers coordinate.<br />Hosts execute.
+            </div>
+            <span class="version-label">COHESIX / CONTROL PLANE</span>
+          </div>
+        </aside>
+        <div class="workbench-main">
+          <header class="appbar">
+            <div class="connection-status">
+              <span class="status-dot" id="connection-dot"></span
+              ><button id="connection-open">Connect a hive</button
+              ><span id="connection-role">No active session</span>
+            </div>
+            <div class="appbar-right">
+              <span class="mode-label" id="source-mode">OFFLINE</span
+              ><button id="palette-open" aria-label="Find an action">
+                Find an action <kbd>⌘ K</kbd>
+              </button>
+            </div>
+          </header>
+          <main id="workspace" tabindex="-1">
+            <div class="page-heading">
+              <div>
+                <p class="eyebrow" id="view-eyebrow">YOUR HIVE, IN VIEW</p>
+                <h1 id="view-title">
+                  Mission control<span class="accent-dot">.</span>
+                </h1>
+                <p id="view-description">
+                  A clear view of your fleet. A deliberate path to every action.
+                </p>
+              </div>
+              <div class="heading-actions">
+                <sp-button variant="secondary" size="s" id="context-help"
+                  aria-label="Help with this screen">?</sp-button>
+              <sp-button variant="secondary" id="showcase-toggle"
+                >Presentation view</sp-button
+              >
+              </div>
+            </div>
+            <div id="notice" role="status" aria-live="polite" hidden></div>
+            <section data-desk="hive" aria-label="Hive overview">
+              <div class="welcome-strip" id="welcome-strip">
+                <div class="welcome-mark">↗</div>
+                <div>
+                  <h2>Bring your hive into view</h2>
+                  <p>
+                    Connect to a Queen or share a Hive Gateway. Your credentials
+                    stay in this session.
+                  </p>
+                </div>
+                <sp-button variant="accent" id="welcome-connect"
+                  >Connect a hive</sp-button
+                >
+              </div>
+              <div class="metrics-grid">
+                <article>
+                  <span>QUEEN</span
+                  ><strong id="metric-queen">Not connected</strong
+                  ><small id="hive-root">Reachability unknown</small>
+                </article>
+                <article>
+                  <span>ACTIVE SESSIONS</span
+                  ><strong id="metric-workers">—</strong
+                  ><small id="hive-sessions">Awaiting observation</small>
+                </article>
+                <article>
+                  <span>PRESSURE</span><strong id="metric-pressure">—</strong
+                  ><small id="hive-pressure">No current measurement</small>
+                </article>
+                <article>
+                  <span>EXECUTION PROOF</span
+                  ><strong id="metric-proof">Per record</strong
+                  ><small>Readiness is separate from execution</small>
+                </article>
+              </div>
+              <div class="hive-toolbar">
+                <span class="section-kicker">01 / LIVE HIVE</span
+                ><span id="hive-status">Ready when you are</span
+                ><sp-button id="hive-start" variant="accent"
+                  >Start observing</sp-button
+                ><sp-button id="hive-stop" variant="secondary">Pause</sp-button>
+              </div>
+              <article class="panel hive-panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Hive topology</h2>
+                    <p>Select a worker to inspect its activity and evidence.</p>
+                  </div>
+                  <sp-button
+                    id="hive-reset-view"
+                    class="action"
+                    variant="secondary"
+                  >
+                    <span slot="icon" data-icon="crosshair"></span>
+                    <span data-button-label>Reset view</span>
+                  </sp-button>
+                </header>
+                <div class="panel-body hive-body">
+                  <div class="hive-stage">
+                    <div id="hive-canvas" class="hive-canvas">
+                      <div
+                        class="hive-fallback"
+                        id="hive-fallback"
+                        role="status"
+                        aria-live="polite"
+                      ></div>
+                    </div>
+                    <div class="hive-overlay mono">
+                      <span class="badge soft"
+                        >Zoom with trackpad / scroll</span
+                      >
+                      <span class="badge soft">Drag to pan</span>
+                    </div>
+                  </div>
+                  <aside class="hive-telemetry mono" id="hive-telemetry">
+                    <header class="hive-telemetry__header">
+                      <div>
+                        <p class="eyebrow">Worker activity</p>
+                        <p class="lede">
+                          Bounded telemetry overlays per worker.
+                        </p>
+                      </div>
+                      <sp-button
+                        id="hive-detail-clear"
+                        class="action"
+                        variant="secondary"
+                      >
+                        <span data-button-label>Clear</span>
+                      </sp-button>
+                    </header>
+                    <div class="hive-telemetry__overlays" id="hive-overlays">
+                      <p class="placeholder">Awaiting telemetry.</p>
+                    </div>
+                    <div class="hive-telemetry__detail">
+                      <div class="hive-telemetry__detail-header">
+                        <span class="label" id="hive-detail-title"
+                          >Select worker</span
+                        >
+                      </div>
+                      <div class="hive-worker-state" id="hive-detail-state">
+                        declaration=unknown lifecycle=unknown receipt=unknown
+                        artifact=unknown proof=unknown
+                      </div>
+                      <div
+                        class="hive-telemetry__detail-lines"
+                        id="hive-detail-lines"
+                      >
+                        <p class="placeholder">No telemetry loaded.</p>
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+              </article>
+
+              <article class="panel wide hive-schedule-panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Scheduling &amp; leases</h2>
+                    <p>Read-only queue and lease state from /proc.</p>
+                  </div>
+                  <span class="badge ghost" id="hive-schedule-summary"
+                    >Scheduler idle</span
+                  >
+                </header>
+                <div class="panel-body hive-schedule mono">
+                  <section class="hive-schedule__section">
+                    <div class="hive-schedule__section-header">
+                      <div>
+                        <p class="eyebrow">Scheduler Queue</p>
+                        <p class="lede">
+                          Declarative queue ordering from /proc/schedule.
+                        </p>
+                      </div>
+                      <span class="badge ghost" id="hive-schedule-queue-summary"
+                        >Queue empty</span
+                      >
+                    </div>
+                    <div class="hive-schedule__table" id="hive-schedule-queue">
+                      <p class="placeholder">Awaiting schedule queue.</p>
+                    </div>
+                  </section>
+                  <section class="hive-schedule__section">
+                    <div class="hive-schedule__section-header">
+                      <div>
+                        <p class="eyebrow">Lease Timeline</p>
+                        <p class="lede">
+                          Active leases and preemption history from /proc/lease.
+                        </p>
+                      </div>
+                      <span class="badge ghost" id="hive-lease-summary"
+                        >Leases idle</span
+                      >
+                    </div>
+                    <div class="hive-lease__group">
+                      <div class="hive-lease__label">Active leases</div>
+                      <div class="hive-lease__list" id="hive-lease-active">
+                        <p class="placeholder">No active leases.</p>
+                      </div>
+                    </div>
+                    <div class="hive-lease__group">
+                      <div class="hive-lease__label">Preemptions</div>
+                      <div class="hive-lease__list" id="hive-lease-preemptions">
+                        <p class="placeholder">No preemptions yet.</p>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </article>
+
+              <div class="quick-actions">
+                <button data-action="cuda">
+                  <span class="quick-icon">↗</span
+                  ><strong>Run a CUDA recipe</strong
+                  ><span>Plan, admit, observe and verify</span><b>→</b></button
+                ><button data-action="lora">
+                  <span class="quick-icon">◇</span
+                  ><strong>Release a private adapter</strong
+                  ><span>Evaluate, canary and promote</span><b>→</b></button
+                ><button data-view="evidence">
+                  <span class="quick-icon">≋</span
+                  ><strong>Follow the evidence</strong
+                  ><span>Inspect the records behind a result</span><b>→</b>
+                </button>
+              </div>
+            </section>
+            <section
+              data-desk="operations"
+              aria-label="Guided operations"
+              hidden
+            >
+              <div class="desk-layout">
+                <aside class="operation-browser">
+                  <label for="operation-search">Find an operation</label
+                  ><input
+                    id="operation-search"
+                    type="search"
+                    placeholder="Try recipe, GPU, verify…"
+                  />
+                  <div id="operation-list"></div>
+                </aside>
+                <article class="form-card" id="operation-editor">
+                  <div class="empty-state">
+                    <span>↗</span>
+                    <h2>What would you like to do?</h2>
+                    <p>
+                      Choose an operation. We’ll guide you through its inputs,
+                      review and result.
+                    </p>
+                  </div>
+                </article>
+              </div>
+            </section>
+            <section
+              data-desk="namespaces"
+              aria-label="Namespace explorer"
+              hidden
+            >
+              <div class="namespace-toolbar">
+                <input
+                  id="namespace-path"
+                  aria-label="Namespace path"
+                  value="/proc"
+                /><sp-button id="namespace-go" variant="accent"
+                  >Browse</sp-button
+                ><sp-button id="namespace-up" variant="secondary"
+                  >Parent</sp-button
+                ><sp-button id="namespace-copy" variant="secondary"
+                  >Copy path</sp-button
+                >
+              </div>
+              <div
+                id="namespace-breadcrumbs"
+                aria-label="Path breadcrumb"
+              ></div>
+              <div class="desk-layout">
+                <aside class="namespace-tree" id="namespace-roots"></aside>
+                <article class="form-card">
+                  <div class="card-heading">
+                    <h2 id="namespace-title">Namespace</h2>
+                    <span class="pill" id="namespace-kind"
+                      >Scoped · read only</span
+                    >
+                  </div>
+                  <div class="button-row">
+                    <sp-button id="namespace-read" variant="secondary"
+                      >Read file</sp-button
+                    ><sp-button id="namespace-tail" variant="secondary"
+                      >Recent activity</sp-button
+                    ><sp-button id="namespace-transcript" variant="secondary"
+                      >Show transcript</sp-button
+                    >
+                  </div>
+                  <div id="namespace-entries" class="file-list">
+                    <p class="empty-copy">
+                      Browse a root to discover directories and files.
+                    </p>
+                  </div>
+                  <pre id="namespace-output" class="read-output">
+Nothing selected.</pre
+                  >
+                </article>
+              </div>
+            </section>
+            <section data-desk="story" aria-label="Run story" hidden>
+              <div class="artifact-open">
+                <div>
+                  <h2>Every phase has a source</h2>
+                  <p>
+                    Open a canonical recipe or LoRA report. Verify signed
+                    outcomes from the Evidence desk.
+                  </p>
+                </div>
+                <button class="inline-link" data-view="replay">
+                  Explore a reference run →</button
+                ><input
+                  id="story-path"
+                  aria-label="Run report path"
+                  placeholder="/absolute/path/to/report.json"
+                /><sp-button id="story-open" variant="accent"
+                  >Open run</sp-button
+                >
+              </div>
+              <div id="story-content" class="empty-state">
+                <span>◌</span>
+                <h2>A run tells its own story</h2>
+                <p>
+                  Phase, provider, artifact and receipt stay connected to their
+                  original records.
+                </p>
+              </div>
+            </section>
+            <section data-desk="flight" aria-label="GPU flight deck" hidden>
+              <div class="artifact-open">
+                <div>
+                  <h2>External execution. Visible boundaries.</h2>
+                  <p>
+                    GPU and model facts come from the registered host. Missing
+                    sensors remain unknown.
+                  </p>
+                </div>
+                <sp-button id="flight-refresh" variant="accent"
+                  >Discover GPUs</sp-button
+                >
+              </div>
+              <div id="flight-content" class="metrics-grid">
+                <article>
+                  <span>PROVIDER</span><strong>Unknown</strong
+                  ><small>No selected host observation</small>
+                </article>
+                <article>
+                  <span>UTILIZATION</span><strong>—</strong
+                  ><small>Unavailable until published</small>
+                </article>
+                <article>
+                  <span>TEMPERATURE / POWER</span><strong>—</strong
+                  ><small>Host sensors required</small>
+                </article>
+                <article>
+                  <span>MODEL / ADAPTER</span><strong>Unknown</strong
+                  ><small>No authoritative publication</small>
+                </article>
+              </div>
+              <div class="form-card">
+                <h2>Explore the GPU host</h2>
+                <div class="button-row">
+                  <button data-host-operation="gpu list">List GPUs →</button
+                  ><button data-host-operation="gpu status">
+                    Inspect a GPU →</button
+                  ><button data-host-operation="gpu lease">
+                    Request a lease →</button
+                  ><button data-host-operation="doctor">
+                    Check the environment →
+                  </button>
+                </div>
+                <pre id="flight-output" class="read-output">
+No host facts loaded.</pre
+                >
+              </div>
+            </section>
+            <section data-desk="tickets" aria-label="Tickets and policy" hidden>
+              <div class="two-column">
+                <article class="form-card">
+                  <span class="section-kicker">AUTHORITY</span>
+                  <h2>Know what your session can do</h2>
+                  <p>
+                    Every action is checked by the existing role, ticket and
+                    deployment policy.
+                  </p>
+                  <div class="button-row">
+                    <button data-read-path="/host/tickets/status">
+                      Ticket status →</button
+                    ><button data-read-path="/host/tickets/deadletter">
+                      Dead letters →</button
+                    ><button data-read-path="/policy/rules">
+                      Policy rules →</button
+                    ><button data-read-path="/audit/decisions">
+                      Audit decisions →</button
+                    ><button data-read-path="/actions/queue">
+                      Approval queue →
+                    </button>
+                  </div>
+                  <pre id="authority-output" class="read-output">
+Select a view. Disabled paths return their exact refusal.</pre
+                  >
+                </article>
+                <article class="form-card">
+                  <span class="section-kicker">CONTROL</span>
+                  <h2>Act with explicit authority</h2>
+                  <p>Review each action before it reaches the Queen.</p>
+                  <div id="control-actions"></div>
+                  <details>
+                    <summary>Mint a capability ticket</summary>
+                    <p class="field-help">
+                      Requires an enrolled local issuer. The ticket is kept in
+                      this session only.
+                    </p>
+                    <label for="session-subject">Subject identity</label
+                    ><input id="session-subject" /><sp-button
+                      id="mint-ticket"
+                      variant="secondary"
+                      >Mint for selected role</sp-button
+                    >
+                    <p id="mint-status" role="status"></p>
+                  </details>
+                </article>
+              </div>
+            </section>
+            <section data-desk="evidence" aria-label="Evidence desk" hidden>
+              <div class="artifact-open">
+                <div>
+                  <h2>Open the record behind the result</h2>
+                  <p>
+                    Content integrity and signed authority are displayed
+                    separately.
+                  </p>
+                </div>
+                <input
+                  id="evidence-path"
+                  aria-label="Evidence pack path"
+                  placeholder="/absolute/path/to/evidence-pack"
+                /><sp-button id="evidence-open" variant="accent"
+                  >Inspect pack</sp-button
+                >
+              </div>
+              <div class="quick-actions">
+                <button data-host-operation="evidence pack">
+                  <strong>Collect evidence</strong
+                  ><span>A canonical, redacted evidence pack</span
+                  ><b>→</b></button
+                ><button data-host-operation="evidence story">
+                  <strong>Verify signed outcomes</strong
+                  ><span>Independent trust and immutable CAS</span
+                  ><b>→</b></button
+                ><button data-host-operation="evidence timeline">
+                  <strong>Build a timeline</strong
+                  ><span>Correlate observations and receipts</span
+                  ><b>→</b></button
+                ><button data-host-operation="evidence export">
+                  <strong>Export for review</strong
+                  ><span>Canonical CI and SIEM projections</span><b>→</b>
+                </button>
+              </div>
+              <div id="evidence-content" class="form-card">
+                <p class="empty-copy">
+                  Open a pack or choose an evidence operation.
+                </p>
+              </div>
+            </section>
+            <section data-desk="replay" aria-label="Replay desk" hidden>
+              <div class="reference-journeys">
+                <span class="section-kicker">THE REFERENCE JOURNEY</span>
+                <h2>Real work. Ready to replay.</h2>
+                <p>
+                  Explore accepted historical runs, verified against their
+                  original signed records. No hardware required.
+                </p>
+                <div class="quick-actions">
+                  <button data-reference="cuda">
+                    <span class="quick-icon">↗</span
+                    ><strong>A bounded CUDA run</strong
+                    ><span>Admission → external execution → Worker receipt</span
+                    ><b>→</b></button
+                  ><button data-reference="lora">
+                    <span class="quick-icon">◇</span
+                    ><strong>A private adapter release</strong
+                    ><span>Evaluate → canary → promote</span><b>→</b></button
+                  ><button data-reference="recovery">
+                    <span class="quick-icon">↶</span
+                    ><strong>When a canary fails</strong
+                    ><span>See why a recovered candidate remains failed</span
+                    ><b>→</b>
+                  </button>
+                </div>
+              </div>
+              <article class="form-card">
+                <span class="section-kicker">REPLAY / OFFLINE</span>
+                <h2>Return to a moment. Keep its context.</h2>
+                <p>
+                  Open a validated trace or Hive snapshot without connecting to
+                  a target.
+                </p>
+                <label for="replay-kind">Artifact</label
+                ><select id="replay-kind">
+                  <option value="trace">Canonical trace</option>
+                  <option value="hive">Hive CBOR snapshot</option></select
+                ><label for="replay-path">Artifact path</label
+                ><input
+                  id="replay-path"
+                  placeholder="/absolute/path/to/capture.trace"
+                />
+                <div class="button-row">
+                  <sp-button id="replay-open" variant="accent"
+                    >Open offline</sp-button
+                  ><sp-button id="replay-hive" variant="secondary"
+                    >View hive</sp-button
+                  >
+                </div>
+                <pre id="replay-output" class="read-output">
+Replay preserves recorded observations. It cannot establish current readiness.</pre
+                >
+              </article>
+            </section>
+            <section data-desk="console" aria-label="Expert console" hidden>
+              <article class="panel wide console-panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Console</h2>
+                    <p>
+                      Interactive cohsh prompt over the shared TCP console
+                      session.
+                    </p>
+                  </div>
+                  <div class="console-actions">
+                    <sp-button
+                      id="console-dump-log"
+                      class="action"
+                      variant="secondary"
+                    >
+                      <span data-button-label>Dump log</span>
+                    </sp-button>
+                    <sp-button
+                      id="console-clear"
+                      class="action"
+                      variant="secondary"
+                    >
+                      <span data-button-label>Clear</span>
+                    </sp-button>
+                    <sp-button
+                      id="console-stop"
+                      class="action"
+                      variant="secondary"
+                    >
+                      <span slot="icon" data-icon="stop"></span>
+                      <span data-button-label>Stop</span>
+                    </sp-button>
+                  </div>
+                </header>
+                <div class="panel-body console-body">
+                  <div
+                    class="console-output mono"
+                    id="console-output"
+                    role="log"
+                    aria-live="polite"
+                  >
+                    <p class="placeholder">Console idle.</p>
+                  </div>
+                </div>
+                <footer class="panel-footer console-footer">
+                  <div class="console-input">
+                    <span class="console-prompt">coh&gt;</span>
+                    <sp-textfield
+                      id="console-input"
+                      class="input mono spectrum-field"
+                      placeholder="help · attach queen · log · tail /log/queen.log"
+                      aria-label="Console input"
+                    ></sp-textfield>
+                  </div>
+                  <sp-button id="console-send" class="action" variant="accent">
+                    <span slot="icon" data-icon="play"></span>
+                    <span data-button-label>Send</span>
+                  </sp-button>
+                </footer>
+              </article>
+            </section>
+            <section data-desk="settings" aria-label="Settings" hidden>
+              <div class="two-column">
+                <article class="form-card">
+                  <h2>Connection &amp; display</h2>
+                  <p>
+                    Connect to a Queen directly or use a gateway to share access
+                    with host tools.
+                  </p>
+                  <sp-button id="settings-connect" variant="accent"
+                    >Manage connection</sp-button
+                  ><label class="checkbox-row"
+                    ><input type="checkbox" id="reduced-motion" />Reduce
+                    motion</label
+                  >
+                  <p class="field-help">
+                    The operating system preference is always respected.
+                  </p>
+                  <label for="hive-snapshot-key">Snapshot key</label
+                  ><input
+                    id="hive-snapshot-key"
+                    value="demo"
+                    aria-label="Snapshot key"
+                  /><label for="tool-directory"
+                    >Installed host tools directory</label
+                  ><input
+                    id="tool-directory"
+                    placeholder="/absolute/path/to/bundle/bin"
+                  /><sp-button id="tool-directory-save" variant="secondary"
+                    >Use this installation</sp-button
+                  >
+                  <p class="field-help">
+                    SwarmUI checks that coh uses the same argument schema. Tools
+                    run without a shell.
+                  </p>
+                </article>
+                <article class="form-card">
+                  <h2>Evidence, never assumptions</h2>
+                  <p>
+                    Worker declaration, lifecycle, receipt, external execution
+                    and target proof remain separate.
+                  </p>
+                  <p>
+                    LIVE describes the connection. REPLAY and OFFLINE describe
+                    retained records. Each result carries its own proof class.
+                  </p>
+                  <p>
+                    Profiles save only a name, endpoint, transport and role.
+                    Credentials and tickets are never stored in browser storage.
+                  </p>
+                  <button id="profile-forget">Forget saved profiles</button>
+                </article>
+              </div>
+            </section>
+          </main>
+          <footer class="proofbar">
+            <span id="presentation-mode" class="mode-label">OFFLINE</span
+            ><span id="proof-class"
+              >Retained observations · no live authority</span
+            ><button id="transcript-toggle">
+              Action transcript <span id="transcript-count">0</span> ↑
+            </button>
+          </footer>
+          <aside id="transcript-drawer" aria-label="Action transcript" hidden>
+            <header>
+              <h2>Action transcript</h2>
+              <button id="transcript-close" aria-label="Close transcript">
+                ×
+              </button>
+            </header>
+            <div id="action-transcript" role="log" aria-live="polite"></div>
+          </aside>
+        </div>
+      </div>
+      <dialog id="connection-dialog" aria-labelledby="connection-title">
+        <form id="connection-form">
+          <header>
+            <span class="section-kicker">CONNECTION</span
+            ><button
+              type="button"
+              data-close-dialog
+              aria-label="Close connection"
+            >
+              ×
+            </button>
+          </header>
+          <h2 id="connection-title">Your next connection.</h2>
+          <p>A Queen for direct control. A gateway for shared access.</p>
+          <label for="connection-profile">Saved connection</label
+          ><select id="connection-profile">
+            <option value="">New connection</option>
+          </select>
+          <div class="connection-options">
+            <label
+              ><input
+                name="transport"
+                type="radio"
+                value="rest"
+                checked
+              /><strong>Hive Gateway</strong
+              ><span>Shared access · host workflows</span></label
+            ><label
+              ><input name="transport" type="radio" value="console" /><strong
+                >Queen</strong
+              ><span>Direct TCP · exclusive console</span></label
+            >
+          </div>
+          <label for="connection-endpoint">Endpoint</label
+          ><input
+            id="connection-endpoint"
+            required
+            placeholder="https://gateway.example:8443"
+            autocomplete="off"
+          />
+          <p id="connection-hint" class="field-help">
+            Use your gateway’s base URL. Its delegated identity and policy still
+            apply.
+          </p>
+          <label for="connection-credential"
+            >Authentication token or secret reference</label
+          ><input
+            id="connection-credential"
+            type="password"
+            required
+            autocomplete="off"
+            placeholder="Token, env:NAME or file:/absolute/path"
+          />
+          <div class="two-column">
+            <div>
+              <label for="session-role">Role</label
+              ><select id="session-role">
+                <option>queen</option>
+                <option>worker-heartbeat</option>
+                <option>worker-gpu</option>
+                <option>worker-lora</option>
+                <option>worker-bus</option>
+              </select>
+            </div>
+            <div>
+              <label for="session-ticket">Delegated ticket or reference</label
+              ><input
+                id="session-ticket"
+                type="password"
+                autocomplete="off"
+                placeholder="If required by your deployment"
+              />
+            </div>
+          </div>
+          <label for="connection-name"
+            >Save as
+            <span class="optional">optional · no credentials saved</span></label
+          ><input
+            id="connection-name"
+            placeholder="Development hive"
+            maxlength="64"
+          />
+          <p id="connection-result" role="status" aria-live="polite"></p>
+          <footer>
+            <sp-button id="disconnect" variant="secondary" type="button"
+              >Disconnect</sp-button
+            ><sp-button id="connect" variant="accent" type="submit"
+              >Connect</sp-button
+            >
+          </footer>
+        </form>
+      </dialog>
+      <dialog id="review-dialog" role="dialog" aria-modal="true" aria-label="Review action">
+        <header>
+          <span class="section-kicker">REVIEW ACTION</span
+          ><button data-close-dialog aria-label="Close review">×</button>
+        </header>
+        <h2 id="review-title">Ready to proceed?</h2>
+        <p id="review-description"></p>
+        <pre id="review-preview"></pre>
+        <p class="field-help">
+          The existing command, deployment policy and delegated authority make
+          the final decision. An interrupted controller must be reconciled
+          before retrying.
+        </p>
+        <footer>
+          <sp-button id="review-cancel" variant="secondary">Go back</sp-button
+          ><sp-button id="review-confirm" variant="accent"
+            >Confirm &amp; run</sp-button
+          >
+        </footer>
+      </dialog>
+      <dialog id="palette-dialog" aria-label="Find an action">
+        <input
+          id="palette-search"
+          type="search"
+          aria-label="Search actions"
+          placeholder="Where would you like to go?"
+        />
+        <div id="palette-results"></div>
+        <p class="field-help">↑ ↓ to navigate · Enter to open · Esc to close</p>
+      </dialog>
+    </sp-theme>
+    <script src="vendor/pixi.min.js"></script>
+    <script type="module" src="vendor/spectrum.bundle.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

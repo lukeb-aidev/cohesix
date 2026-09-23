@@ -1,0 +1,845 @@
+# Author: Lukas Bower
+# Purpose: Implement filesystem, TCP, REST, and mock Cohesix Python backends.
+# Copyright 2026 Lukas Bower
+
+"""Backend implementations for Cohesix Python client."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import socket
+import struct
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from .auth import resolve_secret
+from .defaults import DEFAULTS
+from .errors import CohesixError
+from .paths import MAX_PATH_LEN, join_root, validate_path
+from .ticket import normalize_role, normalize_ticket
+
+_CONSOLE = DEFAULTS.get("console", {})
+_SECURE9P = DEFAULTS.get("secure9p", {})
+MAX_LINE_LEN = int(_CONSOLE.get("max_line_len", 256))
+MAX_ECHO_LEN = int(_CONSOLE.get("max_echo_len", 128))
+MAX_FRAME_LEN = int(_SECURE9P.get("msize", 8192))
+CAT_CHUNK_MAX_COUNT = int(_CONSOLE["cat_chunk_max_count"])
+CAT_CHUNK_MAX_WIRE_BYTES = int(_CONSOLE["cat_chunk_max_wire_bytes"])
+CAT_REASSEMBLED_MAX_BYTES = int(_CONSOLE["cat_reassembled_max_bytes"])
+REQUEST_AUTH_ENV_KEYS = (
+    "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+    "COHSH_REST_AUTH_TOKEN",
+    "COH_REST_AUTH_TOKEN",
+)
+_RETRY = DEFAULTS.get("retry", {})
+REST_DEFAULT_MAX_ATTEMPTS = max(1, int(_RETRY.get("max_attempts", 3) or 3))
+REST_DEFAULT_BACKOFF_MS = max(0, int(_RETRY.get("backoff_ms", 200) or 0))
+REST_DEFAULT_BACKOFF_CEILING_MS = max(
+    REST_DEFAULT_BACKOFF_MS,
+    int(_RETRY.get("ceiling_ms", 2000) or 2000),
+)
+REST_RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+
+
+def _resolve_request_auth_token(value: Optional[str]) -> Optional[str]:
+    if value is not None:
+        token = value.strip()
+        return token or None
+    for env_name in REQUEST_AUTH_ENV_KEYS:
+        env_value = os.environ.get(env_name)
+        if env_value and env_value.strip():
+            return env_value.strip()
+    return None
+
+
+class Backend:
+    def list_dir(self, path: str) -> List[str]:
+        raise NotImplementedError
+
+    def read_file(self, path: str, max_bytes: int) -> bytes:
+        raise NotImplementedError
+
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        return self.read_file(path, max_bytes)
+
+    def write_append(self, path: str, payload: bytes) -> int:
+        raise NotImplementedError
+
+    def get_bounds(self) -> Optional[Dict[str, Any]]:
+        return None
+
+    def get_worker_runtime_bounds(self) -> Optional[Dict[str, Any]]:
+        """Return optional declaration-only Worker bounds, never readiness."""
+
+        return None
+
+    def get_backend_class(self) -> str:
+        """Return a non-proof backend projection class."""
+
+        return "unknown"
+
+
+class FilesystemBackend(Backend):
+    """Filesystem backend operating on a mounted Secure9P namespace."""
+
+    def __init__(self, root: str) -> None:
+        self.root = os.path.abspath(root)
+
+    def _resolve(self, path: str) -> str:
+        _ = validate_path(path)
+        resolved = join_root(self.root, path)
+        resolved = os.path.abspath(resolved)
+        if not resolved.startswith(self.root):
+            raise CohesixError("path escapes mount root")
+        return resolved
+
+    def list_dir(self, path: str) -> List[str]:
+        resolved = self._resolve(path)
+        if not os.path.isdir(resolved):
+            raise CohesixError(f"{path} is not a directory")
+        entries = sorted(os.listdir(resolved))
+        return [entry for entry in entries if entry]
+
+    def read_file(self, path: str, max_bytes: int) -> bytes:
+        resolved = self._resolve(path)
+        if not os.path.isfile(resolved):
+            raise CohesixError(f"{path} is not a file")
+        with open(resolved, "rb") as handle:
+            data = handle.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise CohesixError(f"read {path} exceeds max bytes {max_bytes}")
+        return data
+
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        resolved = self._resolve(path)
+        if not os.path.isfile(resolved):
+            raise CohesixError(f"{path} is not a file")
+        if max_bytes <= 0:
+            return b""
+        with open(resolved, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            file_size = handle.tell()
+            seek_pos = max(0, file_size - max_bytes)
+            handle.seek(seek_pos)
+            return handle.read(max_bytes)
+
+    def write_append(self, path: str, payload: bytes) -> int:
+        resolved = self._resolve(path)
+        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+        with open(resolved, "ab") as handle:
+            handle.write(payload)
+        return len(payload)
+
+
+class TcpBackend(Backend):
+    """TCP console backend using the cohsh-core console grammar."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        auth_token: str,
+        role: str,
+        ticket: Optional[str],
+        timeout_s: float = 2.0,
+        max_retries: int = 3,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.auth_source = auth_token
+        self.auth_token = resolve_secret(auth_token)
+        self.role = normalize_role(role)
+        self.ticket = normalize_ticket(self.role, ticket, queen_validate=True)
+        self.timeout_s = timeout_s
+        self.max_retries = max_retries
+        self._sock: Optional[socket.socket] = None
+        self._connect()
+
+    def get_backend_class(self) -> str:
+        """A direct TCP client is a console projection, not target proof."""
+
+        return "console-projection"
+
+    def close(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            finally:
+                self._sock = None
+
+    def _connect(self) -> None:
+        self.auth_token = resolve_secret(self.auth_source)
+        self.close()
+        sock = socket.create_connection((self.host, self.port), timeout=self.timeout_s)
+        sock.settimeout(self.timeout_s)
+        self._sock = sock
+        self._auth()
+        self._attach()
+
+    def _send_line(self, line: str) -> None:
+        if len(line) > MAX_LINE_LEN:
+            raise CohesixError(f"console line exceeds {MAX_LINE_LEN} bytes")
+        try:
+            payload = line.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise CohesixError("console line must be ASCII") from exc
+        total_len = len(payload) + 4
+        if total_len < 4 or total_len > MAX_FRAME_LEN:
+            raise CohesixError("console frame length invalid")
+        frame = struct.pack("<I", total_len) + payload
+        assert self._sock is not None
+        self._sock.sendall(frame)
+
+    def _recv_exact(self, size: int) -> bytes:
+        assert self._sock is not None
+        buf = b""
+        while len(buf) < size:
+            try:
+                chunk = self._sock.recv(size - len(buf))
+            except OSError as exc:
+                raise CohesixError(f"connection closed ({exc})") from exc
+            if not chunk:
+                raise CohesixError("connection closed")
+            buf += chunk
+        return buf
+
+    def _recv_line(self) -> str:
+        header = self._recv_exact(4)
+        total_len = struct.unpack("<I", header)[0]
+        if total_len < 4 or total_len > MAX_FRAME_LEN:
+            raise CohesixError("invalid console frame length")
+        payload_len = total_len - 4
+        payload = self._recv_exact(payload_len)
+        try:
+            return payload.decode("utf-8").strip("\r\n")
+        except UnicodeDecodeError as exc:
+            raise CohesixError("console payload not UTF-8") from exc
+
+    def _auth(self) -> None:
+        self._send_line(f"AUTH {self.auth_token}")
+        saw_line = False
+        for _ in range(self.max_retries * 4):
+            try:
+                line = self._recv_line()
+            except CohesixError as exc:
+                if not saw_line and "connection closed" in str(exc).lower():
+                    raise CohesixError(
+                        "authentication rejected: connection closed before AUTH response"
+                    ) from exc
+                raise
+            saw_line = True
+            if line.startswith("OK AUTH"):
+                return
+            if line.startswith("ERR AUTH"):
+                raise CohesixError(line)
+        raise CohesixError("auth timed out waiting for AUTH response")
+
+    def _attach(self) -> None:
+        ticket_payload = self.ticket or ""
+        self._send_line(f"ATTACH {self.role} {ticket_payload}")
+        for _ in range(self.max_retries * 4):
+            line = self._recv_line()
+            if line.startswith("OK ATTACH"):
+                return
+            if line.startswith("ERR ATTACH"):
+                raise CohesixError(line)
+        raise CohesixError("attach timed out")
+
+    def _stream_command(self, verb: str, path: str) -> List[str]:
+        validate_path(path)
+        self._send_line(f"{verb} {path}")
+        lines: List[str] = []
+        summary_line: Optional[str] = None
+        while True:
+            response = self._recv_line()
+            if response.startswith("OK ") or response.startswith("ERR "):
+                # ACK line
+                if response.startswith(f"ERR {verb}"):
+                    raise CohesixError(f"{verb} failed: {response}")
+                if response.startswith(f"OK {verb}"):
+                    if verb == "CAT" and summary_line is None and "data=" in response:
+                        summary_line = response.split("data=", 1)[1].strip()
+                continue
+            if response == "END":
+                if not lines and summary_line is not None:
+                    lines.append(summary_line)
+                return _reassemble_cat_chunks(lines) if verb in ("CAT", "TAIL") else lines
+            lines.append(response)
+
+    def list_dir(self, path: str) -> List[str]:
+        return self._stream_command("LS", path)
+
+    def read_file(self, path: str, max_bytes: int) -> bytes:
+        lines = self._stream_command("CAT", path)
+        data = "\n".join(lines).encode("utf-8")
+        if len(data) > max_bytes:
+            raise CohesixError(f"read {path} exceeds max bytes {max_bytes}")
+        return data
+
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        lines = self._stream_command("TAIL", path)
+        data = "\n".join(lines).encode("utf-8")
+        if len(data) > max_bytes:
+            raise CohesixError(f"tail {path} exceeds max bytes {max_bytes}")
+        return data
+
+    def write_append(self, path: str, payload: bytes) -> int:
+        validate_path(path)
+        try:
+            payload_str = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CohesixError("payload must be UTF-8") from exc
+        trimmed = payload_str.rstrip("\n")
+        if "\n" in trimmed or "\r" in trimmed:
+            raise CohesixError("echo payload must be a single line")
+        if len(trimmed.encode("utf-8")) > MAX_ECHO_LEN:
+            raise CohesixError(f"echo payload exceeds {MAX_ECHO_LEN} bytes")
+        if trimmed:
+            line = f"ECHO {path} {trimmed}"
+        else:
+            line = f"ECHO {path}"
+        self._send_line(line)
+        while True:
+            response = self._recv_line()
+            if response.startswith("OK ECHO"):
+                return len(payload)
+            if response.startswith("ERR ECHO"):
+                raise CohesixError(response)
+
+
+def _reassemble_cat_chunks(lines: List[str]) -> List[str]:
+    """Verify ordered C1 groups before exposing logical CAT/TAIL records."""
+    def parse(line: str) -> tuple[int, int, str, str]:
+        fields = line.split(":", 4)
+        if len(line.encode("utf-8")) > CAT_CHUNK_MAX_WIRE_BYTES or len(fields) != 5:
+            raise CohesixError("invalid CAT chunk wire bound/header")
+        version, seq, count, digest, payload = fields
+        if (version != "C1" or len(seq) != 4 or len(count) != 4 or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in seq + count + digest)):
+            raise CohesixError("invalid CAT chunk canonical header")
+        sequence, total = int(seq, 16), int(count, 16)
+        if not 1 <= total <= CAT_CHUNK_MAX_COUNT or sequence >= total or not payload:
+            raise CohesixError("invalid CAT chunk sequence/count/payload")
+        return sequence, total, digest, payload
+
+    output: List[str] = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].startswith("C1:"):
+            output.append(lines[index])
+            index += 1
+            continue
+        sequence, count, digest, _ = parse(lines[index])
+        if sequence != 0 or index + count > len(lines):
+            raise CohesixError("partial or replayed CAT chunk group")
+        chunks: List[str] = []
+        size = 0
+        for expected in range(count):
+            seq, total, checksum, payload = parse(lines[index + expected])
+            if (seq, total, checksum) != (expected, count, digest):
+                raise CohesixError("CAT chunk sequence/count/digest mismatch")
+            size += len(payload.encode("utf-8"))
+            if size > CAT_REASSEMBLED_MAX_BYTES:
+                raise CohesixError("CAT chunk record exceeds byte bound")
+            chunks.append(payload)
+        record = "".join(chunks)
+        if hashlib.sha256(record.encode("utf-8")).hexdigest() != digest:
+            raise CohesixError("CAT chunk digest mismatch")
+        output.append(record)
+        index += count
+    return output
+
+
+MAX_REST_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+def _read_bounded_rest_response(response) -> bytes:
+    """Refuse excessive advertised sizes before reading or decoding JSON."""
+    length = response.headers.get("Content-Length")
+    if length is not None:
+        try:
+            length = int(length)
+        except (ValueError, TypeError) as exc:
+            raise CohesixError("invalid REST response length") from exc
+        if length < 0 or length > MAX_REST_RESPONSE_BYTES:
+            raise CohesixError("REST response exceeds byte bound")
+    payload = response.read(MAX_REST_RESPONSE_BYTES + 1)
+    if len(payload) > MAX_REST_RESPONSE_BYTES:
+        raise CohesixError("REST response exceeds byte bound")
+    return payload
+
+
+class RestBackend(Backend):
+    """REST backend using the hive-gateway JSON API."""
+
+    def __init__(
+        self,
+        base_url: str,
+        timeout_s: float = 2.0,
+        request_auth_token: Optional[str] = None,
+        max_attempts: Optional[int] = None,
+        backoff_ms: Optional[int] = None,
+        backoff_ceiling_ms: Optional[int] = None,
+        delegated_ticket: Optional[str] = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout_s = timeout_s
+        self.request_auth_token = _resolve_request_auth_token(request_auth_token)
+        self.delegated_ticket = delegated_ticket if delegated_ticket is not None else os.environ.get("COH_REST_TICKET")
+        self.max_attempts = max(1, int(max_attempts or REST_DEFAULT_MAX_ATTEMPTS))
+        self.backoff_ms = max(
+            0,
+            int(REST_DEFAULT_BACKOFF_MS if backoff_ms is None else backoff_ms),
+        )
+        self.backoff_ceiling_ms = max(
+            self.backoff_ms,
+            int(
+                REST_DEFAULT_BACKOFF_CEILING_MS
+                if backoff_ceiling_ms is None
+                else backoff_ceiling_ms
+            ),
+        )
+
+    def list_dir(self, path: str) -> List[str]:
+        response = self._request_json("GET", "/v1/fs/ls", query={"path": path})
+        lines = response.get("lines", [])
+        if not isinstance(lines, list):
+            raise CohesixError("invalid REST response: lines missing")
+        return [str(line) for line in lines]
+
+    def read_file(self, path: str, max_bytes: int) -> bytes:
+        response = self._request_json(
+            "GET",
+            "/v1/fs/cat",
+            query={"path": path, "max_bytes": str(int(max_bytes))},
+        )
+        lines = response.get("lines", [])
+        if not isinstance(lines, list):
+            raise CohesixError("invalid REST response: lines missing")
+        payload = "\n".join(str(line) for line in lines).encode("utf-8")
+        if len(payload) > max_bytes:
+            raise CohesixError(f"read {path} exceeds max bytes {max_bytes}")
+        return payload
+
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        response = self._request_json(
+            "GET",
+            "/v1/fs/tail",
+            query={"path": path, "max_bytes": str(int(max_bytes))},
+        )
+        lines = response.get("lines", [])
+        if not isinstance(lines, list):
+            raise CohesixError("invalid REST response: lines missing")
+        payload = "\n".join(str(line) for line in lines).encode("utf-8")
+        if len(payload) > max_bytes:
+            raise CohesixError(f"tail {path} exceeds max bytes {max_bytes}")
+        return payload
+
+    def write_append(self, path: str, payload: bytes) -> int:
+        validate_path(path)
+        try:
+            payload_str = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CohesixError("payload must be UTF-8") from exc
+        trimmed = payload_str.rstrip("\n")
+        if "\n" in trimmed or "\r" in trimmed:
+            raise CohesixError("echo payload must be a single line")
+        if len(trimmed.encode("utf-8")) > MAX_ECHO_LEN:
+            raise CohesixError(f"echo payload exceeds {MAX_ECHO_LEN} bytes")
+        response = self._request_json(
+            "POST",
+            "/v1/fs/echo",
+            body={"path": path, "line": trimmed},
+        )
+        bytes_written = response.get("bytes", len(payload))
+        return int(bytes_written)
+
+    def get_bounds(self) -> Optional[Dict[str, Any]]:
+        payload = self._request_payload("GET", "/v1/meta/bounds")
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception as exc:  # pragma: no cover - indicates gateway bug
+            raise CohesixError("invalid REST bounds payload") from exc
+        if not isinstance(data, dict):  # pragma: no cover - indicates gateway bug
+            raise CohesixError("invalid REST bounds payload")
+        return data
+
+    def get_worker_runtime_bounds(self) -> Optional[Dict[str, Any]]:
+        """Return optional REST declaration metadata without inferring READY."""
+
+        bounds = self.get_bounds()
+        if bounds is None:
+            return None
+        value = bounds.get("worker_runtime_bounds")
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise CohesixError("invalid REST Worker runtime bounds")
+        return dict(value)
+
+    def get_backend_class(self) -> str:
+        """Read an optional gateway projection class; absence stays unknown."""
+
+        payload = self._request_payload("GET", "/v1/meta/status")
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise CohesixError("invalid REST status payload") from exc
+        if not isinstance(data, dict):
+            raise CohesixError("invalid REST status payload")
+        value = data.get("backend_class", "unknown")
+        if value not in ("host-model", "console-projection", "unknown"):
+            raise CohesixError("invalid REST backend class")
+        return str(value)
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: Optional[dict] = None,
+        body: Optional[dict] = None,
+    ) -> dict:
+        payload = self._request_payload(method, path, query=query, body=body)
+        return self._parse_rest_payload(method, path, payload)
+
+    def _request_payload(
+        self,
+        method: str,
+        path: str,
+        query: Optional[dict] = None,
+        body: Optional[dict] = None,
+    ) -> bytes:
+        request_auth = resolve_secret(self.request_auth_token) if self.request_auth_token is not None else None
+        mutating = method not in {"GET", "HEAD", "OPTIONS"}
+        if mutating:
+            try:
+                if self.request_auth_token is None:
+                    raise ValueError("request auth required")
+                if not self.delegated_ticket:
+                    raise ValueError("delegated ticket required")
+                normalize_ticket("queen", self.delegated_ticket, queen_validate=True)
+            except ValueError as exc:
+                raise CohesixError(f"EPERM {exc}") from exc
+        url = f"{self.base_url}{path}"
+        if query:
+            url = f"{url}?{urllib.parse.urlencode(query)}"
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+        for attempt in range(self.max_attempts):
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("Accept", "application/json")
+            if request_auth:
+                req.add_header("Authorization", f"Bearer {request_auth}")
+                req.add_header("x-cohesix-auth", request_auth)
+            if self.delegated_ticket:
+                req.add_header("x-cohesix-ticket", self.delegated_ticket)
+            if body is not None:
+                req.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                    return _read_bounded_rest_response(resp)
+            except urllib.error.HTTPError as exc:
+                payload = _read_bounded_rest_response(exc)
+                if not mutating and self._should_retry_http(exc, attempt):
+                    self._sleep_backoff(attempt, exc)
+                    continue
+                self._raise_rest_error(method, path, payload, exc)
+                raise AssertionError("unreachable")
+            except urllib.error.URLError as exc:
+                if not mutating and self._should_retry_url(exc, attempt):
+                    self._sleep_backoff(attempt, None)
+                    continue
+                raise CohesixError(f"REST connection failed: {exc}") from exc
+        raise CohesixError(f"REST {method} {path} failed after {self.max_attempts} attempts")
+
+    def _parse_rest_payload(self, method: str, path: str, payload: bytes) -> dict:
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception as exc:  # pragma: no cover - indicates gateway bug
+            raise CohesixError("invalid REST response payload") from exc
+        if not isinstance(data, dict):  # pragma: no cover - indicates gateway bug
+            raise CohesixError("invalid REST response payload")
+        if data.get("status") != "OK":
+            error = data.get("error") or f"{method} {path} failed"
+            raise CohesixError(str(error))
+        return data
+
+    def _raise_rest_error(
+        self, method: str, path: str, payload: bytes, exc: urllib.error.HTTPError
+    ) -> dict:
+        try:
+            data = json.loads(payload.decode("utf-8")) if payload else {}
+        except Exception:
+            data = {}
+        if isinstance(data, dict) and data.get("error"):
+            raise CohesixError(str(data.get("error")))
+        raise CohesixError(f"REST {method} {path} failed with status {exc.code}")
+
+    def _should_retry_http(self, exc: urllib.error.HTTPError, attempt: int) -> bool:
+        return attempt + 1 < self.max_attempts and int(exc.code) in REST_RETRYABLE_HTTP_CODES
+
+    def _should_retry_url(self, exc: urllib.error.URLError, attempt: int) -> bool:
+        if attempt + 1 >= self.max_attempts:
+            return False
+        reason = str(exc.reason).lower() if getattr(exc, "reason", None) is not None else ""
+        return any(
+            marker in reason
+            for marker in (
+                "timed out",
+                "temporarily unavailable",
+                "temporary failure",
+                "connection refused",
+                "connection reset",
+                "connection aborted",
+                "broken pipe",
+                "failed to establish",
+            )
+        )
+
+    def _sleep_backoff(
+        self, attempt: int, exc: Optional[urllib.error.HTTPError]
+    ) -> None:
+        delay_ms = self.backoff_ms * (2**attempt)
+        if self.backoff_ceiling_ms > 0:
+            delay_ms = min(delay_ms, self.backoff_ceiling_ms)
+        if exc is not None:
+            retry_after = exc.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    delay_ms = max(delay_ms, int(retry_after) * 1000)
+                except ValueError:
+                    pass
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+
+
+class MockBackend(FilesystemBackend):
+    """Deterministic mock backend for tests and examples."""
+
+    def __init__(self, root: Optional[str] = None, include_mig: bool = False) -> None:
+        if root is None:
+            root = os.path.join("out", "examples", "mockfs")
+        super().__init__(root)
+        self._telemetry_counts: dict[str, int] = {}
+        self._include_mig = include_mig
+        self._next_worker_id = 1
+        self._gpu_for_worker: dict[str, str] = {}
+        self._worker_for_gpu: dict[str, str] = {}
+        self._worker_roles: dict[str, str] = {}
+        self._worker_generations: dict[str, int] = {}
+        self._worker_shard_bits = 8
+        self._seed()
+
+    def _configure_worker_shard_bits(self, shard_bits: int) -> None:
+        """Bind future mock Worker records to one validated target profile."""
+
+        if not 1 <= shard_bits <= 8:
+            raise CohesixError("mock Worker shard width must be in 1..=8")
+        if self._worker_roles and shard_bits != self._worker_shard_bits:
+            raise CohesixError("cannot change mock Worker shards after admission")
+        self._worker_shard_bits = shard_bits
+
+    def get_backend_class(self) -> str:
+        """Mock state is explicitly host-model and never target proof."""
+
+        return "host-model"
+
+    def _seed(self) -> None:
+        root = Path(self.root)
+        (root / "gpu" / "GPU-0").mkdir(parents=True, exist_ok=True)
+        (root / "gpu" / "GPU-1").mkdir(parents=True, exist_ok=True)
+        gpu_info = {
+            "id": "GPU-0",
+            "name": "MockGPU",
+            "memory_mb": 8192,
+            "sm_count": 80,
+            "driver_version": "mock",
+            "runtime_version": "mock",
+        }
+        (root / "gpu" / "GPU-0" / "info").write_text(
+            json.dumps(gpu_info), encoding="utf-8"
+        )
+        gpu_info["id"] = "GPU-1"
+        (root / "gpu" / "GPU-1" / "info").write_text(
+            json.dumps(gpu_info), encoding="utf-8"
+        )
+        (root / "gpu" / "GPU-0" / "status").touch()
+        (root / "gpu" / "GPU-0" / "lease").touch()
+        (root / "gpu" / "GPU-1" / "status").touch()
+        (root / "gpu" / "GPU-1" / "lease").touch()
+
+        if self._include_mig:
+            mig_dir = root / "gpu" / "MIG-0"
+            mig_dir.mkdir(parents=True, exist_ok=True)
+            mig_info = {
+                "id": "MIG-0",
+                "name": "MockMIG",
+                "memory_mb": 1024,
+                "sm_count": 14,
+                "driver_version": "mock",
+                "runtime_version": "mock",
+            }
+            (mig_dir / "info").write_text(json.dumps(mig_info), encoding="utf-8")
+            (mig_dir / "status").touch()
+            (mig_dir / "lease").touch()
+
+        export_root = root / "queen" / "export" / "lora_jobs" / "job_8932"
+        export_root.mkdir(parents=True, exist_ok=True)
+        (export_root / "telemetry.cbor").write_bytes(b"telemetry-v1\n")
+        (export_root / "base_model.ref").write_text("vision-base-v1\n", encoding="utf-8")
+        (export_root / "policy.toml").write_text('[policy]\nname = "default"\n', encoding="utf-8")
+
+        registry_manifest = (
+            root
+            / "gpu"
+            / "models"
+            / "available"
+            / "llama3-edge-v7"
+            / "manifest.toml"
+        )
+        registry_manifest.parent.mkdir(parents=True, exist_ok=True)
+        registry_manifest.write_text("[model]\nid=\"llama3-edge-v7\"\n", encoding="utf-8")
+
+        telemetry_path = root / "queen" / "telemetry" / "device-1" / "seg"
+        telemetry_path.mkdir(parents=True, exist_ok=True)
+        seg_path = telemetry_path / "seg-000001"
+        seg_path.write_text("{\"seq\":1}\n", encoding="utf-8")
+        latest_path = root / "queen" / "telemetry" / "device-1" / "latest"
+        latest_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_path.write_text("seg-000001\n", encoding="utf-8")
+        self._telemetry_counts["device-1"] = 1
+
+    def write_append(self, path: str, payload: bytes) -> int:
+        # Special-case telemetry ctl for deterministic segment creation.
+        if path.startswith("/queen/telemetry/") and path.endswith("/ctl"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                device_id = parts[3]
+                count = self._telemetry_counts.get(device_id, 0) + 1
+                self._telemetry_counts[device_id] = count
+                seg_id = f"seg-{count:06d}"
+                base = Path(self.root) / "queen" / "telemetry" / device_id
+                (base / "seg").mkdir(parents=True, exist_ok=True)
+                (base / "latest").write_text(f"{seg_id}\n", encoding="utf-8")
+                (base / "seg" / seg_id).touch()
+        if path == "/queen/ctl":
+            self._handle_ctl(payload)
+        return super().write_append(path, payload)
+
+    def _handle_ctl(self, payload: bytes) -> None:
+        try:
+            text = payload.decode("utf-8").strip()
+            if text.endswith("\n"):
+                text = text[:-1]
+            data = json.loads(text)
+        except Exception:
+            return
+        if "kill" in data:
+            worker_id = data.get("kill")
+            if isinstance(worker_id, str):
+                self._mock_worker_observation(worker_id, lifecycle="terminal")
+                gpu_id = self._gpu_for_worker.pop(worker_id, None)
+                if gpu_id:
+                    self._worker_for_gpu.pop(gpu_id, None)
+                    lease_path = Path(self.root) / "gpu" / gpu_id / "lease"
+                    entry = {
+                        "schema": "gpu-lease/v1",
+                        "state": "RELEASED",
+                        "gpu_id": gpu_id,
+                        "worker_id": worker_id,
+                        "mem_mb": 1024,
+                        "streams": 1,
+                        "ttl_s": 0,
+                        "priority": 1,
+                    }
+                    lease_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+            return
+        spawn = data.get("spawn")
+        role = {
+            "heartbeat": "worker-heartbeat",
+            "gpu": "worker-gpu",
+            "lora": "worker-lora",
+        }.get(spawn)
+        if role is None:
+            return
+        requested_id = data.get("worker_id")
+        if isinstance(requested_id, str) and requested_id:
+            worker_id = requested_id
+        else:
+            worker_id = f"worker-{self._next_worker_id}"
+            self._next_worker_id += 1
+        self._worker_roles[worker_id] = role
+        self._worker_generations[worker_id] = self._worker_generations.get(worker_id, 0) + 1
+        self._mock_worker_observation(worker_id, lifecycle="ready")
+
+        if spawn != "gpu":
+            return
+        lease = data.get("lease", {})
+        gpu_id = lease.get("gpu_id")
+        if not gpu_id:
+            return
+        self._gpu_for_worker[worker_id] = gpu_id
+        self._worker_for_gpu[gpu_id] = worker_id
+        lease_path = Path(self.root) / "gpu" / gpu_id / "lease"
+        lease_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "schema": "gpu-lease/v1",
+            "state": "ACTIVE",
+            "gpu_id": gpu_id,
+            "worker_id": worker_id,
+            "mem_mb": lease.get("mem_mb", 1024),
+            "streams": lease.get("streams", 1),
+            "ttl_s": lease.get("ttl_s", 60),
+            "priority": lease.get("priority", 1),
+        }
+        lease_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    def _mock_worker_observation(self, worker_id: str, *, lifecycle: str) -> None:
+        role = self._worker_roles.get(worker_id)
+        if role is None:
+            return
+        generation = self._worker_generations.get(worker_id, 1)
+        shard = hashlib.sha256(worker_id.encode("ascii")).digest()[0]
+        if self._worker_shard_bits < 8:
+            shard >>= 8 - self._worker_shard_bits
+        telemetry = (
+            Path(self.root)
+            / "shard"
+            / f"{shard:02x}"
+            / "worker"
+            / worker_id
+            / "telemetry"
+        )
+        telemetry.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "schema": "cohesix-worker-observation/v1",
+            "public_instance_id": worker_id,
+            "identity": {
+                "role": role,
+                "slot": 0,
+                "lease_epoch": 1,
+                "supervisor_generation": generation,
+                "cap_generation": 1,
+            },
+            "state": {
+                "declaration": "executable",
+                "lifecycle": lifecycle,
+                "artifact": "missing",
+                "receipt": "none",
+                "execution_proof": "host-model",
+            },
+            "request_admitted": True,
+            "provider_completed": False,
+            "receipt_sequence": 0,
+        }
+        telemetry.write_text(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )

@@ -1,0 +1,2 @@
+ERR ATTACH reason=denied
+ERR ATTACH reason=throttled delay_ms=250

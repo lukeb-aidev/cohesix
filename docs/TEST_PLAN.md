@@ -3323,9 +3323,18 @@ The catalog exposes the same inputs as `TP_RELEASE_MACOS_RESULT`,
 `TP_RELEASE_LINUX_RESULT`, `TP_RELEASE_PI4_RESULT`, `TP_RELEASE_DIR` and
 `TP_RELEASE_RESULT`. Missing/failed checks, changed logs or archives, an old
 version, or different source commits fail closed. Retain the final result and
-the complete evidence directories with the release delivery record. Only after
+the complete evidence directories with the release delivery record. Ordinarily, only after
 this gate and the independently required M26e acceptance/reviewer gates pass may
-the candidate archives be published.
+the candidate archives be published. For `1.1.0-beta` alone, Lukas Bower
+approved a limited release decision on 23 September 2026 after declining
+another final SD write/readback and boot. The final Pi raw image contains the
+same 27 hashed files as the independently read-back and booted candidate but
+differs in FAT metadata. The final exact raw image has no physical media-
+readback or boot result, no fresh 10-cold/10-warm Wi-Fi series, and no passing
+three-archive verifier. Keep each as `NOT_RUN`; the owner decision permits this
+specific beta publication with those disclosed limits but supplies no
+Conditional G, final-image hardware, Wi-Fi reliability or performance PASS.
+It cannot be reused for another release.
 
 ### Automated Stage 05 — Release governance and attestation
 - For the owner-approved `1.0.0-beta` carry-forward only, the dedicated

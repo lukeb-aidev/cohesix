@@ -1,0 +1,19 @@
+# Author: Lukas Bower
+# Purpose: Validate pooled throughput, retries, and pool exhaustion.
+attach queen
+EXPECT OK
+pool bench path=/log/queen.log ops=64 batch=8 payload=pool inject_failures=1 inject_bytes=8 exhaust=1 kind=telemetry
+EXPECT SUBSTR pool bench result OK
+EXPECT SUBSTR expected=64 observed=64
+quit
+# 9P-only replay section (ignored by cohsh after quit)
+attach queen
+EXPECT OK
+spawn heartbeat ticks=1 ttl_s=30
+EXPECT OK
+kill worker-1
+EXPECT OK
+tail /log/queen.log
+EXPECT OK
+tail /log/../queen.log
+EXPECT ERR

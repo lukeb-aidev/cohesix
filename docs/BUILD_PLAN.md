@@ -129,7 +129,7 @@ owned by their specific contracts.
 | [27d](#27d) | Verified Private LoRA Release | Complete |
 | [27e](#27e) | Installation, Adoption and CI | Complete |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
-| [27g](#27g) | Integrated Qualification and Next Release | In Progress — Release A qualification and two-hour Pi burn-in |
+| [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
@@ -12269,14 +12269,22 @@ Deliverables: Complete operator controls and accessibility evidence, alongside t
 ## Milestone 27g — Integrated Qualification and Next Release <a id="27g"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress — integrated Release A qualification, started 20 September 2026.
+**Status:** Complete — owner-approved limited Release A qualification,
+23 September 2026.
 
-The repaired two-hour burn-in and exact-source five-stage QEMU pressure plan
-pass. The selected Pi image has two passing cold GENET performance boots and a
-readable HDMI capture; prior-source extracted installation, SD readback and USB
-input checks retain their own identities. Final-image paired hardware,
-Wi-Fi/repeatability, distributed-media and extracted-package gates remain open;
-these partial results do not close the milestone.
+The repaired two-hour Pi/Mac/Linux burn-in, post-burn staged plans, QEMU
+pressure and exact-source merge baseline passed at their recorded identities.
+The installed `7b4a08d95` Pi SD candidate passed raw readback, fresh numbered
+U-Boot-menu GENET static, GENET DHCP and Wi-Fi DHCP boots, packaged TCP checks,
+a final Apple Home power-cycled GENET boot and HDMI observation. The final
+archive has the same 27 embedded files but different FAT metadata; its raw
+bytes were not written and read back, and no fresh 10-cold/10-warm Wi-Fi
+series was run. Lukas Bower explicitly selected the final GENET cold boot and
+approved publication with these limits on 23 September. This scoped release
+decision does not give the final raw image a media-readback PASS, make the
+three-archive verifier PASS, or extend M26e Wi-Fi/repeatability acceptance to
+the new image. The [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md)
+retains the passing results and owner-accepted gaps.
 
 **Prerequisites:** completed 27b, 27c, 27d, 27e and 27f.
 

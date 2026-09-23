@@ -1,0 +1,6 @@
+# Author: Lukas Bower
+# Purpose: Provide the dedicated source payload for the exact eight-chunk CAS capacity test.
+# Copyright 2026 Lukas Bower
+cohesix-cas-max-chunks-v1
+This fixture is padded as one payload to exactly 1,024 bytes.
+It is distinct from trace_v0.trace, which remains the complete replay fixture and the nine-chunk negative CAS preflight input.

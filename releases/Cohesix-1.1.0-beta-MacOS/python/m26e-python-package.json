@@ -1,0 +1,94 @@
+{
+  "entry_points": [
+    "cohesix-playbook=cohesix.playbook_cli:main"
+  ],
+  "extras": [
+    "dev",
+    "integrations",
+    "ml"
+  ],
+  "interpreters": [
+    {
+      "implementation": "CPython",
+      "optional_peft_status": "degraded",
+      "package_version": "0.2.0a2",
+      "platform": "macOS-27.0-arm64-arm-64bit",
+      "profile_contract_sha256": "dc46e433031579ce8bb4261c9264f05ae0ca98227dc143594a65ab2ddd48153c",
+      "python_version": "3.11.13",
+      "result": "PASS",
+      "schema": "cohesix-python-smoke/v1",
+      "target": "qemu",
+      "target_defaults": "neutral",
+      "worker_bus": "model-only-refused",
+      "worker_control_proof": "strict-request-serialization",
+      "worker_roles": [
+        "worker-gpu",
+        "worker-heartbeat",
+        "worker-lora"
+      ]
+    },
+    {
+      "implementation": "CPython",
+      "optional_peft_status": "degraded",
+      "package_version": "0.2.0a2",
+      "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+      "profile_contract_sha256": "dc46e433031579ce8bb4261c9264f05ae0ca98227dc143594a65ab2ddd48153c",
+      "python_version": "3.13.7",
+      "result": "PASS",
+      "schema": "cohesix-python-smoke/v1",
+      "target": "qemu",
+      "target_defaults": "neutral",
+      "worker_bus": "model-only-refused",
+      "worker_control_proof": "strict-request-serialization",
+      "worker_roles": [
+        "worker-gpu",
+        "worker-heartbeat",
+        "worker-lora"
+      ]
+    }
+  ],
+  "meta": {
+    "author": "Lukas Bower",
+    "purpose": "Bind one target-neutral wheel to independently generated QEMU and Pi contracts."
+  },
+  "profile_contracts": {
+    "pi4": {
+      "bytes": 4990,
+      "filename": "cohesix_python_pi4_production.json",
+      "manifest_sha256": "d868f11432f73c461a274bc59c58de905700b2b11cbf2190f839ced79744c135",
+      "sha256": "6fd30c4597b1abfeb666a52966753c277e068396a0b4dab16f1125496d1a846b",
+      "target_profile": "pi4_production"
+    },
+    "qemu": {
+      "bytes": 4991,
+      "filename": "cohesix_python_qemu_smp_production.json",
+      "manifest_sha256": "5508274d8ff5780a7188bced7a4edbc9db56dedcea962b9b747346d3bd757ec8",
+      "sha256": "dc46e433031579ce8bb4261c9264f05ae0ca98227dc143594a65ab2ddd48153c",
+      "target_profile": "qemu_smp_production"
+    }
+  },
+  "proof_boundary": {
+    "mock_is_target_proof": false,
+    "package_install_is_target_proof": false,
+    "python_projection_is_authority": false
+  },
+  "python_requires": ">=3.11",
+  "schema": "cohesix-python-package/v1",
+  "wheel": {
+    "bytes": 126219,
+    "filename": "cohesix-0.2.0a2-py3-none-any.whl",
+    "members_sha256": "5d90781578014805834f9cf2ce993941b268d893f8393f4aabb453c60671ab48",
+    "modules": [
+      "cohesix/__init__.py",
+      "cohesix/backends.py",
+      "cohesix/client.py",
+      "cohesix/evidence.py",
+      "cohesix/generated.py",
+      "cohesix/orchestration.py",
+      "cohesix/playbooks.py",
+      "cohesix/receipts.py",
+      "cohesix/worker.py"
+    ],
+    "sha256": "50ef629ac6558a860ac03ed482af162777a838ac432b503ee55d450896bd8a63"
+  }
+}

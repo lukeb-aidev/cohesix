@@ -1,0 +1,1028 @@
+{
+  "graph_sha256": "8e928bb3e1fdf6c5350ff3c028b05a5f828bba9b4ce8bb009759b6890129a6db",
+  "playbooks": [
+    {
+      "dependencies": [
+        "host-ticket-executor",
+        "kubernetes-provider",
+        "systemd-provider",
+        "worker-control"
+      ],
+      "id": "jetson-critical-infra",
+      "use_case": "agent-action-airlock",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "modbus.read",
+          "systemd.status-check"
+        ],
+        "external_dependencies": [
+          {
+            "id": "critical-infra-app",
+            "kind": "signed_application",
+            "owner": "deployment-owner"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "linux-aarch64-cuda",
+        "recovery_actions": [
+          "systemd.stop"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "linux",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "jetson",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    },
+    {
+      "dependencies": [
+        "host-ticket-executor",
+        "kubernetes-provider",
+        "systemd-provider",
+        "worker-control"
+      ],
+      "id": "jetson-manufacturing-safety",
+      "use_case": "self-healing-edge-swarm",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "systemd.start",
+          "gpu.workload.submit"
+        ],
+        "external_dependencies": [
+          {
+            "id": "manufacturing-safety-app",
+            "kind": "signed_application",
+            "owner": "deployment-owner"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "linux-aarch64-cuda",
+        "recovery_actions": [
+          "gpu.workload.cancel",
+          "systemd.stop"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "linux",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "jetson",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    },
+    {
+      "dependencies": [
+        "host-ticket-executor",
+        "kubernetes-provider",
+        "systemd-provider",
+        "worker-control"
+      ],
+      "id": "jetson-traffic-safety",
+      "use_case": "self-healing-edge-swarm",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "systemd.start",
+          "gpu.workload.submit"
+        ],
+        "external_dependencies": [
+          {
+            "id": "traffic-safety-app",
+            "kind": "signed_application",
+            "owner": "deployment-owner"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "linux-aarch64-cuda",
+        "recovery_actions": [
+          "gpu.workload.cancel",
+          "systemd.stop"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "linux",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "jetson",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    },
+    {
+      "dependencies": [
+        "docker-provider",
+        "host-ticket-executor",
+        "siem-evidence-export",
+        "worker-control"
+      ],
+      "id": "mac-endpoint-compliance",
+      "use_case": "agent-action-airlock",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "endpoint_compliance.observe"
+        ],
+        "external_dependencies": [],
+        "governance_mode": "observe",
+        "package_profile": "macos-controller",
+        "recovery_actions": [
+          "endpoint_compliance.observe"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "macos",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "macos",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "none"
+      }
+    },
+    {
+      "dependencies": [
+        "cas-artifact",
+        "docker-provider",
+        "gpu-host-provider",
+        "kubernetes-provider",
+        "peft-host-provider",
+        "peft-receipt-path",
+        "worker-control"
+      ],
+      "id": "mac-private-peft-grid",
+      "use_case": "private-lora-foundry",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "peft.export",
+          "peft.import",
+          "peft.activate"
+        ],
+        "external_dependencies": [
+          {
+            "id": "m27d-peft-pipeline",
+            "kind": "accepted_milestone",
+            "owner": "milestone-27d"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "macos-controller",
+        "recovery_actions": [
+          "peft.rollback"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "macos",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "remote-cuda",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    },
+    {
+      "dependencies": [
+        "docker-provider",
+        "host-ticket-executor",
+        "worker-control"
+      ],
+      "id": "mac-release-factory",
+      "use_case": "self-healing-edge-swarm",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "mac_release.build",
+          "mac_release.test",
+          "mac_release.archive",
+          "mac_release.codesign",
+          "mac_release.notarize",
+          "mac_release.upload"
+        ],
+        "external_dependencies": [],
+        "governance_mode": "observe",
+        "package_profile": "macos-controller",
+        "recovery_actions": [
+          "launchd.stop"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "macos",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "macos",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "none"
+      }
+    },
+    {
+      "dependencies": [
+        "federation-provider",
+        "kubernetes-provider",
+        "python-sdk-projection",
+        "rest-gateway-projection",
+        "worker-control"
+      ],
+      "id": "mixed-closed-loop-ai-factory",
+      "use_case": "multi-hive-mission-control",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "peft.export",
+          "peft.import",
+          "peft.activate"
+        ],
+        "external_dependencies": [
+          {
+            "id": "m27d-peft-pipeline",
+            "kind": "accepted_milestone",
+            "owner": "milestone-27d"
+          },
+          {
+            "id": "closed-loop-factory-app",
+            "kind": "signed_application",
+            "owner": "deployment-owner"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "linux-aarch64-cuda",
+        "recovery_actions": [
+          "peft.rollback"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "linux",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "fleet",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    },
+    {
+      "dependencies": [
+        "federation-provider",
+        "fuse-mount-projection",
+        "kubernetes-provider",
+        "rest-gateway-projection",
+        "worker-control"
+      ],
+      "id": "mixed-logistics-digital-twin",
+      "use_case": "multi-hive-mission-control",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "systemd.start",
+          "gpu.workload.submit"
+        ],
+        "external_dependencies": [
+          {
+            "id": "logistics-digital-twin-app",
+            "kind": "signed_application",
+            "owner": "deployment-owner"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "linux-aarch64-cuda",
+        "recovery_actions": [
+          "gpu.workload.cancel",
+          "systemd.stop"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "linux",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "fleet",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    },
+    {
+      "dependencies": [
+        "gpu-host-provider",
+        "gpu-receipt-path",
+        "kubernetes-provider",
+        "worker-control"
+      ],
+      "id": "mixed-medical-edge-ai",
+      "use_case": "gpu-flight-deck",
+      "workflow": {
+        "authority_custodian": "root-admitted-ticket",
+        "bypass_posture": "Native administrators remain independent; labels and package presence grant no Cohesix authority.",
+        "evidence_schema": "cohesix-causal-evidence/v1",
+        "execute_actions": [
+          "systemd.start",
+          "gpu.workload.submit"
+        ],
+        "external_dependencies": [
+          {
+            "id": "medical-edge-app",
+            "kind": "signed_application",
+            "owner": "deployment-owner"
+          }
+        ],
+        "governance_mode": "observe",
+        "package_profile": "linux-aarch64-cuda",
+        "recovery_actions": [
+          "gpu.workload.cancel",
+          "systemd.stop"
+        ],
+        "schema": "cohesix-workflow/v1",
+        "stages": [
+          {
+            "after": [],
+            "id": "preflight",
+            "owner": "controller",
+            "postcondition": "Resolve exact packages, external applications, native targets, topology and credential references before any write.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "preflight"
+            ],
+            "id": "admit",
+            "owner": "target-hive",
+            "postcondition": "Authenticate the caller and admit one bounded ticket under current writer and policy authority.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "admit"
+            ],
+            "id": "execute",
+            "owner": "provider-host",
+            "postcondition": "Dispatch only the admitted action through its registered native executor; dispatch alone is non-terminal.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "execute"
+            ],
+            "id": "observe",
+            "owner": "provider-host",
+            "postcondition": "Read exact native object identity and postcondition, retaining bounded immutable artifacts.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "observe"
+            ],
+            "id": "verify",
+            "owner": "controller",
+            "postcondition": "Validate every signed causal chain and exact target/Worker/native correlation before advancing.",
+            "when": "normal"
+          },
+          {
+            "after": [
+              "verify"
+            ],
+            "id": "recover",
+            "owner": "controller",
+            "postcondition": "Submit a separately admitted recovery ticket linked to the verified original graph; stopping a service does not reverse publication or certify safety.",
+            "when": "explicit_recovery"
+          }
+        ],
+        "topology": [
+          {
+            "host_class": "linux",
+            "id": "controller",
+            "owner": "coh-workflow"
+          },
+          {
+            "host_class": "sel4",
+            "id": "target-hive",
+            "owner": "root-task"
+          },
+          {
+            "host_class": "fleet",
+            "id": "provider-host",
+            "owner": "host-ticket-agent"
+          }
+        ],
+        "worker_tier": "executable"
+      }
+    }
+  ],
+  "production_use_case_accepted": false,
+  "required_proof": [
+    "native_provider",
+    "causal_terminal",
+    "exact_package",
+    "target_worker_if_selected",
+    "recovery",
+    "external_dependencies"
+  ],
+  "schema": "cohesix-use-case-evidence/v1",
+  "source_sha256": "20ac83c7634beec230ebbbbe26a4dee23c6f0b35d48241a5c0f0d57160700afe",
+  "use_cases": [
+    {
+      "dependencies": [
+        "authenticated-console-projection",
+        "host-ticket-executor",
+        "worker-control"
+      ],
+      "id": "agent-action-airlock",
+      "promotion": "requires a live Worker target session plus each selected external executor row",
+      "title": "The Agent Action Airlock"
+    },
+    {
+      "dependencies": [
+        "gpu-host-provider",
+        "gpu-receipt-path",
+        "host-ticket-executor",
+        "swarmui-projection",
+        "worker-control"
+      ],
+      "id": "gpu-flight-deck",
+      "promotion": "requires live provider inventory and separate exact WorkerGpu receipt proof",
+      "title": "The GPU Flight Deck"
+    },
+    {
+      "dependencies": [
+        "cas-artifact",
+        "gpu-host-provider",
+        "gpu-receipt-path",
+        "host-ticket-executor",
+        "peft-host-provider",
+        "peft-receipt-path",
+        "worker-control"
+      ],
+      "id": "model-rollout-flight-recorder",
+      "promotion": "requires verified artifacts, live providers, and exact current-generation receipts",
+      "title": "Model Rollout with a Flight Recorder"
+    },
+    {
+      "dependencies": [
+        "federation-provider",
+        "rest-gateway-projection",
+        "siem-evidence-export",
+        "worker-control"
+      ],
+      "id": "multi-hive-mission-control",
+      "promotion": "requires independently accepted peers and target-bound evidence",
+      "title": "Multi-Hive Mission Control"
+    },
+    {
+      "dependencies": [
+        "cas-artifact",
+        "peft-host-provider",
+        "peft-receipt-path",
+        "worker-control"
+      ],
+      "id": "private-lora-foundry",
+      "promotion": "requires live host PEFT execution and a separate WorkerLora receipt",
+      "title": "The Private LoRA Foundry"
+    },
+    {
+      "dependencies": [
+        "host-ticket-executor",
+        "siem-evidence-export",
+        "worker-control"
+      ],
+      "id": "self-healing-edge-swarm",
+      "promotion": "requires target Worker proof and every selected remediation provider",
+      "title": "The Self-Healing Edge Swarm"
+    }
+  ]
+}
