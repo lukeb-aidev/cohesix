@@ -2038,9 +2038,10 @@ fn deferred_console_handoff_ready(
     ip: Ipv4Address,
     prefix_len: u8,
 ) -> bool {
-    address_source == "dhcp-lease"
-        && dhcp_phase == "bound"
-        && ip != Ipv4Address::UNSPECIFIED
+    matches!(
+        (address_source, dhcp_phase),
+        ("dhcp-lease", "bound") | ("manifest-static", "disabled")
+    ) && ip != Ipv4Address::UNSPECIFIED
         && prefix_len != 0
 }
 
@@ -8702,7 +8703,7 @@ impl GenetNetStack {
     }
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-    fn transition_after_dhcp(&mut self, hal: &mut KernelHal<'_>) -> bool {
+    fn transition_after_address_ready(&mut self, hal: &mut KernelHal<'_>) -> bool {
         if matches!(self.state, GenetNetState::DirectArmed { .. }) {
             return self.service_direct_genet_handoff();
         }
@@ -8796,9 +8797,13 @@ impl GenetNetStack {
                 false
             }
             Err(error) => {
+                let handoff_phase = if status.address_source == "manifest-static" {
+                    "static-ready"
+                } else {
+                    "dhcp-bound"
+                };
                 let mut failed = status;
                 failed.address_source = "isolated-child-transition-failed";
-                failed.dhcp_phase = "bound";
                 failed.tcp_ready = false;
                 let containment_started = runtime.begin_containment().is_ok();
                 self.state = GenetNetState::Failed {
@@ -8811,8 +8816,8 @@ impl GenetNetStack {
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} status=failed state=suspended root_tcp=disabled containment_started={} backend=bcmgenet-v5 err={error}",
-                        console_tcb, containment_started,
+                        "CONSOLE_NETWORK_HANDOFF phase={} tcb=0x{:04x} status=failed state=suspended root_tcp=disabled containment_started={} backend=bcmgenet-v5 err={error}",
+                        handoff_phase, console_tcb, containment_started,
                     ),
                 );
                 crate::bootstrap::log::force_uart_line(line.as_str());
@@ -8848,10 +8853,10 @@ impl GenetNetStack {
                 let self_test_enabled =
                     stack.self_test.enabled && stack.stage_policy.allow_selftest;
                 let console_tcb = runtime.tcb_cptr();
+                let status = stack.status_report();
                 if let Err(error) = runtime.activate() {
                     let mut failed = stack.status_report();
                     failed.address_source = "isolated-console-activation-failed";
-                    failed.dhcp_phase = "bound";
                     failed.tcp_ready = false;
                     let containment_started = runtime.begin_containment().is_ok();
                     self.state = GenetNetState::Failed {
@@ -8887,8 +8892,8 @@ impl GenetNetStack {
                         self.config.policy.mode.as_str(),
                         self.config.policy.interface.as_str(),
                         "wired",
-                        "dhcp-lease",
-                        "bound",
+                        status.address_source,
+                        status.dhcp_phase,
                         self_test_enabled,
                     )),
                     _policy: stack,
@@ -8912,7 +8917,6 @@ impl GenetNetStack {
             crate::hal::driver_task::DriverTaskRetainedServiceTurn::Failed => {
                 let mut failed = stack.status_report();
                 failed.address_source = "isolated-direct-genet-handoff-failed";
-                failed.dhcp_phase = "bound";
                 failed.tcp_ready = false;
                 let containment_started = runtime.begin_containment().is_ok();
                 self.state = GenetNetState::Failed {
@@ -9315,7 +9319,7 @@ impl Cyw43NetStack {
     }
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-    fn transition_after_dhcp(&mut self, hal: &mut KernelHal<'_>) -> bool {
+    fn transition_after_address_ready(&mut self, hal: &mut KernelHal<'_>) -> bool {
         if !self.transition_ready() {
             return false;
         }
@@ -9373,8 +9377,8 @@ impl Cyw43NetStack {
                         config.policy.mode.as_str(),
                         config.policy.interface.as_str(),
                         "wifi",
-                        "dhcp-lease",
-                        "bound",
+                        status.address_source,
+                        status.dhcp_phase,
                         self_test_enabled,
                     )),
                     policy: stack,
@@ -9383,7 +9387,8 @@ impl Cyw43NetStack {
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} ip={}/{} gateway={} mac={} descriptor=finalized state=active owner=isolated-child root_tcp=disabled",
+                        "CONSOLE_NETWORK_HANDOFF phase={} tcb=0x{:04x} ip={}/{} gateway={} mac={} descriptor=finalized state=active owner=isolated-child root_tcp=disabled",
+                        if status.address_source == "manifest-static" { "static-ready" } else { "dhcp-bound" },
                         console_tcb,
                         ip,
                         prefix_len,
@@ -9395,9 +9400,13 @@ impl Cyw43NetStack {
                 true
             }
             Err(error) => {
+                let handoff_phase = if status.address_source == "manifest-static" {
+                    "static-ready"
+                } else {
+                    "dhcp-bound"
+                };
                 let mut failed = status;
                 failed.address_source = "isolated-child-transition-failed";
-                failed.dhcp_phase = "bound";
                 failed.tcp_ready = false;
                 self.state = Cyw43NetState::Failed {
                     _runtime: runtime,
@@ -9408,7 +9417,8 @@ impl Cyw43NetStack {
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} status=failed state=suspended root_tcp=disabled err={error}",
+                        "CONSOLE_NETWORK_HANDOFF phase={} tcb=0x{:04x} status=failed state=suspended root_tcp=disabled err={error}",
+                        handoff_phase,
                         console_tcb,
                     ),
                 );
@@ -9797,7 +9807,7 @@ impl NetPoller for GenetNetStack {
     ) -> Result<bool, HalError> {
         #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
         {
-            return Ok(self.transition_after_dhcp(hal));
+            return Ok(self.transition_after_address_ready(hal));
         }
         #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
         {
@@ -10184,7 +10194,7 @@ impl NetPoller for Cyw43NetStack {
     ) -> Result<bool, HalError> {
         #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
         {
-            return Ok(self.transition_after_dhcp(hal));
+            return Ok(self.transition_after_address_ready(hal));
         }
         #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
         {
@@ -13955,11 +13965,47 @@ mod tests {
     }
 
     #[test]
-    fn deferred_console_handoff_requires_complete_dhcp_address_truth() {
+    fn deferred_console_handoff_requires_complete_address_truth() {
         let assigned = Ipv4Address::new(192, 168, 10, 50);
         assert!(deferred_console_handoff_ready(
             "dhcp-lease",
             "bound",
+            assigned,
+            24,
+        ));
+        assert!(deferred_console_handoff_ready(
+            "manifest-static",
+            "disabled",
+            assigned,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "manifest-static",
+            "bound",
+            assigned,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "dhcp-lease",
+            "disabled",
+            assigned,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "manifest-static",
+            "disabled",
+            Ipv4Address::UNSPECIFIED,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "manifest-static",
+            "disabled",
+            assigned,
+            0,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "wifi-associating",
+            "disabled",
             assigned,
             24,
         ));
