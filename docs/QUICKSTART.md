@@ -3,7 +3,7 @@
 <!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix 1.0.0-beta quickstart
+# Cohesix 1.1.0-beta quickstart
 
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
 shell, gateway, Python client and desktop UI run on your Mac or Linux host.
@@ -16,9 +16,9 @@ admission, durable journals and signed evidence as the native recipes.
 
 ## Choose your download
 
-Use all files from the same release. For **1.0.0-beta**:
+Use all files from the same release. For **1.1.0-beta**:
 
-When upgrading from 0.9.0-beta, extract into new directories and install the
+When upgrading from 1.0.0-beta, extract into new directories and install the
 bundled Python wheel there. Keep each host's binaries, QEMU image and generated
 contracts together. Export existing evidence before replacing a target image;
 copying an old policy or generated configuration into the new bundle does not
@@ -27,9 +27,9 @@ own package versions; `VERSION.txt` identifies the overall release.
 
 | You want to… | Download | What it contains |
 | --- | --- | --- |
-| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.0.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
-| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.0.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
-| Boot a physical Raspberry Pi 4 | `Cohesix-1.0.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
+| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.1.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
+| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.1.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
+| Boot a physical Raspberry Pi 4 | `Cohesix-1.1.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
 
 Each archive contains `QUICKSTART.md`, `README.md`, `RELEASE_NOTES.md`,
 `VERSION.txt` and `MANIFEST.sha256`. The Pi archive has no `bin/`, Python
@@ -47,8 +47,8 @@ one you downloaded; do not paste angle-bracket placeholders literally.
 ```bash
 mkdir -p "$HOME/cohesix-releases"
 cd "$HOME/cohesix-releases"
-tar -xzf "$HOME/Downloads/Cohesix-1.0.0-beta-MacOS.tar.gz"
-cd Cohesix-1.0.0-beta-MacOS
+tar -xzf "$HOME/Downloads/Cohesix-1.1.0-beta-MacOS.tar.gz"
+cd Cohesix-1.1.0-beta-MacOS
 ```
 
 Before running anything, verify **all** manifest entries:
@@ -165,28 +165,60 @@ saved network settings. Back up anything you need before proceeding.
 
 ### Write and read back on Mac
 
-Discover the removable card again after insertion. Replace `diskN` below with
-that exact whole disk; check its model, removable status and byte size using
-`diskutil info`. The commands erase the selected disk:
+Discover the removable card again after insertion. Apple's built-in SDXC reader
+appears as an **internal, physical** disk, so inspect `diskutil list` rather than
+filtering for external disks. Replace `diskN` below with the exact whole disk;
+check its model, removable status and byte size using `diskutil info`. The
+commands erase the selected disk:
 
 ```bash
-diskutil list external physical
+diskutil list
 diskutil info /dev/diskN
 diskutil unmountDisk /dev/diskN
-sudo dd if=image/cohesix-pi4-sd.img of=/dev/rdiskN bs=4m
-sync
-IMAGE_BYTES=$(stat -f %z image/cohesix-pi4-sd.img)
-sudo cmp -n "$IMAGE_BYTES" image/cohesix-pi4-sd.img /dev/rdiskN
-```
+sudo python3 - image/cohesix-pi4-sd.img /dev/rdiskN <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import plistlib
+import subprocess
+import sys
 
-Readback succeeds only if `cmp` exits zero without output. Do not boot on a
-write or comparison error. Before ejecting, mount the new boot partition with
-`diskutil mountDisk /dev/diskN` if you need to inspect the target's credential
-reference described below. Then unmount and eject:
-
-```bash
+image, raw = Path(sys.argv[1]), sys.argv[2]
+if not raw.startswith('/dev/rdisk') or not raw[10:].isdigit():
+    raise SystemExit('select an explicit whole raw disk such as /dev/rdisk22')
+whole = '/dev/disk' + raw[10:]
+info = plistlib.loads(subprocess.check_output(['diskutil', 'info', '-plist', whole]))
+if not (info.get('WholeDisk') and info.get('RemovableMedia')
+        and info.get('Writable') and info.get('VirtualOrPhysical') == 'Physical'
+        and info.get('BusProtocol') == 'Secure Digital'
+        and info.get('TotalSize', 0) >= image.stat().st_size):
+    raise SystemExit('selected disk is not a writable removable SD card of sufficient size')
+with image.open('rb') as source, open(raw, 'r+b', buffering=0) as card:
+    while chunk := source.read(1024 * 1024):
+        if card.write(chunk) != len(chunk):
+            raise SystemExit('short SD write')
+    card.flush()
+    os.fsync(card.fileno())
+    source.seek(0)
+    expected, actual = hashlib.sha256(), hashlib.sha256()
+    with open(raw, 'rb', buffering=0) as readback:
+        while chunk := source.read(1024 * 1024):
+            expected.update(chunk)
+            data = readback.read(len(chunk))
+            if len(data) != len(chunk):
+                raise SystemExit('short SD readback')
+            actual.update(data)
+    if actual.digest() != expected.digest():
+        raise SystemExit('SD readback differs from the distributed image')
+print('SD write and whole-image readback: PASS')
+PY
 diskutil eject /dev/diskN
 ```
+
+Keep the raw device open through the readback: macOS can otherwise remount the
+new FAT partition and write Spotlight/FSEvents files before a separate `cmp`
+starts. Eject immediately after `PASS`; do not mount or browse the card between
+verification and eject. Do not boot on a write, readback or eject error.
 
 ### Write and read back on Linux
 
