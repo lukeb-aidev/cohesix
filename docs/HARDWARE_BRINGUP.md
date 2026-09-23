@@ -578,6 +578,13 @@ depend on seL4 `CONFIG_PRINTING` or a root-owned debug UART sink. Early debug
 breadcrumbs are separate diagnostics; their absence cannot waive image identity.
 The gate wrapper remains
 the canonical path for a controlled concurrent serial/pcap proof.
+On macOS its single serial reader keeps the USB-UART control line asserted
+through capture. When a selected Pi profile differs from the checkout default,
+pass `--cohsh-policy <selected-generated-cohsh_policy.toml>` with the matching
+`--cohsh` binary and `--manifest`; the peer validates and rechecks those exact
+files before connecting. The first wired DHCP lifetime may legitimately report
+network generation zero, while the authenticated `nettest` run generation must
+still be nonzero. A zero-generation Wi-Fi lifetime remains a refusal.
 Gate-proof `--normalize-only` remains safe for historical logs but cannot create
 the live admission-to-terminal link.
 

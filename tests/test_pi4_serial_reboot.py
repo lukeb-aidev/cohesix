@@ -1886,6 +1886,7 @@ def test_nettest_peer_auth_secret_is_environment_only(
     assert captured["close_fds"] is True
     assert captured["cwd"] == REPO_ROOT
     assert argv[argv.index("--tcp-port") + 1] == "31337"
+    assert argv[argv.index("--policy") + 1] == str(config.policy)
     assert argv[argv.index("--script") + 1] == str(config.script)
     assert secret not in repr(config)
 
@@ -1895,6 +1896,11 @@ def test_nettest_peer_auth_secret_is_environment_only(
     (
         (NETSTATS_WIFI_BOUND, "wifi", ("wifi", "192.168.86.154", 4)),
         (NETSTATS_GENET_BOUND, "genet", ("genet", "192.168.10.50", 4)),
+        (
+            NETSTATS_GENET_BOUND.replace(b"generation=4", b"generation=0"),
+            "genet",
+            ("genet", "192.168.10.50", 0),
+        ),
         (NETSTATS_GENET_BOUND, None, ("genet", "192.168.10.50", 4)),
     ),
 )
@@ -1933,7 +1939,7 @@ def test_nettest_peer_selector_fails_closed_on_noncanonical_status(
     required_lane: str,
     message: str,
 ) -> None:
-    """Pending, zero-generation, cross-lane, and ambiguous state never launch."""
+    """Pending, zero-generation WiFi, cross-lane and ambiguous state never launch."""
 
     with pytest.raises(RuntimeError, match=message):
         pi4_serial_reboot.select_nettest_peer_target(snapshot, required_lane)
@@ -2050,23 +2056,29 @@ def test_nettest_peer_rejects_nonprivate_or_nondirect_targets(target: str) -> No
     assert pi4_serial_reboot.validate_nettest_peer_ip(target) is None
 
 
+@pytest.mark.parametrize("changed", ("script", "policy"))
 def test_nettest_peer_revalidates_preflight_files_before_spawn(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
+    changed: str,
 ) -> None:
-    """A replaced cohsh or script cannot inherit the already-loaded credential."""
+    """A replaced peer script or selected policy cannot inherit its credential."""
 
     cohsh = tmp_path / "cohsh"
     script = tmp_path / "boot_v0.coh"
+    policy = tmp_path / "cohsh_policy.toml"
     cohsh.write_bytes(b"cohsh-v1")
     cohsh.chmod(0o755)
     script.write_text("ping\n", encoding="utf-8")
+    policy.write_text("policy-v1\n", encoding="utf-8")
     config = pi4_serial_reboot.NettestPeerConfig(
         repo=tmp_path,
         cohsh=cohsh,
+        policy=policy,
         script=script,
         auth_token="exact-secret",
         cohsh_sha256=pi4_serial_reboot.regular_file_sha256(cohsh),
+        policy_sha256=pi4_serial_reboot.regular_file_sha256(policy),
         script_sha256=pi4_serial_reboot.regular_file_sha256(script),
     )
     monkeypatch.setattr(
@@ -2080,7 +2092,7 @@ def test_nettest_peer_revalidates_preflight_files_before_spawn(
         lambda *_args, **_kwargs: pytest.fail("changed input reached Popen"),
     )
 
-    script.write_text("help\n", encoding="utf-8")
+    (script if changed == "script" else policy).write_text("changed\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="changed after preflight"):
         REAL_START_NETTEST_TCP_PEER(config, "192.168.10.50", "genet")
 
@@ -2191,6 +2203,7 @@ def test_prepare_nettest_peer_requires_one_usable_queen_secret(
     )
 
     assert config.cohsh == cohsh
+    assert config.policy == REPO_ROOT / "configs/generated/cohsh_policy.toml"
     assert config.script == REPO_ROOT / "scripts/cohsh/boot_v0.coh"
     assert config.auth_token == "private-console-token"
     assert "private-console-token" not in repr(config)
@@ -2226,6 +2239,13 @@ def test_prepare_nettest_peer_rejects_symlink_manifest(
 
     with pytest.raises(RuntimeError, match="canonical regular non-symlink"):
         pi4_serial_reboot.prepare_nettest_peer(REPO_ROOT, cohsh, link)
+
+    policy = tmp_path / "policy.toml"
+    policy.write_text("policy-v1\n", encoding="utf-8")
+    policy_link = tmp_path / "policy-link.toml"
+    policy_link.symlink_to(policy)
+    with pytest.raises(RuntimeError, match="canonical regular non-symlink"):
+        pi4_serial_reboot.prepare_nettest_peer(REPO_ROOT, cohsh, manifest, policy_link)
 
 
 def test_nettest_result_parser_requires_complete_generation_tagged_terminal() -> None:

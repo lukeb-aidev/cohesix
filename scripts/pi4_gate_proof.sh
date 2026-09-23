@@ -15,6 +15,7 @@ MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 VENV_DIR="${COHESIX_PI4_VENV:-${ROOT_DIR}/.venv}"
 PYTHON="${VENV_DIR}/bin/python"
 COHSH_PATH="${COHESIX_PI4_COHSH:-${ROOT_DIR}/out/cohesix/host-tools/cohsh}"
+COHSH_POLICY_PATH="${COHESIX_PI4_COHSH_POLICY:-${ROOT_DIR}/configs/generated/cohsh_policy.toml}"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 SERIAL_DEVICE="${COHESIX_PI4_SERIAL_DEVICE:-/dev/cu.usbserial-0001}"
@@ -114,6 +115,8 @@ Options:
   --cohsh <path>             Canonical authenticated TCP client used by the
                              generation-bound nettest peer
                              (default: out/cohesix/host-tools/cohsh)
+  --cohsh-policy <path>      Exact generated policy for that client; select the
+                             tested image profile when it differs from default
   --flash-disk <device|auto> Flash SD card via scripts/pi4-image-build.sh.
                              "auto" requires exactly one external disk carrying
                              the configured --disk-label.
@@ -1382,6 +1385,7 @@ import os
 import signal
 import stat
 import sys
+import serial
 
 device_path, seal_value = sys.argv[1:]
 try:
@@ -1393,7 +1397,7 @@ if (
     or not isinstance(seal.get("leaf_identity"), list)
 ):
     raise SystemExit("serial capture output path seal lacks a leaf identity")
-device_fd = os.open(device_path, os.O_RDONLY | getattr(os, "O_NOCTTY", 0))
+device = serial.Serial(device_path, baudrate=115200, timeout=0.1)
 directory_flags = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -1430,7 +1434,7 @@ try:
         raise SystemExit("serial capture output leaf identity changed")
 except BaseException:
     os.close(directory_fd)
-    os.close(device_fd)
+    device.close()
     raise
 os.close(directory_fd)
 
@@ -1443,9 +1447,9 @@ signal.signal(signal.SIGTERM, stop_capture)
 signal.signal(signal.SIGINT, stop_capture)
 try:
     while True:
-        chunk = os.read(device_fd, 64 * 1024)
+        chunk = device.read(min(max(device.in_waiting, 1), 64 * 1024))
         if not chunk:
-            break
+            continue
         view = memoryview(chunk)
         while view:
             written = os.write(output_fd, view)
@@ -1453,7 +1457,7 @@ try:
 finally:
     os.fsync(output_fd)
     os.close(output_fd)
-    os.close(device_fd)
+    device.close()
 PY
     CAPTURE_PID="$!"
     sleep 0.1
@@ -1622,12 +1626,12 @@ preflight_nettest_peer() {
     require_file "${SERIAL_REBOOT_HELPER}"
     "${PYTHON}" - \
       "${ROOT_DIR}" "${SERIAL_REBOOT_HELPER}" \
-      "${COHSH_PATH}" "${MANIFEST_PATH}" <<'PY'
+      "${COHSH_PATH}" "${MANIFEST_PATH}" "${COHSH_POLICY_PATH}" <<'PY'
 import importlib.util
 import pathlib
 import sys
 
-repo_raw, helper_raw, cohsh_raw, manifest_raw = sys.argv[1:]
+repo_raw, helper_raw, cohsh_raw, manifest_raw, policy_raw = sys.argv[1:]
 helper = pathlib.Path(helper_raw)
 spec = importlib.util.spec_from_file_location(
     "cohesix_pi4_serial_reboot",
@@ -1641,6 +1645,7 @@ module.prepare_nettest_peer(
     pathlib.Path(repo_raw),
     pathlib.Path(cohsh_raw),
     pathlib.Path(manifest_raw),
+    pathlib.Path(policy_raw),
 )
 PY
 }
@@ -1652,7 +1657,7 @@ run_nettest_peer() {
 
     "${PYTHON}" - \
       "${ROOT_DIR}" "${SERIAL_REBOOT_HELPER}" \
-      "${COHSH_PATH}" "${MANIFEST_PATH}" \
+      "${COHSH_PATH}" "${MANIFEST_PATH}" "${COHSH_POLICY_PATH}" \
       "${snapshot_path}" "${network_status_offset}" \
       "${required_lane}" "${NETTEST_OBSERVATION_SECONDS}" <<'PY'
 import importlib.util
@@ -1665,6 +1670,7 @@ import time
     helper_raw,
     cohsh_raw,
     manifest_raw,
+    policy_raw,
     snapshot_raw,
     offset_raw,
     required_lane_raw,
@@ -1696,6 +1702,7 @@ try:
         pathlib.Path(repo_raw),
         pathlib.Path(cohsh_raw),
         pathlib.Path(manifest_raw),
+        pathlib.Path(policy_raw),
     )
     failure = module.observe_nettest_tcp_peer(
         config,
@@ -2845,6 +2852,11 @@ while [[ $# -gt 0 ]]; do
         --cohsh)
             require_arg "$1" "$#"
             COHSH_PATH="$2"
+            shift 2
+            ;;
+        --cohsh-policy)
+            require_arg "$1" "$#"
+            COHSH_POLICY_PATH="$2"
             shift 2
             ;;
         --flash-disk)

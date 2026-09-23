@@ -25,11 +25,12 @@ hosts; and the applicable staged [Test Plan](TEST_PLAN.md) and release gates.
 Component completion does not establish assembled release acceptance.
 
 The repaired physical-console/TCP path completed the two-hour Pi/Mac/Linux
-operator burn-in, followed by passing five-stage QEMU and Pi test plans.
-Extracted Mac and Linux installation checks, independently verified SD media,
-fresh Pi boot, USB input and HDMI checks also pass. Full pressure qualification,
-physical repeatability, remaining assembled-artifact checks and release promotion
-are still open; see the [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md).
+operator burn-in. The final-source five-stage QEMU pressure plan passes, as do
+two cold GENET first-connection runs and a readable HDMI capture of the selected
+Pi image. Earlier-source extracted installation, SD readback and physical USB
+input checks retain their original scope. Final-image paired hardware,
+Wi-Fi/repeatability, distributed-media, extracted-package and release-promotion
+gates remain open; see the [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md).
 
 The release's implemented workflows and their qualified component records are:
 
@@ -64,7 +65,7 @@ historical evidence does not establish release qualification.
 | Workers | Passive `worker-heartbeat`, `worker-gpu`, and `worker-lora` instances use two bounded executor lanes; QEMU and Pi each declare 1/127/128 instances. `worker-bus` remains model/session-only. | Target-qualified QEMU evidence covers the selected 256-Worker population and receipt path; the Pi configuration still requires separate fresh physical evidence. |
 | Physical drivers | Pi 4 serial, display, USB, GENET, SDIO, and CYW43 paths use manifest-declared isolated runtimes admitted through HAL. | Board evidence from another source tree or image does not qualify a newly composed image. |
 | QEMU | `aarch64/virt` with GICv3 is the reference target on macOS HVF and AArch64 Linux KVM. | Target-qualified evidence applies only to the exact VM artifacts and proof lanes exercised; see the [Milestone 26e result record](BUILD_PLAN.md#26e). It is not Pi 4 hardware proof. |
-| Raspberry Pi 4 | Pi firmware → U-Boot → seL4 binary image → root task is the supported hardware boot path. | The selected release candidate has fresh SD/readback, boot, isolated-driver, physical-input and GENET transport evidence. Full physical repeatability and pressure acceptance remain open. |
+| Raspberry Pi 4 | Pi firmware → U-Boot → seL4 binary image → root task is the supported hardware boot path. | The selected image has fresh cold GENET and HDMI observations. Earlier-source SD/readback and physical-input evidence does not establish final-image media or full physical repeatability acceptance. |
 | Host tools | `cohsh`, `coh`, Hive Gateway, SwarmUI, Python, GPU, sidecar, ticket, CAS, and evidence tools run beside the target on macOS or Linux. | Host, mock, fixture, and package success cannot create target Worker, driver, or use-case acceptance. |
 | GPU and AI execution | GPU drivers, CUDA/NVML, model training, inference, PEFT execution, and deployment-specific automation remain host-side. | Cohesix records bounded authority, lifecycle, telemetry, and receipts; it does not execute GPU workloads in the VM. |
 | AWS/UEFI | Planned only. | No current Cohesix AWS target or production-use claim. |
@@ -81,6 +82,6 @@ historical evidence does not establish release qualification.
 - For performance claims, follow [Benchmarking](BENCHMARKS.md) and retain the
   complete result artifact.
 
-This snapshot describes the repository on 22 September 2026. A change that alters
+This snapshot describes the repository on 23 September 2026. A change that alters
 one of these public capability boundaries must update this page in the same
 change.

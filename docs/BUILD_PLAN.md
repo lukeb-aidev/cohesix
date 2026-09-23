@@ -12271,10 +12271,12 @@ Deliverables: Complete operator controls and accessibility evidence, alongside t
 
 **Status:** In Progress — integrated Release A qualification, started 20 September 2026.
 
-The repaired two-hour burn-in and subsequent five-stage QEMU/Pi plans pass.
-Extracted Mac/Linux installation, SD readback and fresh physical USB/HDMI checks
-pass. Pressure/profile integration, remaining hardware/repeatability and final
-release promotion remain open; these partial results do not close the milestone.
+The repaired two-hour burn-in and exact-source five-stage QEMU pressure plan
+pass. The selected Pi image has two passing cold GENET performance boots and a
+readable HDMI capture; prior-source extracted installation, SD readback and USB
+input checks retain their own identities. Final-image paired hardware,
+Wi-Fi/repeatability, distributed-media and extracted-package gates remain open;
+these partial results do not close the milestone.
 
 **Prerequisites:** completed 27b, 27c, 27d, 27e and 27f.
 

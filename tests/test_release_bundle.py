@@ -123,9 +123,19 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
             tmp_path, tmp_path, path, False
         ) == "release-documentation"
     for path in (
+        "scripts/pi4_gate_proof.sh",
+        "scripts/pi4_serial_reboot.py",
+        "tests/test_pi4_gate_proof.py",
+        "tests/test_pi4_serial_reboot.py",
+    ):
+        assert publication.classify_change(
+            tmp_path, tmp_path, path, False
+        ) == "physical-proof-collector"
+    for path in (
         "releases/RELEASE_NOTES-1.0.0-beta.md",
         "releases/RELEASE_NOTES-1.2.0-beta.md",
         "docs/audit/M27D_IMPLEMENTATION_RECORD.md",
+        "apps/root-task/src/net/mod.rs",
     ):
         with pytest.raises(
             publication.evidence.EvidenceError, match="contract changed"

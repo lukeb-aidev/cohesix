@@ -775,9 +775,11 @@ def test_gate_proof_runs_canonical_authenticated_nettest_peer(
     snapshot = tmp_path / "serial-snapshot.log"
     cohsh = tmp_path / "cohsh"
     manifest = tmp_path / "pi.toml"
+    policy = tmp_path / "cohsh_policy.toml"
     snapshot.write_bytes(b"old\nbound-status")
     cohsh.write_text("fixture\n", encoding="utf-8")
     manifest.write_text("fixture\n", encoding="utf-8")
+    policy.write_text("fixture\n", encoding="utf-8")
     helper.write_text(
         """\
 import os
@@ -797,9 +799,9 @@ def select_nettest_peer_target(snapshot, required_lane):
     return "wifi", "192.168.86.154", 9
 
 
-def prepare_nettest_peer(repo, cohsh, manifest):
+def prepare_nettest_peer(repo, cohsh, manifest, policy):
     del repo
-    record(f"prepare:{cohsh.name}:{manifest.name}")
+    record(f"prepare:{cohsh.name}:{manifest.name}:{policy.name}")
     return "sealed-config"
 
 
@@ -812,13 +814,14 @@ def observe_nettest_tcp_peer(config, target, lane, observation):
     result = _run_output_guard_probe(
         tmp_path,
         'SERIAL_REBOOT_HELPER="$4"\n'
-        'COHSH_PATH="$5"\nMANIFEST_PATH="$6"\n'
-        'FAKE_PEER_LOG="$7"\nexport FAKE_PEER_LOG\n'
+        'COHSH_PATH="$5"\nMANIFEST_PATH="$6"\nCOHSH_POLICY_PATH="$7"\n'
+        'FAKE_PEER_LOG="$8"\nexport FAKE_PEER_LOG\n'
         'NETTEST_OBSERVATION_SECONDS=0\n'
-        'run_nettest_peer "$8" 4 wifi',
+        'run_nettest_peer "$9" 4 wifi',
         str(helper),
         str(cohsh),
         str(manifest),
+        str(policy),
         str(calls),
         str(snapshot),
     )
@@ -829,7 +832,7 @@ def observe_nettest_tcp_peer(config, target, lane, observation):
     )
     assert calls.read_text(encoding="utf-8").splitlines() == [
         "select:wifi",
-        "prepare:cohsh:pi.toml",
+        "prepare:cohsh:pi.toml:cohsh_policy.toml",
         "observe:sealed-config:192.168.86.154:wifi:0.0",
     ]
     source = SCRIPT_PATH.read_text(encoding="utf-8")

@@ -218,10 +218,12 @@ class NettestPeerConfig:
     __slots__ = (
         "repo",
         "cohsh",
+        "policy",
         "script",
         "auth_token",
         "port",
         "cohsh_sha256",
+        "policy_sha256",
         "script_sha256",
     )
 
@@ -232,22 +234,26 @@ class NettestPeerConfig:
         cohsh: pathlib.Path,
         script: pathlib.Path,
         auth_token: str,
+        policy: pathlib.Path | None = None,
         port: int = NETTEST_PEER_PORT,
         cohsh_sha256: str | None = None,
+        policy_sha256: str | None = None,
         script_sha256: str | None = None,
     ) -> None:
         self.repo = repo
         self.cohsh = cohsh
+        self.policy = policy if policy is not None else repo / "configs/generated/cohsh_policy.toml"
         self.script = script
         self.auth_token = auth_token
         self.port = port
         self.cohsh_sha256 = cohsh_sha256
+        self.policy_sha256 = policy_sha256
         self.script_sha256 = script_sha256
 
     def __repr__(self) -> str:
         return (
             "NettestPeerConfig("
-            f"repo={self.repo!r}, cohsh={self.cohsh!r}, "
+            f"repo={self.repo!r}, cohsh={self.cohsh!r}, policy={self.policy!r}, "
             f"script={self.script!r}, port={self.port!r}, "
             "auth_token=<redacted>)"
         )
@@ -615,6 +621,7 @@ def prepare_nettest_peer(
     repo: pathlib.Path,
     cohsh: pathlib.Path,
     ticket_config: pathlib.Path,
+    policy: pathlib.Path | None = None,
 ) -> NettestPeerConfig:
     """Validate all host inputs before diagnostics acquire the UART."""
 
@@ -632,6 +639,11 @@ def prepare_nettest_peer(
         ticket_config,
         label="nettest peer ticket manifest",
     )
+    resolved_policy = canonical_regular_file(
+        resolved_repo,
+        policy if policy is not None else pathlib.Path("configs/generated/cohsh_policy.toml"),
+        label="nettest peer policy",
+    )
     resolved_script = canonical_regular_file(
         resolved_repo,
         DEFAULT_NETTEST_PEER_SCRIPT,
@@ -640,9 +652,11 @@ def prepare_nettest_peer(
     return NettestPeerConfig(
         repo=resolved_repo,
         cohsh=resolved_cohsh,
+        policy=resolved_policy,
         script=resolved_script,
         auth_token=load_queen_console_token(resolved_manifest),
         cohsh_sha256=regular_file_sha256(resolved_cohsh),
+        policy_sha256=regular_file_sha256(resolved_policy),
         script_sha256=regular_file_sha256(resolved_script),
     )
 
@@ -672,6 +686,7 @@ def revalidate_nettest_peer_inputs(config: NettestPeerConfig) -> None:
 
     for path, expected, label, executable in (
         (config.cohsh, config.cohsh_sha256, "nettest peer cohsh", True),
+        (config.policy, config.policy_sha256, "nettest peer policy", False),
         (config.script, config.script_sha256, "nettest peer script", False),
     ):
         if expected is None:
@@ -788,6 +803,8 @@ def start_nettest_tcp_peer(
             validated_ip,
             "--tcp-port",
             str(config.port),
+            "--policy",
+            str(config.policy),
             "--script",
             str(config.script),
         ],
@@ -1134,7 +1151,7 @@ def select_nettest_peer_target(
     }.get((policy, active))
     target_ip = validate_nettest_peer_ip(ip)
     if (
-        generation == 0
+        (generation == 0 and lane == "wifi")
         or mode != "dhcp"
         or address_source != "dhcp-lease"
         or dhcp_phase != "bound"

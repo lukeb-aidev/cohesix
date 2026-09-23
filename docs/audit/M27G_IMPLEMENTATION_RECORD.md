@@ -875,3 +875,69 @@ are unchanged. The focused harness suite passes 322 tests. This is a benchmark
 producer correction under `m27g-assembled-journeys-and-recovery`; host tools,
 SDK, target parsers and generated authority already enforce the intended
 contract and require no implementation changes.
+
+## Exact Release A post-burn qualification checkpoint
+
+The frozen runtime source is `6f6726ed2777b9585d657eeb3b2770b2fe579d8e`
+(`sha256:270c1670f31d1d9f0f0471028df7568229545bf017acc68bae3dc94a6191c52e`).
+The selected QEMU and Pi Release A manifests retain matching 512-entry Queen
+intent capacity under schema 1.28; the Pi SD stage identifies image SHA-256
+`0404f162444c122e3cc98c9c425e2da10642d1e09fd8bbff3decb94ce8a4dc64`.
+These identities supersede older 64-entry and intermediate candidate proofs
+only for the lanes actually rerun.
+
+The exact-source Mac host gates pass (`out/m27g/final-6f6726ed2/host-gates-01/`).
+The post-burn five-stage QEMU plan and executable Worker/root evidence pass at
+`out/m27g/final-pressure-6f6726ed2-02/`. Medium pressure completed 43,099
+operations without errors and observed 256/256 READY Workers. High pressure
+completed 61,166 successful operations, with 19 bounded `buffer-full`
+refusals among 61,185 attempts (error rate 0.00031053 within the unchanged
+0.01 budget), and again observed 256/256 READY Workers. The first full-plan
+attempt retained a collector quiescence failure after overlapping Pi support
+work; it was not accepted. The following isolated exact-source run passed.
+
+The native Linux AArch64 KVM guest and host tools were built from the same
+source, rebound to the Jetson's selected KVM/seL4/timer launch identity and
+passed the canonical ten-script authenticated TCP base regression. The Mac
+target-neutral Python wheel passed installation smoke on both Mac and Linux
+AArch64 against the same exact Release A QEMU and Pi generated contracts.
+Extracted release-bundle installation remains a separate gate. An additional
+Linux KVM pressure attempt is retained as
+non-claiming: its fixed host-integration matrix selects `macos-arm64`, which
+the native `linux/aarch64` verifier correctly refuses. That optional attempt
+does not replace or weaken the passing Mac QEMU pressure result.
+
+The earlier `a3217e25` physical keyboard check accepted, drained and echoed
+149 actual key bytes with zero drops, and Lukas observed working arrow keys.
+The USB, local-seat and HDMI implementation paths are unchanged between that
+source and this candidate. This is carried-forward functional input evidence,
+not a fabricated fresh keypress on the final image. The exact final Pi image
+has two separately observed 1,024-request cold GENET first-connection passes
+(686.212 and 610.0906 requests/s, p95 4.303 and 4.9534 ms) and a readable
+OBS HDMI boot capture under `out/m27g/final-6f6726ed2/pi4-physical/`.
+Canonical paired serial/packet, Wi-Fi, media, repeatability and packaged
+first-install acceptance remain separate pending gates at this checkpoint.
+
+The first exact-image paired-capture attempts are retained as failures. The
+macOS USB-UART reader opened the device without asserting its control line and
+recorded zero bytes, even though the Pi was waiting at U-Boot; a same-port
+pyserial probe isolated that collector condition. The active gate now owns one
+configured pyserial reader. Subsequent paired captures recorded the sealed
+boot and live diagnostics, but the canonical authenticated `nettest` peer
+refused a valid first GENET DHCP lifetime at network generation zero and then,
+in a diagnostic that allowed that lifetime, launched the strict-profile
+`cohsh` binary against the checkout's incompatible default policy. Direct
+selected-policy TCP execution passed, and a same-boot selected-policy peer
+produced `peer-assisted-pass` for nonzero `run_generation=2`; the target
+network generation remained zero. No target network or driver code changed.
+
+The narrowly scoped M27g physical-proof collector repair permits generation
+zero only for an exactly bound wired lifetime, keeps zero-generation Wi-Fi
+refused, and passes an explicit validated/rechecked generated policy to the
+host peer. The gate keeps its normal serial, network and terminal checks and
+uses a single configured serial reader. `245` focused Python gate/release
+tests pass, including selected-policy argument and replacement refusals.
+The release publication bridge records these non-runtime physical collector
+and test files separately from the frozen `6f6726ed2` target source; it still
+rejects arbitrary runtime drift. Fresh post-repair canonical physical proof
+remains required and is not inferred from the diagnostic.

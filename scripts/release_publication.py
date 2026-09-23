@@ -23,13 +23,18 @@ INVENTORY = "configs/generated/implementation_surface_inventory.json"
 GRAPH = "configs/generated/host_integration_dependency.json"
 DOCUMENTS = frozenset({
     "README.md", "docs/BUILD_PLAN.md", "docs/TEST_PLAN.md", "docs/FAILOVER.md",
-    "docs/HOST_TOOLS.md", "docs/QUICKSTART.md", "docs/REPO_LAYOUT.md",
+    "docs/HOST_TOOLS.md", "docs/HARDWARE_BRINGUP.md", "docs/QUICKSTART.md", "docs/REPO_LAYOUT.md",
     "docs/STATUS.md", "releases/RELEASE_NOTES-1.1.0-beta.md",
     "docs/audit/M27G_IMPLEMENTATION_RECORD.md",
 })
 FACTORY = frozenset({
     "scripts/release_bundle.sh", "scripts/release_inputs.py",
     "scripts/release_publication.py", "scripts/release_qualify.py",
+    "tests/test_release_bundle.py",
+})
+PHYSICAL_PROOF = frozenset({
+    "scripts/pi4_gate_proof.sh", "scripts/pi4_serial_reboot.py",
+    "tests/test_pi4_gate_proof.py", "tests/test_pi4_serial_reboot.py",
 })
 HELP_ONLY = frozenset({
     "scripts/failover_watchdog.py", "scripts/rest_perf_harness.py",
@@ -111,6 +116,8 @@ def classify_change(root: Path, qualified: Path, path: str, deleted: bool) -> st
         return "local-output-exclusions"
     if path in FACTORY:
         return "publication-tooling"
+    if path in PHYSICAL_PROOF:
+        return "physical-proof-collector"
     if path in HELP_ONLY and normalized_help((root / path).read_text()) == normalized_help(
         (qualified / path).read_text()
     ):
