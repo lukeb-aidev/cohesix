@@ -38,12 +38,17 @@ environment; the Pi remains the control plane.
 
 One measured 120-minute Pi 4 GENET, Mac and Linux AArch64 NVIDIA operator run
 completed 24 CUDA outputs and four LoRA journeys, including failed-canary and
-rollback cases. Exact-source QEMU pressure observed 256/256 READY Workers:
-43,099 successful operations without error at medium load, then 61,166
-successes and 19 bounded buffer-full refusals among 61,185 high-load attempts
-(0.00031053, within the unchanged 0.01 budget). These are control-plane
-measurements, not GPU speedups. The [M27g record](../docs/audit/M27G_IMPLEMENTATION_RECORD.md)
+rollback cases. At the pre-release runtime checkpoint, QEMU pressure observed
+256/256 READY Workers: 43,099 successful operations without error at medium
+load, then 61,166 successes and 19 bounded buffer-full refusals among 61,185
+high-load attempts (0.00031053, within the unchanged 0.01 budget). The later
+Pi static-address handoff correction passed focused tests and fresh SD-image
+network checks. These are control-plane measurements, not GPU speedups. The
+[M27g record](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/audit/M27G_IMPLEMENTATION_RECORD.md)
 retains the attempts, source/image identities, failures and proof limits.
+Fresh Wi-Fi DHCP operation was verified on the release image; a new 10-cold/
+10-warm Wi-Fi repeatability series was not run on that image. Release A makes
+no new Wi-Fi reliability or performance claim from that functional boot.
 
 ## Install and upgrade
 

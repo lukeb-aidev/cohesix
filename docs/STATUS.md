@@ -17,20 +17,25 @@ interchangeable.
 
 ## Release 1.1.0-beta
 
-Release A (`1.1.0-beta`) is being qualified under
-[Milestone 27g](BUILD_PLAN.md#27g). The assembled release requires complete
-CUDA and private LoRA journeys through CLI, Python, CI and native SwarmUI;
-a two-hour current-image Pi 4 GENET burn-in with Mac and Linux AArch64 NVIDIA
-hosts; and the applicable staged [Test Plan](TEST_PLAN.md) and release gates.
-Component completion does not establish assembled release acceptance.
+Release A (`1.1.0-beta`) completes [Milestone 27g](BUILD_PLAN.md#27g).
+The integrated CUDA and private LoRA journeys, CLI, Python, CI and native
+SwarmUI were exercised during a measured two-hour Pi 4 GENET, Mac and Linux
+AArch64 NVIDIA operator run. The applicable staged [Test Plan](TEST_PLAN.md)
+passed after that burn-in. Subsequent changes received focused source and
+physical checks; the unchanged staged and pressure records retain their exact
+source identities rather than being relabelled as new-image runs.
 
-The repaired physical-console/TCP path completed the two-hour Pi/Mac/Linux
-operator burn-in. The final-source five-stage QEMU pressure plan passes, as do
-two cold GENET first-connection runs and a readable HDMI capture of the selected
-Pi image. Earlier-source extracted installation, SD readback and physical USB
-input checks retain their original scope. Final-image paired hardware,
-Wi-Fi/repeatability, distributed-media, extracted-package and release-promotion
-gates remain open; see the [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md).
+The distributed Pi SD image passed an independent raw readback, fresh numbered
+U-Boot-menu boots with GENET static, GENET DHCP and Wi-Fi DHCP, and packaged
+authenticated TCP checks. Mac and Linux archives passed independent extracted
+installation checks, and the three-archive verifier passed. The HDMI output was
+visually checked through the capture card. Earlier physical USB keypress and
+Wi-Fi repeatability records remain at their original image identities; this
+release does not claim a new 512-entry-image Wi-Fi repeatability series; the
+release owner selected a fresh GENET cold boot as the final physical check.
+This does not extend the earlier Wi-Fi hardware acceptance to the new image. The
+[qualification record](audit/M27G_IMPLEMENTATION_RECORD.md) identifies each
+proof, limitation and carried-forward result.
 
 The release's implemented workflows and their qualified component records are:
 
@@ -43,11 +48,9 @@ The release's implemented workflows and their qualified component records are:
 | Delegated authority, failover, inspection and evidence | [Authority](M27A_AUTHORITY.md), [operator evidence](OPERATOR_EVIDENCE.md) | [Authority qualification](audit/M27A_COMPLETION_EVIDENCE.md), [operator utilities](audit/M27_COMPLETION_EVIDENCE.md) |
 
 These records retain exact source, package, target and trust identities,
-failures and accepted gaps. Fresh assembled qualification remains required;
-replay and component evidence retain their original scope.
-
-The published release remains [1.0.0-beta](../releases/RELEASE_NOTES-1.0.0-beta.md).
-Its acceptance and provenance exceptions remain in the
+failures and accepted gaps. Replay and component evidence retain their original
+scope. The previous [1.0.0-beta](../releases/RELEASE_NOTES-1.0.0-beta.md)
+acceptance and provenance exceptions remain in the
 [audit record](audit/AUDIT_REPORT_2026-09-13.md). The current
 [exceptions register](audit/EXCEPTIONS.md) records DD30 as an owner-accepted
 retired gap; dynamic fault/wake testing remains unexecuted.
@@ -65,7 +68,7 @@ historical evidence does not establish release qualification.
 | Workers | Passive `worker-heartbeat`, `worker-gpu`, and `worker-lora` instances use two bounded executor lanes; QEMU and Pi each declare 1/127/128 instances. `worker-bus` remains model/session-only. | Target-qualified QEMU evidence covers the selected 256-Worker population and receipt path; the Pi configuration still requires separate fresh physical evidence. |
 | Physical drivers | Pi 4 serial, display, USB, GENET, SDIO, and CYW43 paths use manifest-declared isolated runtimes admitted through HAL. | Board evidence from another source tree or image does not qualify a newly composed image. |
 | QEMU | `aarch64/virt` with GICv3 is the reference target on macOS HVF and AArch64 Linux KVM. | Target-qualified evidence applies only to the exact VM artifacts and proof lanes exercised; see the [Milestone 26e result record](BUILD_PLAN.md#26e). It is not Pi 4 hardware proof. |
-| Raspberry Pi 4 | Pi firmware → U-Boot → seL4 binary image → root task is the supported hardware boot path. | The selected image has fresh cold GENET and HDMI observations. Earlier-source SD/readback and physical-input evidence does not establish final-image media or full physical repeatability acceptance. |
+| Raspberry Pi 4 | Pi firmware → numbered U-Boot menu → seL4 binary image → root task is the supported hardware boot path. | The distributed image passed raw SD readback, GENET static/DHCP, Wi-Fi DHCP and packaged TCP checks. Earlier keyboard and Wi-Fi repeatability evidence remains source-bound; no new full-image repeatability claim is made. |
 | Host tools | `cohsh`, `coh`, Hive Gateway, SwarmUI, Python, GPU, sidecar, ticket, CAS, and evidence tools run beside the target on macOS or Linux. | Host, mock, fixture, and package success cannot create target Worker, driver, or use-case acceptance. |
 | GPU and AI execution | GPU drivers, CUDA/NVML, model training, inference, PEFT execution, and deployment-specific automation remain host-side. | Cohesix records bounded authority, lifecycle, telemetry, and receipts; it does not execute GPU workloads in the VM. |
 | AWS/UEFI | Planned only. | No current Cohesix AWS target or production-use claim. |
