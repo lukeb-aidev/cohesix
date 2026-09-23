@@ -166,30 +166,31 @@ frames the controls; PixiJS renders the hive and recorded execution story.
 
 ![SwarmUI showing a verified historical LoRA run with distinct evidence owners and a persistent REPLAY label](docs/images/swarmui/run-story.jpg)
 
-This is the native desktop candidate displaying a signed historical reference,
-not a new live execution. See the [SwarmUI guide](docs/SWARMUI.md),
+This is the native desktop displaying a signed historical reference, not a new
+live execution. See the [SwarmUI guide](docs/SWARMUI.md),
 [native gallery](docs/SWARMUI_GALLERY.md), and
-[operator walkthrough](docs/OPERATOR_WALKTHROUGH.md). The workbench is available
-in current source; the existing 1.0.0-beta archives retain their original UI.
+[operator walkthrough](docs/OPERATOR_WALKTHROUGH.md). The redesigned workbench
+ships in the 1.1.0-beta Mac and Linux bundles.
 
-## Cohesix 1.0.0-beta
+## Cohesix 1.1.0-beta
 
-**1.0.0-beta** brings seL4 16, four-core SMP+MCS scheduling, isolated root
-services and physical drivers, and 256 passive Heartbeat/GPU/LoRA Workers.
-It adds a Raspberry Pi 4 SD-image distribution alongside the native Mac and
-Linux ARM64 host bundles. See the [release notes](releases/RELEASE_NOTES-1.0.0-beta.md)
-for changes since 0.9.0-beta, upgrade guidance, and known limitations.
+**1.1.0-beta** brings the completely redesigned SwarmUI workbench, accountable
+native CUDA jobs, private LoRA import and training through a verified release
+decision, and matching 512-entry Queen intent capacity on QEMU and Pi. It ships
+Mac, Linux ARM64 and Raspberry Pi 4 bundles. See the
+[release notes](releases/RELEASE_NOTES-1.1.0-beta.md) for improvements, upgrade
+guidance and measured limits.
 
-Release Stage 5 is accepted as `PASS_WITH_RESIDUAL_RISK` at `5be3ca588` under
-the owner's explicit evidence carry-forward decision. The release bundles are rebuilt from one source commit without rerunning
-tests, as requested by the release owner. The selected source, tested artifacts and distributed images retain
-separate identities. DD30's dynamic fault/wake test remains unexecuted. See the
-[audit report](docs/audit/AUDIT_REPORT_2026-09-13.md) for the accepted gaps and
-the original evidence.
+A measured two-hour Pi/Mac/Linux operator run and recorded staged and pressure
+checks passed. The final Mac and Linux bundles passed extracted installation
+checks. The Pi archive contains the same installed files as the physically
+read-back and booted candidate, but its final raw SD bytes were not physically
+read back or booted. A new-image Wi-Fi repeatability series was not run. See
+the [qualification record](docs/audit/M27G_IMPLEMENTATION_RECORD.md) for the
+owner-approved release decision and precise proof boundaries.
 
-The release directory retains 0.9.0-beta alongside 1.0.0-beta. Earlier bundles
-and notes remain available from their original
-[Git tags](https://github.com/lukeb-aidev/cohesix/tags).
+Earlier bundles and notes remain available under [releases/](releases/) and their
+original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
 
 See [Current status](docs/STATUS.md) for the capability and evidence snapshot,
 and the [Build Plan](docs/BUILD_PLAN.md) for the complete record of planned and
@@ -203,7 +204,7 @@ running them.
 
 ### Run a release bundle
 
-Choose the matching **1.0.0-beta** Mac or Linux ARM64 archive under [releases/](releases/)
+Choose the matching **1.1.0-beta** Mac or Linux ARM64 archive under [releases/](releases/)
 and follow its bundled `QUICKSTART.md` and release notes. After extraction, verify its
 `MANIFEST.sha256` before running tools: use `shasum -a 256 --check MANIFEST.sha256`
 on Mac or `sha256sum --check MANIFEST.sha256` on Linux. The common host-bundle
@@ -226,8 +227,9 @@ QEMU flow is:
    unset COHSH_AUTH_TOKEN
    ```
 
-The `Cohesix-1.0.0-beta-Pi4.tar.gz` archive contains the SD image and documentation; it requires
-the matching host archive for CLI, Python, and SwarmUI tools. See the current
+The `Cohesix-1.1.0-beta-Pi4.tar.gz` archive contains the SD image and
+documentation; it requires the matching host archive for CLI, Python, and
+SwarmUI tools. See the current
 [Quickstart](docs/QUICKSTART.md) for the three-bundle installation workflow.
 
 Direct TCP is authenticated but not encrypted. Keep it on loopback or carry it

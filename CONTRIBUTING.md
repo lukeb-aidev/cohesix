@@ -170,6 +170,10 @@ git diff --check
 invocation rather than rerunning an identical check only to satisfy both listings.
 Any evidence reuse must follow TEST_PLAN's immutable source/profile/resume rules.
 A subset used during development does not waive final merge obligations.
+For release packaging, [Conditional G](docs/TEST_PLAN.md#conditional-g--release-bundle-validation-macos-linux-and-pi4)
+selects repeat checks by material change. A changed archive or image hash alone
+requires an integrity/equivalence decision, not an automatic staged rerun; the
+original target result retains its exact source, image and boot identity.
 
 The current GitHub `ci` workflow is a smaller health check, not execution of this
 entire baseline. Its weekly/manual dependency audit does not silently waive the
@@ -177,8 +181,11 @@ pre-merge audit requirement. Complete and record the required checks not perform
 by CI; do not describe unexecuted checks as passing. The actual division is in
 [GitHub Actions gate mapping](docs/TEST_PLAN.md#github-actions-gate-mapping).
 
-Run the complete staged Test Plan with a unique evidence directory when the
-active task or TEST_PLAN requires staged acceptance, and before any release claim:
+Establish the complete staged Test Plan with a unique evidence directory when
+the active task or TEST_PLAN requires staged acceptance. Before a release claim,
+use the retained baseline at its original source/profile identity and apply
+Conditional G's material-change decision; repeat only the affected checks when
+materially changed. The initial staged commands are:
 
 ```bash
 scripts/ci/test_plan_run.sh --list

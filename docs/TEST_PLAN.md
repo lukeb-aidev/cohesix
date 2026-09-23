@@ -3222,13 +3222,44 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
 
 ### Conditional G — Release bundle validation (macOS, Linux and Pi4)
 
-This is mandatory when shipping the three `Cohesix-1.0.0-beta` archives. It runs
-after the applicable five-stage plan and all M26e hardware, pressure,
-repeatability, Worker/full-system and review gates. Stage 05 alone does not run
-this conditional action. Follow [HOST_TOOLS release factory](HOST_TOOLS.md#release-factory)
-to build/test on Mac and the selected Linux ARM64 builder and assemble candidates
-under `releases/`. The catalogued `release.bundle-validation` action is an
-executable final verifier and requires all three installation result records.
+Every three-archive release needs bundle validation. Establish the applicable
+staged, hardware, pressure, repeatability, Worker/full-system and review evidence
+for the baseline runtime, installed package and target profile. For a later
+candidate, repeat only checks affected by material changes under the rule below;
+Stage 05 alone does not run this conditional action. A changed commit or
+SHA-256 is an identity change to investigate, not by itself a reason to repeat
+those tests.
+Follow [HOST_TOOLS release factory](HOST_TOOLS.md#release-factory) to build/test
+on Mac and the selected Linux ARM64 builder and assemble candidates under
+`releases/`. The catalogued `release.bundle-validation` action is the strict
+exact-archive verifier when the three installation records name the distributed
+archives.
+
+Before choosing repeat tests, compare the candidate with the already qualified
+artifacts and record both identities, the changed files/metadata, the comparison
+method and the affected contracts. Always verify the candidate archive manifests,
+extracted file hashes and modes, source/provenance bindings and Pi image layout.
+For a different raw Pi image, compare its boot partition geometry, boot-relevant
+filesystem metadata and complete installed file tree with the qualified image;
+equal file hashes alone do not establish equivalent layout. Recompression,
+timestamps, FAT allocation metadata or publication-only prose that leave the
+installed executable payload, selected manifests, policy, generated contracts,
+boot behavior, installation instructions and claimed behavior unchanged require
+this integrity/equivalence check, **not** another host, QEMU or physical-Pi run.
+The original test results keep their original artifact hashes and proof classes;
+the comparison bridges them to the candidate without relabeling them as fresh
+tests of its raw bytes.
+
+Repeat only the checks whose contracts a material change can affect. Runtime,
+boot chain, partition/layout, security policy, authority, dependencies, host
+executables, UI behavior, installation procedure, target profile, toolchain or
+test machinery changes select their affected host/target and negative checks.
+Environmental drift counts when it can change the tested behavior. A new
+performance or reliability claim needs its own applicable measurement. If
+equivalence cannot be established, treat the difference as material or unresolved
+and run the affected checks; a hash mismatch alone is neither a PASS nor a
+blanket failure. Do not rerun the entire five-stage plan merely because a final
+archive was rebuilt with equivalent contents.
 
 Extract each archive into a fresh directory outside the source checkout and
 outside `releases/`. Keep the original tarball beside its extracted folder.
@@ -3260,9 +3291,10 @@ two ports must be free. The Linux image uses the native KVM timer/profile;
 Mac uses HVF. The final record remains installation smoke evidence, not a new
 M26e performance or full-system claim.
 
-For the first Pi4 SD-image release, qualify the actual distributed `.img`:
+For the first materially distinct Pi4 installation payload, qualify the actual
+distributed `.img` (the version below is an example):
 
-1. Extract `Cohesix-1.0.0-beta-Pi4.tar.gz` into its own clean directory. Verify
+1. Extract `Cohesix-<version>-Pi4.tar.gz` into its own clean directory. Verify
    its manifest and image SHA-256. Identify a removable whole SD card whose byte
    capacity is at least the metadata's `minimum_target_bytes`. Follow the
    packaged QUICKSTART and HARDWARE_BRINGUP device-identification rules to write
@@ -3274,8 +3306,8 @@ For the first Pi4 SD-image release, qualify the actual distributed `.img`:
 
    ```bash
    python3 scripts/release_qualify.py media \
-     --bundle <clean-extraction>/Cohesix-1.0.0-beta-Pi4 \
-     --archive <clean-extraction>/Cohesix-1.0.0-beta-Pi4.tar.gz \
+     --bundle <clean-extraction>/Cohesix-<version>-Pi4 \
+     --archive <clean-extraction>/Cohesix-<version>-Pi4.tar.gz \
      --device <explicit-whole-disk-device> \
      --output <fresh-evidence>/media/result.json
    ```
@@ -3294,11 +3326,11 @@ For the first Pi4 SD-image release, qualify the actual distributed `.img`:
 
    ```bash
    python3 scripts/release_qualify.py pi4 \
-     --bundle <clean-extraction>/Cohesix-1.0.0-beta-Pi4 \
-     --archive <clean-extraction>/Cohesix-1.0.0-beta-Pi4.tar.gz \
+     --bundle <clean-extraction>/Cohesix-<version>-Pi4 \
+     --archive <clean-extraction>/Cohesix-<version>-Pi4.tar.gz \
      --media-result <fresh-evidence>/media/result.json \
      --serial-log <fresh-single-boot-serial.log> \
-     --host-bundle <clean-extraction>/Cohesix-1.0.0-beta-MacOS \
+     --host-bundle <clean-extraction>/Cohesix-<version>-MacOS \
      --host <pi-ip> --provisioning-verified \
      --output <fresh-evidence>/pi4/result.json
    ```
@@ -3321,20 +3353,27 @@ python3 scripts/release_qualify.py verify \
 
 The catalog exposes the same inputs as `TP_RELEASE_MACOS_RESULT`,
 `TP_RELEASE_LINUX_RESULT`, `TP_RELEASE_PI4_RESULT`, `TP_RELEASE_DIR` and
-`TP_RELEASE_RESULT`. Missing/failed checks, changed logs or archives, an old
-version, or different source commits fail closed. Retain the final result and
-the complete evidence directories with the release delivery record. Ordinarily, only after
-this gate and the independently required M26e acceptance/reviewer gates pass may
-the candidate archives be published. For `1.1.0-beta` alone, Lukas Bower
+`TP_RELEASE_RESULT`. The executable verifier deliberately fails closed on
+missing/failed records, changed logs or archives, version drift and different
+source commits. When only the archive/raw-image identity changed and the
+comparison above proves equivalent installed contents, retain that refusal and
+a reviewed equivalence record with the release delivery evidence. That record
+is the alternative bundle-validation decision; it is not a verifier PASS or
+fresh final-byte media test. Publish only after the applicable unchanged or
+focused renewed acceptance, bundle decision and named release-owner approval.
+For `1.1.0-beta` alone, Lukas Bower
 approved a limited release decision on 23 September 2026 after declining
 another final SD write/readback and boot. The final Pi raw image contains the
 same 27 hashed files as the independently read-back and booted candidate but
 differs in FAT metadata. The final exact raw image has no physical media-
 readback or boot result, no fresh 10-cold/10-warm Wi-Fi series, and no passing
-three-archive verifier. Keep each as `NOT_RUN`; the owner decision permits this
-specific beta publication with those disclosed limits but supplies no
-Conditional G, final-image hardware, Wi-Fi reliability or performance PASS.
-It cannot be reused for another release.
+three-archive verifier. Keep the omitted physical tests as `NOT_RUN` and retain
+the verifier's archive-change refusal; the owner decision permits this specific
+beta publication with those disclosed limits but supplies no
+strict-verifier, final-byte hardware, Wi-Fi reliability or performance PASS.
+Its comparison checked file hashes and image layout, not every boot-relevant
+filesystem property required for general equivalence above. This historical
+owner exception cannot be reused as an equivalence precedent for another release.
 
 ### Automated Stage 05 — Release governance and attestation
 - For the owner-approved `1.0.0-beta` carry-forward only, the dedicated

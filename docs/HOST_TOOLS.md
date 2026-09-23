@@ -1943,9 +1943,12 @@ is packaging evidence, not physical boot evidence.
 
 All archives carry the maintained root `QUICKSTART.md`, with links relocated
 by the factory rather than a separate invented Pi procedure. After assembly,
-run **Conditional G** in the [Test Plan](TEST_PLAN.md): validate each packaged
-QEMU launcher on its native host and perform Pi image readback plus a fresh
-configured boot of the distributed image. Archive creation or build-only
-success is not release acceptance.
+apply **Conditional G** in the [Test Plan](TEST_PLAN.md). Qualify each materially
+distinct packaged QEMU launcher on its native host and the Pi installation path
+with image readback and a fresh configured boot. For a later archive or image
+whose bytes differ only in nonmaterial packaging metadata, verify the new
+manifest and record the required content/layout equivalence instead of repeating
+host or physical tests. Archive creation or build-only success is not release
+acceptance, and prior test results keep their original artifact identities.
 
 </details>
