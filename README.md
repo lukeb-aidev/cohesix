@@ -181,14 +181,6 @@ Mac, Linux ARM64 and Raspberry Pi 4 bundles. See the
 [release notes](releases/RELEASE_NOTES-1.1.0-beta.md) for improvements, upgrade
 guidance and measured limits.
 
-A measured two-hour Pi/Mac/Linux operator run and recorded staged and pressure
-checks passed. The final Mac and Linux bundles passed extracted installation
-checks. The Pi archive contains the same installed files as the physically
-read-back and booted candidate, but its final raw SD bytes were not physically
-read back or booted. A new-image Wi-Fi repeatability series was not run. See
-the [qualification record](docs/audit/M27G_IMPLEMENTATION_RECORD.md) for the
-owner-approved release decision and precise proof boundaries.
-
 Earlier bundles and notes remain available under [releases/](releases/) and their
 original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
 
