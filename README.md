@@ -195,6 +195,10 @@ guidance and measured limits.
   Jetson GPU and SwarmUI fit into a small model-adaptation workflow.
 - [Safe canary recovery](https://youtu.be/OKvjddbSsFs) — follow a SwarmUI
   example of inspecting a failed trial and recovering safely.
+- [Live Hive: 12 Workers in SwarmUI](https://youtu.be/wajLnWFAu70) — follow a
+  factory alert scenario while SwarmUI maps twelve Workers managed by a live
+  Pi 4 Queen. Inspect one Worker's state and health, then see the Jetson GPU
+  bridge report unavailable.
 
 Earlier bundles and notes remain available under [releases/](releases/) and their
 original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
