@@ -18,7 +18,7 @@ import tomllib
 from typing import Any
 
 from cohesix.auth import resolve_secret_reference
-from provider_m28_live import qemu_image_identity, read_artifact
+from provider_m28_live import is_generated_derivation, qemu_image_identity, read_artifact
 from provider_matrix import require
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -127,8 +127,13 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
     selected = load_reference(reference, host_profile, case)
     require(not state_dir.exists(), "M28b evidence directory already exists")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    require(commit == selected["source_commit"] and not subprocess.check_output(
-        ["git", "status", "--porcelain"], cwd=ROOT), "M28b exact source checkout required")
+    changed = subprocess.check_output(
+        ["git", "diff", "--name-only", "HEAD", "--"], cwd=ROOT, text=True).splitlines()
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT)
+    require(commit == selected["source_commit"]
+            and all(is_generated_derivation(path) for path in changed)
+            and not untracked, "M28b exact source with only selected generated derivatives required")
     require(digest(Path(selected["source_manifest"]), 8 * 1024 * 1024) ==
             selected["target_manifest_sha256"], "M28b manifest changed")
     qemu = qemu_image_identity(selected["target_qemu_pid"], commit, artifact_root=ROOT)
