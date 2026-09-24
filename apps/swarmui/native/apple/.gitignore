@@ -1,0 +1,6 @@
+# Author: Lukas Bower
+# Purpose: Keep local Swift and generated Xcode build products out of the native source inventory.
+# Copyright 2026 Lukas Bower
+.build/
+.swiftpm/
+*.xcodeproj/

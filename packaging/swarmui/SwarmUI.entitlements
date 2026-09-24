@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Share the installed app's delegated gateway Keychain item with its App Intents extension. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>keychain-access-groups</key><array><string>$(AppIdentifierPrefix)com.cohesix.swarmui</string></array>
+</dict></plist>

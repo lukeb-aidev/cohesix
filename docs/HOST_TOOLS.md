@@ -1510,6 +1510,45 @@ The desktop's internal `coh --ui-schema` handshake checks exact parser agreement
 adapters do not grant target authority. Persistent FUSE, arbitrary shell-backed
 runs and identity administration explain their service boundary in the catalog.
 
+The in-progress M28c Apple extension exposes a local capability check and
+source-level App Intents for **Inspect Cohesix Job**, **Request Cohesix Job
+Cancellation** and **Explain Cohesix Job**. Inspect/cancel use the shared Hive
+Gateway's existing `/v1/jobs/{admission_id}` contract with a delegated ticket;
+the cancellation action asks for confirmation and reports only the gateway's
+request state. Explain uses the on-device Foundation Models API when available,
+labels its interpretation and links the exact scoped job URL. Its deterministic
+fallback keeps the gateway state visible. None of these actions can submit a
+new job or prove a terminal signed outcome.
+
+SwarmUI's Settings offers an explicit **Enable Apple actions for this
+connection** control after a delegated gateway connection succeeds. Its native
+host stores that connection in the Mac Keychain; **Remove Apple action access**
+deletes the selected Keychain item without revoking the gateway ticket. The
+app and extension require a shared Keychain access group and matching signed
+provisioning. A locally assembled development-signed diagnostic helper with
+that restricted entitlement was killed at launch without a profile. The
+new in-app enrollment path still needs signed, live validation. A synthetic
+Foundation Models probe and detached MLX smoke establish local SDK/compute
+feasibility only. The [M28c build plan](BUILD_PLAN.md#28c) requires an
+admitted developer journey and live evidence before completion.
+
+The selected Mac also has vMLX/MLX Studio 1.6.65. Its bundled engine served a
+local SmolLM2-135M model at `127.0.0.1:18080` and returned one bounded
+OpenAI-compatible chat response; the tiny model gave a poor answer. This is a
+detached serving transport check, not an accepted Cohesix inference result.
+The engine repaired alignment in the ignored local model weights on load,
+changing their SHA-256, so the planned `m28c-vmlx-compatibility` path uses a
+content-bound disposable copy and reports both hashes. Only an explicitly
+selected loopback model and deployment generation may be queried. vMLX's
+MCP/tool endpoints cannot act as a route around Cohesix tickets or policy.
+The focused Python `cohesix.vmlx_compat.VmlxClient(endpoint, model)` can read
+one healthy served model and make a bounded local chat request. Its
+`VmlxReply.evidence()` exposes token counts and prompt/output digests rather
+than the text; the caller retains the result privately for its own evaluation.
+It rejects non-loopback endpoints, redirects, ambiguous model listings and
+tool-call output. It does not enroll a model, sign a result or manage a
+deployment, so it is not the admitted vMLX lifecycle by itself.
+
 ### Cohesix Python package
 
 Use the package when your application needs structured calls rather than

@@ -124,7 +124,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
         required = {"id", "group", "providers", "proof_class", "lane"}
         live = case.get("id") in {"m28-jobs-live", "m28-authority-live",
                                     "m28a-workloads-live", "m28a-recovery-live",
-                                    "m28b-peft-live", "m28b-serving-live"}
+                                    "m28b-peft-live", "m28b-serving-live",
+                                    "m28c-platform-live"}
         optional = {"surface", "runner"} if live else {"surface", "command"}
         require(set(case) >= required | {"runner" if live else "command"}
                 and set(case) <= required | optional,
@@ -141,7 +142,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             case["group"] in GROUPS and case["lane"] in LANES, "matrix case group/lane"
         )
         require(
-            case["proof_class"] == ("live_target" if live else "host_contract")
+            case["proof_class"] == ("live_host" if identifier == "m28c-platform-live"
+                                    else "live_target" if live else "host_contract")
             and (not live or case["lane"] == "live_safe"),
             "host tests cannot claim live evidence",
         )
@@ -155,7 +157,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "surface" not in case or case["surface"] in surfaces, "unregistered surface"
         )
         if live:
-            expected_runner = ("provider_m28b_live" if identifier in {
+            expected_runner = ("provider_m28c_platform" if identifier == "m28c-platform-live" else
+                "provider_m28b_live" if identifier in {
                 "m28b-peft-live", "m28b-serving-live"} else
                 "provider_m28a_live" if identifier in {
                 "m28a-workloads-live", "m28a-recovery-live"} else "provider_m28_live")

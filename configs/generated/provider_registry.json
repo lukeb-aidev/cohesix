@@ -2146,6 +2146,38 @@
           {
             "executable": false,
             "kind": "text",
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Info.plist",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": true,
+            "kind": "mach_o",
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/MacOS/SwarmUIIntents",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "json",
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Resources/Metadata.appintents/extract.actionsdata",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "json",
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Resources/Metadata.appintents/version.json",
+            "schema_pointer": null,
+            "schema_value": null,
+            "version": "1"
+          },
+          {
+            "executable": false,
+            "kind": "text",
             "path": "SwarmUI.app/Contents/Info.plist",
             "schema_pointer": null,
             "schema_value": null,
@@ -7628,7 +7660,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "c6b740554e69fcef95a9265889279622e26839f2ef2a7657aa842e7e00ffe917",
+  "graph_sha256": "7bf42e7cf93176ac1f0a0849fc2656c952ba679e1390503777a1de58ec005004",
   "playbooks": [
     {
       "dependencies": [
@@ -8575,7 +8607,7 @@
   ],
   "resolved_manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "c73ada5ce4e58cd5279b1bf3094b91fbecf438577178cd1e6df80cda617d24eb",
+  "source_sha256": "d70d8ccbca19e9385ab4155074d790aeae30fecbbcbc3e06a082546cc6d11b73",
   "use_cases": [
     {
       "dependencies": [

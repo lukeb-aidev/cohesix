@@ -9,6 +9,76 @@ macOS 26 on Apple Silicon is the primary Cohesix development host. This guide
 installs host dependencies and explains how the current tree consumes, but does
 not vendor, upstream seL4 build outputs.
 
+## M28c Apple integration host
+
+M28c additionally targets macOS 27 with Xcode 27 and its public macOS 27 SDK.
+The feasibility host observed macOS 27.0 build `26A428`, Xcode 27.0 build
+`27A266a`, an Apple M4 with 24 GiB unified memory and `en_AU` locale. XcodeGen
+2.44.1 generates the local extension project from
+`apps/swarmui/native/apple/project.yml`; its output is ignored. The Swift
+package provides the actual-device capability probe and focused checks:
+
+```bash
+swift test --package-path apps/swarmui/native/apple
+swift run --package-path apps/swarmui/native/apple CohesixPlatformProbe
+swift run --package-path apps/swarmui/native/apple CohesixAssistanceProbe
+xcodegen generate --spec apps/swarmui/native/apple/project.yml
+xcodebuild -project apps/swarmui/native/apple/SwarmUIApple.xcodeproj \
+  -scheme SwarmUIIntents -configuration Release \
+  -derivedDataPath out/m28c/DerivedData CODE_SIGNING_ALLOWED=NO build
+```
+
+The selected `macos-desktop` package inventory now requires the extension's
+Mach-O, Info.plist and both extracted App Intents metadata files. Pass the
+Release `SwarmUIIntents.appex` directory to
+`scripts/install/stage_swarmui.py --apple-extension-dir`. The extension needs
+its sandbox, outbound network and shared Keychain access-group entitlements;
+the parent app needs the same Keychain group while remaining outside the App
+Sandbox. A matching Apple provisioning profile is required for the restricted
+Keychain entitlement. A manually development-signed diagnostic enrollment
+helper with that entitlement was killed at launch on the reference Mac despite
+a valid signature, so the shipping path uses SwarmUI's Settings for enrollment
+and must be retested under provisioned signing. The earlier probe action was
+discovered in Shortcuts; that is discovery evidence, not an executable Siri or
+Cohesix work result.
+
+The selected direct-distribution path is Developer ID Application signing
+with hardened runtime. `scripts/install/sign_swarmui_macos.py sign --app
+<absolute-staged-app> --team-id <team> --identity-sha1 <Developer-ID-SHA1>
+--app-profile <absolute-app-profile> --extension-profile
+<absolute-extension-profile> --state-dir <new-evidence-dir>` validates and
+embeds exact Apple provisioning for both bundle IDs, then signs the extension
+and app with the same Keychain group. `sign-development` uses the same profiles
+and an Apple Development identity for installed feasibility checks. The
+`notarize` phase takes `--notary-profile`
+instead of `--identity-sha1`, submits the exact archive with `notarytool`,
+checks Apple's acceptance log, staples and assesses the app. Provision the
+certificates, profiles and notary credential outside the repository. Neither
+a provisioned development signature nor a Developer ID identity and
+notarisation result is currently present in the M28c
+feasibility record.
+
+The optional vMLX compatibility host has `/Applications/vMLX.app` 1.6.65,
+bundle `net.vmlx.app`, with bundled engine commit
+`22f9c77711fb580df32f4d40bbaea989c2d5421b`. Its app gateway was
+observed on loopback `127.0.0.1:8080` with zero loaded backends. A separate
+bundled-engine smoke served the local M28c model on loopback port 18080 and
+returned one chat response. vMLX repaired the scratch model's safetensors
+alignment before loading: SHA-256 changed from
+`989e3ef746b41999ca096055a60c87057b8e842824253391bc0d9ed8dfc6936e`
+to `61840936148403ac34b1dd9a8e7eb71eade5d898587b158914c65e7b36113f60`.
+Use an immutable enrolled source and a disposable model copy for future
+compatibility checks; that detached smoke does not qualify the model or the
+M28c release lifecycle.
+The focused `cohesix.vmlx_compat.VmlxClient` reached the bundled engine on a
+separate loopback port and returned a bounded local response while exposing
+only prompt/output digests as evidence. It requires an exact served model ID,
+rejects redirects and tool calls, and never submits a Cohesix job. The copied
+model's SHA-256 was unchanged during that second test. Run
+`python3 -m pytest -q tools/cohesix-py/tests/test_vmlx_compat.py` for its
+pure refusal checks; acceptance still needs `m28c-vmlx-live` against an
+admitted adapter generation and rollback.
+
 See the [Glossary](GLOSSARY.md) for Cohesix-specific build and evidence terms.
 
 ## Supported toolchain

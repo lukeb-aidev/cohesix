@@ -29,7 +29,7 @@ CONVERGENCE_DOC_START = "<!-- test-plan-convergence:start -->"
 CONVERGENCE_DOC_END = "<!-- test-plan-convergence:end -->"
 ACTION_ID_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 ALLOWED_SCOPES = {"common", "provisioned-target", "target", "conditional"}
-ALLOWED_TARGETS = {"qemu", "pi4"}
+ALLOWED_TARGETS = {"macos", "qemu", "pi4"}
 ALLOWED_EVIDENCE_CLASSES = {"acceptance", "diagnostic"}
 CONVERGENCE_PHASE_ORDER = {
     "target-entry": 10,

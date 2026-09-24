@@ -1,9 +1,10 @@
 // Author: Lukas Bower
-// Purpose: Guard desktop endpoint, structured argv, namespace and control boundaries with independent contract cases.
+// Purpose: Guard desktop endpoint, Apple delegation, structured argv, namespace and control boundaries with independent contract cases.
 // Copyright 2026 Lukas Bower
 use std::collections::BTreeMap;
 use swarmui::workbench::{
-    control_line, host_arguments, namespace_command, ConnectionRequest, ControlRequest, HostRequest,
+    apple_delegation_payload, control_line, host_arguments, namespace_command, ConnectionRequest,
+    ControlRequest, HostRequest,
 };
 
 fn connection() -> ConnectionRequest {
@@ -48,6 +49,29 @@ fn connection_rejects_credentials_in_urls_and_placeholder_auth() {
     let resolved = input.resolve().expect("valid explicit Queen endpoint");
     assert_eq!(resolved.port, 31337);
     assert_eq!(resolved.host, "192.0.2.1");
+}
+
+#[test]
+fn apple_actions_enrol_only_an_existing_delegated_gateway() {
+    let mut input = connection();
+    let without_ticket = input.resolve().unwrap();
+    assert!(apple_delegation_payload(&without_ticket).is_err());
+
+    input.ticket = Some("delegated-test-ticket".into());
+    let active = input.resolve().unwrap();
+    let stored: serde_json::Value =
+        serde_json::from_slice(&apple_delegation_payload(&active).unwrap()).unwrap();
+    assert_eq!(stored["endpoint"], "https://gateway.example:8443");
+    assert_eq!(stored["requestToken"], "operator-unique-test-credential");
+    assert_eq!(stored["delegatedTicket"], "delegated-test-ticket");
+
+    input.endpoint = "http://remote.example:8080".into();
+    assert!(apple_delegation_payload(&input.resolve().unwrap()).is_err());
+    input.endpoint = "http://127.0.0.1:8080".into();
+    assert!(apple_delegation_payload(&input.resolve().unwrap()).is_ok());
+    input.transport = "console".into();
+    input.endpoint = "tcp://127.0.0.1:31337".into();
+    assert!(apple_delegation_payload(&input.resolve().unwrap()).is_err());
 }
 #[test]
 fn host_arguments_reuse_cli_validation_without_shell_or_secret_arguments() {

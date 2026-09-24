@@ -5450,6 +5450,30 @@ executable = true
 version = "1"
 
 [[providers.deployment_profiles.artifacts]]
+path = "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/MacOS/SwarmUIIntents"
+kind = "mach_o"
+executable = true
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Info.plist"
+kind = "text"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Resources/Metadata.appintents/extract.actionsdata"
+kind = "json"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
+path = "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Resources/Metadata.appintents/version.json"
+kind = "json"
+executable = false
+version = "1"
+
+[[providers.deployment_profiles.artifacts]]
 path = "docs/SWARMUI.md"
 kind = "text"
 executable = false

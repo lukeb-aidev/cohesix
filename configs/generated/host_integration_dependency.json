@@ -5,9 +5,9 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "c73ada5ce4e58cd5279b1bf3094b91fbecf438577178cd1e6df80cda617d24eb",
+    "source_sha256": "d70d8ccbca19e9385ab4155074d790aeae30fecbbcbc3e06a082546cc6d11b73",
     "resolved_manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
-    "implementation_surface_inventory_sha256": "1264bc3ef9a2174d0326b41b587653ba742ede563a57815fffc69b9bf077436b"
+    "implementation_surface_inventory_sha256": "333becffa321e3a528a05aa57a5bf95dce7ceb40e97489584b42df8460c32901"
   },
   "host_profiles": [
     {
@@ -10946,6 +10946,38 @@
           {
             "path": "LICENSE.txt",
             "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Info.plist",
+            "kind": "text",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/MacOS/SwarmUIIntents",
+            "kind": "mach_o",
+            "executable": true,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Resources/Metadata.appintents/extract.actionsdata",
+            "kind": "json",
+            "executable": false,
+            "version": "1",
+            "schema_pointer": null,
+            "schema_value": null
+          },
+          {
+            "path": "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/Contents/Resources/Metadata.appintents/version.json",
+            "kind": "json",
             "executable": false,
             "version": "1",
             "schema_pointer": null,

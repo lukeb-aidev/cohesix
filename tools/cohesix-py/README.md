@@ -43,6 +43,31 @@ can set `requested_outcome_verified=True`. See
 Use a wheel built from the matching M28b source; older published wheels may not
 contain this client.
 
+The in-progress M28c source also provides `cohesix.vmlx_compat.VmlxClient`
+for one explicitly selected vMLX model on an HTTP loopback endpoint. Its
+`generate(prompt, max_tokens=32)` returns private text plus an `evidence()`
+view of model identity, token counts and prompt/output SHA-256 digests. It
+rejects redirects, ambiguous model listings, tool calls and oversized
+responses. The client does not admit a Cohesix ticket, verify an outcome or
+manage a model generation. See [the M28c host contract](../../docs/HOST_TOOLS.md)
+for the installed vMLX test and its model-byte mutation limit; this source API
+is not in the published 1.1.0b1 wheel.
+
+With a separately started local server that names the selected model, a
+developer can inspect a bounded response:
+
+```python
+from cohesix.vmlx_compat import VmlxClient
+
+client = VmlxClient("http://127.0.0.1:18081", "cohesix-smollm2-135m")
+reply = client.generate("Summarize the local test result.", max_tokens=24)
+print(reply.text)
+print(reply.evidence())
+```
+
+Treat that result as local model output until an admitted Cohesix generation,
+held-out evaluation and rollback bind it to a verified release.
+
 Release compatibility is tested
 on CPython 3.11 and 3.13. The wheel is target-neutral; it does not bundle or
 select a QEMU/Pi manifest.

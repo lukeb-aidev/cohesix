@@ -919,6 +919,20 @@ test_policy = "nonzero"
 minimum_test_count = 1
 
 [[action]]
+id = "ui.m28c-platform-live"
+stage = 0
+tier = "ui"
+scope = "conditional"
+targets = ["macos"]
+description = "Observe one development-signed installed App Intents action in Shortcuts and actual Apple AI/Metal availability on the exact-source Mac. This does not prove Siri or product work."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-platform-live --reference-config "${M28C_PLATFORM_REFERENCE:?}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE:?}/m28c-platform-live"'
+timeout_seconds = 600
+trigger_paths = ["apps/swarmui/native/apple/**", "apps/swarmui/src/workbench.rs", "apps/swarmui/src-tauri/main.rs", "apps/swarmui/frontend/**", "packaging/swarmui/Info.plist", "packaging/swarmui/SwarmUI.entitlements", "scripts/install/stage_swarmui.py", "scripts/install/stage_host_package.py", "scripts/install/sign_swarmui_macos.py", "scripts/ci/provider_m28c_platform.py", "configs/provider_conformance.toml"]
+expected_evidence = ["m28c-platform-live-summary", "installed-development-signature", "shortcuts-action-discovery", "actual-device-capabilities"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
 id = "federation.three-hive-relay"
 stage = 0
 tier = "federation"

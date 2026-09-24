@@ -1,5 +1,5 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Frame terminal-free connection, governed operations and evidence in the SwarmUI workbench. -->
+<!-- Purpose: Frame terminal-free connection, Apple actions, governed operations and evidence in the SwarmUI workbench. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!doctype html>
 <html lang="en">
@@ -679,6 +679,17 @@ Replay preserves recorded observations. It cannot establish current readiness.</
                     SwarmUI checks that coh uses the same argument schema. Tools
                     run without a shell.
                   </p>
+                  <h3>Apple Shortcuts and Siri</h3>
+                  <p class="field-help">
+                    Connect to a delegated Hive Gateway, then store that exact
+                    connection in this Mac's Keychain for job inspection and
+                    cancellation. The gateway checks policy on every request.
+                  </p>
+                  <sp-button id="apple-actions-enrol" variant="secondary" disabled
+                    >Enable Apple actions for this connection</sp-button
+                  ><sp-button id="apple-actions-remove" variant="secondary"
+                    >Remove Apple action access</sp-button
+                  ><p id="apple-actions-status" role="status" aria-live="polite"></p>
                 </article>
                 <article class="form-card">
                   <h2>Evidence, never assumptions</h2>

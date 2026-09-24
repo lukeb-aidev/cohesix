@@ -75,3 +75,41 @@ def test_desktop_bundle_uses_selected_binary_and_launch_metadata(tmp_path: Path)
     stage.stage(root, root, root / "bin", "desktop", root / "out")
     assert (root / "out/SwarmUI.app/Contents/MacOS/swarmui").read_bytes() == b"native executable identity"
     assert (root / "out/SwarmUI.app/Contents/Info.plist").read_text() == "launch metadata"
+
+
+def test_macos_desktop_requires_and_confines_selected_extension(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    (root / "configs/generated").mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "bin/swarmui").write_bytes(b"selected app binary")
+    extension = root / "build/SwarmUIIntents.appex"
+    members = {
+        "Contents/MacOS/SwarmUIIntents": b"selected extension binary",
+        "Contents/Info.plist": b"extension metadata",
+        "Contents/Resources/Metadata.appintents/extract.actionsdata": b"{}",
+        "Contents/Resources/Metadata.appintents/version.json": b"{}",
+    }
+    for name, data in members.items():
+        path = extension / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    prefix = "SwarmUI.app/Contents/Extensions/SwarmUIIntents.appex/"
+    artifacts = [
+        {"path": "SwarmUI.app/Contents/MacOS/swarmui", "executable": True},
+        *({"path": prefix + name, "executable": name.endswith("/SwarmUIIntents")}
+          for name in members),
+    ]
+    (root / "configs/generated/provider_registry.json").write_text(json.dumps({
+        "contract": {"deployment_profiles": [
+            {"id": "macos-desktop", "artifacts": artifacts}
+        ]}
+    }))
+    with pytest.raises(ValueError, match="requires"):
+        stage.stage(root, root, root / "bin", "macos-desktop", root / "missing")
+    stage.stage(root, root, root / "bin", "macos-desktop", root / "out", extension)
+    for name, data in members.items():
+        assert (root / "out" / prefix / name).read_bytes() == data
+    (extension / "Contents/Info.plist").unlink()
+    (extension / "Contents/Info.plist").symlink_to(root / "bin/swarmui")
+    with pytest.raises(ValueError, match="symlink"):
+        stage.stage(root, root, root / "bin", "macos-desktop", root / "rejected", extension)

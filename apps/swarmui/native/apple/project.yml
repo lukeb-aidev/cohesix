@@ -1,0 +1,24 @@
+# Author: Lukas Bower
+# Purpose: Generate the native App Intents and Keychain enrollment components for SwarmUI.
+# Copyright 2026 Lukas Bower
+name: SwarmUIApple
+options:
+  bundleIdPrefix: com.cohesix.swarmui
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    SWIFT_VERSION: "6.0"
+targets:
+  SwarmUIIntents:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/SwarmUIIntents
+      - path: Sources/CohesixApple
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cohesix.swarmui.intents
+        INFOPLIST_FILE: Sources/SwarmUIIntents/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_NAME: SwarmUIIntents
+        CODE_SIGN_ENTITLEMENTS: Sources/SwarmUIIntents/SwarmUIIntents.entitlements

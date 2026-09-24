@@ -21,11 +21,16 @@ def main() -> None:
     parser.add_argument("--generated-root", type=Path, required=True)
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--profile", choices=["macos-desktop", "linux-aarch64-desktop"], required=True)
+    parser.add_argument("--apple-extension-dir", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     output = args.out.absolute()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    stage(args.repo.absolute(), args.generated_root.absolute(), args.bin_dir.absolute(), args.profile, output / "package-input")
+    stage(
+        args.repo.absolute(), args.generated_root.absolute(), args.bin_dir.absolute(),
+        args.profile, output / "package-input",
+        args.apple_extension_dir.absolute() if args.apple_extension_dir else None,
+    )
     source = args.repo.absolute() / "apps/swarmui/frontend"
     entries = sorted(source.rglob("*"))
     if any(path.is_symlink() for path in entries):

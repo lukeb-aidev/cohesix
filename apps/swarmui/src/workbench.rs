@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Keep desktop forms, connection inputs and host execution inside existing Cohesix authority.
+// Purpose: Keep desktop forms, connection inputs, Apple Keychain enrollment and host execution inside existing Cohesix authority.
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 //! Desktop-only validation and bounded adapters; the owning command still admits every action.
@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const HOST_TIMEOUT: Duration = Duration::from_secs(120);
+const APPLE_KEYCHAIN_SERVICE: &str = "com.cohesix.swarmui.gateway";
+const APPLE_KEYCHAIN_ACCOUNT: &str = "selected-delegation";
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,6 +109,74 @@ impl ConnectionRequest {
             ticket,
         })
     }
+}
+
+/// Freeze only the already connected delegated gateway identity for native App Intents.
+/// Keychain storage grants no new Cohesix authority; the gateway rechecks every use.
+pub fn apple_delegation_payload(connection: &Connection) -> Result<Vec<u8>, String> {
+    let endpoint = url::Url::parse(&connection.endpoint)
+        .map_err(|_| "invalid_endpoint: Apple actions require a gateway URL")?;
+    let loopback = matches!(
+        endpoint.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    );
+    if connection.transport != "rest"
+        || connection.role != "queen"
+        || !(endpoint.scheme() == "https" || endpoint.scheme() == "http" && loopback)
+        || !matches!(endpoint.path(), "" | "/")
+        || endpoint.username() != ""
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err("unsupported: Apple actions need a delegated HTTPS or loopback gateway".into());
+    }
+    let ticket = connection
+        .ticket
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or("authentication: a delegated ticket is required for Apple actions")?;
+    let valid_secret = |value: &str, maximum: usize| {
+        !value.is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
+    };
+    if !valid_secret(&connection.credential, 4096) || !valid_secret(ticket, 8192) {
+        return Err("authentication: Apple action credentials exceed bounds".into());
+    }
+    let payload = serde_json::to_vec(&json!({
+        "endpoint": connection.endpoint,
+        "requestToken": connection.credential,
+        "delegatedTicket": ticket,
+    }))
+    .map_err(|_| "authentication: cannot encode Apple action enrollment")?;
+    if payload.len() > 16_384 {
+        return Err("authentication: Apple action enrollment exceeds Keychain bound".into());
+    }
+    Ok(payload)
+}
+
+/// Store a live, explicit delegation in the selected app's unsynchronised Keychain group.
+#[cfg(target_os = "macos")]
+pub fn store_apple_delegation(connection: &Connection) -> Result<(), String> {
+    use security_framework::passwords::{set_generic_password_options, PasswordOptions};
+    let payload = apple_delegation_payload(connection)?;
+    let mut options =
+        PasswordOptions::new_generic_password(APPLE_KEYCHAIN_SERVICE, APPLE_KEYCHAIN_ACCOUNT);
+    options.set_access_synchronized(Some(false));
+    options.use_protected_keychain();
+    set_generic_password_options(&payload, options)
+        .map_err(|_| "keychain: could not store the delegated gateway identity".into())
+}
+
+/// Remove only the native actions' selected delegation, leaving the live UI session intact.
+#[cfg(target_os = "macos")]
+pub fn remove_apple_delegation() -> Result<(), String> {
+    use security_framework::passwords::{delete_generic_password_options, PasswordOptions};
+    let mut options =
+        PasswordOptions::new_generic_password(APPLE_KEYCHAIN_SERVICE, APPLE_KEYCHAIN_ACCOUNT);
+    options.set_access_synchronized(Some(false));
+    options.use_protected_keychain();
+    delete_generic_password_options(options)
+        .map_err(|_| "keychain: no removable Apple action enrollment was found".into())
 }
 
 #[derive(Clone, Serialize, Deserialize)]

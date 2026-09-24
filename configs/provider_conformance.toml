@@ -63,6 +63,14 @@ lane = "live_safe"
 runner = "provider_m28b_live"
 
 [[cases]]
+id = "m28c-platform-live"
+group = "packaging"
+providers = []
+proof_class = "live_host"
+lane = "live_safe"
+runner = "provider_m28c_platform"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

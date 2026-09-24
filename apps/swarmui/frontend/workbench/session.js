@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Guide session setup and retain only non-secret connection profiles.
+// Purpose: Guide session setup, explicit Apple Keychain enrollment and non-secret connection profiles.
 // Copyright 2026 Lukas Bower
 import {
   state,
@@ -66,6 +66,9 @@ export function reflectSession(info) {
   state.connection = info.connection || null;
   state.connected = Boolean(info.connection);
   const mode = info.mode || {};
+  document.getElementById("apple-actions-enrol").disabled =
+    !state.connected || mode.offline || mode.trace_replay || mode.hive_replay ||
+    info.connection?.transport !== "rest" || !info.connection?.delegated;
   setMode(
     info.fixture
       ? "FIXTURE"
@@ -200,6 +203,19 @@ export function initializeSession() {
     localStorage.removeItem(profileKey);
     renderProfiles();
     notice("Saved connection profiles removed.");
+  });
+  document.getElementById("apple-actions-enrol").addEventListener("click", async () => {
+    setStatus("apple-actions-status", "Saving this delegated gateway connection in Keychain…");
+    const result = await invoke("swarmui_apple_actions_enrol");
+    setStatus("apple-actions-status", result.ok
+      ? "Apple actions can inspect this gateway's admitted jobs. Shortcuts and Siri still require an installed signed extension."
+      : result.error);
+  });
+  document.getElementById("apple-actions-remove").addEventListener("click", async () => {
+    const result = await invoke("swarmui_apple_actions_remove");
+    setStatus("apple-actions-status", result.ok
+      ? "Apple action access removed from Keychain. This does not revoke the gateway ticket itself."
+      : result.error);
   });
   document
     .getElementById("tool-directory-save")

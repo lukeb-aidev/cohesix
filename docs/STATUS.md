@@ -96,6 +96,25 @@ record](audit/M28B_IMPLEMENTATION_RECORD.md) keeps the distinct source, profile,
 negative-result and network-observation limits. This is component evidence, not
 Pi 4 or integrated Release B qualification.
 
+[Milestone 28c](BUILD_PLAN.md#28c) has begun with a macOS 27 public-SDK and
+device feasibility probe. Foundation Models and Metal are available on the
+selected M4 host, and a development-signed installed App Intents action is
+discoverable in Shortcuts. Authenticated job inspect/cancel and on-device
+explanation compile with focused tests; a detached MLX inference and LoRA
+smoke ran on the M4. Shared Keychain provisioning, live Shortcuts/Siri work,
+admitted MLX release/rollback and direct-distribution signing have not passed;
+installed vMLX 1.6.65 additionally served one local model through a detached
+loopback API smoke, with poor answer quality and an observed local weight
+alignment rewrite. A bounded Python vMLX client also made one real local
+request against a disposable, unchanged model copy. Its
+[compatibility task](BUILD_PLAN.md#28c) now requires
+content-bound model copies and an admitted canary/rollback before acceptance;
+the [feasibility record](audit/M28C_FEASIBILITY_RECORD.md) lists the exact
+blockers. M28c now also requires an installed
+[developer-useful Mac journey](BUILD_PLAN.md#28c) across an admitted job,
+local MLX execution, result inspection and rollback. This is not M28c
+completion or Release B acceptance.
+
 ## Capability snapshot
 
 | Surface | Checked-in implementation | Evidence boundary |

@@ -148,6 +148,21 @@ must link all required reports and the `m28a-recovery-live` cancellation and
 interruption record. Direct native smoke, Python output checks and an older
 M28 target result do not replace these admitted exact-source observations.
 
+M28c's first gate is `m28c-platform-live` on a supported macOS 27 Apple Silicon
+host. It binds a development-signed installed app and extension, Shortcuts
+action search and a native Apple AI/Metal availability probe to the exact
+committed source. This observation permits implementation of the later M28c
+tasks; it does not prove a spoken Siri invocation, an authenticated hive job,
+Foundation Models explanation, MLX execution or direct-distribution
+notarisation. The installed vMLX compatibility lane binds exact signed app
+and engine identity, a disposable before/after-hashed local model, explicit
+loopback endpoint, bounded client response, accepted adapter generation,
+held-out comparison and incumbent rollback. A healthy server or HTTP 200
+alone is diagnostic, and vMLX tool/MCP endpoints confer no Cohesix authority.
+`m28c-actions-live`, `m28c-mlx-live`, `m28c-vmlx-live`,
+`m28c-assistance-live` and `m28c-developer-live` retain their separate fresh
+component and integrated evidence obligations before Milestone 28c closure.
+
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
 | Parsing, bounds, arithmetic, serialization, ABI/layout, policy, replay, pure state transitions | Small deterministic tests with independent expected truth | Stage 01 and AGENTS Test Discipline |
@@ -1259,6 +1274,7 @@ from that catalog.
 | `federation.m28a-recovery-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-recovery-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-recovery-live"` |
 | `federation.m28b-peft-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-peft-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28b-peft-live"` |
 | `federation.m28b-serving-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-serving-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28b-serving-live"` |
+| `ui.m28c-platform-live` | conditional | `ui` | conditional / macos | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-platform-live --reference-config "${M28C_PLATFORM_REFERENCE:?}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE:?}/m28c-platform-live"` |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |

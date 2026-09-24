@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: SwarmUI Tauri entry point and command wiring.
+// Purpose: SwarmUI Tauri entry point, governed command wiring and Apple Keychain enrollment.
 // Author: Lukas Bower
 //! SwarmUI desktop entry point and Tauri command wiring.
 #![forbid(unsafe_code)]
@@ -498,6 +498,57 @@ fn swarmui_mode(state: State<'_, AppState>) -> SwarmUiMode {
         hive_replay: false,
         offline: true,
     })
+}
+
+#[tauri::command]
+fn swarmui_apple_actions_enrol(state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mode = state.mode.lock().map_err(|_| "state locked")?.clone();
+        if mode.offline || mode.trace_replay || mode.hive_replay {
+            return Err(
+                "offline: connect a delegated Hive Gateway before enabling Apple actions".into(),
+            );
+        }
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "state locked")?
+            .clone()
+            .ok_or("disconnected: connect before enabling Apple actions")?;
+        workbench::store_apple_delegation(&connection)?;
+        state
+            .record(
+                "apple_actions_enrol",
+                json!({"stored":true,"credential":false}),
+            )
+            .map_err(|_| {
+                "Keychain saved, but the local action record failed; remove access before retrying"
+            })?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Err("unsupported: Apple actions require macOS".into())
+    }
+}
+
+#[tauri::command]
+fn swarmui_apple_actions_remove(state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        workbench::remove_apple_delegation()?;
+        state
+            .record("apple_actions_remove", json!({"removed":true}))
+            .map_err(|_| "Keychain access removed, but the local action record failed")?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Err("unsupported: Apple actions require macOS".into())
+    }
 }
 
 #[tauri::command]
@@ -1053,6 +1104,8 @@ fn main() {
             swarmui_hive_reset,
             swarmui_mint_ticket,
             swarmui_mode,
+            swarmui_apple_actions_enrol,
+            swarmui_apple_actions_remove,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build SwarmUI native application")

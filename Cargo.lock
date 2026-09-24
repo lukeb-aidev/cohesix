@@ -4894,6 +4894,7 @@ dependencies = [
  "nine-door",
  "rfd",
  "secure9p-codec",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2 0.11.0",
