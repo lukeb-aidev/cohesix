@@ -114,49 +114,54 @@ def test_recovery_requires_separate_exact_cancel_identity(tmp_path):
     config, graph = fixture(tmp_path)
     original = json.loads(Path(config["selected_request"]).read_text())
     cancellation = {
-        "binding": {
-            **original["binding"],
-            "action": "gpu.workload.cancel",
-            "admission_id": "cancel-admit-1",
-            "ticket_id": "cancel-ticket-1",
-            "idempotency_key": "cancel-once-1",
-            "subject": "operator-1",
-        },
-        "ticket": {
-            **original["ticket"],
-            "action": "gpu.workload.cancel",
-            "id": "cancel-ticket-1",
-            "idempotency_key": "cancel-once-1",
-            "args": {"job_id": original["binding"]["ticket_id"]},
-        },
+        **original["ticket"],
+        "schema": "host-ticket/v2",
+        "action": "gpu.workload.cancel",
+        "id": "cancel-ticket-1",
+        "idempotency_key": "cancel-once-1",
+        "operation_id": "cancel-ticket-1",
+        "receipt_mode": "worker",
+        "expires_unix_ms": 2000,
+        "args": {"job_id": original["binding"]["ticket_id"]},
     }
-    cancellation["binding"]["input_sha256"] = digest(
-        json.dumps(cancellation["ticket"]["args"], sort_keys=True,
-                   separators=(",", ":")).encode())
-    original["binding"]["subject"] = "operator-1"
-    original["binding"]["admission_id"] = "submit-admit-1"
+    original["ticket"]["expires_unix_ms"] = 3000
     path = tmp_path / "cancel.json"
     data = json.dumps(cancellation).encode()
     path.write_bytes(data)
-    config["cancel_selected_request"] = str(path)
-    config["cancel_selected_sha256"] = digest(data)
-    assert live.selected_cancel(config, original, graph) == cancellation
-    cancellation["ticket"]["args"]["job_id"] = "some-other-job"
-    cancellation["binding"]["input_sha256"] = digest(
-        json.dumps(cancellation["ticket"]["args"], sort_keys=True,
-                   separators=(",", ":")).encode())
+    config["cancel_ticket"] = str(path)
+    config["cancel_ticket_sha256"] = digest(data)
+    assert live.direct_cancel(config, original) == cancellation
+    cancellation["args"]["job_id"] = "some-other-job"
     altered = json.dumps(cancellation).encode()
     path.write_bytes(altered)
-    config["cancel_selected_sha256"] = digest(altered)
+    config["cancel_ticket_sha256"] = digest(altered)
     with pytest.raises(ValueError, match="original native job"):
-        live.selected_cancel(config, original, graph)
-    cancellation["ticket"]["args"]["job_id"] = "ticket-1"
-    cancellation["ticket"]["receipt_worker_id"] = "another-worker"
-    cancellation["binding"]["input_sha256"] = digest(
-        json.dumps(cancellation["ticket"]["args"], sort_keys=True,
-                   separators=(",", ":")).encode())
+        live.direct_cancel(config, original)
+    cancellation["args"]["job_id"] = "ticket-1"
+    cancellation["receipt_worker_id"] = "another-worker"
     changed = json.dumps(cancellation).encode()
     path.write_bytes(changed)
-    config["cancel_selected_sha256"] = digest(changed)
+    config["cancel_ticket_sha256"] = digest(changed)
     with pytest.raises(ValueError, match="original native job"):
-        live.selected_cancel(config, original, graph)
+        live.direct_cancel(config, original)
+
+
+def test_raw_cancel_reconciliation_rejects_conflicting_target_terminals():
+    ticket = {"id": "cancel-1", "idempotency_key": "cancel-once",
+              "operation_id": "cancel-1", "subject_ref": "GPU-0",
+              "receipt_worker_id": "worker-1"}
+    terminal = {**ticket, "action": "gpu.workload.cancel",
+                "state": "succeeded"}
+
+    class Target:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def read_file(self, path, limit):
+            assert path == "/host/tickets/status" and limit == 32768
+            return b"\n".join(json.dumps(row).encode() for row in self.rows)
+
+    assert live.direct_terminal(Target([terminal]), ticket, 1) == terminal
+    with pytest.raises(ValueError, match="ambiguous"):
+        live.direct_terminal(Target([terminal,
+                                     {**terminal, "state": "failed"}]), ticket, 1)

@@ -1073,7 +1073,10 @@ alone is not that accepted result.
 
 The registered batch recipe has no checkpoint format. An interrupted or lost
 response must be reconciled by its original admission and native ID. Cancellation
-is a separately admitted `gpu.workload.cancel` targeting that ID and releases
+is a separate authenticated `host-ticket/v2` `gpu.workload.cancel` append to
+`/host/tickets/spec`, naming that original native job ID. It uses its own ticket
+identity and the same Worker binding; reconcile its `/host/tickets/status`
+terminal without resubmitting after an uncertain response. Cancellation releases
 capacity only after child reaping and terminal evidence. A fresh request after a
 confirmed failure is an explicit newly authorised restart, never resume or
 automatic replay. Read-only status, the private executor WAL and the standing

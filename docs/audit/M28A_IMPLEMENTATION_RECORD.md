@@ -36,6 +36,13 @@ ledger retain execution and reservation state separately. Failed or interrupted
 effects are reconciled by original identity; a new effect requires a new
 admission.
 
+The focused recovery review found that standing selected jobs admit GPU submit
+and systemd restart, while GPU cancel is already an authenticated target ticket.
+The live runner now writes one distinct `host-ticket/v2` cancellation through
+that route, correlates its target terminal and native object, and never replays
+an uncertain cancellation. The original selected submit remains in the standing
+ledger until its result and capacity settle.
+
 ## Focused evidence so far
 
 | Check | Result | Proof limit |
@@ -65,7 +72,7 @@ build directory; neither is an immutable acceptance artifact.
   adaptation under both advertised `systemd` and Docker native owners. Retain
   each original selected job, signed target terminal, native object and
   task-specific output verifier.
-- Run `m28a-recovery-live` with a separate selected cancellation, controller
+- Run `m28a-recovery-live` with a separate target-admitted cancellation, controller
   response loss, reaped native child, unrelated sentinel survival and standing
   reservation settlement. Retain timeout/revoke, runner restart and capped OOM
   evidence at their actual proof classes.

@@ -41,7 +41,7 @@ FIELDS = {
     "package_sha256", "input_file", "executor_state_root",
 }
 RECOVERY_FIELDS = {
-    "cancel_selected_request", "cancel_selected_sha256", "admin_ticket_ref",
+    "cancel_ticket", "cancel_ticket_sha256", "admin_ticket_ref",
 }
 PATHS = {
     "source_manifest", "gateway_binary", "agent_binary", "gpu_bridge_binary",
@@ -94,12 +94,12 @@ def load_reference(path: Path, host_profile: str,
                 and config[key].startswith(("env:", "file:")),
                 f"M28a {key} reference")
     if case == "m28a-recovery-live":
-        require(isinstance(config["cancel_selected_sha256"], str)
+        require(isinstance(config["cancel_ticket_sha256"], str)
                 and re.fullmatch(r"[0-9a-f]{64}",
-                                 config["cancel_selected_sha256"]),
+                                 config["cancel_ticket_sha256"]),
                 "M28a cancel request digest")
-        require(isinstance(config["cancel_selected_request"], str)
-                and Path(config["cancel_selected_request"]).is_absolute(),
+        require(isinstance(config["cancel_ticket"], str)
+                and Path(config["cancel_ticket"]).is_absolute(),
                 "M28a cancel request path")
         require(isinstance(config["admin_ticket_ref"], str)
                 and config["admin_ticket_ref"].startswith(("env:", "file:")),
@@ -197,47 +197,61 @@ def selected_workload(config: dict[str, Any], graph: str,
     return selected, parameters
 
 
-def selected_cancel(config: dict[str, Any], original: dict[str, Any],
-                    graph: str) -> dict[str, Any]:
-    """Bind a separately admitted cancellation to the original native job."""
-    data = read_artifact(Path(config["cancel_selected_request"]), 4096)
+def direct_cancel(config: dict[str, Any], original: dict[str, Any]) -> dict[str, Any]:
+    """Bind a separate target-admitted control ticket to the original native job."""
+    data = read_artifact(Path(config["cancel_ticket"]), 4096)
     require(hashlib.sha256(data).hexdigest()
-            == config["cancel_selected_sha256"],
+            == config["cancel_ticket_sha256"],
             "M28a cancel request changed")
-    selected = json.loads(data)
-    require(isinstance(selected, dict) and set(selected) == {"binding", "ticket"},
-            "M28a cancel job shape")
-    binding, ticket = selected["binding"], selected["ticket"]
-    prior = original["binding"]
-    require(isinstance(binding, dict) and isinstance(ticket, dict)
-            and binding.get("schema") == "cohesix-job-binding/v1"
-            and binding.get("action") == ticket.get("action")
-            == "gpu.workload.cancel"
-            and binding.get("ticket_id") == ticket.get("id")
-            and binding.get("idempotency_key") == ticket.get("idempotency_key")
-            and binding.get("admission_id") != prior.get("admission_id")
-            and binding.get("ticket_id") != prior.get("ticket_id")
-            and binding.get("policy_sha256") == graph
-            and binding.get("units") == 1
-            and binding.get("subject") == prior.get("subject")
-            and binding.get("target") == prior.get("target")
-            and ticket.get("target") == original["ticket"].get("target")
-            and ticket.get("subject_ref") == original["ticket"].get("subject_ref")
-            and ticket.get("receipt_worker_id")
-            == original["ticket"].get("receipt_worker_id")
-            and ticket.get("receipt_supervisor_generation")
-            == original["ticket"].get("receipt_supervisor_generation")
-            and ticket.get("receipt_cap_generation")
-            == original["ticket"].get("receipt_cap_generation")
-            and ticket.get("writer_epoch")
-            == original["ticket"].get("writer_epoch")
-            and ticket.get("args") == {"job_id": prior.get("ticket_id")}
-            and binding.get("input_sha256") == hashlib.sha256(
-                json.dumps(ticket.get("args"), sort_keys=True,
-                           separators=(",", ":")).encode()).hexdigest()
-            and "admission" not in ticket,
+    ticket = json.loads(data)
+    prior = original["ticket"]
+    require(isinstance(ticket, dict)
+            and ticket.get("schema") == "host-ticket/v2"
+            and ticket.get("action") == "gpu.workload.cancel"
+            and ticket.get("id") != prior.get("id")
+            and ticket.get("idempotency_key") != prior.get("idempotency_key")
+            and ticket.get("operation_id") == ticket.get("id")
+            and ticket.get("receipt_mode") == "worker"
+            and "target" not in ticket and prior.get("target") is None
+            and all(ticket.get(key) == prior.get(key) for key in (
+                "subject_ref", "receipt_worker_role", "receipt_worker_id",
+                "receipt_supervisor_generation", "receipt_cap_generation",
+                "writer_epoch",
+            ))
+            and ticket.get("args") == {"job_id": prior.get("id")}
+            and type(ticket.get("expires_unix_ms")) is int
+            and ticket["expires_unix_ms"] <= prior.get("expires_unix_ms", 0)
+            and "admission" not in ticket
+            and "resolved_worker_slot" not in ticket
+            and "resolved_lease_epoch" not in ticket
+            and "admission_sequence" not in ticket,
             "M28a cancel must name the original native job")
-    return selected
+    return ticket
+
+
+def direct_terminal(backend: RestBackend, ticket: dict[str, Any],
+                    wait_seconds: int) -> dict[str, Any]:
+    """Reconcile a raw target control ticket without resubmitting its effect."""
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        data = backend.read_file("/host/tickets/status", 32768)
+        rows = [json.loads(line) for line in data.splitlines() if line]
+        matches = [row for row in rows if row.get("id") == ticket["id"]
+                   and row.get("idempotency_key") == ticket["idempotency_key"]]
+        terminals = [row for row in matches
+                     if row.get("state") in {"succeeded", "failed", "expired"}]
+        require(len(terminals) <= 1 or all(row == terminals[0] for row in terminals),
+                "M28a cancel target result ambiguous")
+        if terminals:
+            result = terminals[-1]
+            require(result.get("action") == "gpu.workload.cancel"
+                    and result.get("operation_id") == ticket["operation_id"]
+                    and result.get("subject_ref") == ticket["subject_ref"]
+                    and result.get("receipt_worker_id") == ticket["receipt_worker_id"],
+                    "M28a cancel target identity changed")
+            return result
+        time.sleep(0.25)
+    raise ValueError(f"M28a cancel outcome unresolved for {ticket['id']}")
 
 
 def terminal_for(backend: RestBackend, binding: dict[str, Any],
@@ -307,18 +321,22 @@ def recovery(backend: RestBackend, config: dict[str, Any],
              selected: dict[str, Any], graph: str,
              state_dir: Path) -> dict[str, Any]:
     """Drop one response, cancel the active child and prove settled accounting."""
-    cancel = selected_cancel(config, selected, graph)
+    cancel = direct_cancel(config, selected)
     original_binding = selected["binding"]
     scope_id = original_binding["scope_id"]
     with (state_dir / "attempts.jsonl").open("x", encoding="utf-8") as stream:
-        for selected_job in (selected, cancel):
-            stream.write(json.dumps({
-                "admission_id": selected_job["binding"]["admission_id"],
-                "ticket_id": selected_job["binding"]["ticket_id"],
-                "action": selected_job["binding"]["action"],
-                "request_sha256": hashlib.sha256(
-                    json.dumps(selected_job, sort_keys=True).encode()).hexdigest(),
-            }, sort_keys=True) + "\n")
+        stream.write(json.dumps({
+            "admission_id": original_binding["admission_id"],
+            "ticket_id": original_binding["ticket_id"],
+            "action": original_binding["action"],
+            "request_sha256": hashlib.sha256(
+                json.dumps(selected, sort_keys=True).encode()).hexdigest(),
+        }, sort_keys=True) + "\n")
+        stream.write(json.dumps({
+            "ticket_id": cancel["id"],
+            "action": cancel["action"],
+            "request_sha256": config["cancel_ticket_sha256"],
+        }, sort_keys=True) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
     directory_fd = os.open(state_dir, os.O_RDONLY)
@@ -379,16 +397,13 @@ def recovery(backend: RestBackend, config: dict[str, Any],
     try:
         cancel_submission = "target_write_ack"
         try:
-            response = interrupted.submit_selected_job(
-                cancel["binding"], cancel["ticket"],
-            )
-            require(response.get("record", {}).get("binding") == cancel["binding"]
-                    and response.get("submission") == "target_write_ack",
-                    "M28a cancel target write ACK unavailable")
+            payload = json.dumps(cancel, separators=(",", ":")).encode()
+            require(interrupted.write_append("/host/tickets/spec", payload)
+                    == len(payload), "M28a cancel target write ACK unavailable")
         except CohesixError as error:
             cancel_submission = f"uncertain_response:{type(error).__name__}"
-        cancel_record, cancel_terminal = terminal_for(
-            interrupted, cancel["binding"], config["wait_seconds"],
+        cancel_terminal = direct_terminal(
+            interrupted, cancel, config["wait_seconds"],
         )
         require(cancel_terminal["state"] == "succeeded"
                 and sentinel.poll() is None,
@@ -399,7 +414,9 @@ def recovery(backend: RestBackend, config: dict[str, Any],
         sentinel.wait(timeout=5)
     cancelled_native = native_for(
         Path(config["provider_evidence_root"]),
-        cancel_terminal, cancel["binding"], graph,
+        cancel_terminal, {"ticket_id": cancel["id"],
+                          "idempotency_key": cancel["idempotency_key"],
+                          "action": cancel["action"]}, graph,
     )
     cancelled_job = cancelled_native.get("observation", {})
     require(cancelled_job.get("binding", {}).get("ticket_id")
@@ -427,7 +444,7 @@ def recovery(backend: RestBackend, config: dict[str, Any],
     return {"lost_response": submission,
             "original_admission_id": original_binding["admission_id"],
             "started": started, "marker": str(marker),
-            "cancel": {"submission": cancel_submission, "record": cancel_record,
+            "cancel": {"submission": cancel_submission,
                        "target_terminal": cancel_terminal,
                        "unrelated_sentinel_alive_after_cancel": True},
             "cancel_native": cancelled_native,
