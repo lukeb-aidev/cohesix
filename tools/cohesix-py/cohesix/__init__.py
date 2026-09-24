@@ -22,6 +22,7 @@ from .evidence import (
 )
 from .errors import CohesixError
 from .identity import IdentityTicket, exchange_identity, local_subject
+from .model_release import PeftReleaseClient, PeftReleaseStatus
 from .orchestration import (
     ApprovalRequest,
     CohesixOrchestrator,
@@ -76,6 +77,8 @@ __all__ = [
     "ControlPlan",
     "CompatibilityReceipt",
     "OperationReport",
+    "PeftReleaseClient",
+    "PeftReleaseStatus",
     "EvidencePackSummary",
     "ExportRequest",
     "FilesystemBackend",

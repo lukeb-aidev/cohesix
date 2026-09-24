@@ -96,8 +96,19 @@ import and checkpoint-resume operations. The serving case needs a fixed
 base/incumbent/candidate comparison, pre-load rejection, a separate streaming
 application request after promotion, and interruption followed by an observed
 incumbent request at the frozen generation. Preserve every negative result and
-original identity. The focused Rust, compiler, Python and UI projection tests
-cover deterministic contracts; they cannot replace any of those live outcomes.
+original identity. Record approved staging transfers and a live host/network
+observation or enforced egress boundary for the private reference; an offline
+environment variable alone cannot establish no payload egress. The focused
+Rust, compiler, Python and UI projection tests cover deterministic contracts;
+they cannot replace any of those live outcomes. Run
+`python3 -m pytest -q tools/cohesix-py/tests/test_model_release.py tools/cohesix-py/tests/test_playbooks.py`
+for the Python operator path. Require
+wrong-operation and wrong-request reports, contradictory pending/terminal states,
+and changed deployment requests to refuse; lost submission response must use
+read-only recovery with the original operation. Only the shared CLI verifier's
+successful requested outcome may set the Python verified flag. MCP and A2A
+projections inherit these underlying identity and evidence boundaries when their
+separate 28d/28e tasks are activated; M28b Python tests are not protocol evidence.
 This component lane does not qualify Pi hardware or the assembled Release B.
 
 Installation/adoption/CI uses focused signed-package refusal, explicit Python

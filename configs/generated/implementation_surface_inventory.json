@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "9e6316172360de06f729bb23b4f7e867a49550139780f5247665486a29449838",
+  "source_sha256": "14655ccc245d55d13f6296a6dc7ccf5ec0246852983d9312e1c087bc1d964da5",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -8258,6 +8258,20 @@
       "evidence_eligible": true
     },
     {
+      "id": "tracked:tools/cohesix-py/cohesix/model_release.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/cohesix/model_release.py",
+      "implementation_class": "production_live",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "Python package manifest; rule=cohesix-python-library",
+      "package_disposition": "release_python_library",
+      "evidence_requirement": "authenticated host integration and typed receipts",
+      "current_observed_mode": "live_host_adapter",
+      "evidence_eligible": true
+    },
+    {
       "id": "tracked:tools/cohesix-py/cohesix/native_providers.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/cohesix/native_providers.py",
@@ -8804,6 +8818,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:tools/cohesix-py/tests/test_model_release.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_model_release.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "source_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:tools/cohesix-py/tests/test_operator.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_operator.py",
@@ -9220,6 +9248,7 @@
       "tools/cohesix-py/cohesix/hf_native.py",
       "tools/cohesix-py/cohesix/journey.py",
       "tools/cohesix-py/cohesix/identity.py",
+      "tools/cohesix-py/cohesix/model_release.py",
       "tools/cohesix-py/cohesix/snapshots.py",
       "tools/cohesix-py/cohesix/integrations.py",
       "tools/cohesix-py/cohesix/native_providers.py",
@@ -9462,6 +9491,7 @@
       "python/cohesix-py/cohesix/identity.py",
       "python/cohesix-py/cohesix/integrations.py",
       "python/cohesix-py/cohesix/journey.py",
+      "python/cohesix-py/cohesix/model_release.py",
       "python/cohesix-py/cohesix/native_providers.py",
       "python/cohesix-py/cohesix/operator.py",
       "python/cohesix-py/cohesix/orchestration.py",
@@ -10946,6 +10976,20 @@
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": true,
         "selection_source": "Python package manifest; rule=cohesix-python-library; exact release source `tools/cohesix-py/cohesix/journey.py`",
+        "package_disposition": "release_python_library",
+        "evidence_requirement": "authenticated host integration and typed receipts",
+        "current_observed_mode": "live_host_adapter",
+        "evidence_eligible": true
+      },
+      {
+        "id": "release-asset:python/cohesix-py/cohesix/model_release.py",
+        "kind": "python_artifact",
+        "path": "python/cohesix-py/cohesix/model_release.py",
+        "implementation_class": "production_live",
+        "owner": "python-client",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": true,
+        "selection_source": "Python package manifest; rule=cohesix-python-library; exact release source `tools/cohesix-py/cohesix/model_release.py`",
         "package_disposition": "release_python_library",
         "evidence_requirement": "authenticated host integration and typed receipts",
         "current_observed_mode": "live_host_adapter",

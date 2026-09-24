@@ -34,6 +34,14 @@ For the qualified native import/training workflow, see
 to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
 prepares the pinned native profile; `examples/private_lora_request.py` prepares
 subsequent requests from reviewed provenance. Preparation is not execution evidence.
+`cohesix.PeftReleaseClient` wraps that CLI path for Python applications: call
+`plan`, explicitly `apply` with credential references, then `inspect` or
+`recover` using the same deployment. Its `PeftReleaseStatus` preserves the
+operation/request identity and uncertain or failed states; only CLI `verify`
+can set `requested_outcome_verified=True`. See
+[Python support](../../docs/PYTHON_SUPPORT.md) for the complete example.
+Use a wheel built from the matching M28b source; older published wheels may not
+contain this client.
 
 Release compatibility is tested
 on CPython 3.11 and 3.13. The wheel is target-neutral; it does not bundle or

@@ -388,7 +388,7 @@ The [native release recipe](PRIVATE_LORA_RELEASE.md) uses
 `cohesix.playbooks.run_peft_release`; Python validates and projects the same
 CLI report and never emits training scores or Worker receipts.
 For an application that needs an explicit release decision, use the higher-level
-`PeftReleaseClient` from the installed `cohesix` package:
+`PeftReleaseClient` from a `cohesix` wheel built from the matching M28b source:
 
 ```python
 from pathlib import Path
@@ -419,7 +419,11 @@ read-only observation reports success. The typed status binds operation and
 request digests and shows `not_submitted`, `outcome_unknown`, `succeeded`,
 `failed`, `recovered_failure`, or `rollback_failed` without inventing a new
 receipt. `requested_outcome_verified` is true only after successful CLI
-verification. It is a non-authoritative Python projection; exact source,
+verification. The status also projects signed held-out losses and sample count,
+comparison policy digest, frozen baseline generation, observed served generation
+and observed restored generation. Missing or malformed serving observations
+cannot pass a successful outcome. It is a non-authoritative Python projection;
+exact source,
 serving generation and application-client observations remain separate release
 evidence. Future MCP and A2A views must use the same underlying identity and
 verifier result, not this Python object as authority.

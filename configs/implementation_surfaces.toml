@@ -1743,6 +1743,7 @@ python_artifacts = [
   "tools/cohesix-py/cohesix/hf_native.py",
   "tools/cohesix-py/cohesix/journey.py",
   "tools/cohesix-py/cohesix/identity.py",
+  "tools/cohesix-py/cohesix/model_release.py",
   "tools/cohesix-py/cohesix/snapshots.py",
   "tools/cohesix-py/cohesix/integrations.py",
   "tools/cohesix-py/cohesix/native_providers.py",

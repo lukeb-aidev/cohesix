@@ -12833,7 +12833,8 @@ explicit unresolved outcome rather than invented success.
 
 **Status:** In Progress — `m28b-configurable-peft-training-and-import` and `m28b-evaluate-canary-promote-rollback` activated on 24 September 2026.
 
-**Value:** genuine adapters progress from training/import to measured, reversible serving.
+**Value:** a private edge adapter moves from pinned training or import to a
+measured, reversible release whose exact served generation a real client sees.
 **Prerequisites:** 28, 28a and accepted 27d LoRA transaction; extend its journal,
 registry, evaluator, activation and recovery rather than recreate them.
 
@@ -12846,6 +12847,11 @@ provenance. Use safe formats; disable arbitrary remote-code loading in the refer
 Explicitly configure licence acceptance, gated downloads, uploads and private data.
 An imported adapter cannot invent training provenance; an artifact reference is
 not licence or safety certification.
+For the qualified private reference, stage approved inputs explicitly and keep
+base weights, private data, prompts, outputs and adapters on the selected host
+during execution. Retain only bounded digests, metrics and scoped evidence in
+control-plane reports. Record any authorised external transfer separately;
+an offline setting alone is not proof that payloads did not leave the host.
 
 Reuse real framework checkpoints where supported, distinguishing full training
 resume from adapter-only restart. Record stochastic settings without promising
@@ -12864,10 +12870,11 @@ no blanket compatibility or general conversion programme.
 Make the operator decision portable across CLI, Python playbook, SwarmUI and
 later agent protocols: bind one immutable operation/request identity, distinguish
 unsubmitted, uncertain and terminal states, and expose the signed evidence graph
-reference separately from the requested-outcome verdict. Only the shared CLI
-verifier can mark a successful requested outcome; a serving HTTP response,
-Python object, MCP tool result or A2A task state cannot. A lost submit response
-must resume observation of the original operation, never create a second effect.
+reference separately from the requested-outcome verdict. Only accepted signed
+evidence checked by the shared verifier can mark a successful requested outcome;
+a serving HTTP response, Python object, MCP tool result or A2A task state cannot.
+A lost submit response must resume observation of the original operation, never
+create a second effect.
 The Python path must give a newcomer explicit plan, submit, inspect and recovery
 steps without implementing a second journal or evaluator. Record the held-out
 comparison policy, exact serving generation and rollback observation in the
@@ -12894,6 +12901,7 @@ Commands:
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-peft-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28b-peft-live"
 Checks:
   - Real training and independent compatible import both complete; checkpoint evidence explicitly binds optimizer/scheduler/RNG/data position where the selected runtime supports full resume.
+  - Reference staging and live execution disclose every external model/data transfer; no unapproved upload or implicit runtime download carries private payloads. The control plane receives bounded identity/evidence rather than raw model/data content.
   - Corrupt/oversize/unsafe artifacts, path races, wrong base/tokenizer, stale generations and duplicate submissions fail safely; no arbitrary remote-code loading or invented provenance.
   - Record actual runtime checkpoint support before execution; an unsupported checkpoint cannot pass a resume claim, and adapter restart cannot be relabelled full training resume.
 Deliverables: Pinned model/data/runtime selection, configurable train/import instructions, safe format/checkpoint fixtures and genuine adapter/recovery evidence in m28b-peft-live.
