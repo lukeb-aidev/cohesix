@@ -12420,6 +12420,25 @@ Commands: scripts/check-generated.sh; scripts/ci/check_test_plan.sh; git diff --
 Checks: Each README link opens the intended video for a reader, descriptions preserve live/replay and release-evidence limits, and no release acceptance claim changes. AI-assisted copy and link selection were checked against the public uploads.
 Deliverables: Public README video index and a reviewable mailing-list draft.
 ```
+
+### Live Hive video index extension
+
+**Status:** Complete — 24 September 2026. The sixth public link resolves to the
+intended Live Hive video. This documentation-only addition does not change the
+sealed release or its qualification evidence.
+
+```text
+Title/ID: m27h-live-hive-video-index
+Milestone: 27h / Release A Community Video Index
+Goal: Add the approved Live Hive SwarmUI demonstration to the public video index.
+Inputs: approved Pi 4 and Jetson video export, verified public YouTube upload, README.md.
+Changes:
+  - README.md — add one link describing the live Worker visualization and its observed limits.
+Commands: scripts/check-generated.sh (includes scripts/ci/check_test_plan.sh); git diff --check; verify the public video link in a signed-out browser.
+Checks: The link opens the intended video; the AI-assisted description distinguishes Worker state and host inventory from completed execution or release acceptance.
+Deliverables: A sixth public README video link.
+```
+
 ## Milestone 27i — Release A Python Index Publication <a id="27i"></a>
 [Milestones](#Milestones)
 

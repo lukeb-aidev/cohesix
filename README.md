@@ -183,6 +183,10 @@ guidance and measured limits.
 
 ### Watch 1.1.0-beta in action
 
+- [Live Hive: 12 Workers in SwarmUI](https://youtu.be/wajLnWFAu70) — follow a
+  factory alert scenario while SwarmUI maps twelve Workers managed by a live
+  Pi 4 Queen. Inspect one Worker's state and health, then see the Jetson GPU
+  bridge report unavailable.
 - [Raspberry Pi 4 boot tour](https://youtu.be/63kroQa_sys) — see the SD image,
   U-Boot, HDMI and serial boot, then explore the root shell with `caps`, `bi`,
   `smp` and `netstats`.
