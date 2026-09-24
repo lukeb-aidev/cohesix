@@ -135,7 +135,7 @@ owned by their specific contracts.
 | [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
 | [27h](#27h) | Release A Community Video Index | Complete — documentation only |
 | [27i](#27i) | Release A Python Index Publication | In Progress — PyPI trusted publishing |
-| [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
+| [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Complete — selected foundation |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
 | [28c](#28c) | macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows | Planned |
@@ -12585,12 +12585,13 @@ inventories are unchanged. No product runtime or hardware qualification was run.
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — owner activated Milestone 28 on 24 September 2026.
+**Status:** Complete — selected foundation accepted on 24 September 2026.
 
 Implementation and evidence are tracked in
-[M28_IMPLEMENTATION_RECORD](audit/M28_IMPLEMENTATION_RECORD.md). The milestone
-remains open until all three task records and the definition of done below have
-exact-source evidence.
+[M28_IMPLEMENTATION_RECORD](audit/M28_IMPLEMENTATION_RECORD.md). The three
+task records and the definition of done below have focused host checks and
+exact-source Linux AArch64 CUDA, KVM target, and native service evidence.
+This component acceptance does not qualify Release B or future MCP/A2A listeners.
 
 **Value:** every client safely operates the same durable job without granting
 unrestricted host access or repeatedly asking permission inside valid policy.
