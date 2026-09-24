@@ -12434,6 +12434,7 @@ Goal: Publish a version-aligned Cohesix Python distribution from the exact 1.1.0
 Inputs: v1.1.0-beta source commit 8bda91891591466b67f5f4a35e733fe2d3acf0e8, selected Python source inventory, PyPI personal pending publisher for cohesix, GitHub pypi environment and retained package qualification.
 Changes:
   - .github/workflows/release-pypi.yml — manually triggered, source-pinned build, package validation, artifact digest handoff and environment-gated OIDC upload of only 1.1.0b0.
+  - docs/{PYTHON_SUPPORT,HOST_TOOLS}.md — document the published Python-only install path and its host-bundle boundary.
   - docs/BUILD_PLAN.md — record the bounded post-release publication scope, ownership handoff and proof limits.
 Commands: actionlint .github/workflows/release-pypi.yml; python3 scripts/install/build_python_package.py --repo <exact-tag-stage> --inventory <exact-tag-inventory> --out <fresh-dist>; python3 -m twine check <fresh-dist>/*.whl <fresh-dist>/*.tar.gz; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; git diff --check; dispatch the reviewed workflow and inspect its build hashes before approving the pypi environment.
 Checks: The workflow checks out the exact tagged commit, changes only the Python package version from 0.2.0-alpha2 to 1.1.0b0 in its isolated build source, validates wheel/sdist source and metadata, and uploads those exact checked artifacts only after named reviewer approval. PyPI's project/version API must report both uploaded filenames and SHA-256 digests; the project remains personally owned until a separately verified transfer after Cohesix organization approval. No target, bundle or overall-release acceptance is inferred from this host publication.
@@ -12450,9 +12451,15 @@ uploaded with GitHub OIDC. PyPI lists the
 wheel SHA-256 `7a1ef4d996f8c5366200ea8ef6359a9b587ba95ec9016fe372249490f85068dd`
 and sdist SHA-256 `85ec35c9c21239c7df42ec06bd6da0062d790f3c11385fc05b055b85e07f708c`.
 Independent downloads matched both hashes and the selected source files.
+An isolated `pip install cohesix==1.1.0b0` from the public index and both CLI
+help commands passed on Python 3.13.
 The Cohesix Community organization request remains pending; verify project
 ownership and transfer it only after PyPI approves the organization. Package
-publication does not add target or overall-release acceptance evidence.
+publication does not add target or overall-release acceptance evidence. A
+post-upload page review found checkout-only installation guidance, a stale
+Homepage URL and five relative documentation links that resolve to 404 on
+PyPI. The uploaded `1.1.0b0` metadata cannot be edited in place; a corrected
+page requires a separately versioned distribution.
 
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
