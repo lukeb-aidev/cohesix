@@ -181,6 +181,21 @@ Mac, Linux ARM64 and Raspberry Pi 4 bundles. See the
 [release notes](releases/RELEASE_NOTES-1.1.0-beta.md) for improvements, upgrade
 guidance and measured limits.
 
+### Watch 1.1.0-beta in action
+
+- [Raspberry Pi 4 boot tour](https://youtu.be/63kroQa_sys) — see the SD image,
+  U-Boot, HDMI and serial boot, then explore the root shell with `caps`, `bi`,
+  `smp` and `netstats`.
+- [Raw Pi 4 boot: HDMI and serial](https://youtu.be/Iarz2uBwnaY) — follow the
+  operator's boot and shell output in one continuous sequence after the initial
+  idle minute was trimmed.
+- [Governed CUDA across Pi, Mac and Jetson](https://youtu.be/cf0x8659WvI) —
+  see a live Jetson host check alongside the Mac SwarmUI workflow.
+- [Train an edge visual adapter](https://youtu.be/lmCR_0Pnaac) — see how a
+  Jetson GPU and SwarmUI fit into a small model-adaptation workflow.
+- [Safe canary recovery](https://youtu.be/OKvjddbSsFs) — follow a SwarmUI
+  example of inspecting a failed trial and recovering safely.
+
 Earlier bundles and notes remain available under [releases/](releases/) and their
 original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
 

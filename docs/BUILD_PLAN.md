@@ -5,9 +5,10 @@
 
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
 
-The current roadmap is contained in this file: unchanged milestones 0–27g,
-[Release B and milestones 28–28g](#release-b), then deferred whole-numbered
-milestones 29–43. The [ownership map](#roadmap-id-mapping) resolves historical
+The current roadmap is contained in this file: milestones 0–27g, the narrow
+[Release A video index](#27h), [Release B and milestones 28–28g](#release-b),
+then deferred whole-numbered milestones 29–43. The
+[ownership map](#roadmap-id-mapping) resolves historical
 references without changing evidence or generated identifiers. Only the new
 28x release scope is committed next; later design inventories are not additional
 release gates. This planning revision activates no implementation work.
@@ -130,6 +131,7 @@ owned by their specific contracts.
 | [27e](#27e) | Installation, Adoption and CI | Complete |
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
+| [27h](#27h) | Release A Community Video Index | Complete — documentation only |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
@@ -12394,6 +12396,26 @@ Changes:
 Commands: Select focused owner tests and exact host/target builds under TEST_PLAN; run scripts/check-generated.sh and scripts/ci/check_test_plan.sh before merge.
 Checks: No thresholds or proof classes change; complete integration evidence and named review support the A release, while B/C reservations remain intact.
 Deliverables: Qualified 1.1.0-beta artifacts and evidence-backed adoption/overhead report.
+```
+## Milestone 27h — Release A Community Video Index <a id="27h"></a>
+[Milestones](#Milestones)
+
+**Status:** Complete — 24 September 2026. Five public YouTube links resolve to
+the intended Cohesix videos, and the README indexes them for newcomers. This
+post-release documentation task changes no Release A artifact, qualification
+result, or acceptance boundary.
+
+```text
+Title/ID: m27h-community-video-index
+Milestone: 27h / Release A Community Video Index
+Goal: Make the five completed 1.1.0-beta videos easy for newcomers to find.
+Inputs: completed YouTube uploads, README.md, Release A notes and status.
+Changes:
+  - README.md — link the narrated and raw Pi boot videos and three Mac/Jetson use cases with accurate, short descriptions.
+  - seL4 development-list note — draft a concise introduction for readers unfamiliar with AI tooling; do not send it as part of this task.
+Commands: scripts/check-generated.sh; scripts/ci/check_test_plan.sh; git diff --check; verify the five public video links.
+Checks: Each README link opens the intended video for a reader, descriptions preserve live/replay and release-evidence limits, and no release acceptance claim changes. AI-assisted copy and link selection were checked against the public uploads.
+Deliverables: Public README video index and a reviewable mailing-list draft.
 ```
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
