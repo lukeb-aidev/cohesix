@@ -13244,6 +13244,26 @@ configuration and recipes. Model/data downloads are explicit, with declared
 size, licence and credentials; do not hide them in installation or create a
 new distribution service. Preserve required package hashes/signatures/SBOMs.
 
+Ship native Apple Silicon macOS `.pkg` and Ubuntu ARM64 `.deb` installers in
+addition to the portable archives. Build them from the same exact source,
+compiler-selected host profiles, generated policy, binaries, Python wheel and,
+when selected, host-specific QEMU inputs as the assembled candidate. Keep the
+existing 1.1.0-beta extraction path usable for side-by-side migration; a native package
+cannot silently adopt its state. Install code separately from user-owned state,
+CAS, evidence, models and credential references. QEMU, a graphical desktop and
+GPU/model runtimes are required only for the selected journey; host-only use
+must not require all three. Preserve existing advertised macOS 26 base-host
+operation while qualifying macOS 27 for the Apple-specific journeys, and test
+every advertised Ubuntu ARM64 release (22.04, 24.04 and 26.04).
+
+SwarmUI launches as a normal signed Mac app from Applications/Finder, Spotlight
+and the Dock, and as a GNOME app from its application grid/search on Linux.
+Both installations supply a stable name, icon and version, find their own
+resources and matching `coh`/gateway without a shell `PATH`, source checkout or
+bundle-root working directory, and open a useful connect/doctor state with no
+running Queen. The Linux desktop entry and icon follow freedesktop paths;
+headless Linux installation does not acquire desktop dependencies.
+
 Doctor diagnoses versions, endpoint ownership, credentials, storage, GPU/model/
 runtime compatibility, protocol controls and Apple availability with actionable
 remedies. Secrets never appear in example arguments/logs. CLI, SwarmUI, Siri and
@@ -13269,17 +13289,75 @@ must fail closed and reconcile safely; automatic VM-local durable resumption
 remains 37, not a Release B claim. A missing required API/package/credential/
 hardware/evidence is a named blocker, not permission to lower the release promise.
 
-**Deliverables:** Installable candidate and guides, integrated acceptance matrix, exact release evidence and approval-ready release notes.
+**Deliverables:** Native Mac and Ubuntu ARM64 installers, launchable SwarmUI apps,
+portable archives and guides, integrated acceptance matrix, exact release
+evidence and approval-ready release notes.
 
 **Task breakdown**
 
 ```text
+Title/ID: m28g-macos-native-installer
+Milestone: 28g / m28g-macos-native-installer
+Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.
+Inputs: Accepted 27e signed host/desktop profiles and 28c Apple app/entitlements; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; packaging/swarmui/Info.plist; supported Apple Silicon/macOS versions and external signing identities.
+Changes:
+  - scripts/install/build_macos_pkg.sh + packaging/macos/** + scripts/release_bundle.sh + scripts/setup_environment.sh — stage the compiler-registered host payload, offline Python/NeMo kit and selected Mac assets at stable locations without mandatory QEMU setup; sign nested code before freezing its Cohesix file manifest, then sign/notarize/staple the outer `.pkg`. Supply a receipt-bound removal helper; signing credentials remain outside the payload.
+  - apps/swarmui/tauri.conf.json + packaging/swarmui/Info.plist + native app resource lookup — ship the accepted 28c App Intents integration, icon, version and required resources in `/Applications/SwarmUI.app`; resolve installed `coh` and gateway without a terminal environment.
+  - tests/test_macos_installer.py + scripts/release_qualify.py + docs/TEST_PLAN.md + docs/QUICKSTART.md — add exact installed-payload and GUI-launch checks, clean install, 1.1.0-beta side-by-side migration, interrupted/repeated install, replacement/rollback and uninstall evidence on the advertised Mac support envelope.
+Commands:
+  - python3 -m pytest -q tests/test_macos_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_release_qualify.py
+  - scripts/install/build_macos_pkg.sh --reference-config "${RELEASE_B_REFERENCE}" --out "${RELEASE_B_EVIDENCE}/installers/macos"
+  - python3 scripts/release_qualify.py installer --reference-config "${RELEASE_B_REFERENCE}" --installer-manifest "${RELEASE_B_EVIDENCE}/installers/macos/installers.json" --output "${RELEASE_B_EVIDENCE}/installers/macos/result.json"
+Checks:
+  - Independently verify Developer ID application and installer signatures, accepted notarization/stapling, exact source/profile/SBOM/file hashes and installed readback; the installer cannot trust a key supplied only by its own payload.
+  - A clean macOS 27 Apple Silicon session launches SwarmUI from Finder, Spotlight and Dock, with the 28c integration available when supported; macOS 26 base-host use remains operational where advertised. Host-only startup neither installs nor requires QEMU/GPU/model downloads.
+  - Failed/repeated installation leaves the previous usable version and external state/evidence intact; explicit rollback and receipt-bound uninstall remove owned code/registration and only installer-owned service enrollment without deleting user data or credentials by default.
+Deliverables: Reproducible signed/notarized `.pkg`, installer manifest, native launch and lifecycle test reports, and public Mac install/upgrade/removal guidance.
+
+Title/ID: m28g-ubuntu-arm64-native-installer
+Milestone: 28g / m28g-ubuntu-arm64-native-installer
+Goal: Install the exact Release B host candidate through Ubuntu ARM64 packages with GNOME launch and headless operation.
+Inputs: Accepted 27e Linux signed host/desktop profiles; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; supported Ubuntu 22.04/24.04/26.04 ARM64 dependency and service contracts.
+Changes:
+  - scripts/install/build_ubuntu_arm64_deb.sh + packaging/debian/** + scripts/release_bundle.sh + scripts/setup_environment.sh — produce versioned controller and optional SwarmUI `.deb` packages from the compiler-registered payload, offline Python/NeMo kit and selected Linux assets without mandatory QEMU setup; declare release-specific dependencies and a separately verifiable publisher identity for downloaded packages without adding a distribution service.
+  - packaging/debian/com.cohesix.swarmui.desktop + packaging/debian/icons/** + native app resource lookup — install the desktop entry and icon in freedesktop locations with a stable executable path and `Terminal=false`; keep WebKit/GTK dependencies out of the headless controller package.
+  - tests/test_ubuntu_arm64_installer.py + scripts/release_qualify.py + docs/TEST_PLAN.md + docs/QUICKSTART.md — add exact installed-payload, package-manager lifecycle and GNOME-launch checks on each advertised Ubuntu ARM64 release, including 1.1.0-beta side-by-side migration.
+Commands:
+  - python3 -m pytest -q tests/test_ubuntu_arm64_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_release_qualify.py
+  - scripts/install/build_ubuntu_arm64_deb.sh --reference-config "${RELEASE_B_REFERENCE}" --out "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64"
+  - python3 scripts/release_qualify.py installer --reference-config "${RELEASE_B_REFERENCE}" --installer-manifest "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64/installers.json" --output "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64/result.json"
+Checks:
+  - On Ubuntu 22.04, 24.04 and 26.04 ARM64, package-manager install resolves declared dependencies and installed bytes match the exact source/profile/SBOM; independent publisher trust covers each `.deb` and the embedded Cohesix signature is verified without self-enrollment.
+  - A GNOME user opens SwarmUI from application grid/search with its icon and a useful connect/doctor state, with no Terminal, inherited shell variables or checkout. The controller package installs and runs headlessly without GNOME/WebKit, QEMU or CUDA driver installation.
+  - Upgrade, failed/repeated install, rollback, remove and purge preserve or remove state/evidence/configuration only as explicitly documented; service enrollment and activation remain opt-in, and no maintainer script downloads models or copies credentials.
+Deliverables: Reproducible Ubuntu ARM64 `.deb` set, installer manifest/publisher proof, GNOME and headless lifecycle reports, and public Linux install/upgrade/removal guidance.
+
+Title/ID: m28g-host-clients-as-built-alignment
+Milestone: 28g / m28g-host-clients-as-built-alignment
+Goal: Align every shipped host tool, Python library and SwarmUI operation with the selected code and generated contracts as built.
+Inputs: Accepted 28–28f implementation and selected manifests; exact Release B candidate and installed client packages; configs/generated/implementation_surface_inventory.json; 27e host tools/Python and 27f SwarmUI contracts; docs/HOST_TOOLS.md; docs/PYTHON_SUPPORT.md; docs/SWARMUI.md; docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/{coh,cohsh,hive-gateway,gpu-bridge-host,host-sidecar-bridge,host-ticket-agent,cas-tool}/** + crates/coh-cli/src/** + their tests — review all seven shipped host executables against their selected implementation; reconcile commands, parser/help/manuals, inputs, authority, errors, status and recovery, and clearly gate any advertised operation lacking a reachable implementation.
+  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align typed requests, authentication, identity, bounded inputs, refusal and pending/terminal outcome mapping with the same selected operations in the installed wheel.
+  - apps/swarmui/src/** + apps/swarmui/frontend/** + apps/swarmui/tests/** — align the `coh --ui-schema` handshake, visible controls, availability/disabled states, job identity and evidence views with the selected contracts in the installed app; fixture/replay content remains labelled as retained evidence.
+  - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/SWARMUI.md + docs/USERLAND_AND_CLI.md + docs/TEST_PLAN.md + release evidence index — record one capability-by-capability as-built parity matrix, corrected public help/examples and the complete host-tool/Python/benchmark compatibility review, including unaffected surfaces.
+Commands:
+  - cargo test --locked -p coh -p cohsh -p hive-gateway -p gpu-bridge-host -p host-sidecar-bridge -p host-ticket-agent -p cas-tool
+  - cargo test --locked -p swarmui --test workbench --test console_parity
+  - python3 -m pytest -q tools/cohesix-py/tests/test_parity.py tools/cohesix-py/tests/test_generated_contract.py tools/cohesix-py/tests/test_provider_registry.py tools/cohesix-py/tests/test_selected_jobs.py
+  - cargo test --locked -p coh-rtc implementation_surface && python3 scripts/ci/check_implementation_surfaces.py --inventory configs/generated/implementation_surface_inventory.json
+Checks:
+  - For each advertised selected capability, trace the generated inventory and implementation to installed CLI, Python and SwarmUI entry points where applicable; record supported, unavailable and deliberately client-specific surfaces with reasons. No client claims a selected capability solely from a fixture, planned task, stale package or documentation.
+  - Shared operations agree on admission/authority, validated inputs and bounds, native job identity, denial/error, cancellation, ambiguous or pending recovery, terminal outcome and evidence. Unsupported or disabled operations refuse visibly and consistently; SwarmUI resource resolution and `coh --ui-schema` match the installed binary without a source checkout.
+  - Verify exact source/profile/generated-policy/package identity for all three installed client surfaces. Reuse a shared job from m28g-adoption-live for cross-client observation; focused tests and fixtures prove client contracts only, while live provider, target and release claims retain their separate acceptance cases.
+Deliverables: Hash-bound as-built client parity matrix, corrected shipped surfaces and manuals, focused test reports, and an explicit host-tool/Python/benchmark compatibility record in the Release B evidence index.
+
 Title/ID: m28g-installation-and-integrated-adoption
 Milestone: 28g / m28g-installation-and-integrated-adoption
 Goal: Make CUDA, PEFT, Apple and NeMo journeys installable and operable from public instructions.
-Inputs: Accepted 28–28f artifacts/evidence; 27e installation; 27f workbench; scripts/install/; docs/HOST_TOOLS.md; release matrix below.
+Inputs: Accepted 28–28f artifacts/evidence; both 28g native installer reports; 27e installation; 27f workbench; scripts/install/; docs/HOST_TOOLS.md; release matrix below. Use the m28g-host-clients-as-built-alignment contract matrix to select cross-client observations and feed the shared live-job result back to that task.
 Changes:
-  - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — assemble candidate Mac/Linux packages, Python/NeMo kit, native Apple integration, client configs and recipes with hashes/signatures/SBOMs.
+  - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — bind the installed Mac/Linux packages, Python/NeMo kit, native Apple integration, client configs and recipes to one exact source/profile/hash inventory.
   - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — actionable capability/credential/storage/protocol/Apple diagnostics and one coherent job/evidence view.
   - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and independent evaluator walkthrough; explicit downloads and private-data/licence choices.
 Commands:
@@ -13288,17 +13366,17 @@ Commands:
   - cargo test --locked -p swarmui --lib
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28g-adoption-live"
 Checks:
-  - All acceptance-matrix journeys run from installed candidate artifacts with no source patches, hidden credentials or developer-only setup; same job/outcome is inspectable across applicable clients.
+  - All acceptance-matrix journeys run from the native installed candidate artifacts with no source patches, hidden credentials, terminal-only SwarmUI launch or developer-only setup; same job/outcome is inspectable across applicable clients.
   - At least one independent person or agent completes clean installation and useful work; record identity, assistance, steps/time/downloads and blockers against frozen adoption budgets.
-  - Install rollback/uninstall preserves declared user data and revokes/removes owned services/credentials safely; no hidden model downloads or automatic loss of active job evidence.
+  - Install rollback/uninstall preserves declared user data, disables/removes only installer-owned service registration and retains external credentials unless the operator explicitly selects documented removal; no hidden model downloads or automatic loss of active job evidence.
 Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and m28g-adoption-live evidence for the integrated matrix.
 
 Title/ID: m28g-release-b-qualification
 Milestone: 28g / m28g-release-b-qualification
 Goal: Qualify the assembled ecosystem release with complete applicable target and release evidence.
-Inputs: Exact candidate; accepted component case reports; TEST_PLAN catalog; fixed adoption/quality/overhead budgets; release evidence/exception rules.
+Inputs: Exact candidate, both native installer identities/reports and m28g-host-clients-as-built-alignment parity report; accepted component case reports; TEST_PLAN catalog; fixed adoption/quality/overhead budgets; release evidence/exception rules.
 Changes:
-  - scripts/release_qualify.py + tests/test_release_qualify.py — verify the required matrix and exact source/package/profile/target bindings; missing live/platform evidence cannot promote.
+  - scripts/release_qualify.py + tests/test_release_qualify.py — verify the required matrix and exact source/native-installer/installed-payload/profile/target bindings; missing live/platform evidence cannot promote.
   - Existing conformance cases + configs/test_plan_actions.toml + docs/TEST_PLAN.md — m28g-integration-live for four effective protocol modes, master override negatives, cross-client identity/budget/revocation, Queen loss and host-process recovery.
   - docs/BENCHMARKS.md + planned M28 implementation record + release notes/status — retained baseline and fixed thresholds, compatibility/non-impact review, exact evidence index, limitations and named release-owner approval binding.
 Commands:
@@ -13308,7 +13386,7 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir "${RELEASE_B_EVIDENCE}/qemu"
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir "${RELEASE_B_EVIDENCE}/pi4"
 Checks:
-  - All required matrix rows and applicable staged/conditional pressure, repeatability, hardware, due-diligence and promotion gates pass at exact assembled identity; component reports alone cannot qualify the release.
+  - All required matrix rows, both native installer/GUI-launch records and applicable staged/conditional pressure, repeatability, hardware, due-diligence and promotion gates pass at exact assembled identity; component reports alone cannot qualify the release.
   - Freeze baseline IDs, metric definitions, sample/window selection and numeric quality/resource/latency/adoption thresholds before integrated runs; retain failures without post-failure threshold relaxation.
   - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
 Deliverables: Qualified 1.2.0-beta candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
@@ -13330,15 +13408,37 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | Ordinary protocols / `m28d-mcp-live`, `m28e-a2a-live` | Standard named/versioned MCP client and A2A peer; Linux-hosted gateway/provider path without Apple | MCP-only and A2A-only complete selected real work; scoped discovery, denial, cancel and reconnect resolve native outcomes. |
 | NeMo / `m28f-nemo-install`, `m28f-nemo-live` | Clean pinned Toolkit host and configured model endpoint; Pi/Jetson; Apple absent | Native MCP CUDA and A2A adapter journeys, denied/failed/interrupted cases, same-input direct comparison and reproducible configuration. |
 | Protocol composition / `m28g-integration-live` | MCP-only, A2A-only, both, neither; each advertised gateway host | Live endpoint/disabled-surface checks, shared identity/budget/revocation, disable/restart with existing jobs retained and authenticated CLI/REST recovery. Master false defeats every subordinate flag/override. |
-| Installation / `m28g-adoption-live` | Clean supported Mac and Linux host environments; packaged Python/NeMo/native app | All three published journeys, explicit downloads, doctor remedies, rollback/uninstall and independent evaluator walkthrough within frozen step/time/size/intervention budgets. |
+| Client as-built alignment / `m28g-host-clients-as-built-alignment` | Exact installed host CLI tools, Python wheel and SwarmUI from each selected package | Capability-by-capability inventory and contract parity; matching authority, validation, identity, refusal/recovery and evidence across shared operations, with unavailable and client-specific surfaces stated; shared live job observed through m28g-adoption-live. |
+| Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |
+| Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean Ubuntu 22.04/24.04/26.04 ARM64 hosts; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
+| Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and independent evaluator walkthrough within frozen step/time/size/intervention budgets. |
 | Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |
 
-**Checks / definition of done:** Every required row passes with exact artifact
-and profile identity, fixed budgets and accessible retained evidence. Component,
-host, QEMU, physical Pi, model-quality and release proof remain separate. Missing
-required evidence blocks closure; optional/deferred capabilities cannot substitute.
-The qualified candidate is ready for named human release-owner approval; milestone
-completion itself is not publication approval.
+**Checks / definition of done:** The signed/notarized Mac `.pkg`, independently
+authenticated Ubuntu ARM64 `.deb` set and portable archives install from
+published instructions on every advertised host profile. Installed bytes,
+generated contracts, source, package manifest, SBOM and Python/NeMo inputs
+resolve to one exact candidate identity. SwarmUI opens from Finder, Spotlight
+and Dock on Mac and GNOME application grid/search on Linux without Terminal,
+checkout paths or shell-only configuration; the Linux controller also works
+headlessly. Clean install, 1.1.0-beta migration, repeated/interrupted install,
+upgrade, rollback and uninstall have retained package-manager, launch and
+state/evidence records; credentials, models and user evidence follow explicit
+retention/removal choices, and services never gain authority through install.
+The shipped host CLI tools, Python library and SwarmUI match the selected
+as-built code and generated contracts for every advertised operation, with
+hash-bound parity evidence, consistent shared job/outcome views and explicit
+unavailable or client-specific surfaces. Public help and manuals reflect those
+installed behaviors; the complete host-tool/Python/benchmark compatibility
+review records affected and unaffected surfaces.
+
+Every required journey and matrix row passes from those installed artifacts with
+fixed budgets and accessible evidence, including an independent clean-install
+walkthrough. Component, host installation, GUI launch, QEMU, physical Pi,
+model-quality and release proof remain separate. Missing required evidence
+blocks closure; optional/deferred capabilities cannot substitute. The qualified
+candidate is ready for named human release-owner approval; milestone completion
+itself is not publication approval.
 
 ## Deferred milestones — preserved designs, separate activation <a id="deferred-milestones"></a>
 
