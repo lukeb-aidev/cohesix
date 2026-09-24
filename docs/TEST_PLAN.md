@@ -92,7 +92,11 @@ The selected M28b lifecycle adds `m28b-peft-live` and `m28b-serving-live` to
 the provider matrix and canonical action catalog. Run each with a fresh private
 reference file and state directory against the exact-source KVM Queen and Linux
 AArch64 NVIDIA host. The PEFT case needs separate admitted train, independent
-import and checkpoint-resume operations. The serving case needs a fixed
+import and checkpoint-resume operations. Train and resume references use
+`expected_adapter_sha256 = "observed"` because
+their weights are produced during execution; the live runner binds the digest
+from both native scan and stage. Import and promote references pin the supplied
+adapter digest before admission. The serving case needs a fixed
 base/incumbent/candidate comparison, pre-load rejection, a separate streaming
 application request after promotion, and interruption followed by an observed
 incumbent request at the frozen generation. Preserve every negative result and

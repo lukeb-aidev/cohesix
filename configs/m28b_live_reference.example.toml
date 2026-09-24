@@ -27,4 +27,6 @@ delegated_ticket_ref = "file:/absolute/private/delegated-ticket"
 wait_seconds = 1800
 expected_state = "succeeded"
 expected_generation = 1
-expected_adapter_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# Train and resume bind the scanned and staged digest after genuine native execution.
+# Import and promote select the exact expected adapter digest before admission.
+expected_adapter_sha256 = "observed"

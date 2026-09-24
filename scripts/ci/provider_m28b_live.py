@@ -125,6 +125,15 @@ def refresh_verifier_clock(path: Path, original: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def observed_trained_adapter(phases: dict[str, dict[str, Any]]) -> str:
+    """Bind stochastic training output through native scan and staged serving input."""
+    scanned = phases["scan"]["detail"]["adapter_sha256"]
+    staged = phases["stage"]["detail"]["adapter_sha256"]
+    require(isinstance(scanned, str) and re.fullmatch(r"[0-9a-f]{64}", scanned) is not None
+            and scanned == staged, "M28b observed trained adapter identity")
+    return scanned
+
+
 def interrupt_after_load(root: Path, operation: str, unit: str,
                          deadline: float, done: threading.Event, record: dict[str, Any]) -> None:
     """Stop only the selected owned serving unit after Load has durable completion."""
@@ -238,9 +247,7 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
                 "M28b interrupted promotion restoration")
     expected = selected["expected_adapter_sha256"]
     if expected == "observed":
-        expected = phases["train"]["detail"]["adapter_sha256"]
-        require(re.fullmatch(r"[0-9a-f]{64}", expected) is not None,
-                "M28b observed trained adapter identity")
+        expected = observed_trained_adapter(phases)
     expected_adapter = None if expected == "base" else expected
     accepted = json.loads(read_artifact(root / "accepted.json", 8192))
     require(accepted["generation"] == selected["expected_generation"]

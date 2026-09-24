@@ -93,3 +93,14 @@ def test_verifier_clock_refresh_keeps_enrolled_trust_fixed(tmp_path: Path) -> No
     path.write_text(json.dumps(current))
     with pytest.raises(ValueError):
         live.refresh_verifier_clock(path, original)
+
+
+def test_observed_training_digest_must_match_scanned_and_staged_adapter() -> None:
+    """A training metric or checkpoint alone cannot identify the served adapter."""
+    digest = "a" * 64
+    phases = {"scan": {"detail": {"adapter_sha256": digest}},
+              "stage": {"detail": {"adapter_sha256": digest}}}
+    assert live.observed_trained_adapter(phases) == digest
+    phases["stage"]["detail"]["adapter_sha256"] = "b" * 64
+    with pytest.raises(ValueError):
+        live.observed_trained_adapter(phases)
