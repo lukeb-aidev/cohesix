@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Refuse unsafe Mac signing selections and preserve the exact shared Keychain entitlement.
+# Purpose: Refuse unsafe Mac signing selections and bind profile, certificate and shared Keychain rights.
 # Copyright 2026 Lukas Bower
 """Pure signing-input checks; no certificate, notarisation or external upload is used."""
 
@@ -87,6 +87,7 @@ def test_profile_must_authorize_exact_team_bundle_and_group(
         "TeamIdentifier": ["KB88FQXUX2"],
         "UUID": "11111111-1111-1111-1111-111111111111",
         "ExpirationDate": datetime.now(timezone.utc) + timedelta(days=1),
+        "DeveloperCertificates": [b"selected certificate"],
         "Entitlements": {
             "com.apple.application-identifier": "KB88FQXUX2.com.cohesix.swarmui",
             "keychain-access-groups": ["KB88FQXUX2.com.cohesix.swarmui"],
@@ -102,6 +103,14 @@ def test_profile_must_authorize_exact_team_bundle_and_group(
     assert signer.provisioning_profile(
         profile_path, "KB88FQXUX2", "com.cohesix.swarmui"
     )["bundle_id"] == "com.cohesix.swarmui"
+    identity = signer.hashlib.sha1(b"selected certificate").hexdigest()
+    signer.provisioning_profile(
+        profile_path, "KB88FQXUX2", "com.cohesix.swarmui", identity
+    )
+    with pytest.raises(ValueError, match="certificate"):
+        signer.provisioning_profile(
+            profile_path, "KB88FQXUX2", "com.cohesix.swarmui", "0" * 40
+        )
     profile["Entitlements"]["keychain-access-groups"] = ["OTHERTEAM.*"]
     with pytest.raises(ValueError, match="authorize"):
         signer.provisioning_profile(profile_path, "KB88FQXUX2", "com.cohesix.swarmui")

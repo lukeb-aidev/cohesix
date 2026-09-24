@@ -105,7 +105,8 @@ def entitlements(source: Path, team: str) -> bytes:
     return plistlib.dumps(template)
 
 
-def provisioning_profile(source: Path, team: str, bundle: str) -> dict[str, str]:
+def provisioning_profile(source: Path, team: str, bundle: str,
+                         identity: str | None = None) -> dict[str, str]:
     """Verify one Apple-issued profile authorizes the exact signed bundle and group."""
     require(source.is_absolute() and ".." not in source.parts
             and all(not part.is_symlink() for part in source.parents),
@@ -128,6 +129,15 @@ def provisioning_profile(source: Path, team: str, bundle: str) -> dict[str, str]
             and (team + GROUP_SUFFIX in allowed_groups or team + ".*" in allowed_groups)
             and app_identifier == team + "." + bundle,
             "provisioning profile does not authorize the exact bundle and Keychain group")
+    if identity is not None:
+        certificates = profile.get("DeveloperCertificates")
+        require(isinstance(certificates, list) and 1 <= len(certificates) <= 32
+                and all(isinstance(certificate, bytes) and certificate
+                        for certificate in certificates)
+                and identity.upper() in {
+                    hashlib.sha1(certificate).hexdigest().upper()
+                    for certificate in certificates
+                }, "provisioning profile does not authorize the selected certificate")
     identifier = profile.get("UUID")
     require(isinstance(identifier, str)
             and re.fullmatch(r"[0-9a-fA-F-]{36}", identifier) is not None,
@@ -190,7 +200,8 @@ def sign(app: Path, state: Path, team: str, identity: str,
     require(not state.exists(), "signing evidence directory already exists")
     checked = {
         label: provisioning_profile(source, team,
-            "com.cohesix.swarmui" + (".intents" if label == "extension" else ""))
+            "com.cohesix.swarmui" + (".intents" if label == "extension" else ""),
+            identity)
         for label, source in profiles.items()
     }
     require(set(checked) == {"app", "extension"}, "two selected profiles required")
