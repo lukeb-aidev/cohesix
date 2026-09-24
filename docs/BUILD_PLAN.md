@@ -6,12 +6,14 @@
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
 
 The current roadmap is contained in this file: milestones 0–27g, the narrow
-[Release A video index](#27h), [Release B and milestones 28–28g](#release-b),
+[Release A video index](#27h) and [Python index publication](#27i),
+[Release B and milestones 28–28g](#release-b),
 then deferred whole-numbered milestones 29–43. The
 [ownership map](#roadmap-id-mapping) resolves historical
 references without changing evidence or generated identifiers. Only the new
 28x release scope is committed next; later design inventories are not additional
-release gates. This planning revision activates no implementation work.
+release gates. Milestone 27i separately authorizes the owner-requested Python
+publication path without reopening Release A acceptance.
 
 This build plan records what Cohesix has implemented, what remains to be built,
 and the conditions for completing each milestone. It defines scope, dependencies,
@@ -132,6 +134,7 @@ owned by their specific contracts.
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
 | [27h](#27h) | Release A Community Video Index | Complete — documentation only |
+| [27i](#27i) | Release A Python Index Publication | In Progress — PyPI trusted publishing |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
@@ -12416,6 +12419,25 @@ Changes:
 Commands: scripts/check-generated.sh; scripts/ci/check_test_plan.sh; git diff --check; verify the five public video links.
 Checks: Each README link opens the intended video for a reader, descriptions preserve live/replay and release-evidence limits, and no release acceptance claim changes. AI-assisted copy and link selection were checked against the public uploads.
 Deliverables: Public README video index and a reviewable mailing-list draft.
+```
+## Milestone 27i — Release A Python Index Publication <a id="27i"></a>
+[Milestones](#Milestones)
+
+**Status:** In Progress — owner-requested post-release Python publication,
+24 September 2026. This task does not change the sealed `1.1.0-beta` archives,
+their historical acceptance, or Release B scope.
+
+```text
+Title/ID: m27i-pypi-1-1-0b0-publication
+Milestone: 27i / Release A Python Index Publication
+Goal: Publish a version-aligned Cohesix Python distribution from the exact 1.1.0-beta tagged SDK source through a reviewer-gated GitHub trusted publisher.
+Inputs: v1.1.0-beta source commit 8bda91891591466b67f5f4a35e733fe2d3acf0e8, selected Python source inventory, PyPI personal pending publisher for cohesix, GitHub pypi environment and retained package qualification.
+Changes:
+  - .github/workflows/release-pypi.yml — manually triggered, source-pinned build, package validation, artifact digest handoff and environment-gated OIDC upload of only 1.1.0b0.
+  - docs/BUILD_PLAN.md — record the bounded post-release publication scope, ownership handoff and proof limits.
+Commands: actionlint .github/workflows/release-pypi.yml; python3 scripts/install/build_python_package.py --repo <exact-tag-stage> --inventory <exact-tag-inventory> --out <fresh-dist>; python3 -m twine check <fresh-dist>/*.whl <fresh-dist>/*.tar.gz; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; git diff --check; dispatch the reviewed workflow and inspect its build hashes before approving the pypi environment.
+Checks: The workflow checks out the exact tagged commit, changes only the Python package version from 0.2.0-alpha2 to 1.1.0b0 in its isolated build source, validates wheel/sdist source and metadata, and uploads those exact checked artifacts only after named reviewer approval. PyPI's project/version API must report both uploaded filenames and SHA-256 digests; the project remains personally owned until a separately verified transfer after Cohesix organization approval. No target, bundle or overall-release acceptance is inferred from this host publication.
+Deliverables: Reviewed dedicated workflow, GitHub run/build digest record, PyPI cohesix 1.1.0b0 wheel and sdist URLs/hashes, and an explicit pending organization-transfer record.
 ```
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
