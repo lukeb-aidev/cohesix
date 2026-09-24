@@ -39,7 +39,8 @@ Deliverables: Source feasibility probe and this measured blocker record; no M28c
 | Extension sandbox | `com.apple.security.app-sandbox`, `com.apple.security.network.client` and a shared Keychain group are on the diagnostic extension signature. An earlier bundle without the sandbox entitlement was not listed by `pluginkit`. | The sandbox difference is the observed registration fix. A valid signature and `pluginkit` listing do not show that the shared Keychain code can run. |
 | Keychain launch | The manually development-signed enrollment helper with a shared access-group entitlement passed `codesign --verify` but exited 137 before its own argument check. The same helper signed without the restricted entitlement ran and returned its expected missing-argument error. | The controlled difference points to missing provisioning for the restricted entitlement. No real token was entered or stored. |
 | Distribution | The chosen channel is direct distribution outside the Mac App Store. The signed-in Apple Developer team offers Developer ID Application certificate creation, but no Developer ID identity, app/extension provisioning profiles or notarisation credential is installed locally; no notarisation was attempted. The new signer requires both exact Apple profiles before it signs either component. | [Apple's direct-distribution requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) require Developer ID signing and notarisation of the final package; [Apple's Keychain sharing guidance](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) requires profile-authorized entitlements for the data protection Keychain. |
-| Apple App ID | The Apple Developer team `KB88FQXUX2` now lists the explicit `com.cohesix.swarmui` App ID. The exact `com.cohesix.swarmui.intents` extension ID is prepared for registration, with account confirmation pending. | The parent ID alone does not provision or sign either executable. |
+| Apple App IDs | The Apple Developer team `KB88FQXUX2` lists explicit `com.cohesix.swarmui` and `com.cohesix.swarmui.intents` App IDs. | Registration alone does not provision or sign either executable. |
+| macOS capabilities | The extension registration screen showed In-App Purchase on by default and no other capability selected. It had no Keychain Sharing checkbox. SwarmUI and the extension declare the same Keychain access group in their signing entitlements. Apple's current [macOS guidance](https://developer.apple.com/design/human-interface-guidelines/app-shortcuts) supports App Intents actions inside user-created Shortcuts, not automatic App Shortcuts; [SiriKit capability guidance](https://developer.apple.com/documentation/xcode/configuring-siri-support) excludes macOS. The unused `AppShortcutsProvider` was removed from the macOS extension source. | A user-created Shortcut still needs a live Mac execution and spoken Siri invocation before any M28c action acceptance. No optional portal capability was selected for the extension. |
 | Installed action | The original development-signed probe appeared in Shortcuts search; a reassembled three-action bundle was installed and listed by `pluginkit`. The four-action source build has not been installed. | No action has executed through Shortcuts or Siri, and no hive connection is enrolled. |
 
 The signer accepts an Apple profile that authorizes the selected Keychain group
@@ -49,7 +50,10 @@ contract](https://developer.apple.com/documentation/technotes/tn3125-inside-code
 allows the team wildcard to authorize a specific group. The focused signer
 fixture passes; an Apple-issued SwarmUI profile has not yet been tested.
 The signer also checks that the selected signing certificate is listed in each
-profile before changing the staged app; its focused fixture passes.
+profile before changing the staged app; its focused fixture passes. After
+removing the unsupported macOS `AppShortcutsProvider`, eight focused Swift
+tests, the unsigned Release extension build and `scripts/check-generated.sh`
+passed. Installed discovery and action execution require the provisioned rebuild.
 
 `coh-rtc` regenerated the canonical host/package/source projections after the
 new files were staged, and `scripts/check-generated.sh` passed. The final

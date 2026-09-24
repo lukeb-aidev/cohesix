@@ -67,32 +67,3 @@ struct ExplainCohesixJobIntent: AppIntent {
         return .result(value: assistance.summary)
     }
 }
-
-struct SwarmUIShortcuts: AppShortcutsProvider {
-    static var appShortcuts: [AppShortcut] {
-        AppShortcut(
-            intent: PlatformProbeIntent(),
-            phrases: ["Check Cohesix support in \(.applicationName)"],
-            shortTitle: "Check Cohesix Support",
-            systemImageName: "checkmark.shield"
-        )
-        AppShortcut(
-            intent: InspectCohesixJobIntent(),
-            phrases: ["Inspect a Cohesix job in \(.applicationName)"],
-            shortTitle: "Inspect Cohesix Job",
-            systemImageName: "doc.text.magnifyingglass"
-        )
-        AppShortcut(
-            intent: CancelCohesixJobIntent(),
-            phrases: ["Request Cohesix job cancellation in \(.applicationName)"],
-            shortTitle: "Cancel Cohesix Job",
-            systemImageName: "stop.circle"
-        )
-        AppShortcut(
-            intent: ExplainCohesixJobIntent(),
-            phrases: ["Explain a Cohesix job in \(.applicationName)"],
-            shortTitle: "Explain Cohesix Job",
-            systemImageName: "text.bubble"
-        )
-    }
-}

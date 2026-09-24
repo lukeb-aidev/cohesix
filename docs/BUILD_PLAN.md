@@ -12955,7 +12955,7 @@ Judge depth by this lifecycle, not the number of supported frameworks.
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — `m28c-apple-platform-feasibility` activated on 25 September 2026. Public-SDK compilation, host capability probes and development-signed Shortcuts action discovery pass. Source implementations of authenticated job inspect/cancel and on-device explanation now compile, and a detached MLX LoRA smoke ran on Metal. Installed vMLX 1.6.65 served one local model over its loopback OpenAI-compatible API; a bounded Cohesix Python client also made one real local request against a disposable copy. These are detached compatibility observations. Shared Keychain provisioning, actual Shortcuts/Siri execution, an admitted MLX lifecycle, vMLX lifecycle compatibility and direct-distribution signing remain open; no dependent Apple task is accepted.
+**Status:** In Progress — `m28c-apple-platform-feasibility` activated on 25 September 2026. Public-SDK compilation, host capability probes and development-signed Shortcuts action discovery pass. Source implementations of authenticated job inspect/cancel and on-device explanation now compile, and a detached MLX LoRA smoke ran on Metal. Installed vMLX 1.6.65 served one local model over its loopback OpenAI-compatible API; a bounded Cohesix Python client also made one real local request against a disposable copy. These are detached compatibility observations. Explicit app and extension IDs are registered. Apple's macOS guidance requires user-created Shortcuts for App Intents actions; automatic App Shortcuts are unavailable. Shared Keychain provisioning, actual Shortcuts/Siri execution, an admitted MLX lifecycle, vMLX lifecycle compatibility and direct-distribution signing remain open; no dependent Apple task is accepted.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.
@@ -12970,8 +12970,9 @@ Add the smallest native Swift App Intents integration to the existing signed app
 no SwarmUI rewrite or second desktop product. Swift remains host-side.
 
 Expose configured hives, approved recipes, runs and deployments through App
-Intents/App Shortcuts: inspect status, start an approved job, inspect results,
-request cancellation and permitted promotion/rollback. Deep-link to SwarmUI.
+Intents actions in user-created Shortcuts on macOS: inspect status, start an
+approved job, inspect results, request cancellation and permitted
+promotion/rollback. Deep-link to SwarmUI.
 Return durable job references promptly; long jobs survive Siri/extension exit.
 Use authenticated shared operations and native secure credential storage, not
 AppleScript/UI scripting or shell. Spoken text, device possession and model
@@ -13021,10 +13022,11 @@ the UI identifies the actual Metal device and links each result to its source.
 On the reference Mac with vMLX installed, the developer can serve the accepted
 generation through its loopback API, observe the same evaluated result and
 return to the verified incumbent without changing Cohesix authority.
-Siri can inspect and cancel the enrolled job with platform confirmation and
-the same Cohesix policy. The Foundation Models explanation must help the
-developer decide a typed next action from that job's scoped evidence. A
-capability probe, a compiled extension or a detached demo is not useful-work
+Siri can run a user-created Shortcut that inspects or cancels the enrolled job
+with platform confirmation and the same Cohesix policy. macOS does not support
+automatic App Shortcuts or the SiriKit capability. The Foundation Models
+explanation must help the developer decide a typed next action from that job's
+scoped evidence. A capability probe, a compiled extension or a detached demo is not useful-work
 acceptance. Preserve a terminal-free post-enrolment path and a deterministic
 manual path when Apple Intelligence is unavailable.
 
@@ -13052,18 +13054,18 @@ Deliverables: Native feasibility probe and m28c-platform-live support/blocker ma
 
 Title/ID: m28c-native-apple-actions
 Milestone: 28c / m28c-native-apple-actions
-Goal: Expose selected governed jobs through App Intents, Shortcuts and Siri without new authority.
+Goal: Expose selected governed jobs through macOS App Intents actions in Shortcuts, including user-created Siri shortcuts, without new authority.
 Inputs: m28c-apple-platform-feasibility; 28 schemas; selected 28a/28b operations; SwarmUI packaging; delegated credentials.
 Changes:
   - apps/swarmui/native/apple/ (planned Swift package/native integration) — typed entities/actions for hive/recipe/run/deployment, secure credential handoff, scope-filtered indexing, prompt return of durable job references and deep links.
   - apps/swarmui/src/workbench.rs + scripts/install/stage_swarmui.py — integrate the native component with the existing signed app and Rust-owned job views; implement chosen entitlements/signing/notarisation and installed discovery checks.
-  - docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md + matrix/catalog — exact build/install/sign commands, Siri/Shortcuts walkthrough and m28c-actions-live with an observed speech-driven invocation, cancellation and revoked-entity checks.
+  - docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md + matrix/catalog — exact build/install/sign commands, user-created Siri/Shortcuts walkthrough and m28c-actions-live with an observed speech-driven invocation, cancellation and revoked-entity checks.
 Commands:
   - swift test --package-path apps/swarmui/native/apple
   - cargo test --locked -p swarmui --lib
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-actions-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-actions-live"
 Checks:
-  - Actual Siri and Shortcuts submit/inspect/cancel permitted work and return the same durable identity/receipts visible in CLI/SwarmUI; long work survives extension exit.
+  - Actual Shortcuts actions and a user-created Siri shortcut submit/inspect/cancel permitted work and return the same durable identity/receipts visible in CLI/SwarmUI; long work survives extension exit.
   - Ambiguous/unauthenticated/stale entities cannot cause effects; revoked entries disappear; platform-required confirmation and Cohesix policy remain enforced.
   - Collect signing/notarisation result for the selected distribution channel and actual device observations; unit or Shortcuts tests alone cannot pass Siri acceptance.
 Deliverables: Packaged native actions, exact installation/distribution instructions and m28c-actions-live evidence with per-surface proof limits.
@@ -13134,13 +13136,14 @@ Commands:
 Checks:
   - A developer completes an actual admitted local MLX experiment with measured Metal use, held-out result, canary observation and rollback; every surface resolves the original durable identity and signed Cohesix outcome.
   - The installed app handles credential absence, stale/revoked scope, unavailable model, cancellation and restart without inventing success or replaying effects; a developer can find and act on the strongest blocker.
-  - One observed Siri invocation and one Shortcuts invocation complete permitted inspect/cancel operations; Foundation Models gives a source-linked interpretation and typed proposed action without submitting it.
+  - One observed Siri invocation of a user-created Shortcut and one Shortcuts invocation complete permitted inspect/cancel operations; Foundation Models gives a source-linked interpretation and typed proposed action without submitting it.
   - The final installed bytes verify the selected Developer ID signature and notarisation for direct distribution; evidence binds source, app, extension, Mac, model and native provider identity.
 Deliverables: Installed developer-useful Mac journey, first-use documentation and m28c-developer-live evidence; no Release B or Pi hardware claim.
 ```
 
-**Checks / definition of done:** actual supported-device Siri/Shortcuts operation, evidence-grounded
-assistance, admitted local Metal work, installed vMLX compatibility and exact Developer ID notarisation
+**Checks / definition of done:** actual supported-device Shortcuts operation and
+Siri invocation of a user-created Shortcut, evidence-grounded assistance,
+admitted local Metal work, installed vMLX compatibility and exact Developer ID notarisation
 are exercised. Unit tests or Shortcuts alone cannot establish live Siri acceptance; unresolved platform
 availability is explicit.
 
