@@ -351,8 +351,10 @@ def native_evidence(
     require(isinstance(observation, dict), "M28 native observation shape")
     if binding["action"] == "systemd.restart":
         before, after = observation.get("before"), observation.get("after")
+        job = observation.get("job")
         require(isinstance(before, dict) and isinstance(after, dict)
-                and observation.get("job", 0) > 0
+                and isinstance(job, str)
+                and re.fullmatch(r"/org/freedesktop/systemd1/job/[1-9][0-9]*", job)
                 and after.get("active_state") == "active"
                 and after.get("service_result") == "success"
                 and before.get("invocation_id") != after.get("invocation_id"),
@@ -430,7 +432,9 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
         require(service["binding"]["admission_id"] != gpu["binding"]["admission_id"],
                 "M28 job identity collision")
         if case == "m28-jobs-live":
-            for selected in (service, gpu):
+            # The CUDA request carries a short native inventory observation.
+            # Consume it before the independent service restart can age it out.
+            for selected in (gpu, service):
                 admission_id = selected["binding"]["admission_id"]
                 with (state_dir / "attempts.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({"admission_id": admission_id,

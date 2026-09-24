@@ -194,6 +194,35 @@ fn observe_service(ticket: &HostTicketSpec, now: u64) -> Result<AdmissionFacts> 
     })
 }
 
+fn gpu_execution_identity(encoded: &str, gpu_id: &str) -> Result<PublishedDevice> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Projection {
+        id: String,
+        #[serde(rename = "name")]
+        _name: String,
+        #[serde(rename = "memory_mb")]
+        _memory_mb: u32,
+        #[serde(rename = "sm_count")]
+        _sm_count: u32,
+        #[serde(rename = "driver_version")]
+        _driver_version: String,
+        #[serde(rename = "runtime_version")]
+        _runtime_version: String,
+        execution_identity: PublishedDevice,
+    }
+    let projection: Projection = serde_json::from_str(encoded)?;
+    ensure!(
+        projection.id == gpu_id
+            && projection.execution_identity.schema == "cohesix-gpu-device/v1"
+            && projection.execution_identity.source_id == "gpu-bridge-host/cuda-reference"
+            && projection.execution_identity.source_mode == "production"
+            && projection.execution_identity.source_epoch > 0,
+        "EPERM GPU inventory identity"
+    );
+    Ok(projection.execution_identity)
+}
+
 fn observe_gpu(state: &AppState, ticket: &HostTicketSpec, now: u64) -> Result<AdmissionFacts> {
     let gpu_id = ticket.subject_ref.as_deref().context("GPU id required")?;
     let worker_id = ticket
@@ -233,28 +262,14 @@ fn observe_gpu(state: &AppState, ticket: &HostTicketSpec, now: u64) -> Result<Ad
         .context("lease sequence missing")?
         .parse::<u64>()?;
     ensure!(state_epoch > 0, "EPERM lease sequence");
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Projection {
-        id: String,
-        execution_identity: PublishedDevice,
-    }
     let lines = state.read_uncached(&format!("/gpu/{gpu_id}/info"))?;
     let encoded = lines.join("\n");
     ensure!(encoded.len() <= 8192, "ELIMIT GPU inventory");
-    let projection: Projection = serde_json::from_str(&encoded)?;
-    ensure!(
-        projection.id == gpu_id
-            && projection.execution_identity.schema == "cohesix-gpu-device/v1"
-            && projection.execution_identity.source_id == "gpu-bridge-host/cuda-reference"
-            && projection.execution_identity.source_mode == "production"
-            && projection.execution_identity.source_epoch > 0,
-        "EPERM GPU inventory identity"
-    );
+    let identity = gpu_execution_identity(&encoded, gpu_id)?;
     Ok(AdmissionFacts {
         observed_unix_ms: now,
         state_epoch,
-        resource_generation: projection.execution_identity.source_epoch,
+        resource_generation: identity.source_epoch,
         policy_sha256: String::new(),
     })
 }
@@ -661,5 +676,44 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(hashes, vec![hex::encode(Sha256::digest(exact.as_bytes()))]);
         assert!(matching_target_results(vec!["not-json".into()], &binding).is_err());
+    }
+
+    #[test]
+    fn native_gpu_info_accepts_full_descriptor_and_rejects_rebinding() {
+        let descriptor = json!({
+            "id": "GPU-0",
+            "name": "CUDA device",
+            "memory_mb": 7485,
+            "sm_count": 8,
+            "driver_version": "13020",
+            "runtime_version": "13020",
+            "execution_identity": {
+                "schema": "cohesix-gpu-device/v1",
+                "device_uuid": "a".repeat(32),
+                "device_ordinal": 0,
+                "topology_sha256": "b".repeat(64),
+                "helper_sha256": "c".repeat(64),
+                "provider_graph_sha256": "d".repeat(64),
+                "source_id": "gpu-bridge-host/cuda-reference",
+                "source_epoch": 7,
+                "source_mode": "production",
+            },
+        });
+        let encoded = descriptor.to_string();
+        assert_eq!(
+            gpu_execution_identity(&encoded, "GPU-0")
+                .expect("full native descriptor")
+                .source_epoch,
+            7
+        );
+        assert!(gpu_execution_identity(&encoded, "GPU-1").is_err());
+        let mut fixture = descriptor.clone();
+        fixture["execution_identity"]["source_mode"] = json!("fixture");
+        assert!(gpu_execution_identity(&fixture.to_string(), "GPU-0").is_err());
+        assert!(gpu_execution_identity(
+            &encoded.replacen("\"name\":", "\"unexpected\":0,\"name\":", 1),
+            "GPU-0"
+        )
+        .is_err());
     }
 }

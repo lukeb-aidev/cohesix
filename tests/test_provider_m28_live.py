@@ -32,7 +32,7 @@ def native_fixture(root: Path, action: str) -> tuple[dict, dict, Path]:
                 "active_state": "active",
                 "service_result": "success",
             },
-            "job": 42,
+            "job": "/org/freedesktop/systemd1/job/42",
         }
         if action == "systemd.restart"
         else {"state": "succeeded", "terminal_unix_ms": 1234}
@@ -73,6 +73,18 @@ def test_native_object_requires_exact_ticket_and_provider_graph(tmp_path: Path) 
         native_evidence(tmp_path, terminal, {**binding, "ticket_id": "other"}, "a" * 64)
     with pytest.raises(ValueError, match="correlation"):
         native_evidence(tmp_path, terminal, binding, "b" * 64)
+
+
+def test_service_native_object_requires_systemd_job_path(tmp_path: Path) -> None:
+    binding, terminal, path = native_fixture(tmp_path, "systemd.restart")
+    native = json.loads(path.read_bytes())
+    native["observation"]["job"] = 42
+    encoded = json.dumps(native, separators=(",", ":")).encode()
+    changed = tmp_path / f"{hashlib.sha256(encoded).hexdigest()}.json"
+    changed.write_bytes(encoded)
+    terminal["message"] = f"native_observation=sha256:{changed.stem}"
+    with pytest.raises(ValueError, match="systemd native postcondition"):
+        native_evidence(tmp_path, terminal, binding, "a" * 64)
 
 
 def test_reconciliation_requires_the_exact_retained_target_line_digest() -> None:
