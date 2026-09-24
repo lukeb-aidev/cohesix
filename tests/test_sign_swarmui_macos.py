@@ -98,6 +98,14 @@ def test_profile_must_authorize_exact_team_bundle_and_group(
         profile_path, "KB88FQXUX2", "com.cohesix.swarmui"
     )
     assert selected["bundle_id"] == "com.cohesix.swarmui"
+    profile["Entitlements"]["keychain-access-groups"] = ["KB88FQXUX2.*"]
+    assert signer.provisioning_profile(
+        profile_path, "KB88FQXUX2", "com.cohesix.swarmui"
+    )["bundle_id"] == "com.cohesix.swarmui"
+    profile["Entitlements"]["keychain-access-groups"] = ["OTHERTEAM.*"]
+    with pytest.raises(ValueError, match="authorize"):
+        signer.provisioning_profile(profile_path, "KB88FQXUX2", "com.cohesix.swarmui")
+    profile["Entitlements"]["keychain-access-groups"] = ["KB88FQXUX2.*"]
     with pytest.raises(ValueError, match="authorize"):
         signer.provisioning_profile(
             profile_path, "KB88FQXUX2", "com.cohesix.swarmui.intents"

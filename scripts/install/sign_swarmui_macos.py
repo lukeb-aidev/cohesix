@@ -120,9 +120,13 @@ def provisioning_profile(source: Path, team: str, bundle: str) -> dict[str, str]
         expiry = expiry.replace(tzinfo=timezone.utc)
     require(isinstance(expiry, datetime) and expiry > datetime.now(timezone.utc),
             "provisioning profile expired")
+    allowed_groups = rights.get("keychain-access-groups")
+    app_identifier = rights.get("com.apple.application-identifier")
     require(profile.get("TeamIdentifier") == [team]
-            and rights.get("keychain-access-groups") == [team + GROUP_SUFFIX]
-            and rights.get("com.apple.application-identifier") == team + "." + bundle,
+            and isinstance(allowed_groups, list)
+            and all(isinstance(group, str) for group in allowed_groups)
+            and (team + GROUP_SUFFIX in allowed_groups or team + ".*" in allowed_groups)
+            and app_identifier == team + "." + bundle,
             "provisioning profile does not authorize the exact bundle and Keychain group")
     identifier = profile.get("UUID")
     require(isinstance(identifier, str)
