@@ -60,14 +60,14 @@ source .venv/bin/activate
 ```
 
 For a Python-only integration with Release A, install the
-[`1.1.0b0` distribution from PyPI](https://pypi.org/project/cohesix/1.1.0b0/)
+[`1.1.0b1` distribution from PyPI](https://pypi.org/project/cohesix/1.1.0b1/)
 in an activated Python 3.11+ environment:
 
 ```bash
-python3 -m pip install 'cohesix==1.1.0b0'
+python3 -m pip install 'cohesix==1.1.0b1'
 ```
 
-This version uses the `1.1.0-beta` tagged SDK source with Python-aligned version
+This version uses the `1.1.0-beta` tagged SDK code with corrected Python package
 metadata. It installs the client, not the native host tools or target runtime;
 use the matching host bundle for those components. The sealed Release A archives
 retain their original bundled wheel.

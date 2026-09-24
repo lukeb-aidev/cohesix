@@ -134,7 +134,7 @@ owned by their specific contracts.
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
 | [27h](#27h) | Release A Community Video Index | Complete — documentation only |
-| [27i](#27i) | Release A Python Index Publication | Reopened — published `1.1.0b0` page correction only |
+| [27i](#27i) | Release A Python Index Publication | Complete — PyPI `1.1.0b1` page correction published |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Complete — selected foundation |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
@@ -12423,9 +12423,10 @@ Deliverables: Public README video index and a reviewable mailing-list draft.
 ## Milestone 27i — Release A Python Index Publication <a id="27i"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — the `1.1.0b0` publication completed on 24 September 2026;
-the bounded `m27i-pypi-1-1-0b1-page-correction` task restores its public
-installation and navigation metadata. This does not change the sealed
+**Status:** Complete — the `1.1.0b0` publication and bounded
+`m27i-pypi-1-1-0b1-page-correction` both completed on 24 September 2026.
+The correction restores public installation and navigation metadata. It does
+not change the sealed
 `1.1.0-beta` archives, their historical acceptance, or Release B scope.
 
 ```text
@@ -12475,6 +12476,24 @@ Commands: actionlint .github/workflows/release-pypi.yml; python3 scripts/install
 Checks: The staged source differs from the sealed tag only in the two declared Python metadata files; built wheel/sdist contents, description, public URLs and package version are inspected; the rendered PyPI page and downloaded public hashes match the approved GitHub artifacts. The correction makes no new target, bundle, runtime or overall-release acceptance claim.
 Deliverables: Reviewed workflow and source delta, exact artifact digest record, corrected PyPI 1.1.0b1 wheel and sdist with verified page and provenance, and retained 1.1.0b0 historical evidence.
 ```
+
+Correction evidence: [PR #2231](https://github.com/lukeb-aidev/cohesix/pull/2231)
+passed CI and merged as `f0f4bc224a8d74576da15021f3e64f2a00dec8d6`.
+[Run 35969770663](https://github.com/lukeb-aidev/cohesix/actions/runs/35969770663)
+used the sealed `v1.1.0-beta` SDK source and metadata commit
+`da3ff4c7e1df1fbe97087c2d9a1df2d3334a5d49`, passed package checks,
+recorded the exact-artifact `pypi` environment approval by `lukeb-aidev`, and
+uploaded with GitHub OIDC. The
+[`1.1.0b1` PyPI page](https://pypi.org/project/cohesix/1.1.0b1/) lists the
+wheel SHA-256 `b3af61edb295168b5f7f7012d484ea48d2a31f297e66d689c2fbdeeedc1d38ff`
+and sdist SHA-256 `c573717ffd47b87367fe329dbd68ef8c57982a8d869c94a308ea41c337f56b78`,
+both matching independently downloaded public files and the retained GitHub
+artifact. The rendered install command, seven public links, Python requirement
+and trusted-publishing provenance were checked. Fresh PyPI installs and both
+CLI help commands passed on Python 3.11 and 3.13. All 28 SDK code files match
+the prior wheel; no native archive, target or overall-release acceptance claim
+changes. The Cohesix Community organization request and project transfer remain
+pending.
 
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
