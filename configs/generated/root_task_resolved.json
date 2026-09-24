@@ -20,12 +20,41 @@
     "host_ai": false,
     "production_failover": false
   },
+  "gateway": {
+    "schema": "cohesix-agent-protocol-controls/v1",
+    "agent_protocols": {
+      "enabled": false
+    },
+    "mcp": {
+      "enabled": false
+    },
+    "a2a": {
+      "enabled": false
+    }
+  },
+  "standing_authority": {
+    "schema": "cohesix-standing-controls/v1",
+    "enabled": true,
+    "actions": [
+      "gpu.workload.submit",
+      "systemd.restart"
+    ],
+    "max_scopes": 4,
+    "max_jobs": 256,
+    "max_job_units": 1,
+    "max_total_units": 256,
+    "max_concurrent": 2,
+    "max_retries": 2,
+    "max_cooldown_ms": 60000,
+    "max_fact_age_ms": 5000,
+    "max_decision_ttl_ms": 5000
+  },
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.28",
+    "schema": "1.29",
     "affinity": {
       "enabled": true,
       "max_cores": 4,

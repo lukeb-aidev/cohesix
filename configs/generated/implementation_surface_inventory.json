@@ -5892,6 +5892,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/audit/M28_IMPLEMENTATION_RECORD.md",
+      "kind": "tracked_surface",
+      "path": "docs/audit/M28_IMPLEMENTATION_RECORD.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/audit/OPERATOR_MANUALS_RECORD.md",
       "kind": "tracked_surface",
       "path": "docs/audit/OPERATOR_MANUALS_RECORD.md",
@@ -8807,6 +8821,20 @@
       "id": "tracked:tools/cohesix-py/tests/test_rest_backend_auth.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_rest_backend_auth.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "source_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/tests/test_selected_jobs.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_selected_jobs.py",
       "implementation_class": "fixture",
       "owner": "python-client",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",

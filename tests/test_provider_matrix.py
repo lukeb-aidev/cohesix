@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -33,6 +35,9 @@ def test_matrix_rejects_weakened_obligations_unknown_identity_and_unscoped_comma
     valid = load(tmp_path)
     assert valid["maximum_case_seconds"] == 600
     assert any(case["id"] == "signed-causal-graph-refusals" for case in valid["cases"])
+    assert {case["id"] for case in valid["cases"] if case["proof_class"] == "live_target"} == {
+        "m28-jobs-live", "m28-authority-live"
+    }
     for old, new in [
         ('"discover", "preflight"', '"discover", "discover"'),
         ('"jetson-orin-nano-jp7"', '"invented-profile"'),
@@ -44,6 +49,7 @@ def test_matrix_rejects_weakened_obligations_unknown_identity_and_unscoped_comma
         ('["cargo", "test", "--locked", "-p"', '["cargo", "test", "--workspace", "-p"'),
         ("maximum_output_bytes = 1048576", "maximum_output_bytes = 1048577"),
         ('id = "identity-exact-delegation"', 'id = "signed-causal-graph-refusals"'),
+        ('runner = "provider_m28_live"', 'runner = "unregistered_runner"'),
     ]:
         with pytest.raises(ValueError):
             load(tmp_path, (old, new))
@@ -86,6 +92,16 @@ def test_validation_records_no_execution_and_exact_selected_contract(
     with pytest.raises(ValueError, match="no matching"):
         matrix.run_matrix(policy, contract, tmp_path / "unknown", provider="unknown")
     assert not (tmp_path / "unknown").exists()
+    selected = tmp_path / "one"
+    assert matrix.run_matrix(
+        policy, contract, selected, case_id="signed-causal-graph-refusals", validate_only=True
+    ) == 0
+    rows = json.loads((selected / "summary.json").read_bytes())["results"]
+    assert [row["id"] for row in rows] == ["signed-causal-graph-refusals"]
+    with pytest.raises(ValueError, match="no matching"):
+        matrix.run_matrix(
+            policy, contract, tmp_path / "missing", case_id="unknown", validate_only=True
+        )
 
 
 def test_command_capture_refuses_empty_success_and_output_overflow() -> None:
@@ -104,3 +120,33 @@ def test_command_capture_refuses_empty_success_and_output_overflow() -> None:
         ["python3", "-c", "raise SystemExit(3)"], 10, 1024
     )
     assert (code, result) == (3, "FAIL")
+
+
+def test_case_cli_refuses_duplicate_or_incompatible_selection(tmp_path: Path) -> None:
+    script = ROOT / "scripts/ci/provider_conformance_run.py"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "tools/cohesix-py")}
+    state = tmp_path / "case"
+
+    def run(*selection: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(script), "--state-dir", str(state), *selection],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    for selection in [
+        ("--case", "signed-causal-graph-refusals", "--case", "signed-causal-graph-refusals"),
+        ("--case", "signed-causal-graph-refusals", "--evidence-only"),
+        ("--case", "missing", "--validate-only"),
+        ("--case", "m28-jobs-live"),
+        ("--case", "m28-authority-live", "--validate-only"),
+    ]:
+        assert run(*selection).returncode != 0
+        assert not state.exists()
+    assert run("--case", "signed-causal-graph-refusals", "--validate-only").returncode == 0
+    summary = json.loads((state / "summary.json").read_bytes())
+    assert summary["selected_cases"] == 1
+    assert summary["results"][0]["result"] == "NOT_RUN"

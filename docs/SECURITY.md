@@ -134,6 +134,16 @@ Only one process may own the target TCP session. Concurrent clients share one
 Hive Gateway owner rather than racing direct `cohsh`, SwarmUI, or bridge
 connections.
 
+Host agent protocol access has a compiler-owned, false-default master switch
+and independent MCP and A2A switches in manifest schema 1.29. The effective
+value is the master AND the per-protocol switch. The gateway rejects runtime
+override attempts before resolving credentials or starting transport work.
+This foundation declares no MCP or A2A handler, listener, discovery resource,
+stream or background task. A future protocol adapter must enforce its own
+effective switch before registration and must use the existing delegated
+authority and job recovery paths. Switching access off does not erase an
+execution or pending delivery obligation.
+
 ### Console compartment boundary
 
 The active `console-network-runtime` child uses console-network ABI v6 and owns
@@ -641,6 +651,26 @@ the host. The host ticket agent validates schema, action allowlist, arguments,
 idempotency, and state before a configured host adapter performs a side effect.
 Use dedicated host identities, least-privilege adapter configuration, and the
 request/result/federation contracts in [Interfaces](INTERFACES.md#host-tickets-and-federation).
+
+M28 selected jobs place their standing scope and cumulative ledger under one
+private host custody point shared by the gateway and native ticket agent. The
+compiler permits only GPU workload submission and an enrolled systemd restart;
+the deployment scope may narrow action, exact target, subject, expiry, budget,
+concurrency, retry and cooldown. Both selected effects cost one budget unit.
+The gateway derives current target or native facts before durable reservation;
+the agent rechecks the source binding and facts at native dispatch. A local
+file lock serializes spending, and a synchronized replacement retains the
+same admission identity across restart. Unknown native termination keeps its
+allocation. Revocation prevents new dispatch; it does not erase or terminate
+an existing effect. A cancellation request is not native termination.
+
+These are host-enforced limits. A privileged host administrator, another
+gateway/agent using a different ledger, or a legacy raw host-ticket delegation
+that independently permits the same action can bypass this standing budget.
+Deployers must keep one selected custody point and attenuate legacy tickets to
+the intended action paths. Ledger and scope files are protected local state,
+not cryptographic proof of native execution. The target's ticket, Worker,
+lease and writer-epoch checks remain independent of host standing decisions.
 
 ### Recipe recovery and cached results
 

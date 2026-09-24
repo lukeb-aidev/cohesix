@@ -51,6 +51,11 @@ def main() -> int:
         "--playbooks", dest="group", action="store_const", const="playbooks"
     )
     parser.add_argument("--host-profile", default="jetson-orin-nano-jp7")
+    parser.add_argument("--case", action="append", help="Run one exact matrix case")
+    parser.add_argument(
+        "--reference-config", type=Path,
+        help="Private exact-source configuration for a selected live case",
+    )
     parser.add_argument("--provider", action="append")
     parser.add_argument("--native-providers", action="store_true")
     parser.add_argument("--live-reference", action="store_true")
@@ -87,6 +92,25 @@ def main() -> int:
         matrix = load_matrix(args.matrix, contract)
     except (ValueError, KeyError, TypeError, OSError) as exc:
         parser.error("invalid conformance matrix: " + str(exc))
+    if args.case and (
+        len(args.case) != 1
+        or args.group
+        or args.provider
+        or args.native_providers
+        or args.live_reference
+    ):
+        parser.error("--case requires one unique id and no group, provider or native selector")
+    if args.case and args.case[0] in {"m28-jobs-live", "m28-authority-live"}:
+        if not args.reference_config or args.validate_only:
+            parser.error("M28 live cases require --reference-config and real execution")
+        from provider_m28_live import run_live
+
+        try:
+            return run_live(args.case[0], args.reference_config, args.host_profile, args.state_dir)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            parser.error(str(exc))
+    if args.reference_config:
+        parser.error("--reference-config is only valid for a selected M28 live case")
     if args.provider == ["mac_release"] and args.live_reference:
         if args.group or args.validate_only or args.native_providers:
             parser.error("live macOS release has its own owned Xcode lane")
@@ -127,7 +151,8 @@ def main() -> int:
         except (ValueError, OSError) as exc:
             parser.error(str(exc))
     if (
-        args.group
+        args.case
+        or args.group
         or args.validate_only
         or args.provider
         in (["federation"], ["launchd"], ["mac_release"], ["endpoint_compliance"])
@@ -146,6 +171,7 @@ def main() -> int:
                 args.group,
                 args.provider[0] if args.provider else None,
                 args.validate_only,
+                args.case[0] if args.case else None,
             )
         except (ValueError, OSError) as exc:
             parser.error(str(exc))

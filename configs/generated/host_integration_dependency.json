@@ -5,9 +5,9 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "20ac83c7634beec230ebbbbe26a4dee23c6f0b35d48241a5c0f0d57160700afe",
-    "resolved_manifest_sha256": "d3029e105edb84e05b1377a6a479ae4e1e3bed555046e4606625644c95951aa5",
-    "implementation_surface_inventory_sha256": "7660a37808a36a600f6cba7ab6d8293084011df1a7d642bdf368f6a43fcba474"
+    "source_sha256": "c73ada5ce4e58cd5279b1bf3094b91fbecf438577178cd1e6df80cda617d24eb",
+    "resolved_manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
+    "implementation_surface_inventory_sha256": "521149f561266e15d96bb6a6cdbf0c65b55e680e86814a69c932e318180adf8f"
   },
   "host_profiles": [
     {
@@ -8886,7 +8886,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -8894,7 +8894,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -8902,9 +8902,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28"
+            "schema_value": "1.29"
           },
           {
             "path": "contracts/implementation_surface_inventory.json",
@@ -9516,7 +9516,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -9524,7 +9524,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -9532,9 +9532,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28"
+            "schema_value": "1.29"
           },
           {
             "path": "contracts/implementation_surface_inventory.json",
@@ -10232,7 +10232,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -10240,7 +10240,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -10248,9 +10248,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28"
+            "schema_value": "1.29"
           },
           {
             "path": "contracts/provider_registry.json",
@@ -10424,7 +10424,7 @@
             "path": "config/coh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1"
           },
@@ -10432,7 +10432,7 @@
             "path": "config/cohsh_policy.toml",
             "kind": "toml",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": null,
             "schema_value": null
           },
@@ -10440,9 +10440,9 @@
             "path": "config/root_task_resolved.json",
             "kind": "json",
             "executable": false,
-            "version": "1.28",
+            "version": "1.29",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28"
+            "schema_value": "1.29"
           },
           {
             "path": "contracts/implementation_surface_inventory.json",

@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use coh::CohAccess;
@@ -66,6 +67,8 @@ pub struct ExecutorConfig {
     pub gpu_request_root: Option<PathBuf>,
     /// Explicit pinned native HF profile; absent disables adapter release.
     pub peft_release_config: Option<PathBuf>,
+    /// Private generated-policy ledger shared with the selected gateway.
+    pub standing_ledger: Option<Arc<cohesix_authority::standing_ledger::StandingLedger>>,
 }
 
 impl Default for ExecutorConfig {
@@ -84,6 +87,7 @@ impl Default for ExecutorConfig {
             gpu_executor_credential_ref: None,
             gpu_request_root: None,
             peft_release_config: None,
+            standing_ledger: None,
         }
     }
 }
@@ -132,6 +136,7 @@ pub fn execute_action(
 ) -> Result<String> {
     crate::provider::validate(spec)?;
     super::causal::preflight(config, spec)?;
+    crate::standing::selected_record(spec, config)?;
     if spec.schema == crate::HOST_TICKET_V2_SCHEMA {
         crate::claim::validate_v2_action_args(spec)?;
     }

@@ -121,13 +121,12 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
     )
     seen = set()
     for case in cases:
-        require(
-            set(case)
-            <= {"id", "group", "providers", "surface", "proof_class", "lane", "command"}
-            and set(case)
-            >= {"id", "group", "providers", "proof_class", "lane", "command"},
-            "matrix case fields",
-        )
+        required = {"id", "group", "providers", "proof_class", "lane"}
+        live = case.get("id") in {"m28-jobs-live", "m28-authority-live"}
+        optional = {"surface", "runner"} if live else {"surface", "command"}
+        require(set(case) >= required | {"runner" if live else "command"}
+                and set(case) <= required | optional,
+                "matrix case fields")
         identifier = case["id"]
         require(
             isinstance(identifier, str)
@@ -140,7 +139,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             case["group"] in GROUPS and case["lane"] in LANES, "matrix case group/lane"
         )
         require(
-            case["proof_class"] == "host_contract",
+            case["proof_class"] == ("live_target" if live else "host_contract")
+            and (not live or case["lane"] == "live_safe"),
             "host tests cannot claim live evidence",
         )
         require(
@@ -152,6 +152,9 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
         require(
             "surface" not in case or case["surface"] in surfaces, "unregistered surface"
         )
+        if live:
+            require(case.get("runner") == "provider_m28_live", "unregistered live runner")
+            continue
         command = case["command"]
         require(
             isinstance(command, list)
@@ -268,12 +271,15 @@ def run_matrix(
     group: str | None = None,
     provider: str | None = None,
     validate_only: bool = False,
+    case_id: str | None = None,
 ) -> int:
     """Retain selected host results without upgrading generated availability."""
     cases = [
         case
         for case in matrix["cases"]
+        if case["proof_class"] == "host_contract"
         if (case["group"] != "perf" if group is None else case["group"] == group)
+        and (case_id is None or case["id"] == case_id)
         and (
             provider is None
             or provider in case["providers"]

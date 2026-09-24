@@ -10,12 +10,13 @@ publish = false
 
 [features]
 default = []
-std = ["serde/std", "serde_json/std"]
+std = ["serde/std", "serde_json/std", "dep:fs2"]
 
 [dependencies]
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
 sha2 = { workspace = true }
+fs2 = { version = "0.4.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3.27.0"

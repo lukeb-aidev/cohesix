@@ -66,7 +66,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -74,15 +74,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28",
-            "version": "1.28"
+            "schema_value": "1.29",
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -691,7 +691,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -699,15 +699,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28",
-            "version": "1.28"
+            "schema_value": "1.29",
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -1412,7 +1412,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -1420,15 +1420,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28",
-            "version": "1.28"
+            "schema_value": "1.29",
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -1605,7 +1605,7 @@
             "path": "config/coh_policy.toml",
             "schema_pointer": "/coh/run/lease/schema",
             "schema_value": "gpu-lease/v1",
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -1613,15 +1613,15 @@
             "path": "config/cohsh_policy.toml",
             "schema_pointer": null,
             "schema_value": null,
-            "version": "1.28"
+            "version": "1.29"
           },
           {
             "executable": false,
             "kind": "json",
             "path": "config/root_task_resolved.json",
             "schema_pointer": "/root_task/schema",
-            "schema_value": "1.28",
-            "version": "1.28"
+            "schema_value": "1.29",
+            "version": "1.29"
           },
           {
             "executable": false,
@@ -7628,7 +7628,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "3e69a83f5b91e1686d20eee3d70a58e513dba2059b3146383c1c7bd9e4144f5e",
+  "graph_sha256": "7d57ac979f10f6fd1a9f4d0e152dbf63875b4e2eaf5610bac408758aff33b02b",
   "playbooks": [
     {
       "dependencies": [
@@ -8573,9 +8573,9 @@
       }
     }
   ],
-  "resolved_manifest_sha256": "d3029e105edb84e05b1377a6a479ae4e1e3bed555046e4606625644c95951aa5",
+  "resolved_manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "20ac83c7634beec230ebbbbe26a4dee23c6f0b35d48241a5c0f0d57160700afe",
+  "source_sha256": "c73ada5ce4e58cd5279b1bf3094b91fbecf438577178cd1e6df80cda617d24eb",
   "use_cases": [
     {
       "dependencies": [

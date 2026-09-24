@@ -1,0 +1,34 @@
+# Author: Lukas Bower
+# Purpose: Show the private exact-source inputs required by the two M28 live provider cases.
+# Copyright 2026 Lukas Bower
+
+# Copy to a private file. Replace every path, hash, request and credential
+# reference with the selected deployment; these zero hashes cannot pass live
+# source and binary checks. Credential values never belong in this file.
+schema = "cohesix-m28-live-reference/v1"
+host_profile = "jetson-orin-nano-jp7"
+source_commit = "0000000000000000000000000000000000000000"
+gateway_url = "http://127.0.0.1:8080"
+request_auth_ref = "env:HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+delegated_ticket_ref = "env:COH_REST_TICKET"
+source_manifest = "/absolute/cohesix/configs/generated/root_task_resolved.json"
+target_manifest_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+gateway_binary = "/absolute/bin/hive-gateway"
+gateway_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+agent_binary = "/absolute/bin/host-ticket-agent"
+agent_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+gpu_bridge_binary = "/absolute/bin/gpu-bridge-host"
+gpu_bridge_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+cuda_helper_binary = "/absolute/bin/cuda-reference"
+cuda_helper_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+service_request = "/absolute/private/service-job.json"
+service_request_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+gpu_request = "/absolute/private/gpu-job.json"
+gpu_request_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+gpu_input_cas = "/absolute/private/gpu-requests/0000000000000000000000000000000000000000000000000000000000000000.json"
+gpu_device_uuid = "00000000000000000000000000000000"
+nvidia_driver_version = "0.0"
+service_unit = "cohesix-m28-probe.service"
+provider_evidence_root = "/absolute/private/provider-evidence"
+wait_seconds = 300
+jobs_evidence = "/absolute/private/m28-jobs-live/summary.json"

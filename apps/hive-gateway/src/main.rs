@@ -10,6 +10,7 @@
 mod auth;
 mod evidence;
 mod identity;
+mod jobs;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
@@ -254,6 +255,12 @@ struct Cli {
     /// Exact target-session identity for the console target currently behind this gateway.
     #[arg(long)]
     target_session: Option<PathBuf>,
+    /// Private ledger shared with the native ticket agent on this host.
+    #[arg(long, requires = "standing_scopes")]
+    standing_ledger: Option<PathBuf>,
+    /// Private selected scope file; this cannot widen generated controls.
+    #[arg(long, requires = "standing_ledger")]
+    standing_scopes: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -284,6 +291,7 @@ struct GatewayInner {
     broker: Arc<BrokerMetrics>,
     proc_cache: Mutex<ProcReadCache>,
     control_write_backpressure: Mutex<ControlWriteBackpressure>,
+    standing_ledger: Option<Arc<cohesix_authority::standing_ledger::StandingLedger>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1288,13 +1296,22 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let protocol_controls = generated_protocol_controls()?;
+    reject_runtime_protocol_overrides()?;
     let cli = Cli::parse();
     let config = GatewayConfig::from_cli(cli)?;
+    info!(
+        "agent protocol ceiling master={} mcp={} a2a={}",
+        protocol_controls.agent_protocols.enabled,
+        protocol_controls.effective_mcp(),
+        protocol_controls.effective_a2a()
+    );
     if config.mock {
         info!("hive-gateway mock transport enabled");
     }
 
     let (delegation, identity) = config.delegation()?;
+    let standing_ledger = jobs::selected_ledger(&config)?;
     let policy = apply_policy_overrides(CohshPolicy::from_generated(), &config)?;
     info!(
         "hive-gateway session pool control={} telemetry={}",
@@ -1362,6 +1379,7 @@ async fn main() -> Result<()> {
             broker: broker_metrics,
             proc_cache: Mutex::new(ProcReadCache::default()),
             control_write_backpressure: Mutex::new(ControlWriteBackpressure::default()),
+            standing_ledger,
         }),
     };
 
@@ -1385,6 +1403,21 @@ async fn main() -> Result<()> {
         .route("/v1/fs/tail", get(fs_tail))
         .route("/v1/fs/echo", post(fs_echo))
         .route("/v1/fs/echo-batch", post(fs_echo_batch))
+        .route(
+            "/v1/jobs",
+            post(jobs::submit).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route("/v1/jobs/{admission_id}", get(jobs::status))
+        .route("/v1/jobs/{admission_id}/cancel", post(jobs::cancel))
+        .route("/v1/jobs/{admission_id}/reconcile", post(jobs::reconcile))
+        .route(
+            "/v1/standing/scopes/{scope_id}/inspect",
+            post(jobs::inspect_scope),
+        )
+        .route(
+            "/v1/standing/scopes/{scope_id}/revoke",
+            post(jobs::revoke_scope),
+        )
         .route("/v1/openapi.yaml", get(openapi_yaml))
         .route("/docs", get(swagger_ui))
         .with_state(state.clone());
@@ -1433,6 +1466,8 @@ struct GatewayConfig {
     worker_acceptance_evidence: Option<PathBuf>,
     worker_acceptance_root: Option<PathBuf>,
     target_session: Option<PathBuf>,
+    standing_ledger: Option<PathBuf>,
+    standing_scopes: Option<PathBuf>,
 }
 
 fn normalize_tcp_target_host(value: &str) -> Result<String> {
@@ -1596,6 +1631,8 @@ impl GatewayConfig {
             worker_acceptance_evidence,
             worker_acceptance_root,
             target_session,
+            standing_ledger: cli.standing_ledger,
+            standing_scopes: cli.standing_scopes,
         })
     }
 
@@ -1640,6 +1677,29 @@ fn generated_authority_policy() -> Result<cohesix_authority::policy::AuthorityPo
         "../../../configs/generated/root_task_resolved.json"
     ))?;
     Ok(generated.authority)
+}
+
+fn generated_protocol_controls() -> Result<cohesix_authority::protocol::ProtocolControls> {
+    cohesix_authority::protocol::ProtocolControls::from_resolved_manifest(include_bytes!(
+        "../../../configs/generated/root_task_resolved.json"
+    ))
+    .map_err(anyhow::Error::msg)
+}
+
+fn reject_runtime_protocol_overrides() -> Result<()> {
+    // Runtime launch settings cannot turn a compiler-controlled entry point on.
+    for key in [
+        "HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED",
+        "HIVE_GATEWAY_MCP_ENABLED",
+        "HIVE_GATEWAY_A2A_ENABLED",
+    ] {
+        if env::var_os(key).is_some() {
+            return Err(anyhow::anyhow!(
+                "EPERM {key} cannot override generated agent protocol controls"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn env_flag(key: &str) -> bool {
@@ -6390,6 +6450,8 @@ mod tests {
             worker_acceptance_evidence: None,
             worker_acceptance_root: None,
             target_session: None,
+            standing_ledger: None,
+            standing_scopes: None,
         };
         let policy = CohshPolicy::from_generated();
         let updated = apply_policy_overrides(policy, &config).expect("apply overrides");
@@ -6574,6 +6636,7 @@ mod tests {
                 broker: Arc::new(BrokerMetrics::default()),
                 proc_cache: Mutex::new(ProcReadCache::default()),
                 control_write_backpressure: Mutex::new(ControlWriteBackpressure::default()),
+                standing_ledger: None,
             }),
         }
     }

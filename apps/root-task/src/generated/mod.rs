@@ -1112,9 +1112,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.28";
+pub const MANIFEST_SCHEMA: &str = "1.29";
 pub const MANIFEST_SHA256: &str =
-    "d3029e105edb84e05b1377a6a479ae4e1e3bed555046e4606625644c95951aa5";
+    "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

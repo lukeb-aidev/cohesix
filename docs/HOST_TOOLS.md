@@ -903,6 +903,16 @@ Useful endpoints are `/v1/meta/status`, `/v1/meta/bounds`, `/v1/fs/ls`,
 [API Guidelines](API_GUIDELINES.md). Use positive read limits and the returned
 bounds instead of guessing larger payload sizes.
 
+`coh doctor` prints the compiled `agent-protocols` master, MCP and A2A
+switches. They are false in the current QEMU and Pi manifests. A protocol is
+effective only when its own switch and the master are true. The current gateway
+does not implement MCP or A2A routes; selecting a switch does not create an
+endpoint. Changing a deployment's manifest requires rebuilding the matching
+host tools and target profile. Launch environment variables or CLI options
+cannot turn a compiled-off protocol on. Disabling access does not cancel
+underlying tickets, effects or pending results; use existing authenticated REST
+and CLI recovery to inspect them.
+
 The broker serialises work over the existing target connection and provides
 bounded progress for host-ticket ingress, control/receipts and telemetry.
 Concurrent clients share its upstream budget; they do not get independent
@@ -1267,6 +1277,49 @@ production Release A profile disables federation. Use the full
 [host-ticket contract](INTERFACES.md) and
 [authority recovery rules](M27A_AUTHORITY.md#host-execution-and-writer-ownership)
 before changing epochs, state placement or execution topology.
+
+#### Selected M28 jobs and standing scopes
+
+For selected `gpu.workload.submit` and `systemd.restart` jobs, place the
+gateway and native ticket agent on the same Linux host. Give both processes
+the same absolute `--standing-ledger` path and private
+`--standing-scopes` JSON file. The compiler-selected profile caps the file at
+four scopes, 256 retained jobs, one budget unit per effect, two concurrent
+effects, two retries, 5 seconds for facts and 5 seconds for a decision. Each
+scope names exactly one delegated subject, action, target, policy graph hash,
+expiry and narrower bounds. The scope file must be readable only by its owner;
+the ledger directory is mode 0700 and the ledger file mode 0600.
+
+Provision the empty ledger once with `host-ticket-agent --manifest
+<selected-resolved-manifest> --standing-scopes <private-file>
+--standing-ledger <private-ledger> --standing-init`. Then start the agent and
+gateway with those same paths. Keep the agent's cursor, execution journal,
+evidence root, GPU request CAS and native bridge configuration across restarts.
+The ledger rejects a missing, corrupt, full or changed-policy state. Never
+initialize a replacement for lost state while an earlier native outcome may
+still exist; restore or reconcile the original custody first.
+
+`coh --rest-url "$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job submit
+--input <private-job.json>` submits the exact versioned `binding` and raw
+host ticket once. `coh job status <admission-id>` and `coh job reconcile
+<admission-id>` inspect the original execution and target result after a lost
+reply; they never issue another native effect. `coh job cancel <admission-id>`
+records a request and requires a later native terminal to establish stopped
+work. `coh job inspect-scope <scope-id>` and `coh job revoke-scope
+<scope-id>` require a separate delegated `/host/standing/admin` write ticket.
+Ordinary read/write delegation cannot approve its own scope escalation.
+
+The live M28 reference case is selected by a private
+`cohesix-m28-live-reference/v1` TOML file containing absolute source, binary,
+manifest, request and evidence paths, pinned hashes, a loopback or TLS gateway
+URL and `env:`/`file:` credential references. Run
+`scripts/ci/provider_conformance_run.sh --matrix
+configs/provider_conformance.toml --case m28-jobs-live --reference-config
+"$RELEASE_B_REFERENCE" --host-profile "$RELEASE_B_HOST_PROFILE" --state-dir
+"$RELEASE_B_EVIDENCE/m28-jobs-live"`, then the `m28-authority-live` case with
+the same reference and a fresh state directory. The second case consumes the
+first case's immutable `summary.json`. A report records one exact target and
+native observation, not acceptance for another profile or a Cohesix release.
 
 ### `cas-tool`
 

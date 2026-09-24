@@ -32,6 +32,8 @@ pub mod executors;
 pub mod provider;
 /// Federated cross-hive relay worker.
 pub mod relay;
+/// Exact selected-job identity binding for standing-authority dispatch.
+pub mod standing;
 /// Status receipt helpers.
 pub mod status;
 /// UTF-8-safe bounded text helpers.
@@ -1280,6 +1282,7 @@ where
     let key = TicketKey::new(&spec.id, &spec.idempotency_key);
     let mut entry = journal.prepare(spec)?;
     if entry.terminal {
+        standing::acknowledge_delivery(spec, executor_config)?;
         summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
         return Ok(());
     }
@@ -1360,10 +1363,12 @@ where
         ));
     }
     let result: HostTicketResult = serde_json::from_str(line)?;
+    standing::settle_result(spec, executor_config, line, result.state == "succeeded")?;
     if !causal::already_published(transport, session, executor_config, path, &result)? {
         status::append_result_line(transport, session, path, line)?;
     }
     causal::terminal(transport, session, executor_config, spec, path, &result)?;
+    standing::acknowledge_delivery(spec, executor_config)?;
     match result.state.as_str() {
         "succeeded" => summary.succeeded = summary.succeeded.saturating_add(1),
         "expired" => summary.expired = summary.expired.saturating_add(1),
@@ -1455,6 +1460,12 @@ where
                 .ok_or_else(|| anyhow!("persisted journal state lacks provider result"))?;
             let (result_path, expected_line) =
                 build_v2_provider_result_line(manifest, spec, provider_result)?;
+            standing::settle_result(
+                spec,
+                executor_config,
+                &expected_line,
+                provider_result.outcome != wal::JournalProviderOutcome::Stale,
+            )?;
             if entry
                 .result_path
                 .as_deref()
@@ -1488,6 +1499,7 @@ where
             state,
             wal::ExecutionJournalState::ResultPublished | wal::ExecutionJournalState::Terminal
         ) {
+            standing::acknowledge_delivery(spec, executor_config)?;
             summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
             return Ok(());
         }
@@ -1542,6 +1554,7 @@ where
                     reconciled: false,
                 },
                 Err(err) if executors::is_provider_pending(&err) => {
+                    standing::mark_uncertain_if_dispatched(spec, executor_config)?;
                     return Err(err).context(
                         "provider outcome remains pending; journal stays executing for observation",
                     );
@@ -1598,12 +1611,19 @@ where
             .ok_or_else(|| anyhow!("provider-result-persisted entry lacks result"))?;
         let (path, line) = build_v2_provider_result_line(manifest, spec, provider_result)?;
         journal.stage_result(&key, path.as_str(), line.as_str())?;
+        standing::settle_result(
+            spec,
+            executor_config,
+            &line,
+            provider_result.outcome != wal::JournalProviderOutcome::Stale,
+        )?;
 
         let already_visible = terminal.contains(&key);
         if !already_visible {
             status::append_result_line(transport, session, path.as_str(), line.as_str())?;
         }
         journal.mark_result_published(&key)?;
+        standing::acknowledge_delivery(spec, executor_config)?;
         match provider_result.outcome {
             wal::JournalProviderOutcome::Confirmed => {
                 summary.succeeded = summary.succeeded.saturating_add(1);

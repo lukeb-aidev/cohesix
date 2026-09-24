@@ -12495,10 +12495,10 @@ packages and cases named below are **planned outputs** of their named owner.
 Missing tests or empty selections cannot pass. Use the existing conformance
 runner and TEST_PLAN catalog, not a second acceptance or execution system.
 
-`m28-selected-job-contract` owns planned `--case <id>` and
-`--reference-config <path>` options for `scripts/ci/provider_conformance_run.sh`;
-these options do not exist yet. Extend its existing matrix/runner and tests,
-preserving current modes. Reject unknown, duplicate and incompatible selections.
+`m28-selected-job-contract` owns `--case <id>` and
+`--reference-config <path>` options for `scripts/ci/provider_conformance_run.sh`.
+The selected M28 runner rejects unknown, duplicate and incompatible selections;
+its live results still require exact-source execution and retained evidence.
 Validate the reference file's installed binary/package paths, source/generated
 profile digests, endpoints, secret references, device/runtime versions, approved
 workload/model/data hashes, resource caps and evidence paths. It contains no
@@ -12563,7 +12563,12 @@ inventories are unchanged. No product runtime or hardware qualification was run.
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** In Progress — owner activated Milestone 28 on 24 September 2026.
+
+Implementation and evidence are tracked in
+[M28_IMPLEMENTATION_RECORD](audit/M28_IMPLEMENTATION_RECORD.md). The milestone
+remains open until all three task records and the definition of done below have
+exact-source evidence.
 
 **Value:** every client safely operates the same durable job without granting
 unrestricted host access or repeatedly asking permission inside valid policy.

@@ -139,6 +139,7 @@ fn main() -> Result<()> {
             print!("{}", cohesix_authority::provider::registry_json());
             Ok(())
         }
+        Command::Job(args) => run_selected_job(args, role, cli.ticket.as_deref()),
         Command::Identity {
             mapping,
             jwks,
@@ -1371,6 +1372,45 @@ fn resolve_auth_token(cli_token: Option<&str>) -> Result<String> {
     Err(anyhow!(
         "tcp auth token must be configured with --auth-token or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN"
     ))
+}
+
+fn run_selected_job(args: JobArgs, role: Role, ticket: Option<&str>) -> Result<()> {
+    anyhow::ensure!(
+        role == Role::Queen && !args.connect.mock,
+        "selected jobs require an authenticated Queen REST gateway"
+    );
+    let url = resolve_rest_url(args.connect.rest_url.as_deref())
+        .context("selected jobs require --rest-url or COH_REST_URL")?;
+    let mut client = cohesix_rest::GatewayClient::new(url);
+    if let Some(auth) = resolve_rest_auth_token(args.connect.rest_auth_token.as_deref()) {
+        client = client.with_request_auth_token(auth);
+    }
+    if let Some(ticket) = ticket {
+        client = client.with_delegated_ticket(ticket);
+    }
+    let report = match args.command {
+        JobCommand::Submit { input } => {
+            use std::io::Read;
+            anyhow::ensure!(
+                input.is_file() && !input.is_symlink(),
+                "selected job input must be a regular file"
+            );
+            let mut bytes = Vec::new();
+            std::fs::File::open(&input)?
+                .take(4097)
+                .read_to_end(&mut bytes)?;
+            anyhow::ensure!(bytes.len() <= 4096, "ELIMIT selected job input");
+            let request: serde_json::Value = serde_json::from_slice(&bytes)?;
+            client.submit_selected_job(&request)?
+        }
+        JobCommand::Status { admission_id } => client.selected_job_status(&admission_id)?,
+        JobCommand::Cancel { admission_id } => client.request_selected_job_cancel(&admission_id)?,
+        JobCommand::Reconcile { admission_id } => client.reconcile_selected_job(&admission_id)?,
+        JobCommand::InspectScope { scope_id } => client.inspect_standing_scope(&scope_id)?,
+        JobCommand::RevokeScope { scope_id } => client.revoke_standing_scope(&scope_id)?,
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
 }
 
 fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {

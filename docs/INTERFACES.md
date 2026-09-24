@@ -10,7 +10,7 @@ interfaces: transport selection, target console framing, namespace paths,
 control files, and non-generated record schemas. It links to generated snippets
 for compiler-owned values instead of copying them.
 
-Manifest schema 1.28 permits at most 512 retained Queen intent outcomes and
+Manifest schema 1.29 permits at most 512 retained Queen intent outcomes and
 selects 512 in both QEMU and Pi Release A profiles. Compatibility policy defaults
 remain 64; the Python projection includes the selected `queen_dedupe_entries`.
 Exhaustion refuses new identities without eviction or repeated effects.
@@ -23,6 +23,10 @@ The schema retains compiler-selected macOS launchd service maps, exact
 Xcode/release/endpoint target maps and version-1 actions. Their target, process-identity,
 refusal and observation contracts are in [MACOS_PROVIDERS.md](MACOS_PROVIDERS.md).
 No macOS device access or native execution moves into the VM.
+The schema adds host-only `gateway` protocol controls with
+`cohesix-agent-protocol-controls/v1` shape. Missing switches resolve false;
+unknown fields or versions refuse. Master and per-protocol switches are
+conjoined and do not alter target console, Secure9P or Worker ABIs.
 
 Protocol internals belong in [SECURE9P.md](SECURE9P.md), role and ticket policy
 in [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md), system boundaries in
@@ -1227,6 +1231,30 @@ production use case or Worker execution: the source retains the exact uniquely
 correlated target terminal before marking delivery, and independently resolves
 the peer request credential and delegated ticket. Missing credentials, stale
 epoch, conflicting results and exhausted durable capacity remain refusals.
+
+The selected M28 REST job contract is `cohesix-job-binding/v1`. It binds one
+scope, admission id, original ticket/idempotency pair, delegated subject,
+action, exact target, input and policy SHA-256 hashes, state and resource
+generations, deadline, one budget unit and attempt number. The gateway adds
+`admission.standing_scope_id` to the existing target ticket only after it has
+durably reserved that identity. Older admission correlations omit this optional
+field and keep their original meaning; omission never creates a standing
+grant. The native agent checks the same admission, ticket and input against
+the private ledger before a provider call. Target ticket and lease admission
+remain separate controls.
+
+`cohesix-standing-scope/v1` identifies one subject, action and exact target
+with expiry, generation, policy hash, cumulative unit budget, concurrency,
+retry, cooldown, fact-age and decision-lifetime ceilings. The selected manifest
+has `cohesix-standing-controls/v1` with only GPU submit and systemd restart
+enabled. `cohesix-standing-ledger/v1` is host-local and limited to 1 MiB, 256
+jobs and 16 scopes before any smaller generated limit. Its `reserved`,
+`dispatching`, `uncertain`, `confirmed` and `refused_no_effect` execution states
+are distinct from `pending` and `acknowledged` result delivery. Only a
+pre-dispatch refusal releases a no-effect reservation; unknown native
+termination stays allocated. Full, corrupt, missing or changed-policy state
+refuses new effects. Reconciliation exposes the exact retained target result
+line digest and never grants an effect replay.
 
 ## CAS updates
 

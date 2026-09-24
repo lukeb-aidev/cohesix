@@ -6,7 +6,33 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.28"
+schema = "1.29"
+
+[gateway]
+schema = "cohesix-agent-protocol-controls/v1"
+
+[gateway.agent_protocols]
+enabled = false
+
+[gateway.mcp]
+enabled = false
+
+[gateway.a2a]
+enabled = false
+
+[standing_authority]
+schema = "cohesix-standing-controls/v1"
+enabled = false
+actions = []
+max_scopes = 0
+max_jobs = 0
+max_job_units = 0
+max_total_units = 0
+max_concurrent = 0
+max_retries = 0
+max_cooldown_ms = 0
+max_fact_age_ms = 0
+max_decision_ttl_ms = 0
 
 [root_task.affinity]
 enabled = true

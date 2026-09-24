@@ -15,6 +15,22 @@ required_lifecycle = ["discover", "preflight", "execute", "observe", "verify", "
 proof_lanes = ["mock", "dry_run", "live_safe", "negative", "receipt", "recovery", "package"]
 
 [[cases]]
+id = "m28-jobs-live"
+group = "executors"
+providers = ["gpu.workload", "systemd"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28_live"
+
+[[cases]]
+id = "m28-authority-live"
+group = "identity"
+providers = ["gpu.workload", "systemd"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28_live"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

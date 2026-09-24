@@ -52,6 +52,8 @@ pub struct PackageConfig {
 pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
 
+    audit.push_line(protocol_status()?);
+
     let policy = match load_policy(&config.policy_path) {
         Ok(policy) => {
             let detail = format!(
@@ -123,6 +125,32 @@ pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
         Ok(())
     } else {
         Err(anyhow!("doctor failed: {} check(s) failed", errors.len()))
+    }
+}
+
+fn protocol_status() -> Result<String> {
+    let protocols = cohesix_authority::protocol::ProtocolControls::from_resolved_manifest(
+        include_bytes!("../../../configs/generated/root_task_resolved.json"),
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(format!(
+        "doctor check=agent-protocols schema={} master={} mcp={} a2a={} endpoints=not-implemented",
+        protocols.schema,
+        protocols.agent_protocols.enabled,
+        protocols.effective_mcp(),
+        protocols.effective_a2a()
+    ))
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::protocol_status;
+
+    #[test]
+    fn selected_profile_reports_disabled_protocols_without_claiming_endpoints() {
+        let status = protocol_status().expect("generated controls");
+        assert!(status.contains("master=false mcp=false a2a=false"));
+        assert!(status.ends_with("endpoints=not-implemented"));
     }
 }
 

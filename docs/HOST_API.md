@@ -34,11 +34,48 @@ the OpenAPI document.
 | `POST` | `/v1/identity/exchange` | [Mapped identity issuance](IDENTITY_MAPPING.md) | Yes; no existing ticket |
 | `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes, plus write delegation |
 | `POST` | `/v1/fs/echo-batch` | Bounded ordered `ECHO` appends | Yes, plus write delegation |
+| `POST` | `/v1/jobs` | Reserve and submit one exact selected host ticket | Yes, plus delegated `/host/tickets/spec` write |
+| `GET` | `/v1/jobs/{admission_id}` | Read retained execution and result delivery | Yes, plus delegated `/host/tickets/status` read |
+| `POST` | `/v1/jobs/{admission_id}/cancel` | Record a cancellation request; no termination claim | Yes, plus delegated `/host/tickets/spec` write |
+| `POST` | `/v1/jobs/{admission_id}/reconcile` | Read the target result for the same identity | Yes, plus delegated `/host/tickets/status` read |
+| `POST` | `/v1/standing/scopes/{scope_id}/inspect` | Inspect durable budget and revocation state | Yes, plus separate `/host/standing/admin` write |
+| `POST` | `/v1/standing/scopes/{scope_id}/revoke` | Block new dispatch under the scope | Yes, plus separate `/host/standing/admin` write |
 | `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
 | `GET` | `/docs` | Offline index linking the embedded OpenAPI and provider contract | No |
 
 Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 `lines` query. The gateway validates those bounds before contacting the target.
+
+The selected manifest has versioned `[gateway.agent_protocols]`,
+`[gateway.mcp]` and `[gateway.a2a]` enablement switches. All three default to
+false; effective MCP and A2A access each requires both its own switch and the
+master switch. This version contains no MCP or A2A endpoint. REST remains
+available when either protocol is disabled, including authenticated reads used
+to recover an existing job. Gateway launch variables and clients cannot raise
+the compiled switches; an attempted protocol override is refused at startup.
+
+Selected jobs accept at most 4,096 JSON bytes containing one `binding` and one
+raw `ticket`. The versioned binding fixes subject, action, target, input hash,
+policy graph hash, current state and resource generations, deadline, ticket id,
+idempotency key, admission id, attempt and one budget unit. Only
+`gpu.workload.submit` and `systemd.restart` are admitted by the selected
+standing profile. The gateway observes the target lease/GPU publication or
+native systemd unit before reservation. The agent checks the same binding and
+current state at its native dispatch boundary. A successful `POST` returns
+HTTP 202 for a target write ACK; an exact existing admission returns 200. An
+uncertain write returns 409 with its original admission id. Status and
+reconciliation never submit the effect again.
+
+The `record.execution` values are `reserved`, `dispatching`, `uncertain`,
+`confirmed` and `refused_no_effect`; `record.delivery` is independently
+`pending` or `acknowledged`. Cancellation first records
+`cancel_requested=true`. If native dispatch has already begun, the flag does
+not prove cancellation; a separate authorized native control and terminal
+observation are required. Reconciliation reports `effect_replay_allowed=false`
+and returns target results with their exact line SHA-256 digests only when the
+target read succeeds. A digest matching `record.result_sha256` binds retained
+execution to that target line. Its HTTP 503
+means that the target result is unavailable, not that no effect occurred.
 
 ## Worker Runtime Metadata
 

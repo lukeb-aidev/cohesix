@@ -5,7 +5,7 @@
 openapi: 3.1.0
 info:
   title: Cohesix Hive Gateway
-  version: 0.4.0
+  version: 0.5.0
   description: |-
     Host-only REST gateway that projects Cohesix console/file semantics into a
     JSON API. Responses mirror OK/ERR/END semantics and enforce manifest bounds.
@@ -421,6 +421,128 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayResponse"
+  /v1/jobs:
+    post:
+      summary: Reserve and submit one selected durable job.
+      description: >-
+        The private standing ledger reserves the exact binding before a root
+        ticket write. A lost or uncertain response is reconciled by the same
+        admission id; callers must not submit a new effect identity.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [binding, ticket]
+              properties:
+                binding:
+                  $ref: "#/components/schemas/SelectedJobBinding"
+                ticket:
+                  type: object
+                  description: Existing exact host-ticket/v1 or host-ticket/v2 request without caller admission.
+      responses:
+        "200":
+          description: Exact admission already retained; no effect replay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobResponse"
+        "202":
+          description: Target ticket write acknowledged; native outcome remains pending.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobResponse"
+        "403":
+          description: Delegation, scope, current facts or budget refused.
+        "409":
+          description: Target write outcome uncertain; reconcile original admission id.
+        "503":
+          description: Current native or target facts unavailable.
+  /v1/jobs/{admission_id}:
+    get:
+      summary: Read retained execution and independent result delivery state.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      parameters:
+        - $ref: "#/components/parameters/AdmissionId"
+      responses:
+        "200":
+          description: One retained job record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobRecord"
+        "404":
+          description: Unknown or inaccessible admission id.
+  /v1/jobs/{admission_id}/cancel:
+    post:
+      summary: Record a cancellation request without asserting termination.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      parameters:
+        - $ref: "#/components/parameters/AdmissionId"
+      responses:
+        "202":
+          description: Cancellation requested; existing native work may continue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobRecord"
+  /v1/jobs/{admission_id}/reconcile:
+    post:
+      summary: Observe exact target results without submitting the effect again.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      parameters:
+        - $ref: "#/components/parameters/AdmissionId"
+      responses:
+        "200":
+          description: Retained job and bounded matching target results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobReconciliation"
+        "503":
+          description: Target result read unavailable; absence of effect is not established.
+  /v1/standing/scopes/{scope_id}/inspect:
+    post:
+      summary: Inspect a scope and its retained cumulative budget.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      parameters:
+        - $ref: "#/components/parameters/ScopeId"
+      responses:
+        "200":
+          description: Private standing scope and budget snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandingScopeStatus"
+  /v1/standing/scopes/{scope_id}/revoke:
+    post:
+      summary: Durably revoke future dispatch under a standing scope.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+      parameters:
+        - $ref: "#/components/parameters/ScopeId"
+      responses:
+        "200":
+          description: Revoked scope and retained budget; existing work remains unresolved until observed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandingScopeStatus"
   /v1/openapi.yaml:
     get:
       summary: OpenAPI 3.1 specification.
@@ -442,6 +564,23 @@ paths:
               schema:
                 type: string
 components:
+  parameters:
+    AdmissionId:
+      in: path
+      name: admission_id
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ScopeId:
+      in: path
+      name: scope_id
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
   securitySchemes:
     delegatedTicket:
       type: apiKey
@@ -465,6 +604,65 @@ components:
       description: >
         Alternative to bearer auth for mutating endpoints.
   schemas:
+    SelectedJobBinding:
+      type: object
+      additionalProperties: false
+      required: [schema, scope_id, admission_id, ticket_id, idempotency_key, subject, action, target, input_sha256, policy_sha256, state_epoch, resource_generation, deadline_unix_ms, units, attempt]
+      properties:
+        schema: {const: cohesix-job-binding/v1}
+        scope_id: {type: string}
+        admission_id: {type: string}
+        ticket_id: {type: string}
+        idempotency_key: {type: string}
+        subject: {type: string}
+        action: {type: string, enum: [gpu.workload.submit, systemd.restart]}
+        target: {type: string}
+        input_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        policy_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        state_epoch: {type: integer, minimum: 1}
+        resource_generation: {type: integer, minimum: 1}
+        deadline_unix_ms: {type: integer, minimum: 1}
+        units: {const: 1}
+        attempt: {type: integer, minimum: 1}
+    SelectedJobRecord:
+      type: object
+      required: [binding, intent_sha256, scope_generation, decision_expires_unix_ms, reserved_unix_ms, execution, delivery, cancel_requested]
+      properties:
+        binding:
+          $ref: "#/components/schemas/SelectedJobBinding"
+        intent_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        scope_generation: {type: integer, minimum: 1}
+        decision_expires_unix_ms: {type: integer, minimum: 1}
+        reserved_unix_ms: {type: integer, minimum: 1}
+        dispatched_unix_ms: {type: [integer, 'null']}
+        execution: {type: string, enum: [reserved, dispatching, uncertain, confirmed, refused_no_effect]}
+        delivery: {type: string, enum: [pending, acknowledged]}
+        result_sha256: {type: [string, 'null']}
+        cancel_requested: {type: boolean}
+    SelectedJobResponse:
+      type: object
+      required: [schema, record, submission]
+      properties:
+        schema: {const: cohesix-selected-job-response/v1}
+        record:
+          $ref: "#/components/schemas/SelectedJobRecord"
+        submission: {type: string, enum: [existing, target_write_ack]}
+    SelectedJobReconciliation:
+      type: object
+      required: [schema, record, target_results, target_result_sha256, effect_replay_allowed]
+      properties:
+        schema: {const: cohesix-selected-job-reconciliation/v1}
+        record:
+          $ref: "#/components/schemas/SelectedJobRecord"
+        target_results: {type: array, maxItems: 64, items: {type: object}}
+        target_result_sha256: {type: array, maxItems: 64, items: {type: string, pattern: '^[0-9a-f]{64}$'}}
+        effect_replay_allowed: {const: false}
+    StandingScopeStatus:
+      type: object
+      required: [scope, budget]
+      properties:
+        scope: {type: object}
+        budget: {type: object}
     GatewayResponse:
       type: object
       required:
