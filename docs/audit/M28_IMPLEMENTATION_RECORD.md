@@ -30,13 +30,13 @@ or full state must refuse new effects with a deterministic error.
 
 | Obligation | Result | Retained evidence |
 | --- | --- | --- |
-| Shared job lifecycle and CLI/REST/Python source parity | Host checks passed; installed live parity pending | `cargo test --locked -p coh --test recipe --test run --test workflow`; `cargo test --locked -p cohesix-rest --lib`; `cargo test --locked -p host-ticket-agent --lib`; focused Python command below. These verify client requests and host journal transitions, not a target effect. |
-| Standing scope, atomic accounting and current-state refusal | Host checks passed; live refusals pending | `cargo test --locked -p cohesix-authority`; `cargo test --locked -p hive-gateway`; `cargo test --locked -p host-ticket-agent --lib`; focused Python command below. |
+| Shared job lifecycle and CLI/REST/Python source parity | Host checks passed; installed live parity pending | `cargo test --locked -p coh --test recipe --test run --test workflow`; `cargo test --locked -p cohesix-rest --lib`; `cargo test --locked -p host-ticket-agent --lib`; focused Python command below. These verify client requests and host journal transitions. |
+| Standing scope, atomic accounting and current-state refusal | Host checks passed; one exploratory GPU outcome confirmed; full live refusals pending | `cargo test --locked -p cohesix-authority`; `cargo test --locked -p hive-gateway` (91 unit and two protocol-control tests after the subject fix); `cargo test --locked -p host-ticket-agent --lib`; focused Python command below. |
 | Generated protocol flag truth table and startup ceiling | Host checks passed | `cargo test --locked -p coh-rtc`; `cargo test --locked -p hive-gateway --test agent_protocol_controls`; `cargo test --locked -p coh --lib doctor::`. MCP/A2A listeners are not implemented or claimed. |
-| Live bounded GPU action and allowlisted service recovery | Pending | — |
-| Generated consistency and selected source checks | Passed; target and native host work pending | `scripts/check-generated.sh --update-pi4-test-profile`; `git diff --check`; `cargo fmt --all --check`; focused Python command below. |
+| Live bounded GPU action and allowlisted service recovery | Native GPU/target path observed in a mixed-source preflight; service and exact-source case reports pending | `out/audit/m28-source-c7ca45655/gpu-job-04-observation.json` and the content-addressed native object named below. Neither `m28-jobs-live` nor `m28-authority-live` has passed. |
+| Generated consistency and selected source checks | Canonical generated checks passed; final exact-source target case pending | `scripts/check-generated.sh --update-pi4-test-profile`; `git diff --check`; `cargo fmt --all --check`; focused Python command below. |
 
-The focused Python command passed 60 tests:
+The focused Python command passed 61 tests:
 
 ```bash
 .venv/bin/python -m pytest -q \
@@ -60,8 +60,35 @@ built under `out/cohesix-m28-kvm/` and booted on the Linux AArch64 NVIDIA host
 through KVM. The retained serial transcript at
 `out/audit/qemu-serial.log` on that host reached `root-console.start.ok` and
 reported the selected 31,250,000 Hz timer. This preflight is not exact-source
-M28 job evidence: the native provider and authenticated target cases have not
-yet passed, and the Pi driver acceptance line is red in this QEMU guest.
+M28 job evidence: the native provider and authenticated target cases had not
+yet run, and the Pi driver acceptance line is red in this QEMU guest.
+
+A private KVM derivation from source `83fe1105913ed4324443519fe5aa073fbf2f9001`
+then booted with selected manifest SHA-256
+`7e7a27ee02720e147fbf7f8386a689c1c6cb678c11377d574423a9157213bd52`.
+Authenticated `/proc/boot` readback is retained at
+`out/audit/m28-source-c7ca45655/qemu-authenticated-read.txt`. After two
+gateway repairs, a native Linux AArch64 CUDA host accepted
+`m28-gpu-work-04` under standing scope `m28-gpu`, Worker `worker-3`, and root
+lease `m28-lease-04`. The ledger reported `confirmed` execution and
+`acknowledged` delivery; the target retained `claimed`, `running`, and one
+`succeeded` result for the same admission. The content-addressed native object
+`629965998cd77c03d35b018248eddf855c7452ebdb395d0ea935a16ab022aa47`
+reports `cuda_output_verified`, the selected device UUID, 768 allocated
+bytes, one stream, and the verified output SHA-256. Its exact bytes and the
+read-only reconciliation are retained in
+`out/audit/m28-source-c7ca45655/`. The earlier rejected admissions were
+checked to have no ledger allocation before a fresh identity was submitted.
+
+This is a useful live preflight, not milestone acceptance: the guest image was
+built at the initial source commit, while the repaired gateway and evidence
+reader came from later commits. The exact-source `m28-jobs-live` and
+`m28-authority-live` reports remain unrun. The confined
+`cohesix-m28-probe.service` is now installed and active on Merlin2; its
+installed bytes match the private source file SHA-256
+`a5bcef68274bfe6bd4446233af436a3e2415af1d16ccc7b30b465a9c2f81326c`.
+The governed service action and live interrupted-delivery observation remain
+to be exercised.
 
 No M28 acceptance or Release B qualification is claimed while these rows are
 pending. Material AI assistance: contract inventory and implementation drafting

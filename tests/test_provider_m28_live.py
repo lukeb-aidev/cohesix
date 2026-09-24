@@ -119,6 +119,9 @@ def test_reconciliation_requires_the_exact_retained_target_line_digest() -> None
     with pytest.raises(ValueError, match="target result identity mismatch"):
         observe_terminal(backend, "admit-1", 1)
     backend.rows = [claimed, result, result]
+    backend.hashes = ["c" * 64, "a" * 64, "a" * 64]
+    assert observe_terminal(backend, "admit-1", 1) == (record, result)
+    backend.hashes[1] = "d" * 64
     with pytest.raises(ValueError, match="target terminal ambiguous"):
         observe_terminal(backend, "admit-1", 1)
 

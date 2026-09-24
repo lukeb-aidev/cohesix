@@ -65,7 +65,8 @@ historical evidence does not establish release qualification.
 [Milestone 28](BUILD_PLAN.md#28) is in progress. The source now declares
 false-default, compiler-controlled MCP and A2A access switches and implements
 selected REST/CLI/Python jobs with a private standing ledger for GPU submit and
-service restart. The current gateway has no MCP or A2A routes. The required
+service restart. The current gateway has no MCP or A2A routes. A mixed-source
+QEMU/native CUDA preflight has a confirmed GPU result; the required
 exact-source live GPU/service cases and milestone acceptance remain pending in
 the [M28 implementation record](audit/M28_IMPLEMENTATION_RECORD.md). This work
 does not change Release A acceptance or qualify Release B.

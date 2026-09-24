@@ -298,13 +298,14 @@ def observe_terminal(
                         "M28 target result identity mismatch")
                 if row.get("state") in {"succeeded", "failed", "expired"}:
                     terminal_rows.append((row, row_hash))
-            require(len(terminal_rows) <= 1, "M28 target terminal ambiguous")
+            require(len({row_hash for _, row_hash in terminal_rows}) <= 1,
+                    "M28 target terminal ambiguous")
             if (
                 record["execution"] == "confirmed"
                 and record["delivery"] == "acknowledged"
-                and len(terminal_rows) == 1
+                and bool(terminal_rows)
             ):
-                terminal, terminal_hash = terminal_rows[0]
+                terminal, terminal_hash = terminal_rows[-1]
                 require(terminal["state"] == "succeeded"
                         and terminal_hash == record["result_sha256"],
                         "M28 target terminal mismatch")
