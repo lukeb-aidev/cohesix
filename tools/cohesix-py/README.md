@@ -4,38 +4,38 @@
 <!-- Author: Lukas Bower -->
 # cohesix (Python)
 
-`cohesix` is a thin, non-authoritative Python SDK for Cohesix control-plane
-operations. It mirrors existing control-file and console semantics; it does not
-introduce new protocol behavior.
+Use `cohesix` to connect Python applications to Cohesix control and telemetry
+through explicit REST, TCP console, mounted Secure9P, or mock backends. This
+thin, non-authoritative SDK mirrors existing control-file and console semantics;
+it does not introduce new protocol behavior.
 
 ## Install
 
-Editable source install:
+Install the published Python client (Python 3.11 or later):
 
 ```bash
-python3 -m pip install -e tools/cohesix-py
+python3 -m pip install 'cohesix==1.1.0b1'
 ```
 
-With host integration adapters:
+For optional host integration adapters or PEFT/LoRA helper package probes:
 
 ```bash
-python3 -m pip install -e 'tools/cohesix-py[integrations]'
+python3 -m pip install 'cohesix[integrations]==1.1.0b1'
+python3 -m pip install 'cohesix[ml]==1.1.0b1'
 ```
+
+These install the Python client, not the matching native Cohesix host tools,
+target profile, or a live target. In a source checkout, use
+`python3 -m pip install -e tools/cohesix-py` for editable development instead.
 
 For the qualified native import/training workflow, see
-[Private LoRA release](../../docs/PRIVATE_LORA_RELEASE.md).
+[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PRIVATE_LORA_RELEASE.md).
 `cohesix.playbooks.run_peft_release` routes plan/apply/watch/explain/verify/recover
 to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
 prepares the pinned native profile; `examples/private_lora_request.py` prepares
 subsequent requests from reviewed provenance. Preparation is not execution evidence.
 
-With PEFT/LoRA helper package probes:
-
-```bash
-python3 -m pip install -e 'tools/cohesix-py[ml]'
-```
-
-The core wheel requires Python 3.11 or later. Release compatibility is tested
+Release compatibility is tested
 on CPython 3.11 and 3.13. The wheel is target-neutral; it does not bundle or
 select a QEMU/Pi manifest.
 
@@ -142,10 +142,13 @@ cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-por
 ```
 
 Artifacts are written under `out/examples/playbooks/<playbook-id>/`.
-See [`docs/USE_CASES.md`](../../docs/USE_CASES.md) for the capability map and
+See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/USE_CASES.md) for the capability map and
 the contribution path toward complete generated workflows.
 
 ## Existing examples
+
+These scripts and the evidence-pack commands below require a source checkout
+with the matching native tools.
 
 ```bash
 python3 tools/cohesix-py/examples/lease_run.py --mock
@@ -186,7 +189,7 @@ scripts/ci/python_compat_run.sh \
   --state-dir out/python-compat/m26e-wheel
 ```
 
-See [`docs/PYTHON_SUPPORT.md`](../../docs/PYTHON_SUPPORT.md) for target
+See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PYTHON_SUPPORT.md) for target
 projection commands and proof-boundary details.
 
 ## Installed CUDA and LoRA journeys
@@ -195,5 +198,5 @@ projection commands and proof-boundary details.
 and signed verifier. `cohesix.journey.run` returns the same versioned outcome
 and exit mapping. Only verified requested completion returns zero; an ACK,
 timeout or recovered failed canary does not. Keep state outside runner scratch.
-See [Adoption](../../docs/ADOPTION.md) and [CI workflows](../../docs/CI_WORKFLOWS.md)
+See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/CI_WORKFLOWS.md)
 for exact installation, config, authority and recovery steps.

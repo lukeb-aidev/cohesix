@@ -8,15 +8,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cohesix"
-version = "0.2.0-alpha2"
-description = "Cohesix Python client (filesystem + TCP console backends)"
+version = "1.1.0b1"
+description = "Python client for Cohesix REST, TCP console, Secure9P, and mock workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/lukasbower/cohesix"
+Homepage = "https://lukeb-aidev.github.io/cohesix/"
+Source = "https://github.com/lukeb-aidev/cohesix"
+Documentation = "https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PYTHON_SUPPORT.md"
 
 [project.optional-dependencies]
 integrations = [

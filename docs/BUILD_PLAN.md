@@ -134,7 +134,7 @@ owned by their specific contracts.
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
 | [27h](#27h) | Release A Community Video Index | Complete — documentation only |
-| [27i](#27i) | Release A Python Index Publication | Complete — PyPI `1.1.0b0` published |
+| [27i](#27i) | Release A Python Index Publication | Reopened — published `1.1.0b0` page correction only |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
@@ -12423,9 +12423,10 @@ Deliverables: Public README video index and a reviewable mailing-list draft.
 ## Milestone 27i — Release A Python Index Publication <a id="27i"></a>
 [Milestones](#Milestones)
 
-**Status:** Complete — owner-approved post-release Python publication,
-24 September 2026. This task does not change the sealed `1.1.0-beta` archives,
-their historical acceptance, or Release B scope.
+**Status:** Reopened — the `1.1.0b0` publication completed on 24 September 2026;
+the bounded `m27i-pypi-1-1-0b1-page-correction` task restores its public
+installation and navigation metadata. This does not change the sealed
+`1.1.0-beta` archives, their historical acceptance, or Release B scope.
 
 ```text
 Title/ID: m27i-pypi-1-1-0b0-publication
@@ -12460,6 +12461,20 @@ post-upload page review found checkout-only installation guidance, a stale
 Homepage URL and five relative documentation links that resolve to 404 on
 PyPI. The uploaded `1.1.0b0` metadata cannot be edited in place; a corrected
 page requires a separately versioned distribution.
+
+```text
+Title/ID: m27i-pypi-1-1-0b1-page-correction
+Milestone: 27i / Release A Python Index Publication
+Goal: Publish a corrected 1.1.0b1 Python-only distribution from the sealed 1.1.0-beta SDK code so PyPI readers get working installation instructions, documentation links and project identity.
+Inputs: m27i-pypi-1-1-0b0-publication defect record, v1.1.0-beta tagged SDK source, exact metadata-only delta, registered GitHub trusted publisher and pypi reviewer environment.
+Changes:
+  - tools/cohesix-py/{pyproject.toml,README.md} — align the Python version, summary, URLs and index-facing instructions while preserving SDK behavior.
+  - .github/workflows/release-pypi.yml — build and validate 1.1.0b1 from the tagged SDK plus the pinned metadata delta, then hand off exact reviewed bytes to the existing OIDC gate.
+  - docs/{BUILD_PLAN,HOST_TOOLS,PYTHON_SUPPORT}.md — record the correction scope, Python-only install route and resulting publication evidence.
+Commands: actionlint .github/workflows/release-pypi.yml; python3 scripts/install/build_python_package.py --repo <tag-plus-metadata-stage> --inventory <tag-inventory> --out <fresh-dist>; python3 -m twine check <fresh-dist>/*.whl <fresh-dist>/*.tar.gz; isolated Python 3.11 and 3.13 wheel/CLI smoke; scripts/check-generated.sh; scripts/ci/check_test_plan.sh; git diff --check; inspect reviewed GitHub artifact hashes before pypi environment approval.
+Checks: The staged source differs from the sealed tag only in the two declared Python metadata files; built wheel/sdist contents, description, public URLs and package version are inspected; the rendered PyPI page and downloaded public hashes match the approved GitHub artifacts. The correction makes no new target, bundle, runtime or overall-release acceptance claim.
+Deliverables: Reviewed workflow and source delta, exact artifact digest record, corrected PyPI 1.1.0b1 wheel and sdist with verified page and provenance, and retained 1.1.0b0 historical evidence.
+```
 
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
