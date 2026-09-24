@@ -134,7 +134,7 @@ owned by their specific contracts.
 | [27f](#27f) | SwarmUI Community Showcase: Spectrum Workbench + Live AI Hive | Planned — next release |
 | [27g](#27g) | Integrated Qualification and Next Release | Complete — owner-approved limited Release A qualification |
 | [27h](#27h) | Release A Community Video Index | Complete — documentation only |
-| [27i](#27i) | Release A Python Index Publication | In Progress — PyPI trusted publishing |
+| [27i](#27i) | Release A Python Index Publication | Complete — PyPI `1.1.0b0` published |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Planned |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
@@ -12423,7 +12423,7 @@ Deliverables: Public README video index and a reviewable mailing-list draft.
 ## Milestone 27i — Release A Python Index Publication <a id="27i"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress — owner-requested post-release Python publication,
+**Status:** Complete — owner-approved post-release Python publication,
 24 September 2026. This task does not change the sealed `1.1.0-beta` archives,
 their historical acceptance, or Release B scope.
 
@@ -12439,6 +12439,21 @@ Commands: actionlint .github/workflows/release-pypi.yml; python3 scripts/install
 Checks: The workflow checks out the exact tagged commit, changes only the Python package version from 0.2.0-alpha2 to 1.1.0b0 in its isolated build source, validates wheel/sdist source and metadata, and uploads those exact checked artifacts only after named reviewer approval. PyPI's project/version API must report both uploaded filenames and SHA-256 digests; the project remains personally owned until a separately verified transfer after Cohesix organization approval. No target, bundle or overall-release acceptance is inferred from this host publication.
 Deliverables: Reviewed dedicated workflow, GitHub run/build digest record, PyPI cohesix 1.1.0b0 wheel and sdist URLs/hashes, and an explicit pending organization-transfer record.
 ```
+
+Publication evidence: [workflow PR #2229](https://github.com/lukeb-aidev/cohesix/pull/2229)
+passed CI and merged as `36ec41da868500ed63fd77d84d63a89374a7b906`.
+[Run 35963322755](https://github.com/lukeb-aidev/cohesix/actions/runs/35963322755)
+built from tagged source `8bda91891591466b67f5f4a35e733fe2d3acf0e8`,
+passed package checks, recorded the `pypi` approval by `lukeb-aidev`, and
+uploaded with GitHub OIDC. PyPI lists the
+[`1.1.0b0` wheel and sdist](https://pypi.org/project/cohesix/1.1.0b0/):
+wheel SHA-256 `7a1ef4d996f8c5366200ea8ef6359a9b587ba95ec9016fe372249490f85068dd`
+and sdist SHA-256 `85ec35c9c21239c7df42ec06bd6da0062d790f3c11385fc05b055b85e07f708c`.
+Independent downloads matched both hashes and the selected source files.
+The Cohesix Community organization request remains pending; verify project
+ownership and transfer it only after PyPI approves the organization. Package
+publication does not add target or overall-release acceptance evidence.
+
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
 **Status:** Planned — owner-directed scope, 23 September 2026. Milestones
