@@ -202,6 +202,7 @@ pub fn host_catalog() -> Value {
             "gpu workload" => Some("Submit an already approved GPU ticket. Use Job status and reconciliation to obtain its original signed outcome."),
             "job status" => Some("Read the original admitted job's execution, delivery and reserved capacity state."),
             "job reconcile" => Some("Read target results for the original admission after interruption; never resubmit its side effect."),
+            "peft release" => Some("Plan or reconcile one admitted adapter release. Inspect the held-out base, incumbent and candidate comparison, real serving canary, rejected candidate and restored generation in its signed evidence."),
             _ => None,
         };
         if let Some(help) = help {

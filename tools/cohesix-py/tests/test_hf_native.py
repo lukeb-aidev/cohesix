@@ -78,6 +78,38 @@ class NativeInputs(unittest.TestCase):
             with self.assertRaises(Refused):
                 self.provider.current_authority()
 
+    def test_full_state_checkpoint_binds_source_profile_files_and_data_position(self) -> None:
+        from cohesix.hf_native import CHECKPOINT_FILES
+
+        self.provider.config = {"profile_sha256": "11" * 32}
+        self.provider.profile = {"settings": {"max_steps": 32}}
+        self.provider.request = {"operation_id": "new-attempt"}
+        self.provider.operation = self.root / "operations" / "new-attempt"
+        self.provider.operation.mkdir(parents=True)
+        source = self.root / "operations" / "interrupted-attempt"
+        source.mkdir()
+        source_request = {"profile_sha256": "11" * 32, "input_sha256": "22" * 32,
+                          "entry": "train", "operation_id": "interrupted-attempt"}
+        request_ref = self.provider.store(encode(source_request))
+        files = {name: self.provider.store(encode({"global_step": 8}) if name == "trainer_state.json"
+                                           else b"native-checkpoint-fixture:" + name.encode())
+                 for name in CHECKPOINT_FILES}
+        manifest = {"schema": "cohesix-peft-checkpoint/v1", "source_operation": "interrupted-attempt",
+                    "request_sha256": request_ref, "profile_sha256": "11" * 32,
+                    "input_sha256": "22" * 32, "step": 8, "files": files}
+        reference = self.provider.store(encode(manifest))
+        write(source / "checkpoint.json", encode({"checkpoint_sha256": reference, "step": 8}))
+        path, observed = self.provider.checkpoint(reference, materialize=True)
+        self.assertEqual(observed["step"], 8)
+        self.assertEqual((path / "optimizer.pt").read_bytes(), b"native-checkpoint-fixture:optimizer.pt")
+        for field, value in [("profile_sha256", "33" * 32), ("step", 32)]:
+            changed = {**manifest, field: value}
+            with self.assertRaises(Refused):
+                self.provider.checkpoint(self.provider.store(encode(changed)))
+        write(source / "checkpoint.json", encode({"checkpoint_sha256": "44" * 32, "step": 8}))
+        with self.assertRaises(Refused):
+            self.provider.checkpoint(reference)
+
     @unittest.skipUnless(importlib.util.find_spec("cryptography"), "requires qualified native cryptography stack")
     def test_source_attestation_binds_actual_bundle_dataset_and_configured_key(self) -> None:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -96,6 +128,13 @@ class NativeInputs(unittest.TestCase):
         for source, adapter in [("66" * 32, "55" * 32), ("44" * 32, None), ("44" * 32, "77" * 32)]:
             with self.assertRaises(Refused):
                 self.provider.attest([ref], source, adapter)
+        imported = {**payload, "schema": "cohesix-peft-source-attestation/v2",
+                    "dataset_sha256": None, "training_provenance": "unknown"}
+        import_ref = self.provider.store(encode({"payload": imported, "key_id": "fixture",
+                                                 "signature": key.sign(encode(imported)).hex()}))
+        self.provider.attest([import_ref], "44" * 32, "55" * 32, unknown_training=True)
+        with self.assertRaises(Refused):
+            self.provider.attest([ref], "44" * 32, "55" * 32, unknown_training=True)
         record["signature"] = "00" * 64
         bad = self.provider.store(encode(record))
         with self.assertRaises(Exception):

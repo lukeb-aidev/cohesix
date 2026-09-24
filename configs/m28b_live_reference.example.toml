@@ -1,0 +1,30 @@
+# Author: Lukas Bower
+# Purpose: Show the private exact-source inputs required for one admitted M28b live PEFT case.
+# Copyright 2026 Lukas Bower
+schema = "cohesix-m28b-live-reference/v1"
+host_profile = "jetson-orin-nano-jp7"
+scenario = "train"
+source_commit = "0000000000000000000000000000000000000000"
+source_manifest = "/absolute/checkout/configs/generated/root_task_resolved.json"
+target_qemu_pid = 1
+target_manifest_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+coh_binary = "/absolute/checkout/target/release/coh"
+coh_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+agent_binary = "/absolute/checkout/target/release/host-ticket-agent"
+agent_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+native_python = "/absolute/pinned-venv/bin/python"
+native_config = "/absolute/private/native.json"
+native_config_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+hf_helper = "/absolute/checkout/tools/cohesix-py/cohesix/hf_native.py"
+hf_helper_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+deployment = "/absolute/private/deployment.json"
+deployment_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+application_client = "/absolute/checkout/tools/cohesix-py/examples/private_lora_client.py"
+application_client_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+gateway_url = "http://127.0.0.1:8080"
+request_auth_ref = "file:/absolute/private/gateway-auth"
+delegated_ticket_ref = "file:/absolute/private/delegated-ticket"
+wait_seconds = 1800
+expected_state = "succeeded"
+expected_generation = 1
+expected_adapter_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

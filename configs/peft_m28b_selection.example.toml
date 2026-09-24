@@ -1,0 +1,38 @@
+# Author: Lukas Bower
+# Purpose: Show a reviewed offline LoRA qualification selection with disjoint licensed datasets and fixed acceptance bounds.
+# Copyright 2026 Lukas Bower
+schema = "cohesix-peft-selection/v1"
+train_data = "/absolute/private/train.json"
+eval_data = "/absolute/private/heldout.json"
+license_refs = ["https://huggingface.co/HuggingFaceTB/SmolLM2-135M/blob/93efa2f097d58c2a74874c7e644dbc9b0cee75a2/README.md", "https://github.com/lukasbower/cohesix/blob/main/LICENSE.txt"]
+credential_refs = []
+gated_download = false
+upload = false
+
+[resource_caps]
+phase_memory_bytes = 3221225472
+serving_memory_bytes = 2147483648
+retained_cas_bytes = 2147483648
+
+[settings]
+seed = 41
+max_steps = 32
+learning_rate = 0.0005
+rank = 4
+max_length = 128
+batch_size = 1
+checkpoint_interval = 8
+
+[canary]
+prompts = ["Cohesix keeps model weights", "A host ticket", "The accepted deployment", "A failed adapter"]
+max_tokens = 8
+maximum_latency_ms = 30000
+
+[evaluation_policy]
+minimum_samples = 16
+maximum_age_ms = 3600000
+
+[evaluation_policy.metrics.eval_loss]
+direction = "lower"
+absolute_bound = 8.0
+maximum_regression = 0.0

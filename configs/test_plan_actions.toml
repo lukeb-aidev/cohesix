@@ -891,6 +891,34 @@ test_policy = "nonzero"
 minimum_test_count = 1
 
 [[action]]
+id = "federation.m28b-peft-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Verify exact-source admitted configurable LoRA training, independent import and full-state checkpoint recovery on the selected Jetson host."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-peft-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28b-peft-live"'
+timeout_seconds = 3600
+trigger_paths = ["tools/cohesix-py/cohesix/hf_native.py", "tools/cohesix-py/examples/private_lora_*.py", "apps/host-ticket-agent/src/executors/peft_release.rs", "apps/coh/src/peft/**", "scripts/ci/provider_m28b_live.py", "configs/cuda_recipe.toml"]
+expected_evidence = ["m28b-peft-live-summary", "signed-native-train-and-import", "full-state-checkpoint-recovery", "unknown-import-training-provenance"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "federation.m28b-serving-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Verify fixed held-out comparison, refused candidate, actual application request and interrupted generation-fenced promotion with observed incumbent rollback."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-serving-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28b-serving-live"'
+timeout_seconds = 3600
+trigger_paths = ["tools/cohesix-py/cohesix/hf_native.py", "tools/cohesix-py/examples/private_lora_client.py", "apps/host-ticket-agent/src/executors/peft_release.rs", "apps/coh/src/peft/**", "apps/swarmui/**", "scripts/ci/provider_m28b_live.py"]
+expected_evidence = ["m28b-serving-live-summary", "base-incumbent-candidate-comparison", "application-served-generation", "rejection-and-incumbent-restoration"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
 id = "federation.three-hive-relay"
 stage = 0
 tier = "federation"

@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "2c7ec53fab2036f4bb71fe40807dc6234c2e455ccbf43c8e15524dbfd469cff6",
+  "source_sha256": "9e6316172360de06f729bb23b4f7e867a49550139780f5247665486a29449838",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -4604,6 +4604,20 @@
       "evidence_eligible": true
     },
     {
+      "id": "tracked:apps/swarmui/frontend/workbench/peft_projection.js",
+      "kind": "tracked_surface",
+      "path": "apps/swarmui/frontend/workbench/peft_projection.js",
+      "implementation_class": "production_live",
+      "owner": "swarmui",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "exact release UI asset list; rule=swarmui-release-assets",
+      "package_disposition": "release_ui_asset",
+      "evidence_requirement": "asset hash and authenticated gateway integration",
+      "current_observed_mode": "live_host_ui",
+      "evidence_eligible": true
+    },
+    {
       "id": "tracked:apps/swarmui/frontend/workbench/session.js",
       "kind": "tracked_surface",
       "path": "apps/swarmui/frontend/workbench/session.js",
@@ -8510,6 +8524,34 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:tools/cohesix-py/examples/private_lora_client.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/examples/private_lora_client.py",
+      "implementation_class": "diagnostic",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit examples directory; rule=cohesix-python-examples",
+      "package_disposition": "example_not_evidence",
+      "evidence_requirement": "cannot satisfy target or release acceptance",
+      "current_observed_mode": "example_playbook",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/examples/private_lora_import.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/examples/private_lora_import.py",
+      "implementation_class": "diagnostic",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit examples directory; rule=cohesix-python-examples",
+      "package_disposition": "example_not_evidence",
+      "evidence_requirement": "cannot satisfy target or release acceptance",
+      "current_observed_mode": "example_playbook",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:tools/cohesix-py/examples/private_lora_release.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/examples/private_lora_release.py",
@@ -8793,6 +8835,20 @@
       "id": "tracked:tools/cohesix-py/tests/test_parity.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_parity.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "source_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/tests/test_peft_selection.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_peft_selection.py",
       "implementation_class": "fixture",
       "owner": "python-client",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -9259,6 +9315,7 @@
       "apps/swarmui/frontend/workbench/navigation.js",
       "apps/swarmui/frontend/workbench/operations.js",
       "apps/swarmui/frontend/workbench/paths.js",
+      "apps/swarmui/frontend/workbench/peft_projection.js",
       "apps/swarmui/frontend/workbench/session.js",
       "apps/swarmui/frontend/workbench/state.js",
       "apps/swarmui/frontend/workbench/story.js"
@@ -9547,6 +9604,7 @@
       "ui/swarmui/workbench/navigation.js",
       "ui/swarmui/workbench/operations.js",
       "ui/swarmui/workbench/paths.js",
+      "ui/swarmui/workbench/peft_projection.js",
       "ui/swarmui/workbench/session.js",
       "ui/swarmui/workbench/state.js",
       "ui/swarmui/workbench/story.js"
@@ -12876,6 +12934,20 @@
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": true,
         "selection_source": "exact release UI asset list; rule=swarmui-release-assets; exact release source `apps/swarmui/frontend/workbench/paths.js`",
+        "package_disposition": "release_ui_asset",
+        "evidence_requirement": "asset hash and authenticated gateway integration",
+        "current_observed_mode": "live_host_ui",
+        "evidence_eligible": true
+      },
+      {
+        "id": "release-asset:ui/swarmui/workbench/peft_projection.js",
+        "kind": "ui_asset",
+        "path": "ui/swarmui/workbench/peft_projection.js",
+        "implementation_class": "production_live",
+        "owner": "swarmui",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": true,
+        "selection_source": "exact release UI asset list; rule=swarmui-release-assets; exact release source `apps/swarmui/frontend/workbench/peft_projection.js`",
         "package_disposition": "release_ui_asset",
         "evidence_requirement": "asset hash and authenticated gateway integration",
         "current_observed_mode": "live_host_ui",

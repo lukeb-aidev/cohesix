@@ -137,7 +137,7 @@ owned by their specific contracts.
 | [27i](#27i) | Release A Python Index Publication | Complete — PyPI `1.1.0b1` page correction published |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Complete — selected foundation |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Complete — selected Orin systemd and Docker lanes |
-| [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
+| [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | In Progress |
 | [28c](#28c) | macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows | Planned |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | Planned |
 | [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
@@ -12831,7 +12831,7 @@ explicit unresolved outcome rather than invented success.
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** In Progress — `m28b-configurable-peft-training-and-import` and `m28b-evaluate-canary-promote-rollback` activated on 24 September 2026.
 
 **Value:** genuine adapters progress from training/import to measured, reversible serving.
 **Prerequisites:** 28, 28a and accepted 27d LoRA transaction; extend its journal,
@@ -12860,6 +12860,18 @@ identity, readiness and inference canary. Publication or HTTP success is not a
 verified deployment. Keep general API cloning/proxying/routing in 35. HF, MLX and
 NeMo adapters interoperate only for actually qualified format/model/runtime pairs;
 no blanket compatibility or general conversion programme.
+
+Make the operator decision portable across CLI, Python playbook, SwarmUI and
+later agent protocols: bind one immutable operation/request identity, distinguish
+unsubmitted, uncertain and terminal states, and expose the signed evidence graph
+reference separately from the requested-outcome verdict. Only the shared CLI
+verifier can mark a successful requested outcome; a serving HTTP response,
+Python object, MCP tool result or A2A task state cannot. A lost submit response
+must resume observation of the original operation, never create a second effect.
+The Python path must give a newcomer explicit plan, submit, inspect and recovery
+steps without implementing a second journal or evaluator. Record the held-out
+comparison policy, exact serving generation and rollback observation in the
+28b evidence so later protocol adapters can project them without reinterpretation.
 
 **Deliverables:** Configurable training/import, fixed evaluation and serving contracts, runtime canaries and verified promotion/rollback evidence.
 
@@ -12893,15 +12905,17 @@ Inputs: m28b-configurable-peft-training-and-import; accepted 27d evaluator/activ
 Changes:
   - apps/coh/src/peft/{controller,activate,release}.rs + tools/cohesix-py/cohesix/hf_native.py — select the supported native serving endpoint and predeclare held-out task metric, quality floor, latency/resource caps and comparison procedure before candidate evaluation.
   - apps/host-ticket-agent/src/executors/peft_release.rs — runtime readiness/model-adapter observations and real inference canaries, fenced generation promotion, interrupted transition reconciliation and verified rollback.
+  - tools/cohesix-py/cohesix/{model_release,playbooks}.py + tools/cohesix-py/tests/test_model_release.py + docs/PYTHON_SUPPORT.md — a bounded Python release client over the existing CLI plan/apply/watch/verify/recover path; freeze request identity, require explicit submit, retain uncertain/recovered-failure states and expose a verified-success flag only after CLI verification.
   - apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/BENCHMARKS.md — base/incumbent/candidate comparison and rejection/recovery views; matrix/catalog gain m28b-serving-live.
 Commands:
   - cargo test --locked -p coh --test peft_release
   - cargo test --locked -p host-ticket-agent --lib executors::peft_release
-  - python3 -m pytest -q tools/cohesix-py/tests/test_hf_native.py
+  - python3 -m pytest -q tools/cohesix-py/tests/test_hf_native.py tools/cohesix-py/tests/test_model_release.py tools/cohesix-py/tests/test_playbooks.py
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-serving-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28b-serving-live"
 Checks:
   - Base/incumbent/candidate use the same held-out inputs and declared thresholds; failed quality/canary or stale generation cannot promote.
   - A real application request observes the serving identity and output; interrupt promotion, reconcile the generation and prove rollback restores the incumbent using another inference request.
+  - Python plan/submit/inspect/recover preserves the original operation and request digest across a lost response; wrong-identity, malformed or contradictory reports fail closed. MCP and A2A later project this same result through their separately admitted and activated tasks.
   - Publish negative comparisons and stochastic settings; HTTP success, registry publication and judge scores alone cannot qualify deployment.
 Deliverables: Usable native endpoint, fixed evaluation configuration, comparison/canary/rollback guide and m28b-serving-live report with observed served generations.
 ```
@@ -13081,7 +13095,7 @@ Deliverables: Pinned transport/configuration contract, packaged launch paths and
 Title/ID: m28d-mcp-selected-workflows
 Milestone: 28d / m28d-mcp-selected-workflows
 Goal: Let an ordinary MCP client discover, complete and recover the selected CUDA/PEFT workflows.
-Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions; shared generated registry; maintained SDK and named standard client.
+Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; shared generated registry; maintained SDK and named standard client.
 Changes:
   - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors and bounded resources.
   - apps/hive-gateway/tests/{mcp_protocol,mcp_workflows}.rs (planned) — mapping parity, visibility, required fields and cross-client idempotency; no direct provider calls or model-authored success.
@@ -13093,6 +13107,7 @@ Commands:
 Checks:
   - Named ordinary client and exact version complete a useful CUDA job and PEFT comparison/deployment operation inside standing authority; refusal and lost-response recovery preserve original identities.
   - Each selected operation has generated input/output/authority/lifecycle/evidence mapping; scoped discovery hides inaccessible records. Credential forwarding, arbitrary writes and caller-supplied receipts refuse.
+  - PEFT tools project the accepted 28b operation/request identity, held-out comparison and exact serving generation; only the shared verifier's successful requested outcome is labelled verified. Lost tool responses reconcile the original operation, including recovered failure and rollback blockers.
   - MCP-only operation works; read-only conformance cannot close mutating acceptance. Real shared-budget/revocation tests use CLI/REST and MCP without requiring A2A.
 Deliverables: Generated selected catalogue, client configuration/guide and m28d-mcp-live outcome/recovery evidence.
 ```
@@ -13130,7 +13145,7 @@ stay in 36/34.
 Title/ID: m28e-a2a-durable-jobs
 Milestone: 28e / m28e-a2a-durable-jobs
 Goal: Delegate and recover long-running selected jobs through a standard A2A peer.
-Inputs: 28 job/authority/control contracts; selected 28a/28b providers; shared gateway; pinned public A2A revision/binding and maintained SDK; no MCP dependency.
+Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; shared gateway; pinned public A2A revision/binding and maintained SDK; no MCP dependency.
 Changes:
   - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency.
   - apps/hive-gateway/src/a2a/ (planned) — canonical task-to-job ID correlation; map pending/running/input-required/terminal/cancel-requested/cancel-confirmed/uncertain states to the selected binding without inventing terminal success.
@@ -13143,6 +13158,7 @@ Commands:
 Checks:
   - A2A-only peer delegates a real job, disconnects, reconnects after gateway restart and obtains the correct scoped provider outcome/artifact references without re-execution.
   - Pending cancellation never means confirmed termination; ambiguous native outcomes remain explicitly uncertain and accounted. Stale/expired cursors return a bounded resynchronisation path.
+  - A PEFT task retains the same release operation/request identity, serving generation, verified-outcome verdict and evidence references after reconnect. Task completion alone cannot upgrade a failed comparison, recovered failure or rollback blocker to release success.
   - All master/A2A flag combinations, cross-subject reads, unauthorised sub-actions, malformed/oversize traffic, slow consumers and revoked scopes fail safely; no push callbacks or second scheduler.
 Deliverables: Pinned state-mapping table, service/peer package, lifecycle/recovery guide and m28e-a2a-live evidence separate from MCP acceptance.
 ```

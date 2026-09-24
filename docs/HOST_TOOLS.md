@@ -786,6 +786,12 @@ For an admitted native HF import/training release with actual serving, evaluatio
 and verified rollback, use [`coh peft release`](PRIVATE_LORA_RELEASE.md). It has
 `plan/apply/watch/explain/verify/recover` modes and shares the durable host journal
 and signed verifier. The file-registry commands below retain their existing scope.
+The [selected configurable lifecycle](PRIVATE_LORA_RELEASE.md#configurable-selected-lora-lifecycle)
+pins separate training and held-out data, supports an independently supplied
+safe adapter with unknown training provenance, and records a real application
+request after serving or rollback. Full-state checkpoint recovery needs a new
+admitted operation bound to an immutable native checkpoint; `watch` reconciles
+the original uncertain effect before any new attempt.
 
 Use this on the host that owns the training outputs and model registry. It
 moves bounded job/registry information; training and inference remain outside

@@ -32,5 +32,28 @@
   "max_reuse_age_ms": 3600000,
   "automatic_retries": 0,
   "recovery": "reconcile-before-dispatch; current exact authority; ambiguous work retains reservations",
-  "data": "cohesix-cuda-reference/v1 deterministic vector or matrix inputs"
+  "data": "cohesix-cuda-reference/v1 deterministic vector or matrix inputs",
+  "peft": {
+    "schema": "cohesix-peft-capabilities/v1",
+    "base_model": "HuggingFaceTB/SmolLM2-135M",
+    "base_revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+    "training": [
+      "lora"
+    ],
+    "import_formats": [
+      "peft-lora-safetensors"
+    ],
+    "checkpoint": "hf-trainer-full-state/v1",
+    "checkpoint_files": [
+      "adapter_model.safetensors",
+      "adapter_config.json",
+      "optimizer.pt",
+      "scheduler.pt",
+      "rng_state.pth",
+      "trainer_state.json"
+    ],
+    "checkpoint_interval_max": 16,
+    "serving": "transformers-serve-local",
+    "qlora": false
+  }
 }

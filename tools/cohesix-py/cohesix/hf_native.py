@@ -31,6 +31,8 @@ import urllib.request
 
 MAX_JSON = 262144
 MAX_ADAPTER = 33554432
+CHECKPOINT_FILES = ["adapter_model.safetensors", "adapter_config.json", "optimizer.pt",
+                    "scheduler.pt", "rng_state.pth", "trainer_state.json"]
 REFERENCE_MODEL = "HuggingFaceTB/SmolLM2-135M"
 REFERENCE_REVISION = "93efa2f097d58c2a74874c7e644dbc9b0cee75a2"
 REFERENCE_WEIGHTS = "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
@@ -63,16 +65,28 @@ def sha(data: bytes) -> str:
 
 
 def regular(path: Path, maximum: int) -> bytes:
-    """Confine reads to regular files, rejecting every symlink component."""
-    require(path.is_absolute() and ".." not in path.parts, "invalid_path")
-    for part in (path, *path.parents):
-        require(not part.is_symlink(), "symlink_refused")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as stream:
-        meta = os.fstat(stream.fileno())
-        require(stat.S_ISREG(meta.st_mode) and meta.st_size <=
-                maximum, "artifact_size_or_kind")
-        data = stream.read(maximum + 1)
+    """Read through directory descriptors so a swapped parent cannot redirect a read."""
+    require(path.is_absolute() and ".." not in path.parts
+            and type(maximum) is int and maximum >= 0, "invalid_path")
+    parts = path.parts[1:]
+    require(bool(parts), "invalid_path")
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in parts[:-1]:
+            next_directory = os.open(component, os.O_RDONLY | os.O_DIRECTORY |
+                                     os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = next_directory
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        with os.fdopen(fd, "rb") as stream:
+            meta = os.fstat(stream.fileno())
+            require(stat.S_ISREG(meta.st_mode) and meta.st_size <=
+                    maximum, "artifact_size_or_kind")
+            data = stream.read(maximum + 1)
+    except OSError as error:
+        raise Refused("artifact_path_or_kind") from error
+    finally:
+        os.close(directory)
     require(len(data) <= maximum, "artifact_size")
     return data
 
@@ -142,11 +156,43 @@ class Provider:
         require(type(self.config["port"]) is int and 1024 <=
                 self.config["port"] <= 65535, "port_bounds")
         self.profile = json.loads(self.blob(self.config["profile_sha256"], MAX_JSON))
-        keys(self.profile, {"schema", "versions", "base", "tokenizer_sha256", "context",
-                            "train_data", "eval_data", "settings", "canary", "license_refs",
-                            "source_sha256", "attestations", "attestation_keys"})
-        require(self.profile["schema"] == "cohesix-hf-profile/v1"
-                and self.profile["versions"] == VERSIONS, "pinned_profile_required")
+        profile_fields = {"schema", "versions", "base", "tokenizer_sha256", "context",
+                          "train_data", "eval_data", "settings", "canary", "license_refs",
+                          "source_sha256", "attestations", "attestation_keys"}
+        self.profile_schema = self.profile.get("schema")
+        require(self.profile_schema in {"cohesix-hf-profile/v1", "cohesix-hf-profile/v2"},
+                "native_profile_schema")
+        keys(self.profile, profile_fields | ({"capabilities_sha256", "evaluation_policy"}
+                                           if self.profile_schema.endswith("/v2") else set()))
+        require(self.profile["versions"] == VERSIONS, "pinned_profile_required")
+        if self.profile_schema.endswith("/v2"):
+            capabilities = json.loads(self.blob(self.profile["capabilities_sha256"], MAX_JSON))
+            keys(capabilities, {"schema", "base_model", "base_revision", "training", "import_formats",
+                                "checkpoint", "checkpoint_files", "checkpoint_interval_max", "serving", "qlora"})
+            require(capabilities == {"schema": "cohesix-peft-capabilities/v1",
+                                    "base_model": REFERENCE_MODEL, "base_revision": REFERENCE_REVISION,
+                                    "training": ["lora"], "import_formats": ["peft-lora-safetensors"],
+                                    "checkpoint": "hf-trainer-full-state/v1",
+                                    "checkpoint_files": CHECKPOINT_FILES,
+                                    "checkpoint_interval_max": 16,
+                                    "serving": "transformers-serve-local", "qlora": False},
+                    "unsupported_peft_capabilities")
+            policy = self.profile["evaluation_policy"]
+            keys(policy, {"minimum_samples", "maximum_age_ms", "metrics"})
+            require(policy["minimum_samples"] == 16 and type(policy["maximum_age_ms"]) is int
+                    and 1 <= policy["maximum_age_ms"] <= 3600000
+                    and isinstance(policy["metrics"], dict) and set(policy["metrics"]) == {"eval_loss"},
+                    "evaluation_policy_shape")
+            bound = policy["metrics"]["eval_loss"]
+            keys(bound, {"direction", "absolute_bound", "maximum_regression"})
+            require(bound["direction"] == "lower"
+                    and type(bound["absolute_bound"]) in {int, float}
+                    and math.isfinite(bound["absolute_bound"])
+                    and 0 < bound["absolute_bound"] <= 8.0
+                    and type(bound["maximum_regression"]) in {int, float}
+                    and math.isfinite(bound["maximum_regression"])
+                    and bound["maximum_regression"] == 0,
+                    "evaluation_policy_bounds")
         require(self.profile["license_refs"]
                 and self.profile["attestations"], "provenance_required")
         self.blob(self.profile["source_sha256"], MAX_JSON)
@@ -193,16 +239,21 @@ class Provider:
             write(path, data)
         return reference
 
-    def attest(self, references: list[str], source: str, adapter: str | None) -> None:
+    def attest(self, references: list[str], source: str, adapter: str | None,
+               unknown_training: bool = False) -> None:
         """Require a source attestation signed by an independently configured profile key."""
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         require(isinstance(references, list) and 1 <= len(references) <= 4
                 and 1 <= len(self.profile["attestation_keys"]) <= 4, "source_attestation_required")
-        expected = {"schema": "cohesix-peft-source-attestation/v1", "source_sha256": source,
+        expected = {"schema": "cohesix-peft-source-attestation/v2" if unknown_training else
+                    "cohesix-peft-source-attestation/v1", "source_sha256": source,
                     "base_sha256": self.profile["context"]["base_sha256"],
                     "tokenizer_sha256": self.profile["tokenizer_sha256"],
-                    "dataset_sha256": self.profile["train_data"], "adapter_bundle_sha256": adapter,
+                    "dataset_sha256": None if unknown_training else self.profile["train_data"],
+                    "adapter_bundle_sha256": adapter,
                     "permitted_use": "training-and-private-inference", "license_refs": self.profile["license_refs"]}
+        if unknown_training:
+            expected["training_provenance"] = "unknown"
         for reference in references:
             record = json.loads(self.blob(reference, MAX_JSON))
             keys(record, {"payload", "key_id", "signature"})
@@ -264,6 +315,9 @@ class Provider:
 
     def validate(self) -> dict[str, Any]:
         self.stack()
+        if self.profile_schema.endswith("/v2"):
+            require(self.request["evaluation_policy"] == self.profile["evaluation_policy"],
+                    "evaluation_policy_binding")
         base, manifest = self.bundle(self.profile["base"])
         require(manifest["source"] == REFERENCE_MODEL and manifest["revision"] == REFERENCE_REVISION
                 and manifest["files"].get("model.safetensors") == REFERENCE_WEIGHTS,
@@ -272,12 +326,20 @@ class Provider:
                 and "config.json" in manifest["files"], "safe_base_required")
         settings = self.profile["settings"]
         keys(settings, {"seed", "max_steps", "learning_rate",
-             "rank", "max_length", "batch_size"})
+             "rank", "max_length", "batch_size"} |
+             ({"checkpoint_interval"} if self.profile_schema.endswith("/v2") else set()))
         require(type(settings["seed"]) is int and 0 <= settings["seed"] < 2**32
                 and type(settings["max_steps"]) is int and 1 <= settings["max_steps"] <= 64
+                and type(settings["learning_rate"]) in {float, int}
                 and math.isfinite(settings["learning_rate"]) and 0 < settings["learning_rate"] <= 0.001
-                and settings["rank"] in {2, 4, 8} and settings["max_length"] in {64, 128}
+                and type(settings["rank"]) is int and settings["rank"] in {2, 4, 8}
+                and type(settings["max_length"]) is int and settings["max_length"] in {64, 128}
                 and settings["batch_size"] == 1, "training_bounds")
+        if self.profile_schema.endswith("/v2"):
+            require(type(settings["checkpoint_interval"]) is int
+                    and 1 <= settings["checkpoint_interval"] <= 16
+                    and settings["checkpoint_interval"] < settings["max_steps"],
+                    "checkpoint_interval_bounds")
         canary = self.profile["canary"]
         keys(canary, {"prompts", "max_tokens", "maximum_latency_ms"})
         require(isinstance(canary["prompts"], list) and len(canary["prompts"]) == 4
@@ -301,44 +363,59 @@ class Provider:
                 "evaluation_configuration_binding")
         train_rows = json.loads(self.blob(self.profile["train_data"], MAX_JSON))
         eval_rows = json.loads(self.blob(self.profile["eval_data"], MAX_JSON))
-        require(len(eval_rows) == 16 and len(set(eval_rows)) == 16 and not set(train_rows).intersection(eval_rows),
+        require(isinstance(train_rows, list) and isinstance(eval_rows, list)
+                and 16 <= len(train_rows) <= 256 and len(eval_rows) == 16
+                and all(isinstance(row, str) and 16 <= len(row) <= 2048 for row in train_rows + eval_rows)
+                and len(set(train_rows)) == len(train_rows) and len(set(eval_rows)) == 16
+                and not set(train_rows).intersection(eval_rows),
                 "independent_heldout_split_required")
         expected_input = {"profile_sha256", "source_sha256",
                           "attestations", "license_refs", "checkpoint"}
         if self.request["entry"] == "import":
             expected_input.update({"adapter_bundle_sha256", "base_sha256", "tokenizer_sha256", "versions",
+                                   "training_provenance"} if self.profile_schema.endswith("/v2") else
+                                  {"adapter_bundle_sha256", "base_sha256", "tokenizer_sha256", "versions",
                                    "dataset_sha256", "training_settings"})
         keys(self.input, expected_input)
         require(self.input["profile_sha256"] == self.config["profile_sha256"]
                 and self.input["license_refs"] == self.profile["license_refs"] and self.input["source_sha256"]
                 and self.input["attestations"], "input_provenance")
         self.blob(self.input["source_sha256"], MAX_JSON)
+        unknown_import = self.request["entry"] == "import" and self.profile_schema.endswith("/v2")
         self.attest(self.input["attestations"], self.input["source_sha256"],
-                    self.input.get("adapter_bundle_sha256") if self.request["entry"] == "import" else None)
-        require(self.input.get("checkpoint") is None,
-                "native_resume_unqualified_use_new_authorized_attempt")
+                    self.input.get("adapter_bundle_sha256") if self.request["entry"] == "import" else None,
+                    unknown_training=unknown_import)
+        if self.input.get("checkpoint") is not None:
+            require(self.request["entry"] == "train" and self.profile_schema.endswith("/v2"),
+                    "native_resume_unqualified_use_new_authorized_attempt")
+            self.checkpoint(self.input["checkpoint"])
         if self.request["entry"] == "import":
             path, _ = self.bundle(self.input["adapter_bundle_sha256"])
             scanned = self.scan_adapter(path)
+            compatible = (self.input.get("training_provenance") == "unknown" if unknown_import else
+                          self.input["dataset_sha256"] == self.profile["train_data"]
+                          and self.input["training_settings"] == settings)
             require(self.input["base_sha256"] == self.profile["context"]["base_sha256"]
                     and self.input["tokenizer_sha256"] == self.profile["tokenizer_sha256"]
-                    and self.input["versions"] == VERSIONS
-                    and self.input["dataset_sha256"] == self.profile["train_data"]
-                    and self.input["training_settings"] == settings, "import_compatibility")
+                    and self.input["versions"] == VERSIONS and compatible,
+                    "import_compatibility")
             write(self.operation / "candidate.json", encode({"bundle_sha256": self.input["adapter_bundle_sha256"],
                   "adapter_sha256": scanned["adapter_sha256"], "entry": "import"}))
         else:
             require(self.request["entry"] == "train", "entry_not_supported")
-        return {"base": str(base), "provenance": "verified", "native_checkpoint_resume": "unqualified"}
+        return {"base": str(base), "source_provenance": "verified",
+                "training_provenance": "unknown" if unknown_import else "profile-bound",
+                "native_checkpoint_resume": "supported" if self.profile_schema.endswith("/v2") else "unqualified"}
 
     def scan_adapter(self, path: Path) -> dict[str, Any]:
-        from safetensors import safe_open
+        from safetensors.torch import load
         payload = regular(path / "adapter_model.safetensors", MAX_ADAPTER)
         config_bytes = regular(path / "adapter_config.json", MAX_JSON)
         config = json.loads(config_bytes)
         base, _ = self.bundle(self.profile["base"])
+        base_labels = {str(base)} | ({REFERENCE_MODEL} if self.profile_schema.endswith("/v2") else set())
         require(config.get("peft_type") == "LORA" and config.get("task_type") == "CAUSAL_LM"
-                and config.get("base_model_name_or_path") == str(base)
+                and config.get("base_model_name_or_path") in base_labels
                 and config.get("r") == self.profile["settings"]["rank"]
                 and set(config.get("target_modules", [])) == {"q_proj", "v_proj"}
                 and config.get("lora_alpha") == 2*self.profile["settings"]["rank"]
@@ -347,17 +424,30 @@ class Provider:
                 "adapter_config_compatibility")
         import torch
         nonzero = False
-        with safe_open(str(path / "adapter_model.safetensors"), framework="pt", device="cpu") as tensors:
-            names = list(tensors.keys())
-            require(0 < len(names) <= 512, "adapter_tensor_count")
-            for name in names:
-                require(".lora_A." in name or ".lora_B." in name,
-                        "unexpected_adapter_tensor")
-                value = tensors.get_tensor(name)
-                require(value.ndim == 2 and value.dtype in {torch.float32, torch.float16, torch.bfloat16}
-                        and bool(torch.isfinite(value).all()), "invalid_adapter_tensor")
-                if ".lora_B." in name:
-                    nonzero = nonzero or bool(torch.count_nonzero(value))
+        tensors = load(payload)
+        names = list(tensors)
+        require(0 < len(names) <= 512, "adapter_tensor_count")
+        shapes: dict[tuple[int, str, str], tuple[int, ...]] = {}
+        for name, value in tensors.items():
+            require(".lora_A." in name or ".lora_B." in name,
+                    "unexpected_adapter_tensor")
+            require(value.ndim == 2 and value.dtype in {torch.float32, torch.float16, torch.bfloat16}
+                    and bool(torch.isfinite(value).all()), "invalid_adapter_tensor")
+            if self.profile_schema.endswith("/v2"):
+                matched = re.fullmatch(
+                    r"base_model\.model\.model\.layers\.(\d+)\.self_attn\.(q_proj|v_proj)\.lora_(A|B)\.weight",
+                    name)
+                require(matched is not None, "unexpected_adapter_tensor")
+                layer, module, side = int(matched[1]), matched[2], matched[3]
+                require(layer < 30, "adapter_layer_bounds")
+                expected_shape = ((self.profile["settings"]["rank"], 576) if side == "A" else
+                                  (576 if module == "q_proj" else 192, self.profile["settings"]["rank"]))
+                require(tuple(value.shape) == expected_shape, "adapter_tensor_shape")
+                shapes[(layer, module, side)] = tuple(value.shape)
+            if ".lora_B." in name:
+                nonzero = nonzero or bool(torch.count_nonzero(value))
+        if self.profile_schema.endswith("/v2"):
+            require(len(shapes) == 120, "adapter_tensor_inventory")
         require(nonzero, "untrained_or_synthetic_adapter")
         files = {"adapter_config.json": sha(
             config_bytes), "adapter_model.safetensors": sha(payload)}
@@ -391,8 +481,48 @@ class Provider:
             result.append(value)
         return result
 
+    def checkpoint(self, reference: str, materialize: bool = False) -> tuple[Path | None, dict[str, Any]]:
+        """Accept only a complete checkpoint published by this exact native profile."""
+        manifest = json.loads(self.blob(reference, MAX_JSON))
+        keys(manifest, {"schema", "source_operation", "request_sha256", "profile_sha256", "input_sha256",
+                        "step", "files"})
+        source = manifest["source_operation"]
+        require(manifest["schema"] == "cohesix-peft-checkpoint/v1"
+                and isinstance(source, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", source)
+                and source != self.request["operation_id"]
+                and manifest["profile_sha256"] == self.config["profile_sha256"]
+                and type(manifest["step"]) is int
+                and 0 < manifest["step"] < self.profile["settings"]["max_steps"]
+                and isinstance(manifest["files"], dict)
+                and set(manifest["files"]) == set(CHECKPOINT_FILES),
+                "checkpoint_compatibility")
+        source_operation = self.root / "operations" / source
+        require(source_operation.is_dir() and not source_operation.is_symlink()
+                and read_json(source_operation / "checkpoint.json")["checkpoint_sha256"] == reference,
+                "checkpoint_source_binding")
+        source_request = json.loads(self.blob(manifest["request_sha256"], MAX_JSON))
+        require(source_request["profile_sha256"] == self.config["profile_sha256"]
+                and source_request["input_sha256"] == manifest["input_sha256"]
+                and source_request["entry"] == "train"
+                and source_request["operation_id"] == source, "checkpoint_source_request")
+        destination = self.operation / "training" / f'checkpoint-{manifest["step"]}'
+        for name in CHECKPOINT_FILES:
+            maximum = MAX_JSON if name.endswith(".json") else MAX_ADAPTER
+            payload = self.blob(manifest["files"][name], maximum)
+            if materialize:
+                destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target = destination / name
+                if target.exists():
+                    require(regular(target, maximum) == payload, "checkpoint_materialization_changed")
+                else:
+                    write(target, payload)
+        state = json.loads(self.blob(manifest["files"]["trainer_state.json"], MAX_JSON))
+        require(state.get("global_step") == manifest["step"], "checkpoint_data_position")
+        return (destination if materialize else None), manifest
+
     def train(self) -> dict[str, Any]:
         import peft
+        import torch
         model, tokenizer, hf = self.model()
         settings = self.profile["settings"]
         model = peft.get_peft_model(model, peft.LoraConfig(r=settings["rank"], lora_alpha=2*settings["rank"],
@@ -400,7 +530,25 @@ class Provider:
         output = self.operation / "training"
         require(not output.exists(), "ambiguous_training_already_started")
         output.mkdir(mode=0o700)
+        resume_path = None
+        resumed_from = None
+        if self.input["checkpoint"] is not None:
+            resume_path, checkpoint = self.checkpoint(self.input["checkpoint"], materialize=True)
+            from transformers.trainer import safe_globals
+            for name, expected in [("optimizer.pt", {"state", "param_groups"}),
+                                   ("scheduler.pt", {"base_lrs", "last_epoch"})]:
+                state = torch.load(resume_path / name, map_location="cpu", weights_only=True)
+                require(isinstance(state, dict) and expected <= set(state),
+                        "checkpoint_native_state_invalid")
+            with safe_globals():
+                rng = torch.load(resume_path / "rng_state.pth", map_location="cpu", weights_only=True)
+            require(isinstance(rng, dict) and {"python", "numpy", "cpu", "cuda"} <= set(rng),
+                    "checkpoint_rng_missing")
+            resumed_from = {"source_operation": checkpoint["source_operation"],
+                            "step": checkpoint["step"], "checkpoint_sha256": self.input["checkpoint"]}
         observations: list[dict[str, Any]] = []
+
+        provider = self
 
         class Observer(hf.TrainerCallback):
             def on_log(self, args: Any, state: Any, control: Any, logs: Any = None, **kwargs: Any) -> None:
@@ -410,17 +558,39 @@ class Provider:
 
             def on_train_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
                 observations.append({"event": "train_end", "step": state.global_step,
-                                     "native_checkpoint": None, "resume_qualified": False})
+                                     "native_checkpoint": read_json(provider.operation / "checkpoint.json")
+                                     if provider.profile_schema.endswith("/v2") else None,
+                                     "resume_qualified": provider.profile_schema.endswith("/v2")})
                 write(output / "observations.json", encode({"events": observations}))
+
+            def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+                if not provider.profile_schema.endswith("/v2"):
+                    return
+                directory = output / f"checkpoint-{state.global_step}"
+                files = {}
+                for name in CHECKPOINT_FILES:
+                    maximum = MAX_JSON if name.endswith(".json") else MAX_ADAPTER
+                    files[name] = provider.store(regular(directory / name, maximum))
+                manifest = {"schema": "cohesix-peft-checkpoint/v1",
+                            "source_operation": provider.request["operation_id"],
+                            "request_sha256": provider.request_sha,
+                            "profile_sha256": provider.config["profile_sha256"],
+                            "input_sha256": provider.request["input_sha256"],
+                            "step": state.global_step, "files": files}
+                reference = provider.store(encode(manifest))
+                write(provider.operation / "checkpoint.json", encode({"checkpoint_sha256": reference,
+                      "step": state.global_step}))
 
         trainer = hf.Trainer(model=model, args=hf.TrainingArguments(
             output_dir=str(output), max_steps=settings["max_steps"], per_device_train_batch_size=1,
             learning_rate=settings["learning_rate"], seed=settings["seed"], data_seed=settings["seed"],
-            save_strategy="no", logging_steps=1, report_to=[], optim="adamw_torch",
+            save_strategy="steps" if self.profile_schema.endswith("/v2") else "no",
+            save_steps=settings.get("checkpoint_interval", 500), save_total_limit=2,
+            save_safetensors=True, logging_steps=1, report_to=[], optim="adamw_torch",
             dataloader_num_workers=0, dataloader_pin_memory=False, disable_tqdm=True),
             train_dataset=self.data(self.profile["train_data"], tokenizer),
             data_collator=hf.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False), callbacks=[Observer()])
-        result = trainer.train()
+        result = trainer.train(resume_from_checkpoint=str(resume_path) if resume_path else None)
         adapter = output / "adapter"
         model.save_pretrained(adapter, safe_serialization=True)
         scanned = self.scan_adapter(adapter)
@@ -437,10 +607,19 @@ class Provider:
             require(self.blob(reference, MAX_ADAPTER) == regular(
                 adapter/name, MAX_ADAPTER), "cleanup_cas_verification")
         shutil.rmtree(adapter)
+        if self.profile_schema.endswith("/v2"):
+            for checkpoint_dir in output.glob("checkpoint-*"):
+                require(checkpoint_dir.is_dir() and not checkpoint_dir.is_symlink(),
+                        "checkpoint_directory_changed")
+                shutil.rmtree(checkpoint_dir)
         return {"native_job_id": "systemd:"+os.environ["INVOCATION_ID"], "training_metrics": result.metrics,
                 "cleanup": {"scratch_adapter_removed": not adapter.exists(), "cas_artifacts_retained": True},
-                "bundle_sha256": bundle_sha, "checkpoint": {"kind": "deployable_adapter",
-                                                            "native_resume": False, "reason": "optimizer_scheduler_rng_checkpoint_not_qualified"}}
+                "bundle_sha256": bundle_sha, "checkpoint": {"kind": "hf_trainer_full_state"
+                                                            if self.profile_schema.endswith("/v2") else "deployable_adapter",
+                                                            "native_resume": self.profile_schema.endswith("/v2"),
+                                                            "source": resumed_from,
+                                                            "retained": read_json(self.operation / "checkpoint.json")
+                                                            if self.profile_schema.endswith("/v2") else None}}
 
     def behavior(self, model: Any, tokenizer: Any, torch: Any) -> dict[str, Any]:
         """Read native greedy continuations for the exact configured model and prompts."""

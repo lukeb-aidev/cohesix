@@ -51,6 +51,75 @@ at most eight tokens, match the evaluator's greedy output and finish within
 30 seconds. This small reference establishes its stated workload contract; it
 does not qualify arbitrary models, data or production quality.
 
+## Configurable selected LoRA lifecycle
+
+For a reviewed training run, copy
+[`peft_m28b_selection.example.toml`](../configs/peft_m28b_selection.example.toml)
+to a private path. Set absolute paths to licensed UTF-8 JSON arrays of training
+and held-out text. The preparer requires 16–256 distinct training rows, exactly
+16 distinct held-out rows and no overlap. Freeze the base manifest, data files,
+seed, 2–64 training steps, rank, context length, checkpoint interval, four
+application prompts, held-out loss ceiling and zero allowed regression before
+request admission. The compiled
+[`cuda_recipe.json`](../configs/generated/cuda_recipe.json) selects this exact
+SmolLM2 revision, PEFT LoRA safetensors, native Transformers serving and the
+HF Trainer full-state checkpoint format. It does not select QLoRA. The selected
+offline reference refuses gated downloads and uploads; licence and credential
+references are declarations, never embedded secret values.
+
+```bash
+python3 tools/cohesix-py/examples/private_lora_release.py \
+  --root /absolute/private/new-release --base /absolute/pinned/base \
+  --base-manifest /absolute/pinned/base-manifest.json \
+  --selection /absolute/private/selection.toml \
+  --capabilities configs/generated/cuda_recipe.json --port 38527 \
+  --service cohesix-lora-selected.service
+```
+
+This creates a fresh private root, source attestation, pinned profile, native
+service unit and a **prepared** training request. Install the generated unit
+under the owning systemd user and configure the host-ticket agent with the
+generated `agent.json`. The selected Python environment must match every pinned
+package in the profile and pass CUDA preflight. Use the same admission, `plan`,
+`apply`, `watch` and signed `verify` flow below; preparation alone is no result.
+
+For an independently supplied adapter, use
+[`private_lora_import.py`](../tools/cohesix-py/examples/private_lora_import.py)
+with a directory containing only `adapter_config.json` and
+`adapter_model.safetensors`, an explicit non-secret origin reference and a
+licence already accepted in the profile. The scanner checks the selected base,
+tokenizer, PEFT configuration, tensor names, layer inventory, shapes, finite
+values and byte bounds before enrollment. The local source custodian signs the
+observed bytes and records `training_provenance: unknown`; it does not claim
+to know the supplier's data, optimizer or training job. Prepare a distinct
+`import` release request with [`private_lora_request.py`](../tools/cohesix-py/examples/private_lora_request.py),
+then admit it normally. An imported adapter must pass the same held-out
+comparison, scan, serving canary and generation fence as a trained one.
+
+The selected profile publishes an immutable HF Trainer checkpoint after each
+configured interval. Its manifest binds the source operation, exact profile
+and input, data position, adapter safetensors, optimizer, scheduler, RNG and
+trainer state to individual CAS digests. A full-state resume is a **new**
+authorised training operation referencing that manifest with
+`private_lora_request.py --checkpoint <sha256>`; first reconcile and safely
+close the original interrupted effect. The native helper verifies the source
+marker, exact profile and step, rematerializes the immutable files, loads the
+checkpoint with the pinned runtime's restricted state loader and asks HF
+Trainer to resume. Stochastic settings are recorded; matching weights are not
+promised. A completed adapter is only a deployable artifact, and the older
+profile continues to refuse a full-state resume claim.
+
+After a signed successful promotion, use
+[`private_lora_client.py`](../tools/cohesix-py/examples/private_lora_client.py)
+on the GPU host with the native config, original operation, expected generation
+and accepted adapter digest. It sends a separate streaming application request
+to the loopback Transformers endpoint and records returned model identity,
+observed output hash, latency and the active systemd invocation. Repeat it
+after a failed promotion with `--rollback` and the frozen incumbent generation.
+Keep the signed release report, native phase records and application observation
+together. A rejected comparison never reaches Load. A recovered canary failure
+keeps the candidate failed even when the incumbent is observed restored.
+
 ## Prepare the native host
 
 Use [private_lora_release.py](../tools/cohesix-py/examples/private_lora_release.py)
@@ -75,13 +144,14 @@ loopback serving port. Ticket arguments cannot supply commands, URLs or paths.
 An absent configuration returns `not_enabled`; macOS native execution returns
 `not_supported`. macOS can still control the remote admitted workflow.
 
-An import input contains the profile, source and attestation references,
+An M28b import input contains the profile, source and attestation references,
 license references, `checkpoint: null`, adapter bundle reference, exact base and
-tokenizer digests, pinned versions, training dataset digest and resolved training
-settings. A training input contains the profile/source/attestation/license
-references and `checkpoint: null`. Each source attestation signs the exact
-`cohesix-peft-source-attestation/v1` payload, including the adapter bundle for
-import. Adapter identity hashes the canonical file-name/digest map of both native
+tokenizer digests, pinned versions, and `training_provenance: unknown`. It makes
+no claim about the supplier's dataset or training settings. A training input
+contains the profile/source/attestation/license references and its checkpoint
+reference, if resuming. The M28b source attestation signs the exact
+`cohesix-peft-source-attestation/v2` payload, including the adapter bundle for
+import and the unknown provenance marker. Adapter identity hashes the canonical file-name/digest map of both native
 safetensors and PEFT configuration, so changing configuration cannot reuse an
 evaluated weight identity. An import requires genuine native safetensors plus PEFT configuration;
 it needs no invented Cohesix training job. Missing provenance, changed hashes,
@@ -140,10 +210,14 @@ Only then can generation compare-and-swap commit the accepted deployment.
 ## Interruption, rollback and cleanup
 
 Workflow position, native checkpoint and deployable adapter are separate records.
-The selected reference saves deployable adapters and read-only training/end
-observations; native optimizer/scheduler/RNG resume is **unqualified**. A supplied
-checkpoint is refused with `native_resume_unqualified_use_new_authorized_attempt`.
-Authorize a fresh operation if training must restart, preserving earlier evidence.
+The selected M28b profile retains native optimizer, scheduler, RNG and data
+position with the adapter at each configured interval. A new, separately
+authorized training operation can resume only from a complete checkpoint of
+the same profile after the original effect is reconciled. The older M27d
+profile saves deployable adapters and read-only training/end observations; it
+refuses a supplied checkpoint with
+`native_resume_unqualified_use_new_authorized_attempt`. Preserve earlier
+evidence when authorizing a fresh operation.
 Verified immutable outputs within the original transaction are reused; native
 phases with durable dispatch intent and unknown outcome are never issued twice.
 

@@ -91,6 +91,31 @@ pub struct EvaluationPolicy {
     pub metrics: BTreeMap<String, MetricBound>,
 }
 
+impl EvaluationPolicy {
+    /// Refuse unbounded or non-finite criteria before native work can start.
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=1_000_000).contains(&self.minimum_samples)
+                && (1..=3_600_000).contains(&self.maximum_age_ms)
+                && !self.metrics.is_empty()
+                && self.metrics.len() <= 16,
+            "invalid_policy evaluation-bounds"
+        );
+        for (name, bound) in &self.metrics {
+            ensure!(
+                !name.is_empty()
+                    && name.len() <= 64
+                    && !name.chars().any(char::is_control)
+                    && bound.absolute_bound.is_finite()
+                    && bound.maximum_regression.is_finite()
+                    && bound.maximum_regression >= 0.0,
+                "invalid_policy metric-bound"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// A first deployment explicitly names the qualified base and retains it for recovery.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,13 +218,7 @@ pub fn compare(
     current: &DeploymentState,
     now: u64,
 ) -> Result<Comparison> {
-    ensure!(
-        (1..=1_000_000).contains(&policy.minimum_samples)
-            && (1..=3_600_000).contains(&policy.maximum_age_ms)
-            && !policy.metrics.is_empty()
-            && policy.metrics.len() <= 16,
-        "invalid_policy evaluation-bounds"
-    );
+    policy.validate()?;
     validate_report(candidate, policy, now)?;
     validate_report(baseline, policy, now)?;
     ensure!(
@@ -223,14 +242,6 @@ pub fn compare(
         ),
     }
     for (metric, bound) in &policy.metrics {
-        ensure!(
-            !metric.is_empty()
-                && metric.len() <= 64
-                && bound.absolute_bound.is_finite()
-                && bound.maximum_regression.is_finite()
-                && bound.maximum_regression >= 0.0,
-            "invalid_policy metric-bound"
-        );
         let value = candidate.metrics.get(metric);
         let reference = baseline.metrics.get(metric);
         ensure!(

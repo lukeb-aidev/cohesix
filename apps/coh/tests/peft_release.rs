@@ -119,6 +119,26 @@ fn native_comparison_requires_exact_context_samples_current_generation_and_quali
     assert!(compare(&candidate, &baseline, &policy, &changed, 1100).is_err());
 }
 
+#[test]
+fn release_request_preflight_rejects_invalid_hash_and_nonfinite_policy() {
+    let provider = Provider::new(Entry::Train);
+    assert!(provider.request.validate().is_ok());
+    let mut changed = provider.request.clone();
+    changed.profile_sha256 = "not-a-digest".into();
+    assert!(changed.validate().is_err());
+    let mut changed = provider.request.clone();
+    changed
+        .evaluation_policy
+        .metrics
+        .get_mut("eval_loss")
+        .unwrap()
+        .absolute_bound = f64::NAN;
+    assert!(changed.validate().is_err());
+    let mut changed = provider.request.clone();
+    changed.baseline.generation = 1;
+    assert!(changed.validate().is_err());
+}
+
 struct Provider {
     request: Request,
     current: DeploymentState,

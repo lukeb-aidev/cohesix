@@ -3,6 +3,7 @@
 // Copyright 2026 Lukas Bower
 import { element, state, setStatus } from "./state.js";
 import { ownershipNodes, StoryCanvas } from "../hive/story.js";
+import { peftProjection } from "./peft_projection.js";
 let canvas = null,
   playback = null;
 const human = (value) => String(value ?? "unknown").replaceAll("_", " ");
@@ -95,6 +96,32 @@ export function showStory(envelope, verified = false) {
     inspector = element("aside", undefined, "story-inspector");
   layout.append(left, inspector);
   root.append(layout);
+  const peft = peftProjection(report);
+  if (peft) {
+    left.append(element("h3", "Private adapter comparison and serving"));
+    const comparison = element("div", undefined, "proof-axes");
+    for (const [label, value] of [
+      ["Held-out loss · base or incumbent", peft.baseline_loss],
+      ["Held-out loss · candidate", peft.candidate_loss],
+      ["Held-out samples", peft.heldout_samples],
+      ["Incumbent generation", peft.baseline_generation],
+      ["Candidate adapter", peft.candidate_adapter],
+      ["Served generation", peft.served_generation],
+      ["Canary latency (ms)", peft.canary_latency_ms],
+      ["Restored generation", peft.restored_generation],
+      ["Restored adapter", peft.restored_adapter],
+    ]) {
+      const row = element("div");
+      row.append(element("span", label), element("strong", value ?? "Unavailable"));
+      comparison.append(row);
+    }
+    left.append(comparison);
+    if (peft.state === "recovered_failure")
+      left.append(element("p", "Candidate failed. The incumbent was observed restored; this remains a failed candidate release.", "story-blocker"));
+    if (peft.state === "failed")
+      left.append(element("p", "Candidate rejected. Inspect the phase and signed result before any new attempt.", "story-blocker"));
+    detail(left, "Exact PEFT comparison and recovery observation", peft);
+  }
   const inspect = (label, value) => {
     inspector.replaceChildren(
       element("span", "SOURCE INSPECTOR", "section-kicker"),

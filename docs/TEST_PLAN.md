@@ -88,6 +88,18 @@ independently enrolled native evidence. Host journal fault tests cannot substitu
 for those outcomes. Compile exact affected host/target profiles and run generated
 and Test Plan consistency; the full staged release campaign remains owned by 27g.
 
+The selected M28b lifecycle adds `m28b-peft-live` and `m28b-serving-live` to
+the provider matrix and canonical action catalog. Run each with a fresh private
+reference file and state directory against the exact-source KVM Queen and Linux
+AArch64 NVIDIA host. The PEFT case needs separate admitted train, independent
+import and checkpoint-resume operations. The serving case needs a fixed
+base/incumbent/candidate comparison, pre-load rejection, a separate streaming
+application request after promotion, and interruption followed by an observed
+incumbent request at the frozen generation. Preserve every negative result and
+original identity. The focused Rust, compiler, Python and UI projection tests
+cover deterministic contracts; they cannot replace any of those live outcomes.
+This component lane does not qualify Pi hardware or the assembled Release B.
+
 Installation/adoption/CI uses focused signed-package refusal, explicit Python
 archive/install, service-rendering and journey identity/outcome/retry tests. Install
 selected packages into fresh directories, build/install the SDK in a clean interpreter,
@@ -1230,6 +1242,8 @@ from that catalog.
 | `federation.m28-authority-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28-authority-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28-authority-live"` |
 | `federation.m28a-workloads-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-workloads-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-workloads-live"` |
 | `federation.m28a-recovery-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-recovery-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-recovery-live"` |
+| `federation.m28b-peft-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-peft-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28b-peft-live"` |
+| `federation.m28b-serving-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-serving-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28b-serving-live"` |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |

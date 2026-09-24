@@ -387,6 +387,48 @@ The exact receipt actions are:
 The [native release recipe](PRIVATE_LORA_RELEASE.md) uses
 `cohesix.playbooks.run_peft_release`; Python validates and projects the same
 CLI report and never emits training scores or Worker receipts.
+For an application that needs an explicit release decision, use the higher-level
+`PeftReleaseClient` from the installed `cohesix` package:
+
+```python
+from pathlib import Path
+from cohesix import PeftReleaseClient
+
+release = PeftReleaseClient(
+    coh_binary=Path("/opt/cohesix/bin/coh"),
+    deployment=Path("/srv/private-model/release-deployment.json"),
+)
+planned = release.plan()
+# After reviewing the immutable request and delegated ticket:
+release.apply(
+    rest_url="https://queen.example.invalid",
+    auth_ref="file:/run/secrets/coh-auth",
+    ticket_ref="file:/run/secrets/coh-ticket",
+)
+outcome = release.inspect()
+if outcome.requested_outcome_verified:
+    print(outcome.operation_id, outcome.graph_sha256)
+else:
+    print(outcome.state, outcome.ambiguous)
+```
+
+`plan` does not submit work; `apply` is the only effectful method and never
+retries on a lost response. After interruption, use `recover` or `inspect` with
+the same deployment. `inspect` calls the shared CLI verifier only when its
+read-only observation reports success. The typed status binds operation and
+request digests and shows `not_submitted`, `outcome_unknown`, `succeeded`,
+`failed`, `recovered_failure`, or `rollback_failed` without inventing a new
+receipt. `requested_outcome_verified` is true only after successful CLI
+verification. It is a non-authoritative Python projection; exact source,
+serving generation and application-client observations remain separate release
+evidence. Future MCP and A2A views must use the same underlying identity and
+verifier result, not this Python object as authority.
+The selected [configurable LoRA guide](PRIVATE_LORA_RELEASE.md#configurable-selected-lora-lifecycle)
+uses the installed native Python environment to prepare a pinned profile,
+independent import, fresh checkpoint-resume request and application endpoint
+observation. These preparation and observation helpers never submit a Queen
+ticket. `run_peft_release` still uses the admitted `coh` path and its signed
+outcome; an adapter-only restart has no optimizer, scheduler or RNG resume claim.
 
 The receipt identity is the full role, slot, lease epoch, supervisor
 generation, and capability generation. A mismatch with the expected identity

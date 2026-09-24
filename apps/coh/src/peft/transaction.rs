@@ -43,6 +43,42 @@ pub struct Request {
     pub baseline: DeploymentState,
 }
 
+impl Request {
+    /// Validate the admitted immutable request before a journal or native phase is created.
+    pub fn validate(&self) -> Result<()> {
+        let digest = |value: &str| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        };
+        ensure!(
+            self.schema == "cohesix-peft-release/v1",
+            "invalid_request release-schema"
+        );
+        ensure!(
+            digest(&self.profile_sha256)
+                && digest(&self.input_sha256)
+                && digest(&self.baseline.served_artifact_sha256)
+                && digest(&self.baseline.runtime_sha256),
+            "invalid_request release-artifact-identity"
+        );
+        if let Some(adapter) = &self.baseline.adapter_sha256 {
+            ensure!(
+                digest(adapter) && adapter == &self.baseline.served_artifact_sha256,
+                "invalid_request incumbent-adapter"
+            );
+        } else {
+            ensure!(
+                self.baseline.generation == 0,
+                "invalid_request base-generation"
+            );
+        }
+        self.evaluation_policy.validate()?;
+        Ok(())
+    }
+}
+
 /// Workflow position is separate from native checkpoints and deployable artifacts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -327,10 +363,7 @@ pub fn run(
     native: &mut dyn Native,
     recovery_only: bool,
 ) -> Result<Journal> {
-    ensure!(
-        request.schema == "cohesix-peft-release/v1",
-        "invalid_request release-schema"
-    );
+    request.validate()?;
     for id in [
         &request.operation_id,
         &request.model_id,

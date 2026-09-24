@@ -1842,6 +1842,7 @@ ui_assets = [
   "apps/swarmui/frontend/workbench/navigation.js",
   "apps/swarmui/frontend/workbench/operations.js",
   "apps/swarmui/frontend/workbench/paths.js",
+  "apps/swarmui/frontend/workbench/peft_projection.js",
   "apps/swarmui/frontend/workbench/session.js",
   "apps/swarmui/frontend/workbench/state.js",
   "apps/swarmui/frontend/workbench/story.js",

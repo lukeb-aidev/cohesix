@@ -47,6 +47,22 @@ lane = "live_safe"
 runner = "provider_m28a_live"
 
 [[cases]]
+id = "m28b-peft-live"
+group = "executors"
+providers = ["peft", "systemd"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28b_live"
+
+[[cases]]
+id = "m28b-serving-live"
+group = "executors"
+providers = ["peft", "systemd"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28b_live"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

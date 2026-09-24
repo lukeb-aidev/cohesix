@@ -34,6 +34,22 @@ struct Contract {
     automatic_retries: u32,
     recovery: String,
     data: String,
+    peft: PeftCapabilities,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PeftCapabilities {
+    schema: String,
+    base_model: String,
+    base_revision: String,
+    training: Vec<String>,
+    import_formats: Vec<String>,
+    checkpoint: String,
+    checkpoint_files: Vec<String>,
+    checkpoint_interval_max: u32,
+    serving: String,
+    qlora: bool,
 }
 
 fn compile(bytes: &str) -> Result<Vec<u8>> {
@@ -73,7 +89,25 @@ fn compile(bytes: &str) -> Result<Vec<u8>> {
             && !c.recovery.is_empty()
             && c.recovery.len() <= 256
             && !c.data.is_empty()
-            && c.data.len() <= 128,
+            && c.data.len() <= 128
+            && c.peft.schema == "cohesix-peft-capabilities/v1"
+            && c.peft.base_model == "HuggingFaceTB/SmolLM2-135M"
+            && c.peft.base_revision == "93efa2f097d58c2a74874c7e644dbc9b0cee75a2"
+            && c.peft.training == ["lora"]
+            && c.peft.import_formats == ["peft-lora-safetensors"]
+            && c.peft.checkpoint == "hf-trainer-full-state/v1"
+            && c.peft.checkpoint_files
+                == [
+                    "adapter_model.safetensors",
+                    "adapter_config.json",
+                    "optimizer.pt",
+                    "scheduler.pt",
+                    "rng_state.pth",
+                    "trainer_state.json"
+                ]
+            && (1..=16).contains(&c.peft.checkpoint_interval_max)
+            && c.peft.serving == "transformers-serve-local"
+            && !c.peft.qlora,
         "invalid CUDA recipe contract"
     );
     let mut output = serde_json::to_vec_pretty(&c)?;
@@ -105,6 +139,11 @@ mod tests {
             (
                 "max_retained_bytes = 8388608",
                 "max_retained_bytes = 8388609",
+            ),
+            ("qlora = false", "qlora = true"),
+            (
+                "checkpoint_interval_max = 16",
+                "checkpoint_interval_max = 17",
             ),
         ] {
             assert!(super::compile(&source.replace(from, to)).is_err());

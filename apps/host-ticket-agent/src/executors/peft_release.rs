@@ -284,6 +284,7 @@ fn run(
         "EPERM release-input-digest"
     );
     let request: Request = serde_json::from_slice(&bytes)?;
+    request.validate()?;
     ensure!(
         serde_json::to_vec(&request)? == bytes
             && spec.operation_id.as_ref() == Some(&request.operation_id)

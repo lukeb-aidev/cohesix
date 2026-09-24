@@ -1184,3 +1184,17 @@ evidence-pack, transport, or artifact-size overhead; this offline harness does
 not measure live transport latency. It is host-tool evidence, never a replacement
 for raw framed TCP, REST, QEMU, or Pi performance acceptance. Existing benchmark
 scripts require no wire or report-schema changes for M27.
+
+## Selected private adapter evaluation and serving
+
+The configurable LoRA selection fixes the disjoint 16-row held-out set,
+tokenizer/preprocessing, base revision, evaluator/runtime versions, seed,
+resource contract and loss threshold before any candidate is trained or
+imported. Base, incumbent and candidate reports must use the same context and
+sample count; record raw `eval_loss` and native report digests even when the
+candidate fails the absolute ceiling or zero-regression rule. Do not tune the
+bound after seeing a negative result. The streaming application request records
+an observed model identity, generation, output digest and latency after native
+promotion or rollback. Report these as selected workload measurements, separate
+from REST, raw TCP and Pi pressure benchmarks; an HTTP 200 or judge score cannot
+stand in for the fixed comparison or a rollback observation.
