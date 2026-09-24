@@ -136,7 +136,7 @@ owned by their specific contracts.
 | [27h](#27h) | Release A Community Video Index | Complete — documentation only |
 | [27i](#27i) | Release A Python Index Publication | Complete — PyPI `1.1.0b1` page correction published |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Complete — selected foundation |
-| [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Planned |
+| [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Complete — selected Orin systemd and Docker lanes |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Planned |
 | [28c](#28c) | macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows | Planned |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | Planned |
@@ -12757,7 +12757,7 @@ checks are mandatory; broad formal assurance is not.
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — `m28a-approved-user-workloads` and `m28a-cuda-operations-and-recovery` activated on 24 September 2026.
+**Status:** Complete — `m28a-approved-user-workloads` and `m28a-cuda-operations-and-recovery` at the selected Orin scope on 24 September 2026; see the [M28a implementation record](audit/M28A_IMPLEMENTATION_RECORD.md).
 
 **Value:** users run their own approved useful workload, not only diagnostic kernels.
 **Prerequisites:** 28 and accepted 27b/27c CUDA/executor/recipe foundations.
