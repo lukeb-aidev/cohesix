@@ -1,8 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Publish the exact tagged Cohesix 1.1.0b0 Python source through reviewer-gated PyPI trusted publishing.
+# Purpose: Publish the reviewed Cohesix 1.1.0b1 metadata correction from sealed SDK source through reviewer-gated PyPI trusted publishing.
 # Copyright 2026 Lukas Bower
 
-name: Publish Cohesix Python 1.1.0b0
+name: Publish Cohesix Python 1.1.0b1
 
 on:
   workflow_dispatch:
@@ -10,12 +10,12 @@ on:
 permissions: {}
 
 concurrency:
-  group: cohesix-pypi-1-1-0b0
+  group: cohesix-pypi-1-1-0b1
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build and check tagged Python distribution
+    name: Build and check tagged SDK with reviewed metadata
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -23,6 +23,7 @@ jobs:
       contents: read
     env:
       RELEASE_SOURCE_COMMIT: 8bda91891591466b67f5f4a35e733fe2d3acf0e8
+      METADATA_SOURCE_COMMIT: da3ff4c7e1df1fbe97087c2d9a1df2d3334a5d49
     steps:
       - name: Check out sealed release source
         uses: actions/checkout@v4
@@ -37,6 +38,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_COMMIT"
           echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
+      - name: Fetch reviewed metadata correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$METADATA_SOURCE_COMMIT"
+          test "$(git rev-parse FETCH_HEAD)" = "$METADATA_SOURCE_COMMIT"
+
       - name: Install Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -45,28 +53,59 @@ jobs:
       - name: Install isolated package tools
         run: python -m pip install --disable-pip-version-check setuptools==84.0.0 wheel==0.48.0 packaging==26.3 twine==7.0.0
 
-      - name: Apply only the release-aligned Python version
+      - name: Apply only reviewed Python package metadata
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import os
           import subprocess
           from packaging.version import Version
 
-          if str(Version('1.1.0-beta')) != '1.1.0b0':
-              raise SystemExit('release and Python versions do not align')
-          project = Path('tools/cohesix-py/pyproject.toml')
-          before = project.read_text()
-          old = 'version = "0.2.0-alpha2"'
-          if before.count(old) != 1:
+          if str(Version('1.1.0-beta.1')) != '1.1.0b1':
+              raise SystemExit('Python correction version is not PEP 440 aligned')
+          project = Path('tools/cohesix-py')
+          if 'version = "0.2.0-alpha2"' not in (project / 'pyproject.toml').read_text():
               raise SystemExit('tagged Python version does not match expected source')
-          project.write_text(before.replace(old, 'version = "1.1.0b0"'))
-          changed = subprocess.check_output(
+          for name in ('pyproject.toml', 'README.md'):
+              reviewed = subprocess.check_output([
+                  'git', 'show', f"{os.environ['METADATA_SOURCE_COMMIT']}:{project / name}"
+              ])
+              (project / name).write_bytes(reviewed)
+          changed = set(subprocess.check_output(
               ['git', 'diff', '--name-only'], text=True
-          ).splitlines()
-          if changed != [str(project)]:
+          ).splitlines())
+          expected = {str(project / name) for name in ('pyproject.toml', 'README.md')}
+          if changed != expected:
               raise SystemExit(f'unexpected tagged-source changes: {changed}')
+          PY
+
+      - name: Check index-facing metadata and public links
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import tomllib
+          from urllib.request import Request, urlopen
+
+          project = tomllib.loads(Path('tools/cohesix-py/pyproject.toml').read_text())['project']
+          readme = Path('tools/cohesix-py/README.md').read_text()
+          if project['version'] != '1.1.0b1':
+              raise SystemExit('wrong package version')
+          if "python3 -m pip install 'cohesix==1.1.0b1'" not in readme:
+              raise SystemExit('published install command missing')
+          links = list(project['urls'].values())
+          links += re.findall(r'\]\(([^)]+)\)', readme)
+          if not links or any(not link.startswith('https://') for link in links):
+              raise SystemExit('non-public or relative project link')
+          for link in sorted(set(links)):
+              with urlopen(Request(link, method='HEAD'), timeout=15) as response:
+                  if response.status != 200:
+                      raise SystemExit(f'broken project link: {link}')
+          print(f'checked {len(set(links))} public project URLs')
           PY
 
       - name: Build and validate distributions
@@ -78,11 +117,36 @@ jobs:
             --inventory configs/generated/implementation_surface_inventory.json \
             --out out/pypi-build
           python -m twine check \
-            out/pypi-build/cohesix-1.1.0b0-py3-none-any.whl \
-            out/pypi-build/cohesix-1.1.0b0.tar.gz
+            out/pypi-build/cohesix-1.1.0b1-py3-none-any.whl \
+            out/pypi-build/cohesix-1.1.0b1.tar.gz
+          python - <<'PY'
+          from email.parser import BytesParser
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          build = Path('out/pypi-build')
+          readme = Path('tools/cohesix-py/README.md').read_text()
+          with zipfile.ZipFile(build / 'cohesix-1.1.0b1-py3-none-any.whl') as wheel:
+              wheel_metadata = BytesParser().parsebytes(
+                  wheel.read('cohesix-1.1.0b1.dist-info/METADATA')
+              )
+          with tarfile.open(build / 'cohesix-1.1.0b1.tar.gz') as sdist:
+              member = sdist.extractfile('cohesix-1.1.0b1/PKG-INFO')
+              if member is None:
+                  raise SystemExit('source distribution metadata missing')
+              sdist_metadata = BytesParser().parsebytes(member.read())
+          for metadata in (wheel_metadata, sdist_metadata):
+              if metadata['Version'] != '1.1.0b1':
+                  raise SystemExit('built distribution version mismatch')
+              if metadata.get_payload().strip() != readme.strip():
+                  raise SystemExit('built long description differs from reviewed README')
+              if 'Homepage, https://lukeb-aidev.github.io/cohesix/' not in metadata.get_all('Project-URL', []):
+                  raise SystemExit('built Homepage differs from reviewed site')
+          PY
           python -m venv /tmp/cohesix-pypi-smoke
           /tmp/cohesix-pypi-smoke/bin/python -m pip install --no-deps \
-            out/pypi-build/cohesix-1.1.0b0-py3-none-any.whl
+            out/pypi-build/cohesix-1.1.0b1-py3-none-any.whl
           /tmp/cohesix-pypi-smoke/bin/python -c 'import cohesix; print(cohesix.__file__)'
           /tmp/cohesix-pypi-smoke/bin/cohesix-journey --help > /dev/null
           /tmp/cohesix-pypi-smoke/bin/cohesix-playbook --help > /dev/null
@@ -92,8 +156,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p handoff/dist
-          cp out/pypi-build/cohesix-1.1.0b0-py3-none-any.whl \
-             out/pypi-build/cohesix-1.1.0b0.tar.gz handoff/dist/
+          cp out/pypi-build/cohesix-1.1.0b1-py3-none-any.whl \
+             out/pypi-build/cohesix-1.1.0b1.tar.gz handoff/dist/
           cp out/pypi-build/distributions.json handoff/
           (cd handoff && sha256sum dist/* distributions.json > SHA256SUMS && sha256sum -c SHA256SUMS)
           cat handoff/SHA256SUMS
@@ -101,7 +165,7 @@ jobs:
       - name: Retain reviewed distributions
         uses: actions/upload-artifact@v4
         with:
-          name: cohesix-1.1.0b0-distributions
+          name: cohesix-1.1.0b1-distributions
           path: handoff/
           if-no-files-found: error
           retention-days: 30
@@ -119,7 +183,7 @@ jobs:
       - name: Retrieve checked distributions
         uses: actions/download-artifact@v4
         with:
-          name: cohesix-1.1.0b0-distributions
+          name: cohesix-1.1.0b1-distributions
           path: handoff
 
       - name: Verify handoff and inspect PyPI state
@@ -139,8 +203,8 @@ jobs:
 
           paths = sorted(Path('dist').iterdir())
           expected_names = {
-              'cohesix-1.1.0b0-py3-none-any.whl',
-              'cohesix-1.1.0b0.tar.gz',
+              'cohesix-1.1.0b1-py3-none-any.whl',
+              'cohesix-1.1.0b1.tar.gz',
           }
           if {path.name for path in paths} != expected_names:
               raise SystemExit('unexpected distribution handoff')
@@ -152,7 +216,7 @@ jobs:
           if report['schema'] != 'cohesix-python-distributions/v1' or recorded != expected:
               raise SystemExit('distribution manifest and handoff differ')
           try:
-              with urlopen('https://pypi.org/pypi/cohesix/1.1.0b0/json',
+              with urlopen('https://pypi.org/pypi/cohesix/1.1.0b1/json',
                            timeout=15) as response:
                   version = json.load(response)
           except HTTPError as error:
@@ -165,9 +229,9 @@ jobs:
               observed = {row['filename']: row['digests']['sha256']
                           for row in version['urls']}
               if observed != expected:
-                  raise SystemExit('PyPI has different or partial 1.1.0b0 files')
+                  raise SystemExit('PyPI has different or partial 1.1.0b1 files')
               publish = 'false'
-              print('Exact 1.1.0b0 files are already published')
+              print('Exact 1.1.0b1 files are already published')
           with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
               output.write(f'publish={publish}\n')
           PY
