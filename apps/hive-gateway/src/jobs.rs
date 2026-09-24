@@ -132,12 +132,13 @@ fn authorize_status(state: &AppState, headers: &HeaderMap) -> Result<String> {
         .delegation
         .lock()
         .map_err(|_| anyhow!("EPERM authority-state-unavailable"))?
-        .authorize_read(
+        .authorize_read_principal(
             delegated_token(headers),
             STATUS_PATH,
             4096,
             authority_now_ms()?,
         )
+        .map(|principal| principal.subject)
         .map_err(|error| anyhow!("{error}"))
 }
 
@@ -401,11 +402,23 @@ pub(super) async fn submit(
             Ok(value) => value,
             Err(error) => return fail(StatusCode::BAD_REQUEST, error),
         };
-    let subject = match authorize_delegated(&state, &headers, SPEC_PATH, &[&line]) {
-        Ok(subject) => subject,
+    let principal = match state
+        .inner
+        .delegation
+        .lock()
+        .map_err(|_| "EPERM authority-state-unavailable")
+        .and_then(|mut delegation| {
+            delegation.authorize_write_principal(
+                delegated_token(&headers),
+                SPEC_PATH,
+                &[&line],
+                authority_now_ms().map_err(|_| "EPERM authority-clock-unavailable")?,
+            )
+        }) {
+        Ok(principal) => principal,
         Err(error) => return fail(StatusCode::FORBIDDEN, error),
     };
-    if payload.binding.subject != subject {
+    if payload.binding.subject != principal.subject {
         return fail(StatusCode::FORBIDDEN, "EPERM standing subject mismatch");
     }
     let now = match authority_now_ms() {
@@ -429,11 +442,11 @@ pub(super) async fn submit(
             .into_response();
     }
     let state_for_write = state.clone();
-    let subject_for_write = subject.clone();
+    let identity_for_write = principal.ticket_hash;
     let result = tokio::task::spawn_blocking(move || {
         evidence::write(
             &state_for_write,
-            &subject_for_write,
+            &identity_for_write,
             SPEC_PATH,
             line.as_bytes(),
         )
