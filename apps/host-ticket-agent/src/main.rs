@@ -8,6 +8,8 @@
 //! Host ticket agent binary.
 
 use std::collections::VecDeque;
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -17,6 +19,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
+use cohesix_authority::standing::{StandingControls, StandingScopeFile};
+use cohesix_authority::standing_ledger::StandingLedger;
 use cohesix_ticket::Role;
 use cohsh::{NineDoorTransport, RestTransport, RoleArg, Session, TcpTransport, Transport};
 use host_ticket_agent::executors::ExecutorConfig;
@@ -124,6 +128,70 @@ struct Args {
     /// Pinned native HF release profile; all artifacts remain under its private CAS root.
     #[arg(long)]
     peft_release_config: Option<PathBuf>,
+    /// Private persistent M28 ledger path, required when standing authority is compiled on.
+    #[arg(long, value_name = "FILE", requires = "standing_scopes")]
+    standing_ledger: Option<PathBuf>,
+    /// Administrative scope enrollment, bounded by the selected generated ceiling.
+    #[arg(long, value_name = "FILE", requires = "standing_ledger")]
+    standing_scopes: Option<PathBuf>,
+    /// Explicit one-time administrative provisioning; never recreates lost state.
+    #[arg(long, action = ArgAction::SetTrue, requires = "standing_ledger")]
+    standing_init: bool,
+}
+
+fn selected_standing_ledger(args: &Args) -> Result<Option<Arc<StandingLedger>>> {
+    let manifest_file = fs::File::open(&args.manifest)?;
+    let mut manifest_bytes = Vec::new();
+    manifest_file
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut manifest_bytes)?;
+    anyhow::ensure!(
+        manifest_bytes.len() <= 2 * 1024 * 1024,
+        "ELIMIT resolved manifest"
+    );
+    let controls = StandingControls::from_resolved_manifest(&manifest_bytes)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    if !controls.enabled {
+        anyhow::ensure!(
+            args.standing_ledger.is_none() && args.standing_scopes.is_none(),
+            "EPERM standing authority disabled by selected manifest"
+        );
+        return Ok(None);
+    }
+    if args.standing_ledger.is_none() && args.standing_scopes.is_none() {
+        return Ok(None);
+    }
+    let ledger_path = args
+        .standing_ledger
+        .as_ref()
+        .context("enabled standing authority requires --standing-ledger")?;
+    let scopes_path = args
+        .standing_scopes
+        .as_ref()
+        .context("enabled standing authority requires --standing-scopes")?;
+    anyhow::ensure!(
+        scopes_path.is_absolute() && !scopes_path.is_symlink(),
+        "EPERM standing scope file path"
+    );
+    let file = fs::File::open(scopes_path)?;
+    let mut bytes = Vec::new();
+    file.take(65_537).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() <= 65_536, "ELIMIT standing scope file");
+    let selection: StandingScopeFile = serde_json::from_slice(&bytes)?;
+    selection
+        .validate(&controls)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let graph = cohesix_authority::provider::registry()?["graph_sha256"]
+        .as_str()
+        .context("generated provider graph hash missing")?
+        .to_owned();
+    let ledger = StandingLedger::new(ledger_path.clone(), graph, controls, selection.scopes)?;
+    if args.standing_init {
+        ledger.initialize()?;
+    } else {
+        ledger.status("startup-check")?;
+    }
+    Ok(Some(Arc::new(ledger)))
 }
 
 fn main() -> Result<()> {
@@ -163,6 +231,17 @@ fn main() -> Result<()> {
         .as_ref()
         .map(|_| cohesix_evidence::producer::executable_digest())
         .transpose()?;
+    let standing_ledger = selected_standing_ledger(&args)?;
+    if args.standing_init {
+        println!(
+            "standing authority ledger initialized at {}",
+            args.standing_ledger
+                .as_ref()
+                .expect("clap requires path")
+                .display()
+        );
+        return Ok(());
+    }
     let executor_config = ExecutorConfig {
         mount: manifest.mount_path.clone(),
         registry_root,
@@ -177,6 +256,7 @@ fn main() -> Result<()> {
         gpu_executor_credential_ref: args.gpu_executor_credential_ref.clone(),
         gpu_request_root: args.gpu_request_root.clone(),
         peft_release_config: args.peft_release_config.clone(),
+        standing_ledger,
     };
     if args.mock && args.execution_lanes != 1 {
         return Err(anyhow::anyhow!(
@@ -215,7 +295,11 @@ fn main() -> Result<()> {
         let lane_running = Arc::clone(&running);
         let lane_feed = shared_snapshot.as_ref().map(Arc::clone);
         handles.push(thread::spawn(move || {
-            let result = if let Some(feed) = lane_feed {
+            // Version-1 tickets enter the raw spec log without changing the
+            // admitted snapshot. Its owner must poll even with shared ingress.
+            let result = if let Some(feed) = lane_feed.filter(|_| {
+                lane_uses_snapshot_feed(lane_index, lane_args.gpu_executor_socket.is_some())
+            }) {
                 run_ticket_lane_from_snapshot(
                     &lane_args,
                     &lane_manifest,
@@ -268,6 +352,10 @@ fn main() -> Result<()> {
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+fn lane_uses_snapshot_feed(lane_index: usize, gpu_executor: bool) -> bool {
+    lane_index != usize::from(gpu_executor)
 }
 
 #[derive(Debug, Default)]
@@ -718,6 +806,14 @@ fn _ping_transport(transport: &mut dyn Transport, session: &Session) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_ticket_owner_polls_with_shared_snapshot_ingress() {
+        assert!(!lane_uses_snapshot_feed(0, false));
+        assert!(lane_uses_snapshot_feed(1, false));
+        assert!(lane_uses_snapshot_feed(0, true));
+        assert!(!lane_uses_snapshot_feed(1, true));
+    }
 
     #[test]
     fn snapshot_feed_deduplicates_and_coalesces_to_latest_generation() {

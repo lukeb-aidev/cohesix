@@ -69,6 +69,8 @@ pub enum Command {
     Recover(WorkflowArgs),
     /// Print compiler-owned provider and surface contracts without opening a transport.
     Providers,
+    /// Operate one durable selected job or administer its narrow standing scope.
+    Job(JobArgs),
     /// Build, verify or install an exact signed host package without a transport.
     Package {
         #[command(subcommand)]
@@ -211,6 +213,34 @@ pub struct DiffArgs {
     /// REST request authentication token.
     #[arg(long)]
     pub rest_auth_token: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct JobArgs {
+    #[command(flatten)]
+    pub connect: ConnectArgs,
+    #[command(subcommand)]
+    pub command: JobCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum JobCommand {
+    /// Submit an exact JSON binding and raw ticket; uncertain replies need reconcile.
+    Submit {
+        /// Bounded JSON file containing binding and ticket objects.
+        #[arg(long)]
+        input: PathBuf,
+    },
+    /// Read retained execution and independent delivery state.
+    Status { admission_id: String },
+    /// Request cancellation without claiming native termination.
+    Cancel { admission_id: String },
+    /// Inspect target results for one identity without replaying its effect.
+    Reconcile { admission_id: String },
+    /// Inspect standing scope spending under a separate admin ticket.
+    InspectScope { scope_id: String },
+    /// Revoke future effects under a separate admin ticket.
+    RevokeScope { scope_id: String },
 }
 
 #[derive(Debug, Parser)]
@@ -587,4 +617,35 @@ pub fn ui_schema() -> serde_json::Value {
     let mut command = Cli::command();
     command.build();
     node(&command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_job_commands_share_one_rest_connection_schema() {
+        let cli = Cli::try_parse_from([
+            "coh",
+            "--ticket-ref",
+            "env:JOB_TICKET",
+            "job",
+            "--rest-url",
+            "http://127.0.0.1:8080",
+            "submit",
+            "--input",
+            "/tmp/job.json",
+        ])
+        .expect("selected job command");
+        assert!(matches!(
+            cli.command,
+            Command::Job(JobArgs {
+                command: JobCommand::Submit { .. },
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["coh", "job", "cancel", "../job"]).is_ok());
+        // The runtime validates ids before constructing a URL; the parser
+        // preserves the original bytes for that deterministic refusal.
+    }
 }

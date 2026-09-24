@@ -402,7 +402,7 @@ class HostTicketRequest:
         if self.writer_epoch is not None:
             payload["writer_epoch"] = self.writer_epoch
         if self.admission is not None:
-            payload["admission"] = asdict(self.admission)
+            payload["admission"] = self.admission.to_payload()
         if self.target is not None:
             payload["target"] = self.target
         if self.args:

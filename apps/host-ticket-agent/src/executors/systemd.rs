@@ -7,6 +7,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
+use cohesix_authority::standing::AdmissionFacts;
 use cohsh::{Session, Transport};
 use host_sidecar_bridge::native::{
     dispatch_systemd, observe_systemd_before, systemd_postcondition, validate_native_id,
@@ -45,6 +46,22 @@ pub fn execute(
         _ => return Err(anyhow!("EPERM unsupported-systemd-action")),
     };
     super::observation::prepare(config)?;
+    if let Some(record) = crate::standing::selected_record(spec, config)? {
+        let (state_epoch, resource_generation) =
+            crate::standing::service_generations(&serde_json::to_value(&before)?)?;
+        let now = crate::unix_time_ms_now();
+        crate::standing::begin_dispatch(
+            spec,
+            config,
+            &AdmissionFacts {
+                observed_unix_ms: now,
+                state_epoch,
+                resource_generation,
+                policy_sha256: record.binding.policy_sha256,
+            },
+            now,
+        )?;
+    }
     let job = dispatch_systemd(&unit, action, deadline)?;
     loop {
         let observed = observe_systemd_before(&unit, deadline).map_err(|_| {

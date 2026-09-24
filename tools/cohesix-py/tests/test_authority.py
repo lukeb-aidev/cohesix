@@ -52,6 +52,11 @@ def test_strict_intent_keeps_writer_and_admission_state_separate():
     assert payload["writer_epoch"] == 1
     assert payload["admission"]["state_epoch"] == 8
     assert payload["admission"]["resource_generation"] == 9
+    assert "standing_scope_id" not in payload["admission"]
+    selected = replace(admission, standing_scope_id="scope-1")
+    assert selected.to_payload()["standing_scope_id"] == "scope-1"
+    with pytest.raises(CohesixError):
+        replace(admission, standing_scope_id="../scope")
     assert intent.encode() == intent.encode()
     with pytest.raises(CohesixError, match="stale-writer"):
         replace(intent, writer_epoch=2).encode()

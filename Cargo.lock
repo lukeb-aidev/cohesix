@@ -795,6 +795,7 @@ dependencies = [
 name = "cohesix-authority"
 version = "0.1.0"
 dependencies = [
+ "fs2",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2291,6 +2292,8 @@ dependencies = [
  "cohsh-core",
  "ed25519-dalek 3.0.0",
  "hex",
+ "host-sidecar-bridge",
+ "host-ticket-agent",
  "nine-door",
  "rustix",
  "secure9p-codec",

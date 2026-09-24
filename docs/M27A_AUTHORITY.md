@@ -59,8 +59,9 @@ side effect. An exact duplicate returns the retained outcome without consuming
 another approval or repeating the effect. Changed fields under the same identity
 produce `EPERM idempotency-conflict`. Capacity exhaustion returns `ELIMIT`;
 completed identities are not evicted. Compatibility policy defaults hold 64
-entries; Release A selects 512 on both QEMU and Pi. Manifest schema 1.28 permits
-1–512 entries and projects the selected capacity into the Python SDK. Pressure
+entries; Release A selects 512 on both QEMU and Pi. Release A schema 1.28 and
+current schema 1.29 both permit 1–512 entries and project the selected capacity
+into the Python SDK. Pressure
 qualification must budget every distinct intent, including refusals and fault
 preflight, before the first mutation. Increasing capacity changes no identity,
 approval, fencing or audit semantics.

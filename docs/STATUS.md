@@ -62,6 +62,17 @@ Broader providers, agent protocols and other deferred features remain governed
 by the [Build Plan](BUILD_PLAN.md#roadmap-id-mapping). Their existing source or
 historical evidence does not establish release qualification.
 
+[Milestone 28](BUILD_PLAN.md#28) is complete at its selected foundation scope.
+The source declares
+false-default, compiler-controlled MCP and A2A access switches and implements
+selected REST/CLI/Python jobs with a private standing ledger for GPU submit and
+service restart. Exact-source KVM target and native Linux AArch64 CUDA/service
+observations passed the selected jobs and standing authority cases, including
+stale request refusal and recovery of pending result delivery. The current
+gateway has no MCP or A2A routes. The [M28 implementation record](audit/M28_IMPLEMENTATION_RECORD.md)
+retains the evidence and limits. This component result does not change Release A
+acceptance or qualify Release B.
+
 ## Capability snapshot
 
 | Surface | Checked-in implementation | Evidence boundary |
@@ -88,6 +99,6 @@ historical evidence does not establish release qualification.
 - For performance claims, follow [Benchmarking](BENCHMARKS.md) and retain the
   complete result artifact.
 
-This snapshot describes the repository on 23 September 2026. A change that alters
+This snapshot describes the repository on 24 September 2026. A change that alters
 one of these public capability boundaries must update this page in the same
 change.

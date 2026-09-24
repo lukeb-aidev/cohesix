@@ -197,6 +197,16 @@ They remain bounded by the gateway's upstream target authority. The explicit
 single-caller read-compatibility option is not enabled by default. See
 [read authentication](HOST_API.md#authentication-and-exposure).
 
+`RestBackend.submit_selected_job(binding, ticket)` posts the same versioned
+binding used by `coh job submit`. The retained admission id is the recovery key:
+`selected_job_status(id)` reads execution and independent result delivery;
+`reconcile_selected_job(id)` checks the target result without another effect;
+`request_selected_job_cancel(id)` only requests cancellation. An uncertain
+submission response requires status or reconcile with the original id, never a
+new ticket or idempotency key. `inspect_standing_scope(id)` and
+`revoke_standing_scope(id)` require a separate delegated admin ticket. Standing
+authority and native outcome remain gateway/agent contracts, not Python grants.
+
 ```python
 import os
 

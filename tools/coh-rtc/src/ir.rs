@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.28";
+const SCHEMA_VERSION: &str = "1.29";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -155,6 +155,10 @@ pub struct Manifest {
     #[serde(default)]
     pub authority: cohesix_authority::policy::AuthorityPolicy,
     #[serde(default)]
+    pub gateway: cohesix_authority::protocol::ProtocolControls,
+    #[serde(default)]
+    pub standing_authority: cohesix_authority::standing::StandingControls,
+    #[serde(default)]
     pub meta: ManifestMeta,
     pub root_task: RootTaskSection,
     pub profile: Profile,
@@ -260,6 +264,8 @@ impl Manifest {
         crate::authority::validate(self)?;
         self.validate_ticket_limits()?;
         self.validate_ecosystem()?;
+        self.validate_gateway()?;
+        self.validate_standing_authority()?;
         self.validate_sidecars()?;
         self.validate_telemetry()?;
         self.validate_lifecycle()?;
@@ -301,6 +307,36 @@ impl Manifest {
         self.root_task
             .driver_images
             .validate_for_profile(self.profile_is_pi4_family())?;
+        Ok(())
+    }
+
+    fn validate_gateway(&self) -> Result<()> {
+        self.gateway.validate().map_err(anyhow::Error::msg)?;
+        if self.gateway.effective_mcp() || self.gateway.effective_a2a() {
+            if !self.ecosystem.host.enable
+                || !self.ecosystem.host.tickets.enable
+                || !self.authority.delegated_rest
+                || !self.authority.strict_queen_intents
+                || !self.authority.execution_wal_required
+            {
+                bail!("enabled gateway agent protocols require host tickets, delegated REST, strict intents and execution WAL");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_standing_authority(&self) -> Result<()> {
+        self.standing_authority
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+        if self.standing_authority.enabled
+            && (!self.ecosystem.host.enable
+                || !self.ecosystem.host.tickets.enable
+                || !self.authority.delegated_rest
+                || !self.authority.execution_wal_required)
+        {
+            bail!("standing authority requires host tickets, delegated REST and execution WAL");
+        }
         Ok(())
     }
 

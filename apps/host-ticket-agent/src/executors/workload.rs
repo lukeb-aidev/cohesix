@@ -8,6 +8,7 @@ use super::{provider_pending, ExecutorConfig, ReconcileOutcome};
 use crate::{HostTicketSpec, HOST_TICKET_V2_SCHEMA};
 use anyhow::{anyhow, bail, ensure, Result};
 use cohesix_authority::gpu::{WorkloadControl, WorkloadSubmit};
+use cohesix_authority::standing::AdmissionFacts;
 use cohsh::{Session, Transport};
 use gpu_bridge_host::workload::{self, Binding, Command, Input, Job};
 use gpu_bridge_host::PublishedDevice;
@@ -334,6 +335,20 @@ pub fn execute(
         input.request.memory_budget_bytes <= selected_resources.memory_bytes,
         "GPU workload exceeds Worker memory reservation"
     );
+    if let Some(record) = crate::standing::selected_record(spec, config)? {
+        let now = workload::now_ms()?;
+        crate::standing::begin_dispatch(
+            spec,
+            config,
+            &AdmissionFacts {
+                observed_unix_ms: now,
+                state_epoch: sequence,
+                resource_generation: selected_inventory.source_epoch,
+                policy_sha256: record.binding.policy_sha256,
+            },
+            now,
+        )?;
+    }
     let job = call(
         config,
         Command::Submit {

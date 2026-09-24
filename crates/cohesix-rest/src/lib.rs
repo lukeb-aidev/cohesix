@@ -262,6 +262,82 @@ impl GatewayClient {
         Ok(lines.len())
     }
 
+    /// Submit one complete selected intent. A transport error is uncertain;
+    /// callers must reconcile this exact admission ID before another effect.
+    pub fn submit_selected_job(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
+        let encoded = serde_json::to_vec(request)?;
+        if encoded.len() > 4096 || !request.is_object() {
+            return Err(anyhow!("ELIMIT selected job request"));
+        }
+        let ticket = self.validate_write_credentials()?;
+        let url = format!("{}/v1/jobs", self.base_url);
+        decode_json_response(
+            "JOB SUBMIT",
+            "selected job",
+            self.post_json(&url, request, &ticket),
+        )
+    }
+
+    /// Read one retained execution and independent delivery state.
+    pub fn selected_job_status(&self, admission_id: &str) -> Result<serde_json::Value> {
+        cohesix_authority::validate_id(admission_id).map_err(|_| anyhow!("EPERM job id"))?;
+        let url = format!("{}/v1/jobs/{admission_id}", self.base_url);
+        decode_json_response(
+            "JOB STATUS",
+            "selected job status",
+            self.get_operation(&url),
+        )
+    }
+
+    /// Request cancellation once without treating the request as termination.
+    pub fn request_selected_job_cancel(&self, admission_id: &str) -> Result<serde_json::Value> {
+        self.selected_job_control(admission_id, "cancel")
+    }
+
+    /// Inspect the retained record and exact target results without replay.
+    pub fn reconcile_selected_job(&self, admission_id: &str) -> Result<serde_json::Value> {
+        self.selected_job_control(admission_id, "reconcile")
+    }
+
+    /// Inspect durable scope spending under a separately scoped admin ticket.
+    pub fn inspect_standing_scope(&self, scope_id: &str) -> Result<serde_json::Value> {
+        self.standing_scope_control(scope_id, "inspect")
+    }
+
+    /// Revoke future effects without claiming termination of dispatched work.
+    pub fn revoke_standing_scope(&self, scope_id: &str) -> Result<serde_json::Value> {
+        self.standing_scope_control(scope_id, "revoke")
+    }
+
+    fn selected_job_control(
+        &self,
+        admission_id: &str,
+        operation: &str,
+    ) -> Result<serde_json::Value> {
+        cohesix_authority::validate_id(admission_id).map_err(|_| anyhow!("EPERM job id"))?;
+        let ticket = self.validate_write_credentials()?;
+        let url = format!("{}/v1/jobs/{admission_id}/{operation}", self.base_url);
+        decode_json_response(
+            "JOB CONTROL",
+            "selected job control",
+            self.post_json(&url, &serde_json::json!({}), &ticket),
+        )
+    }
+
+    fn standing_scope_control(&self, scope_id: &str, operation: &str) -> Result<serde_json::Value> {
+        cohesix_authority::validate_id(scope_id).map_err(|_| anyhow!("EPERM scope id"))?;
+        let ticket = self.validate_write_credentials()?;
+        let url = format!(
+            "{}/v1/standing/scopes/{scope_id}/{operation}",
+            self.base_url
+        );
+        decode_json_response(
+            "STANDING SCOPE",
+            "standing scope",
+            self.post_json(&url, &serde_json::json!({}), &ticket),
+        )
+    }
+
     fn get(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
         Self::get_with_agent(
             &self.metadata_agent,
@@ -1542,5 +1618,33 @@ mod tests {
             "BOUNDS failed (http 401): denied",
             "the upgraded client must retain the gateway error body",
         );
+    }
+
+    #[test]
+    fn selected_job_submission_uses_one_authenticated_request_and_keeps_identity() {
+        let (base_url, request_rx, server) = serve_once(
+            "202 Accepted",
+            r#"{"schema":"cohesix-selected-job-response/v1","submission":"target_write_ack"}"#,
+        );
+        let response = GatewayClient::new(base_url)
+            .with_request_auth_token("test-auth")
+            .with_delegated_ticket(delegated_fixture())
+            .submit_selected_job(&serde_json::json!({
+                "binding":{"admission_id":"admit-1"},
+                "ticket":{"id":"ticket-1"}
+            }))
+            .expect("selected response");
+        assert_eq!(response["submission"], "target_write_ack");
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture");
+        server.join().expect("one request");
+        assert!(request.starts_with("POST /v1/jobs HTTP/1.1\r\n"));
+        let body = request.split_once("\r\n\r\n").expect("HTTP body").1;
+        let submitted: serde_json::Value = serde_json::from_str(body).expect("JSON request");
+        assert_eq!(submitted["binding"]["admission_id"], "admit-1");
+        assert!(GatewayClient::new("http://127.0.0.1:1")
+            .selected_job_status("../job")
+            .is_err());
     }
 }

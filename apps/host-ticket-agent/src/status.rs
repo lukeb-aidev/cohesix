@@ -356,6 +356,7 @@ mod tests {
             state_epoch: u64::MAX,
             resource_generation: u64::MAX,
             decision_expiry: u64::MAX,
+            standing_scope_id: None,
         });
         let line = build_result_line(
             &spec,

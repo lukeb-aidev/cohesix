@@ -460,6 +460,73 @@ class RestBackend(Backend):
         bytes_written = response.get("bytes", len(payload))
         return int(bytes_written)
 
+    def submit_selected_job(
+        self, binding: Dict[str, Any], ticket: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Submit once; a lost response requires status/reconcile by admission id."""
+        from .authority import authority_id
+
+        if not isinstance(binding, dict) or not isinstance(ticket, dict):
+            raise CohesixError("EPERM selected job shape")
+        authority_id(binding.get("admission_id"))
+        request = {"binding": binding, "ticket": ticket}
+        if len(json.dumps(request).encode("utf-8")) > 4096:
+            raise CohesixError("ELIMIT selected job request")
+        return self._selected_job_payload("POST", "/v1/jobs", body=request)
+
+    def selected_job_status(self, admission_id: str) -> Dict[str, Any]:
+        """Read one retained execution and pending result-delivery obligation."""
+        from .authority import authority_id
+
+        authority_id(admission_id)
+        return self._selected_job_payload("GET", f"/v1/jobs/{admission_id}")
+
+    def request_selected_job_cancel(self, admission_id: str) -> Dict[str, Any]:
+        """Request cancellation; this does not claim native termination."""
+        return self._selected_job_control(admission_id, "cancel")
+
+    def reconcile_selected_job(self, admission_id: str) -> Dict[str, Any]:
+        """Inspect target results without resubmitting the original effect."""
+        return self._selected_job_control(admission_id, "reconcile")
+
+    def inspect_standing_scope(self, scope_id: str) -> Dict[str, Any]:
+        """Inspect retained scope accounting with a separate admin ticket."""
+        return self._standing_scope_control(scope_id, "inspect")
+
+    def revoke_standing_scope(self, scope_id: str) -> Dict[str, Any]:
+        """Revoke future effects; existing work remains separately reconciled."""
+        return self._standing_scope_control(scope_id, "revoke")
+
+    def _standing_scope_control(self, scope_id: str, operation: str) -> Dict[str, Any]:
+        from .authority import authority_id
+
+        authority_id(scope_id)
+        return self._selected_job_payload(
+            "POST", f"/v1/standing/scopes/{scope_id}/{operation}", body={}
+        )
+
+    def _selected_job_control(self, admission_id: str, operation: str) -> Dict[str, Any]:
+        from .authority import authority_id
+
+        authority_id(admission_id)
+        return self._selected_job_payload(
+            "POST", f"/v1/jobs/{admission_id}/{operation}", body={}
+        )
+
+    def _selected_job_payload(
+        self, method: str, path: str, body: Optional[dict] = None
+    ) -> Dict[str, Any]:
+        payload = self._request_payload(method, path, body=body)
+        if len(payload) > 65536:
+            raise CohesixError("ELIMIT selected job response")
+        try:
+            result = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CohesixError("invalid selected job response") from exc
+        if not isinstance(result, dict):
+            raise CohesixError("invalid selected job response")
+        return result
+
     def get_bounds(self) -> Optional[Dict[str, Any]]:
         payload = self._request_payload("GET", "/v1/meta/bounds")
         try:

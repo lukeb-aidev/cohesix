@@ -35,8 +35,15 @@ pub mod package;
 /// Immutable host-side private adapter release requests.
 pub mod peft;
 pub mod policy;
+/// Compiler-controlled host protocol access ceiling.
+pub mod protocol;
 #[cfg(feature = "std")]
 pub mod secret;
+/// Exact selected jobs and deterministic standing-scope admission.
+pub mod standing;
+/// Shared durable standing-budget custody for co-located gateway and executor.
+#[cfg(feature = "std")]
+pub mod standing_ledger;
 
 /// Versioned namespace for strict intents; legacy `/queen/ctl` stays separate.
 pub const QUEEN_INTENT_PATH: &str = "/queen/intents/ctl";
@@ -83,6 +90,10 @@ pub struct AdmissionCorrelation {
     pub state_epoch: u64,
     pub resource_generation: u64,
     pub decision_expiry: u64,
+    /// When present, selected M28 actions require the matching durable scope
+    /// reservation at the native executor. Older correlation remains non-granting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standing_scope_id: Option<String>,
 }
 
 impl AdmissionCorrelation {
@@ -100,6 +111,9 @@ impl AdmissionCorrelation {
         }
         if self.decision_expiry == 0 {
             return Err(AuthorityError::Invalid);
+        }
+        if let Some(scope_id) = &self.standing_scope_id {
+            validate_id(scope_id)?;
         }
         Ok(())
     }

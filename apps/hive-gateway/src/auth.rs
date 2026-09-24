@@ -10,6 +10,14 @@ use std::collections::BTreeMap;
 
 pub const TICKET_HEADER: &str = "x-cohesix-ticket";
 
+/// Verified caller identity and the separate ticket fingerprint used by
+/// evidence custody and quota accounting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegatedPrincipal {
+    pub ticket_hash: String,
+    pub subject: String,
+}
+
 #[derive(Debug, Clone)]
 struct Usage {
     claims: TicketClaims,
@@ -346,7 +354,9 @@ impl Delegation {
         operations: usize,
         now: u64,
     ) -> Result<String, &'static str> {
-        let result = self.admit(token, path, bytes, operations, now, Some(&[]));
+        let result = self
+            .admit(token, path, bytes, operations, now, Some(&[]))
+            .map(|principal| principal.ticket_hash);
         if result.is_err() {
             self.refusals = self.refusals.saturating_add(1);
         }
@@ -360,6 +370,19 @@ impl Delegation {
         lines: &[&str],
         now: u64,
     ) -> Result<String, &'static str> {
+        self.authorize_write_principal(token, path, lines, now)
+            .map(|principal| principal.ticket_hash)
+    }
+
+    /// Return the verified subject as well as the ticket hash for standing
+    /// scope selection. Both values come from the same charged authorization.
+    pub fn authorize_write_principal(
+        &mut self,
+        token: Option<&str>,
+        path: &str,
+        lines: &[&str],
+        now: u64,
+    ) -> Result<DelegatedPrincipal, &'static str> {
         let result = lines
             .iter()
             .try_fold(0usize, |total, line| total.checked_add(line.len()))
@@ -379,6 +402,18 @@ impl Delegation {
         bytes: usize,
         now: u64,
     ) -> Result<String, &'static str> {
+        self.authorize_read_principal(token, path, bytes, now)
+            .map(|principal| principal.ticket_hash)
+    }
+
+    /// Preserve the authenticated subject across status, cancel and recovery.
+    pub fn authorize_read_principal(
+        &mut self,
+        token: Option<&str>,
+        path: &str,
+        bytes: usize,
+        now: u64,
+    ) -> Result<DelegatedPrincipal, &'static str> {
         let result = self.admit(token, path, bytes, 1, now, None);
         if result.is_err() {
             self.refusals = self.refusals.saturating_add(1);
@@ -394,7 +429,7 @@ impl Delegation {
         operations: usize,
         now: u64,
         write_lines: Option<&[&str]>,
-    ) -> Result<String, &'static str> {
+    ) -> Result<DelegatedPrincipal, &'static str> {
         let read = write_lines.is_none();
         if !canonical_path(path) || operations == 0 {
             return Err("EPERM delegated-request-shape");
@@ -456,8 +491,17 @@ impl Delegation {
         } else if self.ceiling_role != Role::Queen {
             return Err("EPERM gateway-ceiling");
         }
+        let subject = caller
+            .claims
+            .subject
+            .as_ref()
+            .ok_or("EPERM delegated-ticket-subject")?
+            .clone();
         self.entries.insert(identity.clone(), caller);
-        Ok(identity)
+        Ok(DelegatedPrincipal {
+            ticket_hash: identity,
+            subject,
+        })
     }
 }
 
@@ -495,6 +539,31 @@ mod tests {
             .expect("issue")
             .encode()
             .expect("encode")
+    }
+
+    #[test]
+    fn standing_principal_keeps_subject_distinct_from_ticket_fingerprint() {
+        let mut writer = delegation();
+        let ticket = token(claims());
+        let first = writer
+            .authorize_write_principal(Some(&ticket), "/queen/intents/ctl", &["{}"], 1000)
+            .expect("verified write");
+        assert_eq!(first.subject, "operator");
+        assert_eq!(first.ticket_hash.len(), 64);
+        assert_ne!(first.subject, first.ticket_hash);
+        let again = writer
+            .authorize_write_principal(Some(&ticket), "/queen/intents/ctl", &["{}"], 1000)
+            .expect("same ticket and subject");
+        assert_eq!(again, first);
+
+        let mut reads = delegation();
+        let read_ticket =
+            token(claims().with_scopes(vec![TicketScope::new("/", TicketVerb::Read, 2)]));
+        let status = reads
+            .authorize_read_principal(Some(&read_ticket), "/host/tickets/status", 20, 1000)
+            .expect("verified status read");
+        assert_eq!(status.subject, "operator");
+        assert_ne!(status.ticket_hash, first.ticket_hash);
     }
 
     #[test]

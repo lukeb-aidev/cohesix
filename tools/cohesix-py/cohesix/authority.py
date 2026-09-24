@@ -170,7 +170,7 @@ def authority_u64(value: int, *, positive: bool = False) -> int:
 
 @dataclass(frozen=True)
 class AdmissionCorrelation:
-    """Structural correlation only; M28a owns decision validity and freshness."""
+    """Structural correlation; standing scope presence requires executor validation."""
 
     admission_id: str
     intent_hash: str
@@ -178,6 +178,7 @@ class AdmissionCorrelation:
     state_epoch: int
     resource_generation: int
     decision_expiry: int
+    standing_scope_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         authority_id(self.admission_id)
@@ -187,6 +188,15 @@ class AdmissionCorrelation:
         authority_u64(self.state_epoch)
         authority_u64(self.resource_generation)
         authority_u64(self.decision_expiry, positive=True)
+        if self.standing_scope_id is not None:
+            authority_id(self.standing_scope_id)
+
+    def to_payload(self) -> dict[str, object]:
+        """Preserve the historical wire shape when no standing scope is selected."""
+        payload = asdict(self)
+        if self.standing_scope_id is None:
+            payload.pop("standing_scope_id")
+        return payload
 
 
 @dataclass(frozen=True)
@@ -241,7 +251,7 @@ class QueenIntent:
             if epoch is not None:
                 payload["writer_epoch"] = epoch
             if self.admission is not None:
-                payload["admission"] = asdict(self.admission)
+                payload["admission"] = self.admission.to_payload()
             encoded = json.dumps(
                 payload, separators=(",", ":"), allow_nan=False
             ).encode("utf-8")
