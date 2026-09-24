@@ -56,6 +56,8 @@ def load_reference(path: Path, host_profile: str, case: str) -> dict[str, Any]:
     require(type(value["expected_generation"]) is int and 0 <= value["expected_generation"] < 2**32,
             "M28b generation bound")
     require(value["expected_adapter_sha256"] == "base" or
+            value["expected_adapter_sha256"] == "observed" and
+            value["scenario"] in {"train", "resume"} or
             isinstance(value["expected_adapter_sha256"], str) and
             re.fullmatch(r"[0-9a-f]{64}", value["expected_adapter_sha256"]) is not None,
             "M28b expected adapter")
@@ -104,6 +106,25 @@ def result_report(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     return report
 
 
+def refresh_verifier_clock(path: Path, original: dict[str, Any]) -> None:
+    """Verify current records at observation time without changing enrolled trust."""
+    current = json.loads(read_artifact(path, 65536))
+    require({key: value for key, value in current.items() if key != "verification_unix_ms"}
+            == {key: value for key, value in original.items() if key != "verification_unix_ms"},
+            "M28b verifier trust changed")
+    current["verification_unix_ms"] = int(time.time() * 1000)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(json.dumps(current, separators=(",", ":"), allow_nan=False).encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def interrupt_after_load(root: Path, operation: str, unit: str,
                          deadline: float, done: threading.Event, record: dict[str, Any]) -> None:
     """Stop only the selected owned serving unit after Load has durable completion."""
@@ -144,6 +165,8 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
         require(digest(path, maximum) == selected[name + "_sha256"], f"M28b {name} changed")
     native = json.loads(read_artifact(Path(selected["native_config"]), 8192))
     deployment = json.loads(read_artifact(Path(selected["deployment"]), 262144))
+    trust_path = Path(deployment["execution"]["trust"])
+    original_trust = json.loads(read_artifact(trust_path, 65536))
     operation = deployment["request"]["operation_id"]
     require(isinstance(operation, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", operation),
             "M28b operation identity")
@@ -174,7 +197,11 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
     (state_dir / "apply.stderr.txt").write_text(applied.stderr)
     report = None
     while time.monotonic() - started < selected["wait_seconds"]:
+        refresh_verifier_clock(trust_path, original_trust)
         watched = command(coh, "watch", deployment_path, 60, token, ticket_ref, gateway)
+        if watched.returncode != 0 and "EPERM evidence-stale-or-chronology" in watched.stderr:
+            time.sleep(0.1)
+            continue
         report = result_report(watched)
         if report["result"] is not None:
             break
@@ -210,11 +237,16 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
                 and phases["rollback"]["detail"]["candidate_release"] == "failed",
                 "M28b interrupted promotion restoration")
     expected = selected["expected_adapter_sha256"]
+    if expected == "observed":
+        expected = phases["train"]["detail"]["adapter_sha256"]
+        require(re.fullmatch(r"[0-9a-f]{64}", expected) is not None,
+                "M28b observed trained adapter identity")
     expected_adapter = None if expected == "base" else expected
     accepted = json.loads(read_artifact(root / "accepted.json", 8192))
     require(accepted["generation"] == selected["expected_generation"]
             and accepted["adapter_sha256"] == expected_adapter,
             "M28b accepted generation or adapter changed")
+    refresh_verifier_clock(trust_path, original_trust)
     verified = command(coh, "verify", deployment_path, 60, token, ticket_ref, gateway)
     require((verified.returncode == 0) == (selected["scenario"] in POSITIVE),
             "M28b candidate verification outcome")

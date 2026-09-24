@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sys
 
 import pytest
@@ -61,3 +62,34 @@ def test_live_selection_refuses_wrong_scenario_outcome_and_unscoped_inputs(tmp_p
     good.write_text(changed)
     with pytest.raises(ValueError):
         live.load_reference(good, "jetson-orin-nano-jp7", "m28b-peft-live")
+
+
+def test_training_identity_is_observed_without_predicting_stochastic_weights(tmp_path: Path) -> None:
+    """Only training and full-state resume may bind the adapter after native work."""
+    for scenario, case in [("train", "m28b-peft-live"), ("resume", "m28b-peft-live")]:
+        selected = reference(tmp_path / "selected.toml", scenario=scenario)
+        selected.write_text(selected.read_text().replace("c" * 64, "observed"))
+        assert live.load_reference(selected, "jetson-orin-nano-jp7", case)[
+            "expected_adapter_sha256"] == "observed"
+    selected = reference(tmp_path / "selected.toml", scenario="import")
+    selected.write_text(selected.read_text().replace("c" * 64, "observed"))
+    with pytest.raises(ValueError):
+        live.load_reference(selected, "jetson-orin-nano-jp7", "m28b-peft-live")
+
+
+def test_verifier_clock_refresh_keeps_enrolled_trust_fixed(tmp_path: Path) -> None:
+    """A late signed record can be checked without widening its key or binding."""
+    path = tmp_path / "trust.json"
+    original = {"schema": "cohesix-evidence-trust/v1", "expected": {"ticket_id": "one"},
+                "keys": [{"id": "gateway"}], "verification_unix_ms": 1,
+                "maximum_record_ttl_ms": 600000}
+    path.write_text(json.dumps(original))
+    live.refresh_verifier_clock(path, original)
+    current = json.loads(path.read_text())
+    assert current["verification_unix_ms"] > 1
+    assert current["expected"] == original["expected"]
+    assert current["keys"] == original["keys"]
+    current["expected"]["ticket_id"] = "two"
+    path.write_text(json.dumps(current))
+    with pytest.raises(ValueError):
+        live.refresh_verifier_clock(path, original)
