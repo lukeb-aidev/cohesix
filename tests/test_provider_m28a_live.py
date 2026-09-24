@@ -165,3 +165,23 @@ def test_raw_cancel_reconciliation_rejects_conflicting_target_terminals():
     with pytest.raises(ValueError, match="ambiguous"):
         live.direct_terminal(Target([terminal,
                                      {**terminal, "state": "failed"}]), ticket, 1)
+
+
+def test_registered_result_checks_signed_wrapper_and_native_owner():
+    report = {"observed_output_sha256": "a" * 64}
+    config = {"registration_sha256": "b" * 64,
+              "package_sha256": "c" * 64, "lane": "systemd"}
+    observed = {
+        "schema": "cohesix-registered-cuda-observation/v1",
+        "output": {"sha256": report["observed_output_sha256"]},
+        "registration_sha256": config["registration_sha256"],
+        "package_sha256": config["package_sha256"],
+        "native_enforcement": {"owner": {"kind": "systemd"}},
+    }
+    native = {"observation": {"state": "succeeded",
+                              "observation": observed}}
+    assert live.registered_result(native, report, config) == observed
+    with pytest.raises(ValueError, match="native owner"):
+        live.registered_result(native, report, {**config, "lane": "docker"})
+    with pytest.raises(ValueError, match="native owner"):
+        live.registered_result({"observation": observed}, report, config)

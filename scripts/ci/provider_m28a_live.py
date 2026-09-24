@@ -317,6 +317,24 @@ def native_for(root: Path, terminal: dict[str, Any],
     return native
 
 
+def registered_result(native: dict[str, Any], report: dict[str, Any],
+                      config: dict[str, Any]) -> dict[str, Any]:
+    """Check the executor result inside its separately signed provider wrapper."""
+    operation = native.get("observation")
+    observed = operation.get("observation") if isinstance(operation, dict) else None
+    require(isinstance(observed, dict)
+            and observed.get("schema") == "cohesix-registered-cuda-observation/v1"
+            and observed.get("output", {}).get("sha256")
+            == report["observed_output_sha256"]
+            and observed.get("registration_sha256")
+            == config["registration_sha256"]
+            and observed.get("package_sha256") == config["package_sha256"]
+            and observed.get("native_enforcement", {}).get("owner", {}).get("kind")
+            == config["lane"],
+            "M28a native owner, package or output changed")
+    return observed
+
+
 def recovery(backend: RestBackend, config: dict[str, Any],
              selected: dict[str, Any], graph: str,
              state_dir: Path) -> dict[str, Any]:
@@ -511,16 +529,7 @@ def run_live(case: str, reference: Path, host_profile: str,
             Path(config["input_file"]), output_path,
             dimensions["width"], dimensions["height"], dimensions["frames"],
         )
-        observation = job["native"]["observation"]["observation"]
-        require(observation.get("schema") == "cohesix-registered-cuda-observation/v1"
-                and observation.get("output", {}).get("sha256")
-                == report["observed_output_sha256"]
-                and observation.get("registration_sha256")
-                == config["registration_sha256"]
-                and observation.get("package_sha256") == config["package_sha256"]
-                and observation.get("native_enforcement", {}).get("owner", {}).get("kind")
-                == config["lane"],
-                "M28a native owner, package or output changed")
+        registered_result(job["native"]["observation"], report, config)
         summary["proof"] = {"job": job, "verifier": report}
         summary["result"] = "PASS"
     except (ValueError, OSError, KeyError, TypeError, CohesixError,
