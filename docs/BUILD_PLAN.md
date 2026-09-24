@@ -137,7 +137,7 @@ owned by their specific contracts.
 | [27i](#27i) | Release A Python Index Publication | Complete — PyPI `1.1.0b1` page correction published |
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Complete — selected foundation |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Complete — selected Orin systemd and Docker lanes |
-| [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | In Progress |
+| [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Complete |
 | [28c](#28c) | macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows | Planned |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | Planned |
 | [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
@@ -12831,7 +12831,7 @@ explicit unresolved outcome rather than invented success.
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — `m28b-configurable-peft-training-and-import` and `m28b-evaluate-canary-promote-rollback` activated on 24 September 2026.
+**Status:** Complete — `m28b-configurable-peft-training-and-import` and `m28b-evaluate-canary-promote-rollback` completed on 24 September 2026 at the selected Linux AArch64 NVIDIA/KVM component scope. The [implementation record](audit/M28B_IMPLEMENTATION_RECORD.md) binds the focused checks and admitted lifecycle evidence; it does not qualify Pi hardware or Release B.
 
 **Value:** a private edge adapter moves from pinned training or import to a
 measured, reversible release whose exact served generation a real client sees.

@@ -84,6 +84,18 @@ checks settled their reservations without replay. The [M28a implementation
 record](audit/M28A_IMPLEMENTATION_RECORD.md) retains the focused evidence and
 limits; this component result does not qualify Release B.
 
+[Milestone 28b](BUILD_PLAN.md#28b) is complete for the selected private model
+reference. Cohesix can train or import a small model adapter, measure it against
+the running version, and reversibly promote it with a verified application
+request. A pinned Linux AArch64 NVIDIA host completed genuine LoRA training,
+independent compatible import, and full Trainer checkpoint resume through an
+exact-source KVM Queen and WorkerLora receipt path. Held out comparison rejected
+a worse adapter before load. An interrupted promotion restored its incumbent,
+which another application request observed. The [M28b implementation
+record](audit/M28B_IMPLEMENTATION_RECORD.md) keeps the distinct source, profile,
+negative-result and network-observation limits. This is component evidence, not
+Pi 4 or integrated Release B qualification.
+
 ## Capability snapshot
 
 | Surface | Checked-in implementation | Evidence boundary |
