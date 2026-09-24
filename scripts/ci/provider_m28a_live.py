@@ -283,6 +283,22 @@ def terminal_for(backend: RestBackend, binding: dict[str, Any],
                         "M28a recovery result identity")
                 if row.get("state") in {"succeeded", "failed", "expired"}:
                     terminals.append((row, row_hash))
+            # Failed provider effects are retained in the target deadletter
+            # stream. The standing ledger hashes that exact line, while the
+            # ordinary status stream retains only claimed/running progress.
+            deadletters = backend.read_file("/host/tickets/deadletter", 32768)
+            for line in deadletters.splitlines():
+                row = json.loads(line)
+                if (row.get("id") == binding["ticket_id"]
+                        and row.get("idempotency_key")
+                        == binding["idempotency_key"]):
+                    require(row.get("action") == binding["action"]
+                            and row.get("operation_id") == binding["ticket_id"]
+                            and row.get("admission", {}).get("admission_id")
+                            == admission
+                            and row.get("state") in {"failed", "expired"},
+                            "M28a recovery deadletter identity")
+                    terminals.append((row, hashlib.sha256(line).hexdigest()))
             require(len({row_hash for _, row_hash in terminals}) <= 1,
                     "M28a recovery terminal ambiguous")
             if (record["execution"] == "confirmed"

@@ -185,3 +185,34 @@ def test_registered_result_checks_signed_wrapper_and_native_owner():
         live.registered_result(native, report, {**config, "lane": "docker"})
     with pytest.raises(ValueError, match="native owner"):
         live.registered_result({"observation": observed}, report, config)
+
+
+def test_recovery_reconciles_exact_deadletter_line_against_standing_result():
+    binding = {"admission_id": "admit-1", "ticket_id": "job-1",
+               "idempotency_key": "once-1", "action": "gpu.workload.submit"}
+    terminal = {"id": "job-1", "idempotency_key": "once-1",
+                "action": "gpu.workload.submit", "operation_id": "job-1",
+                "admission": {"admission_id": "admit-1"},
+                "state": "failed", "message": "gpu_workload_cancelled"}
+    raw = json.dumps(terminal, separators=(",", ":")).encode()
+    record = {"binding": binding, "execution": "confirmed",
+              "delivery": "acknowledged", "result_sha256": digest(raw)}
+
+    class Target:
+        def selected_job_status(self, admission):
+            assert admission == "admit-1"
+            return record
+
+        def reconcile_selected_job(self, admission):
+            assert admission == "admit-1"
+            return {"effect_replay_allowed": False, "record": record,
+                    "target_results": [], "target_result_sha256": []}
+
+        def read_file(self, path, limit):
+            assert path == "/host/tickets/deadletter" and limit == 32768
+            return raw + b"\n"
+
+    assert live.terminal_for(Target(), binding, 1) == (record, terminal)
+    record["result_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="result hash"):
+        live.terminal_for(Target(), binding, 1)
