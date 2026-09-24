@@ -283,19 +283,30 @@ def observe_terminal(
             rows = reconciliation["target_results"]
             hashes = reconciliation["target_result_sha256"]
             require(isinstance(rows, list) and isinstance(hashes, list)
-                    and len(rows) == len(hashes) <= 1,
-                    "M28 target result ambiguous")
+                    and len(rows) == len(hashes) <= 16,
+                    "M28 target result stream bound")
+            terminal_rows = []
+            for row, row_hash in zip(rows, hashes):
+                require(isinstance(row, dict)
+                        and isinstance(row_hash, str)
+                        and re.fullmatch(r"[0-9a-f]{64}", row_hash)
+                        and row.get("id") == record["binding"]["ticket_id"]
+                        and row.get("idempotency_key")
+                        == record["binding"]["idempotency_key"]
+                        and isinstance(row.get("admission"), dict)
+                        and row["admission"].get("admission_id") == admission_id,
+                        "M28 target result identity mismatch")
+                if row.get("state") in {"succeeded", "failed", "expired"}:
+                    terminal_rows.append((row, row_hash))
+            require(len(terminal_rows) <= 1, "M28 target terminal ambiguous")
             if (
                 record["execution"] == "confirmed"
                 and record["delivery"] == "acknowledged"
-                and len(rows) == 1
+                and len(terminal_rows) == 1
             ):
-                terminal = rows[0]
+                terminal, terminal_hash = terminal_rows[0]
                 require(terminal["state"] == "succeeded"
-                        and hashes[0] == record["result_sha256"]
-                        and terminal["id"] == record["binding"]["ticket_id"]
-                        and terminal["idempotency_key"] == record["binding"]["idempotency_key"]
-                        and terminal["admission"]["admission_id"] == admission_id,
+                        and terminal_hash == record["result_sha256"],
                         "M28 target terminal mismatch")
                 return record, terminal
         time.sleep(0.25)

@@ -94,6 +94,8 @@ def test_reconciliation_requires_the_exact_retained_target_line_digest() -> None
               "delivery": "acknowledged", "result_sha256": "a" * 64}
     result = {"id": "ticket-1", "idempotency_key": "once-1",
               "admission": {"admission_id": "admit-1"}, "state": "succeeded"}
+    claimed = {**result, "state": "claimed"}
+    running = {**result, "state": "running"}
 
     class Backend:
         def selected_job_status(self, admission_id: str) -> dict:
@@ -102,16 +104,23 @@ def test_reconciliation_requires_the_exact_retained_target_line_digest() -> None
 
         def reconcile_selected_job(self, admission_id: str) -> dict:
             assert admission_id == "admit-1"
-            return {"record": record, "target_results": [result],
-                    "target_result_sha256": [self.hash],
+            return {"record": record, "target_results": self.rows,
+                    "target_result_sha256": self.hashes,
                     "effect_replay_allowed": False}
 
     backend = Backend()
-    backend.hash = "b" * 64
+    backend.rows = [claimed, running, result]
+    backend.hashes = ["c" * 64, "d" * 64, "b" * 64]
     with pytest.raises(ValueError, match="target terminal mismatch"):
         observe_terminal(backend, "admit-1", 1)
-    backend.hash = "a" * 64
+    backend.hashes[-1] = "a" * 64
     assert observe_terminal(backend, "admit-1", 1) == (record, result)
+    backend.rows = [{**claimed, "id": "another-ticket"}, running, result]
+    with pytest.raises(ValueError, match="target result identity mismatch"):
+        observe_terminal(backend, "admit-1", 1)
+    backend.rows = [claimed, result, result]
+    with pytest.raises(ValueError, match="target terminal ambiguous"):
+        observe_terminal(backend, "admit-1", 1)
 
 
 def test_service_request_requires_exact_unit_target_and_input(
