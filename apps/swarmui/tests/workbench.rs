@@ -109,6 +109,39 @@ fn offline_and_single_owner_refuse_live_host_actions() {
     assert!(host_arguments(&request(&["run"], &[]), Some(&direct), false).is_err());
     assert!(host_arguments(&request(&["providers"], &[]), None, true).is_ok());
 }
+
+#[test]
+fn registered_workload_forms_keep_host_ownership_explicit() {
+    let catalog = swarmui::workbench::host_catalog();
+    let commands = catalog["commands"].as_array().unwrap();
+    let workload = commands
+        .iter()
+        .find(|row| row["name"] == "workload")
+        .unwrap();
+    let register = workload["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "register")
+        .unwrap();
+    assert!(register["help"]
+        .as_str()
+        .unwrap()
+        .contains("privileged local"));
+    let action = request(
+        &["workload", "inspect"],
+        &[("registration", "/tmp/registration.json")],
+    );
+    if cfg!(target_os = "linux") {
+        assert!(host_arguments(&action, None, true).is_ok());
+    } else {
+        assert!(host_arguments(&action, None, true).is_err());
+        assert!(register["unavailable"]
+            .as_str()
+            .unwrap()
+            .contains("Linux GPU executor"));
+    }
+}
 #[test]
 fn namespace_paths_refuse_ambiguous_or_out_of_profile_walks() {
     let roots = vec!["/proc".into(), "/shard".into()];

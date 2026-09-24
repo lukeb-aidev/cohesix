@@ -12757,7 +12757,7 @@ checks are mandatory; broad formal assurance is not.
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** In Progress — `m28a-approved-user-workloads` and `m28a-cuda-operations-and-recovery` activated on 24 September 2026.
 
 **Value:** users run their own approved useful workload, not only diagnostic kernels.
 **Prerequisites:** 28 and accepted 27b/27c CUDA/executor/recipe foundations.

@@ -112,6 +112,14 @@ refusal and existing REST availability. They cannot close MCP/A2A listener or
 job conformance; those belong to M28d and M28e. M28 shared jobs and standing
 authority require their separate focused recovery/concurrency checks and the
 live `m28-jobs-live` and `m28-authority-live` cases before milestone acceptance.
+M28a selects the generated registration and existing executor recovery checks,
+then runs `m28a-workloads-live` separately for the useful reference and one
+independently configured adaptation on each advertised native owner. A case
+report covers one fresh admission and records exact source, target, package,
+device, input, output and independent pixel verification. The milestone ledger
+must link all required reports and the `m28a-recovery-live` cancellation and
+interruption record. Direct native smoke, Python output checks and an older
+M28 target result do not replace these admitted exact-source observations.
 
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
@@ -1220,6 +1228,8 @@ from that catalog.
 | `performance.gateway-telemetry` | conditional | `performance` | conditional / qemu, pi4 | evidence-only: telemetry-summary-matrix, ops-csv, ramp-csv, ramp-svg |
 | `federation.m28-jobs-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28-jobs-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28-jobs-live"` |
 | `federation.m28-authority-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28-authority-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28-authority-live"` |
+| `federation.m28a-workloads-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-workloads-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-workloads-live"` |
+| `federation.m28a-recovery-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-recovery-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-recovery-live"` |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |

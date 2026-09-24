@@ -209,12 +209,12 @@ fn input(stage: &Stage) -> Result<Value> {
         "EPERM recipe-input-canonical"
     );
     parsed.request.validate(
-        parsed.request.inventory_observed_unix_ms,
-        &parsed.request.provider_graph_sha256,
+        &parsed.schema,
+        parsed.request.inventory_observed_unix_ms(),
+        parsed.request.provider_graph_sha256(),
     )?;
     ensure!(
-        parsed.schema == "cohesix-gpu-workload-input/v1"
-            && parsed.request.ticket_id == stage.execution.request["id"],
+        parsed.request.ticket_id() == stage.execution.request["id"],
         "EPERM recipe-input-identity"
     );
     for h in [
@@ -375,7 +375,7 @@ fn journal(d: &Deployment) -> Result<Journal> {
                 == if a.cancel {
                     0
                 } else {
-                    parsed.request.memory_budget_bytes
+                    parsed.request.memory_budget_bytes()
                 },
             "EPERM recipe-journal-accounting"
         );
@@ -614,7 +614,7 @@ fn current(access: &mut dyn CohAccess, a: &Attempt, now: u64, dispatch: bool) ->
             let parsed: Input = serde_json::from_value(a.input.clone())?;
             parsed
                 .request
-                .validate(now, &parsed.request.provider_graph_sha256)?;
+                .validate(&parsed.schema, now, parsed.request.provider_graph_sha256())?;
         }
     }
     Ok(())

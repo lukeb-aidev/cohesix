@@ -14,6 +14,14 @@ struct Contract {
     id: String,
     stages: Vec<String>,
     entrypoints: Vec<String>,
+    registered_input_schema: String,
+    registration_schema: String,
+    max_registration_bytes: u32,
+    max_input_bytes: u32,
+    max_output_bytes: u32,
+    max_parameters: u32,
+    max_secret_refs: u32,
+    max_disk_bytes: u32,
     submit_action: String,
     cancel_action: String,
     max_stages: u32,
@@ -31,7 +39,7 @@ struct Contract {
 fn compile(bytes: &str) -> Result<Vec<u8>> {
     let c: Contract = toml::from_str(bytes)?;
     ensure!(
-        c.schema == "cohesix-cuda-recipe-contract/v1"
+        c.schema == "cohesix-cuda-recipe-contract/v2"
             && c.id == "cuda-reference"
             && c.stages
                 == [
@@ -43,6 +51,14 @@ fn compile(bytes: &str) -> Result<Vec<u8>> {
                     "recover"
                 ]
             && c.entrypoints == ["vadd", "matmul"]
+            && c.registered_input_schema == "cohesix-gpu-workload-input/v2"
+            && c.registration_schema == "cohesix-cuda-registration/v1"
+            && c.max_registration_bytes == 8192
+            && c.max_input_bytes == 262144
+            && c.max_output_bytes == 262144
+            && c.max_parameters == 8
+            && c.max_secret_refs == 8
+            && c.max_disk_bytes == 33554432
             && c.submit_action == "gpu.workload.submit"
             && c.cancel_action == "gpu.workload.cancel"
             && (1..=8).contains(&c.max_stages)
@@ -78,6 +94,11 @@ mod tests {
         let source = include_str!("../../../configs/cuda_recipe.toml");
         assert!(super::compile(source).is_ok());
         for (from, to) in [
+            (
+                "max_registration_bytes = 8192",
+                "max_registration_bytes = 8193",
+            ),
+            ("max_parameters = 8", "max_parameters = 9"),
             ("automatic_retries = 0", "automatic_retries = 1"),
             ("max_parallel = 1", "max_parallel = 2"),
             ("max_attempts = 32", "max_attempts = 33"),

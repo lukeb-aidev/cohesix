@@ -7628,7 +7628,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "7d57ac979f10f6fd1a9f4d0e152dbf63875b4e2eaf5610bac408758aff33b02b",
+  "graph_sha256": "39e8d3196e0ae01f08dd31fb1ef931bbd1f9ed7ec1600dd62fe9314eea2296a7",
   "playbooks": [
     {
       "dependencies": [

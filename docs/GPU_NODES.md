@@ -414,6 +414,19 @@ native child termination; retained output artifacts are not native training
 checkpoints. Queen reboot persistence and production Worker bundle binding keep
 their separate evidence owners.
 
+The same executor also accepts version 2 requests for administrator-enrolled
+CUDA packages. A private digest-named registration fixes one package executable,
+`run` entrypoint, selected GPU, input CAS root, typed parameters, secret
+references and finite memory/disk/deadline bounds. `coh workload inspect` and
+`register` run on the GPU host and never issue a Queen ticket. The bridge copies
+only the hash-checked executable and input into its owned job directory, passes
+bounded data arguments without a shell, and verifies the declared output hash.
+The batch-edge reference has an independent CPU pixel verifier; a digest match
+without that verifier does not prove the task's result. Version 1 fixed
+`vadd`/`matmul` requests and retained journal identities continue to decode.
+Registered jobs have no checkpoint resume; cancellation and bridge restart use
+the existing exact native job and result-delivery obligations.
+
 ### Native MIG identity and execution selection
 
 The `gpu-bridge-host --mig-inventory` diagnostic reads NVML directly through the

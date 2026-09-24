@@ -6,6 +6,8 @@
 
 Run the existing cohesix.playbook_cli lifecycle to apply, watch, verify or recover.
 Native workload inputs are produced by the pinned GPU provider before admission.
+Use cuda_batch_edges.py to prepare and independently verify a registered user
+workload stage before placing its request in this durable recipe.
 """
 
 from __future__ import annotations

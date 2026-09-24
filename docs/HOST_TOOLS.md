@@ -33,6 +33,7 @@ not deployment credentials.
 | Use existing file-oriented software | [`coh mount`](#mount-a-namespace) | Host FUSE mount of permitted target paths |
 | Discover a real GPU and publish its inventory | [`gpu-bridge-host`](#gpu-bridge-host) | Discovery on the GPU host; snapshot on the Queen |
 | Run a local program after checking a GPU lease | [`coh run`](#run-a-host-program) | The host where `coh` is running |
+| Register and diagnose approved CUDA work | [`coh workload`](#registered-cuda-workloads) | The GPU executor host |
 | Export a LoRA job and manage an adapter registry | [`coh peft`](#manage-peft-adapters) | Export reads, host registry and GPU projection |
 | Publish Docker, systemd, Kubernetes or other host observations | [`host-sidecar-bridge`](#host-sidecar-bridge) | Observations of the publishing host |
 | Execute admitted, allowlisted host actions | [`host-ticket-agent`](#host-ticket-agent) | The host running the agent |
@@ -1008,7 +1009,77 @@ is not a provider or Worker terminal receipt. Input CAS JSON uses the canonical
 Rust `workload::Input` serialization, is limited to 8192 bytes, and is stored as
 `<sha256>.json`. The agent cannot select an executable path through a ticket.
 The bridge independently rechecks device topology, free-memory headroom, every
-output element, and the expected output digest before reporting success.
+output element for the fixed reference, and the expected output digest before
+reporting success. Registered user work needs its separate task-specific output
+verifier; its bridge result reports `output_digest_verified`.
+
+#### Registered CUDA workloads
+
+An administrator on the **GPU executor host** can enroll a reviewed executable
+without changing Cohesix source. `coh workload inspect --registration FILE`
+checks a `cohesix-cuda-registration/v1` JSON record, its exact package SHA-256,
+fixed `run` entrypoint, input CAS root, selected CUDA UUID, typed integer/choice
+parameters, secret references and finite input/output/memory/disk/deadline caps.
+`coh workload register --registration FILE --state-root DIR` installs those
+unchanged bytes as `DIR/registrations/<sha256>.json` under the private bridge
+owner. Only that owner's filesystem authority can add a registration. Package,
+input and registration digests are rechecked before each native start; a request
+cannot name an executable, command line, input path or secret value. The bridge
+uses the same root-admitted ticket, Worker, lease, journal, device publication,
+one-context limit and cancellation owner as the fixed reference.
+The executor's existing `execution_lane` selects a hardened `systemd` service
+or digest-pinned Docker container as the native owner; registration does not
+start a new container or change that deployment policy. The selected owner must
+expose its real finite cgroup limits, and each advertised lane needs its own
+live package/device/output evidence before qualification.
+The bridge polls its owned execution directory and reaps the child if a
+declared file, per-output limit or aggregate registration disk ceiling is
+exceeded; it refuses undeclared files. The native owner's finite cgroup memory
+limit also covers host shared memory. The disk check is a bounded job guard,
+not a filesystem quota for an administrator-approved package writing elsewhere;
+deployment filesystem permissions and package review remain necessary.
+In SwarmUI, the installed Linux GPU host shows local registration inspection,
+enrollment and diagnosis forms. A Mac workbench shows where these operations
+must run; its governed GPU submission and Job status/reconciliation forms can
+still operate through the Hive Gateway. Review the prepared request and original
+admission ID before submitting once.
+
+Run `coh workload diagnose --executor-config FILE` on that GPU host for a fresh
+native UUID, driver/runtime, topology, measured free/total memory, separate 2 GiB
+OS headroom and 64 MiB request cap, and NVML thermal/power observations when
+available. An unavailable sensor stays unavailable; the estimate is not a GPU
+memory partition or a queued-job guarantee. Use the original admitted job ID
+through `coh job status`/`reconcile` for queue, deadline, cancellation and terminal
+state. The bridge retains a successful `output.bin` only after its SHA-256 matches
+the request's frozen expected digest; the operator must also run the independent
+task-specific verifier before claiming a useful result.
+`coh doctor --local-gpu --gpu-executor-config FILE` includes the same selected
+workload diagnostic in the host readiness report.
+
+The supported [batch edge extraction example](../tools/cohesix-py/examples/cuda_batch_edges.py)
+processes an operator supplied batch of raw 8-bit grayscale frames on the Orin
+GPU. Build its package on the selected Linux AArch64 CUDA host with
+`scripts/build-gpu-batch-edges.sh FRESH_OUTPUT_DIRECTORY`; review the generated
+source/package hash record. `prepare` writes a digest-named input file, privileged
+registration and canonical `cohesix-gpu-workload-input/v2` request with a frozen
+expected output hash. Install the registration, place the request at the agent's
+configured GPU request CAS root as `<request_sha256>.json`, then submit its
+matching `gpu.workload.submit` ticket through the existing selected job flow.
+Prepare a second input batch with different dimensions or pixels for a user
+adaptation; no Cohesix edit is needed. After signed terminal correlation,
+`verify` recomputes every Sobel pixel on the CPU with tolerance zero and checks
+the exact frozen hash. Direct package execution, an ACK or a matching digest
+alone is not that accepted result.
+
+The registered batch recipe has no checkpoint format. An interrupted or lost
+response must be reconciled by its original admission and native ID. Cancellation
+is a separately admitted `gpu.workload.cancel` targeting that ID and releases
+capacity only after child reaping and terminal evidence. A fresh request after a
+confirmed failure is an explicit newly authorised restart, never resume or
+automatic replay. Read-only status, the private executor WAL and the standing
+ledger retain unresolved native outcomes and admission reservations across
+bridge restart. Existing diagnostic reference jobs remain
+version 1 inputs; their persisted identities are not rewritten by registration.
 
 When the GPU executor is selected, lane zero is reserved for lease, cancel,
 and observe operations. Submissions and other provider work use the remaining
@@ -1542,13 +1613,15 @@ directory, dependency-ordered `stages`, and optional `recovery` cancellations.
 Each stage contains `id`, `after`, an absolute `input` path, exact numeric CUDA
 `runtime.driver_version` and `runtime.runtime_version`, and `execution` with the
 existing `request`, `graph`, `trust` and `cas` fields. `input` contains canonical
-`cohesix-gpu-workload-input/v1` bytes, including its pinned helper artifact,
-selected device/topology, checked `vadd` or `matmul` configuration and expected
-output hash. Its SHA-256 must match the ticket's `args.request_sha256`. These
+`cohesix-gpu-workload-input/v1` or version 2 registered bytes, including its
+pinned helper artifact, selected device/topology, fixed reference or enrolled
+package configuration and expected output hash. Its SHA-256 must match the
+ticket's `args.request_sha256`. The fixed reference
+`vadd` and `matmul`
 entrypoints generate their documented deterministic vector/matrix inputs; a
 dependency is an ordering and reuse dependency, not an implicit data transfer.
-A compatible adopter-built helper must implement this same allowlisted ABI and
-be pinned by the existing executor deployment. Arbitrary commands are unavailable.
+A registered package has its own digest-pinned `run` ABI and typed values;
+arbitrary commands are unavailable.
 
 The checked [Python example](../tools/cohesix-py/examples/cuda_recipe.py) assembles
 one or more enrolled stage files and obtains the contract digest from the

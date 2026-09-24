@@ -36,7 +36,8 @@ def test_matrix_rejects_weakened_obligations_unknown_identity_and_unscoped_comma
     assert valid["maximum_case_seconds"] == 600
     assert any(case["id"] == "signed-causal-graph-refusals" for case in valid["cases"])
     assert {case["id"] for case in valid["cases"] if case["proof_class"] == "live_target"} == {
-        "m28-jobs-live", "m28-authority-live"
+        "m28-jobs-live", "m28-authority-live", "m28a-workloads-live",
+        "m28a-recovery-live",
     }
     for old, new in [
         ('"discover", "preflight"', '"discover", "discover"'),

@@ -4,10 +4,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #![forbid(unsafe_code)]
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -170,6 +171,61 @@ pub(crate) fn invoke(
     visibility: Option<&str>,
     maximum: u64,
 ) -> Result<Value> {
+    invoke_with_env(
+        helper,
+        state,
+        args,
+        deadline,
+        cancel,
+        visibility,
+        maximum,
+        &BTreeMap::new(),
+        None,
+    )
+}
+
+fn check_declared_disk(state: &Path, max_disk: u64, max_output: u64) -> Result<()> {
+    let mut total = 0u64;
+    let mut count = 0usize;
+    for entry in fs::read_dir(state)? {
+        let entry = entry?;
+        count += 1;
+        ensure!(count <= 4, "disk_bound undeclared_file");
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| anyhow!("disk_bound file_name"))?;
+        ensure!(
+            matches!(
+                name,
+                "executor" | "input.bin" | "output.bin" | "started.json"
+            ),
+            "disk_bound undeclared_file"
+        );
+        let info = fs::symlink_metadata(entry.path())?;
+        ensure!(info.is_file(), "disk_bound file_kind");
+        if name == "output.bin" {
+            ensure!(info.len() <= max_output, "disk_bound output_bytes");
+        }
+        total = total
+            .checked_add(info.len())
+            .ok_or_else(|| anyhow!("disk_bound overflow"))?;
+        ensure!(total <= max_disk, "disk_bound total_bytes");
+    }
+    Ok(())
+}
+
+pub(crate) fn invoke_with_env(
+    helper: &Path,
+    state: &Path,
+    args: &[String],
+    deadline: Instant,
+    cancel: &AtomicBool,
+    visibility: Option<&str>,
+    maximum: u64,
+    environment: &BTreeMap<String, String>,
+    disk_limits: Option<(u64, u64)>,
+) -> Result<Value> {
     if cancel.load(Ordering::Acquire) {
         bail!("cancelled before_dispatch");
     }
@@ -190,6 +246,7 @@ pub(crate) fn invoke(
     if let Some(visibility) = visibility {
         command.env("CUDA_VISIBLE_DEVICES", visibility);
     }
+    command.envs(environment);
     let mut child = command.spawn()?;
     let stdout = child
         .stdout
@@ -202,6 +259,11 @@ pub(crate) fn invoke(
     let output = thread::spawn(move || read_pipe(stdout, maximum));
     let errors = thread::spawn(move || read_pipe(stderr, maximum));
     let outcome = loop {
+        if let Some((max_disk, max_output)) = disk_limits {
+            if let Err(error) = check_declared_disk(state, max_disk, max_output) {
+                break Err(error);
+            }
+        }
         if cancel.load(Ordering::Acquire) {
             break Err(anyhow!("cancelled cuda_reference"));
         }
@@ -225,6 +287,9 @@ pub(crate) fn invoke(
     let stderr = errors
         .join()
         .map_err(|_| anyhow!("unavailable child_stderr"))??;
+    if let Some((max_disk, max_output)) = disk_limits {
+        check_declared_disk(state, max_disk, max_output)?;
+    }
     let status = outcome?;
     if stdout.len() as u64 > maximum || stderr.len() as u64 > maximum {
         bail!("response_limit cuda_reference");
@@ -534,6 +599,33 @@ mod tests {
             .unwrap_err();
             assert!(error.to_string().starts_with(expected));
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn registered_child_exceeding_declared_output_is_reaped() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = tempfile::tempdir().unwrap();
+        let child = state.path().join("executor");
+        std::fs::write(
+            &child,
+            "#!/usr/bin/env python3\nfrom pathlib import Path\nimport time\nPath('output.bin').write_bytes(b'x' * 4096)\ntime.sleep(5)\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = invoke_with_env(
+            &child,
+            state.path(),
+            &[],
+            Instant::now() + Duration::from_secs(2),
+            &AtomicBool::new(false),
+            None,
+            4096,
+            &BTreeMap::new(),
+            Some((8192, 64)),
+        )
+        .unwrap_err();
+        assert!(error.to_string().starts_with("disk_bound"));
     }
     #[test]
     fn output_verifier_checks_exact_algebra_and_all_bytes() {

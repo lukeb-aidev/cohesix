@@ -163,11 +163,11 @@ fn inventory(
 
 fn bind_inventory(identity: &PublishedDevice, input: &Input) -> Result<()> {
     ensure!(
-        identity.device_uuid == input.request.device_uuid
-            && identity.device_ordinal == input.request.device_ordinal
+        identity.device_uuid == input.request.device_uuid()
+            && identity.device_ordinal == input.request.device_ordinal()
             && identity.topology_sha256 == input.topology_sha256
             && identity.helper_sha256 == input.artifact_sha256
-            && identity.provider_graph_sha256 == input.request.provider_graph_sha256,
+            && identity.provider_graph_sha256 == input.request.provider_graph_sha256(),
         "GPU request differs from root-published device topology"
     );
     Ok(())
@@ -332,7 +332,7 @@ pub fn execute(
     bind_inventory(&selected_inventory, &input)?;
     let selected_resources = resources(transport, session, &binding)?;
     ensure!(
-        input.request.memory_budget_bytes <= selected_resources.memory_bytes,
+        input.request.memory_budget_bytes() <= selected_resources.memory_bytes,
         "GPU workload exceeds Worker memory reservation"
     );
     if let Some(record) = crate::standing::selected_record(spec, config)? {
@@ -565,7 +565,8 @@ mod tests {
                 provider_graph_sha256: "01".repeat(32),
                 memory_budget_bytes: 1048576,
                 deadline_ms: 30000,
-            },
+            }
+            .into(),
         };
         bind_inventory(&selected, &input).unwrap();
         input.topology_sha256 = "03".repeat(32);

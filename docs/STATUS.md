@@ -73,6 +73,16 @@ gateway has no MCP or A2A routes. The [M28 implementation record](audit/M28_IMPL
 retains the evidence and limits. This component result does not change Release A
 acceptance or qualify Release B.
 
+[Milestone 28a](BUILD_PLAN.md#28a) is in progress. The source now contains a
+private digest-pinned workload registration path, version 2 request validation,
+native GPU diagnostics and an independently checked batch-edge example. A
+direct CUDA smoke run on Merlin2 checks the example and independent adaptation
+outputs, but it is not an
+admitted target job or a registered native/container conformance result. The
+required exact-source target, cancellation/recovery and every advertised lane
+evidence remains open in the [M28a implementation record](audit/M28A_IMPLEMENTATION_RECORD.md);
+Release B is not qualified by this work.
+
 ## Capability snapshot
 
 | Surface | Checked-in implementation | Evidence boundary |

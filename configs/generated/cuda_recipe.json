@@ -1,5 +1,5 @@
 {
-  "schema": "cohesix-cuda-recipe-contract/v1",
+  "schema": "cohesix-cuda-recipe-contract/v2",
   "id": "cuda-reference",
   "stages": [
     "plan",
@@ -13,6 +13,14 @@
     "vadd",
     "matmul"
   ],
+  "registered_input_schema": "cohesix-gpu-workload-input/v2",
+  "registration_schema": "cohesix-cuda-registration/v1",
+  "max_registration_bytes": 8192,
+  "max_input_bytes": 262144,
+  "max_output_bytes": 262144,
+  "max_parameters": 8,
+  "max_secret_refs": 8,
+  "max_disk_bytes": 33554432,
   "submit_action": "gpu.workload.submit",
   "cancel_action": "gpu.workload.cancel",
   "max_stages": 8,

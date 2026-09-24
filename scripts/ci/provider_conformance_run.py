@@ -109,8 +109,17 @@ def main() -> int:
             return run_live(args.case[0], args.reference_config, args.host_profile, args.state_dir)
         except (ValueError, OSError, KeyError, TypeError) as exc:
             parser.error(str(exc))
+    if args.case and args.case[0] in {"m28a-workloads-live", "m28a-recovery-live"}:
+        if not args.reference_config or args.validate_only:
+            parser.error("M28a live workload requires --reference-config and real execution")
+        from provider_m28a_live import run_live
+
+        try:
+            return run_live(args.case[0], args.reference_config, args.host_profile, args.state_dir)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            parser.error(str(exc))
     if args.reference_config:
-        parser.error("--reference-config is only valid for a selected M28 live case")
+        parser.error("--reference-config is only valid for a selected M28 or M28a live case")
     if args.provider == ["mac_release"] and args.live_reference:
         if args.group or args.validate_only or args.native_providers:
             parser.error("live macOS release has its own owned Xcode lane")

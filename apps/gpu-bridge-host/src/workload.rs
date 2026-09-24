@@ -6,6 +6,7 @@
 #![allow(missing_docs)]
 
 use crate::reference::{self, ReferenceRequest};
+use crate::registered::{self, RegisteredRequest};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use fs2::FileExt;
 use ring::hmac;
@@ -164,7 +165,94 @@ pub struct Input {
     pub artifact_sha256: String,
     pub topology_sha256: String,
     pub expected_output_sha256: String,
-    pub request: ReferenceRequest,
+    pub request: Request,
+}
+
+/// Existing fixed reference requests and separately enrolled user workloads.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Request {
+    Reference(ReferenceRequest),
+    Registered(RegisteredRequest),
+}
+
+impl From<ReferenceRequest> for Request {
+    fn from(value: ReferenceRequest) -> Self {
+        Self::Reference(value)
+    }
+}
+
+impl Request {
+    /// Original admitted ticket identity.
+    pub fn ticket_id(&self) -> &str {
+        match self {
+            Self::Reference(value) => &value.ticket_id,
+            Self::Registered(value) => &value.ticket_id,
+        }
+    }
+
+    /// Exact published CUDA device identity.
+    pub fn device_uuid(&self) -> &str {
+        match self {
+            Self::Reference(value) => &value.device_uuid,
+            Self::Registered(value) => &value.device_uuid,
+        }
+    }
+
+    /// Selected ordinal, fenced against a changed visible device.
+    pub fn device_ordinal(&self) -> u32 {
+        match self {
+            Self::Reference(value) => value.device_ordinal,
+            Self::Registered(value) => value.device_ordinal,
+        }
+    }
+
+    /// Generated provider contract bound into the request.
+    pub fn provider_graph_sha256(&self) -> &str {
+        match self {
+            Self::Reference(value) => &value.provider_graph_sha256,
+            Self::Registered(value) => &value.provider_graph_sha256,
+        }
+    }
+
+    /// Maximum CUDA allocation admitted by the root reservation.
+    pub fn memory_budget_bytes(&self) -> u64 {
+        match self {
+            Self::Reference(value) => value.memory_budget_bytes,
+            Self::Registered(value) => value.memory_budget_bytes,
+        }
+    }
+
+    /// Whole native child deadline.
+    pub fn deadline_ms(&self) -> u32 {
+        match self {
+            Self::Reference(value) => value.deadline_ms,
+            Self::Registered(value) => value.deadline_ms,
+        }
+    }
+
+    /// Fresh native inventory timestamp carried by either request version.
+    pub fn inventory_observed_unix_ms(&self) -> u64 {
+        match self {
+            Self::Reference(value) => value.inventory_observed_unix_ms,
+            Self::Registered(value) => value.inventory_observed_unix_ms,
+        }
+    }
+
+    /// Reject a mismatched version before reserving native work.
+    pub fn validate(&self, schema: &str, now: u64, graph: &str) -> Result<()> {
+        match self {
+            Self::Reference(value) => {
+                ensure!(schema == "cohesix-gpu-workload-input/v1", "workload_schema");
+                value.validate(now, graph)?;
+            }
+            Self::Registered(value) => {
+                ensure!(schema == "cohesix-gpu-workload-input/v2", "workload_schema");
+                value.validate(now, graph)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -605,7 +693,14 @@ pub fn serve(config: Config) -> Result<()> {
                         match result {
                             Ok(value) => {
                                 job.state = "succeeded".into();
-                                job.detail = "cuda_output_verified".into();
+                                job.detail = if value["schema"]
+                                    == "cohesix-registered-cuda-observation/v1"
+                                {
+                                    "output_digest_verified"
+                                } else {
+                                    "cuda_output_verified"
+                                }
+                                .into();
                                 job.observation = Some(value);
                             }
                             Err(error) => {
@@ -772,13 +867,12 @@ fn handle_at(
             ensure!(active.is_none(), "device_busy");
             ensure!(wal.jobs.len() < MAX_JOBS, "job_retention_backpressure");
             ensure!(
-                input.schema == "cohesix-gpu-workload-input/v1"
-                    && input.artifact_sha256 == config.helper_sha256
+                input.artifact_sha256 == config.helper_sha256
                     && is_hash(&input.topology_sha256)
                     && is_hash(&input.expected_output_sha256)
-                    && input.request.ticket_id == binding.ticket_id
-                    && input.request.device_uuid == config.device_uuid
-                    && input.request.device_ordinal == 0,
+                    && input.request.ticket_id() == binding.ticket_id
+                    && input.request.device_uuid() == config.device_uuid
+                    && input.request.device_ordinal() == 0,
                 "workload_identity_mismatch"
             );
             // Retain a validly bound input's admission failure before replying.
@@ -786,13 +880,16 @@ fn handle_at(
             // without dispatching stale input or reserving an executor slot.
             let admission = input
                 .request
-                .validate(now, &config.provider_graph_sha256)
+                .validate(&input.schema, now, &config.provider_graph_sha256)
                 .and_then(|_| {
                     ensure!(
-                        now.checked_add(u64::from(input.request.deadline_ms))
+                        now.checked_add(u64::from(input.request.deadline_ms()))
                             .is_some_and(|end| end < binding.expires_unix_ms),
                         "ticket_ttl_too_short"
                     );
+                    if let Request::Registered(request) = &input.request {
+                        registered::preflight(&config.state_root, request)?;
+                    }
                     Ok(())
                 });
             let mut job = Job {
@@ -846,14 +943,27 @@ fn handle_at(
                         "stale_topology"
                     );
                     ensure!(!flag.load(Ordering::Acquire), "revoked_before_dispatch");
-                    let mut observation = reference::execute_selected(
-                        &config.helper,
-                        &config.helper_sha256,
-                        &state.join("execution"),
-                        &input.request,
-                        &flag,
-                        config.mig.as_ref(),
-                    )?;
+                    let mut observation = match &input.request {
+                        Request::Reference(request) => reference::execute_selected(
+                            &config.helper,
+                            &config.helper_sha256,
+                            &state.join("execution"),
+                            request,
+                            &flag,
+                            config.mig.as_ref(),
+                        )?,
+                        Request::Registered(request) => registered::execute(
+                            &config.state_root,
+                            &state.join("execution"),
+                            request,
+                            &observation,
+                            &flag,
+                            config
+                                .mig
+                                .as_ref()
+                                .map(|selection| selection.instance.uuid.as_str()),
+                        )?,
+                    };
                     ensure!(
                         observation["output"]["sha256"] == input.expected_output_sha256,
                         "output_hash_mismatch"
@@ -1095,6 +1205,64 @@ mod tests {
             assert_eq!(fs::read(path).unwrap(), persisted);
             assert!(active.is_none());
         }
+    }
+
+    #[test]
+    fn unregistered_user_work_is_retained_as_refusal_without_native_dispatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = binding();
+        let config = Config {
+            schema: "cohesix-gpu-executor-config/v1".into(),
+            socket: directory.path().join("unused.sock"),
+            state_root: directory.path().into(),
+            helper: directory.path().join("must-not-execute"),
+            helper_sha256: "c".repeat(64),
+            credential_ref: "unused".into(),
+            writer_epoch: 1,
+            gpu_id: "GPU-0".into(),
+            device_uuid: "d".repeat(32),
+            provider_graph_sha256: admission.provider_graph_sha256.clone(),
+            mig: None,
+            execution_lane: None,
+        };
+        let input: Input = serde_json::from_value(serde_json::json!({
+            "schema":"cohesix-gpu-workload-input/v2", "artifact_sha256":"c".repeat(64),
+            "topology_sha256":"e".repeat(64), "expected_output_sha256":"f".repeat(64),
+            "request": {"schema":"cohesix-registered-cuda-request/v1", "ticket_id":"job",
+                "registration_sha256":"a".repeat(64), "input_sha256":"b".repeat(64),
+                "parameters":{"frames":1}, "device_ordinal":0,
+                "device_uuid":"d".repeat(32), "inventory_observed_unix_ms":1000,
+                "provider_graph_sha256":admission.provider_graph_sha256,
+                "memory_budget_bytes":4096, "deadline_ms":1000}
+        }))
+        .unwrap();
+        let bytes = serde_json::to_vec(&input).unwrap();
+        let mut wal = Wal {
+            schema: "cohesix-gpu-journal/v1".into(),
+            config_sha256: "b".repeat(64),
+            jobs: BTreeMap::new(),
+        };
+        let mut active = None;
+        let refused = handle_at(
+            Command::Submit {
+                binding: admission,
+                lease_id: "lease".into(),
+                lease_sequence: 1,
+                request_sha256: digest(&bytes),
+                input: Box::new(input),
+            },
+            &config,
+            &mut wal,
+            &directory.path().join("jobs.json"),
+            &mut active,
+            1000,
+        )
+        .unwrap();
+        assert_eq!(refused.state, "failed");
+        assert_eq!(refused.detail, "registration_not_enrolled");
+        assert!(refused.terminal_unix_ms.is_some());
+        assert!(active.is_none());
+        assert!(!directory.path().join("job/execution").exists());
     }
     fn binding() -> Binding {
         Binding {

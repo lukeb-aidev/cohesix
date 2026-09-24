@@ -12,6 +12,9 @@
 pub mod enforcement;
 /// Bounded native CUDA reference execution; admission and Worker proof remain separate.
 pub mod reference;
+/// Privileged digest-pinned CUDA workload registration and native execution.
+#[cfg(unix)]
+pub mod registered;
 /// Authenticated bounded host-local workload executor.
 #[cfg(unix)]
 pub mod workload;

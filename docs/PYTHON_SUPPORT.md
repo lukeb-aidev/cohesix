@@ -207,6 +207,18 @@ new ticket or idempotency key. `inspect_standing_scope(id)` and
 `revoke_standing_scope(id)` require a separate delegated admin ticket. Standing
 authority and native outcome remain gateway/agent contracts, not Python grants.
 
+`cohesix.workload.batch_edges_expected` and `verify_batch_edges` provide an
+independent bounded CPU verifier for the registered CUDA batch-edge example.
+The checked [preparation script](../tools/cohesix-py/examples/cuda_batch_edges.py)
+freezes package, input and expected output digests before a selected job is
+admitted. Its second dataset is an adaptation using the same installed package,
+without a Cohesix source change. `recovery_guidance(record)` explains the
+original job's execution and delivery states, retained uncertainty and lack of
+checkpoint resume; it cannot cancel, settle or authorize a restart. A successful
+pixel check remains host evidence until correlated with the root admission,
+native observation and signed terminal. See [registered CUDA
+workloads](HOST_TOOLS.md#registered-cuda-workloads) for installation and recovery.
+
 ```python
 import os
 

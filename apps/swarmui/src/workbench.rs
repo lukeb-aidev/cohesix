@@ -155,6 +155,14 @@ impl ReviewGate {
 
 /// The terminal runner and arbitrary local command wrapper are deliberately not UI executors.
 pub fn host_unavailable(operation: &[String]) -> Option<&'static str> {
+    if !cfg!(target_os = "linux")
+        && matches!(
+            operation.join(" ").as_str(),
+            "workload inspect" | "workload register" | "workload diagnose"
+        )
+    {
+        return Some("Install this workbench on the selected Linux GPU executor to inspect, enroll or diagnose its local package and device. Use the Mac workbench for admitted run, job status and reconciliation.");
+    }
     match operation.first().map(String::as_str) {
         Some("run") => Some("Use a governed workflow or GPU workload. The desktop does not execute arbitrary host commands."),
         Some("mount") => Some("Persistent FUSE mounts are owned by the installed service manager; use deployment service configuration."),
@@ -187,6 +195,18 @@ pub fn host_catalog() -> Value {
             fields.retain(|f| !hidden_field(f["id"].as_str().unwrap_or("")));
         }
         node["unavailable"] = json!(host_unavailable(path));
+        let help = match path.join(" ").as_str() {
+            "workload inspect" => Some("Preflight one administrator-reviewed CUDA registration, package digest, typed parameters and resource bounds on the GPU host. This does not start work."),
+            "workload register" => Some("Install the reviewed registration under the GPU executor owner's private state root. This is a privileged local configuration change."),
+            "workload diagnose" => Some("Measure the selected GPU, native health and memory headroom against this executor's current configuration."),
+            "gpu workload" => Some("Submit an already approved GPU ticket. Use Job status and reconciliation to obtain its original signed outcome."),
+            "job status" => Some("Read the original admitted job's execution, delivery and reserved capacity state."),
+            "job reconcile" => Some("Read target results for the original admission after interruption; never resubmit its side effect."),
+            _ => None,
+        };
+        if let Some(help) = help {
+            node["help"] = json!(help);
+        }
         if let Some(children) = node["commands"].as_array_mut() {
             for child in children {
                 let name = child["name"].as_str().unwrap_or("").to_owned();
@@ -295,6 +315,14 @@ pub fn host_arguments(
 
 fn host_offline(request: &HostRequest) -> bool {
     let path = request.operation.join(" ");
+    if cfg!(target_os = "linux")
+        && matches!(
+            path.as_str(),
+            "workload inspect" | "workload register" | "workload diagnose"
+        )
+    {
+        return true;
+    }
     let has = |name: &str| {
         request
             .values

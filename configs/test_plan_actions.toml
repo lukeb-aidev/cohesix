@@ -863,6 +863,34 @@ test_policy = "nonzero"
 minimum_test_count = 1
 
 [[action]]
+id = "federation.m28a-workloads-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Verify one admitted registered CUDA workload, exact native owner and independently checked output on the selected Jetson host. Repeat for reference, adaptation and every advertised lane."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-workloads-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-workloads-live"'
+timeout_seconds = 1800
+trigger_paths = ["apps/gpu-bridge-host/**", "apps/host-ticket-agent/src/executors/workload.rs", "apps/coh/src/recipe.rs", "tools/cohesix-py/cohesix/workload.py", "scripts/ci/provider_m28a_live.py", "configs/cuda_recipe.toml"]
+expected_evidence = ["m28a-workloads-live-summary", "registered-package-and-device", "target-terminal-and-native-observation", "independent-output-verifier"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "federation.m28a-recovery-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Verify one exact-source native CUDA cancellation, lost-response reconciliation, reaping and standing capacity settlement."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28a-recovery-live --reference-config "${RELEASE_B_REFERENCE:?}" --host-profile "${RELEASE_B_HOST_PROFILE:?}" --state-dir "${RELEASE_B_EVIDENCE:?}/m28a-recovery-live"'
+timeout_seconds = 1800
+trigger_paths = ["apps/gpu-bridge-host/**", "apps/host-ticket-agent/src/executors/workload.rs", "scripts/ci/provider_m28a_live.py", "tools/cohesix-py/cohesix/workload.py"]
+expected_evidence = ["m28a-recovery-live-summary", "original-native-start", "separate-cancel-terminal", "original-outcome-and-standing-settlement"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
 id = "federation.three-hive-relay"
 stage = 0
 tier = "federation"

@@ -71,6 +71,11 @@ pub enum Command {
     Providers,
     /// Operate one durable selected job or administer its narrow standing scope.
     Job(JobArgs),
+    /// Inspect or install a digest-pinned user CUDA workload on its GPU host.
+    Workload {
+        #[command(subcommand)]
+        command: WorkloadCommand,
+    },
     /// Build, verify or install an exact signed host package without a transport.
     Package {
         #[command(subcommand)]
@@ -119,6 +124,27 @@ pub enum Command {
     Fleet(FleetArgs),
     /// Evidence pack and timeline operations.
     Evidence(EvidenceArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkloadCommand {
+    /// Measure the selected GPU and report current headroom and admission caps.
+    Diagnose {
+        #[arg(long, value_name = "FILE")]
+        executor_config: PathBuf,
+    },
+    /// Check package, typed bounds and digest before privileged installation.
+    Inspect {
+        #[arg(long, value_name = "FILE")]
+        registration: PathBuf,
+    },
+    /// Add one immutable registration under the bridge owner's private state root.
+    Register {
+        #[arg(long, value_name = "FILE")]
+        registration: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        state_root: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -272,6 +298,9 @@ pub struct DoctorArgs {
     /// This host owns GPU execution; explicitly probe its local NVML/CUDA providers.
     #[arg(long)]
     pub local_gpu: bool,
+    /// Selected local GPU executor configuration for fresh workload diagnostics.
+    #[arg(long, requires = "local_gpu", value_name = "FILE")]
+    pub gpu_executor_config: Option<PathBuf>,
     /// This deployment requires a usable native FUSE mount.
     #[arg(long)]
     pub require_fuse: bool,
@@ -647,5 +676,56 @@ mod tests {
         assert!(Cli::try_parse_from(["coh", "job", "cancel", "../job"]).is_ok());
         // The runtime validates ids before constructing a URL; the parser
         // preserves the original bytes for that deterministic refusal.
+    }
+
+    #[test]
+    fn registered_workload_controls_require_explicit_local_paths() {
+        let parsed = Cli::try_parse_from([
+            "coh",
+            "workload",
+            "register",
+            "--registration",
+            "/tmp/registration.json",
+            "--state-root",
+            "/tmp/executor",
+        ])
+        .expect("privileged registration paths");
+        assert!(matches!(
+            parsed.command,
+            Command::Workload {
+                command: WorkloadCommand::Register { .. }
+            }
+        ));
+        assert!(Cli::try_parse_from([
+            "coh",
+            "workload",
+            "register",
+            "--registration",
+            "/tmp/registration.json",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "coh",
+            "workload",
+            "diagnose",
+            "--executor-config",
+            "/tmp/executor.json",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "coh",
+            "doctor",
+            "--gpu-executor-config",
+            "/tmp/executor.json",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "coh",
+            "doctor",
+            "--local-gpu",
+            "--gpu-executor-config",
+            "/tmp/executor.json",
+        ])
+        .is_ok());
     }
 }

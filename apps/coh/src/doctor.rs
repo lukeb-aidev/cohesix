@@ -29,6 +29,8 @@ pub struct DoctorConfig {
     pub mock: bool,
     /// Probe a local NVIDIA provider only when this host is an explicitly selected GPU executor.
     pub local_gpu: bool,
+    /// Exact local executor selected for workload health and headroom observations.
+    pub gpu_executor_config: Option<PathBuf>,
     /// Require FUSE only for a deployment selecting filesystem mounts.
     pub require_fuse: bool,
     /// Check QEMU only for a development host profile.
@@ -50,6 +52,11 @@ pub struct PackageConfig {
 
 /// Run the doctor checks and emit audit lines.
 pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
+    if config.mock && config.gpu_executor_config.is_some() {
+        return Err(anyhow!(
+            "GPU executor diagnostics require a live local host"
+        ));
+    }
     let mut errors: Vec<String> = Vec::new();
 
     audit.push_line(protocol_status()?);
@@ -105,6 +112,19 @@ pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
         }
         if config.local_gpu {
             check_nvml(audit, &mut errors);
+            if let Some(path) = &config.gpu_executor_config {
+                match gpu_bridge_host::registered::diagnose(path) {
+                    Ok(report) => audit.push_line(serde_json::to_string(&report)?),
+                    Err(error) => {
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "DOCTOR",
+                            Some("check=gpu-workload status=unavailable"),
+                        );
+                        errors.push(error.to_string());
+                    }
+                }
+            }
         } else {
             audit.push_line("doctor check=local-gpu status=not_enabled");
         }
@@ -144,13 +164,35 @@ fn protocol_status() -> Result<String> {
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::protocol_status;
+    use super::{protocol_status, run, DoctorConfig};
+    use crate::CohAudit;
+    use cohesix_ticket::Role;
+    use std::path::PathBuf;
 
     #[test]
     fn selected_profile_reports_disabled_protocols_without_claiming_endpoints() {
         let status = protocol_status().expect("generated controls");
         assert!(status.contains("master=false mcp=false a2a=false"));
         assert!(status.ends_with("endpoints=not-implemented"));
+    }
+
+    #[test]
+    fn workload_diagnostics_cannot_be_claimed_from_mock_mode() {
+        let config = DoctorConfig {
+            role: Role::Queen,
+            ticket: None,
+            policy_path: PathBuf::from("unused-policy"),
+            mock: true,
+            local_gpu: true,
+            gpu_executor_config: Some(PathBuf::from("unused-executor")),
+            require_fuse: false,
+            developer_tools: false,
+            package: None,
+        };
+        assert!(run(config, &mut CohAudit::new())
+            .unwrap_err()
+            .to_string()
+            .contains("live local host"));
     }
 }
 

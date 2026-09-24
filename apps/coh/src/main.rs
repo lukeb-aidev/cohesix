@@ -105,6 +105,31 @@ fn main() -> Result<()> {
             run_workflow("recover", role, cli.ticket.as_deref(), &policy_path, args)
         }
 
+        Command::Workload { command } => {
+            let report = match command {
+                WorkloadCommand::Diagnose { executor_config } => {
+                    gpu_bridge_host::registered::diagnose(&executor_config)?
+                }
+                WorkloadCommand::Inspect { registration } => {
+                    gpu_bridge_host::registered::inspect(&registration)?
+                }
+                WorkloadCommand::Register {
+                    registration,
+                    state_root,
+                } => {
+                    let digest = gpu_bridge_host::registered::install(&registration, &state_root)?;
+                    serde_json::json!({
+                        "schema":"cohesix-cuda-registration-install/v1",
+                        "registration_sha256":digest,
+                        "state_root":state_root,
+                        "authoritative":false,
+                        "execution":"not_started",
+                    })
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         Command::Package { command } => {
             let report = match command {
                 PackageCommand::Build {
@@ -434,6 +459,7 @@ fn run_doctor(
         policy_path: policy_path.to_path_buf(),
         mock: args.connect.mock,
         local_gpu: args.local_gpu,
+        gpu_executor_config: args.gpu_executor_config,
         require_fuse: args.require_fuse,
         developer_tools: args.developer_tools,
         package: match (args.package, args.package_trust, args.credential_refs) {

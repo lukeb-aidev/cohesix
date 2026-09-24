@@ -122,7 +122,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
     seen = set()
     for case in cases:
         required = {"id", "group", "providers", "proof_class", "lane"}
-        live = case.get("id") in {"m28-jobs-live", "m28-authority-live"}
+        live = case.get("id") in {"m28-jobs-live", "m28-authority-live",
+                                    "m28a-workloads-live", "m28a-recovery-live"}
         optional = {"surface", "runner"} if live else {"surface", "command"}
         require(set(case) >= required | {"runner" if live else "command"}
                 and set(case) <= required | optional,
@@ -153,7 +154,10 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "surface" not in case or case["surface"] in surfaces, "unregistered surface"
         )
         if live:
-            require(case.get("runner") == "provider_m28_live", "unregistered live runner")
+            expected_runner = ("provider_m28a_live" if identifier in {
+                "m28a-workloads-live", "m28a-recovery-live"}
+                               else "provider_m28_live")
+            require(case.get("runner") == expected_runner, "unregistered live runner")
             continue
         command = case["command"]
         require(
