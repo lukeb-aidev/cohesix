@@ -148,6 +148,41 @@ must link all required reports and the `m28a-recovery-live` cancellation and
 interruption record. Direct native smoke, Python output checks and an older
 M28 target result do not replace these admitted exact-source observations.
 
+Planned M28d/M28e `m28d-mcp-live` and `m28e-a2a-live` each require a named
+standard client to complete and recover selected real work independently. When
+MLX and CUDA are advertised together, each case includes a selected workflow
+using both native providers on their qualified host profiles. Record exact
+provider/host selection, bounded capacity and transfer decisions, original
+stage/job identities, native outcomes and shared-verifier result. Test wrong
+host, incompatible artifact, exhausted capacity/budget, unapproved transfer,
+lost response and reconnect without a new effect. The installed Python wheel
+must project the same shared operation through its CLI/REST path, including
+pending/refused/failed states; focused Python tests cannot replace live MCP,
+A2A, MLX or CUDA evidence. JetPack observations apply only to a host profile
+that actually uses JetPack; another NVIDIA platform needs its own qualification.
+Before claiming vMLX compatibility, pin the installed app, model, MCP SDK,
+transport and peer versions. Run its configured MCP client against the real
+Cohesix server for discovery, admitted CUDA/PEFT work, refusal and recovery;
+record vMLX tool policy and the original shared operation identity. For A2A,
+use a named A2A-capable peer with vMLX as its selected model endpoint, then
+exercise delegation, interruption and reconnect against Cohesix. Record the
+model endpoint, A2A peer and GPU provider separately. A vMLX API response,
+model tool call or task state is not native CUDA/MLX execution or a verified
+PEFT release. If no vMLX model session or compatible peer exists, report the
+live slice blocked and leave generic MCP/A2A and NeMo evidence separate.
+For planned `m28f-nemo-install` and `m28f-nemo-live`, record the pinned NeMo
+Agent Toolkit version and exercise its native MCP transport/auth, selected
+tool discovery and call, plus its per-user A2A Agent Card, task lookup and
+cancellation helpers. The workflow must use an actual selected CUDA job and
+HF PEFT adapter/base/served generation, including a denied or failed candidate.
+Test two verified subjects, client timeout, disconnect and cross-protocol retry:
+the same underlying job remains recoverable, and one subject cannot read the
+other's scoped task or evidence. Toolkit user-ID resolution, tool output and
+agent traces do not supply gateway authentication or native provider proof.
+If a single Toolkit process is claimed to host both protected per-user clients,
+require a startup and authenticated call on each path for that exact version;
+otherwise report separate native workflows and the combined-mode limitation.
+
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
 | Parsing, bounds, arithmetic, serialization, ABI/layout, policy, replay, pure state transitions | Small deterministic tests with independent expected truth | Stage 01 and AGENTS Test Discipline |
