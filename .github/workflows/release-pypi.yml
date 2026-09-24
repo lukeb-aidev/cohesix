@@ -1,0 +1,179 @@
+# Author: Lukas Bower
+# Purpose: Publish the exact tagged Cohesix 1.1.0b0 Python source through reviewer-gated PyPI trusted publishing.
+# Copyright 2026 Lukas Bower
+
+name: Publish Cohesix Python 1.1.0b0
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cohesix-pypi-1-1-0b0
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and check tagged Python distribution
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      RELEASE_SOURCE_COMMIT: 8bda91891591466b67f5f4a35e733fe2d3acf0e8
+    steps:
+      - name: Check out sealed release source
+        uses: actions/checkout@v4
+        with:
+          ref: v1.1.0-beta
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_COMMIT"
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.14'
+
+      - name: Install isolated package tools
+        run: python -m pip install --disable-pip-version-check setuptools==84.0.0 wheel==0.48.0 packaging==26.3 twine==7.0.0
+
+      - name: Apply only the release-aligned Python version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          from packaging.version import Version
+
+          if str(Version('1.1.0-beta')) != '1.1.0b0':
+              raise SystemExit('release and Python versions do not align')
+          project = Path('tools/cohesix-py/pyproject.toml')
+          before = project.read_text()
+          old = 'version = "0.2.0-alpha2"'
+          if before.count(old) != 1:
+              raise SystemExit('tagged Python version does not match expected source')
+          project.write_text(before.replace(old, 'version = "1.1.0b0"'))
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-only'], text=True
+          ).splitlines()
+          if changed != [str(project)]:
+              raise SystemExit(f'unexpected tagged-source changes: {changed}')
+          PY
+
+      - name: Build and validate distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/install/build_python_package.py \
+            --repo . \
+            --inventory configs/generated/implementation_surface_inventory.json \
+            --out out/pypi-build
+          python -m twine check \
+            out/pypi-build/cohesix-1.1.0b0-py3-none-any.whl \
+            out/pypi-build/cohesix-1.1.0b0.tar.gz
+          python -m venv /tmp/cohesix-pypi-smoke
+          /tmp/cohesix-pypi-smoke/bin/python -m pip install --no-deps \
+            out/pypi-build/cohesix-1.1.0b0-py3-none-any.whl
+          /tmp/cohesix-pypi-smoke/bin/python -c 'import cohesix; print(cohesix.__file__)'
+          /tmp/cohesix-pypi-smoke/bin/cohesix-journey --help > /dev/null
+          /tmp/cohesix-pypi-smoke/bin/cohesix-playbook --help > /dev/null
+
+      - name: Record exact upload bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p handoff/dist
+          cp out/pypi-build/cohesix-1.1.0b0-py3-none-any.whl \
+             out/pypi-build/cohesix-1.1.0b0.tar.gz handoff/dist/
+          cp out/pypi-build/distributions.json handoff/
+          (cd handoff && sha256sum dist/* distributions.json > SHA256SUMS && sha256sum -c SHA256SUMS)
+          cat handoff/SHA256SUMS
+
+      - name: Retain reviewed distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: cohesix-1.1.0b0-distributions
+          path: handoff/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Review and upload exact distributions
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - name: Retrieve checked distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: cohesix-1.1.0b0-distributions
+          path: handoff
+
+      - name: Verify handoff and inspect PyPI state
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd handoff
+          sha256sum -c SHA256SUMS
+          python3 - <<'PY'
+          from hashlib import sha256
+          import json
+          from pathlib import Path
+          import os
+          from urllib.error import HTTPError
+          from urllib.request import urlopen
+
+          paths = sorted(Path('dist').iterdir())
+          expected_names = {
+              'cohesix-1.1.0b0-py3-none-any.whl',
+              'cohesix-1.1.0b0.tar.gz',
+          }
+          if {path.name for path in paths} != expected_names:
+              raise SystemExit('unexpected distribution handoff')
+          expected = {path.name: sha256(path.read_bytes()).hexdigest()
+                      for path in paths}
+          report = json.loads(Path('distributions.json').read_text())
+          recorded = {row['filename']: row['sha256']
+                      for row in report['artifacts']}
+          if report['schema'] != 'cohesix-python-distributions/v1' or recorded != expected:
+              raise SystemExit('distribution manifest and handoff differ')
+          try:
+              with urlopen('https://pypi.org/pypi/cohesix/1.1.0b0/json',
+                           timeout=15) as response:
+                  version = json.load(response)
+          except HTTPError as error:
+              if error.code != 404:
+                  raise
+              version = None
+          if version is None:
+              publish = 'true'
+          else:
+              observed = {row['filename']: row['digests']['sha256']
+                          for row in version['urls']}
+              if observed != expected:
+                  raise SystemExit('PyPI has different or partial 1.1.0b0 files')
+              publish = 'false'
+              print('Exact 1.1.0b0 files are already published')
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write(f'publish={publish}\n')
+          PY
+
+      - name: Publish to PyPI with short-lived OIDC credentials
+        if: steps.preflight.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: handoff/dist/
