@@ -1441,7 +1441,10 @@ use:
 python3 -m pip install -e tools/cohesix-py
 ```
 
-That editable path exists only in a source checkout. See
+That editable path exists only in a source checkout. For a Python-only Release A
+integration, install the [version-aligned PyPI distribution](https://pypi.org/project/cohesix/1.1.0b0/)
+in an isolated environment with `python3 -m pip install 'cohesix==1.1.0b0'`.
+It does not install native host tools or the target runtime. See
 [Python support](PYTHON_SUPPORT.md) for optional integration and ML dependencies.
 Do not substitute a different wheel or target contract to repair a missing
 feature in an older bundle.
