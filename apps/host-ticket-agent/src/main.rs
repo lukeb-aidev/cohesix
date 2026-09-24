@@ -295,7 +295,11 @@ fn main() -> Result<()> {
         let lane_running = Arc::clone(&running);
         let lane_feed = shared_snapshot.as_ref().map(Arc::clone);
         handles.push(thread::spawn(move || {
-            let result = if let Some(feed) = lane_feed {
+            // Version-1 tickets enter the raw spec log without changing the
+            // admitted snapshot. Its owner must poll even with shared ingress.
+            let result = if let Some(feed) = lane_feed.filter(|_| {
+                lane_uses_snapshot_feed(lane_index, lane_args.gpu_executor_socket.is_some())
+            }) {
                 run_ticket_lane_from_snapshot(
                     &lane_args,
                     &lane_manifest,
@@ -348,6 +352,10 @@ fn main() -> Result<()> {
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+fn lane_uses_snapshot_feed(lane_index: usize, gpu_executor: bool) -> bool {
+    lane_index != usize::from(gpu_executor)
 }
 
 #[derive(Debug, Default)]
@@ -798,6 +806,14 @@ fn _ping_transport(transport: &mut dyn Transport, session: &Session) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_ticket_owner_polls_with_shared_snapshot_ingress() {
+        assert!(!lane_uses_snapshot_feed(0, false));
+        assert!(lane_uses_snapshot_feed(1, false));
+        assert!(lane_uses_snapshot_feed(0, true));
+        assert!(!lane_uses_snapshot_feed(1, true));
+    }
 
     #[test]
     fn snapshot_feed_deduplicates_and_coalesces_to_latest_generation() {
