@@ -82,6 +82,7 @@ def load_reference(path: Path, host_profile: str) -> dict[str, Any]:
     expected = {
         "schema", "host_profile", "source_commit", "gateway_url",
         "request_auth_ref", "delegated_ticket_ref", "source_manifest",
+        "target_qemu_pid",
         "target_manifest_sha256", "gateway_binary", "gateway_sha256",
         "agent_binary", "agent_sha256", "gpu_bridge_binary", "gpu_bridge_sha256",
         "cuda_helper_binary", "cuda_helper_sha256", "service_request",
@@ -94,6 +95,8 @@ def load_reference(path: Path, host_profile: str) -> dict[str, Any]:
     require(document["host_profile"] == host_profile, "M28 host profile mismatch")
     require(isinstance(document["wait_seconds"], int)
             and 1 <= document["wait_seconds"] <= 300, "M28 wait bound")
+    require(type(document["target_qemu_pid"]) is int
+            and document["target_qemu_pid"] > 0, "M28 QEMU process identity")
     url = urlsplit(document["gateway_url"])
     require(url.scheme in {"http", "https"} and bool(url.hostname)
             and not url.username and not url.password and not url.path.strip("/")
@@ -134,6 +137,45 @@ def load_reference(path: Path, host_profile: str) -> dict[str, Any]:
     return document
 
 
+def qemu_image_identity(
+    pid: int, commit: str, proc_root: Path = Path("/proc"),
+    artifact_root: Path = ROOT,
+) -> dict[str, str]:
+    """Bind the live KVM loader inputs to the selected source build marker."""
+    command = read_artifact(proc_root / str(pid) / "cmdline", 16384).split(b"\0")
+    args = [os.fsdecode(part) for part in command if part]
+    require(args and Path(args[0]).name == "qemu-system-aarch64"
+            and any(args[index:index + 2] == ["-accel", "kvm"]
+                    for index in range(len(args) - 1)), "M28 KVM process identity")
+
+    def option(name: str) -> Path:
+        positions = [index for index, arg in enumerate(args[:-1]) if arg == name]
+        require(len(positions) == 1, f"M28 QEMU {name} identity")
+        path = Path(args[positions[0] + 1])
+        require(path.is_absolute() and path.is_relative_to(artifact_root / "out"),
+                f"M28 QEMU {name} path")
+        return path
+
+    elfloader = option("-kernel")
+    cpio = option("-initrd")
+    loaders = [arg for index, arg in enumerate(args)
+               if index > 0 and args[index - 1] == "-device"
+               and arg.startswith("loader,file=") and ",addr=0x80000000," in arg]
+    require(len(loaders) == 1, "M28 QEMU rootserver loader")
+    rootserver = Path(loaders[0].split(",", 2)[1].removeprefix("file="))
+    require(rootserver.is_absolute() and rootserver.is_relative_to(artifact_root / "out")
+            and rootserver.name == "rootserver", "M28 QEMU rootserver path")
+    image = read_artifact(rootserver, 32 * 1024 * 1024)
+    markers = re.findall(rb"\[BUILD\] ([0-9a-f]{12})(?:-dirty)? ", image)
+    require(markers == [commit[:12].encode()], "M28 live rootserver source mismatch")
+    return {
+        "qemu_pid": str(pid),
+        "rootserver_sha256": hashlib.sha256(image).hexdigest(),
+        "elfloader_sha256": digest(elfloader),
+        "cpio_sha256": digest(cpio),
+    }
+
+
 def source_and_target(config: dict[str, Any], backend: RestBackend) -> dict[str, str]:
     """Bind source revision, binaries, generated manifest and live boot."""
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
@@ -152,6 +194,7 @@ def source_and_target(config: dict[str, Any], backend: RestBackend) -> dict[str,
                 f"M28 {binary} binary hash changed")
     require(platform.system() == "Linux" and platform.machine() == "aarch64",
             "M28 live host must be Linux AArch64")
+    image_identity = qemu_image_identity(config["target_qemu_pid"], commit)
     try:
         query = subprocess.check_output(
             ["/usr/sbin/nvidia-smi", "--query-gpu=uuid,driver_version",
@@ -191,6 +234,7 @@ def source_and_target(config: dict[str, Any], backend: RestBackend) -> dict[str,
             "M28 selected GPU runtime profile")
     return {
         "source_commit": commit,
+        **image_identity,
         "manifest_sha256": manifest_hash,
         "gateway_sha256": config["gateway_sha256"],
         "agent_sha256": config["agent_sha256"],

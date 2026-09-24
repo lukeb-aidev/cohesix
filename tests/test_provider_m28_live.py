@@ -55,6 +55,36 @@ def native_fixture(root: Path, action: str) -> tuple[dict, dict, Path]:
     return binding, terminal, path
 
 
+def test_live_qemu_image_requires_exact_source_marker(tmp_path: Path) -> None:
+    image_dir = tmp_path / "out" / "image"
+    image_dir.mkdir(parents=True)
+    rootserver = image_dir / "rootserver"
+    rootserver.write_bytes(b"\0[BUILD] abcdef123456-dirty timestamp image-id=" + b"0" * 64)
+    elfloader = image_dir / "elfloader"
+    elfloader.write_bytes(b"loader")
+    cpio = image_dir / "system.cpio"
+    cpio.write_bytes(b"payload")
+    proc_root = tmp_path / "proc"
+    process = proc_root / "42"
+    process.mkdir(parents=True)
+    command = [
+        "qemu-system-aarch64", "-accel", "kvm", "-kernel", str(elfloader),
+        "-initrd", str(cpio), "-device",
+        f"loader,file={rootserver},addr=0x80000000,force-raw=on",
+    ]
+    (process / "cmdline").write_bytes(b"\0".join(part.encode() for part in command))
+    identity = live.qemu_image_identity(42, "abcdef123456" + "0" * 28,
+                                        proc_root, tmp_path)
+    assert identity["rootserver_sha256"] == hashlib.sha256(rootserver.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="source mismatch"):
+        live.qemu_image_identity(42, "fedcba654321" + "0" * 28,
+                                 proc_root, tmp_path)
+    rootserver.write_bytes(rootserver.read_bytes() + b"[BUILD] abcdef123456 timestamp")
+    with pytest.raises(ValueError, match="source mismatch"):
+        live.qemu_image_identity(42, "abcdef123456" + "0" * 28,
+                                 proc_root, tmp_path)
+
+
 @pytest.mark.parametrize("action", ["systemd.restart", "gpu.workload.submit"])
 def test_exact_native_object_is_inspectable_and_changed_bytes_refuse(
     tmp_path: Path, action: str
