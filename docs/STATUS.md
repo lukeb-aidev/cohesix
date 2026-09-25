@@ -161,6 +161,8 @@ The new SwarmUI Local MLX desk routes plan, reviewed start, follow, verify,
 recovery and original-job inspection through the installed `coh` schema and
 shows release measurements only from a verified signed journal. The gateway
 and Linux release agent now share an exact accepted-generation dispatch fence.
+The agent checks selected cancellation before each forward native phase while
+allowing authorized rollback and retaining uncertain work for reconciliation.
 The Mac native release executor and live SwarmUI MLX acceptance remain open.
 The [native actions record](audit/M28C_APPLE_ACTIONS_RECORD.md) retains its
 exact diagnostic proof limits.

@@ -65,7 +65,9 @@ vMLX modules additive. The standing-authority parser recognises
 `peft.release` as an optional compiler-selected action. The gateway now
 admits it only with an exact private request, helper and accepted baseline,
 while the agent rechecks the incumbent and standing dispatch barrier before
-native effects. The current selected manifest does not enable that action,
+native effects. Forward phases also recheck a cancellation request; rollback
+remains permitted under valid recovery authority. The current selected
+manifest does not enable that action,
 and the agent's phase executor remains Linux/CUDA, so this is not Mac MLX
 admission. The new SwarmUI desk uses the existing `coh` parser and gateway job
 route; it does not add a transport or provider. Python and raw/REST benchmark

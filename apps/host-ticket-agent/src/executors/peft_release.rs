@@ -147,6 +147,7 @@ struct Adapter<'a> {
     recovery_id: Option<String>,
     request: PathBuf,
     spec: &'a HostTicketSpec,
+    standing_config: &'a ExecutorConfig,
     transport: &'a mut dyn Transport,
     session: &'a Session,
 }
@@ -161,13 +162,16 @@ impl Native for Adapter<'_> {
             8192,
         )?)?)
     }
-    fn authorize(&mut self, _phase: Phase) -> Result<()> {
+    fn authorize(&mut self, phase: Phase) -> Result<()> {
         ensure!(
             self.spec
                 .expires_unix_ms
                 .is_some_and(|expiry| self.now_ms().is_ok_and(|now| now < expiry)),
             "EPERM release-authority-expired"
         );
+        if phase != Phase::Rollback {
+            crate::standing::ensure_not_cancel_requested(self.spec, self.standing_config)?;
+        }
         crate::validate_ready_worker_binding(self.transport, self.session, self.spec)
     }
     fn reconcile(&mut self, phase: Phase) -> Result<Option<Observation>> {
@@ -428,6 +432,7 @@ fn run(
         recovery_id: args.recovery_only.then(|| spec.id.clone()),
         request: request_path,
         spec,
+        standing_config: executor,
         transport,
         session,
     };

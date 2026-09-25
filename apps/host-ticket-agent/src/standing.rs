@@ -57,6 +57,16 @@ pub fn begin_dispatch(
     Ok(())
 }
 
+/// A post-dispatch cancellation request stops new release phase work while
+/// preserving the original job and native reconciliation obligation.
+pub fn ensure_not_cancel_requested(spec: &HostTicketSpec, config: &ExecutorConfig) -> Result<()> {
+    ensure!(
+        !selected_record(spec, config)?.is_some_and(|record| record.cancel_requested),
+        "cancelled selected-release"
+    );
+    Ok(())
+}
+
 /// Derive two nonzero generations from a direct typed native observation.
 /// The full observation remains in the signed native evidence object; these
 /// bounded fields only fence change between admission and dispatch.
@@ -477,6 +487,14 @@ mod tests {
             ..ExecutorConfig::default()
         };
         begin_dispatch(&spec, &config, &facts, 1801).expect("fresh dispatch");
+        ensure_not_cancel_requested(&spec, &config).expect("uninterrupted job");
+        config
+            .standing_ledger
+            .as_ref()
+            .unwrap()
+            .request_cancel(&record.binding.admission_id)
+            .expect("request cancellation");
+        assert!(ensure_not_cancel_requested(&spec, &config).is_err());
         let result = serde_json::json!({
             "schema":"host-ticket-result/v1", "id":spec.id,
             "idempotency_key":spec.idempotency_key, "action":spec.action,
