@@ -33,24 +33,48 @@ struct InspectCohesixJobIntent: AppIntent {
     }
 }
 
+struct ApprovedCohesixScope: AppEntity {
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Approved Cohesix Scope"
+    static let defaultQuery = ApprovedCohesixScopeQuery()
+
+    let id: String
+    let target: String
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(id)", subtitle: "\(target)")
+    }
+}
+
+struct ApprovedCohesixScopeQuery: EntityQuery {
+    func entities(for identifiers: [String]) async throws -> [ApprovedCohesixScope] {
+        let requested = Set(identifiers)
+        return try await suggestedEntities().filter { requested.contains($0.id) }
+    }
+
+    func suggestedEntities() async throws -> [ApprovedCohesixScope] {
+        let credentials = try GatewayKeychain.load()
+        let scopes = try await GatewayJobs(credentials: credentials).availableScopes()
+        return scopes.map { ApprovedCohesixScope(id: $0.id, target: $0.target) }
+    }
+}
+
 struct StartApprovedCohesixJobIntent: AppIntent {
     static let title: LocalizedStringResource = "Start Approved Cohesix Job"
     static let description = IntentDescription(
         "Start one selected standing-scope service recipe using the original Hive Gateway authority."
     )
 
-    @Parameter(title: "Approved Scope ID") var scopeID: String
+    @Parameter(title: "Approved Scope") var scope: ApprovedCohesixScope
     @Parameter(title: "Stable Request ID") var requestID: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        try GatewayJobs.validateAdmissionID(scopeID)
         try GatewayJobs.validateRequestID(requestID)
         try await requestConfirmation(
-            dialog: "Start approved Cohesix scope \(scopeID) for request \(requestID)?"
+            dialog: "Start approved Cohesix scope \(scope.id) for request \(requestID)?"
         )
         let credentials = try GatewayKeychain.load()
         let job = try await GatewayJobs(credentials: credentials)
-            .startApproved(scopeID: scopeID, requestID: requestID)
+            .startApproved(scopeID: scope.id, requestID: requestID)
         return .result(value: job.summary)
     }
 }

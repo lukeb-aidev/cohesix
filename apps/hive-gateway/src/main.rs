@@ -1414,6 +1414,7 @@ async fn main() -> Result<()> {
         .route("/v1/jobs/{admission_id}", get(jobs::status))
         .route("/v1/jobs/{admission_id}/cancel", post(jobs::cancel))
         .route("/v1/jobs/{admission_id}/reconcile", post(jobs::reconcile))
+        .route("/v1/standing/scopes/available", get(jobs::available_scopes))
         .route(
             "/v1/standing/scopes/{scope_id}/inspect",
             post(jobs::inspect_scope),

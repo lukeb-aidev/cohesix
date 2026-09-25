@@ -741,6 +741,35 @@ pub(super) async fn inspect_scope(
     }
 }
 
+/// Supply current subject-filtered choices for native App Entities. A stale
+/// cached entity never grants an effect because submission rechecks the ledger.
+pub(super) async fn available_scopes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let subject = match authorize_status(&state, &headers) {
+        Ok(subject) => subject,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    let result = ledger(&state).and_then(|selected| {
+        selected
+            .available_scopes(&subject, "systemd.restart", authority_now_ms()?)
+            .map_err(Into::into)
+    });
+    match result {
+        Ok(scopes) => Json(json!({
+            "schema": "cohesix-available-scopes/v1",
+            "scopes": scopes.iter().map(|scope| json!({
+                "id": scope.id,
+                "action": scope.action,
+                "target": scope.target,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => fail(StatusCode::SERVICE_UNAVAILABLE, error),
+    }
+}
+
 pub(super) async fn revoke_scope(
     State(state): State<AppState>,
     Path(scope_id): Path<String>,

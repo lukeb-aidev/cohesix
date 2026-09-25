@@ -1433,6 +1433,7 @@ fn run_selected_job(args: JobArgs, role: Role, ticket: Option<&str>) -> Result<(
             scope_id,
             request_id,
         } => client.start_approved_job(&scope_id, &request_id)?,
+        JobCommand::Scopes => client.available_standing_scopes()?,
         JobCommand::Status { admission_id } => client.selected_job_status(&admission_id)?,
         JobCommand::Cancel { admission_id } => client.request_selected_job_cancel(&admission_id)?,
         JobCommand::Reconcile { admission_id } => client.reconcile_selected_job(&admission_id)?,

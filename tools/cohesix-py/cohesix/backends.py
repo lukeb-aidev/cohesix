@@ -494,6 +494,33 @@ class RestBackend(Backend):
             body={"request_id": request_id},
         )
 
+    def available_standing_scopes(self) -> Dict[str, Any]:
+        """Read this delegated subject's current approved service choices."""
+        result = self._selected_job_payload("GET", "/v1/standing/scopes/available")
+        scopes = result.get("scopes")
+        if (result.get("schema") != "cohesix-available-scopes/v1"
+                or not isinstance(scopes, list) or len(scopes) > 16):
+            raise CohesixError("invalid available standing scopes")
+        from .authority import authority_id
+
+        seen: set[str] = set()
+        for scope in scopes:
+            if (not isinstance(scope, dict) or set(scope) != {"id", "action", "target"}
+                    or not isinstance(scope["id"], str)
+                    or not isinstance(scope["target"], str)):
+                raise CohesixError("invalid available standing scopes")
+            authority_id(scope["id"])
+            prefix = "/host/systemd/"
+            suffix = "/restart"
+            target = scope["target"]
+            unit = target[len(prefix):-len(suffix)] if target.startswith(prefix) and target.endswith(suffix) else ""
+            if (scope["id"] in seen or scope["action"] != "systemd.restart"
+                    or not unit or not unit[0].isascii() or not unit[0].isalnum()):
+                raise CohesixError("invalid available standing scopes")
+            authority_id(unit)
+            seen.add(scope["id"])
+        return result
+
     def request_selected_job_cancel(self, admission_id: str) -> Dict[str, Any]:
         """Request cancellation; this does not claim native termination."""
         return self._selected_job_control(admission_id, "cancel")

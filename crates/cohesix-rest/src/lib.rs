@@ -303,6 +303,17 @@ impl GatewayClient {
         )
     }
 
+    /// List the delegated subject's currently usable standing service scopes.
+    /// A listed choice is advisory; each start is rechecked by the gateway.
+    pub fn available_standing_scopes(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/v1/standing/scopes/available", self.base_url);
+        decode_json_response(
+            "STANDING SCOPES",
+            "available standing scopes",
+            self.get_operation(&url),
+        )
+    }
+
     /// Read one retained execution and independent delivery state.
     pub fn selected_job_status(&self, admission_id: &str) -> Result<serde_json::Value> {
         cohesix_authority::validate_id(admission_id).map_err(|_| anyhow!("EPERM job id"))?;
@@ -1696,5 +1707,22 @@ mod tests {
         assert!(GatewayClient::new("http://127.0.0.1:1")
             .start_approved_job("service-1", "../escape")
             .is_err());
+    }
+
+    #[test]
+    fn available_scopes_use_delegated_read_without_a_write() {
+        let (base_url, request_rx, server) = serve_once(
+            "200 OK",
+            r#"{"schema":"cohesix-available-scopes/v1","scopes":[]}"#,
+        );
+        let response = GatewayClient::new(base_url)
+            .with_request_auth_token("test-auth")
+            .with_delegated_ticket(delegated_fixture())
+            .available_standing_scopes()
+            .expect("available scopes");
+        assert_eq!(response["schema"], "cohesix-available-scopes/v1");
+        let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        assert!(request.starts_with("GET /v1/standing/scopes/available HTTP/1.1\r\n"));
     }
 }

@@ -92,6 +92,12 @@ public struct GatewayJob: Decodable, Sendable {
     }
 }
 
+public struct GatewayScope: Decodable, Sendable {
+    public let id: String
+    public let action: String
+    public let target: String
+}
+
 /// A redirect must never carry the gateway token or delegated ticket to another origin.
 private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(
@@ -152,6 +158,44 @@ public struct GatewayJobs: Sendable {
         default: return false
         }
         return target.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// Discover only the current principal's available approved service
+    /// scopes. The server checks revocation and spending again at submission.
+    public func availableScopes() async throws -> [GatewayScope] {
+        guard let url = URL(
+            string: "/v1/standing/scopes/available", relativeTo: credentials.endpoint
+        )?.absoluteURL else { throw GatewayJobError.invalidEndpoint }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(credentials.requestToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(credentials.delegatedTicket, forHTTPHeaderField: "x-cohesix-ticket")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let response = response as? HTTPURLResponse else {
+            throw GatewayJobError.unexpectedResponse
+        }
+        let data = try await Self.readBounded(bytes)
+        guard response.statusCode == 200 else {
+            throw GatewayJobError.rejected(response.statusCode)
+        }
+        struct Selection: Decodable {
+            let schema: String
+            let scopes: [GatewayScope]
+        }
+        guard let selected = try? JSONDecoder().decode(Selection.self, from: data),
+              selected.schema == "cohesix-available-scopes/v1",
+              selected.scopes.count <= 16
+        else { throw GatewayJobError.unexpectedResponse }
+        var seen = Set<String>()
+        for scope in selected.scopes {
+            guard (try? Self.validateAdmissionID(scope.id)) != nil,
+                  scope.action == "systemd.restart",
+                  Self.validSelectedTarget(action: scope.action, target: scope.target),
+                  seen.insert(scope.id).inserted
+            else { throw GatewayJobError.unexpectedResponse }
+        }
+        return selected.scopes
     }
 
     public func inspect(_ admissionID: String) async throws -> GatewayJob {

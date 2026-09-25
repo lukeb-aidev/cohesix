@@ -571,6 +571,48 @@ paths:
                 $ref: "#/components/schemas/SelectedJobReconciliation"
         "503":
           description: Target result read unavailable; absence of effect is not established.
+  /v1/standing/scopes/available:
+    get:
+      summary: List the current delegated subject's available approved service scopes.
+      description: >-
+        The bounded list excludes other subjects, revoked or expired scopes and
+        exhausted budgets. A listed scope is not a grant; start rechecks native
+        facts and durable standing authority before submitting a ticket.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+        - requestAuthHeader: []
+          delegatedTicket: []
+      responses:
+        "200":
+          description: Current subject-filtered service choices.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [schema, scopes]
+                properties:
+                  schema:
+                    const: cohesix-available-scopes/v1
+                  scopes:
+                    type: array
+                    maxItems: 16
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, action, target]
+                      properties:
+                        id:
+                          type: string
+                        action:
+                          const: systemd.restart
+                        target:
+                          type: string
+        "403":
+          description: Missing or invalid delegated read authority.
+        "503":
+          description: Standing ledger or authority clock unavailable.
   /v1/standing/scopes/{scope_id}/inspect:
     post:
       summary: Inspect a scope and its retained cumulative budget.

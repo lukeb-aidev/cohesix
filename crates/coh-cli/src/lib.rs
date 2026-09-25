@@ -264,6 +264,8 @@ pub enum JobCommand {
         #[arg(long)]
         request_id: String,
     },
+    /// List this delegated subject's current approved service choices.
+    Scopes,
     /// Read retained execution and independent delivery state.
     Status { admission_id: String },
     /// Request cancellation without claiming native termination.
@@ -695,6 +697,15 @@ mod tests {
             .command,
             Command::Job(JobArgs {
                 command: JobCommand::StartApproved { .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["coh", "job", "scopes"])
+                .expect("selected scope choices")
+                .command,
+            Command::Job(JobArgs {
+                command: JobCommand::Scopes,
                 ..
             })
         ));

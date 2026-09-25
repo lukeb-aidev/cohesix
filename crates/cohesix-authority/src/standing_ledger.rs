@@ -565,6 +565,52 @@ impl StandingLedger {
         })
     }
 
+    /// List only a principal's scopes with room for one new admission. The
+    /// caller still obtains fresh facts and rechecks the scope at submission.
+    pub fn available_scopes(
+        &self,
+        subject: &str,
+        action: &str,
+        now: u64,
+    ) -> Result<Vec<StandingScope>, LedgerError> {
+        crate::validate_id(subject).map_err(|_| LedgerError::Invalid)?;
+        crate::validate_id(action).map_err(|_| LedgerError::Invalid)?;
+        self.transact(|ledger| {
+            if now == 0 || now < ledger.last_clock_unix_ms {
+                return Err(LedgerError::Refused(StandingRefusal::Clock));
+            }
+            let mut available = Vec::new();
+            for (id, record) in &ledger.scopes {
+                let scope = &record.scope;
+                if scope.subject != subject
+                    || scope.action != action
+                    || now >= scope.expires_unix_ms
+                {
+                    continue;
+                }
+                let budget = ledger.budget(id, None)?;
+                let capacity = budget
+                    .settled_units
+                    .checked_add(budget.reserved_units)
+                    .and_then(|used| used.checked_add(1))
+                    .is_some_and(|used| used <= scope.max_total_units);
+                let cooldown_elapsed = budget.last_dispatch_unix_ms.is_none_or(|last| {
+                    last.checked_add(scope.cooldown_ms)
+                        .is_some_and(|available_at| available_at <= now)
+                });
+                if !budget.revoked
+                    && capacity
+                    && budget.active < scope.max_concurrent
+                    && budget.attempts < scope.max_retries.saturating_add(1)
+                    && cooldown_elapsed
+                {
+                    available.push(scope.clone());
+                }
+            }
+            Ok((available, false))
+        })
+    }
+
     /// Request cancellation without claiming that a dispatched effect stopped.
     /// The native executor will refuse a reservation before its dispatch barrier.
     pub fn request_cancel(&self, admission_id: &str) -> Result<JobRecord, LedgerError> {
@@ -836,6 +882,41 @@ mod tests {
                 .execution,
             JobExecution::Confirmed
         );
+    }
+
+    #[test]
+    fn available_scopes_hide_other_subjects_and_unusable_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ledger.json");
+        let (ledger, binding, facts) = setup(&path);
+        ledger.initialize().expect("initialize private ledger");
+        assert_eq!(
+            ledger
+                .available_scopes("operator", "gpu.workload.submit", 1000)
+                .expect("available")
+                .iter()
+                .map(|scope| scope.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["scope-1"]
+        );
+        assert!(ledger
+            .available_scopes("other", "gpu.workload.submit", 1000)
+            .expect("different subject")
+            .is_empty());
+        assert!(ledger
+            .available_scopes("operator", "systemd.restart", 1000)
+            .expect("different action")
+            .is_empty());
+        ledger.reserve(binding, &facts, 1001).expect("reserve");
+        assert!(ledger
+            .available_scopes("operator", "gpu.workload.submit", 1002)
+            .expect("active scope")
+            .is_empty());
+        ledger.revoke("scope-1").expect("revoke");
+        assert!(ledger
+            .available_scopes("operator", "gpu.workload.submit", 1002)
+            .expect("revoked scope")
+            .is_empty());
     }
 
     #[test]

@@ -89,6 +89,27 @@ private func started(scope: String, id: String) -> Data {
     """.utf8)
 }
 
+@Test func listsOnlyBoundedSelectedScopesAndRefusesSubstitutedAction() async throws {
+    let host = "scopes.example.invalid"
+    StubProtocol.prepare(host: host, status: 200, body: Data("""
+    {"schema":"cohesix-available-scopes/v1","scopes":[
+      {"id":"service-1","action":"systemd.restart",\
+       "target":"/host/systemd/cohesix-agent.service/restart"}]}
+    """.utf8))
+    let scopes = try await client(host: host).availableScopes()
+    #expect(scopes.map(\.id) == ["service-1"])
+    #expect(StubProtocol.observed(host: host)?.url?.path == "/v1/standing/scopes/available")
+    #expect(StubProtocol.observed(host: host)?.value(forHTTPHeaderField: "x-cohesix-ticket") == "delegated-ticket")
+    StubProtocol.prepare(host: host, status: 200, body: Data("""
+    {"schema":"cohesix-available-scopes/v1","scopes":[
+      {"id":"service-1","action":"peft.release",\
+       "target":"/models/model-1/release"}]}
+    """.utf8))
+    await #expect(throws: GatewayJobError.self) {
+        try await client(host: host).availableScopes()
+    }
+}
+
 @Test func rejectsUnsafeGatewayInputs() throws {
     #expect(throws: GatewayJobError.self) {
         try GatewayCredentials(endpoint: "http://hive.example.invalid", requestToken: "token", delegatedTicket: "ticket")

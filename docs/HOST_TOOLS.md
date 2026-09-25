@@ -1398,6 +1398,9 @@ that ID before attempting any new effect; the gateway returns its existing
 record, including an uncertain write, without resubmission. Only the exact
 operator-configured scope and subject can start this route. Revoked scopes
 refuse new starts. This route does not admit an MLX release or a GPU workload.
+`coh job scopes` and the Python REST backend's `available_standing_scopes()`
+list only the delegated subject's current service choices; the list is an
+advisory snapshot, and submission rechecks authority and native state.
 
 The live M28 reference case is selected by a private
 `cohesix-m28-live-reference/v1` TOML file containing absolute source, binary,
@@ -1523,7 +1526,10 @@ runs and identity administration explain their service boundary in the catalog.
 The in-progress M28c Apple extension exposes a local capability check and
 source-level App Intents for **Start Approved Cohesix Job**, **Inspect Cohesix
 Job**, **Request Cohesix Job Cancellation** and **Explain Cohesix Job**.
-Start asks for a configured standing service scope and a stable request ID,
+Start discovers only the connected subject's current approved service scopes
+through `/v1/standing/scopes/available` and asks for a stable request ID.
+Revoked, expired and exhausted scopes leave the Shortcuts picker; a saved
+shortcut with a stale selection is still refused at submission. Start
 requires platform confirmation and calls the same `start-approved` gateway
 route used by `coh` and the Python REST backend. The gateway, rather than
 spoken text, derives the exact ticket and fresh facts; a lost reply is
