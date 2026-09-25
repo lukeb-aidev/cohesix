@@ -86,13 +86,19 @@ identities and proof limits. This selection did not advertise mixed MLX/CUDA,
 weight distribution or vMLX MCP client compatibility; Pi and A2A stayed
 disabled. It does not qualify a physical Pi or Release B.
 
-[Milestone 28e](BUILD_PLAN.md#28e) is in progress. The selected QEMU host
-profile now exposes a compiler-controlled A2A 0.3.0 task projection over the
-same CUDA/PEFT standing jobs, while Pi remains disabled. The generated
-catalogue, focused gateway tests and [implementation
-record](audit/M28E_IMPLEMENTATION_RECORD.md) describe the selected contract.
-Exact-source standard-client delegation, native outcome recovery and NeMo
-compatibility remain necessary before a completion claim.
+[Milestone 28e](BUILD_PLAN.md#28e) is **Complete** for the selected Linux
+CUDA/PEFT A2A scope. The compiler-controlled A2A 0.3.0 gateway projected real
+Jetson CUDA and PEFT jobs through an exact-source KVM Queen. The standard A2A
+SDK recovered both original tasks after gateway restart; independent CUDA
+output verification and the shared signed PEFT verifier accepted their native
+results. NeMo Agent Toolkit's native client resolved the scoped card, looked
+up the CUDA task and requested cancellation without changing its completed
+outcome. Focused tests and live refusals covered disabled access, other
+subjects, exhausted budget and revocation. The [M28e implementation
+record](audit/M28E_IMPLEMENTATION_RECORD.md) retains source, image, package
+and evidence identities. Pi A2A remains disabled; mixed MLX/CUDA, weight
+distribution and vMLX composition were not selected. This component result
+does not qualify a physical Pi or Release B.
 
 [Milestone 28a](BUILD_PLAN.md#28a) is complete at its selected Orin scope. The source contains a
 private digest-pinned workload registration path, version 2 request validation,

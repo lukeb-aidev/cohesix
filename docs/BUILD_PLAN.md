@@ -13236,8 +13236,9 @@ Deliverables: Generated selected catalogue, client configuration/guide and m28d-
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — selected A2A service and focused host contracts implemented;
-exact-source live delegation and recovery evidence remains required.
+**Status:** Complete — selected Linux CUDA/PEFT A2A delegation and recovery
+qualified against exact-source KVM and native Jetson evidence. Conditional
+mixed MLX/CUDA, weight distribution and vMLX composition were not selected.
 
 **Value:** agents delegate long GPU/adapter jobs and reconnect to their actual result.
 **Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected
