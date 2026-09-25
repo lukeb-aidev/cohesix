@@ -403,17 +403,18 @@ class Provider:
         candidate = self.candidate()
         source = Path(candidate["adapter_directory"])
         destination = self.root / "staged" / candidate["adapter_sha256"]
-        require(not destination.exists(), "ambiguous_stage_already_started")
-        destination.parent.mkdir(mode=0o700, exist_ok=True)
-        destination.mkdir(mode=0o700)
-        for source_file in sorted(source.iterdir()):
-            value = regular(source_file, MAX_ADAPTER_BYTES)
-            target = destination / source_file.name
-            with target.open("xb") as stream:
-                os.chmod(target, 0o600)
-                stream.write(value)
-                stream.flush()
-                os.fsync(stream.fileno())
+        if source != destination:
+            require(not destination.exists(), "ambiguous_stage_already_started")
+            destination.parent.mkdir(mode=0o700, exist_ok=True)
+            destination.mkdir(mode=0o700)
+            for source_file in sorted(source.iterdir()):
+                value = regular(source_file, MAX_ADAPTER_BYTES)
+                target = destination / source_file.name
+                with target.open("xb") as stream:
+                    os.chmod(target, 0o600)
+                    stream.write(value)
+                    stream.flush()
+                    os.fsync(stream.fileno())
         require(tree_digest(destination, MAX_ADAPTER_BYTES, 4)
                 == candidate["adapter_sha256"], "staged_adapter_changed")
         staged = {"generation": self.request["baseline"]["generation"] + 1,

@@ -15,6 +15,7 @@ import pytest
 
 from cohesix.hf_native import encode, sha
 from cohesix import mlx_release
+from cohesix.mlx_native import tree_digest
 
 
 def _provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> mlx_release.Provider:
@@ -155,3 +156,31 @@ def test_service_restart_refuses_occupied_loopback_port() -> None:
         with pytest.raises(ValueError, match="ambiguous_service_port_occupied"):
             mlx_release._await_port_available(port, timeout_s=0.05)
     mlx_release._await_port_available(port, timeout_s=1.0)
+
+
+def test_import_of_accepted_staged_adapter_reuses_only_exact_bytes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _provider(tmp_path, monkeypatch)
+    staged = provider.root / "staged"
+    staged.mkdir(mode=0o700)
+    source = tmp_path / "adapter"
+    source.mkdir(mode=0o700)
+    (source / "adapter_config.json").write_text('{"rank":8}')
+    adapter_sha = tree_digest(source, mlx_release.MAX_ADAPTER_BYTES, 4)
+    destination = staged / adapter_sha
+    source.rename(destination)
+    monkeypatch.setattr(provider, "candidate", lambda: {
+        "adapter_directory": str(destination), "adapter_sha256": adapter_sha,
+        "entry": "import"})
+    staged_result = provider.stage()
+    assert staged_result["adapter_directory"] == str(destination)
+    assert staged_result["generation"] == 1
+
+    changed = tmp_path / "different-input"
+    changed.mkdir(mode=0o700)
+    (changed / "adapter_config.json").write_text('{"rank":8}')
+    monkeypatch.setattr(provider, "candidate", lambda: {
+        "adapter_directory": str(changed), "adapter_sha256": adapter_sha,
+        "entry": "import"})
+    with pytest.raises(ValueError, match="ambiguous_stage_already_started"):
+        provider.stage()
