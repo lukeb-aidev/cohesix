@@ -1518,16 +1518,18 @@ the cancellation action asks for confirmation and reports only the gateway's
 request state. Explain uses the on-device Foundation Models API when available,
 labels its interpretation and links the exact scoped job URL. Its deterministic
 fallback keeps the gateway state visible. None of these actions can submit a
-new job or prove a terminal signed outcome.
+new job or prove a terminal signed outcome. On macOS these are actions for
+user-created Shortcuts; automatic App Shortcuts and the SiriKit capability
+are unavailable. A spoken Siri invocation must run a user-created Shortcut.
 
 SwarmUI's Settings offers an explicit **Enable Apple actions for this
 connection** control after a delegated gateway connection succeeds. Its native
 host stores that connection in the Mac Keychain; **Remove Apple action access**
 deletes the selected Keychain item without revoking the gateway ticket. The
 app and extension require a shared Keychain access group and matching signed
-provisioning. A locally assembled development-signed diagnostic helper with
-that restricted entitlement was killed at launch without a profile. The
-new in-app enrollment path still needs signed, live validation. A synthetic
+provisioning. Exact macOS development profiles now sign both components, and
+the canonical app verifies and launches. The new in-app enrollment path and
+extension read still need live validation. A synthetic
 Foundation Models probe and detached MLX smoke establish local SDK/compute
 feasibility only. The [M28c build plan](BUILD_PLAN.md#28c) requires an
 admitted developer journey and live evidence before completion.

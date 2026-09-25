@@ -35,12 +35,13 @@ Release `SwarmUIIntents.appex` directory to
 its sandbox, outbound network and shared Keychain access-group entitlements;
 the parent app needs the same Keychain group while remaining outside the App
 Sandbox. A matching Apple provisioning profile is required for the restricted
-Keychain entitlement. A manually development-signed diagnostic enrollment
-helper with that entitlement was killed at launch on the reference Mac despite
-a valid signature, so the shipping path uses SwarmUI's Settings for enrollment
-and must be retested under provisioned signing. The earlier probe action was
-discovered in Shortcuts; that is discovery evidence, not an executable Siri or
-Cohesix work result.
+Keychain entitlement. Exact macOS development profiles for the parent and
+extension now authorize their bundle IDs and the shared Keychain group; the
+canonical development-signed app verifies and launches. Actual enrollment
+and extension reads remain to be tested. Apple's macOS App Intents actions
+appear in Shortcuts, but automatic App Shortcuts and the SiriKit capability
+are unavailable on Mac. A user must create a Shortcut for spoken Siri use;
+discovery alone is not an executable Siri or Cohesix work result.
 
 The selected direct-distribution path is Developer ID Application signing
 with hardened runtime. `scripts/install/sign_swarmui_macos.py sign --app
@@ -53,10 +54,9 @@ and an Apple Development identity for installed feasibility checks. The
 `notarize` phase takes `--notary-profile`
 instead of `--identity-sha1`, submits the exact archive with `notarytool`,
 checks Apple's acceptance log, staples and assesses the app. Provision the
-certificates, profiles and notary credential outside the repository. Neither
-a provisioned development signature nor a Developer ID identity and
-notarisation result is currently present in the M28c
-feasibility record.
+certificates, profiles and notary credential outside the repository. The
+provisioned development signature is recorded in the M28c feasibility record;
+Developer ID signing and notarisation remain outstanding.
 
 The optional vMLX compatibility host has `/Applications/vMLX.app` 1.6.65,
 bundle `net.vmlx.app`, with bundled engine commit
