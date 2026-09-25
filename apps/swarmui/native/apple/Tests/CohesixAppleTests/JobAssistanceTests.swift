@@ -8,7 +8,8 @@ import Testing
 
 private func job(_ execution: String, cancelled: Bool = false) throws -> GatewayJob {
     let bytes = Data("""
-    {"binding":{"admission_id":"job_123"},"execution":"\(execution)",\
+    {"binding":{"admission_id":"job_123","ticket_id":"ticket_123",\
+    "action":"gpu.workload.submit","target":"/gpu/gpu_1/workload"},"execution":"\(execution)",\
     "delivery":"pending","cancel_requested":\(cancelled),"result_sha256":null}
     """.utf8)
     return try JSONDecoder().decode(GatewayJob.self, from: bytes)

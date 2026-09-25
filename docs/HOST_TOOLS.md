@@ -1514,8 +1514,10 @@ The in-progress M28c Apple extension exposes a local capability check and
 source-level App Intents for **Inspect Cohesix Job**, **Request Cohesix Job
 Cancellation** and **Explain Cohesix Job**. Inspect/cancel use the shared Hive
 Gateway's existing `/v1/jobs/{admission_id}` contract with a delegated ticket;
-the cancellation action asks for confirmation and reports only the gateway's
-request state. Explain uses the on-device Foundation Models API when available,
+the returned record must bind the selected action, target and original ticket
+ID before it is displayed. The cancellation action asks for confirmation and
+reports only the gateway's request state. Explain uses those exact scoped fields
+and the on-device Foundation Models API when available,
 labels its interpretation and links the exact scoped job URL. Its deterministic
 fallback keeps the gateway state visible. None of these actions can submit a
 new job or prove a terminal signed outcome. On macOS these are actions for

@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Read and request cancellation of an admitted Hive Gateway job without inventing an outcome.
+// Purpose: Inspect exact selected Hive Gateway job identity and request cancellation without inventing an outcome.
 // Copyright 2026 Lukas Bower
 
 import Foundation
@@ -58,7 +58,14 @@ public struct GatewayCredentials: Sendable {
 public struct GatewayJob: Decodable, Sendable {
     public struct Binding: Decodable, Sendable {
         public let admissionID: String
-        enum CodingKeys: String, CodingKey { case admissionID = "admission_id" }
+        public let ticketID: String
+        public let action: String
+        public let target: String
+        enum CodingKeys: String, CodingKey {
+            case admissionID = "admission_id"
+            case ticketID = "ticket_id"
+            case action, target
+        }
     }
 
     public let binding: Binding
@@ -76,7 +83,8 @@ public struct GatewayJob: Decodable, Sendable {
     public var summary: String {
         let cancellation = cancelRequested ? "; cancellation requested" : ""
         let result = resultSHA256.map { "; reported result SHA-256 \($0)" } ?? ""
-        return "Job \(binding.admissionID): execution \(execution); delivery \(delivery)\(cancellation)\(result)."
+        return "Job \(binding.admissionID): \(binding.action) at \(binding.target); " +
+            "ticket \(binding.ticketID); execution \(execution); delivery \(delivery)\(cancellation)\(result)."
     }
 }
 
@@ -121,6 +129,17 @@ public struct GatewayJobs: Sendable {
         else { throw GatewayJobError.invalidAdmissionID }
     }
 
+    private static func validSelectedTarget(action: String, target: String) -> Bool {
+        let pattern: String
+        switch action {
+        case "systemd.restart": pattern = #"^/host/systemd/[A-Za-z0-9._-]{1,128}/restart$"#
+        case "gpu.workload.submit": pattern = #"^/gpu/[A-Za-z0-9_-]{1,128}/workload$"#
+        case "peft.release": pattern = #"^/models/[A-Za-z0-9_-]{1,128}/release$"#
+        default: return false
+        }
+        return target.range(of: pattern, options: .regularExpression) != nil
+    }
+
     public func inspect(_ admissionID: String) async throws -> GatewayJob {
         try await request(admissionID, cancel: false)
     }
@@ -155,6 +174,8 @@ public struct GatewayJobs: Sendable {
         }
         guard let job = try? JSONDecoder().decode(GatewayJob.self, from: data),
               job.binding.admissionID == admissionID,
+              (try? Self.validateAdmissionID(job.binding.ticketID)) != nil,
+              Self.validSelectedTarget(action: job.binding.action, target: job.binding.target),
               ["reserved", "dispatching", "uncertain", "confirmed", "refused_no_effect"].contains(job.execution),
               ["pending", "acknowledged"].contains(job.delivery),
               job.resultSHA256.map({ $0.count == 64 && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }) ?? true

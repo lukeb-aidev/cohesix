@@ -9,7 +9,8 @@ import Foundation
 struct CohesixAssistanceProbe {
     static func main() async throws {
         let fixture = Data("""
-        {"binding":{"admission_id":"synthetic-job-1"},"execution":"uncertain",\
+        {"binding":{"admission_id":"synthetic-job-1","ticket_id":"synthetic-ticket-1",\
+        "action":"gpu.workload.submit","target":"/gpu/gpu_1/workload"},"execution":"uncertain",\
         "delivery":"pending","cancel_requested":false,"result_sha256":null}
         """.utf8)
         let job = try JSONDecoder().decode(GatewayJob.self, from: fixture)

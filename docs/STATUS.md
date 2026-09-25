@@ -139,6 +139,9 @@ prompts. It remains diagnostic without admission, serving or a signed result.
 The new direct MLX loopback server returned a bounded matching Metal response
 from this adapter, but has no durable Cohesix serving owner or accepted
 generation.
+Native job inspection also now presents the gateway's selected action, target
+and original ticket ID, with focused contradictory-target refusal. Its actual
+installed, authenticated job path remains unobserved.
 
 ## Capability snapshot
 

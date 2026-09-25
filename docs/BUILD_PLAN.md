@@ -12979,6 +12979,9 @@ not an independent generalization claim or admitted deployment.
 A bounded direct MLX loopback server also returned one matching local response
 from the selected adapter. Its model label is diagnostic and the process is
 not yet supervised by the shared release phases.
+Native job inspection now retains and checks the selected action, target and
+ticket identity from the gateway record before displaying or explaining it;
+this source-level check still needs an installed authenticated job observation.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.

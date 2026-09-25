@@ -57,6 +57,9 @@ public enum JobAssistance {
         )
         let prompt = """
         Admission ID: \(job.binding.admissionID)
+        Ticket ID: \(job.binding.ticketID)
+        Selected action: \(job.binding.action)
+        Selected target: \(job.binding.target)
         Execution: \(job.execution)
         Result delivery: \(job.delivery)
         Cancellation requested: \(job.cancelRequested)

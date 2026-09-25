@@ -57,7 +57,8 @@ private func client(host: String) throws -> GatewayJobs {
 
 private func record(id: String) -> Data {
     Data("""
-    {"binding":{"admission_id":"\(id)"},"execution":"uncertain",\
+    {"binding":{"admission_id":"\(id)","ticket_id":"ticket_123",\
+    "action":"gpu.workload.submit","target":"/gpu/gpu_1/workload"},"execution":"uncertain",\
     "delivery":"pending","cancel_requested":false,"result_sha256":null}
     """.utf8)
 }
@@ -78,6 +79,7 @@ private func record(id: String) -> Data {
     StubProtocol.prepare(host: host, status: 200, body: record(id: "job_123"))
     let job = try await client(host: host).inspect("job_123")
     #expect(job.summary.contains("execution uncertain"))
+    #expect(job.summary.contains("gpu.workload.submit at /gpu/gpu_1/workload"))
     #expect(!job.summary.contains("verified"))
     #expect(StubProtocol.observed(host: host)?.httpMethod == "GET")
     #expect(StubProtocol.observed(host: host)?.url?.path == "/v1/jobs/job_123")
@@ -102,5 +104,15 @@ private func record(id: String) -> Data {
     StubProtocol.prepare(host: "large.example.invalid", status: 200, body: Data(repeating: 0x20, count: 65_537))
     await #expect(throws: GatewayJobError.self) {
         try await client(host: "large.example.invalid").inspect("job_123")
+    }
+}
+
+@Test func rejectsContradictorySelectedActionTarget() async throws {
+    let changed = String(decoding: record(id: "job_123"), as: UTF8.self)
+        .replacingOccurrences(of: "/gpu/gpu_1/workload", with: "/models/gpu_1/release")
+    StubProtocol.prepare(host: "wrong-target.example.invalid", status: 200,
+                         body: Data(changed.utf8))
+    await #expect(throws: GatewayJobError.self) {
+        try await client(host: "wrong-target.example.invalid").inspect("job_123")
     }
 }
