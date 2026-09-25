@@ -140,7 +140,7 @@ owned by their specific contracts.
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Complete |
 | [28c](#28c) | macOS Developer Actions and Local Metal Workbench | Complete — selected Mac developer journey |
 | [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Complete — selected Mac component |
-| [28d](#28d) | MCP Access to Complete Selected Workflows | In Progress |
+| [28d](#28d) | MCP Access to Complete Selected Workflows | Complete — selected MCP-only Jetson Orin component |
 | [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
 | [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
 | [28g](#28g) | Installation, Integrated User Qualification and Release B | Planned |
@@ -11524,9 +11524,10 @@ Discovery defines Queen and Worker, maps all six use cases and nine playbooks
 to user goals, and offers a no-hardware inspection trial.
 Guidance preserves scoped read credentials, exact request identity, bounded
 ticket status/deadletter recovery, independent verification and the distinction
-between registry updates, native serving and verified deployment. MCP/A2A remains
-planned [28d](#28d)/[28e](#28e) scope under `m28d-mcp-selected-workflows` and
-`m28e-a2a-durable-jobs`; these entry points use current CLI, Python and REST.
+between registry updates, native serving and verified deployment. At this
+entry point's qualification, MCP/A2A were still planned [28d](#28d)/[28e](#28e)
+scope under `m28d-mcp-selected-workflows` and `m28e-a2a-durable-jobs`; these
+entry points used CLI, Python and REST.
 
 Documentation, links, generated consistency, CLI/parser checks and explicit
 mock/localhost-fixture exercises qualified the guidance. No live Queen/GPU/Jetson,
