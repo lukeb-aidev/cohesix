@@ -72,6 +72,15 @@ fn rpc_error(id: Value, code: i32, message: &'static str) -> Response {
     Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})).into_response()
 }
 
+fn root_write_uncertain(id: Value, admission: &str) -> Response {
+    Json(json!({"jsonrpc":"2.0","id":id,"error":{
+        "code":-32001,
+        "message":"Root admission uncertain; inspect the original task ID",
+        "data":{"taskId":admission,"effectReplayAllowed":false},
+    }}))
+    .into_response()
+}
+
 fn rpc_result(id: Value, result: Value) -> Response {
     let response = json!({"jsonrpc":"2.0","id":id,"result":result});
     if serde_json::to_vec(&response).is_ok_and(|bytes| bytes.len() <= MAX_RESPONSE_BYTES) {
@@ -105,6 +114,10 @@ async fn response_value(response: Response) -> Result<(StatusCode, Value)> {
 /// uncertain result stays unknown, and cancellation is terminal only after
 /// the ledger confirms that no effect was dispatched.
 fn task_from_reconciliation(result: &Value) -> Result<Value> {
+    task_from_reconciliation_at(result, crate::authority_now_ms()?)
+}
+
+fn task_from_reconciliation_at(result: &Value, now: u64) -> Result<Value> {
     let record = result.get("record").context("job record missing")?;
     let binding = record.get("binding").context("job binding missing")?;
     let id = binding["admission_id"]
@@ -117,6 +130,13 @@ fn task_from_reconciliation(result: &Value) -> Result<Value> {
         .context("target results missing")?;
     let native = rows.last().and_then(|row| row["state"].as_str());
     let state = match execution {
+        "reserved"
+            if record["decision_expires_unix_ms"]
+                .as_u64()
+                .is_some_and(|expiry| now >= expiry) =>
+        {
+            "unknown"
+        }
         "reserved" => "submitted",
         "dispatching" => "working",
         "uncertain" => "unknown",
@@ -274,7 +294,10 @@ async fn dispatch(state: AppState, headers: HeaderMap, request: Request) -> Resp
             let Ok((status, _)) = response_value(response).await else {
                 return rpc_error(id, -32000, "gateway result unavailable");
             };
-            if !status.is_success() && status != StatusCode::CONFLICT {
+            if status == StatusCode::CONFLICT {
+                return root_write_uncertain(id, &admission);
+            }
+            if !status.is_success() {
                 return rpc_error(id, -32000, "selected job refused");
             }
             let task = match inspect(state.clone(), headers.clone(), admission.clone()).await {
@@ -551,5 +574,41 @@ mod tests {
         let task = task_from_reconciliation(&result).unwrap();
         assert_eq!(task["status"]["state"], "completed");
         assert_eq!(task["metadata"]["providerVerified"], false);
+    }
+
+    #[test]
+    fn expired_reservation_is_unknown_until_original_admission_is_reconciled() {
+        let mut result = json!({
+            "record":{"binding":{"admission_id":"job-1","ticket_id":"ticket-1",
+                "idempotency_key":"original-1","action":"peft.release",
+                "target":"/models/example/release"},"execution":"reserved",
+                "decision_expires_unix_ms":100,"delivery":"pending",
+                "cancel_requested":false,"result_sha256":null},
+            "target_results":[],
+        });
+        assert_eq!(
+            task_from_reconciliation_at(&result, 99).unwrap()["status"]["state"],
+            "submitted"
+        );
+        let task = task_from_reconciliation_at(&result, 100).unwrap();
+        assert_eq!(task["status"]["state"], "unknown");
+        assert_eq!(task["metadata"]["effectReplayAllowed"], false);
+        result["record"]["execution"] = "confirmed".into();
+        result["target_results"] = json!([{"state":"succeeded"}]);
+        assert_eq!(
+            task_from_reconciliation_at(&result, 101).unwrap()["status"]["state"],
+            "completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn uncertain_root_write_returns_original_identity_without_success_task() {
+        let response = root_write_uncertain(json!(7), "job-1");
+        let (status, value) = response_value(response).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["error"]["code"], -32001);
+        assert_eq!(value["error"]["data"]["taskId"], "job-1");
+        assert_eq!(value["error"]["data"]["effectReplayAllowed"], false);
+        assert!(value.get("result").is_none());
     }
 }

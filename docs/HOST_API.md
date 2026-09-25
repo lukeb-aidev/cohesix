@@ -105,8 +105,11 @@ terminal cannot be confirmed. `confirmed` plus a matching native
 `completed`/`failed`/`canceled` as appropriate. A task artifact contains only
 the original result URI and SHA-256 reference. `providerVerified=false`
 means the A2A task never substitutes for independent CUDA output or shared
-PEFT release verification. A lost send response is recovered by `tasks/get`
-with the known ticket ID; no replacement identity is submitted. Push
+PEFT release verification. An uncertain Root write returns a JSON-RPC error
+with the original task ID and `effectReplayAllowed=false`; an unadmitted
+reservation becomes `unknown` when its decision expires. A lost send response
+is recovered by `tasks/get` with the known ticket ID; no replacement identity
+is submitted. Push
 notification methods are unsupported.
 
 Selected jobs accept at most 4,096 JSON bytes containing one `binding` and one
