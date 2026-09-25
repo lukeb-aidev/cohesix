@@ -30,6 +30,10 @@ ml = [
   "peft>=0.15.0",
   "transformers>=4.48.0",
 ]
+apple-mlx = [
+  "mlx==0.32.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 dev = [
   "pytest>=8.0.0",
 ]

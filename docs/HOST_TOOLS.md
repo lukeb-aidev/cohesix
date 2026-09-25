@@ -1534,6 +1534,17 @@ Foundation Models probe and detached MLX smoke establish local SDK/compute
 feasibility only. The [M28c build plan](BUILD_PLAN.md#28c) requires an
 admitted developer journey and live evidence before completion.
 
+The in-progress `cohesix.mlx_native` Python module accepts absolute,
+content-bound local model and dataset directories and exposes `infer`,
+`train_lora` and `evaluate_heldout` for the selected Apple Metal device. It
+pins MLX/MLX-LM versions, caps memory and returns artifact/resource identities
+without logging prompt or response text. Its `MlxSelection` binds SHA-256 tree
+digests; those inputs and the adapter output must remain private and unchanged.
+The [native component record](audit/M28C_MLX_COMPONENT_RECORD.md) contains
+the current diagnostic measurements. These functions do not create a Cohesix
+ticket, journal, deployment or signed outcome; the host-agent integration is
+still required before developers can use them as an admitted release.
+
 The selected Mac also has vMLX/MLX Studio 1.6.65. Its bundled engine served a
 local SmolLM2-135M model at `127.0.0.1:18080` and returned one bounded
 OpenAI-compatible chat response; the tiny model gave a poor answer. This is a

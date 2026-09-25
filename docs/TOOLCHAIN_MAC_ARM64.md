@@ -37,8 +37,10 @@ the parent app needs the same Keychain group while remaining outside the App
 Sandbox. A matching Apple provisioning profile is required for the restricted
 Keychain entitlement. Exact macOS development profiles for the parent and
 extension now authorize their bundle IDs and the shared Keychain group; the
-canonical development-signed app verifies and launches. Actual enrollment
-and extension reads remain to be tested. Apple's macOS App Intents actions
+canonical development-signed app verifies and launches. A disposable
+provisioned app/extension identity pair wrote, read and deleted one shared
+Keychain item; the actual SwarmUI enrollment and extension source paths remain
+to be tested. Apple's macOS App Intents actions
 appear in Shortcuts, but automatic App Shortcuts and the SiriKit capability
 are unavailable on Mac. A user must create a Shortcut for spoken Siri use;
 discovery alone is not an executable Siri or Cohesix work result.
@@ -59,6 +61,23 @@ provisioned development signature and a fresh exact-profile Developer ID
 signature are recorded in the M28c feasibility record. Apple accepted and
 stapled a diagnostic copy; final journey notarisation and installed readback
 remain outstanding.
+
+For the in-progress native MLX component, install the pinned optional Python
+extra in a separate Apple Silicon environment:
+
+```bash
+python3 -m venv out/m28c/mlx-venv
+out/m28c/mlx-venv/bin/python -m pip install -e 'tools/cohesix-py[apple-mlx,dev]'
+PYTHONPATH=tools/cohesix-py out/m28c/mlx-venv/bin/python -m pytest -q tools/cohesix-py/tests/test_mlx_native.py
+```
+
+`cohesix.mlx_native.MlxSelection` accepts absolute local model/data directories,
+their `tree_digest` values and a selected Metal memory limit. `infer`,
+`train_lora` and `evaluate_heldout` require the pinned Apple GPU runtime and
+return bounded artifact, device and resource observations. The four-step
+diagnostic result is in the [component record](audit/M28C_MLX_COMPONENT_RECORD.md).
+These primitives still need Cohesix ticket admission, durable phase custody,
+quality policy, canary and rollback before they are a supported release path.
 
 The optional vMLX compatibility host has `/Applications/vMLX.app` 1.6.65,
 bundle `net.vmlx.app`, with bundled engine commit

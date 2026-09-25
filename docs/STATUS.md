@@ -119,7 +119,10 @@ request against a disposable, unchanged model copy. Its
 [compatibility task](BUILD_PLAN.md#28c) now requires
 content-bound model copies and an admitted canary/rollback before acceptance;
 the [feasibility record](audit/M28C_FEASIBILITY_RECORD.md) lists the exact
-blockers. M28c now also requires an installed
+blockers. A new [native MLX component](audit/M28C_MLX_COMPONENT_RECORD.md)
+ran repeatable four-step Metal LoRA training, bounded local inference and
+16-row held-out evaluation; it has no Cohesix admission or accepted quality
+result. M28c now also requires an installed
 [developer-useful Mac journey](BUILD_PLAN.md#28c) across an admitted job,
 local MLX execution, result inspection and rollback. This is not M28c
 completion or Release B acceptance.
