@@ -309,7 +309,8 @@ def _run_vmlx(selected: dict[str, Any], state_dir: Path,
                  "fused_provenance",
                  "prompts_path", "rollback_report", "release_deployment",
                  "rollback_deployment"):
-        require(digest(Path(selected[name]), 262144) == selected[name + "_sha256"],
+        hash_field = "prompts_sha256" if name == "prompts_path" else name + "_sha256"
+        require(digest(Path(selected[name]), 262144) == selected[hash_field],
                 f"M28c1 {name} changed")
     release = json.loads(read_artifact(Path(selected["verified_release_report"]), 262144))
     rollback = json.loads(read_artifact(Path(selected["rollback_report"]), 262144))
