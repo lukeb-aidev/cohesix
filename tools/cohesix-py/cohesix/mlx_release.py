@@ -94,7 +94,6 @@ def _await_port_available(port: int, timeout_s: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("127.0.0.1", port))
                 return
