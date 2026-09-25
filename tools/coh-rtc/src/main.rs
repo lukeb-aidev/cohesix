@@ -143,6 +143,9 @@ struct Args {
     /// Output path for the Python provider binding from the integration graph.
     #[arg(long, default_value = "tools/cohesix-py/cohesix/provider_generated.py")]
     provider_python: PathBuf,
+    /// Selected MCP catalogue derived from the resolved controls and provider registry.
+    #[arg(long, default_value = "configs/generated/mcp_catalogue.json")]
+    mcp_catalogue: PathBuf,
     /// Output path for the shared Rust provider binding.
     #[arg(
         long,
@@ -220,6 +223,13 @@ fn main() -> Result<()> {
         &args.host_integration_graph,
         &args.host_integration_doc,
         (&args.provider_python, &args.provider_rust),
+    )?;
+    coh_rtc::mcp::emit(
+        &args.manifest_out,
+        &args
+            .host_integration_graph
+            .with_file_name("provider_registry.json"),
+        &args.mcp_catalogue,
     )?;
     coh_rtc::recipe::emit(
         &repo_root.join("configs/cuda_recipe.toml"),

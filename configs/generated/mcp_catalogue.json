@@ -1,0 +1,661 @@
+{
+  "actions": [
+    {
+      "argument_schema_ref": "unavailable",
+      "authority_custodian": "root-admitted-ticket",
+      "correlation_fields": [
+        "ticket_id",
+        "subject_id",
+        "action_id",
+        "idempotency_key",
+        "writer_epoch",
+        "evidence_id"
+      ],
+      "effect": "mutation",
+      "evidence_profile": "bounded_native",
+      "id": "gpu.workload.submit",
+      "intent_schema_ref": "host-ticket/v2",
+      "receipt_schema_ref": "unavailable"
+    },
+    {
+      "argument_schema_ref": "host-ticket-provider-arguments/v1",
+      "authority_custodian": "root-admitted-ticket",
+      "correlation_fields": [
+        "ticket_id",
+        "subject_id",
+        "action_id",
+        "idempotency_key",
+        "writer_epoch",
+        "evidence_id"
+      ],
+      "effect": "mutation",
+      "evidence_profile": "bounded_native",
+      "id": "systemd.restart",
+      "intent_schema_ref": "host-ticket/v2",
+      "receipt_schema_ref": "unavailable"
+    }
+  ],
+  "bounds": {
+    "call_timeout_ms": 30000,
+    "concurrent_requests": 16,
+    "request_bytes": 8192,
+    "response_bytes": 16384,
+    "session_mode": "stateless"
+  },
+  "enabled": true,
+  "http_path": "/mcp",
+  "provider_graph_sha256": "064978dc8a79404733f87d389bf806ff19a3cf82b443e0334f576c009f3b611e",
+  "resolved_manifest_sha256": "a31e64dbbaffa7c621f1590c33dd8b2770a7ac13d71929e5cbfbd2aab06c360a",
+  "resources": [
+    {
+      "authority_path": "/host/tickets/status",
+      "effect": "read_only",
+      "output_schema_ref": "cohesix-selected-job-record/v1",
+      "uri_template": "cohesix://jobs/{admission_id}"
+    }
+  ],
+  "revision": "2025-11-25",
+  "schema": "cohesix-mcp-catalogue/v1",
+  "tools": [
+    {
+      "authority_path": "/host/tickets/status",
+      "description": "Read original execution and result-delivery state for this subject.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "admission_id"
+        ],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.inspect_job",
+      "output_schema": {
+        "properties": {
+          "schema": {
+            "const": "cohesix-selected-job-record/v1"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-selected-job-record/v1",
+      "read_only": true,
+      "selected_actions": []
+    },
+    {
+      "authority_path": "/host/tickets/status",
+      "description": "Reconcile the original identity with target result evidence without replaying its effect.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "admission_id"
+        ],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.recover_job",
+      "output_schema": {
+        "properties": {
+          "record": {
+            "type": "object"
+          },
+          "schema": {
+            "const": "cohesix-selected-job-reconciliation/v1"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-selected-job-reconciliation/v1",
+      "read_only": true,
+      "selected_actions": []
+    },
+    {
+      "authority_path": "/host/tickets/spec",
+      "description": "Record cancellation for the original identity; this does not prove native termination.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "admission_id"
+        ],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.request_cancel",
+      "output_schema": {
+        "properties": {
+          "schema": {
+            "const": "cohesix-selected-job-record/v1"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-selected-job-record/v1",
+      "read_only": false,
+      "selected_actions": []
+    },
+    {
+      "authority_path": "/host/tickets/status",
+      "description": "List currently usable approved service scopes for this subject.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.available_services",
+      "output_schema": {
+        "properties": {
+          "schema": {
+            "const": "cohesix-available-scopes/v1"
+          },
+          "scopes": {
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-available-scopes/v1",
+      "read_only": true,
+      "selected_actions": [
+        "systemd.restart"
+      ]
+    },
+    {
+      "authority_path": "/host/tickets/spec",
+      "description": "Submit one approved service restart with a stable request ID.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scope_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.start_approved_service",
+      "output_schema": {
+        "properties": {
+          "record": {
+            "type": "object"
+          },
+          "schema": {
+            "const": "cohesix-selected-job-response/v1"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-selected-job-response/v1",
+      "read_only": false,
+      "selected_actions": [
+        "systemd.restart"
+      ]
+    },
+    {
+      "authority_path": "/host/tickets/status",
+      "description": "List currently usable CUDA and PEFT standing scopes, finite capacity and exact targets for this subject.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.available_selected_jobs",
+      "output_schema": {
+        "properties": {
+          "schema": {
+            "const": "cohesix-available-selected-jobs/v1"
+          },
+          "scopes": {
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-available-selected-jobs/v1",
+      "read_only": true,
+      "selected_actions": [
+        "gpu.workload.submit"
+      ]
+    },
+    {
+      "authority_path": "/host/tickets/status",
+      "description": "Observe the selected CUDA or PEFT host and prepare one short-lived exact job request. No effect is submitted; submit rechecks facts and authority.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "scope_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ticket": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "action": {
+                      "const": "gpu.workload.submit"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "args": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "lease_id": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "request_sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lease_id",
+                        "request_sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "receipt_worker_role": {
+                      "const": "worker-gpu"
+                    }
+                  }
+                }
+              }
+            ],
+            "properties": {
+              "action": {
+                "enum": [
+                  "gpu.workload.submit"
+                ],
+                "type": "string"
+              },
+              "args": {
+                "type": "object"
+              },
+              "expires_unix_ms": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "idempotency_key": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "receipt_cap_generation": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "receipt_mode": {
+                "const": "worker"
+              },
+              "receipt_supervisor_generation": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "receipt_worker_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "receipt_worker_role": {
+                "type": "string"
+              },
+              "schema": {
+                "const": "host-ticket/v2"
+              },
+              "subject_ref": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "writer_epoch": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema",
+              "id",
+              "idempotency_key",
+              "action",
+              "args",
+              "receipt_mode",
+              "operation_id",
+              "subject_ref",
+              "receipt_worker_role",
+              "receipt_worker_id",
+              "receipt_supervisor_generation",
+              "receipt_cap_generation"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope_id",
+          "ticket"
+        ],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.preflight_selected_job",
+      "output_schema": {
+        "properties": {
+          "admission": {
+            "const": "not_submitted"
+          },
+          "request": {
+            "type": "object"
+          },
+          "schema": {
+            "const": "cohesix-selected-job-preflight/v1"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-selected-job-preflight/v1",
+      "read_only": true,
+      "selected_actions": [
+        "gpu.workload.submit"
+      ]
+    },
+    {
+      "authority_path": "/host/tickets/spec",
+      "description": "Submit one exact selected CUDA or PEFT host ticket and standing binding. An ACK is admission only.",
+      "evidence": "shared verifier and native provider receipt only; MCP result is not proof",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "gpu.workload.submit"
+                ],
+                "type": "string"
+              },
+              "admission_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "attempt": {
+                "maximum": 9,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "deadline_unix_ms": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "idempotency_key": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "input_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "policy_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "resource_generation": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "schema": {
+                "const": "cohesix-job-binding/v1"
+              },
+              "scope_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state_epoch": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "subject": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "target": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "ticket_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "units": {
+                "const": 1
+              }
+            },
+            "required": [
+              "schema",
+              "scope_id",
+              "admission_id",
+              "ticket_id",
+              "idempotency_key",
+              "subject",
+              "action",
+              "target",
+              "input_sha256",
+              "policy_sha256",
+              "state_epoch",
+              "resource_generation",
+              "deadline_unix_ms",
+              "units",
+              "attempt"
+            ],
+            "type": "object"
+          },
+          "ticket": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "action": {
+                      "const": "gpu.workload.submit"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "args": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "lease_id": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "request_sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lease_id",
+                        "request_sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "receipt_worker_role": {
+                      "const": "worker-gpu"
+                    }
+                  }
+                }
+              }
+            ],
+            "properties": {
+              "action": {
+                "enum": [
+                  "gpu.workload.submit"
+                ],
+                "type": "string"
+              },
+              "args": {
+                "type": "object"
+              },
+              "expires_unix_ms": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "idempotency_key": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "receipt_cap_generation": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "receipt_mode": {
+                "const": "worker"
+              },
+              "receipt_supervisor_generation": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "receipt_worker_id": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "receipt_worker_role": {
+                "type": "string"
+              },
+              "schema": {
+                "const": "host-ticket/v2"
+              },
+              "subject_ref": {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              "writer_epoch": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema",
+              "id",
+              "idempotency_key",
+              "action",
+              "args",
+              "receipt_mode",
+              "operation_id",
+              "subject_ref",
+              "receipt_worker_role",
+              "receipt_worker_id",
+              "receipt_supervisor_generation",
+              "receipt_cap_generation"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "binding",
+          "ticket"
+        ],
+        "type": "object"
+      },
+      "lifecycle": "admission-or-observation-only; inspect original identity for terminal result",
+      "name": "cohesix.submit_selected_job",
+      "output_schema": {
+        "properties": {
+          "record": {
+            "type": "object"
+          },
+          "schema": {
+            "const": "cohesix-selected-job-response/v1"
+          }
+        },
+        "type": "object"
+      },
+      "output_schema_ref": "cohesix-selected-job-response/v1",
+      "read_only": false,
+      "selected_actions": [
+        "gpu.workload.submit"
+      ]
+    }
+  ],
+  "transports": [
+    "streamable-http",
+    "stdio"
+  ]
+}

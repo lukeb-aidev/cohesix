@@ -23,10 +23,10 @@
   "gateway": {
     "schema": "cohesix-agent-protocol-controls/v1",
     "agent_protocols": {
-      "enabled": false
+      "enabled": true
     },
     "mcp": {
-      "enabled": false
+      "enabled": true
     },
     "a2a": {
       "enabled": false

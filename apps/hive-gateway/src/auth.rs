@@ -421,6 +421,36 @@ impl Delegation {
         result
     }
 
+    /// Inspect current scope visibility after a charged authentication read.
+    /// This never reserves budget; the later write validates the exact line.
+    pub fn permits_path(&self, ticket_hash: &str, path: &str, write: bool, now: u64) -> bool {
+        let Some(caller) = self.entries.get(ticket_hash) else {
+            return false;
+        };
+        let permitted = |usage: &Usage| {
+            now < usage.expires
+                && (if write {
+                    role_allows(&usage.claims, path)
+                } else {
+                    read_role_allows(&usage.claims, path)
+                })
+                && (usage.claims.mounts.is_empty() || within(path, &usage.claims.mounts.at))
+                && (usage.unscoped_ceiling
+                    || usage.claims.scopes.iter().any(|scope| {
+                        (if write {
+                            matches!(scope.verb, TicketVerb::Write | TicketVerb::ReadWrite)
+                        } else {
+                            matches!(scope.verb, TicketVerb::Read | TicketVerb::ReadWrite)
+                        }) && within(path, &scope.path)
+                    }))
+        };
+        permitted(caller)
+            && self
+                .ceiling
+                .as_ref()
+                .map_or(self.ceiling_role == Role::Queen, permitted)
+    }
+
     fn admit(
         &mut self,
         token: Option<&str>,

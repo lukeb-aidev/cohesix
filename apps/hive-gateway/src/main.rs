@@ -11,6 +11,7 @@ mod auth;
 mod evidence;
 mod identity;
 mod jobs;
+mod mcp;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
@@ -213,6 +214,12 @@ struct Cli {
     /// Allow non-loopback bind addresses (risk: exposes write-capable gateway over network).
     #[arg(long, default_value_t = false)]
     allow_non_loopback_bind: bool,
+    /// Serve one local MCP client through newline-delimited stdin/stdout instead of HTTP.
+    #[arg(long, requires = "mcp_stdio_ticket_ref")]
+    mcp_stdio: bool,
+    /// Delegated client ticket source (env:NAME or file:/absolute/path) for local MCP stdio.
+    #[arg(long)]
+    mcp_stdio_ticket_ref: Option<String>,
     /// Role to attach with (queen by default).
     #[arg(long, default_value = "queen")]
     role: String,
@@ -1293,6 +1300,7 @@ struct GatewayResponse {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new("info"))
@@ -1301,9 +1309,14 @@ async fn main() -> Result<()> {
         .init();
 
     let protocol_controls = generated_protocol_controls()?;
+    mcp::validate_catalogue(protocol_controls.effective_mcp())?;
     reject_runtime_protocol_overrides()?;
     let cli = Cli::parse();
     let config = GatewayConfig::from_cli(cli)?;
+    anyhow::ensure!(
+        !config.mcp_stdio || protocol_controls.effective_mcp(),
+        "EPERM MCP stdio disabled by generated controls"
+    );
     info!(
         "agent protocol ceiling master={} mcp={} a2a={}",
         protocol_controls.agent_protocols.enabled,
@@ -1395,7 +1408,18 @@ async fn main() -> Result<()> {
     };
     spawn_connection_manager(state.clone(), log_host, log_port);
 
-    let app = Router::new()
+    if config.mcp_stdio {
+        return mcp::serve_stdio(
+            state,
+            config
+                .mcp_stdio_ticket_ref
+                .as_deref()
+                .context("MCP stdio delegated ticket reference required")?,
+        )
+        .await;
+    }
+
+    let mut app = Router::new()
         .route(
             "/v1/identity/exchange",
             post(identity_exchange).layer(DefaultBodyLimit::max(identity::MAX_EXCHANGE_BODY)),
@@ -1429,8 +1453,17 @@ async fn main() -> Result<()> {
             post(jobs::revoke_scope),
         )
         .route("/v1/openapi.yaml", get(openapi_yaml))
-        .route("/docs", get(swagger_ui))
-        .with_state(state.clone());
+        .route("/docs", get(swagger_ui));
+    if protocol_controls.effective_mcp() {
+        app = app.route(
+            "/mcp",
+            post(mcp::post)
+                .get(mcp::method_not_allowed)
+                .delete(mcp::method_not_allowed)
+                .layer(DefaultBodyLimit::max(mcp::MAX_REQUEST_BYTES)),
+        );
+    }
+    let app = app.with_state(state.clone());
 
     let addr: SocketAddr = config
         .bind
@@ -1479,6 +1512,8 @@ struct GatewayConfig {
     standing_ledger: Option<PathBuf>,
     standing_scopes: Option<PathBuf>,
     peft_release_config: Option<PathBuf>,
+    mcp_stdio: bool,
+    mcp_stdio_ticket_ref: Option<String>,
 }
 
 fn normalize_tcp_target_host(value: &str) -> Result<String> {
@@ -1645,6 +1680,8 @@ impl GatewayConfig {
             standing_ledger: cli.standing_ledger,
             standing_scopes: cli.standing_scopes,
             peft_release_config: cli.peft_release_config,
+            mcp_stdio: cli.mcp_stdio,
+            mcp_stdio_ticket_ref: cli.mcp_stdio_ticket_ref,
         })
     }
 
@@ -2156,6 +2193,10 @@ fn normalize_required_secret(label: &str, value: Option<String>, mock: bool) -> 
     if mock {
         if trimmed.is_empty() {
             return Ok("mock-only-token".to_owned());
+        }
+        if trimmed.starts_with("env:") || trimmed.starts_with("file:") {
+            return cohesix_authority::secret::resolve_reference(trimmed)
+                .map_err(|err| anyhow::anyhow!("{label}: {err}"));
         }
         return Ok(trimmed.to_owned());
     }
@@ -5474,6 +5515,18 @@ mod tests {
     }
 
     #[test]
+    fn mock_secret_reference_uses_the_same_explicit_source_as_production() {
+        let directory = tempfile::tempdir().expect("private fixture directory");
+        let path = directory.path().join("request-auth");
+        std::fs::write(&path, "m28d-local-fixture-secret").unwrap();
+        let reference = format!("file:{}", path.display());
+        assert_eq!(
+            normalize_required_secret("request auth token", Some(reference), true).unwrap(),
+            "m28d-local-fixture-secret"
+        );
+    }
+
+    #[test]
     fn extract_request_auth_reads_bearer_header() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -6465,6 +6518,8 @@ mod tests {
             standing_ledger: None,
             standing_scopes: None,
             peft_release_config: None,
+            mcp_stdio: false,
+            mcp_stdio_ticket_ref: None,
         };
         let policy = CohshPolicy::from_generated();
         let updated = apply_policy_overrides(policy, &config).expect("apply overrides");

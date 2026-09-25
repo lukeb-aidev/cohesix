@@ -41,10 +41,17 @@ const ADMIN_PATH: &str = "/host/standing/admin";
 const MAX_SCOPE_FILE_BYTES: u64 = 65_536;
 const MAX_SUBMIT_BYTES: usize = 4096;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SubmitRequest {
     binding: JobBinding,
+    ticket: HostTicketSpec,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PreflightRequest {
+    scope_id: String,
     ticket: HostTicketSpec,
 }
 
@@ -142,14 +149,17 @@ pub(super) fn selected_ledger(config: &GatewayConfig) -> Result<Option<Arc<Stand
     Ok(Some(Arc::new(ledger)))
 }
 
-fn delegated_token<'a>(headers: &'a HeaderMap) -> Option<&'a str> {
+pub(super) fn delegated_token<'a>(headers: &'a HeaderMap) -> Option<&'a str> {
     if headers.get_all(auth::TICKET_HEADER).iter().count() != 1 {
         return None;
     }
     headers.get(auth::TICKET_HEADER)?.to_str().ok()
 }
 
-fn authorize_status(state: &AppState, headers: &HeaderMap) -> Result<String> {
+pub(super) fn authorize_status_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<auth::DelegatedPrincipal> {
     validate_request_auth(headers, state.request_auth_token())
         .map_err(|error| anyhow!("{error}"))?;
     state
@@ -163,8 +173,81 @@ fn authorize_status(state: &AppState, headers: &HeaderMap) -> Result<String> {
             4096,
             authority_now_ms()?,
         )
-        .map(|principal| principal.subject)
         .map_err(|error| anyhow!("{error}"))
+}
+
+pub(super) fn authorize_status(state: &AppState, headers: &HeaderMap) -> Result<String> {
+    authorize_status_principal(state, headers).map(|principal| principal.subject)
+}
+
+pub(super) fn available_actions(state: &AppState, subject: &str) -> Result<Vec<String>> {
+    let ledger = ledger(state)?;
+    let controls = StandingControls::from_resolved_manifest(include_bytes!(
+        "../../../configs/generated/root_task_resolved.json"
+    ))
+    .map_err(|error| anyhow!("{error}"))?;
+    let now = authority_now_ms()?;
+    let mut actions = Vec::new();
+    for action in controls.actions {
+        if !ledger.available_scopes(subject, &action, now)?.is_empty() {
+            actions.push(action);
+        }
+    }
+    Ok(actions)
+}
+
+/// Return only currently usable CUDA/PEFT standing choices for this subject.
+/// The native facts in a later preflight and the final submit are fresh checks.
+pub(super) async fn available_selected(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let subject = match authorize_status(&state, &headers) {
+        Ok(subject) => subject,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    let selected = match ledger(&state) {
+        Ok(ledger) => ledger,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    let now = match authority_now_ms() {
+        Ok(now) => now,
+        Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    let mut scopes = Vec::new();
+    for action in ["gpu.workload.submit", "peft.release"] {
+        let choices = match selected.available_scopes(&subject, action, now) {
+            Ok(choices) => choices,
+            Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+        };
+        for scope in choices {
+            let status = match selected.scope_status(&scope.id) {
+                Ok(status) => status,
+                Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+            };
+            scopes.push(json!({
+                "scope_id":scope.id,
+                "action":scope.action,
+                "target":scope.target,
+                "expires_unix_ms":scope.expires_unix_ms,
+                "remaining_units":scope.max_total_units
+                    .saturating_sub(status.budget.settled_units)
+                    .saturating_sub(status.budget.reserved_units),
+                "active":status.budget.active,
+                "max_concurrent":scope.max_concurrent,
+            }));
+        }
+    }
+    let registry = match cohesix_authority::provider::registry() {
+        Ok(registry) => registry,
+        Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    Json(json!({
+        "schema":"cohesix-available-selected-jobs/v1",
+        "scopes":scopes,
+        "provider_graph_sha256":registry["graph_sha256"],
+    }))
+    .into_response()
 }
 
 fn authorize_cancel_subject(
@@ -580,6 +663,124 @@ fn approved_service_request(
         .intent_sha256()
         .map_err(|error| anyhow!("{error}"))?;
     Ok(SubmitRequest { binding, ticket })
+}
+
+fn prepare_selected_request(
+    scope: &StandingScope,
+    subject: &str,
+    facts: &AdmissionFacts,
+    mut ticket: HostTicketSpec,
+) -> Result<SubmitRequest> {
+    ensure!(
+        scope.subject == subject
+            && scope.action == ticket.action
+            && ticket.admission.is_none()
+            && matches!(
+                ticket.action.as_str(),
+                "gpu.workload.submit" | "peft.release"
+            ),
+        "EPERM selected preflight identity"
+    );
+    let deadline = match facts.observed_unix_ms.checked_add(scope.decision_ttl_ms) {
+        Some(deadline) => deadline.min(scope.expires_unix_ms),
+        None => return Err(anyhow!("ELIMIT selected deadline")),
+    };
+    ensure!(
+        deadline > facts.observed_unix_ms,
+        "EPERM selected scope expired"
+    );
+    ticket.expires_unix_ms = Some(deadline);
+    validate_spec(&ticket, SpecSource::RawRequest)?;
+    let input_sha256 = ticket
+        .args
+        .get("request_sha256")
+        .and_then(Value::as_str)
+        .context("EPERM selected input digest")?;
+    let binding = JobBinding {
+        schema: JOB_BINDING_SCHEMA.to_owned(),
+        scope_id: scope.id.clone(),
+        admission_id: ticket.id.clone(),
+        ticket_id: ticket.id.clone(),
+        idempotency_key: ticket.idempotency_key.clone(),
+        subject: subject.to_owned(),
+        action: ticket.action.clone(),
+        target: scope.target.clone(),
+        input_sha256: input_sha256.to_owned(),
+        policy_sha256: facts.policy_sha256.clone(),
+        state_epoch: facts.state_epoch,
+        resource_generation: facts.resource_generation,
+        deadline_unix_ms: deadline,
+        units: 1,
+        attempt: 1,
+    };
+    binding
+        .intent_sha256()
+        .map_err(|error| anyhow!("{error}"))?;
+    build_selected_ticket(&binding, ticket.clone(), deadline, scope.generation)?;
+    Ok(SubmitRequest { binding, ticket })
+}
+
+/// Prepare one exact selected request from fresh native and target facts. This
+/// returns no admission or execution claim; submit re-observes before reserve.
+pub(super) async fn preflight(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<PreflightRequest>,
+) -> Response {
+    let subject = match authorize_status(&state, &headers) {
+        Ok(subject) => subject,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    if payload.scope_id.len() > 96
+        || cohesix_authority::validate_id(&payload.scope_id).is_err()
+        || payload.ticket.admission.is_some()
+        || !matches!(
+            payload.ticket.action.as_str(),
+            "gpu.workload.submit" | "peft.release"
+        )
+    {
+        return fail(StatusCode::BAD_REQUEST, "EPERM selected preflight input");
+    }
+    let ledger = match ledger(&state) {
+        Ok(ledger) => ledger,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    let now = match authority_now_ms() {
+        Ok(now) => now,
+        Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    let scopes = match ledger.available_scopes(&subject, &payload.ticket.action, now) {
+        Ok(scopes) => scopes,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    let Some(scope) = scopes
+        .into_iter()
+        .find(|scope| scope.id == payload.scope_id)
+    else {
+        return fail(StatusCode::FORBIDDEN, "EPERM selected scope unavailable");
+    };
+    let state_for_facts = state.clone();
+    let ticket_for_facts = payload.ticket.clone();
+    let facts = match tokio::task::spawn_blocking(move || {
+        observe_facts(&state_for_facts, &ticket_for_facts)
+    })
+    .await
+    {
+        Ok(Ok(facts)) => facts,
+        Ok(Err(error)) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+        Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    let request = match prepare_selected_request(&scope, &subject, &facts, payload.ticket) {
+        Ok(request) => request,
+        Err(error) => return fail(StatusCode::BAD_REQUEST, error),
+    };
+    Json(json!({
+        "schema":"cohesix-selected-job-preflight/v1",
+        "request":request,
+        "admission":"not_submitted",
+        "facts_observed_unix_ms":facts.observed_unix_ms,
+    }))
+    .into_response()
 }
 
 /// Start only a configured service recipe using a stable caller identity.
@@ -1165,6 +1366,67 @@ mod tests {
         let mut changed = scope.clone();
         changed.action = "peft.release".into();
         assert!(approved_service_request(&changed, "req-124", &facts).is_err());
+    }
+
+    #[test]
+    fn selected_release_preflight_prepares_only_an_unadmitted_original_identity() {
+        let scope = StandingScope {
+            schema: STANDING_SCOPE_SCHEMA.into(),
+            id: "release-scope".into(),
+            subject: "operator-1".into(),
+            action: "peft.release".into(),
+            target: "/models/model-a/release".into(),
+            policy_sha256: "a".repeat(64),
+            generation: 2,
+            expires_unix_ms: 200_000,
+            max_job_units: 1,
+            max_total_units: 4,
+            max_concurrent: 1,
+            max_retries: 1,
+            cooldown_ms: 0,
+            fact_max_age_ms: 5_000,
+            decision_ttl_ms: 5_000,
+        };
+        let facts = AdmissionFacts {
+            observed_unix_ms: 100_000,
+            state_epoch: 7,
+            resource_generation: 8,
+            policy_sha256: scope.policy_sha256.clone(),
+        };
+        let ticket = HostTicketSpec {
+            schema: HOST_TICKET_V2_SCHEMA.into(),
+            id: "release-ticket-1".into(),
+            idempotency_key: "release-once-1".into(),
+            action: "peft.release".into(),
+            args: json!({"request_sha256":"b".repeat(64)}),
+            receipt_mode: Some(host_ticket_agent::ReceiptMode::Worker),
+            operation_id: Some("release-op-1".into()),
+            subject_ref: Some("model-a".into()),
+            receipt_worker_role: Some("worker-lora".into()),
+            receipt_worker_id: Some("worker-1".into()),
+            receipt_supervisor_generation: Some(1),
+            receipt_cap_generation: Some(2),
+            ..HostTicketSpec::default()
+        };
+        let request = prepare_selected_request(&scope, "operator-1", &facts, ticket.clone())
+            .expect("fresh selected release request");
+        assert_eq!(request.binding.admission_id, "release-ticket-1");
+        assert_eq!(request.binding.input_sha256, "b".repeat(64));
+        assert_eq!(request.binding.deadline_unix_ms, 105_000);
+        assert_eq!(request.ticket.expires_unix_ms, Some(105_000));
+        assert!(request.ticket.admission.is_none());
+        assert!(prepare_selected_request(&scope, "other", &facts, ticket.clone()).is_err());
+        let mut supplied_grant = ticket;
+        supplied_grant.admission = build_selected_ticket(
+            &request.binding,
+            request.ticket.clone(),
+            105_000,
+            scope.generation,
+        )
+        .unwrap()
+        .0
+        .admission;
+        assert!(prepare_selected_request(&scope, "operator-1", &facts, supplied_grant).is_err());
     }
 
     fn service() -> (JobBinding, HostTicketSpec) {

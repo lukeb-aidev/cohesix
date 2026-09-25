@@ -8,6 +8,7 @@ pub mod codegen;
 pub mod host_integration;
 pub mod implementation_surface;
 pub mod ir;
+pub mod mcp;
 pub mod provider_registry;
 pub mod resource_admission;
 pub mod temporal;

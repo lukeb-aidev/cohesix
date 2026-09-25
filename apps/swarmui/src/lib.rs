@@ -3559,7 +3559,7 @@ fn console_manual<'a>(mut tokens: impl Iterator<Item = &'a str>) -> SwarmUiTrans
             let mut lines = vec![
                 "Shared cohsh manual. SwarmUI supports only commands listed by its help.".to_owned(),
                 "Writes require an enabled console, role and profile; host-only commands run in cohsh.".to_owned(),
-                "SwarmUI spawn uses raw JSON; see the SWARMUI section in man spawn.".to_owned(),
+                "SwarmUI writable spawn uses role and key=value options; see man spawn.".to_owned(),
             ];
             lines.extend(page.lines().map(str::to_owned));
             SwarmUiTranscript::ok(lines)
@@ -3583,7 +3583,7 @@ fn console_help_lines() -> Vec<String> {
         "  log                          - Tail /log/queen.log (64 lines)",
         "Writes (require an enabled console and authorized role/profile):",
         "  echo <text> > <path>          - Append one line",
-        "  spawn <JSON>                 - Compatibility Worker request; man spawn",
+        "  spawn <role> [options]      - Compatibility Worker request; man spawn",
         "  kill <worker_id>              - Compatibility termination request",
         "  ACK confirms admission, not Worker readiness or execution.",
         "Diagnostics: bi, caps [mcs], smp [activity|mcs|poll-time|dump], mem, cachelog [count],",
@@ -4025,7 +4025,7 @@ mod tests {
         assert!(transcript
             .lines
             .iter()
-            .any(|line| line.contains("spawn <JSON>")));
+            .any(|line| line.contains("spawn heartbeat ticks=100")));
         assert!(!backend.console_command("man spawn extra").ok);
         assert!(!backend.console_command("man missing").ok);
         let reads = Arc::new(AtomicUsize::new(0));

@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Check compiler-owned agent protocol defaults, conjunctions, and prerequisites.
+// Purpose: Check compiler-owned selected agent protocol flags, conjunctions, and prerequisites.
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 fn agent_protocol_flags_enforce_all_eight_combinations() {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs");
     let original = load_manifest(&base.join("root_task.toml")).expect("selected manifest");
-    assert!(!original.gateway.effective_mcp());
+    assert!(original.gateway.effective_mcp());
     assert!(!original.gateway.effective_a2a());
     for mask in 0..8 {
         let mut manifest = original.clone();

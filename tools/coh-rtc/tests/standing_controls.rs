@@ -48,6 +48,9 @@ fn absent_standing_policy_is_closed_and_valid_selected_ceiling_compiles() {
 fn missing_host_ticket_dependency_and_runtime_action_widening_refuse() {
     let (base, mut manifest) = selected();
     manifest.standing_authority = enabled();
+    // Isolate standing-authority validation from the selected MCP gateway,
+    // which independently rejects a missing execution WAL first.
+    manifest.gateway.agent_protocols.enabled = false;
     manifest.authority.execution_wal_required = false;
     assert!(manifest
         .validate_with_base(Some(&base))

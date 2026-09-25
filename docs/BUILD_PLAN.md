@@ -140,7 +140,7 @@ owned by their specific contracts.
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Complete |
 | [28c](#28c) | macOS Developer Actions and Local Metal Workbench | Complete — selected Mac developer journey |
 | [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Planned |
-| [28d](#28d) | MCP Access to Complete Selected Workflows | Planned |
+| [28d](#28d) | MCP Access to Complete Selected Workflows | In Progress |
 | [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
 | [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
 | [28g](#28g) | Installation, Integrated User Qualification and Release B | Planned |
@@ -13097,7 +13097,7 @@ Deliverables: Optional governed vMLX serving evidence; prerequisite for later mi
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** In Progress — selected MCP transport and workflow implementation.
 
 **Value:** ordinary agents use useful Cohesix workflows without learning its namespaces.
 **Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected

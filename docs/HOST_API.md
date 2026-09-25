@@ -40,6 +40,7 @@ the OpenAPI document.
 | `POST` | `/v1/jobs/{admission_id}/reconcile` | Read the target result for the same identity | Yes, plus delegated `/host/tickets/status` read |
 | `POST` | `/v1/standing/scopes/{scope_id}/inspect` | Inspect durable budget and revocation state | Yes, plus separate `/host/standing/admin` write |
 | `POST` | `/v1/standing/scopes/{scope_id}/revoke` | Block new dispatch under the scope | Yes, plus separate `/host/standing/admin` write |
+| `POST` | `/mcp` | Stateless MCP 2025-11-25 JSON-RPC over Streamable HTTP, when compiled on | Yes, plus delegated read/write for each selected operation |
 | `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
 | `GET` | `/docs` | Offline index linking the embedded OpenAPI and provider contract | No |
 
@@ -47,12 +48,36 @@ Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 `lines` query. The gateway validates those bounds before contacting the target.
 
 The selected manifest has versioned `[gateway.agent_protocols]`,
-`[gateway.mcp]` and `[gateway.a2a]` enablement switches. All three default to
-false; effective MCP and A2A access each requires both its own switch and the
-master switch. This version contains no MCP or A2A endpoint. REST remains
+`[gateway.mcp]` and `[gateway.a2a]` enablement switches. Their schema defaults
+are false; effective access requires both the master and protocol switch. The
+selected QEMU profile enables MCP and keeps A2A disabled; the Pi profile keeps
+both disabled. `/mcp` is registered only when effective MCP is true. REST remains
 available when either protocol is disabled, including authenticated reads used
 to recover an existing job. Gateway launch variables and clients cannot raise
 the compiled switches; an attempted protocol override is refused at startup.
+
+The MCP endpoint accepts a single JSON-RPC request per POST with
+`Accept: application/json, text/event-stream`, `Content-Type: application/json`
+and the gateway request credential. After `initialize`, send
+`MCP-Protocol-Version: 2025-11-25` on subsequent requests. A delegated
+`x-cohesix-ticket` is required for selected discovery, preflight and job access.
+The endpoint rejects invalid `Origin`, unsupported revisions, messages above
+8,192 bytes and more than 16 concurrent requests; a tool call has a 30-second
+gateway wait bound. `GET` and `DELETE` return 405 after authentication because
+this stateless server has no SSE stream or server session to close. No client
+credentials are forwarded to the target or native provider.
+
+The compiler writes the selected tool, authority, lifecycle and evidence map
+to [`mcp_catalogue.json`](../configs/generated/mcp_catalogue.json). The active
+subject sees only tools backed by currently usable standing scopes. The
+`cohesix.preflight_selected_job` tool observes a selected CUDA or PEFT request
+and prepares a short-lived binding without an effect. Submit rechecks the facts
+and standing budget. `cohesix.submit_selected_job` returns an admission or an
+existing original identity, never a native completion certificate. Inspect and
+recover use that original `admission_id`; cancellation requests do not prove
+termination. The job resource `cohesix://jobs/{admission_id}` is subject-scoped
+and carries bounded state, not model bytes. PEFT comparison, promotion and
+rollback outcomes require the shared verifier and serving observation.
 
 Selected jobs accept at most 4,096 JSON bytes containing one `binding` and one
 raw `ticket`. The versioned binding fixes subject, action, target, input hash,

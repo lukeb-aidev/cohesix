@@ -45,7 +45,7 @@ fn response_code(port: u16, path: &str) -> Option<u16> {
 }
 
 #[test]
-fn disabled_protocols_have_no_routes_while_rest_starts() {
+fn selected_mcp_route_does_not_enable_a2a_or_disable_rest() {
     let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve test port");
     let port = reserved.local_addr().expect("local address").port();
     drop(reserved);
@@ -63,7 +63,8 @@ fn disabled_protocols_have_no_routes_while_rest_starts() {
         assert!(child.0.try_wait().expect("poll gateway").is_none());
         thread::sleep(Duration::from_millis(25));
     }
-    for path in ["/mcp", "/a2a", "/v1/mcp", "/.well-known/agent.json"] {
+    assert_eq!(response_code(port, "/mcp"), Some(401));
+    for path in ["/a2a", "/v1/mcp", "/.well-known/agent.json"] {
         assert_eq!(response_code(port, path), Some(404), "{path}");
     }
     assert_ne!(

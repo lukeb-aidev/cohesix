@@ -286,9 +286,9 @@ WORKFLOW
   LoRA declaration is not evidence of completed training. Kill only the actual
   Worker you created, then inspect teardown. See man kill and man ls.
 SWARMUI
-  The console's write/role/profile gates still apply. Its raw spawn grammar is
-  spawn <JSON>, for example spawn {"spawn":"heartbeat","ticks":100}.
-  cohsh key=value convenience syntax is not SwarmUI spawn syntax. A disabled
+  The writable console's write/role/profile gates still apply. It accepts the
+  same role and key=value options shown above, for example
+  spawn heartbeat ticks=100. The read-only backend refuses spawn. A disabled
   console operation must use the admitted workflow in Operations or Tickets &
   policy, with the required role, transport and profile.
 

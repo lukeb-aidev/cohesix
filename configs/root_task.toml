@@ -12,10 +12,10 @@ schema = "1.29"
 schema = "cohesix-agent-protocol-controls/v1"
 
 [gateway.agent_protocols]
-enabled = false
+enabled = true
 
 [gateway.mcp]
-enabled = false
+enabled = true
 
 [gateway.a2a]
 enabled = false

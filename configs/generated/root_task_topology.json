@@ -1,7 +1,7 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
+  "manifest_sha256": "a31e64dbbaffa7c621f1590c33dd8b2770a7ac13d71929e5cbfbd2aab06c360a",
   "topology_sha256": "f60968a7957d0e83f99b8326952feedde635b50474f73c5662c220330bce3684",
   "topology": {
     "console_network_service": {

@@ -902,6 +902,7 @@ gateway for each host application.
 | `--role ROLE --ticket TICKET` | Upstream namespace authority, not per-caller delegation |
 | `--delegation-key-ref REF` | Provisioned issuer source for delegated write verification |
 | `--allow-non-loopback-bind` | Explicitly permit network exposure; does not add TLS |
+| `--mcp-stdio --mcp-stdio-ticket-ref REF` | Launch the selected local MCP process with an explicit delegated ticket source; no HTTP listener |
 | `--mock` | Own an in-process model instead of a physical or QEMU Queen |
 
 Useful endpoints are `/v1/meta/status`, `/v1/meta/bounds`, `/v1/fs/ls`,
@@ -911,14 +912,56 @@ Useful endpoints are `/v1/meta/status`, `/v1/meta/bounds`, `/v1/fs/ls`,
 bounds instead of guessing larger payload sizes.
 
 `coh doctor` prints the compiled `agent-protocols` master, MCP and A2A
-switches. They are false in the current QEMU and Pi manifests. A protocol is
-effective only when its own switch and the master are true. The current gateway
-does not implement MCP or A2A routes; selecting a switch does not create an
-endpoint. Changing a deployment's manifest requires rebuilding the matching
-host tools and target profile. Launch environment variables or CLI options
-cannot turn a compiled-off protocol on. Disabling access does not cancel
-underlying tickets, effects or pending results; use existing authenticated REST
-and CLI recovery to inspect them.
+switches. The selected QEMU manifest enables MCP under the master switch; Pi
+and A2A remain disabled. A protocol is effective only when its own switch and
+the master are true. Changing a deployment's manifest requires rebuilding the
+matching host tools and target profile. Launch environment variables or CLI
+options cannot turn a compiled-off protocol on. Disabling access does not
+cancel underlying tickets, effects or pending results; use existing
+authenticated REST and CLI recovery to inspect them.
+
+### Selected MCP clients
+
+The selected host gateway serves MCP revision `2025-11-25` at `/mcp` over
+Streamable HTTP, or through its packaged `--mcp-stdio` launch mode. The
+compiler-generated [catalogue](../configs/generated/mcp_catalogue.json) is the
+source for tool names, selected actions, authority and proof limits. The
+gateway uses the existing standing ledger and target connection. Prepare the
+same private `--standing-ledger`, `--standing-scopes`, delegation issuer and
+PEFT release profile needed by REST; a protocol client cannot activate an
+unselected action. Keep the HTTP bind on loopback or an authenticated encrypted
+tunnel. Put the request-auth and delegated-ticket values in a private client
+configuration or secret file, never in a tracked example or process argument.
+
+For NeMo Agent Toolkit 1.9.0 with MCP SDK 1.29.1, its native `mcp_client`
+supports `streamable-http` and `custom_headers`. Point its server URL at
+`http://127.0.0.1:8080/mcp` through the selected protected connection, and
+provide `x-cohesix-auth` and `x-cohesix-ticket` as private custom headers. The
+same release can launch a local `stdio` command, but HTTP is the selected
+Linux-hosted network path. The NeMo compatibility probe checks the installed
+native client's actual initialization and tool schema; a complete NeMo agent
+kit and A2A workflow belong to M28f.
+
+For a desktop client that supports standard MCP stdio, configure the installed
+`hive-gateway` as its command with arguments `--mcp-stdio`,
+`--mcp-stdio-ticket-ref file:/absolute/private/ticket` and the normal gateway
+connection, standing and delegation options. Supply
+`HIVE_GATEWAY_REQUEST_AUTH_TOKEN` through the client's private process
+environment using an explicit `file:/absolute/private/request-auth` reference.
+The child emits JSON-RPC only on stdout and logs on stderr. The ticket and
+issuer secret files must be readable only by the invoking account. Closing
+stdin ends this local MCP process; accepted jobs remain in the native ledger.
+
+The selected tool sequence starts with `cohesix.available_selected_jobs`,
+then `cohesix.preflight_selected_job`,
+`cohesix.submit_selected_job`, then `cohesix.inspect_job` or
+`cohesix.recover_job` with the original admission ID. A preflight response is
+short lived and has `admission: not_submitted`. Submit's ACK is only target
+admission. A lost reply requires inspection or recovery under the same ID;
+never construct a fresh identity for an uncertain effect. PEFT comparison,
+promotion and rollback stay inside the immutable selected release request, and
+only the shared verifier can establish the requested outcome. See
+[Host API](HOST_API.md) for bounds and refusal mapping.
 
 The broker serialises work over the existing target connection and provides
 bounded progress for host-ticket ingress, control/receipts and telemetry.
@@ -1522,8 +1565,9 @@ readiness. Generated display/cache policy is documented in
 
 SwarmUI's console also supports `man [command]` using the same embedded source.
 Its own `help` lists its supported subset and write gates. Shared manuals do
-not enable host-only commands; SwarmUI uses raw JSON for `spawn`, while cohsh
-accepts the documented role and `key=value` arguments.
+not enable host-only commands. The writable SwarmUI console and cohsh accept
+the documented `spawn` role and `key=value` arguments; the read-only SwarmUI
+backend refuses `spawn`.
 
 The additive `coh evidence story --input GRAPH --trust TRUST --cas DIR` command
 verifies the existing signed causal graph and its CAS before returning redacted

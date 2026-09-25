@@ -68,10 +68,17 @@ false-default, compiler-controlled MCP and A2A access switches and implements
 selected REST/CLI/Python jobs with a private standing ledger for GPU submit and
 service restart. Exact-source KVM target and native Linux AArch64 CUDA/service
 observations passed the selected jobs and standing authority cases, including
-stale request refusal and recovery of pending result delivery. The current
-gateway has no MCP or A2A routes. The [M28 implementation record](audit/M28_IMPLEMENTATION_RECORD.md)
+stale request refusal and recovery of pending result delivery. At that
+foundation commit the gateway had no MCP or A2A routes. The [M28 implementation record](audit/M28_IMPLEMENTATION_RECORD.md)
 retains the evidence and limits. This component result does not change Release A
 acceptance or qualify Release B.
+
+[Milestone 28d](BUILD_PLAN.md#28d) is in progress. The selected QEMU profile
+now compiles an authenticated MCP gateway route and local stdio launch path;
+the Pi profile and A2A remain disabled. Generated tool discovery and focused
+transport checks are host contract evidence only. A native standard-client
+CUDA job and PEFT comparison/deployment with exact-source KVM, original
+identity and shared-verifier outcomes remain required before completion.
 
 [Milestone 28a](BUILD_PLAN.md#28a) is complete at its selected Orin scope. The source contains a
 private digest-pinned workload registration path, version 2 request validation,
