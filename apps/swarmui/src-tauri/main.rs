@@ -15,7 +15,9 @@ use std::sync::{
     Mutex,
 };
 use std::time::Duration;
-use swarmui::workbench::{self, Connection, ConnectionRequest, HostRequest, HostResult};
+use swarmui::workbench::{
+    self, Connection, ConnectionRequest, HostRequest, HostResult, LocalMlxRequest,
+};
 
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -777,6 +779,35 @@ async fn swarmui_host_run(
 }
 
 #[tauri::command]
+async fn swarmui_local_mlx(
+    app: tauri::AppHandle,
+    request: LocalMlxRequest,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        request.validate()?;
+        if state.host_busy.swap(true, Ordering::AcqRel) {
+            return Err("busy: another host operation is running".into());
+        }
+        let result = workbench::run_local_mlx(&request);
+        state.host_busy.store(false, Ordering::Release);
+        if let Ok(report) = &result {
+            state.record(
+                "local_mlx",
+                json!({
+                    "operation":request.operation,
+                    "proof_class":report["proof_class"],
+                    "report_sha256":workbench::digest(report.to_string().as_bytes())
+                }),
+            )?;
+        }
+        result
+    })
+    .await
+    .map_err(|_| "mlx_runtime: task failed".to_owned())?
+}
+
+#[tauri::command]
 fn swarmui_tool_directory(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let mut review = state.review.lock().map_err(|_| "state locked")?;
     if state.host_busy.load(Ordering::Acquire) {
@@ -1089,6 +1120,7 @@ fn main() {
             swarmui_control,
             swarmui_host_preview,
             swarmui_host_run,
+            swarmui_local_mlx,
             swarmui_tool_directory,
             swarmui_open_artifact,
             swarmui_reference,

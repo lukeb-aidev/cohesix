@@ -316,12 +316,35 @@
                 </article>
               </div>
             </section>
-            <section data-desk="mlx" aria-label="Local MLX release" hidden>
+            <section data-desk="mlx" aria-label="Local MLX workbench" hidden>
               <article class="panel">
                 <header class="panel-header">
                   <div>
-                    <h2>Local MLX release</h2>
-                    <p>Plan one selected deployment, then submit its exact standing job file through the connected gateway.</p>
+                    <h2>Local Metal model</h2>
+                    <p>Run a pinned local model or measure its held-out loss on this Mac. These observations do not admit or promote a Cohesix release.</p>
+                  </div>
+                </header>
+                <div class="panel-body">
+                  <label for="mlx-python">Python with Cohesix and pinned MLX installed</label>
+                  <input id="mlx-python" type="text" autocomplete="off" placeholder="Absolute path to the selected virtualenv/bin/python" />
+                  <label for="mlx-selection">Private MLX selection JSON</label>
+                  <input id="mlx-selection" type="text" autocomplete="off" placeholder="Absolute path to pinned model, data and optional adapter identities" />
+                  <label for="mlx-prompt">Prompt for local inference</label>
+                  <textarea id="mlx-prompt" maxlength="2048" autocomplete="off" placeholder="Ask a bounded question about the selected local model"></textarea>
+                  <label for="mlx-tokens">Maximum new tokens (1–64)</label>
+                  <input id="mlx-tokens" type="number" min="1" max="64" value="64" />
+                  <div class="button-row">
+                    <sp-button id="mlx-infer" variant="accent">Run local inference</sp-button>
+                    <sp-button id="mlx-evaluate" variant="secondary">Measure held-out loss</sp-button>
+                  </div>
+                  <pre id="mlx-local-result" class="read-output" role="status">Select the pinned runtime and private model profile to begin.</pre>
+                </div>
+              </article>
+              <article class="panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Governed release</h2>
+                    <p>Use these commands only with an admitted deployment profile. The local Metal result above never becomes a signed release outcome.</p>
                   </div>
                 </header>
                 <div class="panel-body">

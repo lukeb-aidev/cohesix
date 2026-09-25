@@ -1553,7 +1553,7 @@ labels its interpretation and links the exact scoped job URL. Its deterministic
 fallback keeps the gateway state visible. A start acknowledgement does not
 prove a terminal signed outcome. On macOS these are actions for
 user-created Shortcuts; automatic App Shortcuts and the SiriKit capability
-are unavailable. A spoken Siri invocation must run a user-created Shortcut.
+are unavailable. Spoken Siri is optional and outside M28c's developer gate.
 
 SwarmUI's Settings offers an explicit **Enable Apple actions for this
 connection** control after a delegated gateway connection succeeds. Its native
@@ -1563,12 +1563,28 @@ app and extension require a shared Keychain access group and matching signed
 provisioning. Exact macOS development profiles sign both components. The
 installed app enrolled its delegated gateway identity, and Shortcuts started,
 inspected and requested cancellation of selected service work on a private
-KVM reference. Spoken Siri and final source-bound action evidence remain open.
-A detached MLX smoke establishes local compute feasibility only. The
-[M28c build plan](BUILD_PLAN.md#28c) requires an admitted developer journey
-and live evidence before completion.
+KVM reference. The [M28c build plan](BUILD_PLAN.md#28c) requires final
+source-bound installed app and Metal evidence before completion.
 
-The new **Local MLX** desk in SwarmUI asks for the private deployment JSON
+The **Local MLX** desk first accepts an absolute path to a selected Python
+virtual environment with the exact Cohesix package and pinned MLX extras,
+and a private selection JSON file. The file contains
+`model_directory`, `model_sha256`, `data_directory`, `data_sha256`,
+`memory_limit_bytes`, and optionally both `adapter_directory` and
+`adapter_sha256`. Use `cohesix.mlx_native.tree_digest` to compute the selected
+tree hashes; keep model, data and adapter paths local and unchanged. **Run
+local inference** accepts a prompt up to 2048 UTF-8 bytes and 1–64 new
+tokens. **Measure held-out loss** uses the selected independent test split.
+Both actions use the fixed `cohesix.mlx_workbench` module, not a shell or hive
+credential. The UI shows the observed Metal device, model/adapter hashes,
+memory and response or loss, always labelled as a local observation. Missing
+Python/MLX, changed bytes or absent Metal produce a refusal, not a fallback.
+Create the environment with `python3 -m venv <private-venv>` and
+`<private-venv>/bin/python -m pip install -e 'tools/cohesix-py[apple-mlx]'`
+from the selected source checkout. A selected runtime is a developer-owned
+dependency; SwarmUI does not bundle model weights or Python into its app.
+
+The adjacent **Governed release** controls ask for the private deployment JSON
 used by `coh peft release` and the exact selected binding/ticket JSON used by
 `coh job submit`. **Plan** validates and retains the original controller
 intent; **Review and start** submits the selected job through the connected
@@ -1579,11 +1595,11 @@ reviewed cancellation.
 The desk displays operation/request identity immediately; held-out loss,
 Metal device, canary and promoted or restored generations appear only when
 the report contains a verified signed native journal. Closing the window or
-losing a reply does not authorize a second submission. The selected Mac MLX
-native executor and signed live release are still required before this UI path
-can complete a local deployment.
+losing a reply does not authorize a second submission. The Mac native executor
+and signed live release belong to [28c1](BUILD_PLAN.md#28c1); these forms
+cannot turn a local Metal result into an accepted deployment.
 
-The in-progress `cohesix.mlx_native` Python module accepts absolute,
+`cohesix.mlx_native` accepts absolute,
 content-bound local model and dataset directories and exposes `infer`,
 `train_lora` and `evaluate_heldout` for the selected Apple Metal device. It
 pins MLX/MLX-LM versions, caps memory and returns artifact/resource identities
@@ -1591,8 +1607,8 @@ without logging prompt or response text. Its `MlxSelection` binds SHA-256 tree
 digests; those inputs and the adapter output must remain private and unchanged.
 The [native component record](audit/M28C_MLX_COMPONENT_RECORD.md) contains
 the current diagnostic measurements. These functions do not create a Cohesix
-ticket, journal, deployment or signed outcome; the host-agent integration is
-still required before developers can use them as an admitted release.
+ticket, journal, deployment or signed outcome; 28c1 owns the host-agent
+integration before developers can use them as an admitted release.
 
 For a local transport check, `python -m cohesix.mlx_service --selection
 <absolute-private-selection.json> --port <loopback-port>` serves one fixed
@@ -1616,9 +1632,9 @@ local SmolLM2-135M model at `127.0.0.1:18080` and returned one bounded
 OpenAI-compatible chat response; the tiny model gave a poor answer. This is a
 detached serving transport check, not an accepted Cohesix inference result.
 The engine repaired alignment in the ignored local model weights on load,
-changing their SHA-256, so the planned `m28c-vmlx-compatibility` path uses a
+changing their SHA-256, so `m28c-vmlx-compatibility` uses a
 content-bound disposable copy and reports both hashes. Only an explicitly
-selected loopback model and deployment generation may be queried. vMLX's
+selected loopback model and diagnostic local label may be queried. vMLX's
 MCP/tool endpoints cannot act as a route around Cohesix tickets or policy.
 The focused Python `cohesix.vmlx_compat.VmlxClient(endpoint, model)` can read
 one healthy served model and make a bounded local chat request. Its
@@ -1638,8 +1654,10 @@ generation label. The session also requires the installed app's signed Team
 and vMLX-repaired bytes, rejects staged mutation during a request and stops its
 process on exit. Use `with VmlxSession(selection) as server:` and call
 `server.generate(prompt, max_tokens)`; `server.evidence()` omits text. The
-caller must still obtain a Cohesix admitted generation and a passing quality
-comparison. A local generation label alone grants neither.
+selected instruction-adapter fused model passed a frozen four-answer
+compatibility comparison on the installed vMLX 1.6.65 engine. This checks
+local serving format and narrow output quality. A Cohesix admitted generation
+and governed rollback remain in 28c1; a local generation label grants neither.
 
 ### Cohesix Python package
 

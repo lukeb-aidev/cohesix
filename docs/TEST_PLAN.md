@@ -148,20 +148,27 @@ must link all required reports and the `m28a-recovery-live` cancellation and
 interruption record. Direct native smoke, Python output checks and an older
 M28 target result do not replace these admitted exact-source observations.
 
-M28c's first gate is `m28c-platform-live` on a supported macOS 27 Apple Silicon
-host. It binds a development-signed installed app and extension, Shortcuts
-action search and a native Apple AI/Metal availability probe to the exact
-committed source. This observation permits implementation of the later M28c
-tasks; it does not prove a spoken Siri invocation, an authenticated hive job,
-Foundation Models explanation, MLX execution or direct-distribution
-notarisation. The installed vMLX compatibility lane binds exact signed app
-and engine identity, a disposable before/after-hashed local model, explicit
-loopback endpoint, bounded client response, accepted adapter generation,
-held-out comparison and incumbent rollback. A healthy server or HTTP 200
-alone is diagnostic, and vMLX tool/MCP endpoints confer no Cohesix authority.
-`m28c-actions-live`, `m28c-mlx-live`, `m28c-vmlx-live`,
-`m28c-assistance-live` and `m28c-developer-live` retain their separate fresh
-component and integrated evidence obligations before Milestone 28c closure.
+M28c's first gate is `m28c-platform-live` on the supported macOS 27 Apple
+Silicon host. It binds a development-signed installed app and extension,
+Shortcuts action discovery and native Apple AI/Metal availability to source.
+For M28c completion, retain source-bound selected component evidence for an
+installed Shortcuts start/inspect/cancel and revoked-scope path using original
+authenticated service-job identities and a source-linked on-device explanation.
+The final installed app must resolve a saved action and refuse the revoked
+scope; this does not claim a fresh authorised service effect on final bytes.
+Also collect actual local MLX training and final installed SwarmUI
+inference/evaluation with observed Metal,
+model/data/adapter hashes and resource bounds, and signed vMLX 1.6.65
+loopback compatibility with disposable before/after-hashed fused model bytes
+and four frozen operational responses. Final app and extension bytes must pass
+Developer ID signature, Apple notarisation, stapling and Gatekeeper checks.
+The native-action, local-compute, optional-vMLX, assistance and final-installed
+records keep separate proof limits; focused tests cannot substitute for these
+live observations. Spoken Siri invocation is outside M28c's developer value
+gate. Local MLX/vMLX results carry no Cohesix job, accepted generation or
+release authority. Milestone 28c1 owns fresh `m28c1-mlx-live` and
+`m28c1-vmlx-live` admission, canary and governed rollback evidence before
+those deployment claims or mixed MLX/CUDA use cases are accepted.
 
 Planned M28d/M28e `m28d-mcp-live` and `m28e-a2a-live` each require a named
 standard client to complete and recover selected real work independently. When

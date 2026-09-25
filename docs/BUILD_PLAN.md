@@ -138,7 +138,8 @@ owned by their specific contracts.
 | [28](#28) | Shared Governed Jobs and Bounded Unattended Authority | Complete — selected foundation |
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Complete — selected Orin systemd and Docker lanes |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Complete |
-| [28c](#28c) | macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows | Planned |
+| [28c](#28c) | macOS Developer Actions and Local Metal Workbench | Complete — selected Mac developer journey |
+| [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Planned |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | Planned |
 | [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
 | [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
@@ -12533,7 +12534,7 @@ The release must deliver three complete user journeys:
 2. Train or import a genuine LoRA adapter, compare it with the base and accepted
    deployment, serve a real canary, promote or roll back and inspect evidence.
 3. Use those operations from NeMo through MCP/A2A and from macOS 27 through
-   App Intents/Shortcuts/Siri; follow the same run in SwarmUI/CLI. Demonstrate
+   App Intents/Shortcuts; follow the same run in SwarmUI/CLI. Demonstrate
    genuine local MLX/Metal work as well as explicit remote CUDA operation,
    including selected workflows that use both providers when advertised.
 
@@ -12550,7 +12551,7 @@ The release must deliver three complete user journeys:
   installation prerequisite for NeMo; MCP and A2A remain independently usable.
 - Every client uses the same authenticated, delegated action/job contract,
   current-state admission, expiry/revocation, idempotency, writer fencing,
-  cumulative budgets and observed result. UI, Siri, model output, protocol
+  cumulative budgets and observed result. UI, voice, model output, protocol
   adapters and provider metadata never mint authority or terminal receipts.
 - Models, training, inference, NeMo, Apple frameworks and CUDA/Metal stay
   host-side. Pi Workers remain control-plane roles, not GPU hosts. Large
@@ -12985,265 +12986,112 @@ Deliverables: Bounded host-transfer contract, source and destination receipts, r
 the canary and accepted deployment; rejection and rollback are demonstrated.
 Judge depth by this lifecycle, not the number of supported frameworks.
 
-## Milestone 28c — macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows <a id="28c"></a>
+## Milestone 28c — macOS Developer Actions and Local Metal Workbench <a id="28c"></a>
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — `m28c-apple-platform-feasibility` passed its focused `m28c-platform-live` gate on 25 September 2026: the provisioned development-signed app launched, all four App Intents actions appeared in Shortcuts and the local support action executed. Source implementations of authenticated job inspect/cancel and on-device explanation compile, and a detached MLX LoRA smoke ran on Metal. Installed vMLX 1.6.65 served one local model over its loopback OpenAI-compatible API; a bounded Cohesix Python client made one real local request against a disposable copy. These are detached compatibility observations. Explicit app and extension IDs are registered. Apple's macOS guidance requires user-created Shortcuts for App Intents actions; automatic App Shortcuts are unavailable. A diagnostic bundle passed exact-profile Developer ID signing, Apple notarisation, stapling and Gatekeeper assessment. Provisioned Keychain sharing and installed SwarmUI enrollment passed, and Shortcuts started, inspected and canceled selected service work on a private KVM reference. Spoken Siri invocation, source-bound action acceptance, an admitted MLX lifecycle, vMLX lifecycle compatibility and final installed journey notarisation remain open; no dependent Apple task is accepted.
+**Status:** Complete — focused supported-Mac, installed Shortcuts component, local Metal, optional vMLX compatibility and final notarised-app evidence are retained in the [M28c completion record](audit/M28C_COMPLETION_RECORD.md). The selected private service-job observations remain component evidence; a revoked-scope status Shortcut on final installed bytes returned HTTP 403 as expected. The 28c1 admitted deployment lifecycle remains Planned.
 
-The initial `m28c-mlx-metal-provider` [native component record](audit/M28C_MLX_COMPONENT_RECORD.md)
-retains actual bounded Metal inference, repeatable LoRA training and a small
-held-out comparison. Its Python code is not yet connected to the shared
-ticket, phase journal or deployment generation, so the task remains open.
-The same record captures diagnostic adapter fusion through installed vMLX and a
-manual incumbent switch. The candidate response failed semantic quality, and
-neither server was bound to an admitted Cohesix generation. The client now
-refuses an observed model-ID switch during an inference request.
-A later bounded session verified the installed vMLX app signature and engine,
-served a disposable copy under a local generation label and checked its
-repaired bytes across one request. That label remains diagnostic.
-A later pinned 1.5B instruction-model LoRA attempt improved held-out loss on
-Metal but failed its predeclared operational response gate, including a
-cancellation-status question. The candidate is not accepted for serving.
-A second, instruction-formatted 48-step local attempt passed its frozen
-four-question response and resource checks, with held-out loss falling from
-5.7968 to 0.8091. Its train and test prompts are distinct, but the four
-answer templates repeat across splits. This is narrow diagnostic quality,
-not an independent generalization claim or admitted deployment.
-A bounded direct MLX loopback server also returned one matching local response
-from the selected adapter. Its model label is diagnostic and the process is
-not yet supervised by the shared release phases.
-A separately frozen vMLX compatibility check then fused that instruction
-adapter into a disposable model. The installed signed vMLX engine returned
-all four predeclared operational answers exactly as direct fused MLX
-inference, within the 5-second per-answer bound, while the original model and
-adapter trees remained unchanged. vMLX repaired only its disposable copy;
-the retained source/loaded hashes are in the native MLX record. Its `g1`
-label is diagnostic; the selected 28b journal has not admitted this adapter,
-assigned an accepted generation or performed a governed rollback.
-Native job inspection retains and checks the selected action, target and
-ticket identity from the gateway record before displaying or explaining it.
-The installed action later inspected one authenticated, confirmed service job.
-A new [native actions component record](audit/M28C_APPLE_ACTIONS_RECORD.md)
-tracks an approved-start route that derives a `systemd.restart` ticket from
-one selected standing scope and fresh gateway facts. The native action, `coh`
-and Python REST client use one stable request ID; an existing admission is
-returned without replay after a lost reply. Focused gateway, client and Swift
-checks pass. The development-signed installed app started a delegated service
-job through Shortcuts, inspected its confirmed durable result, and explained
-it with on-device Foundation Models. A later cancellation attempt exposed a
-gateway subject/fingerprint bug; the corrected route let the installed action
-cancel a held job before dispatch, and the service did not restart. Scope
-revocation withdrew the native choice. The private KVM component observations
-do not establish spoken Siri invocation, the source-bound m28c-actions-live
-case, final Developer ID notarisation, or the admitted MLX/vMLX lifecycle.
-The route does not admit MLX or complete the Mac developer journey.
+**Scope decision (25 September 2026):** A developer needs authenticated Mac actions and useful local model work. Spoken Siri invocation is removed from this milestone: macOS exposes these App Intents through user-created Shortcuts, and voice adds no required developer capability. The original governed Mac MLX release, accepted generation, canary and rollback and generation-fenced vMLX serving move to [28c1](#28c1). They remain required before any later mixed MLX/CUDA or accepted Mac deployment claim. Local observations never become signed Cohesix outcomes.
 
-**Value:** the Mac is a native operator interface and local AI host, not merely remote control.
-**Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.
+**Value and prerequisites:** On the supported macOS 27 Apple Silicon host, the installed SwarmUI and extension use a delegated, Keychain-backed hive connection. A user-created Shortcut can start, inspect and cancel an approved service job and the app can explain that job from scoped evidence with Foundation Models; `coh` resolves the same durable identity. Separately, the developer can select pinned local model/data/adapter bytes in SwarmUI, run bounded MLX inference and held-out evaluation on the observed Metal GPU, and see device, hashes, memory and result. The Python package supplies actual local LoRA training. Installed vMLX 1.6.65 is an optional, bounded loopback compatibility target for a disposable fused copy of the evaluated adapter. Missing vMLX does not remove direct MLX work.
 
-Run `m28c-apple-platform-feasibility` first; its support/signing decision gates
-the dependent Apple implementation tasks without activating deferred frameworks.
-Target macOS 27 on the supported Apple-silicon reference. Verify and pin public
-Xcode/SDK APIs, OS build, device/language/region availability before implementation;
-no invented private Siri API or assumption that Siri speaks MCP/A2A. Preserve
-working older host tools unless a documented compatibility change is necessary.
-Add the smallest native Swift App Intents integration to the existing signed app;
-no SwarmUI rewrite or second desktop product. Swift remains host-side.
+**Evidence boundary:** The selected 28b journal admits neither this Mac's local MLX process nor vMLX's diagnostic generation label. SwarmUI's existing release and job forms expose the genuine selected `coh` contracts when an admitted profile exists; their presence is not an accepted local MLX release. The local MLX panel must label inference/evaluation as observations, refuse changed model/data/adapter bytes and never infer promotion, a signed outcome or recovery from an HTTP response. Its chosen Python environment must contain the pinned Apple MLX dependencies and this exact Cohesix package. The frozen four-question vMLX comparison measures narrow compatibility only; repeated answer templates do not establish broad quality.
 
-Expose configured hives, approved recipes, runs and deployments through App
-Intents actions in user-created Shortcuts on macOS: inspect status, start an
-approved job, inspect results, request cancellation and permitted
-promotion/rollback. Deep-link to SwarmUI.
-Return durable job references promptly; long jobs survive Siri/extension exit.
-Use authenticated shared operations and native secure credential storage, not
-AppleScript/UI scripting or shell. Spoken text, device possession and model
-confidence are not grants. Respect platform authentication/confirmation and
-Cohesix policy; scope indexed entities/results and withdraw stale/revoked entries.
-
-Require one Foundation Models assistance flow: explain a run/refusal from scoped
-evidence and propose a typed approved next action. Label model interpretations,
-link sources and retain deterministic/manual operation when Intelligence is
-unavailable or disabled. Do not ingest Personal Context or build a generic assistant,
-cloud router or arbitrary model-provider distribution platform.
-
-Use **MLX/MLX-LM as the single required Apple compute backend**, reusing Metal
-rather than custom kernels. Demonstrate small real local inference and LoRA
-train/evaluate/serve/rollback over the 28b lifecycle, with actual GPU execution,
-unified-memory limits, cancellation and recovery. Distinguish local MLX, remote
-CUDA and Foundation Models assistance in capability probes and UI. No implicit
-CPU/remote fallback or universal HF/NeMo-to-MLX format claim. MPS/Core ML and
-mobile/watch/visionOS companions are deferred. Include signing/notarisation for
-the chosen distribution channel; missing credentials block that validation.
-
-The installed **vMLX/MLX Studio** runtime is a compatibility target for local
-serving, not a substitute for the required MLX training backend or Cohesix
-admission. Pin its app/engine identity on the selected Mac; test the actual
-loopback health, model listing and bounded chat/Responses contract against a
-predeclared local model and the accepted MLX adapter where the format is
-supported. A separately hashed, evaluated fused model may carry the accepted
-adapter when vMLX cannot load the adapter format directly; document the
-conversion and refuse formats that cannot preserve its observed behavior.
-Reject ambiguous model IDs, wrong endpoints, unbounded streams,
-unexpected tool calls and a changed served generation. vMLX must not import
-Cohesix credentials or call its MCP tool execution path. It may repair model
-weight alignment on load: stage a disposable, content-bound copy and retain
-before/after hashes instead of letting a compatibility test alter enrolled
-training or release artifacts. A healthy server or HTTP 200 is not a verified
-quality result, rollout, Cohesix job outcome or GPU execution receipt.
-
-**Deliverables:** Public-SDK feasibility matrix, signed native actions, Foundation Models assistance, MLX provider and device-qualified journeys.
-
-**Developer value gate:** A developer with an installed signed SwarmUI on the
-supported Mac can configure one delegated hive connection using Keychain-backed
-credentials, choose a manifest-approved recipe, start it from the native
-interface or Shortcuts, and inspect the same durable job/result/evidence in
-SwarmUI and `coh`. The Mac can run one bounded local MLX inference and LoRA
-train/evaluate/canary/rollback journey through the selected 28b lifecycle;
-the UI identifies the actual Metal device and links each result to its source.
-On the reference Mac with vMLX installed, the developer can serve the accepted
-generation through its loopback API, observe the same evaluated result and
-return to the verified incumbent without changing Cohesix authority.
-Siri can run a user-created Shortcut that inspects or cancels the enrolled job
-with platform confirmation and the same Cohesix policy. macOS does not support
-automatic App Shortcuts or the SiriKit capability. The Foundation Models
-explanation must help the developer decide a typed next action from that job's
-scoped evidence. A capability probe, a compiled extension or a detached demo is not useful-work
-acceptance. Preserve a terminal-free post-enrolment path and a deterministic
-manual path when Apple Intelligence is unavailable.
+**Completion gate:** Retain the passed `m28c-platform-live` supported-host probe. On the selected Mac, verify installed app/extension Shortcuts discovery; authenticated selected service start, inspection, held cancellation and scope revocation; one source-linked Foundation Models explanation with deterministic manual operation; actual local MLX LoRA training plus SwarmUI inference and held-out evaluation with pinned input and observed Metal identity; the signed installed vMLX engine's bounded four-response compatibility against the disposable fused candidate; and the final exact-source Developer ID signed, notarised, stapled, Gatekeeper-accepted app. Bind the final evidence to source, app, extension, Mac and private target/model identities. Focused owner tests and these live observations suffice; no full suite, spoken Siri, Release B or Pi hardware acceptance is implied.
 
 **Task breakdown**
 
 ```text
 Title/ID: m28c-apple-platform-feasibility
 Milestone: 28c / m28c-apple-platform-feasibility
-Goal: Resolve public SDK, actual device and signed distribution feasibility before building Apple integrations.
-Inputs: 28/28b; supported Apple-silicon Mac; public Xcode/macOS 27 SDK documentation; existing SwarmUI app/signing pipeline; docs/TOOLCHAIN_MAC_ARM64.md.
-Changes:
-  - apps/swarmui/native/apple/ (planned) + scripts/install/stage_swarmui.py + scripts/install/sign_swarmui_macos.py — minimal public-API probe, selected extension/app packaging and exact Developer ID entitlement/notarisation path with the existing application.
-  - docs/TOOLCHAIN_MAC_ARM64.md + docs/HOST_TOOLS.md + planned M28 implementation record — exact OS/Xcode/SDK/device/memory/language/region matrix, Siri/App Intents/Foundation Models availability, MLX prerequisites and distribution channel.
-  - configs/provider_conformance.toml + TEST_PLAN catalog — m28c-platform-live collects actual native probe, signing and availability observations; absent credentials/APIs are explicit blockers.
-Commands:
-  - sw_vers
-  - xcodebuild -version
-  - xcrun --sdk macosx --show-sdk-version
-  - swift test --package-path apps/swarmui/native/apple
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-platform-live --reference-config "${M28C_PLATFORM_REFERENCE}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE}/m28c-platform-live"
-Checks:
-  - A minimal signed packaged action is discovered on the actual supported device; SDK compile success alone cannot establish Siri or Foundation Models availability.
-  - Record public API references, required entitlements, credential availability and selected notarisation command path before dependent implementation; do not substitute private APIs or a second desktop product.
-Deliverables: Native feasibility probe and m28c-platform-live support/blocker matrix; no full workflow acceptance from the probe alone.
+Goal: Pin the public macOS 27 SDK, supported Mac, signed App Intents discovery and local AI/Metal availability.
+Inputs: 28/28b; supported Apple Silicon Mac; Xcode/macOS 27 SDK; existing SwarmUI package.
+Changes: Native feasibility probe, exact app/extension identities and signing profile; HOST_TOOLS and TOOLCHAIN_MAC_ARM64 support matrix.
+Commands: swift test --package-path apps/swarmui/native/apple; scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-platform-live --reference-config "${M28C_PLATFORM_REFERENCE}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE}/m28c-platform-live"
+Checks: Installed signed actions are discoverable; actual device and public API availability are recorded.
+Deliverables: Focused m28c-platform-live support matrix and signing decision.
 
 Title/ID: m28c-native-apple-actions
 Milestone: 28c / m28c-native-apple-actions
-Goal: Expose selected governed jobs through macOS App Intents actions in Shortcuts, including user-created Siri shortcuts, without new authority.
-Inputs: m28c-apple-platform-feasibility; 28 schemas; selected 28a/28b operations; SwarmUI packaging; delegated credentials.
-Changes:
-  - apps/swarmui/native/apple/ (planned Swift package/native integration) — typed entities/actions for hive/recipe/run/deployment, secure credential handoff, scope-filtered indexing, prompt return of durable job references and deep links.
-  - apps/swarmui/src/workbench.rs + scripts/install/stage_swarmui.py — integrate the native component with the existing signed app and Rust-owned job views; implement chosen entitlements/signing/notarisation and installed discovery checks.
-  - docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md + matrix/catalog — exact build/install/sign commands, user-created Siri/Shortcuts walkthrough and m28c-actions-live with an observed speech-driven invocation, cancellation and revoked-entity checks.
-Commands:
-  - swift test --package-path apps/swarmui/native/apple
-  - cargo test --locked -p swarmui --lib
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-actions-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-actions-live"
-Checks:
-  - Actual Shortcuts actions and a user-created Siri shortcut submit/inspect/cancel permitted work and return the same durable identity/receipts visible in CLI/SwarmUI; long work survives extension exit.
-  - Ambiguous/unauthenticated/stale entities cannot cause effects; revoked entries disappear; platform-required confirmation and Cohesix policy remain enforced.
-  - Collect signing/notarisation result for the selected distribution channel and actual device observations; unit or Shortcuts tests alone cannot pass Siri acceptance.
-Deliverables: Packaged native actions, exact installation/distribution instructions and m28c-actions-live evidence with per-surface proof limits.
+Goal: Use App Intents in user-created Shortcuts to operate one selected delegated service job without new authority.
+Inputs: m28c-apple-platform-feasibility; selected gateway standing scope and stable job identity.
+Changes: Typed start/inspect/cancel native actions, shared Keychain enrollment, bounded scope filtering and deep links; HOST_TOOLS first-use path.
+Commands: swift test --package-path apps/swarmui/native/apple; cargo test --locked -p hive-gateway --bin hive-gateway jobs::tests; cargo test --locked -p swarmui --lib.
+Checks: Installed Shortcuts start and inspect one admitted service job; held cancel prevents dispatch; revoked scope disappears. `coh` resolves the original ID. An unavailable or revoked choice fails closed.
+Deliverables: Installed authenticated Shortcuts workflow with private target record; no speech claim.
 
 Title/ID: m28c-mlx-metal-provider
 Milestone: 28c / m28c-mlx-metal-provider
-Goal: Run small-model MLX inference and LoRA training/serving through the shared jobs and deployment lifecycle.
-Inputs: m28c-apple-platform-feasibility; 28b lifecycle; pinned MLX/MLX-LM; supported Mac memory/GPU and selected model/adapter formats.
-Changes:
-  - tools/cohesix-py/cohesix/mlx_native.py (planned) + apps/host-ticket-agent/src/executors/ + generated provider source — one bounded MLX adapter using existing authority/journal, typed configuration and observed native identity.
-  - apps/hive-gateway/src/jobs.rs + selected 28b client contract — admit the local MLX release through the same durable identity and delegated policy; the current selected jobs API only admits `gpu.workload.submit` and `systemd.restart`, so the Mac integration must not fake a 28b admission from a local subprocess.
-  - tools/cohesix-py/examples/mlx_lora_release.py (planned) — pin small base/tokenizer/data, unified-memory cap, actual Metal execution observer and quality/latency thresholds before live inference/train/evaluate/serve.
-  - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — separate local MLX, remote CUDA and Foundation Models assistance; matrix/catalog gain m28c-mlx-live and format/memory/checkpoint failure cases.
-Commands:
-  - python3 -m pytest -q tools/cohesix-py/tests/test_mlx_native.py
-  - cargo test --locked -p host-ticket-agent --lib
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-mlx-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-mlx-live"
-Checks:
-  - Inference and genuine LoRA training use the observed Metal GPU; canary/promotion/rollback follow 28b and compare predeclared quality/resource thresholds.
-  - Cancellation and interruption preserve job identity and bounded accounting; incompatible format/checkpoint and memory limits fail safely. No silent CPU/remote fallback or universal format portability.
-Deliverables: Installable MLX profile, complete local journey and m28c-mlx-live GPU/quality/recovery evidence.
+Goal: Provide bounded, content-bound local MLX inference, LoRA training and held-out evaluation on Metal.
+Inputs: m28c-apple-platform-feasibility; pinned mlx and mlx-lm; selected private model/data and optional adapter.
+Changes: cohesix.mlx_native and cohesix.mlx_workbench validate inputs, observe GPU/memory/artifact identity and classify local results without admission.
+Commands: python3 -m pytest -q tools/cohesix-py/tests/test_mlx_native.py tools/cohesix-py/tests/test_mlx_workbench.py.
+Checks: Actual selected Mac trains one adapter and performs inference/evaluation on Metal; changed bytes, format, bound and absent GPU refuse. Evidence labels local results as observations.
+Deliverables: Installable Python MLX extra and selected local model/data/adapter record.
 
 Title/ID: m28c-swarmui-mlx-workbench
 Milestone: 28c / m28c-swarmui-mlx-workbench
-Goal: Make the admitted local MLX experiment and deployment lifecycle usable from the installed SwarmUI without a terminal after enrollment.
-Inputs: m28c-mlx-metal-provider; existing SwarmUI connection and review flow; selected 28b job, evidence and generation contracts.
-Changes:
-  - apps/swarmui/src/workbench.rs + frontend/workbench/ + frontend/index.html — a visible Mac MLX workspace for selected profile/device readiness, bounded release plan and reviewed start, durable job follow/cancel/reconcile, held-out comparison, canary generation and verified rollback. Reuse `coh` and the delegated gateway; local model or vMLX replies never become signed job outcomes.
-  - apps/swarmui/tests/ + docs/HOST_TOOLS.md — source-bound identity, stale/revoked scope, missing model/device, interrupted UI and unavailable vMLX checks; a first-use walkthrough that keeps the original admission ID and displays Metal and evidence provenance.
-Commands:
-  - cargo test --locked -p swarmui --lib
-  - cargo test --locked -p swarmui --test workbench
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-developer-live --reference-config "${M28C_DEVELOPER_REFERENCE}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE}/m28c-developer-live"
-Checks:
-  - The installed UI completes the same admitted local MLX release and rollback as `coh`, resolves its original job and signed result, shows the observed Metal device, model and adapter identity, and distinguishes evaluation from served canary evidence.
-  - Closing or restarting SwarmUI cannot replay an effect; missing authority, native provider, vMLX or receipt remains an actionable blocker with manual MLX serving available when vMLX is absent.
-Deliverables: A terminal-free, evidence-linked MLX workspace in the existing signed SwarmUI; included in m28c-developer-live rather than a detached UI demonstration.
+Goal: Let a developer use the pinned local MLX model from SwarmUI after selecting a Python runtime and private profile.
+Inputs: m28c-mlx-metal-provider; existing SwarmUI native app and host command review flow.
+Changes: Local MLX panel invokes the fixed Cohesix Python module without a shell or gateway credentials, presents inference and held-out results with device/hashes/memory and an explicit local proof class. Existing `coh` release/job controls remain conditional on actual admission.
+Commands: cargo test --locked -p swarmui --test workbench; node --test apps/swarmui/tests/mlx_frontend.test.mjs; cargo check --locked -p swarmui --bin swarmui.
+Checks: Installed panel runs one real Metal inference and evaluation; rejects missing runtime/profile, changed inputs, oversized prompt and unsupported helper result. No local reply appears as a signed release result.
+Deliverables: Usable local Metal desk in the signed app, plus focused contract and UI evidence.
 
 Title/ID: m28c-vmlx-compatibility
 Milestone: 28c / m28c-vmlx-compatibility
-Goal: Let a developer use an installed vMLX inference server as a governed, optional serving surface for the accepted local MLX model without changing job authority.
-Inputs: m28c-apple-platform-feasibility; accepted m28c-mlx-metal-provider; installed vMLX 1.6.65 app/engine identity and documented loopback API; immutable selected model and adapter.
-Changes:
-  - tools/cohesix-py/cohesix/ + apps/swarmui/src/workbench.rs — bounded loopback-only vMLX health/model/inference client and a visible installed-server selection; require explicit model and deployment generation, redact prompts and outputs from status logs, and preserve the original Cohesix ticket/outcome.
-  - tools/cohesix-py/examples/ + docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md — repeatable first-use, startup, provenance and refusal instructions for the installed app and its bundled engine; stage a disposable model copy because vMLX may repair tensor alignment on load.
-  - configs/provider_conformance.toml + TEST_PLAN catalog — m28c-vmlx-live with exact app/engine/model/adapter or fused-model hashes, positive client and serving observations, wrong-model/endpoint/credential/tool-call refusals, interrupted stream, mutation detection and rollback to the incumbent generation.
-Commands:
-  - python3 -m pytest -q tools/cohesix-py/tests/test_vmlx_compat.py
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-vmlx-live --reference-config "${M28C_VMLX_REFERENCE}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE}/m28c-vmlx-live"
-Checks:
-  - One real client request resolves the selected Cohesix canary generation through vMLX and matches a held-out quality/resource policy; a later rollback serves the verified incumbent. The required direct MLX serving path remains available when vMLX is absent.
-  - Bind observed loopback process, signed app/engine version, exact local model/adapter bytes and any vMLX alignment rewrite; refuse silent downloads, cloud/LAN fallback and unadmitted MCP/tool effects.
-Deliverables: Optional installed vMLX serving compatibility, explicit unsupported-format results and m28c-vmlx-live evidence, not an independent job or training authority.
+Goal: Verify installed vMLX 1.6.65 as an optional loopback serving format for a separate fused local model copy.
+Inputs: Pinned signed app/engine, source model and evaluated local adapter; disposable content-bound serving copy.
+Changes: Bounded vMLX client/session with exact app/engine/model identity, no Cohesix credentials or tools, and before/after hashes for local alignment repair.
+Commands: python3 -m pytest -q tools/cohesix-py/tests/test_vmlx_compat.py tools/cohesix-py/tests/test_vmlx_runtime.py.
+Checks: Four frozen operational responses match direct fused MLX within the predeclared latency bound; wrong model/endpoint, mutation and unexpected tool use refuse. Diagnostic generation labels confer no rollout authority.
+Deliverables: Optional installed runtime compatibility record with explicit unsupported-format and proof limits.
 
 Title/ID: m28c-foundation-models-assistance
 Milestone: 28c / m28c-foundation-models-assistance
-Goal: Explain scoped operational evidence and propose typed next actions without model authority.
-Inputs: m28c-apple-platform-feasibility; public pinned Foundation Models SDK; shared action schema; existing evidence verifier/native app.
-Changes:
-  - apps/swarmui/native/apple/ — one bounded assistance flow with scoped evidence retrieval, source links, labelled interpretations and schema-validated action proposals; model tool output never bypasses admission.
-  - apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — availability/privacy diagnostics and deterministic manual operation; exclude Personal Context and undisclosed remote fallback.
-  - Native Swift fixtures + matrix/catalog — m28c-assistance-live and disabled/unavailable, prompt-injection, cross-subject evidence and unauthorised-proposal refusal cases.
-Commands:
-  - swift test --package-path apps/swarmui/native/apple
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-assistance-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28c-assistance-live"
-Checks:
-  - Supported-device assistance explains a real run/refusal with inspectable sources and a typed proposal; no prose or tool response becomes an operational receipt.
-  - Injected evidence cannot access other subjects, widen authority or submit unadmitted actions; missing/disabled Intelligence preserves all manual core operations.
-Deliverables: Native assistance/help and m28c-assistance-live report preserving model interpretation versus verified outcome.
+Goal: Explain one scoped admitted service job and suggest a typed next action without submitting it.
+Inputs: Public Foundation Models SDK; verified selected gateway facts and native App Intents action schema.
+Changes: Native on-device explanation, source links, labelled interpretation, manual fallback and prompt-injection/cross-subject refusal.
+Commands: swift test --package-path apps/swarmui/native/apple.
+Checks: Installed explanation cites the original job; model prose has no operational authority and missing Intelligence leaves the manual job path usable.
+Deliverables: Native assistance record with interpretation and receipt separated.
 
 Title/ID: m28c-mac-developer-journey
 Milestone: 28c / m28c-mac-developer-journey
-Goal: Deliver one installed, signed Mac workflow that a developer can use to run and assess approved local AI work.
-Inputs: Accepted m28c feasibility, native actions, MLX provider and SwarmUI workbench, vMLX compatibility and assistance tasks; exact selected 28b lifecycle and delegated hive policy.
-Changes:
-  - apps/swarmui/src/workbench.rs + apps/swarmui/native/apple/ — one visible configure/select/start/follow/inspect/cancel/deploy/rollback path with truthful capability and evidence links; no terminal after enrolment.
-  - scripts/install/stage_swarmui.py + docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md — install, credential enrolment, direct-distribution signing/notarisation and first-use guide on the supported Mac.
-  - configs/provider_conformance.toml + TEST_PLAN catalog — m28c-developer-live binds the same job and source/evidence identities across SwarmUI, `coh`, Shortcuts/Siri and the local MLX provider.
-Commands:
-  - swift test --package-path apps/swarmui/native/apple
-  - cargo test --locked -p swarmui --lib
-  - python3 -m pytest -q tools/cohesix-py/tests/test_mlx_native.py
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-developer-live --reference-config "${M28C_DEVELOPER_REFERENCE}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE}/m28c-developer-live"
-Checks:
-  - A developer completes an actual admitted local MLX experiment with measured Metal use, held-out result, canary observation and rollback; every surface resolves the original durable identity and signed Cohesix outcome.
-  - The installed app handles credential absence, stale/revoked scope, unavailable model, cancellation and restart without inventing success or replaying effects; a developer can find and act on the strongest blocker.
-  - One observed Siri invocation of a user-created Shortcut and one Shortcuts invocation complete permitted inspect/cancel operations; Foundation Models gives a source-linked interpretation and typed proposed action without submitting it.
-  - The final installed bytes verify the selected Developer ID signature and notarisation for direct distribution; evidence binds source, app, extension, Mac, model and native provider identity.
-Deliverables: Installed developer-useful Mac journey, first-use documentation and m28c-developer-live evidence; no Release B or Pi hardware claim.
+Goal: Qualify the final installed, directly distributed developer app on the selected Mac.
+Inputs: Accepted focused 28c tasks; exact app and extension IDs, selected Developer ID profiles/certificate and notarisation credential.
+Changes: Final stage/sign/notarise/staple/Gatekeeper check, installed first-use walkthrough and source-bound evidence ledger.
+Commands: scripts/install/sign_swarmui_macos.py sign; scripts/install/sign_swarmui_macos.py notarize; codesign --verify --deep --strict; xcrun stapler validate; spctl --assess --type execute.
+Checks: Final installed bytes expose the Shortcuts job path and SwarmUI local MLX desk; source and signer identity match the retained report. No 28b Mac release or Release B claim is inferred.
+Deliverables: Notarised developer-useful Mac app and M28c completion record.
 ```
 
-**Checks / definition of done:** actual supported-device Shortcuts operation and
-Siri invocation of a user-created Shortcut, evidence-grounded assistance,
-admitted local Metal work, installed vMLX compatibility and exact Developer ID notarisation
-are exercised. Unit tests or Shortcuts alone cannot establish live Siri acceptance; unresolved platform
-availability is explicit.
+## Milestone 28c1 — Governed Mac MLX Release and vMLX Rollout <a id="28c1"></a>
+
+[Milestones](#Milestones)
+
+**Status:** Planned — activate after 28c. This preserves the previously proposed shared-lifecycle and accepted-deployment work without representing local M28c observations as admission.
+
+```text
+Title/ID: m28c1-admitted-mlx-release
+Milestone: 28c1 / m28c1-admitted-mlx-release
+Goal: Admit local Mac MLX inference, train, evaluate, direct serve, canary, promote and rollback through the selected 28b durable job and phase journal.
+Inputs: Accepted 28c local provider; selected 28b policy/ticket, gateway admission and signed evidence contracts.
+Changes: Mac native executor, bounded cancellation/recovery, generation fence, source-bound Metal/quality/resource reports and shared `coh`/Python/SwarmUI projections.
+Commands: Focused owner tests and a new m28c1-mlx-live selected-host case.
+Checks: Actual admitted job, held-out comparison, observed canary, promotion, rollback and original-identity reconciliation have signed outcomes; no CPU or remote fallback.
+Deliverables: Accepted local MLX deployment lifecycle, not a detached process result.
+
+Title/ID: m28c1-vmlx-governed-serving
+Milestone: 28c1 / m28c1-vmlx-governed-serving
+Goal: Bind optional vMLX serving to an accepted Cohesix generation and return to the verified incumbent after rollback.
+Inputs: m28c1-admitted-mlx-release; pinned signed vMLX app/engine and content-bound fused model copy.
+Changes: Generation-aware selection, same-generation inference checks, bounded process custody and recovery, quality/resource policy and SwarmUI projection.
+Commands: Focused vMLX tests and a new m28c1-vmlx-live selected-host case.
+Checks: Exact accepted generation serves the admitted candidate, changed generation refuses, and governed rollback observes the verified incumbent. No vMLX tool or MCP authority is imported.
+Deliverables: Optional governed vMLX serving evidence; prerequisite for later mixed MLX/CUDA deployment claims.
+```
 
 ## Milestone 28d — MCP Access to Complete Selected Workflows <a id="28d"></a>
 
@@ -13253,7 +13101,7 @@ availability is explicit.
 
 **Value:** ordinary agents use useful Cohesix workflows without learning its namespaces.
 **Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected
-28a/28b actions; accepted 28c MLX actions only when exposed. The Linux-hosted
+28a/28b actions; accepted 28c1 MLX actions only when exposed. The Linux-hosted
 protocol and CUDA/PEFT path remain usable without Apple.
 
 Use a pinned MCP revision and maintained SDK where suitable. Provide the network
@@ -13326,7 +13174,7 @@ Deliverables: Pinned transport/configuration contract, packaged launch paths and
 Title/ID: m28d-mcp-selected-workflows
 Milestone: 28d / m28d-mcp-selected-workflows
 Goal: Let an ordinary MCP client discover, complete and recover selected CUDA/PEFT and qualified mixed MLX/CUDA workflows.
-Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when weight distribution is advertised; accepted 28c MLX provider and approved mixed workflow when selected; shared generated registry; maintained SDK and named standard client; pinned vMLX desktop/client version for its compatibility path.
+Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when weight distribution is advertised; accepted 28c1 admitted MLX provider and approved mixed workflow when selected; shared generated registry; maintained SDK and named standard client; pinned vMLX desktop/client version for its compatibility path.
 Changes:
   - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors, bounded resources and selected mixed-provider stages/transfer refs; add artifact distribution operations only after accepted m28b-verified-weight-distribution.
   - apps/hive-gateway/tests/{mcp_protocol,mcp_workflows}.rs (planned) — mapping parity, visibility, required fields and cross-client idempotency; no direct provider calls or model-authored success.
@@ -13401,7 +13249,7 @@ stay in 36/34.
 Title/ID: m28e-a2a-durable-jobs
 Milestone: 28e / m28e-a2a-durable-jobs
 Goal: Delegate and recover long-running selected jobs, including qualified mixed MLX/CUDA workflows, through a standard A2A peer.
-Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when its skill is advertised; accepted 28c MLX provider and approved mixed workflow when selected; shared gateway; pinned public A2A revision/binding and maintained SDK; selected NeMo Agent Toolkit native A2A client binding; a pinned vMLX model endpoint and named A2A-capable peer for the vMLX compatibility path; no MCP dependency.
+Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when its skill is advertised; accepted 28c1 admitted MLX release and approved mixed workflow when selected; shared gateway; pinned public A2A revision/binding and maintained SDK; selected NeMo Agent Toolkit native A2A client binding; a pinned vMLX model endpoint and named A2A-capable peer for the vMLX compatibility path; no MCP dependency.
 Changes:
   - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency; advertise distribution only for an accepted underlying host operation.
   - apps/hive-gateway/src/a2a/ (planned) — canonical task-to-job ID correlation; map pending/running/input-required/terminal/cancel-requested/cancel-confirmed/uncertain states to the selected binding without inventing terminal success.
@@ -13701,8 +13549,8 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | User CUDA / `m28a-workloads-live`, `m28a-recovery-live` | Pi Queen + Jetson GPU; installed CLI/Python and Mac-originated SwarmUI | Useful reference and independent adaptation, each advertised execution lane, device/output verification, bounded cancel/lost-response recovery; native IDs and signed outcomes. |
 | PEFT lifecycle / `m28b-peft-live`, `m28b-serving-live` | Pi Queen + Jetson; installed training/import and real serving client | Both training and independent import, fixed held-out comparison, actual canary, rejected candidate, interrupted promotion and verified incumbent rollback. |
 | Weight distribution / `m28b-weight-distribution-live` when advertised | Mac source, Pi Queen reference path when selected, and each qualified NVIDIA or MLX destination profile | Real weight at least 1 GiB, exact source and destination SHA-256, observed host payload route/byte count, bounded Queen references, interruption/resume under one identity, and separate activation evidence. Reference-only tests do not close this row. |
-| Native Apple / `m28c-platform-live`, `m28c-actions-live`, `m28c-assistance-live` | Exact macOS 27/SDK/device/language/region; signed SwarmUI, actual Siri and Shortcuts | Availability/signing evidence, speech-driven admitted action and durable result, scoped assistance/proposal; unavailable/disabled Intelligence preserves manual operations. |
-| Local Apple compute / `m28c-mlx-live` | Same supported Mac; pinned MLX/Metal model/data/runtime | Observed local GPU inference/train/evaluate/serve/rollback and bounded cancellation/recovery; no implicit CPU/remote fallback. |
+| Native Apple / focused M28c installed observations | Exact macOS 27/SDK/device/language/region; signed SwarmUI and user-created Shortcuts | Availability/signing evidence, Shortcuts admitted service action and durable result, scoped assistance; unavailable/disabled Intelligence preserves manual operations. |
+| Local Apple compute / M28c local workbench and `m28c1-mlx-live` | Same supported Mac; pinned MLX/Metal model/data/runtime | M28c observes bounded local GPU train/infer/evaluate without admission. The later 28c1 case must prove admitted serve/canary/rollback and bounded cancellation/recovery before deployment claims. |
 | Ordinary protocols / `m28d-mcp-live`, `m28e-a2a-live` | Standard named/versioned MCP client and A2A peer; Linux-hosted gateway/provider path without Apple | MCP-only and A2A-only complete selected real work; scoped discovery, denial, cancel and reconnect resolve native outcomes. |
 | vMLX client composition / separate M28d/M28e compatibility records | Pinned installed vMLX app and model, configured MCP transport; named A2A peer using the selected vMLX model endpoint | vMLX MCP tool execution reaches admitted CUDA/PEFT work with original identity and refusal/recovery; vMLX-backed A2A peer delegates and reconnects without promoting model text or task state to a native outcome. Missing session or peer is recorded as blocked. |
 | Selected mixed MLX/CUDA / mixed subcases of `m28d-mcp-live`, `m28e-a2a-live` | Supported Mac MLX and compatible NVIDIA CUDA host profiles when both providers are advertised; JetPack where applicable | Each protocol independently projects selected work that uses both providers with explicit host selection, bounded transfer, capacity refusal, original stage identities and verified outcome after disconnect; each advertised NVIDIA platform has its own live qualification. |

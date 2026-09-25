@@ -4,7 +4,21 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mlxSummary } from "../frontend/workbench/mlx.js";
+import { localMlxSummary, mlxSummary } from "../frontend/workbench/mlx.js";
+
+test("local Metal result stays distinct from signed release evidence", () => {
+  const text = localMlxSummary({schema:"cohesix-local-mlx/v1",
+    proof_class:"local_metal_observation", operation:"infer",
+    observation:{device_name:"Apple M4",model_sha256:"a".repeat(64),
+      adapter_sha256:"b".repeat(64),peak_memory_bytes:1024,
+      elapsed_ms:12,text:"Ready"}});
+  assert.match(text, /Local Metal observation/);
+  assert.match(text, /Response: Ready/);
+  assert.doesNotMatch(text, /Promoted generation|Signed native release/);
+  assert.match(localMlxSummary({schema:"cohesix-local-mlx/v1",
+    proof_class:"local_refusal",reason:"mlx_model_changed"}), /refused: mlx_model_changed/);
+  assert.equal(localMlxSummary({schema:"unknown"}), null);
+});
 
 test("unverified release report cannot claim a canary or promotion", () => {
   const text = mlxSummary({

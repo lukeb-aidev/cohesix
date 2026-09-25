@@ -1,11 +1,20 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Track the incomplete M28c native MLX component and its measured Mac proof limits. -->
+<!-- Purpose: Retain local M28c MLX measurements and historical deployment proof limits. -->
 <!-- Author: Lukas Bower -->
 
 # Milestone 28c native MLX component record
 
-`m28c-mlx-metal-provider` remains **In Progress**. The native Python component
+**Scope update (25 September 2026):** The revised [M28c](../BUILD_PLAN.md#28c)
+accepts actual local Metal training plus installed SwarmUI inference and
+evaluation as developer work. Its [completion record](M28C_COMPLETION_RECORD.md)
+binds that UI and the final app. The admitted Mac release, accepted generation,
+governed vMLX canary and rollback remain [28c1](../BUILD_PLAN.md#28c1)
+requirements. Earlier “In Progress” labels below describe the original
+deployment scope and are not current M28c completion gates.
+
+At the time of this component record, `m28c-mlx-metal-provider` was **In
+Progress**. The native Python component
 now rejects remote or changed model and dataset inputs, pins MLX 0.32.2 and
 MLX-LM 0.31.3, requires the observed Metal GPU, caps unified memory, and
 returns hashed prompt/output and resource observations. Training checks a
@@ -53,12 +62,12 @@ Deliverables: A source-level guided UI that preserves gateway admission and orig
 | Direct MLX loopback transport | `cohesix.mlx_service` bound one fixed model and the instruction-formatted adapter to `127.0.0.1:18086` under a diagnostic ID containing the full adapter SHA-256. A real bounded chat request observed Apple M4 Metal, 984,493,744 bytes peak allocation and output SHA-256 `d54caf7c83dd0f7f18a72bab8339bf62449e77e67ba63665021ca7d1b1da8f3b`, matching the direct MLX question-2 response from the frozen quality attempt. The process exited after the check. | This API has no Cohesix credential, admitted generation, durable supervisor or signed result. It does not replace the 28b load/canary/promote/rollback phases, and the local `g0` label is not accepted deployment generation zero. |
 | Instruction-adapter vMLX compatibility | Before serving, ignored policy `out/m28c/qwen-instruction-vmlx-policy.md` was frozen at SHA-256 `ff1b3a525da6cd239ef8b69734fedbf3583c1b4649dd988d2e8aea9988a7c872`: four operational questions, exact model, no tools or stream, 64-token cap, each answer within 5,000 ms. MLX-LM fused the selected Qwen model and 48-step adapter into a separate source tree SHA-256 `b75efc50e56aec7c671357ee6eec7d4df55b8c82896a4308d941e0b86e629777`. Direct fused inference produced four useful responses; its first three output digests matched the unfused adapter and the fourth differed in wording while retaining the required decision. Installed signed vMLX 1.6.65 engine commit `22f9c77711fb580df32f4d40bbaea989c2d5421b`, executable SHA-256 `6ae7d9f0b5db2035b623fc0cacecc3f572bc46db18b69cc8fd611f71b0c2ac7d`, served a disposable copy as diagnostic `cohesix-g1-b75efc50e56aec7c`, process 83239. All four vMLX texts exactly matched direct fused inference and took 4,161/2,774/2,840/2,710 ms. The source model and adapter trees stayed unchanged; the loaded copy tree was `a2e3c00622388097a0e8ca3c2b8e600ba765ff44be7d56c88aca5bca43f7cec4` after local alignment repair. Ignored detailed report `out/m28c/qwen-vmlx-session.json` has SHA-256 `76f43119c53feb37f1ff9b9cc59591a5dcefd6b899dbfb0180e717fc5d0b1acb`. | This qualifies a real serving format and narrow response comparison, not a Cohesix admitted generation: `g1` is only a diagnostic label. The trained adapter was produced outside the shared phase journal, no signed result or governed canary exists, and no Cohesix rollback was run. The answer templates remain narrow. |
 
-`m28c-vmlx-compatibility` also remains **In Progress**. The later instruction
-adapter's fused copy passed a predeclared, narrow four-question quality and
-latency policy on the installed engine, including process and repaired-byte
-binding. An admitted generation, signed Cohesix result, same-generation
-canary and governed incumbent rollback remain required by its build-plan
-checks. The earlier manual server switch does not supply those obligations.
+`m28c-vmlx-compatibility` is **Complete at the revised diagnostic scope**.
+The later instruction adapter's fused copy passed a predeclared, narrow
+four-question quality and latency policy on the installed engine, including
+process and repaired-byte binding. An admitted generation, signed Cohesix
+result, same-generation canary and governed incumbent rollback are separate
+28c1 requirements. The earlier manual server switch does not supply them.
 
 The host-tool/Python/benchmark compatibility review finds the native MLX and
 vMLX modules additive. The standing-authority parser recognises

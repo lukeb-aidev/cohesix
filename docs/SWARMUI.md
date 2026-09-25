@@ -52,6 +52,26 @@ Recent activity and snapshot naming have similarly brief tooltips. Important
 input and authority guidance stays visible in the forms. **Find an action**
 searches operations, and the optional console provides `help` and `man` usage.
 
+## Run a local Metal model on Mac
+
+On the supported Apple Silicon Mac, open **Local MLX**. Select the absolute
+`bin/python` path of a private environment containing this Cohesix Python
+package and the pinned `apple-mlx` extra, then select a private JSON profile
+with absolute model/data paths, their `tree_digest` SHA-256 values, a Metal
+memory limit, and optional adapter path and digest. The selected source checkout
+provides the setup command and profile fields in [Host Tools](HOST_TOOLS.md#swarmui).
+
+Enter a bounded prompt and choose **Run local inference**, or choose
+**Measure held-out loss** to evaluate the profile's independent test rows.
+The panel reports the observed Metal device, artifact hashes, peak memory
+and response or loss. It labels these as local observations. A missing runtime,
+changed file or unavailable Metal GPU refuses; no remote or CPU fallback is
+selected. Python `train_lora` creates the adapter before it is selected here.
+The adjacent **Governed release** controls use `coh` and need a separately
+admitted deployment; a model answer or local loss never becomes its signed
+outcome. Installed vMLX compatibility is optional and does not gate direct
+local MLX work.
+
 ## Explore published state
 
 Open **Namespaces**, choose a root and select an entry. Directories open as lists;

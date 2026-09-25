@@ -10,7 +10,7 @@ use cohesix_authority::secret;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -21,6 +21,127 @@ use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const HOST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// One explicit, private local Metal operation. It has no deployment authority.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalMlxRequest {
+    pub python: String,
+    pub selection_path: String,
+    pub operation: String,
+    pub prompt: String,
+    pub max_tokens: u16,
+}
+
+impl LocalMlxRequest {
+    /// Reject ambiguous executables and input before starting the pinned helper.
+    pub fn validate(&self) -> Result<(), String> {
+        let executable = Path::new(&self.python);
+        let name = executable
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if !executable.is_absolute()
+            || self.python.len() > 4096
+            || !name.starts_with("python")
+            || !executable.is_file()
+            || self.python.bytes().any(|b| b.is_ascii_control())
+        {
+            return Err("mlx_runtime: select an installed Python executable".into());
+        }
+        let selected = Path::new(&self.selection_path);
+        if !selected.is_absolute()
+            || !selected.is_file()
+            || self.selection_path.len() > 4096
+            || self.selection_path.bytes().any(|b| b.is_ascii_control())
+        {
+            return Err("mlx_selection: choose one absolute private selection file".into());
+        }
+        match self.operation.as_str() {
+            "infer"
+                if (1..=2048).contains(&self.prompt.len())
+                    && (1..=64).contains(&self.max_tokens) =>
+            {
+                Ok(())
+            }
+            "evaluate" if self.prompt.is_empty() && self.max_tokens == 0 => Ok(()),
+            _ => Err("mlx_operation: choose bounded inference or held-out evaluation".into()),
+        }
+    }
+}
+
+/// Run the installed Cohesix Python MLX helper without a shell or network credentials.
+pub fn run_local_mlx(request: &LocalMlxRequest) -> Result<Value, String> {
+    request.validate()?;
+    let payload = json!({"selection_path":request.selection_path,
+        "operation":request.operation,"prompt":request.prompt,
+        "max_tokens":request.max_tokens});
+    let mut child = Command::new(&request.python)
+        .args(["-I", "-m", "cohesix.mlx_workbench"])
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "mlx_runtime: failed to launch installed Python")?;
+    let serialized = serde_json::to_vec(&payload).map_err(|_| "mlx_request: invalid JSON")?;
+    if let Some(mut input) = child.stdin.take() {
+        input
+            .write_all(&serialized)
+            .map_err(|_| "mlx_request: helper input failed")?;
+    }
+    let stdout = child.stdout.take().ok_or("mlx_runtime: missing output")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("mlx_runtime: missing diagnostics")?;
+    let exceeded = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&exceeded);
+    let out = std::thread::spawn(move || read_output(stdout, flag));
+    let flag = Arc::clone(&exceeded);
+    let err = std::thread::spawn(move || read_output(stderr, flag));
+    let started = Instant::now();
+    let status = loop {
+        if exceeded.load(Ordering::Acquire) || started.elapsed() >= HOST_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("mlx_timeout: local operation exceeded its output or time bound".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("mlx_runtime: helper process failed".into());
+            }
+        }
+    };
+    let output = out
+        .join()
+        .map_err(|_| "mlx_runtime: output reader failed")?;
+    let _ = err
+        .join()
+        .map_err(|_| "mlx_runtime: diagnostics reader failed")?;
+    if !status.success() {
+        return Err(
+            "mlx_runtime: install the matching Cohesix Python package and pinned MLX extras".into(),
+        );
+    }
+    let report: Value =
+        serde_json::from_slice(&output).map_err(|_| "mlx_runtime: helper returned invalid JSON")?;
+    if report["schema"] != "cohesix-local-mlx/v1"
+        || !matches!(
+            report["proof_class"].as_str(),
+            Some("local_metal_observation" | "local_refusal")
+        )
+    {
+        return Err("mlx_runtime: helper returned an unsupported schema".into());
+    }
+    Ok(report)
+}
 const APPLE_KEYCHAIN_SERVICE: &str = "com.cohesix.swarmui.gateway";
 const APPLE_KEYCHAIN_ACCOUNT: &str = "selected-delegation";
 

@@ -96,76 +96,15 @@ record](audit/M28B_IMPLEMENTATION_RECORD.md) keeps the distinct source, profile,
 negative-result and network-observation limits. This is component evidence, not
 Pi 4 or integrated Release B qualification.
 
-[Milestone 28c](BUILD_PLAN.md#28c) has begun with a macOS 27 public-SDK and
-device feasibility probe. Foundation Models and Metal are available on the
-selected M4 host, and a development-signed installed App Intents action is
-discoverable in Shortcuts. Authenticated job inspect/cancel and on-device
-explanation compile with focused tests; a detached MLX inference and LoRA
-smoke ran on the M4. Apple's macOS contract supports App Intents actions in
-user-created Shortcuts, rather than automatic App Shortcuts; the latter's
-unsupported source declaration has been removed. Exact macOS development
-profiles sign the canonical app and extension with the same Keychain group. A
-fresh staged copy passed exact-profile Developer ID signing, Apple notarisation,
-stapling and Gatekeeper assessment; the final developer journey has not.
-The focused platform case passed with four installed actions visible in
-Shortcuts; the local support action executed. A disposable provisioned Keychain
-cross-identity check passed. The installed app later enrolled a delegated
-connection in Keychain, started and inspected a confirmed service job through
-Shortcuts, and explained its real gateway record with on-device Foundation
-Models. A live cancellation check found and repaired a gateway
-subject/fingerprint mismatch; the corrected action cancelled a held job
-without a service restart, and revocation withdrew the native scope choice.
-Spoken Siri invocation, the m28c-actions-live source-bound case, admitted MLX
-release/rollback and final installed journey notarisation have not passed;
-installed vMLX 1.6.65 additionally served one local model through a detached
-loopback API smoke, with poor answer quality and an observed local weight
-alignment rewrite. A bounded Python vMLX client also made one real local
-request against a disposable, unchanged model copy. Its
-[compatibility task](BUILD_PLAN.md#28c) now requires
-content-bound model copies and an admitted canary/rollback before acceptance;
-the [feasibility record](audit/M28C_FEASIBILITY_RECORD.md) lists the exact
-blockers. A new [native MLX component](audit/M28C_MLX_COMPONENT_RECORD.md)
-ran repeatable four-step Metal LoRA training, bounded local inference and
-16-row held-out evaluation; it has no Cohesix admission or accepted quality
-result. A diagnostic adapter fusion served through vMLX and returned the same
-output digest as direct MLX inference, but the answer was semantically wrong;
-the incumbent switch was manual and had no Cohesix generation fence. A
-content-bound vMLX serving session checks the signed installed
-engine and repaired model bytes across one local request; this still has no
-admitted deployment or accepted quality result. M28c requires an installed
-[developer-useful Mac journey](BUILD_PLAN.md#28c) across an admitted job,
-local MLX execution, result inspection and rollback. A pinned 1.5B MLX model
-completed another Metal LoRA attempt and improved held-out loss, but failed its
-predeclared operational response gate. This is not M28c
-completion or Release B acceptance. A second instruction-formatted 48-step
-local attempt passed its frozen four-question gate and improved held-out loss
-from 5.7968 to 0.8091, but answer templates repeat across the disjoint
-prompts. It remains diagnostic without admission, serving or a signed result.
-The new direct MLX loopback server returned a bounded matching Metal response
-from this adapter, but has no durable Cohesix serving owner or accepted
-generation. A later frozen vMLX compatibility check fused the instruction
-adapter into a disposable copy and the installed signed engine returned the
-same four texts as direct fused MLX inference within the predeclared latency
-bound. The source and repaired loaded bytes were recorded separately; the
-diagnostic generation label is not a Cohesix admission, canary or rollback.
-Native job inspection presents the gateway's selected action, target and
-original ticket ID, with focused contradictory-target refusal and one installed
-authenticated service-job observation.
-The selected service-scope start route now has gateway, `coh`, Python and
-Shortcuts source paths with a stable request ID and fresh gateway-derived
-facts. Focused contract checks and an extension build pass. The
-development-signed installed app exposes the start action in Shortcuts;
-the private KVM live start and cancellation are recorded separately from the
-still-unadmitted MLX release and integrated developer journey.
-The new SwarmUI Local MLX desk routes plan, reviewed start, follow, verify,
-recovery and original-job inspection through the installed `coh` schema and
-shows release measurements only from a verified signed journal. The gateway
-and Linux release agent now share an exact accepted-generation dispatch fence.
-The agent checks selected cancellation before each forward native phase while
-allowing authorized rollback and retaining uncertain work for reconciliation.
-The Mac native release executor and live SwarmUI MLX acceptance remain open.
-The [native actions record](audit/M28C_APPLE_ACTIONS_RECORD.md) retains its
-exact diagnostic proof limits.
+[Milestone 28c](BUILD_PLAN.md#28c) is **Complete for the narrowed Mac developer workflow** on 25 September 2026. The [completion record](audit/M28C_COMPLETION_RECORD.md) binds the supported macOS 27 Apple M4, focused tests, selected private KVM service work, pinned model/data/adapter, installed vMLX 1.6.65 and the final Developer ID app. Spoken Siri was removed from the developer value gate; macOS user-created Shortcuts supply the useful native action path. Governed Mac MLX release, accepted generations, canary/promotion/rollback and generation-fenced vMLX serving remain [planned in 28c1](BUILD_PLAN.md#28c1), and no local result is relabelled as a signed Cohesix outcome.
+
+The installed development-signed App Intents path enrolled a delegated Keychain connection and used user-created Shortcuts to start and inspect an approved private KVM service job. `coh` resolved its original admission and confirmed result. A later held cancellation settled `refused_no_effect` before dispatch, and revocation removed the native scope choice. Foundation Models explained the scoped job and proposed a typed inspect follow-up without submitting it. The [actions record](audit/M28C_APPLE_ACTIONS_RECORD.md) retains exact identities, the initial cancellation defect and correction. These are selected component observations, not Release B qualification.
+
+The final SwarmUI release binary and App Intents extension were Developer ID signed under Team `KB88FQXUX2`; Apple accepted notarisation submission `b14be979-3330-4770-94f1-73fce245bf6e`. The stapled app installed at `~/Applications/SwarmUI-M28c-Build2.app` passed strict signature verification and Gatekeeper assessment, and its two signed executable hashes matched the notarised stage. `pluginkit` registered only that final extension. A saved read-only status Shortcut received HTTP 403 after the earlier scope revocation; this is a live refusal, not a fresh authorised job on final bytes.
+
+The final installed **Local MLX** panel ran bounded inference and 16-row held-out evaluation using the pinned Qwen2.5-1.5B instruction model and 48-step LoRA adapter on the observed Apple M4 Metal device. The panel displayed the model/adapter hashes, about 974 MB/1.14 GB peak allocation, a useful bounded answer and held-out loss `0.8091070055961609`, labelled **local observation, no Cohesix admission or promotion**. The Python native component's earlier real 48-step LoRA training and four frozen operational answers remain a narrow diagnostic quality result; answer templates repeat across the train/test split. The installed signed vMLX 1.6.65 engine served a disposable fused copy and reproduced four direct fused answers inside the frozen latency bound; its `g1` label is diagnostic, with source and repaired loaded hashes retained separately in the [MLX record](audit/M28C_MLX_COMPONENT_RECORD.md).
+
+Focused Python MLX (6), vMLX (12), frontend (3), SwarmUI workbench (12), native compile, Rust formatting and generated-consistency checks passed; the installed Metal inference/evaluation and final Apple signing path were exercised. The full suite was not run. M28c adds no Pi hardware, mixed MLX/CUDA, accepted Mac deployment, broad model-quality or integrated Release B claim.
 
 ## Capability snapshot
 

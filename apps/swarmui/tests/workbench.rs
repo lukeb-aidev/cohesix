@@ -4,8 +4,24 @@
 use std::collections::BTreeMap;
 use swarmui::workbench::{
     apple_delegation_payload, control_line, host_arguments, namespace_command, ConnectionRequest,
-    ControlRequest, HostRequest,
+    ControlRequest, HostRequest, LocalMlxRequest,
 };
+
+#[test]
+fn local_mlx_request_rejects_unselected_or_unbounded_execution() {
+    let mut request = LocalMlxRequest {
+        python: "/bin/python3".into(),
+        selection_path: "/tmp/selected.json".into(),
+        operation: "infer".into(),
+        prompt: "A local question".into(),
+        max_tokens: 16,
+    };
+    assert!(request.validate().is_err());
+    request.python = "/bin/sh".into();
+    assert!(request.validate().is_err());
+    request.operation = "promote".into();
+    assert!(request.validate().is_err());
+}
 
 fn connection() -> ConnectionRequest {
     ConnectionRequest {

@@ -1,11 +1,19 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Retain M28c native-action implementation and bounded live Mac evidence without claiming Siri or milestone acceptance. -->
+<!-- Purpose: Retain M28c native-action component evidence and its historical proof limits. -->
 <!-- Author: Lukas Bower -->
 
 # Milestone 28c native actions component record
 
-`m28c-native-apple-actions` remains **In Progress**. The gateway now derives
+**Scope update (25 September 2026):** This record preserves the earlier
+component-status and spoken-Siri proof limits. The revised [M28c developer
+gate](../BUILD_PLAN.md#28c) accepts installed Shortcuts service actions
+without spoken Siri; the [completion record](M28C_COMPLETION_RECORD.md)
+binds the final notarised app and retained live observations. The earlier
+`m28c-actions-live` runner is no longer an M28c closure gate.
+
+At the time of this component record, `m28c-native-apple-actions` was **In
+Progress**. The gateway now derives
 one `systemd.restart` ticket from an operator-selected standing scope and
 fresh native facts. A stable request ID names the durable admission. On a
 lost reply, the same request ID resolves to the existing record without a

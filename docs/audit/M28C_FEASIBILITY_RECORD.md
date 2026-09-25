@@ -5,6 +5,11 @@
 
 # Milestone 28c platform feasibility record
 
+**Scope update (25 September 2026):** The [M28c completion
+record](M28C_COMPLETION_RECORD.md) adds the final Developer ID notarised app,
+installed MLX workbench and bounded developer actions. Spoken Siri is no longer
+a developer-value gate; the earlier diagnostic limits below remain historical.
+
 `m28c-apple-platform-feasibility` is **complete at its platform-probe scope**.
 The focused `m28c-platform-live` case observed source `9dafa2bd0634cbcb5749417ccf014b2ba1d43022`
 on the selected macOS 27 Mac with an installed, provisioned development-signed

@@ -39,11 +39,12 @@ Keychain entitlement. Exact macOS development profiles for the parent and
 extension now authorize their bundle IDs and the shared Keychain group; the
 canonical development-signed app verifies and launches. A disposable
 provisioned app/extension identity pair wrote, read and deleted one shared
-Keychain item; the actual SwarmUI enrollment and extension source paths remain
-to be tested. Apple's macOS App Intents actions
+Keychain item. The installed SwarmUI later enrolled a delegated connection;
+its extension started, inspected and canceled selected service work on a
+private KVM reference. Apple's macOS App Intents actions
 appear in Shortcuts, but automatic App Shortcuts and the SiriKit capability
-are unavailable on Mac. A user must create a Shortcut for spoken Siri use;
-discovery alone is not an executable Siri or Cohesix work result.
+are unavailable on Mac. A user creates a Shortcut for the approved action;
+spoken Siri is optional and outside the M28c developer gate.
 
 The selected direct-distribution path is Developer ID Application signing
 with hardened runtime. `scripts/install/sign_swarmui_macos.py sign --app
@@ -57,12 +58,16 @@ and an Apple Development identity for installed feasibility checks. The
 instead of `--identity-sha1`, submits the exact archive with `notarytool`,
 checks Apple's acceptance log, staples and assesses the app. Provision the
 certificates, profiles and notary credential outside the repository. The
-provisioned development signature and a fresh exact-profile Developer ID
-signature are recorded in the M28c feasibility record. Apple accepted and
-stapled a diagnostic copy; final journey notarisation and installed readback
-remain outstanding.
+provisioned development signature and the earlier diagnostic Developer ID
+qualification are recorded in the M28c feasibility record. The final
+`canonical-stage-12` app and extension passed exact-profile Developer ID
+signing, Apple notarisation submission
+`b14be979-3330-4770-94f1-73fce245bf6e`, stapling and Gatekeeper. Installed
+readback at `~/Applications/SwarmUI-M28c-Build2.app` matched the signed binary
+hashes; [the completion record](audit/M28C_COMPLETION_RECORD.md) retains the
+proof limits and selected local workbench result.
 
-For the in-progress native MLX component, install the pinned optional Python
+For the local Metal workbench, install the pinned optional Python
 extra in a separate Apple Silicon environment:
 
 ```bash
@@ -76,8 +81,11 @@ their `tree_digest` values and a selected Metal memory limit. `infer`,
 `train_lora` and `evaluate_heldout` require the pinned Apple GPU runtime and
 return bounded artifact, device and resource observations. The four-step
 diagnostic result is in the [component record](audit/M28C_MLX_COMPONENT_RECORD.md).
-These primitives still need Cohesix ticket admission, durable phase custody,
-quality policy, canary and rollback before they are a supported release path.
+The installed SwarmUI Local MLX panel selects that Python runtime and a
+private `cohesix.mlx_workbench` JSON profile, then invokes bounded inference
+and held-out evaluation without a shell. Its results are local observations.
+Milestone 28c1 owns Cohesix ticket admission, durable phase custody,
+canary and rollback before these primitives are an accepted release path.
 
 The optional vMLX compatibility host has `/Applications/vMLX.app` 1.6.65,
 bundle `net.vmlx.app`, with bundled engine commit
@@ -89,16 +97,17 @@ alignment before loading: SHA-256 changed from
 `989e3ef746b41999ca096055a60c87057b8e842824253391bc0d9ed8dfc6936e`
 to `61840936148403ac34b1dd9a8e7eb71eade5d898587b158914c65e7b36113f60`.
 Use an immutable enrolled source and a disposable model copy for future
-compatibility checks; that detached smoke does not qualify the model or the
-M28c release lifecycle.
+compatibility checks; that detached smoke does not qualify the model or an
+accepted Cohesix release lifecycle.
 The focused `cohesix.vmlx_compat.VmlxClient` reached the bundled engine on a
 separate loopback port and returned a bounded local response while exposing
 only prompt/output digests as evidence. It requires an exact served model ID,
 rejects redirects and tool calls, and never submits a Cohesix job. The copied
 model's SHA-256 was unchanged during that second test. Run
 `python3 -m pytest -q tools/cohesix-py/tests/test_vmlx_compat.py` for its
-pure refusal checks; acceptance still needs `m28c-vmlx-live` against an
-admitted adapter generation and rollback.
+pure refusal checks. The later instruction-adapter frozen four-answer
+compatibility result is recorded in the M28c MLX component record; admitted
+generation and governed rollback acceptance move to `m28c1-vmlx-live`.
 The same installed app's `vmlx-serve` entrypoint is SHA-256
 `6ae7d9f0b5db2035b623fc0cacecc3f572bc46db18b69cc8fd611f71b0c2ac7d`.
 The optional `cohesix.vmlx_runtime.VmlxSession` verifies this entrypoint and
