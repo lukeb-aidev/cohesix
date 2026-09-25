@@ -93,8 +93,9 @@ job path. A peer that already holds the exact preflight request may instead
 send `skillId`, `binding`, and `ticket`; changed identity or facts refuse.
 The original `ticket.id` is the A2A task ID and retained admission ID.
 
-`tasks/get` reads that original job and native result, even after a gateway
-restart. `tasks/cancel` records a request under the existing cancellation
+`tasks/get` reads that original job and native result from the target status
+and deadletter records, even after a gateway restart. `tasks/cancel` records
+a request under the existing cancellation
 authority; pending cancellation stays pending. `tasks/resubscribe` and
 `message/stream` emit bounded SSE snapshots for at most 30 seconds or 64
 events; after expiry the peer calls `tasks/get` or resubscribes under the same

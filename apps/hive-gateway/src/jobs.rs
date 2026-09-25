@@ -37,6 +37,7 @@ use crate::{
 
 const SPEC_PATH: &str = "/host/tickets/spec";
 const STATUS_PATH: &str = "/host/tickets/status";
+const DEADLETTER_PATH: &str = "/host/tickets/deadletter";
 const ADMIN_PATH: &str = "/host/standing/admin";
 const MAX_SCOPE_FILE_BYTES: u64 = 65_536;
 const MAX_SUBMIT_BYTES: usize = 4096;
@@ -271,12 +272,13 @@ fn selected_record(state: &AppState, admission_id: &str, subject: &str) -> Resul
 }
 
 fn matching_target_results(
-    lines: Vec<String>,
+    status_lines: Vec<String>,
+    deadletter_lines: Vec<String>,
     binding: &JobBinding,
 ) -> Result<(Vec<Value>, Vec<String>)> {
     let mut values = Vec::new();
     let mut hashes = Vec::new();
-    for line in lines {
+    for line in status_lines.into_iter().chain(deadletter_lines) {
         let value: Value = serde_json::from_str(&line)?;
         if value["id"] == binding.ticket_id
             && value["idempotency_key"] == binding.idempotency_key
@@ -1084,15 +1086,20 @@ pub(super) async fn reconcile(
         Err(error) => return fail(StatusCode::NOT_FOUND, error),
     };
     let state_for_read = state.clone();
-    let target =
-        tokio::task::spawn_blocking(move || state_for_read.read_uncached(STATUS_PATH)).await;
-    let lines = match target {
+    let target = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>((
+            state_for_read.read_uncached(STATUS_PATH)?,
+            state_for_read.read_uncached(DEADLETTER_PATH)?,
+        ))
+    })
+    .await;
+    let (status_lines, deadletter_lines) = match target {
         Ok(Ok(lines)) => lines,
         Ok(Err(error)) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
         Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
     };
     let (target_result, target_result_sha256) =
-        match matching_target_results(lines, &record.binding) {
+        match matching_target_results(status_lines, deadletter_lines, &record.binding) {
             Ok(results) => results,
             Err(error) => return fail(StatusCode::BAD_GATEWAY, error),
         };
@@ -1516,10 +1523,28 @@ mod tests {
             "state": "succeeded",
         })
         .to_string();
-        let (results, hashes) = matching_target_results(vec![exact.clone()], &binding).unwrap();
+        let (results, hashes) =
+            matching_target_results(vec![exact.clone()], Vec::new(), &binding).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(hashes, vec![hex::encode(Sha256::digest(exact.as_bytes()))]);
-        assert!(matching_target_results(vec!["not-json".into()], &binding).is_err());
+        let failed = json!({
+            "id": binding.ticket_id,
+            "idempotency_key": binding.idempotency_key,
+            "admission": {"admission_id": binding.admission_id},
+            "state": "failed",
+        })
+        .to_string();
+        let unrelated = json!({"id":"other","state":"failed"}).to_string();
+        let (results, hashes) =
+            matching_target_results(vec![exact], vec![unrelated, failed.clone()], &binding)
+                .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results.last().unwrap()["state"], "failed");
+        assert_eq!(
+            hashes.last().unwrap(),
+            &hex::encode(Sha256::digest(failed.as_bytes()))
+        );
+        assert!(matching_target_results(vec!["not-json".into()], Vec::new(), &binding).is_err());
     }
 
     #[test]
