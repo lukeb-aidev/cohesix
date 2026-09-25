@@ -26,6 +26,7 @@ _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _ENGINE = Path("Contents/Resources/bundled-python/python/bin/vmlx-serve")
 _PROVENANCE = Path("Contents/Resources/bundled-python/vmlx-bundle-provenance.json")
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SIGNED_TEAM = "55KGF2S5AY"
 
 
 class VmlxRuntimeRefusal(ValueError):
@@ -142,9 +143,17 @@ class VmlxSelection:
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(self.app)],
                 capture_output=True, check=False, timeout=30,
             )
+            identity = subprocess.run(
+                ["/usr/bin/codesign", "-dv", "--verbose=4", str(self.app)],
+                capture_output=True, check=False, timeout=30,
+            )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise VmlxRuntimeRefusal("vmlx_app_signature_unavailable") from error
-        _require(signed.returncode == 0, "vmlx_app_signature_invalid")
+        lines = identity.stderr.decode("utf-8", errors="replace").splitlines()
+        _require(signed.returncode == 0 and identity.returncode == 0
+                 and lines.count("Identifier=net.vmlx.app") == 1
+                 and lines.count(f"TeamIdentifier={_SIGNED_TEAM}") == 1,
+                 "vmlx_app_signature_invalid")
         engine = self.app / _ENGINE
         _require(not engine.is_symlink()
                  and _digest_file(engine, 16 * 1024 * 1024) == self.engine_sha256,

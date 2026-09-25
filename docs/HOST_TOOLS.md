@@ -1567,7 +1567,8 @@ deployment, so it is not the admitted vMLX lifecycle by itself.
 content-bound local engine session from the installed signed app. The caller
 must provide the exact app version, bundled engine commit and SHA-256, model
 tree SHA-256, a private staging directory, a free loopback port and a local
-generation label. The session copies the source model, records both original
+generation label. The session also requires the installed app's signed Team
+`55KGF2S5AY`. It copies the source model, records both original
 and vMLX-repaired bytes, rejects staged mutation during a request and stops its
 process on exit. Use `with VmlxSession(selection) as server:` and call
 `server.generate(prompt, max_tokens)`; `server.evidence()` omits text. The

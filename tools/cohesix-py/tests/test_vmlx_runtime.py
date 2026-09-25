@@ -58,6 +58,31 @@ def test_selection_refuses_changed_app_identity_before_process(
         chosen.validate()
 
 
+def test_selection_refuses_other_signing_team(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chosen = selection(tmp_path)
+    resources = chosen.app / "Contents/Resources/bundled-python"
+    resources.mkdir(parents=True)
+    (chosen.app / "Contents/Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleIdentifier": "net.vmlx.app",
+        "CFBundleShortVersionString": "1.6.65",
+    }))
+    (resources / "vmlx-bundle-provenance.json").write_text(json.dumps({
+        "schema_version": 1,
+        "vmlx": {"version": "1.6.65", "commit": "a" * 40},
+    }))
+
+    class Result:
+        returncode = 0
+        stderr = b"Identifier=net.vmlx.app\nTeamIdentifier=other-team\n"
+
+    monkeypatch.setattr("cohesix.vmlx_runtime.subprocess.run",
+                        lambda *_args, **_kwargs: Result())
+    with pytest.raises(VmlxRuntimeRefusal, match="signature_invalid"):
+        chosen.validate()
+
+
 def test_disposable_copy_preserves_selected_source(tmp_path: Path) -> None:
     chosen = selection(tmp_path)
     staged = _stage(chosen)
