@@ -12534,7 +12534,8 @@ The release must deliver three complete user journeys:
    deployment, serve a real canary, promote or roll back and inspect evidence.
 3. Use those operations from NeMo through MCP/A2A and from macOS 27 through
    App Intents/Shortcuts/Siri; follow the same run in SwarmUI/CLI. Demonstrate
-   genuine local MLX/Metal work as well as explicit remote CUDA operation.
+   genuine local MLX/Metal work as well as explicit remote CUDA operation,
+   including selected workflows that use both providers when advertised.
 
 ### Release boundaries and common acceptance
 
@@ -12899,6 +12900,19 @@ steps without implementing a second journal or evaluator. Record the held-out
 comparison policy, exact serving generation and rollback observation in the
 28b evidence so later protocol adapters can project them without reinterpretation.
 
+After a bake-off, distributing its winning weights is a separate, planned
+host-artifact operation. An accepted comparison chooses an immutable artifact;
+it does not copy or activate it. Admit an exact source digest, format and
+revision, selected destination host/profile, export authority, capacity and
+retention before payload movement. Keep model bytes on an authenticated
+host-to-host data path. Queen and its bounded `coh-ref-c/v1` namespace may
+record chunk digests and operation evidence, but a reference is neither payload
+delivery nor destination verification. Do not route model bytes through Pi
+FUSE, MCP messages or A2A task artifacts. Distribution never implies format
+conversion or deployment to an incompatible MLX/CUDA runtime. The dedicated
+task below is inactive until selected; existing 28b lifecycle completion does
+not claim weight distribution.
+
 **Deliverables:** Configurable training/import, fixed evaluation and serving contracts, runtime canaries and verified promotion/rollback evidence.
 
 **Task breakdown**
@@ -12945,6 +12959,26 @@ Checks:
   - Python plan/submit/inspect/recover preserves the original operation and request digest across a lost response; wrong-identity, malformed or contradictory reports fail closed. MCP and A2A later project this same result through their separately admitted and activated tasks.
   - Publish negative comparisons and stochastic settings; HTTP success, registry publication and judge scores alone cannot qualify deployment.
 Deliverables: Usable native endpoint, fixed evaluation configuration, comparison/canary/rollback guide and m28b-serving-live report with observed served generations.
+
+Title/ID: m28b-verified-weight-distribution
+Milestone: 28b / m28b-verified-weight-distribution
+Goal: Distribute a bake-off-selected model artifact to admitted compatible hosts and verify exact destination bytes before a separate deployment decision.
+Inputs: Accepted m28b-evaluate-canary-promote-rollback result; shared 28 job/admission/identity/evidence contract; selected source and destination host profiles; bounded coh-ref-c/v1 references when Queen indexing is selected.
+Changes:
+  - apps/coh/src/peft/ + apps/host-ticket-agent/src/executors/ (planned) — one durable transfer identity and host-side data mover with destination capacity reservation, digest-addressed chunks, bounded resume and independent full-file verification; no arbitrary path-copy or provider credential forwarding.
+  - tools/coh-rtc/src/ + selected host profiles — generated transfer bounds and authority for source/destination, artifact digest/size/format, approved export, byte/chunk quotas, retention and cancellation; reject incompatible destination or stale winning generation before effects.
+  - tools/cohesix-py/cohesix/ + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — plan/submit/inspect/recover the shared operation and show distinct reference-published, bytes-moving, destination-verified and deployment states; Python and UI do not copy bytes or issue their own success verdict.
+  - Host executor/CLI/Python tests + matrix/catalog — m28b-weight-distribution-live using a genuine model weight of at least 1 GiB from a Mac source to one qualified Linux AArch64 NVIDIA destination, with a second destination only when advertised.
+Commands:
+  - cargo test --locked -p coh --test peft_release
+  - cargo test --locked -p host-ticket-agent --lib executors::artifact_transfer
+  - python3 -m pytest -q tools/cohesix-py/tests/test_model_release.py tools/cohesix-py/tests/test_artifact_transfer.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-weight-distribution-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28b-weight-distribution-live"
+Checks:
+  - The source digest/size and frozen bake-off choice bind every chunk and the destination receipt. A separately observed destination reassembly and full SHA-256 match precede verified transfer; activation needs its own compatible provider admission and serving canary.
+  - Lost response, source/destination restart and interrupted transport recover the same operation, reconcile present chunks by digest and never infer success from a Queen reference, transport exit or A2A/MCP client state. Record actual payload route and bytes; bounded Pi references are measured separately.
+  - Wrong host/format/base, stale choice, revoked export, insufficient space, changed/truncated chunk, unsafe path and cross-subject receipt access refuse or remain explicitly unresolved without a replacement effect.
+Deliverables: Bounded host-transfer contract, source and destination receipts, recovery/operator guide and m28b-weight-distribution-live evidence separating reference publication, payload movement, verification and deployment.
 ```
 
 **Checks / definition of done:** both genuine training and independent import work; a real client uses
@@ -13181,7 +13215,8 @@ availability is explicit.
 
 **Value:** ordinary agents use useful Cohesix workflows without learning its namespaces.
 **Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected
-28a/28b actions; Apple providers only when exposed.
+28a/28b actions; accepted 28c MLX actions only when exposed. The Linux-hosted
+protocol and CUDA/PEFT path remain usable without Apple.
 
 Use a pinned MCP revision and maintained SDK where suitable. Provide the network
 transport needed by NeMo and a packaged local desktop-client path, reusing transport
@@ -13189,6 +13224,36 @@ adapters rather than authority implementations. Curate capability discovery,
 preflight/submit/status/cancel/recover, adapter comparison/promotion/rollback and
 evidence tools/resources. Generate schemas/descriptions from the shared contract;
 no generic arbitrary file-write or complete administrative catalogue requirement.
+
+When qualified MLX and CUDA providers are selected, project their approved
+mixed workflows through the same typed job and recipe operations. Discovery and
+preflight identify the selected provider/host profile, capability, capacity,
+budget, compatible artifacts and authorised transfer boundary for each stage.
+The CUDA host may be any compatible NVIDIA platform with an independently
+qualified OS/driver/CUDA/package profile, including JetPack where applicable;
+one platform's evidence does not qualify another. MCP carries bounded
+references and existing stage/job identities, not implicit raw payload transfer,
+backend conversion, resource escalation or fallback to another host.
+When `m28b-verified-weight-distribution` has been accepted and enabled for a
+selected host pair, expose its shared operation as scoped artifact discovery,
+destination preflight, explicit submit, status/cancel/recover and verified
+destination receipt. A client may then distribute the selected winner after
+the bake-off; promotion/activation remains a separate admitted operation.
+Without that host operation, discovery reports unavailable rather than offering
+a copy-shaped tool. MCP resources and any later read-only FUSE projection carry
+bounded references, never weight bytes or write-triggered transfer effects.
+Include the vMLX desktop application as a named MCP client compatibility path:
+its configured MCP client connects to the Cohesix server through a supported
+authenticated transport, discovers only admitted tools and observes the same
+CUDA/PEFT and qualified MLX/CUDA job identities as other clients. Pin the app,
+MCP SDK and transport versions in that path and verify actual tool discovery,
+execution, refusal and lost-response recovery. vMLX's model gateway and MCP
+client are separate roles; its OpenAI-compatible endpoint is not an MCP server
+or a Cohesix provider receipt. This path does not require Cohesix's 28c MLX
+provider or make an Apple host mandatory for the Linux MCP service.
+Keep the Python library's selected workflow requests and result views aligned
+with these provider/host, identity, transfer and recovery fields through its
+existing shared CLI/REST path; MCP adds no separate Python authority or verifier.
 
 Publish examples, counterexamples, required authority, pending/terminal semantics,
 refusal and recovery. Preserve delegated identity, shared budgets, revocation and
@@ -13217,16 +13282,18 @@ Commands:
 Checks:
   - All master/MCP combinations enforce policy on both transports, with no disabled listeners/handlers/discovery/streams/tasks and no CLI/env override.
   - Unauthenticated/bad-Origin/incompatible-revision/oversize traffic fails deterministically; bounded cleanup preserves underlying accepted jobs and REST/A2A independence.
+  - Probe the selected NeMo Agent Toolkit `mcp_client` release against the chosen network transport and delegated auth: its native client can inspect a generated tool name/schema, and an unsupported transport or credential mode is identified before the workflow kit is built. This compatibility probe is not M28f workflow acceptance.
 Deliverables: Pinned transport/configuration contract, packaged launch paths and focused protocol/auth/control evidence; live useful-work closure remains the next task.
 
 Title/ID: m28d-mcp-selected-workflows
 Milestone: 28d / m28d-mcp-selected-workflows
-Goal: Let an ordinary MCP client discover, complete and recover the selected CUDA/PEFT workflows.
-Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; shared generated registry; maintained SDK and named standard client.
+Goal: Let an ordinary MCP client discover, complete and recover selected CUDA/PEFT and qualified mixed MLX/CUDA workflows.
+Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when weight distribution is advertised; accepted 28c MLX provider and approved mixed workflow when selected; shared generated registry; maintained SDK and named standard client; pinned vMLX desktop/client version for its compatibility path.
 Changes:
-  - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors and bounded resources.
+  - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors, bounded resources and selected mixed-provider stages/transfer refs; add artifact distribution operations only after accepted m28b-verified-weight-distribution.
   - apps/hive-gateway/tests/{mcp_protocol,mcp_workflows}.rs (planned) — mapping parity, visibility, required fields and cross-client idempotency; no direct provider calls or model-authored success.
-  - docs/HOST_TOOLS.md + docs/HOST_API.md + installation/doctor owners — versioned ordinary-client setup and recovery examples; matrix/catalog gain m28d-mcp-live.
+  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — review and align selected mixed-provider request/status fields, original stage identities, explicit transfers and recovery with the same generated operation contract; if distribution is selected, project its transfer identity and destination receipt through the existing CLI/REST execution and verifier path.
+  - docs/HOST_TOOLS.md + docs/HOST_API.md + installation/doctor owners — versioned ordinary-client and vMLX MCP configuration, transport/auth setup and recovery examples; matrix/catalog gain m28d-mcp-live and a separate vMLX client compatibility record.
 Commands:
   - cargo test --locked -p hive-gateway --test mcp_protocol --test mcp_workflows
   - cargo test --locked -p host-ticket-agent --lib
@@ -13235,6 +13302,10 @@ Checks:
   - Named ordinary client and exact version complete a useful CUDA job and PEFT comparison/deployment operation inside standing authority; refusal and lost-response recovery preserve original identities.
   - Each selected operation has generated input/output/authority/lifecycle/evidence mapping; scoped discovery hides inaccessible records. Credential forwarding, arbitrary writes and caller-supplied receipts refuse.
   - PEFT tools project the accepted 28b operation/request identity, held-out comparison and exact serving generation; only the shared verifier's successful requested outcome is labelled verified. Lost tool responses reconcile the original operation, including recovered failure and rollback blockers.
+  - When MLX and CUDA are advertised together, the named client completes a selected workflow using both providers and recovers the original stage/job identities. Discovery and preflight expose actual host capabilities, capacity and permitted transfer refs; wrong host, incompatible artifact, exhausted budget and unapproved payload transfer refuse before effects. Queueing or provider unavailability cannot imply completion or silently select another host.
+  - If weight distribution is advertised, a standard MCP client submits a bake-off-selected artifact to one compatible destination through the accepted shared host operation, loses a tool response, then recovers the original transfer identity and destination-verified full digest. Refused export, insufficient space and incompatible format create no payload effect; a Queen reference or successful tool call never counts as delivered bytes.
+  - The installed vMLX client, when claimed supported, connects with its actual configured MCP transport and delegated credentials; its session discovers tools and model-backed calls preflight, submit and recover permitted CUDA/PEFT work. Confirm tool names/schema, client-side tool policy, refusal visibility and original operation identity across a lost response. A vMLX model response or MCP tool result alone cannot certify provider completion; no vMLX session or unavailable compatible model is recorded as a blocker, not a passing mock.
+  - The installed Python wheel projects the same selected request identity, host/provider selection, pending/refused/terminal states and verified outcome where its API exposes those operations; Python output cannot supply an MCP receipt or independent success verdict.
   - MCP-only operation works; read-only conformance cannot close mutating acceptance. Real shared-budget/revocation tests use CLI/REST and MCP without requiring A2A.
 Deliverables: Generated selected catalogue, client configuration/guide and m28d-mcp-live outcome/recovery evidence.
 ```
@@ -13261,6 +13332,26 @@ durable jobs, not another scheduler, mailbox or checkpoint engine. A task does
 not grant arbitrary sub-actions. Each effect needs fresh admission and shared
 accounting; retry across protocols cannot reset budgets or repeat uncertain work.
 Map terminal/failed/cancelled/ambiguous states from observed provider outcomes.
+For a selected mixed MLX/CUDA workflow, the A2A task correlates its existing
+stage/job identities, provider/host selections and authorised artifact transfers.
+If accepted `m28b-verified-weight-distribution` is selected, expose a distinct
+distribution skill backed by its existing durable transfer operation. Task
+progress may link bounded chunk-reference and byte-count evidence, but task
+completion requires the scoped destination verification receipt; deployment
+remains a separate authorised task/action. Without the host operation the skill
+is absent. A2A artifacts never carry the model bytes or create a new copy path.
+Queue delay, capacity refusal, disconnect and revocation remain visible without
+submitting a replacement effect. Delegation cannot change hosts, export private
+inputs, convert incompatible artifacts or expand the workflow's admitted
+authority. The A2A service remains usable on its Linux CUDA/PEFT path when
+Apple is absent.
+For a vMLX-assisted agent, a named A2A-capable peer uses vMLX's explicitly
+configured OpenAI-compatible model endpoint while the peer speaks A2A to
+Cohesix. Verify this composition end to end when vMLX compatibility is
+claimed; do not label the vMLX app itself an A2A peer or turn its model/tool
+output into task, admission or outcome authority. A selected remote CUDA model
+endpoint is separate from Cohesix CUDA job execution, with explicit endpoint,
+data-routing and credential boundaries rather than an implicit fallback.
 Arbitrary push callbacks, extra bindings and generic multi-agent coordination
 stay in 36/34.
 
@@ -13271,21 +13362,27 @@ stay in 36/34.
 ```text
 Title/ID: m28e-a2a-durable-jobs
 Milestone: 28e / m28e-a2a-durable-jobs
-Goal: Delegate and recover long-running selected jobs through a standard A2A peer.
-Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; shared gateway; pinned public A2A revision/binding and maintained SDK; no MCP dependency.
+Goal: Delegate and recover long-running selected jobs, including qualified mixed MLX/CUDA workflows, through a standard A2A peer.
+Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when its skill is advertised; accepted 28c MLX provider and approved mixed workflow when selected; shared gateway; pinned public A2A revision/binding and maintained SDK; selected NeMo Agent Toolkit native A2A client binding; a pinned vMLX model endpoint and named A2A-capable peer for the vMLX compatibility path; no MCP dependency.
 Changes:
-  - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency.
+  - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency; advertise distribution only for an accepted underlying host operation.
   - apps/hive-gateway/src/a2a/ (planned) — canonical task-to-job ID correlation; map pending/running/input-required/terminal/cancel-requested/cancel-confirmed/uncertain states to the selected binding without inventing terminal success.
   - apps/hive-gateway/tests/{agent_protocol_controls,a2a_protocol,a2a_jobs}.rs (planned) — scoped task/artifact access, stream backpressure and cursor expiry, cancellation race, restart/reconnect and independently disabled endpoints.
-  - docs/HOST_API.md + docs/HOST_TOOLS.md + matrix/catalog — named standard peer configuration and m28e-a2a-live; disabled A2A leaves underlying jobs recoverable through existing authenticated surfaces.
+  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align the Python view of selected mixed jobs, stage lineage and verified outcomes, including transfer identity and destination receipt when selected, with the same shared operation after A2A reconnect; do not add a Python-owned task journal or provider executor.
+  - docs/HOST_API.md + docs/HOST_TOOLS.md + matrix/catalog — named standard peer configuration, vMLX model-endpoint/peer setup and m28e-a2a-live with a separate vMLX composition record; disabled A2A leaves underlying jobs recoverable through existing authenticated surfaces.
 Commands:
   - cargo test --locked -p coh-rtc
   - cargo test --locked -p hive-gateway --test agent_protocol_controls --test a2a_protocol --test a2a_jobs
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28e-a2a-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28e-a2a-live"
 Checks:
   - A2A-only peer delegates a real job, disconnects, reconnects after gateway restart and obtains the correct scoped provider outcome/artifact references without re-execution.
+  - Before locking the binding, the selected NeMo Agent Toolkit `a2a_client` can read the scoped Agent Card, resolve a selected skill and use native task lookup/cancellation against the gateway. Its client timeout does not erase or silently cancel an accepted Cohesix job; full NeMo workflow acceptance remains M28f.
   - Pending cancellation never means confirmed termination; ambiguous native outcomes remain explicitly uncertain and accounted. Stale/expired cursors return a bounded resynchronisation path.
   - A PEFT task retains the same release operation/request identity, serving generation, verified-outcome verdict and evidence references after reconnect. Task completion alone cannot upgrade a failed comparison, recovered failure or rollback blocker to release success.
+  - When a mixed workflow is advertised, an A2A-only peer delegates it across selected MLX and CUDA providers, disconnects during pending or running work, and reconnects to the same stage/job lineage and verified outcome. Wrong-host, over-budget, incompatible-artifact and unapproved-transfer requests refuse; no task state supplies a missing native outcome or authorises a new host.
+  - If weight distribution is advertised, an A2A-only peer delegates the selected winner to a compatible destination, disconnects during real byte movement and reconnects to the same transfer/job identity and destination receipt. Task completion cannot replace the full-file digest check; failed or uncertain transfer remains distinguishable from deployment, and a cross-protocol retry cannot copy the bytes a second time.
+  - When vMLX-assisted A2A is claimed, the named peer uses a live pinned vMLX model session or explicitly selected remote endpoint, delegates a permitted CUDA/PEFT job through A2A, and reconnects to the same scoped task/job outcome after interruption. Record model endpoint, peer and provider identities separately; model text, tool calls and task completion do not establish a successful provider outcome.
+  - Python observation of that shared operation agrees with the A2A task's underlying job identity, native outcome and evidence reference; protocol task completion cannot upgrade a Python pending or failed result.
   - All master/A2A flag combinations, cross-subject reads, unauthorised sub-actions, malformed/oversize traffic, slow consumers and revoked scopes fail safely; no push callbacks or second scheduler.
 Deliverables: Pinned state-mapping table, service/peer package, lifecycle/recovery guide and m28e-a2a-live evidence separate from MCP acceptance.
 ```
@@ -13308,6 +13405,16 @@ Ship a pinned kit with version constraints/lockfile, concise configuration,
 authentication/secret references, typed outputs, correlation and runnable workflows.
 Use a small plugin only for a demonstrated native-configuration gap; no fork,
 generic wrapper framework or duplicate SDK/action catalogue.
+Configure the native MCP function group with a selected tool list, protected
+transport and bounded timeout/reconnect behavior. The native A2A client uses
+the selected release's per-user workflow and Agent Card/task helpers. If more
+than one user is served, use per-user MCP clients as well; map each verified
+gateway credential to the same delegated Cohesix subject across both protocols.
+Toolkit user-ID resolution or model text is not authentication, admission or a
+job receipt.
+Claim a combined authenticated per-user MCP and A2A Toolkit process only after
+the pinned release starts that exact configuration and both client paths work;
+otherwise keep the two native workflows separate and record the limitation.
 
 Require two real workflows: a NeMo agent preflights/submits/inspects an approved
 CUDA job through MCP; and a NeMo workflow delegates adapter evaluation/canary/
@@ -13318,9 +13425,13 @@ state; Cohesix owns admitted effects, operational recovery and receipts.
 Expose the accepted HF PEFT training/artifact/serving path through these workflows;
 it need not use NeMo Framework as trainer to be useful to NeMo agents. Qualify
 NeMo-produced imports by exact format/base/runtime evidence, never branding.
-Use the workflow's configured model endpoint without a new Cohesix inference
-proxy. Local/remote NIM or other NeMo services are separately selected and probed,
-not required alongside full NeMo Framework/Triton/Kubernetes on the 8GB Jetson.
+Use the workflow's configured model endpoint, including a qualified vMLX
+OpenAI-compatible gateway or selected CUDA serving endpoint, without a new
+Cohesix inference proxy. Pin and probe the chosen endpoint and keep NeMo's MCP
+and A2A clients connected to Cohesix's governed operations, not to a model
+endpoint as a substitute for job receipts. Local/remote NIM or other NeMo
+services are separately selected and probed, not required alongside full NeMo
+Framework/Triton/Kubernetes on the 8GB Jetson.
 
 Use native Toolkit evaluation/profiling to compare direct and Cohesix-backed
 operation on the same task: setup, credential exposure, results, recovery,
@@ -13339,7 +13450,7 @@ Milestone: 28f / m28f-nemo-agent-toolkit-kit
 Goal: Provide useful Cohesix tools/jobs in an ordinary pinned NeMo Toolkit installation without a fork.
 Inputs: 28d/28e; verified Toolkit native MCP/A2A clients; installed coh/Python/evidence interfaces; selected 28a/28b recipes.
 Changes:
-  - integrations/nemo-agent-toolkit/ (planned) — exact dependency lock/version constraints, native MCP/A2A configurations, secret references, typed result/correlation mapping and two runnable workflows; add a plugin only for a demonstrated native-configuration gap.
+  - integrations/nemo-agent-toolkit/ (planned) — exact dependency lock/version constraints, selected-tool `mcp_client` and per-user `a2a_client` configurations, protected transport/auth references, typed result/correlation mapping and two runnable workflows; add a plugin only for a demonstrated native-configuration gap.
   - scripts/install/ + docs/HOST_TOOLS.md + tools/cohesix-py/README.md — distributable kit and clean-environment setup/doctor instructions; identify Toolkit host, model endpoint, Pi Queen and separate GPU executor.
   - tests/test_nemo_agent_toolkit.py (planned) + matrix/catalog — config validation, dependency/optional-service refusal, installed artifact provenance and m28f-nemo-install.
 Commands:
@@ -13347,6 +13458,8 @@ Commands:
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28f-nemo-install --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28f-nemo-install"
 Checks:
   - Clean installation uses locked candidate/released artifacts without editable checkout or private steps; actual Toolkit native client compatibility is verified before configuring a fallback plugin.
+  - The pinned Toolkit's own MCP ping/tool-list/tool-call path resolves the selected Cohesix schema and a denied call; its A2A client resolves the scoped Agent Card and task helpers. Record native package versions, selected tool names, credential mode and transport rather than inferring compatibility from protocol labels.
+  - If the kit advertises both protected clients in one per-user Toolkit process, its exact pinned configuration starts and authenticates both paths. A failed combined startup is reported with a separate-workflow configuration, not hidden by dropping per-user auth.
   - No raw executor credentials, parallel action registry, mandatory Apple dependency or implicit NIM/Framework/Triton/Kubernetes deployment; optional services report unavailable when absent.
 Deliverables: Versioned kit/lockfile, documented reference topology/client matrix, quick start and m28f-nemo-install evidence.
 
@@ -13355,7 +13468,7 @@ Milestone: 28f / m28f-nemo-live-workflows-and-value
 Goal: Demonstrate useful CUDA and adapter work, bounded autonomy and recovery through both native Toolkit clients.
 Inputs: m28f-nemo-agent-toolkit-kit; real selected CUDA/PEFT providers; configured model endpoint; fixed task data/incumbent; native Toolkit evaluation/profiling.
 Changes:
-  - integrations/nemo-agent-toolkit/ — MCP CUDA preflight/submit/inspect and A2A adapter evaluate/canary/release workflows, failed-candidate and interruption recovery; NeMo retains its own planner/checkpoint state.
+  - integrations/nemo-agent-toolkit/ — MCP CUDA preflight/submit/inspect and A2A adapter evaluate/canary/release workflows using a real pinned HF PEFT candidate, failed-candidate and interruption recovery; NeMo retains its own planner/checkpoint state.
   - Existing conformance collector + docs/BENCHMARKS.md — same-input direct versus Cohesix-backed procedure with fixed quality/control-latency budgets, setup/credential/manual-intervention measures and native Toolkit trace references.
   - docs/HOST_TOOLS.md + matrix/catalog — m28f-nemo-live with denied action, cross-protocol retry/budget exhaustion, reconnect and portable evidence links.
 Commands:
@@ -13363,6 +13476,8 @@ Commands:
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28f-nemo-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28f-nemo-live"
 Checks:
   - Both ordinary native clients cause and observe real permitted work; a denied action causes no effect; failed candidate cannot promote and interruption preserves the original job identity.
+  - The A2A path uses the actual PEFT adapter/base metadata and verifies the served generation after canary/promotion or rollback. Client timeout, reconnect and native `get_task`/`cancel_task` helpers preserve the original task/job identity; timeout alone is neither confirmed cancellation nor failed training.
+  - In the multi-user configuration, two Toolkit users cannot inspect each other's scoped records, tasks, adapters or evidence, even if client-supplied user IDs differ from verified gateway subjects; no Toolkit credential is forwarded to the CUDA executor.
   - One shared subject/workflow budget survives MCP/A2A retry and restart; traces correlate with verified outcomes but do not replace them.
   - Comparison uses identical tasks/data and predeclared budgets, recording adverse/unknown results; another person or agent reproduces the instructions with evaluator identity disclosed.
 Deliverables: Two reproducible workflows and m28f-nemo-live report with actual outcomes, failures, control overhead and practical setup/evidence assessment.
@@ -13481,17 +13596,18 @@ Goal: Align every shipped host tool, Python library and SwarmUI operation with t
 Inputs: Accepted 28–28f implementation and selected manifests; exact Release B candidate and installed client packages; configs/generated/implementation_surface_inventory.json; 27e host tools/Python and 27f SwarmUI contracts; docs/HOST_TOOLS.md; docs/PYTHON_SUPPORT.md; docs/SWARMUI.md; docs/USERLAND_AND_CLI.md.
 Changes:
   - apps/{coh,cohsh,hive-gateway,gpu-bridge-host,host-sidecar-bridge,host-ticket-agent,cas-tool}/** + crates/coh-cli/src/** + their tests — review all seven shipped host executables against their selected implementation; reconcile commands, parser/help/manuals, inputs, authority, errors, status and recovery, and clearly gate any advertised operation lacking a reachable implementation.
-  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align typed requests, authentication, identity, bounded inputs, refusal and pending/terminal outcome mapping with the same selected operations in the installed wheel.
+  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align typed requests, authentication, identity, bounded inputs, refusal and pending/terminal outcome mapping with the same selected operations in the installed wheel, including selected MLX/CUDA host choice, transfer refs and stage lineage.
   - apps/swarmui/src/** + apps/swarmui/frontend/** + apps/swarmui/tests/** — align the `coh --ui-schema` handshake, visible controls, availability/disabled states, job identity and evidence views with the selected contracts in the installed app; fixture/replay content remains labelled as retained evidence.
   - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/SWARMUI.md + docs/USERLAND_AND_CLI.md + docs/TEST_PLAN.md + release evidence index — record one capability-by-capability as-built parity matrix, corrected public help/examples and the complete host-tool/Python/benchmark compatibility review, including unaffected surfaces.
 Commands:
   - cargo test --locked -p coh -p cohsh -p hive-gateway -p gpu-bridge-host -p host-sidecar-bridge -p host-ticket-agent -p cas-tool
   - cargo test --locked -p swarmui --test workbench --test console_parity
-  - python3 -m pytest -q tools/cohesix-py/tests/test_parity.py tools/cohesix-py/tests/test_generated_contract.py tools/cohesix-py/tests/test_provider_registry.py tools/cohesix-py/tests/test_selected_jobs.py
+  - python3 -m pytest -q tools/cohesix-py/tests/test_parity.py tools/cohesix-py/tests/test_generated_contract.py tools/cohesix-py/tests/test_provider_registry.py tools/cohesix-py/tests/test_selected_jobs.py tools/cohesix-py/tests/test_playbooks.py tools/cohesix-py/tests/test_model_release.py
   - cargo test --locked -p coh-rtc implementation_surface && python3 scripts/ci/check_implementation_surfaces.py --inventory configs/generated/implementation_surface_inventory.json
 Checks:
   - For each advertised selected capability, trace the generated inventory and implementation to installed CLI, Python and SwarmUI entry points where applicable; record supported, unavailable and deliberately client-specific surfaces with reasons. No client claims a selected capability solely from a fixture, planned task, stale package or documentation.
   - Shared operations agree on admission/authority, validated inputs and bounds, native job identity, denial/error, cancellation, ambiguous or pending recovery, terminal outcome and evidence. Unsupported or disabled operations refuse visibly and consistently; SwarmUI resource resolution and `coh --ui-schema` match the installed binary without a source checkout.
+  - For an advertised mixed MLX/CUDA operation, Python and the protocol projections preserve selected provider/host and approved transfer boundaries, original stage identity and the shared verifier's outcome; no Python status, MCP tool result or A2A task state independently promotes success.
   - Verify exact source/profile/generated-policy/package identity for all three installed client surfaces. Reuse a shared job from m28g-adoption-live for cross-client observation; focused tests and fixtures prove client contracts only, while live provider, target and release claims retain their separate acceptance cases.
 Deliverables: Hash-bound as-built client parity matrix, corrected shipped surfaces and manuals, focused test reports, and an explicit host-tool/Python/benchmark compatibility record in the Release B evidence index.
 
@@ -13546,10 +13662,13 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | --- | --- | --- |
 | User CUDA / `m28a-workloads-live`, `m28a-recovery-live` | Pi Queen + Jetson GPU; installed CLI/Python and Mac-originated SwarmUI | Useful reference and independent adaptation, each advertised execution lane, device/output verification, bounded cancel/lost-response recovery; native IDs and signed outcomes. |
 | PEFT lifecycle / `m28b-peft-live`, `m28b-serving-live` | Pi Queen + Jetson; installed training/import and real serving client | Both training and independent import, fixed held-out comparison, actual canary, rejected candidate, interrupted promotion and verified incumbent rollback. |
+| Weight distribution / `m28b-weight-distribution-live` when advertised | Mac source, Pi Queen reference path when selected, and each qualified NVIDIA or MLX destination profile | Real weight at least 1 GiB, exact source and destination SHA-256, observed host payload route/byte count, bounded Queen references, interruption/resume under one identity, and separate activation evidence. Reference-only tests do not close this row. |
 | Native Apple / `m28c-platform-live`, `m28c-actions-live`, `m28c-assistance-live` | Exact macOS 27/SDK/device/language/region; signed SwarmUI, actual Siri and Shortcuts | Availability/signing evidence, speech-driven admitted action and durable result, scoped assistance/proposal; unavailable/disabled Intelligence preserves manual operations. |
 | Local Apple compute / `m28c-mlx-live` | Same supported Mac; pinned MLX/Metal model/data/runtime | Observed local GPU inference/train/evaluate/serve/rollback and bounded cancellation/recovery; no implicit CPU/remote fallback. |
 | Ordinary protocols / `m28d-mcp-live`, `m28e-a2a-live` | Standard named/versioned MCP client and A2A peer; Linux-hosted gateway/provider path without Apple | MCP-only and A2A-only complete selected real work; scoped discovery, denial, cancel and reconnect resolve native outcomes. |
-| NeMo / `m28f-nemo-install`, `m28f-nemo-live` | Clean pinned Toolkit host and configured model endpoint; Pi/Jetson; Apple absent | Native MCP CUDA and A2A adapter journeys, denied/failed/interrupted cases, same-input direct comparison and reproducible configuration. |
+| vMLX client composition / separate M28d/M28e compatibility records | Pinned installed vMLX app and model, configured MCP transport; named A2A peer using the selected vMLX model endpoint | vMLX MCP tool execution reaches admitted CUDA/PEFT work with original identity and refusal/recovery; vMLX-backed A2A peer delegates and reconnects without promoting model text or task state to a native outcome. Missing session or peer is recorded as blocked. |
+| Selected mixed MLX/CUDA / mixed subcases of `m28d-mcp-live`, `m28e-a2a-live` | Supported Mac MLX and compatible NVIDIA CUDA host profiles when both providers are advertised; JetPack where applicable | Each protocol independently projects selected work that uses both providers with explicit host selection, bounded transfer, capacity refusal, original stage identities and verified outcome after disconnect; each advertised NVIDIA platform has its own live qualification. |
+| NeMo / `m28f-nemo-install`, `m28f-nemo-live` | Clean pinned Toolkit host and configured model endpoint; Pi Queen and qualified NVIDIA CUDA host, JetPack where applicable; Apple absent | Native MCP CUDA and per-user A2A journeys using a real HF PEFT candidate, denied/failed/interrupted cases, task recovery and subject isolation, same-input direct comparison and reproducible configuration. |
 | Protocol composition / `m28g-integration-live` | MCP-only, A2A-only, both, neither; each advertised gateway host | Live endpoint/disabled-surface checks, shared identity/budget/revocation, disable/restart with existing jobs retained and authenticated CLI/REST recovery. Master false defeats every subordinate flag/override. |
 | Client as-built alignment / `m28g-host-clients-as-built-alignment` | Exact installed host CLI tools, Python wheel and SwarmUI from each selected package | Capability-by-capability inventory and contract parity; matching authority, validation, identity, refusal/recovery and evidence across shared operations, with unavailable and client-specific surfaces stated; shared live job observed through m28g-adoption-live. |
 | Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |

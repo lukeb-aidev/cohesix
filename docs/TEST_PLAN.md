@@ -163,6 +163,56 @@ alone is diagnostic, and vMLX tool/MCP endpoints confer no Cohesix authority.
 `m28c-assistance-live` and `m28c-developer-live` retain their separate fresh
 component and integrated evidence obligations before Milestone 28c closure.
 
+Planned M28d/M28e `m28d-mcp-live` and `m28e-a2a-live` each require a named
+standard client to complete and recover selected real work independently. When
+MLX and CUDA are advertised together, each case includes a selected workflow
+using both native providers on their qualified host profiles. Record exact
+provider/host selection, bounded capacity and transfer decisions, original
+stage/job identities, native outcomes and shared-verifier result. Test wrong
+host, incompatible artifact, exhausted capacity/budget, unapproved transfer,
+lost response and reconnect without a new effect. The installed Python wheel
+must project the same shared operation through its CLI/REST path, including
+pending/refused/failed states; focused Python tests cannot replace live MCP,
+A2A, MLX or CUDA evidence. JetPack observations apply only to a host profile
+that actually uses JetPack; another NVIDIA platform needs its own qualification.
+The planned `m28b-verified-weight-distribution` extension is a prerequisite
+before either protocol advertises model-weight distribution. Its separate
+`m28b-weight-distribution-live` case needs an actual model weight of at least
+1 GiB, frozen bake-off winner and source digest, admission before bytes move,
+observed host-to-host payload route and byte count, destination chunk checks,
+reassembly and independent full-file SHA-256. Record Pi/Queen reference bytes
+separately from payload bytes; publishing `coh-ref-c/v1` references through a
+real FUSE mount does not prove that the Pi carried the model. Interrupt the
+transfer and recover the same durable identity without duplicating verified
+chunks; reject wrong host/format, revoked export, insufficient space, corrupt
+chunk and cross-subject receipt access. The MCP-only and A2A-only live cases
+must each invoke and recover that accepted transfer independently if their
+catalogue advertises it. Check that MCP tool success, A2A task completion and
+Python status agree with the scoped destination receipt; none is a substitute
+for the native byte/digest proof or a separate serving activation canary.
+Before claiming vMLX compatibility, pin the installed app, model, MCP SDK,
+transport and peer versions. Run its configured MCP client against the real
+Cohesix server for discovery, admitted CUDA/PEFT work, refusal and recovery;
+record vMLX tool policy and the original shared operation identity. For A2A,
+use a named A2A-capable peer with vMLX as its selected model endpoint, then
+exercise delegation, interruption and reconnect against Cohesix. Record the
+model endpoint, A2A peer and GPU provider separately. A vMLX API response,
+model tool call or task state is not native CUDA/MLX execution or a verified
+PEFT release. If no vMLX model session or compatible peer exists, report the
+live slice blocked and leave generic MCP/A2A and NeMo evidence separate.
+For planned `m28f-nemo-install` and `m28f-nemo-live`, record the pinned NeMo
+Agent Toolkit version and exercise its native MCP transport/auth, selected
+tool discovery and call, plus its per-user A2A Agent Card, task lookup and
+cancellation helpers. The workflow must use an actual selected CUDA job and
+HF PEFT adapter/base/served generation, including a denied or failed candidate.
+Test two verified subjects, client timeout, disconnect and cross-protocol retry:
+the same underlying job remains recoverable, and one subject cannot read the
+other's scoped task or evidence. Toolkit user-ID resolution, tool output and
+agent traces do not supply gateway authentication or native provider proof.
+If a single Toolkit process is claimed to host both protected per-user clients,
+require a startup and authenticated call on each path for that exact version;
+otherwise report separate native workflows and the combined-mode limitation.
+
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
 | Parsing, bounds, arithmetic, serialization, ABI/layout, policy, replay, pure state transitions | Small deterministic tests with independent expected truth | Stage 01 and AGENTS Test Discipline |
