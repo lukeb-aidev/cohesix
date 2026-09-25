@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Expose installed Apple actions for capability checks and governed gateway job inspection/cancellation.
+// Purpose: Expose installed Apple actions for capability checks and governed gateway job start, inspection and cancellation.
 // Copyright 2026 Lukas Bower
 
 import AppIntents
@@ -29,6 +29,28 @@ struct InspectCohesixJobIntent: AppIntent {
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let credentials = try GatewayKeychain.load()
         let job = try await GatewayJobs(credentials: credentials).inspect(admissionID)
+        return .result(value: job.summary)
+    }
+}
+
+struct StartApprovedCohesixJobIntent: AppIntent {
+    static let title: LocalizedStringResource = "Start Approved Cohesix Job"
+    static let description = IntentDescription(
+        "Start one selected standing-scope service recipe using the original Hive Gateway authority."
+    )
+
+    @Parameter(title: "Approved Scope ID") var scopeID: String
+    @Parameter(title: "Stable Request ID") var requestID: String
+
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        try GatewayJobs.validateAdmissionID(scopeID)
+        try GatewayJobs.validateRequestID(requestID)
+        try await requestConfirmation(
+            dialog: "Start approved Cohesix scope \(scopeID) for request \(requestID)?"
+        )
+        let credentials = try GatewayKeychain.load()
+        let job = try await GatewayJobs(credentials: credentials)
+            .startApproved(scopeID: scopeID, requestID: requestID)
         return .result(value: job.summary)
     }
 }

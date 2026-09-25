@@ -142,6 +142,13 @@ generation.
 Native job inspection also now presents the gateway's selected action, target
 and original ticket ID, with focused contradictory-target refusal. Its actual
 installed, authenticated job path remains unobserved.
+The selected service-scope start route now has gateway, `coh`, Python and
+Shortcuts source paths with a stable request ID and fresh gateway-derived
+facts. Focused contract checks and an extension build pass. The newly
+development-signed installed app exposes the start action in Shortcuts;
+no authenticated live start or MLX release is claimed from this observation.
+The [native actions record](audit/M28C_APPLE_ACTIONS_RECORD.md) retains its
+exact diagnostic proof limits.
 
 ## Capability snapshot
 

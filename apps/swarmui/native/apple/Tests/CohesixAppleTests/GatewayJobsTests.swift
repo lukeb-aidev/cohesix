@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Verify gateway job IDs, authenticated request shapes and refusal of contradictory results.
+// Purpose: Verify approved job start, stable identities, authenticated request shapes and refusal of contradictory results.
 // Copyright 2026 Lukas Bower
 
 import CohesixApple
@@ -10,6 +10,7 @@ private final class StubProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var responses: [String: (Int, Data)] = [:]
     nonisolated(unsafe) private static var requests: [String: URLRequest] = [:]
+    nonisolated(unsafe) private static var requestBodies: [String: Data] = [:]
 
     static func prepare(host: String, status: Int, body: Data) {
         lock.lock()
@@ -23,13 +24,28 @@ private final class StubProtocol: URLProtocol {
         return requests[host]
     }
 
+    static func observedBody(host: String) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestBodies[host]
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         let host = request.url!.host!
+        var body = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count > 0 { body = Data(buffer.prefix(count)) }
+        }
         Self.lock.lock()
         Self.requests[host] = request
+        Self.requestBodies[host] = body
         let selected = Self.responses[host]!
         Self.lock.unlock()
         let response = HTTPURLResponse(
@@ -63,6 +79,16 @@ private func record(id: String) -> Data {
     """.utf8)
 }
 
+private func started(scope: String, id: String) -> Data {
+    Data("""
+    {"schema":"cohesix-selected-job-response/v1","record":{"binding":{\
+    "scope_id":"\(scope)","admission_id":"mac-\(id)","ticket_id":"mac-\(id)",\
+    "action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart"},\
+    "execution":"reserved","delivery":"pending","cancel_requested":false,\
+    "result_sha256":null},"submission":"target_write_ack"}
+    """.utf8)
+}
+
 @Test func rejectsUnsafeGatewayInputs() throws {
     #expect(throws: GatewayJobError.self) {
         try GatewayCredentials(endpoint: "http://hive.example.invalid", requestToken: "token", delegatedTicket: "ticket")
@@ -72,6 +98,37 @@ private func record(id: String) -> Data {
     }
     #expect(throws: GatewayJobError.self) { try GatewayJobs.validateAdmissionID("one/two") }
     #expect(throws: GatewayJobError.self) { try GatewayJobs.validateAdmissionID(String(repeating: "a", count: 129)) }
+    #expect(throws: GatewayJobError.self) { try GatewayJobs.validateRequestID("../escape") }
+    #expect(throws: GatewayJobError.self) { try GatewayJobs.validateRequestID(String(repeating: "a", count: 97)) }
+}
+
+@Test func startsOnlyAnApprovedScopeWithStableIdentity() async throws {
+    let host = "start.example.invalid"
+    StubProtocol.prepare(host: host, status: 202, body: started(scope: "service-1", id: "run-123"))
+    let job = try await client(host: host).startApproved(scopeID: "service-1", requestID: "run-123")
+    #expect(job.binding.admissionID == "mac-run-123")
+    #expect(job.execution == "reserved")
+    let request = StubProtocol.observed(host: host)
+    #expect(request?.httpMethod == "POST")
+    #expect(request?.url?.path == "/v1/jobs/approved/service-1/start")
+    #expect(request?.value(forHTTPHeaderField: "Authorization") == "Bearer request-token")
+    #expect(request?.value(forHTTPHeaderField: "x-cohesix-ticket") == "delegated-ticket")
+    #expect(StubProtocol.observedBody(host: host) == Data(#"{"request_id":"run-123"}"#.utf8))
+}
+
+@Test func rejectsWrongApprovedScopeOrIdentity() async throws {
+    StubProtocol.prepare(host: "start-wrong.example.invalid", status: 202,
+                         body: started(scope: "other-scope", id: "run-123"))
+    await #expect(throws: GatewayJobError.self) {
+        try await client(host: "start-wrong.example.invalid")
+            .startApproved(scopeID: "service-1", requestID: "run-123")
+    }
+    StubProtocol.prepare(host: "start-refused.example.invalid", status: 403,
+                         body: Data(#"{"error":"EPERM revoked approved scope"}"#.utf8))
+    await #expect(throws: GatewayJobError.self) {
+        try await client(host: "start-refused.example.invalid")
+            .startApproved(scopeID: "service-1", requestID: "run-123")
+    }
 }
 
 @Test func inspectsOriginalAdmissionWithoutClaimingSuccess() async throws {
@@ -114,5 +171,15 @@ private func record(id: String) -> Data {
                          body: Data(changed.utf8))
     await #expect(throws: GatewayJobError.self) {
         try await client(host: "wrong-target.example.invalid").inspect("job_123")
+    }
+}
+
+@Test func rejectsClaimedTerminalWithoutItsRetainedResultDigest() async throws {
+    let changed = String(decoding: record(id: "job_123"), as: UTF8.self)
+        .replacingOccurrences(of: "\"execution\":\"uncertain\"", with: "\"execution\":\"confirmed\"")
+    StubProtocol.prepare(host: "false-terminal.example.invalid", status: 200,
+                         body: Data(changed.utf8))
+    await #expect(throws: GatewayJobError.self) {
+        try await client(host: "false-terminal.example.invalid").inspect("job_123")
     }
 }

@@ -1,11 +1,11 @@
 # Copyright 2026 Lukas Bower
 # SPDX-License-Identifier: Apache-2.0
-# Purpose: Define the OpenAPI description for the Cohesix hive-gateway REST API.
+# Purpose: Define the Hive Gateway REST API, including governed approved-scope job starts.
 # Author: Lukas Bower
 openapi: 3.1.0
 info:
   title: Cohesix Hive Gateway
-  version: 0.5.0
+  version: 0.6.0
   description: |-
     Host-only REST gateway that projects Cohesix console/file semantics into a
     JSON API. Responses mirror OK/ERR/END semantics and enforce manifest bounds.
@@ -462,6 +462,64 @@ paths:
           description: Delegation, scope, current facts or budget refused.
         "409":
           description: Target write outcome uncertain; reconcile original admission id.
+        "503":
+          description: Current native or target facts unavailable.
+  /v1/jobs/approved/{scope_id}/start:
+    post:
+      summary: Start one selected service scope with a stable request identity.
+      description: >-
+        The gateway derives the systemd.restart ticket from the operator-selected
+        standing scope and current native facts. Only that scope's subject may
+        start it. A repeated request ID returns the retained admission without
+        replaying an uncertain write. The admission ID is mac-<request_id>.
+        This route does not admit GPU workloads or MLX releases.
+      security:
+        - bearerAuth: []
+          delegatedTicket: []
+        - requestAuthHeader: []
+          delegatedTicket: []
+      parameters:
+        - name: scope_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: '^(?!-)(?!.*\.\.)[A-Za-z0-9._-]+$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [request_id]
+              properties:
+                request_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 96
+                  pattern: '^(?!-)(?!.*\.\.)[A-Za-z0-9._-]+$'
+      responses:
+        "200":
+          description: Original admission retained; no effect replay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobResponse"
+        "202":
+          description: Target ticket write acknowledged; native outcome remains pending.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedJobResponse"
+        "400":
+          description: Malformed request identity or target.
+        "403":
+          description: Delegation, scope, revocation, facts or budget refused.
+        "409":
+          description: Reused identity conflict or uncertain original write; reconcile its admission ID.
         "503":
           description: Current native or target facts unavailable.
   /v1/jobs/{admission_id}:

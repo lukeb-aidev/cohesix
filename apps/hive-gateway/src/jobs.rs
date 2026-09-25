@@ -17,7 +17,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use cohesix_authority::gpu::PublishedDevice;
 use cohesix_authority::standing::{
-    AdmissionFacts, JobBinding, StandingControls, StandingScopeFile,
+    AdmissionFacts, JobBinding, StandingControls, StandingScope, StandingScopeFile,
+    JOB_BINDING_SCHEMA,
 };
 use cohesix_authority::standing_ledger::{JobRecord, ReserveOutcome, StandingLedger};
 use cohesix_authority::AdmissionCorrelation;
@@ -43,6 +44,14 @@ const MAX_SUBMIT_BYTES: usize = 4096;
 pub(super) struct SubmitRequest {
     binding: JobBinding,
     ticket: HostTicketSpec,
+}
+
+/// A Shortcut carries an explicit stable request identity, not a caller-made
+/// ticket, action, target or stale fact snapshot.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ApprovedStartRequest {
+    request_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -337,6 +346,147 @@ fn build_selected_ticket(
     Ok((ticket, line))
 }
 
+fn approved_service_request(
+    scope: &StandingScope,
+    request_id: &str,
+    facts: &AdmissionFacts,
+) -> Result<SubmitRequest> {
+    cohesix_authority::validate_id(request_id).map_err(|_| anyhow!("EPERM request id"))?;
+    ensure!(
+        request_id.len() <= 96 && scope.action == "systemd.restart",
+        "EPERM unsupported approved recipe"
+    );
+    let unit = scope
+        .target
+        .strip_prefix("/host/systemd/")
+        .and_then(|value| value.strip_suffix("/restart"))
+        .context("EPERM approved service target")?;
+    host_sidecar_bridge::native::validate_native_id(unit)?;
+    let args = json!({"unit":unit});
+    let deadline = facts
+        .observed_unix_ms
+        .checked_add(300_000)
+        .context("ELIMIT approved deadline")?
+        .min(scope.expires_unix_ms);
+    ensure!(
+        deadline > facts.observed_unix_ms,
+        "EPERM expired approved scope"
+    );
+    let binding = JobBinding {
+        schema: JOB_BINDING_SCHEMA.to_owned(),
+        scope_id: scope.id.clone(),
+        admission_id: format!("mac-{request_id}"),
+        ticket_id: format!("mac-{request_id}"),
+        idempotency_key: format!("mac-{request_id}"),
+        subject: scope.subject.clone(),
+        action: scope.action.clone(),
+        target: scope.target.clone(),
+        input_sha256: hex::encode(Sha256::digest(serde_json::to_vec(&args)?)),
+        policy_sha256: facts.policy_sha256.clone(),
+        state_epoch: facts.state_epoch,
+        resource_generation: facts.resource_generation,
+        deadline_unix_ms: deadline,
+        units: 1,
+        attempt: 1,
+    };
+    let ticket = HostTicketSpec {
+        schema: HOST_TICKET_V1_SCHEMA.to_owned(),
+        id: binding.ticket_id.clone(),
+        idempotency_key: binding.idempotency_key.clone(),
+        action: binding.action.clone(),
+        target: Some(binding.target.clone()),
+        args,
+        expires_unix_ms: Some(deadline),
+        ..HostTicketSpec::default()
+    };
+    validate_spec(&ticket, SpecSource::RawRequest)?;
+    binding
+        .intent_sha256()
+        .map_err(|error| anyhow!("{error}"))?;
+    Ok(SubmitRequest { binding, ticket })
+}
+
+/// Start only a configured service recipe using a stable caller identity.
+/// An uncertain prior write is returned for reconciliation, never retried.
+pub(super) async fn start_approved(
+    State(state): State<AppState>,
+    Path(scope_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ApprovedStartRequest>,
+) -> Response {
+    let subject = match authorize_status(&state, &headers) {
+        Ok(subject) => subject,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    let ledger = match ledger(&state) {
+        Ok(ledger) => ledger,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    if cohesix_authority::validate_id(&request.request_id).is_err()
+        || request.request_id.len() > 96
+        || cohesix_authority::validate_id(&scope_id).is_err()
+    {
+        return fail(StatusCode::BAD_REQUEST, "EPERM approved request identity");
+    }
+    let scope = match ledger.scope(&scope_id) {
+        Some(scope) if scope.subject == subject && scope.action == "systemd.restart" => scope,
+        _ => return fail(StatusCode::FORBIDDEN, "EPERM approved scope"),
+    };
+    let status = match ledger.scope_status(&scope_id) {
+        Ok(status) => status,
+        Err(error) => return fail(StatusCode::FORBIDDEN, error),
+    };
+    if status.budget.revoked {
+        return fail(StatusCode::FORBIDDEN, "EPERM revoked approved scope");
+    }
+    let admission_id = format!("mac-{}", request.request_id);
+    match ledger.status(&admission_id) {
+        Ok(Some(record))
+            if record.binding.scope_id == scope_id && record.binding.subject == subject =>
+        {
+            return (
+                StatusCode::OK,
+                Json(JobResponse {
+                    schema: "cohesix-selected-job-response/v1",
+                    record,
+                    submission: "existing",
+                }),
+            )
+                .into_response();
+        }
+        Ok(Some(_)) => return fail(StatusCode::CONFLICT, "EPERM request identity conflict"),
+        Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+        Ok(None) => {}
+    }
+    let selected = scope.clone();
+    let state_for_facts = state.clone();
+    let facts = match tokio::task::spawn_blocking(move || {
+        let unit = selected
+            .target
+            .strip_prefix("/host/systemd/")
+            .and_then(|value| value.strip_suffix("/restart"))
+            .context("EPERM approved service target")?;
+        let ticket = HostTicketSpec {
+            action: "systemd.restart".into(),
+            target: Some(selected.target.clone()),
+            args: json!({"unit":unit}),
+            ..HostTicketSpec::default()
+        };
+        observe_facts(&state_for_facts, &ticket)
+    })
+    .await
+    {
+        Ok(Ok(facts)) => facts,
+        Ok(Err(error)) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+        Err(error) => return fail(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    let payload = match approved_service_request(scope, &request.request_id, &facts) {
+        Ok(payload) => payload,
+        Err(error) => return fail(StatusCode::BAD_REQUEST, error),
+    };
+    submit(State(state), headers, Json(payload)).await
+}
+
 pub(super) async fn submit(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -611,7 +761,50 @@ pub(super) async fn revoke_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cohesix_authority::standing::JOB_BINDING_SCHEMA;
+    use cohesix_authority::standing::{JOB_BINDING_SCHEMA, STANDING_SCOPE_SCHEMA};
+
+    #[test]
+    fn approved_start_derives_only_the_selected_service_and_fresh_facts() {
+        let scope = StandingScope {
+            schema: STANDING_SCOPE_SCHEMA.into(),
+            id: "service-1".into(),
+            subject: "operator-1".into(),
+            action: "systemd.restart".into(),
+            target: "/host/systemd/cohesix-agent.service/restart".into(),
+            policy_sha256: "a".repeat(64),
+            generation: 1,
+            expires_unix_ms: 500_000,
+            max_job_units: 1,
+            max_total_units: 4,
+            max_concurrent: 1,
+            max_retries: 1,
+            cooldown_ms: 0,
+            fact_max_age_ms: 5_000,
+            decision_ttl_ms: 5_000,
+        };
+        let facts = AdmissionFacts {
+            observed_unix_ms: 100_000,
+            state_epoch: 2,
+            resource_generation: 3,
+            policy_sha256: scope.policy_sha256.clone(),
+        };
+        let request = approved_service_request(&scope, "req-123", &facts).unwrap();
+        assert_eq!(request.binding.admission_id, "mac-req-123");
+        assert_eq!(request.binding.subject, scope.subject);
+        assert_eq!(request.binding.state_epoch, 2);
+        assert_eq!(request.binding.resource_generation, 3);
+        assert_eq!(request.binding.deadline_unix_ms, 400_000);
+        assert_eq!(request.ticket.args, json!({"unit":"cohesix-agent.service"}));
+        assert_eq!(
+            request.ticket.target.as_deref(),
+            Some(scope.target.as_str())
+        );
+        assert!(approved_service_request(&scope, "../escape", &facts).is_err());
+        assert!(approved_service_request(&scope, &"a".repeat(97), &facts).is_err());
+        let mut changed = scope.clone();
+        changed.action = "peft.release".into();
+        assert!(approved_service_request(&changed, "req-124", &facts).is_err());
+    }
 
     fn service() -> (JobBinding, HostTicketSpec) {
         let args = json!({"unit":"cohesix-agent.service"});

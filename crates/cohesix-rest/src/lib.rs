@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Provide a small REST client for the Cohesix hive-gateway.
+// Purpose: Provide a bounded REST client for the Cohesix hive-gateway, including stable approved-job starts.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -275,6 +275,31 @@ impl GatewayClient {
             "JOB SUBMIT",
             "selected job",
             self.post_json(&url, request, &ticket),
+        )
+    }
+
+    /// Start an operator-selected standing service scope with a stable request
+    /// identity. A lost response must be reconciled under `mac-{request_id}`.
+    pub fn start_approved_job(
+        &self,
+        scope_id: &str,
+        request_id: &str,
+    ) -> Result<serde_json::Value> {
+        cohesix_authority::validate_id(scope_id).map_err(|_| anyhow!("EPERM scope id"))?;
+        cohesix_authority::validate_id(request_id).map_err(|_| anyhow!("EPERM request id"))?;
+        if request_id.len() > 96 {
+            return Err(anyhow!("ELIMIT approved request id"));
+        }
+        let ticket = self.validate_write_credentials()?;
+        let url = format!("{}/v1/jobs/approved/{scope_id}/start", self.base_url);
+        decode_json_response(
+            "JOB START APPROVED",
+            "approved job",
+            self.post_json(
+                &url,
+                &serde_json::json!({"request_id": request_id}),
+                &ticket,
+            ),
         )
     }
 
@@ -1645,6 +1670,31 @@ mod tests {
         assert_eq!(submitted["binding"]["admission_id"], "admit-1");
         assert!(GatewayClient::new("http://127.0.0.1:1")
             .selected_job_status("../job")
+            .is_err());
+    }
+
+    #[test]
+    fn approved_start_sends_only_scope_and_stable_request_identity() {
+        let (base_url, request_rx, server) = serve_once(
+            "202 Accepted",
+            r#"{"schema":"cohesix-selected-job-response/v1","submission":"target_write_ack"}"#,
+        );
+        let result = GatewayClient::new(base_url)
+            .with_request_auth_token("test-auth")
+            .with_delegated_ticket(delegated_fixture())
+            .start_approved_job("service-1", "run-123")
+            .expect("approved start response");
+        assert_eq!(result["submission"], "target_write_ack");
+        let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        assert!(request.starts_with("POST /v1/jobs/approved/service-1/start HTTP/1.1\r\n"));
+        let body = request.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            serde_json::json!({"request_id":"run-123"})
+        );
+        assert!(GatewayClient::new("http://127.0.0.1:1")
+            .start_approved_job("service-1", "../escape")
             .is_err());
     }
 }

@@ -13016,6 +13016,15 @@ not yet supervised by the shared release phases.
 Native job inspection now retains and checks the selected action, target and
 ticket identity from the gateway record before displaying or explaining it;
 this source-level check still needs an installed authenticated job observation.
+A new [native actions component record](audit/M28C_APPLE_ACTIONS_RECORD.md)
+tracks an approved-start route that derives a `systemd.restart` ticket from
+one selected standing scope and fresh gateway facts. The native action, `coh`
+and Python REST client use one stable request ID; an existing admission is
+returned without replay after a lost reply. Focused gateway, client and Swift
+checks pass. A newly development-signed app installed on the selected Mac
+exposes the fifth action in Shortcuts; its authenticated live job path has not
+been exercised. The route does not admit MLX or complete the Mac developer
+journey.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.

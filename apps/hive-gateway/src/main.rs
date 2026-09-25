@@ -1407,6 +1407,10 @@ async fn main() -> Result<()> {
             "/v1/jobs",
             post(jobs::submit).layer(DefaultBodyLimit::max(4096)),
         )
+        .route(
+            "/v1/jobs/approved/{scope_id}/start",
+            post(jobs::start_approved).layer(DefaultBodyLimit::max(256)),
+        )
         .route("/v1/jobs/{admission_id}", get(jobs::status))
         .route("/v1/jobs/{admission_id}/cancel", post(jobs::cancel))
         .route("/v1/jobs/{admission_id}/reconcile", post(jobs::reconcile))

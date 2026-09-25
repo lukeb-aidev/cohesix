@@ -1389,6 +1389,16 @@ work. `coh job inspect-scope <scope-id>` and `coh job revoke-scope
 <scope-id>` require a separate delegated `/host/standing/admin` write ticket.
 Ordinary read/write delegation cannot approve its own scope escalation.
 
+For a selected `systemd.restart` standing scope, `coh --rest-url
+"$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job start-approved
+--scope-id <scope-id> --request-id <stable-id>` asks the gateway to derive
+the service ticket and fresh facts. The response's admission ID is
+`mac-<stable-id>`. Keep the same request ID after a lost reply and inspect
+that ID before attempting any new effect; the gateway returns its existing
+record, including an uncertain write, without resubmission. Only the exact
+operator-configured scope and subject can start this route. Revoked scopes
+refuse new starts. This route does not admit an MLX release or a GPU workload.
+
 The live M28 reference case is selected by a private
 `cohesix-m28-live-reference/v1` TOML file containing absolute source, binary,
 manifest, request and evidence paths, pinned hashes, a loopback or TLS gateway
@@ -1511,16 +1521,21 @@ adapters do not grant target authority. Persistent FUSE, arbitrary shell-backed
 runs and identity administration explain their service boundary in the catalog.
 
 The in-progress M28c Apple extension exposes a local capability check and
-source-level App Intents for **Inspect Cohesix Job**, **Request Cohesix Job
-Cancellation** and **Explain Cohesix Job**. Inspect/cancel use the shared Hive
+source-level App Intents for **Start Approved Cohesix Job**, **Inspect Cohesix
+Job**, **Request Cohesix Job Cancellation** and **Explain Cohesix Job**.
+Start asks for a configured standing service scope and a stable request ID,
+requires platform confirmation and calls the same `start-approved` gateway
+route used by `coh` and the Python REST backend. The gateway, rather than
+spoken text, derives the exact ticket and fresh facts; a lost reply is
+reconciled under `mac-<request-id>`. Inspect/cancel use the shared Hive
 Gateway's existing `/v1/jobs/{admission_id}` contract with a delegated ticket;
 the returned record must bind the selected action, target and original ticket
 ID before it is displayed. The cancellation action asks for confirmation and
 reports only the gateway's request state. Explain uses those exact scoped fields
 and the on-device Foundation Models API when available,
 labels its interpretation and links the exact scoped job URL. Its deterministic
-fallback keeps the gateway state visible. None of these actions can submit a
-new job or prove a terminal signed outcome. On macOS these are actions for
+fallback keeps the gateway state visible. A start acknowledgement does not
+prove a terminal signed outcome. On macOS these are actions for
 user-created Shortcuts; automatic App Shortcuts and the SiriKit capability
 are unavailable. A spoken Siri invocation must run a user-created Shortcut.
 
@@ -1530,8 +1545,10 @@ host stores that connection in the Mac Keychain; **Remove Apple action access**
 deletes the selected Keychain item without revoking the gateway ticket. The
 app and extension require a shared Keychain access group and matching signed
 provisioning. Exact macOS development profiles now sign both components, and
-the canonical app verifies and launches. The new in-app enrollment path and
-extension read still need live validation. A synthetic
+the canonical app verifies and launches. The new start action has passed
+source tests, an extension build and installed Shortcuts discovery on the
+selected Mac; the in-app enrollment path, authenticated extension read and
+live start still need validation. A synthetic
 Foundation Models probe and detached MLX smoke establish local SDK/compute
 feasibility only. The [M28c build plan](BUILD_PLAN.md#28c) requires an
 admitted developer journey and live evidence before completion.

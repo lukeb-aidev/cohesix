@@ -56,6 +56,13 @@ or target interface changes. Integration must preserve M28b's durable phase
 journal and signed result custody; a call to these modules alone cannot
 satisfy that contract.
 
+A later M28c native-action source change added a gateway-derived start for an
+already selected `systemd.restart` standing scope, with matching `coh`, Python
+REST and App Intents clients. It supplies a useful governed start path without
+changing target interfaces, benchmarks, the selected `peft.release` ceiling or
+MLX admission. The Mac release executor, admitted generation and live
+cross-surface evidence above remain outstanding.
+
 Material AI assistance contributed the implementation, tests and this record.
 The ignored local artifacts are diagnostic and must be replaced by exact-source
 live evidence after the admitted implementation is complete.

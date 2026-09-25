@@ -257,6 +257,13 @@ pub enum JobCommand {
         #[arg(long)]
         input: PathBuf,
     },
+    /// Start a configured standing service recipe with a stable retry identity.
+    StartApproved {
+        #[arg(long)]
+        scope_id: String,
+        #[arg(long)]
+        request_id: String,
+    },
     /// Read retained execution and independent delivery state.
     Status { admission_id: String },
     /// Request cancellation without claiming native termination.
@@ -674,6 +681,23 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["coh", "job", "cancel", "../job"]).is_ok());
+        assert!(matches!(
+            Cli::try_parse_from([
+                "coh",
+                "job",
+                "start-approved",
+                "--scope-id",
+                "service-1",
+                "--request-id",
+                "run-123"
+            ])
+            .expect("approved recipe command")
+            .command,
+            Command::Job(JobArgs {
+                command: JobCommand::StartApproved { .. },
+                ..
+            })
+        ));
         // The runtime validates ids before constructing a URL; the parser
         // preserves the original bytes for that deterministic refusal.
     }

@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Implement filesystem, TCP, REST, and mock Cohesix Python backends.
+# Purpose: Implement filesystem, TCP, REST, and mock Cohesix Python backends with stable approved-job starts.
 # Copyright 2026 Lukas Bower
 
 """Backend implementations for Cohesix Python client."""
@@ -480,6 +480,19 @@ class RestBackend(Backend):
 
         authority_id(admission_id)
         return self._selected_job_payload("GET", f"/v1/jobs/{admission_id}")
+
+    def start_approved_job(self, scope_id: str, request_id: str) -> Dict[str, Any]:
+        """Start one selected service scope; reconcile lost replies as mac-{request_id}."""
+        from .authority import authority_id
+
+        authority_id(scope_id)
+        authority_id(request_id)
+        if len(request_id.encode("ascii")) > 96:
+            raise CohesixError("ELIMIT approved request id")
+        return self._selected_job_payload(
+            "POST", f"/v1/jobs/approved/{scope_id}/start",
+            body={"request_id": request_id},
+        )
 
     def request_selected_job_cancel(self, admission_id: str) -> Dict[str, Any]:
         """Request cancellation; this does not claim native termination."""
