@@ -50,6 +50,7 @@ def test_shortcuts_requires_search_and_exact_action() -> None:
     observed = b"""Window: \"New Shortcut 4\", App: Shortcuts.
   6 search text field (settable) Value: Cohesix, Placeholder: Search
     14 text Check Cohesix Apple Support
+The focused UI element is 6 search text field (settable) Value: Cohesix, Placeholder: Search
 """
     assert platform.action_lines(observed)[2].endswith(platform.ACTION)
     with pytest.raises(ValueError, match="Shortcuts"):

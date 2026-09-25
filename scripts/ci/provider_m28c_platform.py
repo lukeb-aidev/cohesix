@@ -87,8 +87,8 @@ def action_lines(raw: bytes) -> list[str]:
     lines = text.splitlines()
     selected = [line.strip() for line in lines
                 if line.startswith("Window:")
-                or "search text field (settable) Value: Cohesix" in line
-                or f"text {ACTION}" in line]
+                or re.match(r"^\s+\d+ search text field \(settable\) Value: Cohesix", line)
+                or re.match(r"^\s+\d+ text " + re.escape(ACTION) + r"$", line)]
     require(len(selected) == 3 and selected[0].startswith("Window:")
             and "Shortcuts" in selected[0]
             and "Value: Cohesix" in selected[1]
