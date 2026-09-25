@@ -39,6 +39,7 @@ MLX = COMMON | {"agent_binary", "agent_sha256", "helper", "helper_sha256",
 VMLX = COMMON | {"verified_release_report", "verified_release_report_sha256",
                  "release_deployment", "release_deployment_sha256",
                  "governed_profile", "governed_profile_sha256",
+                 "fused_provenance", "fused_provenance_sha256",
                  "prompts_path", "prompts_sha256", "rollback_report",
                  "rollback_report_sha256", "rollback_deployment",
                  "rollback_deployment_sha256"}
@@ -80,7 +81,8 @@ def _selected(path: Path, host_profile: str, case: str) -> dict[str, Any]:
                     and re.fullmatch(r"[0-9a-f]{64}", value[key]) is not None,
                     f"M28c1 {key}")
         if key in {"agent_binary", "helper", "deployment", "verified_release_report",
-                   "release_deployment", "governed_profile", "prompts_path",
+                   "release_deployment", "governed_profile", "fused_provenance",
+                   "prompts_path",
                    "rollback_report", "rollback_deployment"}:
             require(isinstance(value[key], str) and Path(value[key]).is_absolute(),
                     f"M28c1 {key} path")
@@ -304,6 +306,7 @@ def _run_release(selected: dict[str, Any], state_dir: Path,
 def _run_vmlx(selected: dict[str, Any], state_dir: Path,
               commit: str, qemu: dict[str, Any]) -> dict[str, Any]:
     for name in ("verified_release_report", "governed_profile",
+                 "fused_provenance",
                  "prompts_path", "rollback_report", "release_deployment",
                  "rollback_deployment"):
         require(digest(Path(selected[name]), 262144) == selected[name + "_sha256"],
@@ -330,11 +333,18 @@ def _run_vmlx(selected: dict[str, Any], state_dir: Path,
                 and observed["result"] == report["result"],
                 "M28c1 retained release report differs from shared verifier")
     selection = GovernedSelection.from_profile(Path(selected["governed_profile"]))
+    fusion = json.loads(read_artifact(Path(selected["fused_provenance"]), 262144))
     released = {row["phase"]: row["result"]
                 for row in release["result"]["native"]["phases"]}
     restored = {row["phase"]: row["result"]
                 for row in rollback["result"]["native"]["phases"]}
     accepted = json.loads(read_artifact(selection.accepted_path, 8192))
+    require(fusion["source_model_sha256"] ==
+            released["validate"]["detail"]["context"]["base_sha256"]
+            and fusion["source_adapter_sha256"] ==
+            released["scan"]["detail"]["adapter_sha256"]
+            and fusion["fused_model_sha256"] == selection.source_sha256,
+            "M28c1 fused model provenance")
     require(selection.release_graph_sha256 == release["result"]["graph_sha256"]
             and released["promote"]["succeeded"]
             and restored["rollback"]["succeeded"]

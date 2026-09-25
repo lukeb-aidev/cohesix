@@ -68,15 +68,24 @@ def _stop_service(label: str, root: Path) -> None:
             and state.get("StandardOutPath") == str(logs / "stdout")
             and state.get("StandardErrorPath") == str(logs / "stderr"),
             "foreign_launchd_service_label")
+    old_pid = state.get("PID")
+    require(old_pid is None or (old_pid.isascii() and old_pid.isdigit()
+                              and int(old_pid) > 0),
+            "ambiguous_launchd_service_pid")
     result = subprocess.run(["/bin/launchctl", "remove", label],
                             capture_output=True, check=False, timeout=15)
     require(result.returncode == 0, "ambiguous_launchd_stop")
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if _service_state(label) is None:
-            return
+            if old_pid is None:
+                return
+            try:
+                os.kill(int(old_pid), 0)
+            except ProcessLookupError:
+                return
         time.sleep(0.1)
-    raise ValueError("ambiguous_launchd_stop")
+    raise ValueError("ambiguous_launchd_stop_or_process")
 
 
 class Provider:
@@ -435,8 +444,11 @@ class Provider:
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             state = _service_state(label)
-            require(state is not None and state.get("PID") not in {None, "0"},
-                    "service_exited_before_ready")
+            if state is None or state.get("PID") in {None, "0"}:
+                require(state is None or state.get("LastExitStatus") in {None, "0"},
+                        "service_exited_before_ready")
+                time.sleep(0.1)
+                continue
             try:
                 with urllib.request.urlopen(
                     f'http://127.0.0.1:{self.config["port"]}/health', timeout=1

@@ -118,3 +118,28 @@ def test_foreign_launchd_label_is_never_removed(
     with pytest.raises(ValueError, match="foreign_launchd_service_label"):
         mlx_release._stop_service("cohesix-mlx-serve-test", tmp_path)
     assert not calls
+
+
+def test_launchd_stop_waits_for_owned_process_to_exit(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    label = "cohesix-mlx-serve-test"
+    logs = tmp_path / "service-logs"
+    states = iter([{"Label": label, "Program": "/usr/bin/env",
+                    "StandardOutPath": str(logs / "stdout"),
+                    "StandardErrorPath": str(logs / "stderr"), "PID": "1234"},
+                   None, None])
+    monkeypatch.setattr(mlx_release, "_service_state", lambda _label: next(states))
+    monkeypatch.setattr(mlx_release.subprocess, "run",
+                        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                            [], 0, b"", b""))
+    checks: list[int] = []
+
+    def process_check(pid: int, _signal: int) -> None:
+        checks.append(pid)
+        if len(checks) == 2:
+            raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(mlx_release.os, "kill", process_check)
+    monkeypatch.setattr(mlx_release.time, "sleep", lambda _seconds: None)
+    mlx_release._stop_service(label, tmp_path)
+    assert checks == [1234, 1234]
