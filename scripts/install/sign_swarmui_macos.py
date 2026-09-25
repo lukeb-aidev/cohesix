@@ -167,6 +167,11 @@ def signature(app: Path, team: str, authority: str) -> dict[str, Any]:
         require(f"TeamIdentifier={team}" in details
                 and f"Authority={authority}:" in details,
                 f"{label} has the wrong signer or team")
+        if authority == "Developer ID Application":
+            require(re.search(r"^CodeDirectory .*flags=0x[0-9a-fA-F]+\([^)]*runtime[^)]*\)",
+                              details, re.MULTILINE) is not None
+                    and re.search(r"^Timestamp=.+", details, re.MULTILINE) is not None,
+                    f"{label} lacks hardened runtime or secure timestamp")
         raw = command(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(path)],
                       stdout_only=True)
         require(raw.startswith("<?xml"), f"{label} has no entitlements")

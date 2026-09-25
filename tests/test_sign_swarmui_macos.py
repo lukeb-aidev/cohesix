@@ -107,6 +107,43 @@ def test_signature_reads_entitlements_without_codesign_diagnostics(
     assert set(report) == {"app", "extension"}
 
 
+def test_developer_id_signature_requires_runtime_and_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = tmp_path / "SwarmUI.app"
+    app.mkdir()
+    group = ["KB88FQXUX2.com.cohesix.swarmui"]
+    rights = plistlib.dumps({
+        "keychain-access-groups": group,
+        "com.apple.security.app-sandbox": True,
+        "com.apple.security.network.client": True,
+    }).decode()
+    details = [
+        "TeamIdentifier=KB88FQXUX2\nAuthority=Developer ID Application: Lukas Bower\n"
+        "CodeDirectory v=20500 flags=0x10000(runtime) hashes=1\nTimestamp=25 Sep 2026",
+    ]
+
+    def fake_command(args: list[str], **_kwargs: object) -> str:
+        if "--verify" in args:
+            return ""
+        return details[0] if "-dvv" in args else rights
+
+    monkeypatch.setattr(signer, "command", fake_command)
+    monkeypatch.setattr(signer, "provisioning_profile", lambda *_args: {"uuid": "profile"})
+    monkeypatch.setattr(signer, "digest_file", lambda *_args: "sha256")
+    assert set(signer.signature(app, "KB88FQXUX2", "Developer ID Application")) == {
+        "app", "extension",
+    }
+    details[0] = details[0].replace("(runtime)", "")
+    with pytest.raises(ValueError, match="hardened runtime"):
+        signer.signature(app, "KB88FQXUX2", "Developer ID Application")
+    details[0] = details[0].replace("flags=0x10000", "flags=0x10000(runtime)").replace(
+        "\nTimestamp=25 Sep 2026", "",
+    )
+    with pytest.raises(ValueError, match="secure timestamp"):
+        signer.signature(app, "KB88FQXUX2", "Developer ID Application")
+
+
 def test_profile_must_authorize_exact_team_bundle_and_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

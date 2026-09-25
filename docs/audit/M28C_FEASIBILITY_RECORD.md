@@ -40,7 +40,7 @@ Deliverables: Source feasibility probe and this measured support/blocker record;
 | Local package | Extension and app passed `codesign --verify --deep --strict` with the local Apple Development identity. `pluginkit` lists `com.cohesix.swarmui.intents` from the installed app, and the Shortcuts action search shows “Check Cohesix Apple Support”. | This establishes action discovery on this Mac; no shortcut or spoken invocation was run. The diagnostic bundle was assembled outside the canonical package pipeline. |
 | Extension sandbox | `com.apple.security.app-sandbox`, `com.apple.security.network.client` and a shared Keychain group are on the diagnostic extension signature. An earlier bundle without the sandbox entitlement was not listed by `pluginkit`. | The sandbox difference is the observed registration fix. A valid signature and `pluginkit` listing do not show that the shared Keychain code can run. |
 | Keychain launch | The manually development-signed enrollment helper with a shared access-group entitlement passed `codesign --verify` but exited 137 before its own argument check. The same helper signed without the restricted entitlement ran and returned its expected missing-argument error. | The controlled difference points to missing provisioning for the restricted entitlement. No real token was entered or stored. |
-| Distribution | The chosen channel is direct distribution outside the Mac App Store. Xcode issued exact macOS development profiles for both App IDs. The canonical staged app and extension then passed nested development signing with shared Keychain entitlements and `codesign --verify --deep --strict`; the app executable launches with `--help`. On 25 September, Xcode created a valid `Developer ID Application: Lukas Bower (KB88FQXUX2)` signing identity, SHA-1 `EEF1BF26D2081CEB18AF1F5B0C4A6D720C1F2B98`. Apple issued exact Developer ID profiles for both bundle IDs; fresh staging `canonical-stage-06` passed nested Developer ID signing, hardened runtime and signature verification with the shared Keychain group. | This is a signed diagnostic copy, not the final installed/notarised package. A notarisation credential and accepted Apple notarisation remain open. [Apple's direct-distribution requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) require notarisation of the final package. |
+| Distribution | The chosen channel is direct distribution outside the Mac App Store. Xcode issued exact macOS development profiles for both App IDs. The canonical staged app and extension then passed nested development signing with shared Keychain entitlements and `codesign --verify --deep --strict`; the app executable launches with `--help`. On 25 September, Xcode created a valid `Developer ID Application: Lukas Bower (KB88FQXUX2)` signing identity, SHA-1 `EEF1BF26D2081CEB18AF1F5B0C4A6D720C1F2B98`. Apple issued exact Developer ID profiles for both bundle IDs; fresh staging `canonical-stage-06` passed nested Developer ID signing with hardened runtime and secure timestamp. `notarytool` accepted submission `6b4fdfe9-bbe2-4162-af79-239e3d2d5f2f`; stapler validation and Gatekeeper assessment passed. | This is a diagnostic copy, not the final installed developer journey. [Apple's direct-distribution requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) require final candidate notarisation. The Keychain credential is outside the repository. |
 | Apple App IDs | The Apple Developer team `KB88FQXUX2` lists explicit `com.cohesix.swarmui` and `com.cohesix.swarmui.intents` App IDs. | Registration alone does not provision or sign either executable. |
 | macOS capabilities | The extension registration screen showed In-App Purchase on by default and no other capability selected. It had no Keychain Sharing checkbox. SwarmUI and the extension declare the same Keychain access group in their signing entitlements. Apple's current [macOS guidance](https://developer.apple.com/design/human-interface-guidelines/app-shortcuts) supports App Intents actions inside user-created Shortcuts, not automatic App Shortcuts; [SiriKit capability guidance](https://developer.apple.com/documentation/xcode/configuring-siri-support) excludes macOS. The unused `AppShortcutsProvider` was removed from the macOS extension source. | A user-created Shortcut still needs a live Mac execution and spoken Siri invocation before any M28c action acceptance. No optional portal capability was selected for the extension. |
 | Installed action | The old diagnostic app was closed. The provisioned build at `/Users/lukasbower/Applications/SwarmUI-M28c-Provisioned.app` launched, and `pluginkit` persistently listed its extension. After restarting Shortcuts, all four source actions appeared once. The support action executed and returned `Apple assistance: available; local Metal: available. No hive action was requested.` | Actual platform invocation is observed; no authenticated job action, Siri invocation or enrolled hive connection has been tested. |
@@ -87,15 +87,20 @@ extension binary SHA-256
 team `KB88FQXUX2`, and the four-action Shortcuts search. The separate
 Shortcuts probe-result accessibility capture has SHA-256
 `98dd311934f627010621189f2dd942c768a498252513db7d3612b4ec5a5b416a`.
-Actual shared Keychain operation, authenticated job actions and Developer ID
-notarisation are dependent implementation work, not a claim from
-this feasibility probe.
+Actual shared Keychain operation and authenticated job actions are dependent
+implementation work, not a claim from this feasibility probe. The later
+Developer ID notarisation is a separate diagnostic distribution observation.
 The fresh Developer ID signing report is retained at ignored
 `out/m28c/canonical-stage-06/developer-id-signing/summary.json`. Its app and
 extension profile UUIDs are `de5bbf6c-f387-48e0-810a-fec100cff52c` and
 `78b00f0b-888f-4aea-a7c9-db6d149b8834`; both authorize the selected
-certificate and shared group. This report is a component signing observation,
-not an accepted notarisation or installed workflow.
+certificate and shared group. The separate notarisation report is retained at
+`out/m28c/canonical-stage-06/notarization/summary.json`. It records accepted
+submission `6b4fdfe9-bbe2-4162-af79-239e3d2d5f2f` and submitted archive
+SHA-256 `65dcfcd210844cb4d9e9f33de84d6586e17698a8664ca7e4cf435a588cd84011`.
+The signer verified the nested signatures, Apple's acceptance log, stapling
+and Gatekeeper assessment. These reports establish diagnostic distribution
+feasibility, not an accepted installed workflow or M28c completion.
 Dependent `m28c-native-apple-actions`, `m28c-mlx-metal-provider`,
 `m28c-vmlx-compatibility` and `m28c-foundation-models-assistance` remain
 outside acceptance. The host-tool, Python and benchmark
