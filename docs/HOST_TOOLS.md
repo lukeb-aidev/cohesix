@@ -1,6 +1,6 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Explain how to install, connect, operate and troubleshoot the Cohesix host-tool suite without widening target authority. -->
+<!-- Purpose: Explain how to install, connect, operate and troubleshoot the Cohesix host-tool suite including governed Mac MLX release. -->
 <!-- Author: Lukas Bower -->
 
 # Cohesix host tools — user guide
@@ -1652,7 +1652,12 @@ digests; those inputs and the adapter output must remain private and unchanged.
 The [native component record](audit/M28C_MLX_COMPONENT_RECORD.md) contains
 the current diagnostic measurements. These functions do not create a Cohesix
 ticket, journal, deployment or signed outcome; 28c1 owns the host-agent
-integration before developers can use them as an admitted release.
+integration through the selected `cohesix.mlx_release` phase helper and
+`coh peft release` journal. The admitted path requires an exact private Mac
+profile, launchd phase and serving custody, the original Root ticket and
+standing job, and signed comparison, canary, promotion or rollback evidence.
+`cohesix.PeftReleaseClient` returns that same CLI result to Python; it does
+not accept a local model observation as deployment proof.
 
 For a local transport check, `python -m cohesix.mlx_service --selection
 <absolute-private-selection.json> --port <loopback-port>` serves one fixed
@@ -1669,7 +1674,15 @@ other roles, wrong generations, remote hosts, malformed or oversized requests.
 Requests run serially and return a content-bound Metal observation without
 logging prompts. The process has no job credential or Cohesix effect endpoint;
 its generation label and HTTP result are diagnostic until the shared accepted
-deployment and durable phase journal own the server lifecycle.
+deployment and durable phase journal own the server lifecycle. The
+`cohesix.vmlx_governed` selection optionally binds a pinned signed vMLX
+engine and disposable fused model copy to the accepted generation and
+verified release graph. It rechecks accepted state before and after each
+inference, compares frozen output hashes and bounded latency/RSS, and retains
+exact process custody for interruption recovery. A changed generation
+refuses. It receives no Cohesix ticket or tool authority. SwarmUI's Local
+MLX desk can display the retained selected-host vMLX report after the
+original signed release and rollback graphs have both been inspected.
 
 The selected Mac also has vMLX/MLX Studio 1.6.65. Its bundled engine served a
 local SmolLM2-135M model at `127.0.0.1:18080` and returned one bounded

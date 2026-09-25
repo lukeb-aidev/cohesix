@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Retain exact native discovery observations and explicit missing execution evidence for provider conformance.
+# Purpose: Retain exact native and Mac Metal release observations with explicit proof limits for provider conformance.
 # Copyright 2026 Lukas Bower
 
 """Run selected matrix contracts or native observations with separate proof classes."""
@@ -137,8 +137,18 @@ def main() -> int:
                             args.state_dir)
         except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
             parser.error(str(exc))
+    if args.case and args.case[0] in {"m28c1-mlx-live", "m28c1-vmlx-live"}:
+        if not args.reference_config or args.validate_only:
+            parser.error("M28c1 Mac release requires --reference-config and real execution")
+        from provider_m28c1_live import run_live
+
+        try:
+            return run_live(args.case[0], args.reference_config, args.host_profile,
+                            args.state_dir)
+        except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
+            parser.error(str(exc))
     if args.reference_config:
-        parser.error("--reference-config is only valid for a selected M28, M28a, M28b or M28c live case")
+        parser.error("--reference-config is only valid for a selected M28 through M28c1 live case")
     if args.provider == ["mac_release"] and args.live_reference:
         if args.group or args.validate_only or args.native_providers:
             parser.error("live macOS release has its own owned Xcode lane")

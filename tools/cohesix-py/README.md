@@ -1,6 +1,6 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Describe Cohesix Python SDK installation, orchestration playbooks, and integration adapters. -->
+<!-- Purpose: Describe Cohesix Python SDK installation, orchestration playbooks, native Mac release and integration adapters. -->
 <!-- Author: Lukas Bower -->
 # cohesix (Python)
 
@@ -67,6 +67,17 @@ print(reply.evidence())
 
 Treat that result as local model output until an admitted Cohesix generation,
 held-out evaluation and rollback bind it to a verified release.
+
+The selected M28c1 Mac source adds `cohesix.mlx_release` for native
+`peft.release` phases under host-agent launchd custody. The helper accepts
+only the frozen request, private model/data/adapter references and phase
+authority from the agent; use `PeftReleaseClient` to plan, admit and inspect
+the original signed operation from Python. `cohesix.vmlx_governed` is an
+optional serving session for an already verified accepted generation. The
+caller supplies the verified release graph, exact signed installed engine,
+fused model copy and frozen quality/resource bounds. It rechecks accepted
+state around inference and records process custody; it cannot admit work or
+interpret a local result as a signed promotion.
 
 Release compatibility is tested
 on CPython 3.11 and 3.13. The wheel is target-neutral; it does not bundle or

@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Guide one local MLX release through reviewed Cohesix commands and display only verified journal observations.
+// Purpose: Guide local MLX releases and project retained governed vMLX observations alongside their verified journal identities.
 // Copyright 2026 Lukas Bower
 
 import { invoke, notice } from "./state.js";
@@ -83,6 +83,40 @@ export function localMlxSummary(report) {
   return lines.join("\n");
 }
 
+export function governedVmlxSummary(report, signedGraphs) {
+  const hash = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  if (report?.schema !== "cohesix-m28c1-live-report/v1" ||
+      report.case !== "m28c1-vmlx-live" ||
+      !hash(report.release_graph_sha256) || !hash(report.rollback_graph_sha256) ||
+      !signedGraphs.has(report.release_graph_sha256) ||
+      !signedGraphs.has(report.rollback_graph_sha256) ||
+      !hash(report.source_sha256) ||
+      !Number.isSafeInteger(report.accepted_generation) ||
+      report.accepted_generation < 0 ||
+      report.changed_generation_refused !== true ||
+      report.rollback_incumbent_observed !== true ||
+      !Array.isArray(report.responses) || report.responses.length !== 4 ||
+      !Array.isArray(report.quality_resources) ||
+      report.quality_resources.length !== report.responses.length ||
+      !report.responses.every((row) => hash(row?.prompt_sha256) &&
+        hash(row?.output_sha256) && typeof row.model === "string" &&
+        row.model.length <= 128 && Number.isSafeInteger(row.completion_tokens) &&
+        row.completion_tokens > 0 && row.completion_tokens <= 64) ||
+      !report.quality_resources.every((row) =>
+        Number.isSafeInteger(row?.elapsed_ms) && row.elapsed_ms >= 0 &&
+        row.elapsed_ms <= 120000 && Number.isSafeInteger(row?.rss_bytes) &&
+        row.rss_bytes > 0 && row.rss_bytes <= 12884901888)) return null;
+  const latency = Math.max(...report.quality_resources.map((row) => row.elapsed_ms));
+  const memory = Math.max(...report.quality_resources.map((row) => row.rss_bytes));
+  return ["Retained governed vMLX observation · signed release and rollback graphs matched",
+    `Accepted generation: ${report.accepted_generation}`,
+    `Fused model SHA-256: ${report.source_sha256}`,
+    `Release graph: ${report.release_graph_sha256}`,
+    `Rollback graph: ${report.rollback_graph_sha256}`,
+    `Frozen responses: ${report.responses.length}; maximum latency: ${latency} ms; maximum RSS: ${memory} bytes`,
+    "Changed generation refused; rollback incumbent observed."].join("\n");
+}
+
 export function initializeMlx(supportedHost) {
   if (!supportedHost) {
     document.querySelector('[data-view="mlx"]').hidden = true;
@@ -91,6 +125,22 @@ export function initializeMlx(supportedHost) {
       .forEach((button) => { button.disabled = true; });
     return;
   }
+  const signedGraphs = new Set();
+  document.getElementById("mlx-vmlx-inspect").addEventListener("click", async () => {
+    const selected = document.getElementById("mlx-vmlx-report").files?.[0];
+    const output = document.getElementById("mlx-vmlx-summary");
+    if (!selected || selected.size > 65536) {
+      output.textContent = "Select a bounded retained vMLX report.";
+      return;
+    }
+    try {
+      const report = JSON.parse(await selected.text());
+      output.textContent = governedVmlxSummary(report, signedGraphs) ||
+        "Report is unsupported or its original signed release and rollback graphs have not both been inspected.";
+    } catch {
+      output.textContent = "Selected report is not valid JSON.";
+    }
+  });
   for (const operation of ["infer", "evaluate"]) {
     document.getElementById(`mlx-${operation}`).addEventListener("click", async () => {
       const python = privatePath("mlx-python");
@@ -154,8 +204,13 @@ export function initializeMlx(supportedHost) {
           document.getElementById("mlx-admission-id").value = id;
           summary().textContent = `Standing job: ${id}\nSubmission: ${report.submission || "unknown"}\nSigned native release evidence: pending; follow the original journal.`;
         } else summary().textContent = "Job response has no bounded admission ID; reconcile the original job file before retrying.";
-      } else summary().textContent = mlxSummary(report) ||
-        "Release report is unavailable or has an unsupported schema.";
+      } else {
+        const projected = mlxSummary(report);
+        if (projected && /^[a-f0-9]{64}$/.test(report.result?.graph_sha256 || ""))
+          signedGraphs.add(report.result.graph_sha256);
+        summary().textContent = projected ||
+          "Release report is unavailable or has an unsupported schema.";
+      }
     } catch {
       summary().textContent = "Command report is not valid JSON; no outcome is inferred.";
     }

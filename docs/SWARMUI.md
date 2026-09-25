@@ -1,5 +1,5 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Operate the native desktop through scoped connections, reviewed forms and independently verified evidence. -->
+<!-- Purpose: Operate the native desktop through scoped connections, reviewed forms and governed MLX evidence. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # SwarmUI operator guide
@@ -71,6 +71,15 @@ The adjacent **Governed release** controls use `coh` and need a separately
 admitted deployment; a model answer or local loss never becomes its signed
 outcome. Installed vMLX compatibility is optional and does not gate direct
 local MLX work.
+
+For the selected Mac release, use **Follow** on the original successful
+promotion and the separately admitted failed candidate's rollback. Once
+both signed graph IDs appear in the desk, select the retained 28c1 vMLX
+report in **Governed vMLX observation**. SwarmUI shows the accepted
+generation, fused model hash, frozen response count and observed resource
+bounds only when both graph IDs match those inspected in this session. This
+is a projection of selected-host evidence, not a new admission or vMLX tool
+endpoint. A changed generation or missing rollback report is refused.
 
 ## Explore published state
 

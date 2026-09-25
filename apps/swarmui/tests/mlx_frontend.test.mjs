@@ -1,10 +1,10 @@
 // Author: Lukas Bower
-// Purpose: Keep SwarmUI MLX summaries tied to verified release evidence and original identity.
+// Purpose: Keep SwarmUI MLX and governed vMLX summaries tied to verified release graphs and original identity.
 // Copyright 2026 Lukas Bower
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { localMlxSummary, mlxSummary } from "../frontend/workbench/mlx.js";
+import { governedVmlxSummary, localMlxSummary, mlxSummary } from "../frontend/workbench/mlx.js";
 
 test("local Metal result stays distinct from signed release evidence", () => {
   const text = localMlxSummary({schema:"cohesix-local-mlx/v1",
@@ -67,4 +67,20 @@ test("verified journal projects Metal, comparison, canary and rollback separatel
   assert.match(text, /Canary latency: 200 ms/);
   assert.match(text, /Restored generation: 0/);
   assert.doesNotMatch(text, /Promoted generation:/);
+});
+
+test("governed vMLX requires both inspected signed graphs", () => {
+  const release = "a".repeat(64), rollback = "b".repeat(64);
+  const report = {schema:"cohesix-m28c1-live-report/v1",case:"m28c1-vmlx-live",
+    release_graph_sha256:release,rollback_graph_sha256:rollback,
+    source_sha256:"c".repeat(64),accepted_generation:1,
+    changed_generation_refused:true,rollback_incumbent_observed:true,
+    responses:Array.from({length:4}, () => ({prompt_sha256:"d".repeat(64),
+      output_sha256:"e".repeat(64),model:"cohesix-g1-test",completion_tokens:8})),
+    quality_resources:Array.from({length:4}, () => ({elapsed_ms:1200,rss_bytes:1048576}))};
+  assert.equal(governedVmlxSummary(report, new Set([release])), null);
+  assert.match(governedVmlxSummary(report, new Set([release, rollback])),
+    /Accepted generation: 1/);
+  assert.equal(governedVmlxSummary({...report, rollback_incumbent_observed:false},
+    new Set([release, rollback])), null);
 });

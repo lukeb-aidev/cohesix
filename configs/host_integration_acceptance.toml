@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Preserve the 26e integration identities and declare bounded M27b provider and exact-host contracts.
+# Purpose: Preserve host integration identities and declare bounded provider and exact-host contracts including Mac Metal release.
 # Copyright 2026 Lukas Bower
 
 schema = "host-integration-dependency-source/v1"
@@ -1470,6 +1470,22 @@ host_headroom_bytes = 2147483648
 observation_ttl_ms = 5000
 unsupported = ["mig", "dla", "pva"]
 execution_lanes = ["native", "systemd", "nvidia_container"]
+
+[[providers.profiles]]
+id = "mac-apple-m4-macos27"
+os = "macos"
+architecture = "arm64"
+board = "Apple M4 Mac16,1"
+ubuntu = "not-applicable"
+l4t = "not-applicable"
+jetpack = "not-applicable"
+cuda_toolkit = "not-applicable"
+compute_capability = "not-applicable"
+shared_memory = true
+host_headroom_bytes = 2147483648
+observation_ttl_ms = 5000
+unsupported = ["cuda", "mig", "dla", "pva"]
+execution_lanes = ["native", "launchd", "metal"]
 
 [[providers.families]]
 id = "systemd"

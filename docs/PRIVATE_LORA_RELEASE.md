@@ -1,5 +1,5 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Operate the confined native HF adapter release recipe with exact provenance, evaluation, serving and recovery authority. -->
+<!-- Purpose: Operate the confined native HF or Mac MLX adapter release recipe with exact provenance, evaluation, serving and recovery authority. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
@@ -10,7 +10,13 @@ host phase journal and signed verifier. Native import and native training
 converge on validation, evaluation, scan, stage, load, canary and promotion.
 Training inserts one native HF Trainer operation after validation. The Linux
 CUDA host owns every weight, dataset, checkpoint, evaluator and inference process.
-The QEMU and Pi 4 source profiles declare the WorkerLora receipt action. Each
+The selected Mac MLX profile uses the same journal and verifier through a
+launchd-owned `cohesix.mlx_release` helper. It binds pinned local model and
+data trees, observed Metal device, held-out loss, four frozen output hashes,
+resource bounds, direct serving canary, accepted generation and rollback.
+The helper cannot mint tickets or sign outcomes. A missing Metal device,
+changed file, quality failure or uncertain process stop refuses without a CPU
+or remote fallback. The QEMU and Pi 4 source profiles declare the WorkerLora receipt action. Each
 deployment still requires its exact generated policy and a fresh READY WorkerLora;
 profile selection alone does not establish physical Pi qualification. Other
 profiles must explicitly select the action before use; a Python projection never
@@ -141,8 +147,11 @@ That file selects the absolute Python executable, pinned helper path and hash,
 and absolute native configuration path. The native configuration selects one
 private root, one profile digest, one allowlisted systemd user unit and one
 loopback serving port. Ticket arguments cannot supply commands, URLs or paths.
-An absent configuration returns `not_enabled`; macOS native execution returns
-`not_supported`. macOS can still control the remote admitted workflow.
+An absent configuration returns `not_enabled`. On macOS, only an explicit
+`cohesix-mlx-native/v1` profile with the exact Python/helper digest enables
+native release. Linux continues to require `cohesix-hf-native/v1`; cross-host
+profile substitution is refused. The Mac can also control a remote admitted
+workflow.
 
 An M28b import input contains the profile, source and attestation references,
 license references, `checkpoint: null`, adapter bundle reference, exact base and

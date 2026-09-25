@@ -110,9 +110,9 @@ def parse_request(raw: bytes, selection: ServingSelection) -> tuple[str, int]:
 
 
 class LocalMlxServer(HTTPServer):
-    """Serialized requests prevent simultaneous MLX loads exceeding the cap."""
+    """Serialized requests and bounded restart after the previous listener exits."""
 
-    allow_reuse_address = False
+    allow_reuse_address = True
 
     def __init__(self, port: int, selection: ServingSelection,
                  generate: Callable[..., MlxInference] = infer,

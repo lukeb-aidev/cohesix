@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Define the canonical staged and claim-specific Cohesix test action catalog.
+# Purpose: Define the canonical staged and claim-specific Cohesix test action catalog including Mac Metal release.
 # Copyright 2026 Lukas Bower
 
 [catalog]
@@ -929,6 +929,34 @@ command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conf
 timeout_seconds = 600
 trigger_paths = ["apps/swarmui/native/apple/**", "apps/swarmui/src/workbench.rs", "apps/swarmui/src-tauri/main.rs", "apps/swarmui/frontend/**", "packaging/swarmui/Info.plist", "packaging/swarmui/SwarmUI.entitlements", "scripts/install/stage_swarmui.py", "scripts/install/stage_host_package.py", "scripts/install/sign_swarmui_macos.py", "scripts/ci/provider_m28c_platform.py", "configs/provider_conformance.toml"]
 expected_evidence = ["m28c-platform-live-summary", "installed-development-signature", "shortcuts-action-discovery", "actual-device-capabilities"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "federation.m28c1-mlx-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "macos"]
+description = "Run an admitted Mac Metal adapter release and a separate interrupted candidate with signed original outcomes and verified incumbent rollback."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c1-mlx-live --reference-config "${M28C1_MLX_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28C1_EVIDENCE:?}/mlx-live"'
+timeout_seconds = 3600
+trigger_paths = ["tools/cohesix-py/cohesix/mlx_release.py", "tools/cohesix-py/cohesix/mlx_native.py", "apps/host-ticket-agent/src/executors/peft_release.rs", "apps/coh/src/peft/**", "scripts/ci/provider_m28c1_live.py", "configs/provider_conformance.toml"]
+expected_evidence = ["m28c1-mlx-live-summary", "signed-native-phases", "heldout-comparison", "verified-incumbent-rollback"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "federation.m28c1-vmlx-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "macos"]
+description = "Bind the signed accepted adapter generation to installed vMLX, refuse a changed generation and observe the restored incumbent."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c1-vmlx-live --reference-config "${M28C1_VMLX_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28C1_EVIDENCE:?}/vmlx-live"'
+timeout_seconds = 3600
+trigger_paths = ["tools/cohesix-py/cohesix/vmlx_governed.py", "tools/cohesix-py/cohesix/vmlx_runtime.py", "scripts/ci/provider_m28c1_live.py", "configs/provider_conformance.toml", "apps/swarmui/**"]
+expected_evidence = ["m28c1-vmlx-live-summary", "accepted-generation-binding", "fused-source-and-served-bytes", "changed-generation-refusal", "rollback-incumbent-inference"]
 test_policy = "nonzero"
 minimum_test_count = 1
 

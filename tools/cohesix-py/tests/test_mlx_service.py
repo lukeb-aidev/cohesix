@@ -90,3 +90,25 @@ def test_loopback_service_returns_bound_generation_and_refuses_tools(tmp_path: P
         finally:
             server.shutdown()
             thread.join(timeout=3)
+
+
+def test_serving_port_restarts_after_closed_session_without_duplicate_listener(
+        tmp_path: Path) -> None:
+    selected = selection(tmp_path)
+    observe = lambda _mlx: {"device_name": "test-device"}
+    with LocalMlxServer(0, selected, observe=observe) as server:
+        port = server.server_port
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request("GET", "/health")
+            assert connection.getresponse().status == 200
+            connection.close()
+            with pytest.raises(OSError):
+                LocalMlxServer(port, selected, observe=observe)
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+    with LocalMlxServer(port, selected, observe=observe):
+        pass

@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Select bounded provider contract checks and preserve separate native, executor, deployment and evidence proof lanes.
+# Purpose: Select bounded provider checks with separate native, executor, deployment, Mac Metal and evidence proof lanes.
 # Copyright 2026 Lukas Bower
 schema = "cohesix-provider-conformance-matrix/v1"
 registry = "configs/generated/provider_registry.json"
@@ -10,7 +10,7 @@ maximum_case_seconds = 600
 # Exact versions, auth/secret refs, lifecycle, native identity, evidence and
 # deployment obligations are inherited from the generated registry. This file
 # selects checks; it cannot add actions, change versions or promote availability.
-profiles = ["jetson-orin-nano-jp7"]
+profiles = ["jetson-orin-nano-jp7", "mac-apple-m4-macos27"]
 required_lifecycle = ["discover", "preflight", "execute", "observe", "verify", "compensate", "export_evidence"]
 proof_lanes = ["mock", "dry_run", "live_safe", "negative", "receipt", "recovery", "package"]
 
@@ -69,6 +69,22 @@ providers = []
 proof_class = "live_host"
 lane = "live_safe"
 runner = "provider_m28c_platform"
+
+[[cases]]
+id = "m28c1-mlx-live"
+group = "executors"
+providers = ["peft"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28c1_live"
+
+[[cases]]
+id = "m28c1-vmlx-live"
+group = "executors"
+providers = ["peft"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28c1_live"
 
 [[cases]]
 id = "native-identity-and-postcondition"
