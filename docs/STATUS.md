@@ -109,9 +109,14 @@ fresh staged copy passed exact-profile Developer ID signing, Apple notarisation,
 stapling and Gatekeeper assessment; the final developer journey has not.
 The focused platform case passed with four installed actions visible in
 Shortcuts; the local support action executed. A disposable provisioned Keychain
-cross-identity check passed. Actual SwarmUI enrollment, authenticated Shortcuts
-jobs and Siri invocation of a user-created Shortcut,
-admitted MLX release/rollback and final installed journey notarisation have not passed;
+cross-identity check passed. The installed app later enrolled a delegated
+connection in Keychain, started and inspected a confirmed service job through
+Shortcuts, and explained its real gateway record with on-device Foundation
+Models. A live cancellation check found and repaired a gateway
+subject/fingerprint mismatch; the corrected action cancelled a held job
+without a service restart, and revocation withdrew the native scope choice.
+Spoken Siri invocation, the m28c-actions-live source-bound case, admitted MLX
+release/rollback and final installed journey notarisation have not passed;
 installed vMLX 1.6.65 additionally served one local model through a detached
 loopback API smoke, with poor answer quality and an observed local weight
 alignment rewrite. A bounded Python vMLX client also made one real local
@@ -139,14 +144,15 @@ prompts. It remains diagnostic without admission, serving or a signed result.
 The new direct MLX loopback server returned a bounded matching Metal response
 from this adapter, but has no durable Cohesix serving owner or accepted
 generation.
-Native job inspection also now presents the gateway's selected action, target
-and original ticket ID, with focused contradictory-target refusal. Its actual
-installed, authenticated job path remains unobserved.
+Native job inspection presents the gateway's selected action, target and
+original ticket ID, with focused contradictory-target refusal and one installed
+authenticated service-job observation.
 The selected service-scope start route now has gateway, `coh`, Python and
 Shortcuts source paths with a stable request ID and fresh gateway-derived
-facts. Focused contract checks and an extension build pass. The newly
+facts. Focused contract checks and an extension build pass. The
 development-signed installed app exposes the start action in Shortcuts;
-no authenticated live start or MLX release is claimed from this observation.
+the private KVM live start and cancellation are recorded separately from the
+still-unadmitted MLX release and integrated developer journey.
 The [native actions record](audit/M28C_APPLE_ACTIONS_RECORD.md) retains its
 exact diagnostic proof limits.
 

@@ -13013,18 +13013,23 @@ not an independent generalization claim or admitted deployment.
 A bounded direct MLX loopback server also returned one matching local response
 from the selected adapter. Its model label is diagnostic and the process is
 not yet supervised by the shared release phases.
-Native job inspection now retains and checks the selected action, target and
-ticket identity from the gateway record before displaying or explaining it;
-this source-level check still needs an installed authenticated job observation.
+Native job inspection retains and checks the selected action, target and
+ticket identity from the gateway record before displaying or explaining it.
+The installed action later inspected one authenticated, confirmed service job.
 A new [native actions component record](audit/M28C_APPLE_ACTIONS_RECORD.md)
 tracks an approved-start route that derives a `systemd.restart` ticket from
 one selected standing scope and fresh gateway facts. The native action, `coh`
 and Python REST client use one stable request ID; an existing admission is
 returned without replay after a lost reply. Focused gateway, client and Swift
-checks pass. A newly development-signed app installed on the selected Mac
-exposes the fifth action in Shortcuts; its authenticated live job path has not
-been exercised. The route does not admit MLX or complete the Mac developer
-journey.
+checks pass. The development-signed installed app started a delegated service
+job through Shortcuts, inspected its confirmed durable result, and explained
+it with on-device Foundation Models. A later cancellation attempt exposed a
+gateway subject/fingerprint bug; the corrected route let the installed action
+cancel a held job before dispatch, and the service did not restart. Scope
+revocation withdrew the native choice. The private KVM component observations
+do not establish spoken Siri invocation, the source-bound m28c-actions-live
+case, final Developer ID notarisation, or the admitted MLX/vMLX lifecycle.
+The route does not admit MLX or complete the Mac developer journey.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.

@@ -151,6 +151,17 @@ fn authorize_status(state: &AppState, headers: &HeaderMap) -> Result<String> {
         .map_err(|error| anyhow!("{error}"))
 }
 
+fn authorize_cancel_subject(
+    delegation: &mut auth::Delegation,
+    token: Option<&str>,
+    control: &str,
+    now: u64,
+) -> Result<String, &'static str> {
+    delegation
+        .authorize_write_principal(token, SPEC_PATH, &[control], now)
+        .map(|principal| principal.subject)
+}
+
 fn selected_record(state: &AppState, admission_id: &str, subject: &str) -> Result<JobRecord> {
     cohesix_authority::validate_id(admission_id).map_err(|_| anyhow!("EPERM job id"))?;
     let record = ledger(state)?
@@ -657,7 +668,19 @@ pub(super) async fn cancel(
     }
     let control =
         json!({"schema":"cohesix-job-cancel/v1", "admission_id":admission_id}).to_string();
-    let subject = match authorize_delegated(&state, &headers, SPEC_PATH, &[&control]) {
+    let subject = match state
+        .inner
+        .delegation
+        .lock()
+        .map_err(|_| "EPERM authority-state-unavailable")
+        .and_then(|mut delegation| {
+            authorize_cancel_subject(
+                &mut delegation,
+                delegated_token(&headers),
+                &control,
+                authority_now_ms().map_err(|_| "EPERM authority-clock-unavailable")?,
+            )
+        }) {
         Ok(subject) => subject,
         Err(error) => return fail(StatusCode::FORBIDDEN, error),
     };
@@ -790,7 +813,54 @@ pub(super) async fn revoke_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cohesix_authority::policy::AuthorityPolicy;
     use cohesix_authority::standing::{JOB_BINDING_SCHEMA, STANDING_SCOPE_SCHEMA};
+    use cohesix_ticket::{
+        BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketKey, TicketScope, TicketVerb,
+    };
+
+    #[test]
+    fn cancellation_checks_the_verified_subject_and_write_scope() {
+        let mut delegation = auth::Delegation::new(
+            Some(TicketKey::from_secret("cancel-test-issuer")),
+            AuthorityPolicy::default(),
+            Role::Queen,
+            None,
+            1000,
+        )
+        .expect("delegation fixture");
+        let issue = |subject: &str, verb| {
+            TicketIssuer::new("cancel-test-issuer")
+                .issue(
+                    TicketClaims::new(
+                        Role::Queen,
+                        BudgetSpec::unbounded().with_ops(Some(2)).with_ttl(Some(10)),
+                        Some(subject.into()),
+                        MountSpec::empty(),
+                        1000,
+                    )
+                    .with_scopes(vec![TicketScope::new(SPEC_PATH, verb, 2)]),
+                )
+                .expect("issue")
+                .encode()
+                .expect("encode")
+        };
+        let operator = issue("operator-1", TicketVerb::Write);
+        let other = issue("operator-2", TicketVerb::Write);
+        let read_only = issue("operator-1", TicketVerb::Read);
+        let control = r#"{"schema":"cohesix-job-cancel/v1","admission_id":"admit-1"}"#;
+        assert_eq!(
+            authorize_cancel_subject(&mut delegation, Some(&operator), control, 1000),
+            Ok("operator-1".into())
+        );
+        assert_eq!(
+            authorize_cancel_subject(&mut delegation, Some(&other), control, 1000),
+            Ok("operator-2".into())
+        );
+        assert!(
+            authorize_cancel_subject(&mut delegation, Some(&read_only), control, 1000).is_err()
+        );
+    }
 
     #[test]
     fn approved_start_derives_only_the_selected_service_and_fresh_facts() {
