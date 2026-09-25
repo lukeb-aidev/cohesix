@@ -46,9 +46,11 @@ Start with [llms.txt](llms.txt) for task selection and authoritative references.
 Operational skills cover [Queen inspection](skills/cohesix-inspect/SKILL.md),
 [governed GPU operations](skills/cohesix-gpu-operations/SKILL.md) and
 [evidence review](skills/cohesix-evidence/SKILL.md), including Python workflows.
+For host preparation, use [AI host setup](skills/cohesix-ai-host-setup/SKILL.md)
+for third-party Mac and Linux model, CUDA and agent tools.
 Load the relevant `SKILL.md` directly or copy its folder into your agent's skill
-location; no supporting files are required. The skills use portable documentation
-links and explain how to select references matching an installed version.
+location with its `references/` directory where present. The skills explain how
+to select references matching an installed version.
 [AGENTS.md](AGENTS.md) remains the separate contributor charter.
 
 ## What makes Cohesix different?
