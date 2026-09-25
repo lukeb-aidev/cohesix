@@ -3558,7 +3558,7 @@ fn console_manual<'a>(mut tokens: impl Iterator<Item = &'a str>) -> SwarmUiTrans
         Ok(page) => {
             let mut lines = vec![
                 "Shared cohsh manual. SwarmUI supports only commands listed by its help.".to_owned(),
-                "Writes require an enabled console, role and profile; host-only commands run in cohsh.".to_owned(),
+                "Writes require an enabled console, role and profile; host release workflows run through coh.".to_owned(),
                 "SwarmUI writable spawn uses role and key=value options; see man spawn.".to_owned(),
             ];
             lines.extend(page.lines().map(str::to_owned));
@@ -4026,6 +4026,10 @@ mod tests {
             .lines
             .iter()
             .any(|line| line.contains("spawn heartbeat ticks=100")));
+        assert!(transcript
+            .lines
+            .iter()
+            .any(|line| line.contains("host release workflows run through coh")));
         assert!(!backend.console_command("man spawn extra").ok);
         assert!(!backend.console_command("man missing").ok);
         let reads = Arc::new(AtomicUsize::new(0));

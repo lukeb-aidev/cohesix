@@ -938,9 +938,11 @@ supports `streamable-http` and `custom_headers`. Point its server URL at
 `http://127.0.0.1:8080/mcp` through the selected protected connection, and
 provide `x-cohesix-auth` and `x-cohesix-ticket` as private custom headers. The
 same release can launch a local `stdio` command, but HTTP is the selected
-Linux-hosted network path. The NeMo compatibility probe checks the installed
-native client's actual initialization and tool schema; a complete NeMo agent
-kit and A2A workflow belong to M28f.
+Linux-hosted network path. The selected M28d run used that installed native
+client to discover the generated recovery schema and return the original
+terminal for an admitted CUDA job. The ordinary MCP SDK client performed the
+effectful CUDA and PEFT submissions. A complete NeMo agent kit and A2A
+workflow belong to M28f.
 
 For a desktop client that supports standard MCP stdio, configure the installed
 `hive-gateway` as its command with arguments `--mcp-stdio`,

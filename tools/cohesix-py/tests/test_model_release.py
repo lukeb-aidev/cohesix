@@ -107,6 +107,22 @@ def test_explicit_submit_and_verify_use_one_identity(
     assert calls[1][1]["ticket_ref"] == "file:/ticket"
 
 
+def test_external_mcp_admission_projects_shared_verified_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = client(tmp_path)
+    monkeypatch.setattr(
+        model_release, "run_peft_release",
+        lambda *_a, **_k: report(state="succeeded", submitted=False),
+    )
+    verified = release.verify()
+    assert verified.state == "succeeded"
+    assert verified.requested_outcome_verified
+    assert verified.graph_sha256 == GRAPH_SHA
+    assert not verified.submitted
+    assert not verified.acknowledged
+
+
 @pytest.mark.parametrize("state", ["failed", "recovered_failure", "rollback_failed"])
 def test_failed_outcome_never_becomes_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str,

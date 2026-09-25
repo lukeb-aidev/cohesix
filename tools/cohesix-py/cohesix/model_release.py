@@ -155,7 +155,10 @@ def _status(report: dict[str, object], operation_id: str, verified: bool) -> Pef
         state = "outcome_unknown" if submitted else "not_submitted"
         graph_sha256 = None
     else:
-        if (not isinstance(result, dict) or not submitted or ambiguous
+        # A signed result may have been admitted through MCP or REST while this
+        # CLI controller's own journal remains unsubmitted. The CLI verifier
+        # owns proof; this field describes only this controller's submission.
+        if (not isinstance(result, dict) or ambiguous
                 or not isinstance(result.get("state"), str)
                 or result["state"] not in _TERMINAL):
             raise ValueError("invalid PEFT release terminal state")

@@ -87,6 +87,14 @@ lane = "live_safe"
 runner = "provider_m28c1_live"
 
 [[cases]]
+id = "m28d-mcp-live"
+group = "executors"
+providers = ["gpu.workload", "peft"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28d_live"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

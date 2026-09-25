@@ -13097,7 +13097,7 @@ Deliverables: Optional governed vMLX serving evidence; prerequisite for later mi
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — selected MCP transport and workflow implementation.
+**Status:** Complete — the [M28d implementation record](audit/M28D_IMPLEMENTATION_RECORD.md) binds the selected authenticated MCP transport, exact-source KVM Queen, native Orin CUDA and PEFT effects, shared verifier, refusal and original-identity recovery. Mixed MLX/CUDA, verified weight distribution and vMLX MCP client paths were not advertised by this selection; this is component evidence, not physical Pi or Release B acceptance.
 
 **Value:** ordinary agents use useful Cohesix workflows without learning its namespaces.
 **Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected

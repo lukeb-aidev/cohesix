@@ -73,12 +73,18 @@ foundation commit the gateway had no MCP or A2A routes. The [M28 implementation 
 retains the evidence and limits. This component result does not change Release A
 acceptance or qualify Release B.
 
-[Milestone 28d](BUILD_PLAN.md#28d) is in progress. The selected QEMU profile
-now compiles an authenticated MCP gateway route and local stdio launch path;
-the Pi profile and A2A remain disabled. Generated tool discovery and focused
-transport checks are host contract evidence only. A native standard-client
-CUDA job and PEFT comparison/deployment with exact-source KVM, original
-identity and shared-verifier outcomes remain required before completion.
+[Milestone 28d](BUILD_PLAN.md#28d) is complete for the selected MCP-only
+Jetson Orin scope. A named MCP SDK client reached an authenticated gateway
+and exact-source KVM Queen, completed native CUDA and PEFT work, and recovered
+the original results after a lost response and gateway restart. The shared
+verifier confirmed the deployed PEFT generation; an installed Python wheel
+projected the same outcomes. Focused transport and manual checks covered
+disabled, scoped, authentication and refusal behavior. Cancellation, exhausted
+budget and revocation caused no new effect. The
+[M28d implementation record](audit/M28D_IMPLEMENTATION_RECORD.md) retains
+identities and proof limits. This selection did not advertise mixed MLX/CUDA,
+weight distribution or vMLX MCP client compatibility; Pi and A2A stayed
+disabled. It does not qualify a physical Pi or Release B.
 
 [Milestone 28a](BUILD_PLAN.md#28a) is complete at its selected Orin scope. The source contains a
 private digest-pinned workload registration path, version 2 request validation,

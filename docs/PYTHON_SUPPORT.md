@@ -425,8 +425,14 @@ and observed restored generation. Missing or malformed serving observations
 cannot pass a successful outcome. It is a non-authoritative Python projection;
 exact source,
 serving generation and application-client observations remain separate release
-evidence. Future MCP and A2A views must use the same underlying identity and
-verifier result, not this Python object as authority.
+evidence. MCP and future A2A views use the same underlying identity and
+verifier result, not this Python object as authority. For an operation admitted
+externally through MCP or REST, `submitted=False` describes this CLI
+controller's journal. A signed terminal result can still be verified under
+the same operation ID and request digest; `verify()` calls the shared
+`coh peft release verify` path before setting
+`requested_outcome_verified=True`. The selected M28d installed-wheel check
+observed the same MCP PEFT operation, signed graph and accepted generation.
 The selected [configurable LoRA guide](PRIVATE_LORA_RELEASE.md#configurable-selected-lora-lifecycle)
 uses the installed native Python environment to prepare a pinned profile,
 independent import, fresh checkpoint-resume request and application endpoint
