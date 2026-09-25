@@ -22,7 +22,7 @@ from typing import Any
 from cohesix.auth import resolve_secret_reference
 from cohesix.vmlx_governed import GovernedSelection, GovernedVmlxSession
 from provider_m28b_live import command, refresh_verifier_clock, result_report
-from provider_m28_live import is_generated_derivation, qemu_image_identity, read_artifact
+from provider_m28_live import is_generated_derivation, read_artifact
 from provider_matrix import require
 
 
@@ -51,6 +51,8 @@ def digest(path: Path, maximum: int = 64 * 1024 * 1024) -> str:
 def _selected(path: Path, host_profile: str, case: str) -> dict[str, Any]:
     value = tomllib.loads(read_artifact(path, 65536).decode())
     expected = MLX if case == "m28c1-mlx-live" else VMLX
+    if value.get("target_host") == "local":
+        expected = expected | {"qemu_binary", "qemu_sha256"}
     require(set(value) == expected and value["schema"] == SCHEMA,
             "M28c1 selected reference fields")
     require(value["host_profile"] == host_profile == "mac-apple-m4-macos27",
@@ -65,7 +67,11 @@ def _selected(path: Path, host_profile: str, case: str) -> dict[str, Any]:
             and type(value["wait_seconds"]) is int
             and 1 <= value["wait_seconds"] <= 3600,
             "M28c1 source or process identity")
-    for key in ("source_manifest", "target_source", "coh_binary", "native_config"):
+    path_fields = ("source_manifest", "target_source", "coh_binary",
+                   "native_config")
+    if value["target_host"] == "local":
+        path_fields += ("qemu_binary",)
+    for key in path_fields:
         require(isinstance(value[key], str) and Path(value[key]).is_absolute(),
                 f"M28c1 {key} path")
     for key in expected:
@@ -116,8 +122,9 @@ def _exact_source(selected: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             "M28c1 remote source path")
     if selected["target_host"] == "local":
         require(Path(remote) == ROOT, "M28c1 local selected source path")
-        return commit, qemu_image_identity(selected["target_qemu_pid"], commit,
-                                           artifact_root=ROOT)
+        require(digest(Path(selected["qemu_binary"]), 128 * 1024 * 1024) ==
+                selected["qemu_sha256"], "M28c1 pinned QEMU changed")
+        return commit, _mac_qemu_image_identity(selected, commit)
     script = ("import json,sys; from pathlib import Path; "
               "sys.path.insert(0,sys.argv[1]+'/scripts/ci'); "
               "from provider_m28_live import qemu_image_identity; "
@@ -132,6 +139,47 @@ def _exact_source(selected: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     require(checked.returncode == 0 and len(checked.stdout) <= 8192,
             "M28c1 remote exact QEMU identity")
     return commit, json.loads(checked.stdout)
+
+
+def _mac_qemu_image_identity(selected: dict[str, Any], commit: str) -> dict[str, str]:
+    """Bind the live pinned HVF process to this source and built image."""
+    observed = subprocess.run(
+        ["ps", "-ww", "-p", str(selected["target_qemu_pid"]), "-o", "command="],
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    require(observed.returncode == 0 and 0 < len(observed.stdout) <= 16384,
+            "M28c1 live Mac QEMU process")
+    args = shlex.split(observed.stdout.strip())
+    require(args and Path(args[0]).resolve() == Path(selected["qemu_binary"]).resolve()
+            and Path(args[0]).name == "qemu-system-aarch64"
+            and any(args[index:index + 2] == ["-accel", "hvf"]
+                    for index in range(len(args) - 1)),
+            "M28c1 pinned HVF process identity")
+
+    def option(name: str) -> Path:
+        positions = [index for index, arg in enumerate(args[:-1]) if arg == name]
+        require(len(positions) == 1, f"M28c1 QEMU {name} identity")
+        path = Path(args[positions[0] + 1])
+        require(path.is_absolute() and path.is_relative_to(ROOT / "out"),
+                f"M28c1 QEMU {name} path")
+        return path
+
+    elfloader = option("-kernel")
+    cpio = option("-initrd")
+    loaders = [arg for index, arg in enumerate(args)
+               if index > 0 and args[index - 1] == "-device"
+               and arg.startswith("loader,file=") and ",addr=0x80000000," in arg]
+    require(len(loaders) == 1, "M28c1 QEMU rootserver loader")
+    rootserver = Path(loaders[0].split(",", 2)[1].removeprefix("file="))
+    require(rootserver.is_absolute() and rootserver.is_relative_to(ROOT / "out")
+            and rootserver.name == "rootserver", "M28c1 QEMU rootserver path")
+    image = read_artifact(rootserver, 32 * 1024 * 1024)
+    markers = re.findall(rb"\[BUILD\] ([0-9a-f]{12})(?:-dirty)? ", image)
+    require(markers == [commit[:12].encode()], "M28c1 live rootserver source")
+    return {"qemu_pid": str(selected["target_qemu_pid"]),
+            "qemu_sha256": selected["qemu_sha256"],
+            "rootserver_sha256": hashlib.sha256(image).hexdigest(),
+            "elfloader_sha256": digest(elfloader), "cpio_sha256": digest(cpio)}
 
 
 def _run_release(selected: dict[str, Any], state_dir: Path,
