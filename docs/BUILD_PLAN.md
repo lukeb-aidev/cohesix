@@ -139,7 +139,7 @@ owned by their specific contracts.
 | [28a](#28a) | Useful CUDA Workloads and Reliable GPU Operations | Complete — selected Orin systemd and Docker lanes |
 | [28b](#28b) | Deeper PEFT Lifecycle and Verified Serving | Complete |
 | [28c](#28c) | macOS Developer Actions and Local Metal Workbench | Complete — selected Mac developer journey |
-| [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Planned |
+| [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Complete — selected Mac component |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | Planned |
 | [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
 | [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
@@ -13071,7 +13071,7 @@ Deliverables: Notarised developer-useful Mac app and M28c completion record.
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — 28c is Complete. Mac native release and governed vMLX implementation are under focused validation; retained local phase and serving diagnostics do not establish selected-host admission or signed outcomes.
+**Status:** Complete — the [M28c1 implementation record](audit/M28C1_IMPLEMENTATION_RECORD.md) binds the selected Apple M4/macOS 27 native release, signed train and recovered rollback, and generation-fenced vMLX serving to one exact-source pinned QEMU Queen. This is selected component evidence, not physical Pi or Release B acceptance.
 
 ```text
 Title/ID: m28c1-admitted-mlx-release

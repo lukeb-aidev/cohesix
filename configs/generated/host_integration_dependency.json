@@ -7,7 +7,7 @@
     "graph_id": "m26e-host-integration",
     "source_sha256": "494af3bafb72a75a04fcf7bdc11a8efa7dc338b1161bb3657b4234b9246129c2",
     "resolved_manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
-    "implementation_surface_inventory_sha256": "fe3c49a73a2d53bcae63cf072b9374dd1ba53b5f1dc9e9362ad009d18a6d93ac"
+    "implementation_surface_inventory_sha256": "b33823607346741aa7f032f60f095547f6a9677821788ca4ea3b95947b5d77af"
   },
   "host_profiles": [
     {
