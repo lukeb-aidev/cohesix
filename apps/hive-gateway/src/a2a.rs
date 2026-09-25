@@ -123,6 +123,7 @@ fn task_from_reconciliation(result: &Value) -> Result<Value> {
         "refused_no_effect" if record["cancel_requested"] == true => "canceled",
         "refused_no_effect" => "rejected",
         "confirmed" => match native {
+            Some("running") => "working",
             Some("succeeded") => "completed",
             Some("cancelled" | "canceled") => "canceled",
             Some("failed" | "recovered_failure") => "failed",
@@ -535,6 +536,11 @@ mod tests {
         assert_eq!(
             task_from_reconciliation(&result).unwrap()["status"]["state"],
             "unknown"
+        );
+        result["target_results"] = json!([{"state":"running"}]);
+        assert_eq!(
+            task_from_reconciliation(&result).unwrap()["status"]["state"],
+            "working"
         );
         result["target_results"] = json!([{"state":"recovered_failure"}]);
         assert_eq!(
