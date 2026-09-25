@@ -136,6 +136,9 @@ completion or Release B acceptance. A second instruction-formatted 48-step
 local attempt passed its frozen four-question gate and improved held-out loss
 from 5.7968 to 0.8091, but answer templates repeat across the disjoint
 prompts. It remains diagnostic without admission, serving or a signed result.
+The new direct MLX loopback server returned a bounded matching Metal response
+from this adapter, but has no durable Cohesix serving owner or accepted
+generation.
 
 ## Capability snapshot
 

@@ -12976,6 +12976,9 @@ four-question response and resource checks, with held-out loss falling from
 5.7968 to 0.8091. Its train and test prompts are distinct, but the four
 answer templates repeat across splits. This is narrow diagnostic quality,
 not an independent generalization claim or admitted deployment.
+A bounded direct MLX loopback server also returned one matching local response
+from the selected adapter. Its model label is diagnostic and the process is
+not yet supervised by the shared release phases.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.

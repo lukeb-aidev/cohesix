@@ -1545,6 +1545,23 @@ the current diagnostic measurements. These functions do not create a Cohesix
 ticket, journal, deployment or signed outcome; the host-agent integration is
 still required before developers can use them as an admitted release.
 
+For a local transport check, `python -m cohesix.mlx_service --selection
+<absolute-private-selection.json> --port <loopback-port>` serves one fixed
+MLX model or adapter at `127.0.0.1` after checking the pinned Metal device.
+The selection JSON names `generation`,
+`model_directory`, `model_sha256`, `data_directory`, `data_sha256`,
+`memory_limit_bytes`, `adapter_directory` and `adapter_sha256`; use `null` for
+both adapter fields when serving the base. The process validates local bytes
+before listening and derives `cohesix-g<generation>-<full-artifact-digest>`
+as its model ID. `GET /health` and `GET /v1/models` expose that ID. A bounded
+`POST /v1/chat/completions` accepts exactly one user message, the selected ID,
+`temperature: 0`, `stream: false` and 1–64 `max_tokens`; it refuses tools,
+other roles, wrong generations, remote hosts, malformed or oversized requests.
+Requests run serially and return a content-bound Metal observation without
+logging prompts. The process has no job credential or Cohesix effect endpoint;
+its generation label and HTTP result are diagnostic until the shared accepted
+deployment and durable phase journal own the server lifecycle.
+
 The selected Mac also has vMLX/MLX Studio 1.6.65. Its bundled engine served a
 local SmolLM2-135M model at `127.0.0.1:18080` and returned one bounded
 OpenAI-compatible chat response; the tiny model gave a poor answer. This is a
