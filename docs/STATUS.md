@@ -104,9 +104,12 @@ explanation compile with focused tests; a detached MLX inference and LoRA
 smoke ran on the M4. Apple's macOS contract supports App Intents actions in
 user-created Shortcuts, rather than automatic App Shortcuts; the latter's
 unsupported source declaration has been removed. Exact macOS development
-profiles now sign the canonical app and extension with the same Keychain group;
-actual shared Keychain use, live Shortcuts and Siri invocation of a user-created Shortcut,
-admitted MLX release/rollback and direct-distribution signing have not passed;
+profiles sign the canonical app and extension with the same Keychain group. A
+fresh staged copy passed exact-profile Developer ID signing and nested verification.
+The focused platform case passed with four installed actions visible in
+Shortcuts; the local support action executed. Actual shared Keychain use,
+authenticated Shortcuts jobs and Siri invocation of a user-created Shortcut,
+admitted MLX release/rollback and notarisation have not passed;
 installed vMLX 1.6.65 additionally served one local model through a detached
 loopback API smoke, with poor answer quality and an observed local weight
 alignment rewrite. A bounded Python vMLX client also made one real local

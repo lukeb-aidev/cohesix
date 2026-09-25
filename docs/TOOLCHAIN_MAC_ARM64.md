@@ -55,8 +55,9 @@ and an Apple Development identity for installed feasibility checks. The
 instead of `--identity-sha1`, submits the exact archive with `notarytool`,
 checks Apple's acceptance log, staples and assesses the app. Provision the
 certificates, profiles and notary credential outside the repository. The
-provisioned development signature is recorded in the M28c feasibility record;
-Developer ID signing and notarisation remain outstanding.
+provisioned development signature and a fresh exact-profile Developer ID
+signature are recorded in the M28c feasibility record. Notarisation and final
+installed readback remain outstanding.
 
 The optional vMLX compatibility host has `/Applications/vMLX.app` 1.6.65,
 bundle `net.vmlx.app`, with bundled engine commit
