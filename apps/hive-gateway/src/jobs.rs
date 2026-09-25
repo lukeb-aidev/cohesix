@@ -669,7 +669,7 @@ fn prepare_selected_request(
     scope: &StandingScope,
     subject: &str,
     facts: &AdmissionFacts,
-    mut ticket: HostTicketSpec,
+    ticket: HostTicketSpec,
 ) -> Result<SubmitRequest> {
     ensure!(
         scope.subject == subject
@@ -681,15 +681,21 @@ fn prepare_selected_request(
             ),
         "EPERM selected preflight identity"
     );
-    let deadline = match facts.observed_unix_ms.checked_add(scope.decision_ttl_ms) {
-        Some(deadline) => deadline.min(scope.expires_unix_ms),
+    let ticket_deadline = ticket
+        .expires_unix_ms
+        .context("EPERM selected ticket expiry required")?;
+    ensure!(
+        ticket_deadline > facts.observed_unix_ms && ticket_deadline <= scope.expires_unix_ms,
+        "EPERM selected ticket expiry outside scope"
+    );
+    let decision_expiry = match facts.observed_unix_ms.checked_add(scope.decision_ttl_ms) {
+        Some(deadline) => deadline.min(ticket_deadline),
         None => return Err(anyhow!("ELIMIT selected deadline")),
     };
     ensure!(
-        deadline > facts.observed_unix_ms,
+        decision_expiry > facts.observed_unix_ms,
         "EPERM selected scope expired"
     );
-    ticket.expires_unix_ms = Some(deadline);
     validate_spec(&ticket, SpecSource::RawRequest)?;
     let input_sha256 = ticket
         .args
@@ -709,14 +715,14 @@ fn prepare_selected_request(
         policy_sha256: facts.policy_sha256.clone(),
         state_epoch: facts.state_epoch,
         resource_generation: facts.resource_generation,
-        deadline_unix_ms: deadline,
+        deadline_unix_ms: ticket_deadline,
         units: 1,
         attempt: 1,
     };
     binding
         .intent_sha256()
         .map_err(|error| anyhow!("{error}"))?;
-    build_selected_ticket(&binding, ticket.clone(), deadline, scope.generation)?;
+    build_selected_ticket(&binding, ticket.clone(), decision_expiry, scope.generation)?;
     Ok(SubmitRequest { binding, ticket })
 }
 
@@ -1406,16 +1412,25 @@ mod tests {
             receipt_worker_id: Some("worker-1".into()),
             receipt_supervisor_generation: Some(1),
             receipt_cap_generation: Some(2),
+            expires_unix_ms: Some(180_000),
             ..HostTicketSpec::default()
         };
         let request = prepare_selected_request(&scope, "operator-1", &facts, ticket.clone())
             .expect("fresh selected release request");
         assert_eq!(request.binding.admission_id, "release-ticket-1");
         assert_eq!(request.binding.input_sha256, "b".repeat(64));
-        assert_eq!(request.binding.deadline_unix_ms, 105_000);
-        assert_eq!(request.ticket.expires_unix_ms, Some(105_000));
+        assert_eq!(request.binding.deadline_unix_ms, 180_000);
+        assert_eq!(request.ticket.expires_unix_ms, Some(180_000));
         assert!(request.ticket.admission.is_none());
         assert!(prepare_selected_request(&scope, "other", &facts, ticket.clone()).is_err());
+        let mut expired_ticket = ticket.clone();
+        expired_ticket.expires_unix_ms = Some(100_000);
+        assert!(prepare_selected_request(&scope, "operator-1", &facts, expired_ticket).is_err());
+        let mut out_of_scope_ticket = ticket.clone();
+        out_of_scope_ticket.expires_unix_ms = Some(200_001);
+        assert!(
+            prepare_selected_request(&scope, "operator-1", &facts, out_of_scope_ticket).is_err()
+        );
         let mut supplied_grant = ticket;
         supplied_grant.admission = build_selected_ticket(
             &request.binding,
