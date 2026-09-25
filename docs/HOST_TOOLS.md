@@ -1563,6 +1563,17 @@ tool-call output, and rechecks the advertised model after inference. It does
 not bind a process or model bytes, enroll a model, sign a result or manage a
 deployment, so it is not the admitted vMLX lifecycle by itself.
 
+`cohesix.vmlx_runtime.VmlxSelection` and `VmlxSession` can start a separate
+content-bound local engine session from the installed signed app. The caller
+must provide the exact app version, bundled engine commit and SHA-256, model
+tree SHA-256, a private staging directory, a free loopback port and a local
+generation label. The session copies the source model, records both original
+and vMLX-repaired bytes, rejects staged mutation during a request and stops its
+process on exit. Use `with VmlxSession(selection) as server:` and call
+`server.generate(prompt, max_tokens)`; `server.evidence()` omits text. The
+caller must still obtain a Cohesix admitted generation and a passing quality
+comparison. A local generation label alone grants neither.
+
 ### Cohesix Python package
 
 Use the package when your application needs structured calls rather than

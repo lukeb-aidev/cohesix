@@ -12965,6 +12965,9 @@ The same record captures diagnostic adapter fusion through installed vMLX and a
 manual incumbent switch. The candidate response failed semantic quality, and
 neither server was bound to an admitted Cohesix generation. The client now
 refuses an observed model-ID switch during an inference request.
+A later bounded session verified the installed vMLX app signature and engine,
+served a disposable copy under a local generation label and checked its
+repaired bytes across one request. That label remains diagnostic.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.

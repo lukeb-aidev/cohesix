@@ -15,7 +15,7 @@ use crate::validate_id;
 pub const STANDING_SCOPE_SCHEMA: &str = "cohesix-standing-scope/v1";
 /// The exact selected job identity contract shared by all client surfaces.
 pub const JOB_BINDING_SCHEMA: &str = "cohesix-job-binding/v1";
-/// Compiler-selected ceiling for the two M28 effect actions.
+/// Compiler-selected ceiling for M28 effect actions, including local PEFT release.
 pub const STANDING_CONTROLS_SCHEMA: &str = "cohesix-standing-controls/v1";
 /// Private deployment file whose entries must attenuate the selected profile.
 pub const STANDING_SCOPE_FILE_SCHEMA: &str = "cohesix-standing-scope-file/v1";
@@ -110,12 +110,18 @@ impl StandingControls {
             };
         }
         if self.actions.is_empty()
-            || self.actions.len() > 2
-            || self
-                .actions
-                .iter()
-                .any(|action| !matches!(action.as_str(), "gpu.workload.submit" | "systemd.restart"))
-            || self.actions.len() == 2 && self.actions[0] == self.actions[1]
+            || self.actions.len() > 3
+            || self.actions.iter().any(|action| {
+                !matches!(
+                    action.as_str(),
+                    "gpu.workload.submit" | "systemd.restart" | "peft.release"
+                )
+            })
+            || self.actions.iter().enumerate().any(|(index, action)| {
+                self.actions[..index]
+                    .iter()
+                    .any(|earlier| earlier == action)
+            })
             || self.max_scopes == 0
             || self.max_scopes > 16
             || self.max_jobs == 0
@@ -609,5 +615,39 @@ mod tests {
             StandingControls::from_resolved_manifest(&serde_json::to_vec(&profile).unwrap())
                 .unwrap();
         assert!(decoded.enabled);
+    }
+
+    #[test]
+    fn optional_peft_release_requires_selected_ceiling_and_exact_scope() {
+        let (mut scope, mut job, facts, budget) = fixture();
+        let mut controls = StandingControls {
+            schema: STANDING_CONTROLS_SCHEMA.into(),
+            enabled: true,
+            actions: alloc::vec![
+                "gpu.workload.submit".into(),
+                "systemd.restart".into(),
+                "peft.release".into()
+            ],
+            max_scopes: 3,
+            max_jobs: 3,
+            max_job_units: 5,
+            max_total_units: 10,
+            max_concurrent: 1,
+            max_retries: 1,
+            max_cooldown_ms: 10,
+            max_fact_age_ms: 100,
+            max_decision_ttl_ms: 20,
+        };
+        scope.action = "peft.release".into();
+        scope.target = "/models/local-model/release".into();
+        job.action = scope.action.clone();
+        job.target = scope.target.clone();
+        assert_eq!(controls.permits_scope(&scope), Ok(()));
+        assert!(evaluate(&scope, &job, &facts, budget, 1100).is_ok());
+        controls.actions.pop();
+        assert_eq!(controls.permits_scope(&scope), Err(StandingRefusal::Scope));
+        controls.actions.push("peft.release".into());
+        controls.actions.push("peft.release".into());
+        assert_eq!(controls.validate(), Err(StandingRefusal::Invalid));
     }
 }

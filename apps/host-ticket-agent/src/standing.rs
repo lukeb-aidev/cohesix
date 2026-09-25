@@ -205,6 +205,20 @@ pub fn verify_ticket(spec: &HostTicketSpec, record: &JobRecord) -> Result<()> {
             );
             request_hash(&spec.args)?
         }
+        (HOST_TICKET_V2_SCHEMA, "peft.release") => {
+            let model_id = spec
+                .subject_ref
+                .as_deref()
+                .ok_or_else(|| anyhow!("EPERM standing-release-subject"))?;
+            cohesix_authority::validate_id(model_id)
+                .map_err(|_| anyhow!("EPERM standing-release-subject"))?;
+            ensure!(
+                record.binding.target == format!("/models/{model_id}/release")
+                    && spec.target.is_none(),
+                "EPERM standing-release-target"
+            );
+            request_hash(&spec.args)?
+        }
         _ => return Err(anyhow!("EPERM unsupported-standing-action")),
     };
     ensure!(
@@ -329,6 +343,27 @@ mod tests {
         admission.intent_hash = record.intent_sha256.clone();
         verify_ticket(&spec, &record).expect("GPU selected job");
         spec.subject_ref = Some("GPU-1".into());
+        assert!(verify_ticket(&spec, &record).is_err());
+    }
+
+    #[test]
+    fn peft_release_identity_requires_exact_model_and_request() {
+        let (mut spec, mut record) = service();
+        spec.schema = HOST_TICKET_V2_SCHEMA.into();
+        spec.action = "peft.release".into();
+        spec.target = None;
+        spec.subject_ref = Some("local-model".into());
+        spec.args = serde_json::json!({"request_sha256":"b".repeat(64)});
+        record.binding.action = spec.action.clone();
+        record.binding.target = "/models/local-model/release".into();
+        record.binding.input_sha256 = "b".repeat(64);
+        record.intent_sha256 = record.binding.intent_sha256().unwrap();
+        spec.admission.as_mut().unwrap().intent_hash = record.intent_sha256.clone();
+        verify_ticket(&spec, &record).expect("selected release identity");
+        spec.subject_ref = Some("other-model".into());
+        assert!(verify_ticket(&spec, &record).is_err());
+        spec.subject_ref = Some("local-model".into());
+        spec.args = serde_json::json!({"request_sha256":"c".repeat(64)});
         assert!(verify_ticket(&spec, &record).is_err());
     }
 

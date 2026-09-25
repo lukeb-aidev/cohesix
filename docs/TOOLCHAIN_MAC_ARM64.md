@@ -99,6 +99,13 @@ model's SHA-256 was unchanged during that second test. Run
 `python3 -m pytest -q tools/cohesix-py/tests/test_vmlx_compat.py` for its
 pure refusal checks; acceptance still needs `m28c-vmlx-live` against an
 admitted adapter generation and rollback.
+The same installed app's `vmlx-serve` entrypoint is SHA-256
+`6ae7d9f0b5db2035b623fc0cacecc3f572bc46db18b69cc8fd611f71b0c2ac7d`.
+The optional `cohesix.vmlx_runtime.VmlxSession` verifies this entrypoint and
+the app signature, stages an exact local model in a private disposable copy,
+binds a loopback process and rechecks its repaired model bytes across each
+bounded request. A diagnostic session succeeded with the fused M28c adapter;
+its local generation label is not a Cohesix admission or accepted deployment.
 
 See the [Glossary](GLOSSARY.md) for Cohesix-specific build and evidence terms.
 

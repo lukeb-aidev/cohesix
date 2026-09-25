@@ -33,6 +33,7 @@ Deliverables: Local MLX primitives and diagnostic compute measurements, not an a
 | Diagnostic vMLX conversion | MLX-LM fused the adapter into a separate model tree SHA-256 `4c6876a4c0a78e6b9e902f652af442e8763b3b844e6c3c55a69e8de6ca7ccff2`. Direct MLX held-out loss was 6.0157470703125 on the same 16 rows and its bounded output digest matched the adapter. The installed vMLX 1.6.65 engine served a disposable copy at loopback; the bounded Cohesix client returned the same output SHA-256 `38add7b12b21120a4860ef45a855d1de7d5173ef7351ac2a3a3921a420826c9d`. | vMLX's text adapter load is unsupported by its documented `--lora-paths` image-model option; this proves a conversion and transport route only. The response interpreted “canary release” as a bird and exhausted its token cap, so it fails useful response quality. No Cohesix canary generation was admitted. |
 | vMLX mutation and incumbent switch | vMLX repaired 272 tensor alignments only in the disposable fused serving copy; `model.safetensors` changed from SHA-256 `7f31bedbc3de3647f4cb3220e3373303fab2323870215f918af07563a75cdb25` to `9360693cf724310a0a98af35a2b82d494cec0a8981ae9794a4a06cfdd5fe57da`. The fused source tree stayed unchanged. After stopping the candidate server, the same loopback port served a copied incumbent tree with unchanged SHA-256 `8b05c3c6097752da054b392d5abab559452fd5c14ae191ee5386130adca4677d`; the old candidate model ID was refused, and the incumbent output digest `474b6d26060740ef5c0763435e9947ee80b4b37ad5b23cd322e586043b6f8990` matched direct base inference. | This is a manual diagnostic server switch, not Cohesix generation-fenced rollback or a quality-qualified incumbent. Neither server imported Cohesix credentials or enabled MCP tool execution. |
 | Client switch refusal | The bounded client now reads health and model listing again after a response; a focused test switches the server's advertised model during inference and the client refuses to return the output. | This detects an observed model switch across a request, not a same-ID weight replacement or an exact process/generation binding. |
+| Content-bound vMLX serving session | `cohesix.vmlx_runtime.VmlxSession` verified the installed `net.vmlx.app` 1.6.65 signature and engine commit `22f9c77711fb580df32f4d40bbaea989c2d5421b` with entrypoint SHA-256 `6ae7d9f0b5db2035b623fc0cacecc3f572bc46db18b69cc8fd611f71b0c2ac7d`. It copied the unchanged fused source tree into a private disposable directory, served it with a minimal environment and no inherited Cohesix credentials on loopback port 18085 as `cohesix-g3-4c6876a4c0a78e6b`, observed process 23689 and loaded tree SHA-256 `c41783392b1d884e8915cba48f822a73eae0061315f33f080e174ecd8d5291fa`, returned one bounded response, and stopped the process. The source tree remained SHA-256 `4c6876a4c0a78e6b9e902f652af442e8763b3b844e6c3c55a69e8de6ca7ccff2`. | Generation 3 was a local diagnostic label, not an admitted Cohesix deployment. The response exhausted its 32-token bound; no predeclared useful-quality policy or root ticket applied. `VmlxSession` records bytes and process while running but does not retain a signed outcome or arrange recovery after its own process exits. |
 
 `m28c-vmlx-compatibility` also remains **In Progress**. The conversion and
 manual server switch prove the installed engine can transport the fused model
@@ -40,11 +41,17 @@ and distinguish selected model IDs. A better model or task-specific dataset,
 predeclared quality/resource policy, admitted generation, process and mutation
 binding, and automated rollback are still required by its build-plan checks.
 
-The host-tool/Python/benchmark compatibility review finds this module additive
-and unused by the current selected agent, gateway, `coh` and SwarmUI. It does
-not change their schemas, ticket actions, benchmark measurements or target
-interfaces. Integration must preserve M28b's durable phase journal and signed
-result custody; a call to this module alone cannot satisfy that contract.
+The host-tool/Python/benchmark compatibility review finds the native MLX and
+vMLX modules additive and unused by the current selected agent, gateway,
+`coh` and SwarmUI. The standing-authority parser now recognises
+`peft.release` as an optional third compiler-selected action, with a focused
+scope/duplicate refusal test. The host agent now checks a selected release's
+model, target and request digest, but its release executor has no standing
+dispatch barrier or Mac MLX phase adapter. Neither selected manifest enables
+the action, and the gateway still refuses its submission. No benchmark metric
+or target interface changes. Integration must preserve M28b's durable phase
+journal and signed result custody; a call to these modules alone cannot
+satisfy that contract.
 
 Material AI assistance contributed the implementation, tests and this record.
 The ignored local artifacts are diagnostic and must be replaced by exact-source
