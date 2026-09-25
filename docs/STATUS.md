@@ -129,7 +129,9 @@ content-bound vMLX serving session checks the signed installed
 engine and repaired model bytes across one local request; this still has no
 admitted deployment or accepted quality result. M28c requires an installed
 [developer-useful Mac journey](BUILD_PLAN.md#28c) across an admitted job,
-local MLX execution, result inspection and rollback. This is not M28c
+local MLX execution, result inspection and rollback. A pinned 1.5B MLX model
+completed another Metal LoRA attempt and improved held-out loss, but failed its
+predeclared operational response gate. This is not M28c
 completion or Release B acceptance.
 
 ## Capability snapshot

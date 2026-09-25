@@ -12968,6 +12968,9 @@ refuses an observed model-ID switch during an inference request.
 A later bounded session verified the installed vMLX app signature and engine,
 served a disposable copy under a local generation label and checked its
 repaired bytes across one request. That label remains diagnostic.
+A later pinned 1.5B instruction-model LoRA attempt improved held-out loss on
+Metal but failed its predeclared operational response gate, including a
+cancellation-status question. The candidate is not accepted for serving.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.
