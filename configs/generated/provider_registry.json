@@ -7595,6 +7595,31 @@
           "dla",
           "pva"
         ]
+      },
+      {
+        "architecture": "arm64",
+        "board": "Apple M4 Mac16,1",
+        "compute_capability": "not-applicable",
+        "cuda_toolkit": "not-applicable",
+        "execution_lanes": [
+          "native",
+          "launchd",
+          "metal"
+        ],
+        "host_headroom_bytes": 2147483648,
+        "id": "mac-apple-m4-macos27",
+        "jetpack": "not-applicable",
+        "l4t": "not-applicable",
+        "observation_ttl_ms": 5000,
+        "os": "macos",
+        "shared_memory": true,
+        "ubuntu": "not-applicable",
+        "unsupported": [
+          "cuda",
+          "mig",
+          "dla",
+          "pva"
+        ]
       }
     ],
     "read_visibility": [
@@ -7660,7 +7685,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "3e133d72a78b16c8e07b93c3d5048694052277c6de1936a037ad3ac6d78ca767",
+  "graph_sha256": "8b5da182d56ea96d4205ffa270343e41456ac6fff8fe7c6a3741585e59fe6949",
   "playbooks": [
     {
       "dependencies": [
@@ -8607,7 +8632,7 @@
   ],
   "resolved_manifest_sha256": "58de21262439c2e4e50760a7c0cd803f4c61acd388698a9509cb8e44c5e3cdcc",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "d70d8ccbca19e9385ab4155074d790aeae30fecbbcbc3e06a082546cc6d11b73",
+  "source_sha256": "494af3bafb72a75a04fcf7bdc11a8efa7dc338b1161bb3657b4234b9246129c2",
   "use_cases": [
     {
       "dependencies": [

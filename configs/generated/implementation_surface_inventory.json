@@ -8356,6 +8356,20 @@
       "evidence_eligible": true
     },
     {
+      "id": "tracked:tools/cohesix-py/cohesix/mlx_release.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/cohesix/mlx_release.py",
+      "implementation_class": "production_live",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "Python package manifest; rule=cohesix-python-library",
+      "package_disposition": "release_python_library",
+      "evidence_requirement": "authenticated host integration and typed receipts",
+      "current_observed_mode": "live_host_adapter",
+      "evidence_eligible": true
+    },
+    {
       "id": "tracked:tools/cohesix-py/cohesix/mlx_service.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/cohesix/mlx_service.py",
@@ -8555,6 +8569,20 @@
       "id": "tracked:tools/cohesix-py/cohesix/vmlx_compat.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/cohesix/vmlx_compat.py",
+      "implementation_class": "production_live",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "Python package manifest; rule=cohesix-python-library",
+      "package_disposition": "release_python_library",
+      "evidence_requirement": "authenticated host integration and typed receipts",
+      "current_observed_mode": "live_host_adapter",
+      "evidence_eligible": true
+    },
+    {
+      "id": "tracked:tools/cohesix-py/cohesix/vmlx_governed.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/cohesix/vmlx_governed.py",
       "implementation_class": "production_live",
       "owner": "python-client",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -8986,6 +9014,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:tools/cohesix-py/tests/test_mlx_release.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_mlx_release.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "source_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:tools/cohesix-py/tests/test_mlx_service.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_mlx_service.py",
@@ -9199,6 +9241,20 @@
       "id": "tracked:tools/cohesix-py/tests/test_vmlx_compat.py",
       "kind": "tracked_surface",
       "path": "tools/cohesix-py/tests/test_vmlx_compat.py",
+      "implementation_class": "fixture",
+      "owner": "python-client",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit package test directory; rule=cohesix-python-tests",
+      "package_disposition": "source_test_fixture",
+      "evidence_requirement": "fixture only; cannot satisfy target evidence",
+      "current_observed_mode": "python_test_fixture",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tools/cohesix-py/tests/test_vmlx_governed.py",
+      "kind": "tracked_surface",
+      "path": "tools/cohesix-py/tests/test_vmlx_governed.py",
       "implementation_class": "fixture",
       "owner": "python-client",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",

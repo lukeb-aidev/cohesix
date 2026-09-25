@@ -1,5 +1,5 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Frame terminal-free connection, Apple actions, governed operations and evidence in the SwarmUI workbench. -->
+<!-- Purpose: Frame terminal-free connection, Apple actions, governed operations and MLX evidence in the SwarmUI workbench. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!doctype html>
 <html lang="en">
@@ -379,6 +379,22 @@
                     <sp-button data-mlx-job="reconcile" variant="secondary">Reconcile</sp-button>
                     <sp-button data-mlx-job="cancel" variant="secondary">Review cancellation</sp-button>
                   </div>
+                </div>
+              </article>
+              <article class="panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Governed vMLX observation</h2>
+                    <p>Follow the original signed release and rollback above, then inspect the retained selected-host vMLX report for that accepted generation.</p>
+                  </div>
+                </header>
+                <div class="panel-body">
+                  <label for="mlx-vmlx-report">Retained vMLX report JSON</label>
+                  <input id="mlx-vmlx-report" type="file" accept="application/json,.json" />
+                  <div class="button-row">
+                    <sp-button id="mlx-vmlx-inspect" variant="secondary">Inspect governed observation</sp-button>
+                  </div>
+                  <pre id="mlx-vmlx-summary" class="read-output" role="status">Inspect both signed graphs before selecting a report.</pre>
                 </div>
               </article>
             </section>

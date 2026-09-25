@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Execute bounded selected conformance contracts with exact source hashes and explicit proof limits.
+# Purpose: Execute bounded selected conformance contracts including Mac MLX release with exact source hashes and proof limits.
 # Copyright 2026 Lukas Bower
 """Matrix selection is not permission to infer native execution from host tests."""
 
@@ -125,7 +125,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
         live = case.get("id") in {"m28-jobs-live", "m28-authority-live",
                                     "m28a-workloads-live", "m28a-recovery-live",
                                     "m28b-peft-live", "m28b-serving-live",
-                                    "m28c-platform-live"}
+                                    "m28c-platform-live", "m28c1-mlx-live",
+                                    "m28c1-vmlx-live"}
         optional = {"surface", "runner"} if live else {"surface", "command"}
         require(set(case) >= required | {"runner" if live else "command"}
                 and set(case) <= required | optional,
@@ -157,7 +158,9 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "surface" not in case or case["surface"] in surfaces, "unregistered surface"
         )
         if live:
-            expected_runner = ("provider_m28c_platform" if identifier == "m28c-platform-live" else
+            expected_runner = ("provider_m28c1_live" if identifier in {
+                "m28c1-mlx-live", "m28c1-vmlx-live"} else
+                "provider_m28c_platform" if identifier == "m28c-platform-live" else
                 "provider_m28b_live" if identifier in {
                 "m28b-peft-live", "m28b-serving-live"} else
                 "provider_m28a_live" if identifier in {

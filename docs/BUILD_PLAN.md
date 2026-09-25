@@ -13071,7 +13071,7 @@ Deliverables: Notarised developer-useful Mac app and M28c completion record.
 
 [Milestones](#Milestones)
 
-**Status:** Planned — activate after 28c. This preserves the previously proposed shared-lifecycle and accepted-deployment work without representing local M28c observations as admission.
+**Status:** In Progress — 28c is Complete. Mac native release and governed vMLX implementation are under focused validation; retained local phase and serving diagnostics do not establish selected-host admission or signed outcomes.
 
 ```text
 Title/ID: m28c1-admitted-mlx-release

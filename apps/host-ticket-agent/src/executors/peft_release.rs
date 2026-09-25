@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Drive admitted PEFT release phases through the existing native systemd executor, retaining original identity and rechecking Root authority.
+// Purpose: Drive admitted PEFT release phases through native systemd or launchd custody while retaining original identity and Root authority.
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 #![forbid(unsafe_code)]
@@ -46,8 +46,64 @@ fn read(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     gpu_bridge_host::workload::read_file(path, maximum)
 }
 
+#[cfg(target_os = "macos")]
+fn launchd_state(label: &str, operation: &Path, phase: &str) -> Result<Option<String>> {
+    let result = Command::new("/bin/launchctl")
+        .args(["list", label])
+        .output()?;
+    if !result.status.success() {
+        return Ok(None);
+    }
+    ensure!(
+        result.stdout.len() <= 8192,
+        "ambiguous native-phase-manager-output"
+    );
+    let output = String::from_utf8(result.stdout)?;
+    let stdout = operation.join(format!("{phase}.native.stdout"));
+    let stderr = operation.join(format!("{phase}.native.stderr"));
+    ensure!(
+        output.contains(&format!("\"Label\" = \"{label}\";"))
+            && output.contains("\"Program\" = \"/usr/bin/env\";")
+            && output.contains(&format!("\"StandardOutPath\" = \"{}\";", stdout.display()))
+            && output.contains(&format!(
+                "\"StandardErrorPath\" = \"{}\";",
+                stderr.display()
+            )),
+        "EPERM foreign-native-phase-label"
+    );
+    Ok(Some(output))
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_stop(label: &str, operation: &Path, phase: &str, required: bool) -> Result<()> {
+    if launchd_state(label, operation, phase)?.is_none() {
+        ensure!(!required, "ambiguous native-phase-manager-state");
+        return Ok(());
+    }
+    ensure!(
+        Command::new("/bin/launchctl")
+            .args(["remove", label])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?
+            .success(),
+        "ambiguous native-phase-stop"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if launchd_state(label, operation, phase)?.is_none() {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "ambiguous native-phase-not-quiescent"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn quiesce(operation: &Path, ticket_id: &str, include_rollback: bool) -> Result<()> {
-    // A systemd-run client may outlive its crashed parent and submit late. The
+    // A native manager client may outlive its crashed parent and submit late. The
     // durable fence prevents any delayed forward helper from mutating runtime.
     crate::wal::durable_atomic_write(
         &operation.join("forward-cancelled.json"),
@@ -65,27 +121,35 @@ fn quiesce(operation: &Path, ticket_id: &str, include_rollback: bool) -> Result<
             "cohesix-lora-phase-{}-{phase}.service",
             &cohesix_evidence::digest(ticket_id.as_bytes())[..16]
         );
-        let state = Command::new("systemctl")
-            .args(["--user", "show", &unit, "--property=LoadState", "--value"])
-            .output()?;
-        if state.stdout == b"not-found\n" {
-            continue;
+        #[cfg(target_os = "macos")]
+        {
+            let label = unit.trim_end_matches(".service");
+            launchd_stop(label, operation, phase, false)?;
         }
-        ensure!(state.status.success(), "ambiguous original-native-unit");
-        ensure!(
-            Command::new("systemctl")
-                .args(["--user", "stop", &unit])
-                .status()?
-                .success(),
-            "ambiguous original-native-stop"
-        );
-        let stopped = Command::new("systemctl")
-            .args(["--user", "show", &unit, "--property=ActiveState", "--value"])
-            .output()?;
-        ensure!(
-            stopped.stdout == b"inactive\n" || stopped.stdout == b"failed\n",
-            "ambiguous original-native-not-quiescent"
-        );
+        #[cfg(not(target_os = "macos"))]
+        {
+            let state = Command::new("systemctl")
+                .args(["--user", "show", &unit, "--property=LoadState", "--value"])
+                .output()?;
+            if state.stdout == b"not-found\n" {
+                continue;
+            }
+            ensure!(state.status.success(), "ambiguous original-native-unit");
+            ensure!(
+                Command::new("systemctl")
+                    .args(["--user", "stop", &unit])
+                    .status()?
+                    .success(),
+                "ambiguous original-native-stop"
+            );
+            let stopped = Command::new("systemctl")
+                .args(["--user", "show", &unit, "--property=ActiveState", "--value"])
+                .output()?;
+            ensure!(
+                stopped.stdout == b"inactive\n" || stopped.stdout == b"failed\n",
+                "ambiguous original-native-not-quiescent"
+            );
+        }
     }
     Ok(())
 }
@@ -152,6 +216,95 @@ struct Adapter<'a> {
     session: &'a Session,
 }
 
+#[cfg(target_os = "macos")]
+impl Adapter<'_> {
+    /// Launchd retains the exact phase label across an agent exit. A missing
+    /// completion remains uncertain; this path never starts that phase again.
+    fn execute_macos(&mut self, phase: Phase) -> Result<Observation> {
+        let label = format!(
+            "cohesix-lora-phase-{}-{}",
+            &cohesix_evidence::digest(self.spec.id.as_bytes())[..16],
+            phase.name()
+        );
+        let expiry = self
+            .spec
+            .expires_unix_ms
+            .ok_or_else(|| anyhow!("EPERM release-expiry"))?;
+        let remaining_ms = expiry
+            .checked_sub(self.now_ms()?)
+            .filter(|remaining| *remaining > 0)
+            .ok_or_else(|| anyhow!("EPERM release-authority-expired"))?
+            .min(300_000);
+        let stdout = self
+            .observation_directory
+            .join(format!("{}.native.stdout", phase.name()));
+        let stderr = self
+            .observation_directory
+            .join(format!("{}.native.stderr", phase.name()));
+        ensure!(
+            !stdout.try_exists()? && !stderr.try_exists()?,
+            "ambiguous native-phase-log-already-exists"
+        );
+        let mut command = Command::new("/bin/launchctl");
+        command
+            .args(["submit", "-l", &label, "-o"])
+            .arg(&stdout)
+            .arg("-e")
+            .arg(&stderr)
+            .args(["--", "/usr/bin/env", "-i"])
+            .arg(format!("HOME={}", self.root.display()))
+            .arg(format!("TMPDIR={}", self.root.display()))
+            .args([
+                "PATH=/usr/bin:/bin",
+                "PYTHONNOUSERSITE=1",
+                "HF_HUB_OFFLINE=1",
+                "TRANSFORMERS_OFFLINE=1",
+            ])
+            .arg(&self.config.python)
+            .arg("-I")
+            .args(["-m", "cohesix.mlx_release"])
+            .arg("--helper")
+            .arg(&self.config.helper)
+            .arg("--config")
+            .arg(&self.config.native_config)
+            .arg("--request")
+            .arg(&self.request)
+            .arg("--phase")
+            .arg(phase.name())
+            .arg("--native-label")
+            .arg(&label)
+            .arg("--authority-expires-unix-ms")
+            .arg(expiry.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(id) = &self.recovery_id {
+            command.arg("--recovery-id").arg(id);
+        }
+        ensure!(command.status()?.success(), "ambiguous native-phase-launch");
+        let deadline = Instant::now() + Duration::from_millis(remaining_ms);
+        loop {
+            if let Some(observation) = self.reconcile(phase)? {
+                launchd_stop(&label, &self.observation_directory, phase.name(), true)?;
+                return Ok(observation);
+            }
+            let output = launchd_state(&label, &self.observation_directory, phase.name())?
+                .ok_or_else(|| anyhow!("ambiguous native-phase-manager-state"))?;
+            ensure!(
+                !output.contains("\"LastExitStatus\" = ") || output.contains("\"PID\" = "),
+                "ambiguous native-phase-exited-without-observation"
+            );
+            let authority = self.authorize(phase);
+            if authority.is_err() || Instant::now() >= deadline {
+                launchd_stop(&label, &self.observation_directory, phase.name(), true)?;
+                authority?;
+                return Err(anyhow!("expired native-phase-deadline"));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+}
+
 impl Native for Adapter<'_> {
     fn now_ms(&self) -> Result<u64> {
         Ok(crate::unix_time_ms_now())
@@ -194,87 +347,94 @@ impl Native for Adapter<'_> {
                 == self.config.helper_sha256,
             "EPERM native-helper-digest"
         );
-        let unit = format!(
-            "cohesix-lora-phase-{}-{}",
-            &cohesix_evidence::digest(self.spec.id.as_bytes())[..16],
-            phase.name()
-        );
-        let log = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(
-                self.observation_directory
-                    .join(format!("{}.native.log", phase.name())),
-            )?;
-        let mut command = Command::new("systemd-run");
-        let expiry = self
-            .spec
-            .expires_unix_ms
-            .ok_or_else(|| anyhow!("EPERM release-expiry"))?;
-        let remaining_ms = expiry
-            .checked_sub(self.now_ms()?)
-            .filter(|remaining| *remaining > 0)
-            .ok_or_else(|| anyhow!("EPERM release-authority-expired"))?
-            .min(300_000);
-        command
-            .args([
-                "--user",
-                "--wait",
-                "--collect",
-                "--quiet",
-                "--service-type=exec",
-                "--unit",
-                &unit,
-            ])
-            .args([
-                "--property=MemoryMax=3221225472",
-                "--property=TasksMax=128",
-                "--property=CPUQuota=200%",
-                "--property=LimitFSIZE=67108864",
-                "--property=NoNewPrivileges=yes",
-            ])
-            .arg(format!("--property=RuntimeMaxSec={remaining_ms}ms"))
-            .arg(&self.config.python)
-            .arg("-I")
-            .arg(&self.config.helper)
-            .arg("--config")
-            .arg(&self.config.native_config)
-            .arg("--request")
-            .arg(&self.request)
-            .arg("--phase")
-            .arg(phase.name())
-            .arg("--authority-expires-unix-ms")
-            .arg(expiry.to_string())
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log);
-        if let Some(id) = &self.recovery_id {
-            command.arg("--recovery-id").arg(id);
+        #[cfg(target_os = "macos")]
+        {
+            return self.execute_macos(phase);
         }
-        let mut child = command.spawn()?;
-        let deadline = Instant::now() + Duration::from_millis(remaining_ms);
-        loop {
-            if let Some(status) = child.try_wait()? {
-                ensure!(status.success(), "failed native-phase-process");
-                return self
-                    .reconcile(phase)?
-                    .ok_or_else(|| anyhow!("ambiguous missing-native-completion"));
+        #[cfg(not(target_os = "macos"))]
+        {
+            let unit = format!(
+                "cohesix-lora-phase-{}-{}",
+                &cohesix_evidence::digest(self.spec.id.as_bytes())[..16],
+                phase.name()
+            );
+            let log = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(
+                    self.observation_directory
+                        .join(format!("{}.native.log", phase.name())),
+                )?;
+            let mut command = Command::new("systemd-run");
+            let expiry = self
+                .spec
+                .expires_unix_ms
+                .ok_or_else(|| anyhow!("EPERM release-expiry"))?;
+            let remaining_ms = expiry
+                .checked_sub(self.now_ms()?)
+                .filter(|remaining| *remaining > 0)
+                .ok_or_else(|| anyhow!("EPERM release-authority-expired"))?
+                .min(300_000);
+            command
+                .args([
+                    "--user",
+                    "--wait",
+                    "--collect",
+                    "--quiet",
+                    "--service-type=exec",
+                    "--unit",
+                    &unit,
+                ])
+                .args([
+                    "--property=MemoryMax=3221225472",
+                    "--property=TasksMax=128",
+                    "--property=CPUQuota=200%",
+                    "--property=LimitFSIZE=67108864",
+                    "--property=NoNewPrivileges=yes",
+                ])
+                .arg(format!("--property=RuntimeMaxSec={remaining_ms}ms"))
+                .arg(&self.config.python)
+                .arg("-I")
+                .arg(&self.config.helper)
+                .arg("--config")
+                .arg(&self.config.native_config)
+                .arg("--request")
+                .arg(&self.request)
+                .arg("--phase")
+                .arg(phase.name())
+                .arg("--authority-expires-unix-ms")
+                .arg(expiry.to_string())
+                .stdin(Stdio::null())
+                .stdout(log.try_clone()?)
+                .stderr(log);
+            if let Some(id) = &self.recovery_id {
+                command.arg("--recovery-id").arg(id);
             }
-            let authority = self.authorize(phase);
-            if authority.is_err() || Instant::now() >= deadline {
-                let stopped = Command::new("systemctl")
-                    .args(["--user", "stop", &unit])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()?;
-                ensure!(stopped.success(), "ambiguous native-phase-stop");
-                let _status = child.wait()?;
-                authority?;
-                return Err(anyhow!("expired native-phase-deadline"));
+            let mut child = command.spawn()?;
+            let deadline = Instant::now() + Duration::from_millis(remaining_ms);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    ensure!(status.success(), "failed native-phase-process");
+                    return self
+                        .reconcile(phase)?
+                        .ok_or_else(|| anyhow!("ambiguous missing-native-completion"));
+                }
+                let authority = self.authorize(phase);
+                if authority.is_err() || Instant::now() >= deadline {
+                    let stopped = Command::new("systemctl")
+                        .args(["--user", "stop", &unit])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()?;
+                    ensure!(stopped.success(), "ambiguous native-phase-stop");
+                    let _status = child.wait()?;
+                    authority?;
+                    return Err(anyhow!("expired native-phase-deadline"));
+                }
+                std::thread::sleep(Duration::from_millis(250));
             }
-            std::thread::sleep(Duration::from_millis(250));
         }
     }
 }
@@ -287,8 +447,8 @@ fn run(
     recovery: bool,
 ) -> Result<transaction::Journal> {
     ensure!(
-        cfg!(target_os = "linux"),
-        "not_supported native-HF-requires-Linux-CUDA"
+        cfg!(any(target_os = "linux", target_os = "macos")),
+        "not_supported native-release-host"
     );
     ensure!(
         spec.schema == HOST_TICKET_V2_SCHEMA && spec.action == "peft.release",
@@ -310,6 +470,11 @@ fn run(
         "EPERM native-executable-path"
     );
     let native: Value = serde_json::from_slice(&read(&config.native_config, 8192)?)?;
+    ensure!(
+        (cfg!(target_os = "linux") && native["schema"] == "cohesix-hf-native/v1")
+            || (cfg!(target_os = "macos") && native["schema"] == "cohesix-mlx-native/v1"),
+        "EPERM native-release-host-profile"
+    );
     let root = PathBuf::from(
         native["root"]
             .as_str()
