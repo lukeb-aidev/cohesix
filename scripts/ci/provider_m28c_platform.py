@@ -138,7 +138,8 @@ def identity(app: Path, selected: dict[str, str]) -> dict[str, Any]:
         require("TeamIdentifier=" + selected["team_id"] in details
                 and "Authority=Apple Development:" in details,
                 "development signer or team mismatch")
-        entitlements = command(["codesign", "-d", "--entitlements", ":-", str(path)])
+        entitlements = command(["codesign", "-d", "--entitlements", ":-", str(path)],
+                               include_stderr=False)
         check_entitlements(entitlements, selected["team_id"], path == extension)
     plugins = command(["pluginkit", "-m", "-v", "-i", "com.cohesix.swarmui.intents"])
     require(str(extension) in plugins, "installed extension not registered")

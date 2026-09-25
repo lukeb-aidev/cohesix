@@ -167,10 +167,10 @@ def signature(app: Path, team: str, authority: str) -> dict[str, Any]:
         require(f"TeamIdentifier={team}" in details
                 and f"Authority={authority}:" in details,
                 f"{label} has the wrong signer or team")
-        raw = command(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(path)])
-        marker = raw.find("<?xml")
-        require(marker >= 0, f"{label} has no entitlements")
-        rights = plistlib.loads(raw[marker:].encode())
+        raw = command(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(path)],
+                      stdout_only=True)
+        require(raw.startswith("<?xml"), f"{label} has no entitlements")
+        rights = plistlib.loads(raw.encode())
         require(rights.get("keychain-access-groups") == [team + GROUP_SUFFIX],
                 f"{label} has the wrong Keychain group")
         if label == "extension":

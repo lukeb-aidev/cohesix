@@ -78,6 +78,35 @@ def test_json_command_uses_stdout_without_discarding_failure_diagnostics(
         signer.command(["/usr/bin/xcrun"], stdout_only=True)
 
 
+def test_signature_reads_entitlements_without_codesign_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = tmp_path / "SwarmUI.app"
+    app.mkdir()
+    group = ["KB88FQXUX2.com.cohesix.swarmui"]
+    app_rights = plistlib.dumps({"keychain-access-groups": group}).decode()
+    extension_rights = plistlib.dumps({
+        "keychain-access-groups": group,
+        "com.apple.security.app-sandbox": True,
+        "com.apple.security.network.client": True,
+    }).decode()
+
+    def fake_command(args: list[str], **kwargs: object) -> str:
+        if "--verify" in args:
+            return ""
+        if "-dvv" in args:
+            return "TeamIdentifier=KB88FQXUX2\nAuthority=Apple Development: Lukas Bower"
+        assert "--entitlements" in args
+        assert kwargs.get("stdout_only") is True
+        return extension_rights if str(signer.EXTENSION) in args[-1] else app_rights
+
+    monkeypatch.setattr(signer, "command", fake_command)
+    monkeypatch.setattr(signer, "provisioning_profile", lambda *_args: {"uuid": "profile"})
+    monkeypatch.setattr(signer, "digest_file", lambda *_args: "sha256")
+    report = signer.signature(app, "KB88FQXUX2", "Apple Development")
+    assert set(report) == {"app", "extension"}
+
+
 def test_profile_must_authorize_exact_team_bundle_and_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

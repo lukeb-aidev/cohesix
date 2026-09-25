@@ -103,8 +103,9 @@ discoverable in Shortcuts. Authenticated job inspect/cancel and on-device
 explanation compile with focused tests; a detached MLX inference and LoRA
 smoke ran on the M4. Apple's macOS contract supports App Intents actions in
 user-created Shortcuts, rather than automatic App Shortcuts; the latter's
-unsupported source declaration has been removed. Shared Keychain provisioning,
-live Shortcuts and Siri invocation of a user-created Shortcut,
+unsupported source declaration has been removed. Exact macOS development
+profiles now sign the canonical app and extension with the same Keychain group;
+actual shared Keychain use, live Shortcuts and Siri invocation of a user-created Shortcut,
 admitted MLX release/rollback and direct-distribution signing have not passed;
 installed vMLX 1.6.65 additionally served one local model through a detached
 loopback API smoke, with poor answer quality and an observed local weight
