@@ -18,7 +18,7 @@ enabled = true
 enabled = true
 
 [gateway.a2a]
-enabled = false
+enabled = true
 
 [standing_authority]
 schema = "cohesix-standing-controls/v1"

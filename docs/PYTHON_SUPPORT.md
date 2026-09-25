@@ -425,7 +425,7 @@ and observed restored generation. Missing or malformed serving observations
 cannot pass a successful outcome. It is a non-authoritative Python projection;
 exact source,
 serving generation and application-client observations remain separate release
-evidence. MCP and future A2A views use the same underlying identity and
+evidence. MCP and A2A views use the same underlying identity and
 verifier result, not this Python object as authority. For an operation admitted
 externally through MCP or REST, `submitted=False` describes this CLI
 controller's journal. A signed terminal result can still be verified under

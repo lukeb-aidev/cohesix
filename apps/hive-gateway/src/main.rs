@@ -7,6 +7,7 @@
 
 //! Host-only REST gateway projecting Cohesix console/file semantics.
 
+mod a2a;
 mod auth;
 mod evidence;
 mod identity;
@@ -1310,6 +1311,7 @@ async fn main() -> Result<()> {
 
     let protocol_controls = generated_protocol_controls()?;
     mcp::validate_catalogue(protocol_controls.effective_mcp())?;
+    a2a::validate_catalogue(protocol_controls.effective_a2a())?;
     reject_runtime_protocol_overrides()?;
     let cli = Cli::parse();
     let config = GatewayConfig::from_cli(cli)?;
@@ -1462,6 +1464,14 @@ async fn main() -> Result<()> {
                 .delete(mcp::method_not_allowed)
                 .layer(DefaultBodyLimit::max(mcp::MAX_REQUEST_BYTES)),
         );
+    }
+    if protocol_controls.effective_a2a() {
+        app = app
+            .route(
+                "/a2a",
+                post(a2a::post).layer(DefaultBodyLimit::max(a2a::MAX_REQUEST_BYTES)),
+            )
+            .route("/.well-known/agent-card.json", get(a2a::agent_card));
     }
     let app = app.with_state(state.clone());
 

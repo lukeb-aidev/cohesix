@@ -3,6 +3,7 @@
 // Purpose: Expose coh-rtc manifest compilation helpers for tests and the CLI.
 // Author: Lukas Bower
 
+pub mod a2a;
 pub mod authority;
 pub mod codegen;
 pub mod host_integration;

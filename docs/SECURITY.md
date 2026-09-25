@@ -137,8 +137,8 @@ connections.
 Host agent protocol access has a compiler-owned, false-default master switch
 and independent MCP and A2A switches in manifest schema 1.29. The effective
 value is the master AND the per-protocol switch. The selected QEMU profile
-enables MCP on the authenticated Hive Gateway bind; Pi keeps it disabled, and
-A2A remains disabled. The gateway rejects runtime override attempts before
+enables MCP and A2A on the authenticated Hive Gateway bind; Pi keeps both
+disabled. The gateway rejects runtime override attempts before
 resolving credentials or starting transport work. Switching access off does
 not erase an execution or pending delivery obligation.
 
@@ -150,8 +150,12 @@ revision, content types and bounds. Per-subject discovery is derived from the
 current standing ledger, and every tool still enters the same REST/CLI job
 authority path. Preflight observes current provider and target facts but does
 not reserve or dispatch. A tool reply, model text, timeout or disconnect does
-not prove a native result or cancel a job. A2A has no handler, listener,
-discovery resource, stream or background task in this selection.
+not prove a native result or cancel a job. A2A uses the same request credential,
+delegated ticket, standing budget and exact job identity. Its Agent Card is
+subject-scoped; its bounded JSON-RPC and SSE handlers carry no second scheduler,
+push callback or provider credential. Task completion and digest references
+cannot substitute for native output or shared PEFT verification. A disabled
+A2A switch registers neither card nor task route or stream.
 
 ### Console compartment boundary
 

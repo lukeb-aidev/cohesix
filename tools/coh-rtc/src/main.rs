@@ -146,6 +146,9 @@ struct Args {
     /// Selected MCP catalogue derived from the resolved controls and provider registry.
     #[arg(long, default_value = "configs/generated/mcp_catalogue.json")]
     mcp_catalogue: PathBuf,
+    /// Selected A2A skills derived from the resolved controls and provider registry.
+    #[arg(long, default_value = "configs/generated/a2a_catalogue.json")]
+    a2a_catalogue: PathBuf,
     /// Output path for the shared Rust provider binding.
     #[arg(
         long,
@@ -230,6 +233,13 @@ fn main() -> Result<()> {
             .host_integration_graph
             .with_file_name("provider_registry.json"),
         &args.mcp_catalogue,
+    )?;
+    coh_rtc::a2a::emit(
+        &args.manifest_out,
+        &args
+            .host_integration_graph
+            .with_file_name("provider_registry.json"),
+        &args.a2a_catalogue,
     )?;
     coh_rtc::recipe::emit(
         &repo_root.join("configs/cuda_recipe.toml"),

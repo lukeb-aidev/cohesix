@@ -61,6 +61,7 @@ implementation_surface_inventory="$work_dir/implementation_surface_inventory.jso
 host_integration_graph="$work_dir/host_integration_dependency.json"
 host_integration_doc="$work_dir/host_integration_dependency.md"
 mcp_catalogue="$work_dir/mcp_catalogue.json"
+a2a_catalogue="$work_dir/a2a_catalogue.json"
 cohesix_python_qemu_profile="$work_dir/cohesix_python_qemu_smp_production.json"
 cohesix_python_pi4_profile="$work_dir/cohesix_python_pi4_production.json"
 
@@ -99,6 +100,7 @@ generate_selected_manifest() {
     --host-integration-graph "$host_integration_graph" \
     --host-integration-doc "$host_integration_doc" \
     --mcp-catalogue "$mcp_catalogue" \
+    --a2a-catalogue "$a2a_catalogue" \
     --provider-python "$work_dir/provider_generated.py" \
     --provider-rust "$work_dir/provider_generated.rs" \
     --cohesix-py-defaults "$cohesix_py_defaults" \
@@ -172,6 +174,7 @@ compare_file "$generated_root/host_integration_dependency.json" "$host_integrati
 compare_file "$repo_root/docs/snippets/host_integration_dependency.md" "$host_integration_doc"
 compare_file "$generated_root/provider_registry.json" "$work_dir/provider_registry.json"
 compare_file "$generated_root/mcp_catalogue.json" "$mcp_catalogue"
+compare_file "$generated_root/a2a_catalogue.json" "$a2a_catalogue"
 compare_file "$generated_root/cuda_recipe.json" "$work_dir/cuda_recipe.json"
 compare_file "$repo_root/tools/cohesix-py/cohesix/provider_generated.py" "$work_dir/provider_generated.py"
 compare_file "$repo_root/crates/cohesix-authority/src/provider_generated.rs" "$work_dir/provider_generated.rs"

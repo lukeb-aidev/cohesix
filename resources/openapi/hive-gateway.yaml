@@ -1,17 +1,93 @@
 # Copyright 2026 Lukas Bower
 # SPDX-License-Identifier: Apache-2.0
-# Purpose: Define the Hive Gateway REST API, including governed approved-scope job starts.
+# Purpose: Define the Hive Gateway REST API and selected agent protocol projections.
 # Author: Lukas Bower
 openapi: 3.1.0
 info:
   title: Cohesix Hive Gateway
-  version: 0.6.0
+  version: 0.7.0
   description: |-
     Host-only REST gateway that projects Cohesix console/file semantics into a
     JSON API. Responses mirror OK/ERR/END semantics and enforce manifest bounds.
 servers:
   - url: http://127.0.0.1:8080
 paths:
+  /.well-known/agent-card.json:
+    get:
+      summary: Subject-scoped A2A 0.3 Agent Card when compiled on.
+      description: >-
+        The effective A2A switch controls route registration. The returned
+        skills include only currently usable CUDA/PEFT standing actions for
+        the delegated subject. A card is discovery, not an admission grant.
+      security:
+        - requestAuthHeader: []
+          delegatedTicket: []
+      responses:
+        "200":
+          description: Bounded A2A Agent Card with JSON-RPC binding.
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Request or delegated read authentication missing.
+  /a2a:
+    post:
+      summary: A2A 0.3 JSON-RPC over the existing durable selected jobs.
+      description: >-
+        message/send and message/stream accept one selected data part with a
+        skillId, scopeId and existing host ticket, or the exact preflight
+        binding and ticket. tasks/get, tasks/cancel and tasks/resubscribe use
+        the original admission ID. A task or artifact is never a native
+        verification receipt. Push notifications are unsupported. Streams are
+        bounded to 30 seconds and 64 events; reconnect uses the same task ID.
+      security:
+        - requestAuthHeader: []
+          delegatedTicket: []
+      parameters:
+        - in: header
+          name: A2A-Version
+          required: false
+          schema:
+            type: string
+            const: '0.3.0'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jsonrpc, id, method, params]
+              properties:
+                jsonrpc:
+                  const: '2.0'
+                id:
+                  oneOf:
+                    - type: string
+                      maxLength: 64
+                    - type: integer
+                method:
+                  enum: [message/send, message/stream, tasks/get, tasks/cancel, tasks/resubscribe]
+                params:
+                  type: object
+      responses:
+        "200":
+          description: JSON-RPC task result or bounded event stream.
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          description: Request or delegated read authentication missing.
+        "403":
+          description: Origin or delegated authority refused.
+        "413":
+          description: Request exceeds 8192 bytes.
+        "429":
+          description: Request or stream capacity exhausted.
   /mcp:
     post:
       summary: Compiler-selected MCP 2025-11-25 Streamable HTTP JSON-RPC.

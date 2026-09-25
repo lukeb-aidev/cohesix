@@ -58,7 +58,7 @@ fn reject(status: StatusCode, message: &'static str) -> Response {
     (status, Json(json!({"error":message}))).into_response()
 }
 
-fn valid_origin(headers: &HeaderMap) -> bool {
+pub(super) fn valid_origin(headers: &HeaderMap) -> bool {
     if headers.get_all("origin").iter().count() == 0 {
         return true;
     }

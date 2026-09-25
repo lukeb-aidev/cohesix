@@ -12,7 +12,7 @@ DEFAULTS = {
     ]},
     "contract_kind": "target-neutral-fallback",
     "manifest_sha256": None,
-    "generation_source_sha256": "a31e64dbbaffa7c621f1590c33dd8b2770a7ac13d71929e5cbfbd2aab06c360a",
+    "generation_source_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
     "execution_proof": "none",
     "diagnostic_artifacts": {"max_bytes": 1048576, "max_files": 682, "trace_max_duration_ms": 60000},
     "secure9p": {"msize": 8192, "walk_depth": 8},

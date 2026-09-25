@@ -912,8 +912,8 @@ Useful endpoints are `/v1/meta/status`, `/v1/meta/bounds`, `/v1/fs/ls`,
 bounds instead of guessing larger payload sizes.
 
 `coh doctor` prints the compiled `agent-protocols` master, MCP and A2A
-switches. The selected QEMU manifest enables MCP under the master switch; Pi
-and A2A remain disabled. A protocol is effective only when its own switch and
+switches. The selected QEMU manifest enables MCP and A2A under the master
+switch; Pi keeps both disabled. A protocol is effective only when its own switch and
 the master are true. Changing a deployment's manifest requires rebuilding the
 matching host tools and target profile. Launch environment variables or CLI
 options cannot turn a compiled-off protocol on. Disabling access does not
@@ -964,6 +964,39 @@ never construct a fresh identity for an uncertain effect. PEFT comparison,
 promotion and rollback stay inside the immutable selected release request, and
 only the shared verifier can establish the requested outcome. See
 [Host API](HOST_API.md) for bounds and refusal mapping.
+
+### Selected A2A peers
+
+The selected host gateway serves A2A JSON-RPC 0.3.0 at `/a2a` and a
+subject-scoped Agent Card at `/.well-known/agent-card.json`. Its
+[generated catalogue](../configs/generated/a2a_catalogue.json) lists only
+selected CUDA and PEFT skills; a particular caller sees only currently usable
+standing scopes. Configure a named peer with the protected gateway base URL,
+the installed `a2a-sdk==0.3.26` binding used by NeMo Agent Toolkit 1.9.0,
+and private `x-cohesix-auth` plus `x-cohesix-ticket` headers. The same
+standing-ledger, issuer, selected scopes and native provider profiles used by
+REST/MCP must be present. Keep the HTTP bind on loopback or a protected
+connection; the client timeout does not cancel a submitted job.
+
+To delegate one selected job, provide an A2A user message with one data part:
+`skillId` is the Agent Card action, `scopeId` is the private selected standing
+scope, and `ticket` is the ordinary exact host-ticket specification with a
+stable `id` and idempotency key. The gateway preflights and submits using its
+existing job path. The response task ID equals `ticket.id`. After a lost
+response, disconnect or restart, use `tasks/get` with that ID; use
+`tasks/resubscribe` for a new bounded stream. `tasks/cancel` records only a
+cancellation request until native termination or a no-effect refusal is
+observed. A task artifact is a digest/reference, never model bytes or a
+deployment certificate. Check the original native result and shared verifier
+before treating a CUDA output or PEFT promotion as accepted. The Python
+library reads the same REST job and verifies the same release graph; it owns
+no A2A task journal.
+
+The selected catalogue does not advertise mixed MLX/CUDA, verified model
+weight distribution or vMLX-assisted A2A composition. A vMLX model endpoint
+can supply a separately named A2A-capable peer only after a pinned live model
+session, peer configuration and end-to-end compatibility record exist; vMLX
+model text does not establish a Cohesix provider outcome.
 
 The broker serialises work over the existing target connection and provides
 bounded progress for host-ticket ingress, control/receipts and telemetry.

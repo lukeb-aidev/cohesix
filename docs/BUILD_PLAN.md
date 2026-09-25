@@ -141,7 +141,7 @@ owned by their specific contracts.
 | [28c](#28c) | macOS Developer Actions and Local Metal Workbench | Complete — selected Mac developer journey |
 | [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Complete — selected Mac component |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | In Progress |
-| [28e](#28e) | A2A Delegation of Durable Selected Jobs | Planned |
+| [28e](#28e) | A2A Delegation of Durable Selected Jobs | In Progress |
 | [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
 | [28g](#28g) | Installation, Integrated User Qualification and Release B | Planned |
 | [29](#29) | Extended Formal Assurance and NIST Evidence | Deferred — explicit activation |
@@ -13235,7 +13235,8 @@ Deliverables: Generated selected catalogue, client configuration/guide and m28d-
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** In Progress — selected A2A service and focused host contracts implemented;
+exact-source live delegation and recovery evidence remains required.
 
 **Value:** agents delegate long GPU/adapter jobs and reconnect to their actual result.
 **Prerequisites:** 28 including `m28-agent-protocol-controls`, and selected

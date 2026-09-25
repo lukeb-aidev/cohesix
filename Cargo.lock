@@ -2292,6 +2292,7 @@ dependencies = [
  "cohsh",
  "cohsh-core",
  "ed25519-dalek 3.0.0",
+ "futures-util",
  "hex",
  "host-sidecar-bridge",
  "host-ticket-agent",

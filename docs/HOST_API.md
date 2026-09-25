@@ -41,6 +41,8 @@ the OpenAPI document.
 | `POST` | `/v1/standing/scopes/{scope_id}/inspect` | Inspect durable budget and revocation state | Yes, plus separate `/host/standing/admin` write |
 | `POST` | `/v1/standing/scopes/{scope_id}/revoke` | Block new dispatch under the scope | Yes, plus separate `/host/standing/admin` write |
 | `POST` | `/mcp` | Stateless MCP 2025-11-25 JSON-RPC over Streamable HTTP, when compiled on | Yes, plus delegated read/write for each selected operation |
+| `GET` | `/.well-known/agent-card.json` | Subject-scoped A2A 0.3 Agent Card, when compiled on | Yes, plus delegated `/host/tickets/status` read |
+| `POST` | `/a2a` | A2A 0.3 JSON-RPC task create, lookup, cancel and bounded SSE, when compiled on | Yes, plus delegated read/write for each selected operation |
 | `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
 | `GET` | `/docs` | Offline index linking the embedded OpenAPI and provider contract | No |
 
@@ -50,8 +52,8 @@ Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 The selected manifest has versioned `[gateway.agent_protocols]`,
 `[gateway.mcp]` and `[gateway.a2a]` enablement switches. Their schema defaults
 are false; effective access requires both the master and protocol switch. The
-selected QEMU profile enables MCP and keeps A2A disabled; the Pi profile keeps
-both disabled. `/mcp` is registered only when effective MCP is true. REST remains
+selected QEMU profile enables MCP and A2A; the Pi profile keeps both disabled.
+Each route is registered only when its effective switch is true. REST remains
 available when either protocol is disabled, including authenticated reads used
 to recover an existing job. Gateway launch variables and clients cannot raise
 the compiled switches; an attempted protocol override is refused at startup.
@@ -79,11 +81,39 @@ termination. The job resource `cohesix://jobs/{admission_id}` is subject-scoped
 and carries bounded state, not model bytes. PEFT comparison, promotion and
 rollback outcomes require the shared verifier and serving observation.
 
+The generated [A2A catalogue](../configs/generated/a2a_catalogue.json)
+selects JSON-RPC binding 0.3.0, compatible with `a2a-sdk==0.3.26` in the
+installed NeMo Agent Toolkit 1.9.0 client. The Agent Card requires the gateway
+request credential and delegated read ticket; it exposes only actions with a
+currently usable scope for that subject. A peer sends one A2A `message/send`
+or `message/stream` message with a single data part containing `skillId`, the
+private selected `scopeId`, and the existing raw host ticket. The gateway
+preflights fresh provider facts, then submits through the same durable REST
+job path. A peer that already holds the exact preflight request may instead
+send `skillId`, `binding`, and `ticket`; changed identity or facts refuse.
+The original `ticket.id` is the A2A task ID and retained admission ID.
+
+`tasks/get` reads that original job and native result, even after a gateway
+restart. `tasks/cancel` records a request under the existing cancellation
+authority; pending cancellation stays pending. `tasks/resubscribe` and
+`message/stream` emit bounded SSE snapshots for at most 30 seconds or 64
+events; after expiry the peer calls `tasks/get` or resubscribes under the same
+ID. Streams have a separate 16-consumer bound and do not own execution.
+An unavailable target read leaves a retained task at `unknown` when its native
+terminal cannot be confirmed. `confirmed` plus a matching native
+`succeeded`/`failed`/`recovered_failure`/cancellation state maps to
+`completed`/`failed`/`canceled` as appropriate. A task artifact contains only
+the original result URI and SHA-256 reference. `providerVerified=false`
+means the A2A task never substitutes for independent CUDA output or shared
+PEFT release verification. A lost send response is recovered by `tasks/get`
+with the known ticket ID; no replacement identity is submitted. Push
+notification methods are unsupported.
+
 Selected jobs accept at most 4,096 JSON bytes containing one `binding` and one
 raw `ticket`. The versioned binding fixes subject, action, target, input hash,
 policy graph hash, current state and resource generations, deadline, ticket id,
 idempotency key, admission id, attempt and one budget unit. Only
-`gpu.workload.submit` and `systemd.restart` are admitted by the selected
+`gpu.workload.submit`, `peft.release` and `systemd.restart` are admitted by the selected
 standing profile. The gateway observes the target lease/GPU publication or
 native systemd unit before reservation. The agent checks the same binding and
 current state at its native dispatch boundary. A successful `POST` returns

@@ -126,7 +126,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
                                     "m28a-workloads-live", "m28a-recovery-live",
                                     "m28b-peft-live", "m28b-serving-live",
                                     "m28c-platform-live", "m28c1-mlx-live",
-                                    "m28c1-vmlx-live", "m28d-mcp-live"}
+                                    "m28c1-vmlx-live", "m28d-mcp-live",
+                                    "m28e-a2a-live"}
         optional = {"surface", "runner"} if live else {"surface", "command"}
         require(set(case) >= required | {"runner" if live else "command"}
                 and set(case) <= required | optional,
@@ -158,7 +159,8 @@ def load_matrix(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "surface" not in case or case["surface"] in surfaces, "unregistered surface"
         )
         if live:
-            expected_runner = ("provider_m28d_live" if identifier == "m28d-mcp-live" else
+            expected_runner = ("provider_m28e_live" if identifier == "m28e-a2a-live" else
+                "provider_m28d_live" if identifier == "m28d-mcp-live" else
                 "provider_m28c1_live" if identifier in {
                 "m28c1-mlx-live", "m28c1-vmlx-live"} else
                 "provider_m28c_platform" if identifier == "m28c-platform-live" else

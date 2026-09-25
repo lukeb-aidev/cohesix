@@ -11,7 +11,7 @@ fn agent_protocol_flags_enforce_all_eight_combinations() {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs");
     let original = load_manifest(&base.join("root_task.toml")).expect("selected manifest");
     assert!(original.gateway.effective_mcp());
-    assert!(!original.gateway.effective_a2a());
+    assert!(original.gateway.effective_a2a());
     for mask in 0..8 {
         let mut manifest = original.clone();
         manifest.gateway.agent_protocols.enabled = mask & 1 != 0;
