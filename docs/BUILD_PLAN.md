@@ -13210,9 +13210,40 @@ Checks:
 Deliverables: Generated selected catalogue, client configuration/guide and m28d-mcp-live outcome/recovery evidence.
 ```
 
-**Checks / definition of done:** a standard client completes useful work from published discovery and
-configuration, including refusal/recovery. Read-only success is intermediate;
-full administrative parity and MCP FUSE remain deferred to 36.
+**Checks / definition of done:**
+
+- The selected MCP revision, generated catalogue and packaged network/local
+  transports pass real endpoint, negotiation, bounds and disabled-surface checks.
+  Delegated authentication, Origin where applicable, scoped discovery, malformed
+  input, incompatible revision, cross-subject access, revocation and concurrency
+  refusal are exercised; disabling MCP leaves accepted jobs and REST/A2A usable.
+  The pinned native NeMo client probes the selected network transport and auth
+  mode; its complete agent workflows remain M28f's acceptance.
+- A named, versioned standard client uses the published configuration to
+  discover admitted schemas and complete a real CUDA job plus a PEFT comparison
+  and deployment operation. Retain the original request/job identity, native
+  result and shared-verifier evidence across cancellation, lost response,
+  reconnect and gateway restart. Denied or exhausted actions cause no effect;
+  pending, uncertain and recovered failure never become verified success from
+  an MCP result or model text. Exercise MCP-only operation and shared budget
+  and revocation behavior with an existing authenticated client surface.
+- When advertised, a selected mixed MLX/CUDA workflow runs on independently
+  qualified provider profiles with explicit host selection, capacity and
+  approved transfer boundaries; wrong-host, incompatible-artifact and
+  unapproved-transfer requests refuse before effects. If verified weight
+  distribution is advertised, its already accepted host operation supplies
+  actual destination bytes, original transfer identity and destination digest
+  evidence; a reference or tool result does not prove delivery.
+- A claimed vMLX compatibility path uses a pinned live model session and the
+  application's configured MCP client to discover, invoke, refuse and recover
+  the same admitted operation; retain a separate compatibility record. The
+  installed Python wheel, where it exposes selected operations, agrees on
+  identity, provider/host selection, pending/refused/terminal state and verified
+  outcome without becoming another authority or receipt source.
+- Retain exact source, generated profile, package, client/configuration and
+  native evidence identities for `m28d-mcp-live` and each claimed conditional
+  path. Focused tests, read-only discovery, mocks and client-reported success
+  cannot close live work. Full administrative parity and MCP FUSE remain in 36.
 
 ## Milestone 28e — A2A Delegation of Durable Selected Jobs <a id="28e"></a>
 
