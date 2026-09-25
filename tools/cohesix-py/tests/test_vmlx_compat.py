@@ -72,6 +72,9 @@ def test_selected_model_response_and_private_evidence(monkeypatch: pytest.Monkey
             {"role": "user", "content": "private prompt"}
         ], "max_tokens": 32, "temperature": 0, "stream": False,
     }
+    assert [path for path, _ in calls] == [
+        "/health", "/v1/models", "/v1/chat/completions", "/health", "/v1/models"
+    ]
 
 
 def test_refuses_changed_model_tools_and_unbounded_usage(
@@ -103,6 +106,25 @@ def test_refuses_ambiguous_model_listing(monkeypatch: pytest.MonkeyPatch) -> Non
                         {"data": [{"id": "selected-model"}, {"id": "selected-model"}]})
     with pytest.raises(VmlxRefusal, match="ambiguous"):
         client.ready()
+
+
+def test_refuses_server_switch_during_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = VmlxClient("http://127.0.0.1:8000", "selected-model")
+    calls = 0
+
+    def response(path: str, _body: dict[str, Any] | None = None) -> dict[str, Any]:
+        nonlocal calls
+        if path == "/health":
+            calls += 1
+            return {"status": "healthy", "model_loaded": True,
+                    "served_model_name": "selected-model" if calls == 1 else "replacement"}
+        if path == "/v1/models":
+            return {"data": [{"id": "selected-model"}]}
+        return selected_reply()
+
+    monkeypatch.setattr(client, "_request", response)
+    with pytest.raises(VmlxRefusal, match="not_ready"):
+        client.generate("private prompt")
 
 
 def test_refuses_nonfinite_json_and_redirect(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1559,7 +1559,8 @@ one healthy served model and make a bounded local chat request. Its
 `VmlxReply.evidence()` exposes token counts and prompt/output digests rather
 than the text; the caller retains the result privately for its own evaluation.
 It rejects non-loopback endpoints, redirects, ambiguous model listings and
-tool-call output. It does not enroll a model, sign a result or manage a
+tool-call output, and rechecks the advertised model after inference. It does
+not bind a process or model bytes, enroll a model, sign a result or manage a
 deployment, so it is not the admitted vMLX lifecycle by itself.
 
 ### Cohesix Python package

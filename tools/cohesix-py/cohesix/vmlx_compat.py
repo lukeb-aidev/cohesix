@@ -177,6 +177,9 @@ class VmlxClient:
                 and type(usage.get("completion_tokens")) is int
                 and 0 < usage["completion_tokens"] <= max_tokens,
                 "vmlx_usage_bound")
+        # A server can switch its loaded model after the initial readiness read.
+        # Refuse a response if the selected identity changed during the request.
+        self.ready()
         output = message["content"]
         return VmlxReply(
             text=output, model=self.model,

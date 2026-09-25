@@ -122,7 +122,10 @@ the [feasibility record](audit/M28C_FEASIBILITY_RECORD.md) lists the exact
 blockers. A new [native MLX component](audit/M28C_MLX_COMPONENT_RECORD.md)
 ran repeatable four-step Metal LoRA training, bounded local inference and
 16-row held-out evaluation; it has no Cohesix admission or accepted quality
-result. M28c now also requires an installed
+result. A diagnostic adapter fusion served through vMLX and returned the same
+output digest as direct MLX inference, but the answer was semantically wrong;
+the incumbent switch was manual and had no Cohesix generation fence. M28c
+now also requires an installed
 [developer-useful Mac journey](BUILD_PLAN.md#28c) across an admitted job,
 local MLX execution, result inspection and rollback. This is not M28c
 completion or Release B acceptance.

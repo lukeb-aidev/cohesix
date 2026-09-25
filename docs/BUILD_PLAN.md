@@ -12961,6 +12961,10 @@ The initial `m28c-mlx-metal-provider` [native component record](audit/M28C_MLX_C
 retains actual bounded Metal inference, repeatable LoRA training and a small
 held-out comparison. Its Python code is not yet connected to the shared
 ticket, phase journal or deployment generation, so the task remains open.
+The same record captures diagnostic adapter fusion through installed vMLX and a
+manual incumbent switch. The candidate response failed semantic quality, and
+neither server was bound to an admitted Cohesix generation. The client now
+refuses an observed model-ID switch during an inference request.
 
 **Value:** the Mac is a native operator interface and local AI host, not merely remote control.
 **Prerequisites:** 28 and selected 28a/28b operations; no MCP/A2A/NeMo dependency.
