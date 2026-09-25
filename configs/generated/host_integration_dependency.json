@@ -5,9 +5,9 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "d70d8ccbca19e9385ab4155074d790aeae30fecbbcbc3e06a082546cc6d11b73",
+    "source_sha256": "494af3bafb72a75a04fcf7bdc11a8efa7dc338b1161bb3657b4234b9246129c2",
     "resolved_manifest_sha256": "a31e64dbbaffa7c621f1590c33dd8b2770a7ac13d71929e5cbfbd2aab06c360a",
-    "implementation_surface_inventory_sha256": "5ffb60d9ae8992bf3820b76af15cbcae11585a508041167249da5776b6fbd8d8"
+    "implementation_surface_inventory_sha256": "e8d03e133e200db98b8671221f90cab60ce63c250ffe507fd20bd90385f51b4b"
   },
   "host_profiles": [
     {
@@ -3432,6 +3432,31 @@
           "native",
           "systemd",
           "nvidia_container"
+        ]
+      },
+      {
+        "id": "mac-apple-m4-macos27",
+        "os": "macos",
+        "architecture": "arm64",
+        "board": "Apple M4 Mac16,1",
+        "ubuntu": "not-applicable",
+        "l4t": "not-applicable",
+        "jetpack": "not-applicable",
+        "cuda_toolkit": "not-applicable",
+        "compute_capability": "not-applicable",
+        "shared_memory": true,
+        "host_headroom_bytes": 2147483648,
+        "observation_ttl_ms": 5000,
+        "unsupported": [
+          "cuda",
+          "mig",
+          "dla",
+          "pva"
+        ],
+        "execution_lanes": [
+          "native",
+          "launchd",
+          "metal"
         ]
       }
     ],
