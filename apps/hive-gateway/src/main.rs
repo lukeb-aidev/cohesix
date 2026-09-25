@@ -261,6 +261,9 @@ struct Cli {
     /// Private selected scope file; this cannot widen generated controls.
     #[arg(long, requires = "standing_ledger")]
     standing_scopes: Option<PathBuf>,
+    /// Exact private native release profile shared with the host ticket agent.
+    #[arg(long, requires = "standing_ledger")]
+    peft_release_config: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -292,6 +295,7 @@ struct GatewayInner {
     proc_cache: Mutex<ProcReadCache>,
     control_write_backpressure: Mutex<ControlWriteBackpressure>,
     standing_ledger: Option<Arc<cohesix_authority::standing_ledger::StandingLedger>>,
+    peft_release_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1380,6 +1384,7 @@ async fn main() -> Result<()> {
             proc_cache: Mutex::new(ProcReadCache::default()),
             control_write_backpressure: Mutex::new(ControlWriteBackpressure::default()),
             standing_ledger,
+            peft_release_config: config.peft_release_config.clone(),
         }),
     };
 
@@ -1473,6 +1478,7 @@ struct GatewayConfig {
     target_session: Option<PathBuf>,
     standing_ledger: Option<PathBuf>,
     standing_scopes: Option<PathBuf>,
+    peft_release_config: Option<PathBuf>,
 }
 
 fn normalize_tcp_target_host(value: &str) -> Result<String> {
@@ -1638,6 +1644,7 @@ impl GatewayConfig {
             target_session,
             standing_ledger: cli.standing_ledger,
             standing_scopes: cli.standing_scopes,
+            peft_release_config: cli.peft_release_config,
         })
     }
 
@@ -6457,6 +6464,7 @@ mod tests {
             target_session: None,
             standing_ledger: None,
             standing_scopes: None,
+            peft_release_config: None,
         };
         let policy = CohshPolicy::from_generated();
         let updated = apply_policy_overrides(policy, &config).expect("apply overrides");
@@ -6642,6 +6650,7 @@ mod tests {
                 proc_cache: Mutex::new(ProcReadCache::default()),
                 control_write_backpressure: Mutex::new(ControlWriteBackpressure::default()),
                 standing_ledger: None,
+                peft_release_config: None,
             }),
         }
     }

@@ -1379,6 +1379,16 @@ The ledger rejects a missing, corrupt, full or changed-policy state. Never
 initialize a replacement for lost state while an earlier native outcome may
 still exist; restore or reconcile the original custody first.
 
+When a selected manifest includes `peft.release`, the gateway also requires
+`--peft-release-config` pointing to the same private native release profile as
+the agent. Admission reads the content-addressed request, exact accepted
+baseline and pinned helper before reserving the job. The agent rechecks that
+baseline and commits the standing dispatch fence before any native release
+phase. A canceled reservation cannot start native work; a dispatch whose
+journal is missing remains ambiguous. The current native phase executor uses
+Linux systemd and CUDA. This path does not qualify a Mac MLX release until a
+Mac native executor and its live evidence are selected.
+
 `coh --rest-url "$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job submit
 --input <private-job.json>` submits the exact versioned `binding` and raw
 host ticket once. `coh job status <admission-id>` and `coh job reconcile
@@ -1550,14 +1560,28 @@ connection** control after a delegated gateway connection succeeds. Its native
 host stores that connection in the Mac Keychain; **Remove Apple action access**
 deletes the selected Keychain item without revoking the gateway ticket. The
 app and extension require a shared Keychain access group and matching signed
-provisioning. Exact macOS development profiles now sign both components, and
-the canonical app verifies and launches. The new start action has passed
-source tests, an extension build and installed Shortcuts discovery on the
-selected Mac; the in-app enrollment path, authenticated extension read and
-live start still need validation. A synthetic
-Foundation Models probe and detached MLX smoke establish local SDK/compute
-feasibility only. The [M28c build plan](BUILD_PLAN.md#28c) requires an
-admitted developer journey and live evidence before completion.
+provisioning. Exact macOS development profiles sign both components. The
+installed app enrolled its delegated gateway identity, and Shortcuts started,
+inspected and requested cancellation of selected service work on a private
+KVM reference. Spoken Siri and final source-bound action evidence remain open.
+A detached MLX smoke establishes local compute feasibility only. The
+[M28c build plan](BUILD_PLAN.md#28c) requires an admitted developer journey
+and live evidence before completion.
+
+The new **Local MLX** desk in SwarmUI asks for the private deployment JSON
+used by `coh peft release` and the exact selected binding/ticket JSON used by
+`coh job submit`. **Plan** validates and retains the original controller
+intent; **Review and start** submits the selected job through the connected
+gateway's standing admission. **Follow**, **Verify** and **Recover** reopen
+that original journal. The returned admission ID fills the adjacent job panel
+when present; otherwise enter it there for status, reconciliation or a
+reviewed cancellation.
+The desk displays operation/request identity immediately; held-out loss,
+Metal device, canary and promoted or restored generations appear only when
+the report contains a verified signed native journal. Closing the window or
+losing a reply does not authorize a second submission. The selected Mac MLX
+native executor and signed live release are still required before this UI path
+can complete a local deployment.
 
 The in-progress `cohesix.mlx_native` Python module accepts absolute,
 content-bound local model and dataset directories and exposes `infer`,

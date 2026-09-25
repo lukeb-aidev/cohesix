@@ -361,7 +361,7 @@ pub fn host_arguments(
     for (_, values) in positional {
         argv.extend(values);
     }
-    let has_connection = node.get_arguments().any(|a| a.get_id() == "host");
+    let has_connection = owned.contains_key("host");
     if offline && !host_offline(request) {
         return Err("offline: this operation may access a network; connect first".into());
     }

@@ -13013,6 +13013,14 @@ not an independent generalization claim or admitted deployment.
 A bounded direct MLX loopback server also returned one matching local response
 from the selected adapter. Its model label is diagnostic and the process is
 not yet supervised by the shared release phases.
+A separately frozen vMLX compatibility check then fused that instruction
+adapter into a disposable model. The installed signed vMLX engine returned
+all four predeclared operational answers exactly as direct fused MLX
+inference, within the 5-second per-answer bound, while the original model and
+adapter trees remained unchanged. vMLX repaired only its disposable copy;
+the retained source/loaded hashes are in the native MLX record. Its `g1`
+label is diagnostic; the selected 28b journal has not admitted this adapter,
+assigned an accepted generation or performed a governed rollback.
 Native job inspection retains and checks the selected action, target and
 ticket identity from the gateway record before displaying or explaining it.
 The installed action later inspected one authenticated, confirmed service job.
@@ -13162,6 +13170,22 @@ Checks:
   - Cancellation and interruption preserve job identity and bounded accounting; incompatible format/checkpoint and memory limits fail safely. No silent CPU/remote fallback or universal format portability.
 Deliverables: Installable MLX profile, complete local journey and m28c-mlx-live GPU/quality/recovery evidence.
 
+Title/ID: m28c-swarmui-mlx-workbench
+Milestone: 28c / m28c-swarmui-mlx-workbench
+Goal: Make the admitted local MLX experiment and deployment lifecycle usable from the installed SwarmUI without a terminal after enrollment.
+Inputs: m28c-mlx-metal-provider; existing SwarmUI connection and review flow; selected 28b job, evidence and generation contracts.
+Changes:
+  - apps/swarmui/src/workbench.rs + frontend/workbench/ + frontend/index.html — a visible Mac MLX workspace for selected profile/device readiness, bounded release plan and reviewed start, durable job follow/cancel/reconcile, held-out comparison, canary generation and verified rollback. Reuse `coh` and the delegated gateway; local model or vMLX replies never become signed job outcomes.
+  - apps/swarmui/tests/ + docs/HOST_TOOLS.md — source-bound identity, stale/revoked scope, missing model/device, interrupted UI and unavailable vMLX checks; a first-use walkthrough that keeps the original admission ID and displays Metal and evidence provenance.
+Commands:
+  - cargo test --locked -p swarmui --lib
+  - cargo test --locked -p swarmui --test workbench
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-developer-live --reference-config "${M28C_DEVELOPER_REFERENCE}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE}/m28c-developer-live"
+Checks:
+  - The installed UI completes the same admitted local MLX release and rollback as `coh`, resolves its original job and signed result, shows the observed Metal device, model and adapter identity, and distinguishes evaluation from served canary evidence.
+  - Closing or restarting SwarmUI cannot replay an effect; missing authority, native provider, vMLX or receipt remains an actionable blocker with manual MLX serving available when vMLX is absent.
+Deliverables: A terminal-free, evidence-linked MLX workspace in the existing signed SwarmUI; included in m28c-developer-live rather than a detached UI demonstration.
+
 Title/ID: m28c-vmlx-compatibility
 Milestone: 28c / m28c-vmlx-compatibility
 Goal: Let a developer use an installed vMLX inference server as a governed, optional serving surface for the accepted local MLX model without changing job authority.
@@ -13197,7 +13221,7 @@ Deliverables: Native assistance/help and m28c-assistance-live report preserving 
 Title/ID: m28c-mac-developer-journey
 Milestone: 28c / m28c-mac-developer-journey
 Goal: Deliver one installed, signed Mac workflow that a developer can use to run and assess approved local AI work.
-Inputs: Accepted m28c feasibility, native actions, MLX, vMLX compatibility and assistance tasks; exact selected 28b lifecycle and delegated hive policy.
+Inputs: Accepted m28c feasibility, native actions, MLX provider and SwarmUI workbench, vMLX compatibility and assistance tasks; exact selected 28b lifecycle and delegated hive policy.
 Changes:
   - apps/swarmui/src/workbench.rs + apps/swarmui/native/apple/ — one visible configure/select/start/follow/inspect/cancel/deploy/rollback path with truthful capability and evidence links; no terminal after enrolment.
   - scripts/install/stage_swarmui.py + docs/HOST_TOOLS.md + docs/TOOLCHAIN_MAC_ARM64.md — install, credential enrolment, direct-distribution signing/notarisation and first-use guide on the supported Mac.

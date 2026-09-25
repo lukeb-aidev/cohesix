@@ -2282,6 +2282,7 @@ dependencies = [
  "axum",
  "base64 0.23.0",
  "clap",
+ "coh",
  "cohesix-authority",
  "cohesix-evidence",
  "cohesix-identity",

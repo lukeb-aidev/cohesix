@@ -12,6 +12,8 @@ use coh::peft::{
     transaction::{self, Native, Observation, Phase, Request, State},
 };
 use cohesix_authority::peft::ReleaseArgs;
+use cohesix_authority::standing::AdmissionFacts;
+use cohesix_authority::standing_ledger::JobExecution;
 use cohsh::{Session, Transport};
 use fs2::FileExt;
 use serde::Deserialize;
@@ -86,6 +88,55 @@ fn quiesce(operation: &Path, ticket_id: &str, include_rollback: bool) -> Result<
         );
     }
     Ok(())
+}
+
+fn begin_selected_release(
+    transport: &mut dyn Transport,
+    session: &Session,
+    spec: &HostTicketSpec,
+    executor: &ExecutorConfig,
+    root: &Path,
+    operation: &Path,
+    request: &Request,
+) -> Result<()> {
+    let Some(record) = crate::standing::selected_record(spec, executor)? else {
+        return Ok(());
+    };
+    match record.execution {
+        JobExecution::Reserved => {}
+        JobExecution::Dispatching | JobExecution::Uncertain => {
+            ensure!(
+                operation.join("recipe.json").try_exists()?,
+                "ambiguous release-dispatch-without-journal"
+            );
+            return Ok(());
+        }
+        _ => return Err(anyhow!("EPERM release-already-terminal")),
+    }
+    crate::validate_ready_worker_binding(transport, session, spec)?;
+    let accepted_value: Value = serde_json::from_slice(&read(&root.join("accepted.json"), 8192)?)?;
+    let accepted: DeploymentState = serde_json::from_value(accepted_value.clone())?;
+    ensure!(
+        accepted == request.baseline,
+        "EPERM release-baseline-changed"
+    );
+    let (state_epoch, resource_generation) = crate::standing::release_generations(&accepted_value)?;
+    let policy_sha256 = cohesix_authority::provider::registry()?["graph_sha256"]
+        .as_str()
+        .ok_or_else(|| anyhow!("EPERM release-provider-graph"))?
+        .to_owned();
+    let now = crate::unix_time_ms_now();
+    crate::standing::begin_dispatch(
+        spec,
+        executor,
+        &AdmissionFacts {
+            observed_unix_ms: now,
+            state_epoch,
+            resource_generation,
+            policy_sha256,
+        },
+        now,
+    )
 }
 
 struct Adapter<'a> {
@@ -358,6 +409,15 @@ fn run(
         );
         crate::validate_ready_worker_binding(transport, session, spec)?;
         original.require_recovery_scope(&request)?;
+    }
+    // The target ticket and release request are already durable. Commit the
+    // selected dispatch barrier before quiescence, a phase helper or a runtime
+    // write; a cancelled reservation cannot reach native work.
+    begin_selected_release(
+        transport, session, spec, executor, &root, &operation, &request,
+    )?;
+    if args.recovery_only {
+        let original = transaction::inspect(&operation)?;
         quiesce(&operation, &original.ticket_id, true)?;
     }
     let mut adapter = Adapter {

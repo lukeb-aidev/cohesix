@@ -33,6 +33,9 @@
               <span data-icon="play"></span>Operations
               <span class="nav-key">2</span>
             </button>
+            <button data-view="mlx">
+              <span data-icon="pulse"></span>Local MLX
+            </button>
             <button data-view="namespaces">
               <span data-icon="folder-open"></span>Namespaces
               <span class="nav-key">3</span>
@@ -312,6 +315,49 @@
                   </div>
                 </article>
               </div>
+            </section>
+            <section data-desk="mlx" aria-label="Local MLX release" hidden>
+              <article class="panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Local MLX release</h2>
+                    <p>Plan one selected deployment, then submit its exact standing job file through the connected gateway.</p>
+                  </div>
+                </header>
+                <div class="panel-body">
+                  <label for="mlx-deployment">Selected deployment file</label>
+                  <input id="mlx-deployment" type="text" autocomplete="off" placeholder="Absolute path to a private deployment JSON file" />
+                  <div class="button-row">
+                    <sp-button data-mlx-mode="plan" variant="secondary">Plan</sp-button>
+                    <sp-button data-mlx-mode="watch" variant="secondary">Follow</sp-button>
+                    <sp-button data-mlx-mode="verify" variant="secondary">Verify</sp-button>
+                    <sp-button data-mlx-mode="recover" variant="secondary">Recover</sp-button>
+                  </div>
+                  <label for="mlx-job-file">Selected standing job file</label>
+                  <input id="mlx-job-file" type="text" autocomplete="off" placeholder="Absolute path to the exact binding and ticket JSON file" />
+                  <div class="button-row">
+                    <sp-button id="mlx-submit" variant="accent">Review and start</sp-button>
+                  </div>
+                  <p id="mlx-release-summary" role="status">No signed MLX release result has been inspected. A local model response is diagnostic until the admitted journal and evidence confirm it.</p>
+                </div>
+              </article>
+              <article class="panel">
+                <header class="panel-header">
+                  <div>
+                    <h2>Original job</h2>
+                    <p>Use the admission ID from the submitted job. Follow or cancel the same identity; never submit a new request to recover a lost reply.</p>
+                  </div>
+                </header>
+                <div class="panel-body">
+                  <label for="mlx-admission-id">Admission ID</label>
+                  <input id="mlx-admission-id" type="text" autocomplete="off" placeholder="Original admission ID" />
+                  <div class="button-row">
+                    <sp-button data-mlx-job="status" variant="secondary">Status</sp-button>
+                    <sp-button data-mlx-job="reconcile" variant="secondary">Reconcile</sp-button>
+                    <sp-button data-mlx-job="cancel" variant="secondary">Review cancellation</sp-button>
+                  </div>
+                </div>
+              </article>
             </section>
             <section
               data-desk="namespaces"

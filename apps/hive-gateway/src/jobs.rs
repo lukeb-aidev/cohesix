@@ -15,7 +15,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use coh::peft::{release::DeploymentState, transaction::Request};
 use cohesix_authority::gpu::PublishedDevice;
+use cohesix_authority::peft::ReleaseArgs;
 use cohesix_authority::standing::{
     AdmissionFacts, JobBinding, StandingControls, StandingScope, StandingScopeFile,
     JOB_BINDING_SCHEMA,
@@ -80,14 +82,28 @@ pub(super) fn selected_ledger(config: &GatewayConfig) -> Result<Option<Arc<Stand
     .map_err(|error| anyhow!("{error}"))?;
     if !controls.enabled {
         ensure!(
-            config.standing_ledger.is_none() && config.standing_scopes.is_none(),
+            config.standing_ledger.is_none()
+                && config.standing_scopes.is_none()
+                && config.peft_release_config.is_none(),
             "EPERM standing authority disabled by compiled manifest"
         );
         return Ok(None);
     }
     if config.standing_ledger.is_none() && config.standing_scopes.is_none() {
+        ensure!(
+            config.peft_release_config.is_none(),
+            "EPERM release profile without standing authority"
+        );
         return Ok(None);
     }
+    ensure!(
+        controls
+            .actions
+            .iter()
+            .any(|action| action == "peft.release")
+            == config.peft_release_config.is_some(),
+        "EPERM selected release profile required only for release authority"
+    );
     let path = config
         .standing_ledger
         .as_ref()
@@ -295,11 +311,160 @@ fn observe_gpu(state: &AppState, ticket: &HostTicketSpec, now: u64) -> Result<Ad
     })
 }
 
+fn read_private(path: &std::path::Path, maximum: u64) -> Result<Vec<u8>> {
+    ensure!(path.is_absolute(), "EPERM release-absolute-path");
+    let mut directory = rustix::fs::open(
+        "/",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let mut components = path.components().peekable();
+    ensure!(
+        components.next() == Some(std::path::Component::RootDir),
+        "EPERM release-absolute-path"
+    );
+    let mut file = None;
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(anyhow!("EPERM release-path-component"));
+        };
+        if components.peek().is_some() {
+            directory = rustix::fs::openat(
+                &directory,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )?;
+        } else {
+            file = Some(std::fs::File::from(rustix::fs::openat(
+                &directory,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::NONBLOCK
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )?));
+        }
+    }
+    let file = file.context("EPERM release-file-path")?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file() && metadata.len() <= maximum,
+        "ELIMIT release-file"
+    );
+    let mut bytes = Vec::new();
+    file.take(maximum + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= maximum, "ELIMIT release-file");
+    Ok(bytes)
+}
+
+fn observe_release_profile(
+    profile_path: &std::path::Path,
+    ticket: &HostTicketSpec,
+    now: u64,
+) -> Result<AdmissionFacts> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ReleaseProfile {
+        python: std::path::PathBuf,
+        helper: std::path::PathBuf,
+        helper_sha256: String,
+        native_config: std::path::PathBuf,
+    }
+    ensure!(
+        std::fs::metadata(profile_path)?.permissions().mode() & 0o077 == 0,
+        "EPERM release-profile-permissions"
+    );
+    let profile: ReleaseProfile = serde_json::from_slice(&read_private(profile_path, 8192)?)?;
+    ensure!(
+        profile.python.is_absolute()
+            && profile.helper.is_absolute()
+            && profile.native_config.is_absolute()
+            && profile.helper_sha256.len() == 64
+            && profile
+                .helper_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && cohesix_evidence::digest(&read_private(&profile.helper, 262144)?)
+                == profile.helper_sha256,
+        "EPERM release-profile-identity"
+    );
+    ensure!(
+        std::fs::metadata(&profile.native_config)?
+            .permissions()
+            .mode()
+            & 0o077
+            == 0,
+        "EPERM release-native-config-permissions"
+    );
+    let native: Value = serde_json::from_slice(&read_private(&profile.native_config, 8192)?)?;
+    let root = native["root"]
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .context("EPERM release-private-root")?;
+    ensure!(
+        root.is_absolute()
+            && root.canonicalize()? == root
+            && std::fs::metadata(&root)?.permissions().mode() & 0o077 == 0,
+        "EPERM release-private-root"
+    );
+    ensure!(
+        cohesix_authority::peft::validate_release_args(&ticket.args),
+        "EPERM release-args"
+    );
+    let selected: ReleaseArgs = serde_json::from_value(ticket.args.clone())?;
+    let request_path = root.join("objects").join(&selected.request_sha256);
+    let request_bytes = read_private(&request_path, 8192)?;
+    ensure!(
+        cohesix_evidence::digest(&request_bytes) == selected.request_sha256,
+        "EPERM release-input-digest"
+    );
+    let request: Request = serde_json::from_slice(&request_bytes)?;
+    request.validate()?;
+    ensure!(
+        serde_json::to_vec(&request)? == request_bytes
+            && native["profile_sha256"] == request.profile_sha256
+            && ticket.operation_id.as_deref() == Some(request.operation_id.as_str())
+            && ticket.subject_ref.as_deref() == Some(request.model_id.as_str())
+            && ticket.target.is_none(),
+        "EPERM release-ticket-input-binding"
+    );
+    let accepted_value: Value =
+        serde_json::from_slice(&read_private(&root.join("accepted.json"), 8192)?)?;
+    let accepted: DeploymentState = serde_json::from_value(accepted_value.clone())?;
+    ensure!(
+        accepted == request.baseline,
+        "EPERM release-baseline-changed"
+    );
+    let (state_epoch, resource_generation) =
+        host_ticket_agent::standing::release_generations(&accepted_value)?;
+    Ok(AdmissionFacts {
+        observed_unix_ms: now,
+        state_epoch,
+        resource_generation,
+        policy_sha256: String::new(),
+    })
+}
+
+fn observe_release(state: &AppState, ticket: &HostTicketSpec, now: u64) -> Result<AdmissionFacts> {
+    let profile = state
+        .inner
+        .peft_release_config
+        .as_deref()
+        .context("EPERM release-profile-not-selected")?;
+    observe_release_profile(profile, ticket, now)
+}
+
 fn observe_facts(state: &AppState, ticket: &HostTicketSpec) -> Result<AdmissionFacts> {
     let now = authority_now_ms()?;
     let mut facts = match ticket.action.as_str() {
         "systemd.restart" => observe_service(ticket, now)?,
         "gpu.workload.submit" => observe_gpu(state, ticket, now)?,
+        "peft.release" => observe_release(state, ticket, now)?,
         _ => return Err(anyhow!("EPERM unsupported standing action")),
     };
     facts.policy_sha256 = cohesix_authority::provider::registry()?["graph_sha256"]
@@ -518,7 +683,11 @@ pub(super) async fn submit(
             payload.ticket.schema.as_str(),
             payload.ticket.action.as_str()
         ),
-        (HOST_TICKET_V1_SCHEMA, "systemd.restart") | (HOST_TICKET_V2_SCHEMA, "gpu.workload.submit")
+        (HOST_TICKET_V1_SCHEMA, "systemd.restart")
+            | (
+                HOST_TICKET_V2_SCHEMA,
+                "gpu.workload.submit" | "peft.release"
+            )
     ) {
         return fail(StatusCode::FORBIDDEN, "EPERM unsupported selected action");
     }
@@ -818,6 +987,99 @@ mod tests {
     use cohesix_ticket::{
         BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketKey, TicketScope, TicketVerb,
     };
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn release_admission_observes_exact_private_baseline_and_helper() {
+        let temporary = tempfile::tempdir().expect("private test directory");
+        let root = temporary.path().canonicalize().unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(root.join("objects")).unwrap();
+        let baseline = json!({
+            "generation": 0,
+            "adapter_sha256": null,
+            "served_artifact_sha256": "a".repeat(64),
+            "runtime_sha256": "b".repeat(64),
+            "healthy": true,
+            "rollback_verified": true,
+        });
+        let request: Request = serde_json::from_value(json!({
+            "schema": "cohesix-peft-release/v1",
+            "operation_id": "op-1",
+            "model_id": "local-mlx",
+            "entry": "train",
+            "profile_sha256": "d".repeat(64),
+            "input_sha256": "e".repeat(64),
+            "evaluation_policy": {
+                "minimum_samples": 4,
+                "maximum_age_ms": 60_000,
+                "metrics": {"eval_loss": {
+                    "direction": "lower", "absolute_bound": 1.0,
+                    "maximum_regression": 0.0
+                }}
+            },
+            "baseline": baseline,
+        }))
+        .unwrap();
+        let request_bytes = serde_json::to_vec(&request).unwrap();
+        let request_hash = cohesix_evidence::digest(&request_bytes);
+        std::fs::write(root.join("objects").join(&request_hash), &request_bytes).unwrap();
+        let accepted = serde_json::to_vec(&request.baseline).unwrap();
+        std::fs::write(root.join("accepted.json"), &accepted).unwrap();
+        let helper = root.join("helper.py");
+        std::fs::write(&helper, b"# selected helper\n").unwrap();
+        let native_config = root.join("native.json");
+        std::fs::write(
+            &native_config,
+            serde_json::to_vec(&json!({
+                "root": root,
+                "profile_sha256": request.profile_sha256,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let profile = root.join("release.json");
+        std::fs::write(
+            &profile,
+            serde_json::to_vec(&json!({
+                "python": "/usr/bin/python3",
+                "helper": helper,
+                "helper_sha256": cohesix_evidence::digest(b"# selected helper\n"),
+                "native_config": native_config,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        for path in [&profile, &native_config] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut ticket = HostTicketSpec {
+            schema: HOST_TICKET_V2_SCHEMA.into(),
+            action: "peft.release".into(),
+            operation_id: Some(request.operation_id.clone()),
+            subject_ref: Some(request.model_id.clone()),
+            args: json!({"request_sha256":request_hash}),
+            ..HostTicketSpec::default()
+        };
+        let facts = observe_release_profile(&profile, &ticket, 1000).unwrap();
+        assert!(facts.state_epoch > 0 && facts.resource_generation > 0);
+        let alias = root.join("profile-alias.json");
+        std::os::unix::fs::symlink(&profile, &alias).unwrap();
+        assert!(observe_release_profile(&alias, &ticket, 1000).is_err());
+        let parent_alias = root.join("release-root-alias");
+        std::os::unix::fs::symlink(&root, &parent_alias).unwrap();
+        assert!(
+            observe_release_profile(&parent_alias.join("release.json"), &ticket, 1000).is_err()
+        );
+        ticket.subject_ref = Some("other-model".into());
+        assert!(observe_release_profile(&profile, &ticket, 1000).is_err());
+        ticket.subject_ref = Some(request.model_id);
+        std::fs::write(root.join("accepted.json"), b"{}").unwrap();
+        assert!(observe_release_profile(&profile, &ticket, 1000).is_err());
+        std::fs::write(root.join("accepted.json"), accepted).unwrap();
+        std::fs::write(&helper, b"# changed helper\n").unwrap();
+        assert!(observe_release_profile(&profile, &ticket, 1000).is_err());
+    }
 
     #[test]
     fn cancellation_checks_the_verified_subject_and_write_scope() {

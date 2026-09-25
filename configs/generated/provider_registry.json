@@ -7660,7 +7660,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "b405284d3382be775a96a7f20aff16290b6b73e7b866dbbffe102d2cb3df8957",
+  "graph_sha256": "93dd7cdec01e83480cb510965788c293d07a81262a124117a196b4716b698ace",
   "playbooks": [
     {
       "dependencies": [

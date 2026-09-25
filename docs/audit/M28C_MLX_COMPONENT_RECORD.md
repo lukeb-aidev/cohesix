@@ -11,17 +11,31 @@ MLX-LM 0.31.3, requires the observed Metal GPU, caps unified memory, and
 returns hashed prompt/output and resource observations. Training checks a
 deadline and cancellation at every loss report; MLX-LM's final adapter config
 is normalized to content and settings rather than scratch output paths.
-The code does not admit a Cohesix job or promote a generation.
+The MLX code does not yet run under a selected Cohesix job or promote a
+generation. Gateway release admission and a release-agent standing dispatch
+fence now have focused source tests, but the selected native executor remains
+Linux/CUDA; no Mac release has been admitted.
 
 ```text
 Title/ID: m28c-mlx-metal-provider
 Milestone: 28c / macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows
 Goal: Run selected local MLX inference and LoRA through the shared admitted release lifecycle.
 Inputs: accepted M28b lifecycle; M28c Apple feasibility; selected M4, MLX and local model/data.
-Changes: tools/cohesix-py/cohesix/mlx_native.py + tools/cohesix-py/tests/test_mlx_native.py implement and check bounded native primitives. The host-ticket-agent, Hive Gateway, coh, SwarmUI and selected provider graph still need the admitted integration.
+Changes: tools/cohesix-py/cohesix/mlx_native.py + tools/cohesix-py/tests/test_mlx_native.py implement and check bounded native primitives. The gateway and agent now check selected release admission and dispatch against the exact accepted baseline, while the selected Mac native executor and provider graph still need integration.
 Commands: PYTHONPATH=tools/cohesix-py out/m28c/mlx-venv/bin/python -m pytest -q tools/cohesix-py/tests/test_mlx_native.py; local content-bound MLX inference, train, held-out evaluate and repeatability probes in ignored out/m28c.
 Checks: Four focused pure refusal tests pass. The selected Mac completed genuine four-step LoRA on Metal and two same-seed runs with the 16-row held-out dataset produced identical adapter bundle digests. The held-out comparison improved loss versus the base; no predeclared 28b policy or independent admitted comparison has been run.
 Deliverables: Local MLX primitives and diagnostic compute measurements, not an accepted M28c provider or developer journey.
+```
+
+```text
+Title/ID: m28c-swarmui-mlx-workbench
+Milestone: 28c / macOS 27: Siri/App Intents, Apple AI and Metal-Backed Workflows
+Goal: Provide the installed app's terminal-free route to the selected MLX release and its signed evidence.
+Inputs: 28b release report and exact selected job JSON; current SwarmUI session and installed coh tool.
+Changes: SwarmUI's Local MLX desk routes plan/follow/verify/recover through coh peft release, reviewed start through coh job submit, and original-ID status/reconcile/cancel through coh job. The host parser now forwards parent command gateway connection arguments. A signed-journal projection shows Metal, held-out comparison, canary and rollback separately.
+Commands: cargo test --locked -p swarmui --lib; cargo test --locked -p swarmui --test workbench; node --test apps/swarmui/tests/mlx_frontend.test.mjs; targeted WebKit Desktop Playwright Local MLX desk case.
+Checks: 18 SwarmUI library tests, 11 workbench tests, two pure frontend projection tests and the one targeted browser form test pass. The browser fixture proves form wiring, not an admitted MLX release or installed app acceptance.
+Deliverables: A source-level guided UI that preserves gateway admission and original job identity. Native Mac MLX execution, installed-byte validation and m28c-developer-live remain open.
 ```
 
 | Local diagnostic observation | Result | Proof limit |
@@ -37,24 +51,27 @@ Deliverables: Local MLX primitives and diagnostic compute measurements, not an a
 | Stronger-model quality attempt | The [MLX Community Qwen2.5-1.5B-Instruct-4bit model](https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit) was pinned to revision `8b403126fc14f14cfc99bb4cfa72ecbc129ea677`, Apache-2.0, and local tree SHA-256 `8b40b6d325ea432fda5d9d9612813d203d44bde7c232b465b0af32454b1d4791`. Before inference or training, ignored policy `out/m28c/qwen-quality-policy.md` was written with SHA-256 `bb0eff0788be397e2d443d623063da3195a995e977ba5081e8e5509826ee54e0`. With the same 16-row held-out dataset, base loss was 7.088871955871582; 16-step, rank-4, seed-41 Metal LoRA created adapter tree SHA-256 `d64ca54360acfc8d1e20094972b1d089ec94e9330388f16d036aff7c16010f29` and candidate loss 3.7540886402130127, with peak Metal allocation below 1 GiB. | The predeclared held-out and resource bounds passed, but the response gate failed: the canary and worse-candidate answers met their criteria, the HTTP answer did not explicitly require both observed generation and quality/outcome evidence, and the cancellation answer refused and repeated punctuation. This is a negative quality result and cannot be promoted or counted as useful-work acceptance. No admitted ticket or signed outcome was involved. |
 | Instruction-formatted quality attempt | A second ignored policy was frozen at SHA-256 `5f9cf02413345d1c2a9f7c6fc89d12141f9223b3e8f7d17b90b729e23bdb64b3` before compute. Its 16/4/16-row local dataset tree is `6b2ef5031d278330c0e4db1a40f5de3ddcc2647df74e2fa7a1c2d0f3229670b7`. A 48-step, rank-8, seed-42 Metal LoRA created adapter tree `a9b837751e207b3c2c52d166f4fb341921cd8d5082197a82915d88f1ea498850`, with 1,182,363,920 bytes peak allocation. Baseline loss was 5.796783924102783 and candidate loss 0.8091069459915161 on 16 test rows. All four frozen operational questions met their explicit semantic criteria within 2,045 ms each and 1,006,469,604 bytes maximum peak allocation. Ignored detailed record `out/m28c/qwen-instruction-attempt.json` has SHA-256 `de93b5bcdb6d5f88d9ff2fd75236379b5d11d6b368619279f51ca1e742e1080b`. | The four answer templates are repeated verbatim across disjoint question phrasings in train, validation and test rows. The loss and responses show the selected narrow facts can be learned; they do not measure broad, independent developer usefulness. This remains an unadmitted local diagnostic: no shared phase journal, target ticket, signed result, accepted serving generation or vMLX canary/rollback. |
 | Direct MLX loopback transport | `cohesix.mlx_service` bound one fixed model and the instruction-formatted adapter to `127.0.0.1:18086` under a diagnostic ID containing the full adapter SHA-256. A real bounded chat request observed Apple M4 Metal, 984,493,744 bytes peak allocation and output SHA-256 `d54caf7c83dd0f7f18a72bab8339bf62449e77e67ba63665021ca7d1b1da8f3b`, matching the direct MLX question-2 response from the frozen quality attempt. The process exited after the check. | This API has no Cohesix credential, admitted generation, durable supervisor or signed result. It does not replace the 28b load/canary/promote/rollback phases, and the local `g0` label is not accepted deployment generation zero. |
+| Instruction-adapter vMLX compatibility | Before serving, ignored policy `out/m28c/qwen-instruction-vmlx-policy.md` was frozen at SHA-256 `ff1b3a525da6cd239ef8b69734fedbf3583c1b4649dd988d2e8aea9988a7c872`: four operational questions, exact model, no tools or stream, 64-token cap, each answer within 5,000 ms. MLX-LM fused the selected Qwen model and 48-step adapter into a separate source tree SHA-256 `b75efc50e56aec7c671357ee6eec7d4df55b8c82896a4308d941e0b86e629777`. Direct fused inference produced four useful responses; its first three output digests matched the unfused adapter and the fourth differed in wording while retaining the required decision. Installed signed vMLX 1.6.65 engine commit `22f9c77711fb580df32f4d40bbaea989c2d5421b`, executable SHA-256 `6ae7d9f0b5db2035b623fc0cacecc3f572bc46db18b69cc8fd611f71b0c2ac7d`, served a disposable copy as diagnostic `cohesix-g1-b75efc50e56aec7c`, process 83239. All four vMLX texts exactly matched direct fused inference and took 4,161/2,774/2,840/2,710 ms. The source model and adapter trees stayed unchanged; the loaded copy tree was `a2e3c00622388097a0e8ca3c2b8e600ba765ff44be7d56c88aca5bca43f7cec4` after local alignment repair. Ignored detailed report `out/m28c/qwen-vmlx-session.json` has SHA-256 `76f43119c53feb37f1ff9b9cc59591a5dcefd6b899dbfb0180e717fc5d0b1acb`. | This qualifies a real serving format and narrow response comparison, not a Cohesix admitted generation: `g1` is only a diagnostic label. The trained adapter was produced outside the shared phase journal, no signed result or governed canary exists, and no Cohesix rollback was run. The answer templates remain narrow. |
 
-`m28c-vmlx-compatibility` also remains **In Progress**. The conversion and
-manual server switch prove the installed engine can transport the fused model
-and distinguish selected model IDs. A better model or task-specific dataset,
-predeclared quality/resource policy, admitted generation, process and mutation
-binding, and automated rollback are still required by its build-plan checks.
+`m28c-vmlx-compatibility` also remains **In Progress**. The later instruction
+adapter's fused copy passed a predeclared, narrow four-question quality and
+latency policy on the installed engine, including process and repaired-byte
+binding. An admitted generation, signed Cohesix result, same-generation
+canary and governed incumbent rollback remain required by its build-plan
+checks. The earlier manual server switch does not supply those obligations.
 
 The host-tool/Python/benchmark compatibility review finds the native MLX and
-vMLX modules additive and unused by the current selected agent, gateway,
-`coh` and SwarmUI. The standing-authority parser now recognises
-`peft.release` as an optional third compiler-selected action, with a focused
-scope/duplicate refusal test. The host agent now checks a selected release's
-model, target and request digest, but its release executor has no standing
-dispatch barrier or Mac MLX phase adapter. Neither selected manifest enables
-the action, and the gateway still refuses its submission. No benchmark metric
-or target interface changes. Integration must preserve M28b's durable phase
-journal and signed result custody; a call to these modules alone cannot
-satisfy that contract.
+vMLX modules additive. The standing-authority parser recognises
+`peft.release` as an optional compiler-selected action. The gateway now
+admits it only with an exact private request, helper and accepted baseline,
+while the agent rechecks the incumbent and standing dispatch barrier before
+native effects. The current selected manifest does not enable that action,
+and the agent's phase executor remains Linux/CUDA, so this is not Mac MLX
+admission. The new SwarmUI desk uses the existing `coh` parser and gateway job
+route; it does not add a transport or provider. Python and raw/REST benchmark
+schemas and target interfaces are unchanged. Integration must preserve M28b's
+durable phase journal and signed result custody; a call to these modules
+alone cannot satisfy that contract.
 
 A later M28c native-action source change added a gateway-derived start for an
 already selected `systemd.restart` standing scope, with matching `coh`, Python

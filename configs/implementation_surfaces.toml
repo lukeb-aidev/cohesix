@@ -1839,6 +1839,7 @@ ui_assets = [
   "apps/swarmui/frontend/workbench/artifacts.js",
   "apps/swarmui/frontend/workbench/controls.js",
   "apps/swarmui/frontend/workbench/hive.js",
+  "apps/swarmui/frontend/workbench/mlx.js",
   "apps/swarmui/frontend/workbench/namespace.js",
   "apps/swarmui/frontend/workbench/navigation.js",
   "apps/swarmui/frontend/workbench/operations.js",

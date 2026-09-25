@@ -143,7 +143,11 @@ from 5.7968 to 0.8091, but answer templates repeat across the disjoint
 prompts. It remains diagnostic without admission, serving or a signed result.
 The new direct MLX loopback server returned a bounded matching Metal response
 from this adapter, but has no durable Cohesix serving owner or accepted
-generation.
+generation. A later frozen vMLX compatibility check fused the instruction
+adapter into a disposable copy and the installed signed engine returned the
+same four texts as direct fused MLX inference within the predeclared latency
+bound. The source and repaired loaded bytes were recorded separately; the
+diagnostic generation label is not a Cohesix admission, canary or rollback.
 Native job inspection presents the gateway's selected action, target and
 original ticket ID, with focused contradictory-target refusal and one installed
 authenticated service-job observation.
@@ -153,6 +157,11 @@ facts. Focused contract checks and an extension build pass. The
 development-signed installed app exposes the start action in Shortcuts;
 the private KVM live start and cancellation are recorded separately from the
 still-unadmitted MLX release and integrated developer journey.
+The new SwarmUI Local MLX desk routes plan, reviewed start, follow, verify,
+recovery and original-job inspection through the installed `coh` schema and
+shows release measurements only from a verified signed journal. The gateway
+and Linux release agent now share an exact accepted-generation dispatch fence.
+The Mac native release executor and live SwarmUI MLX acceptance remain open.
 The [native actions record](audit/M28C_APPLE_ACTIONS_RECORD.md) retains its
 exact diagnostic proof limits.
 

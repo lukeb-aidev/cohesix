@@ -16,6 +16,8 @@ export function peftProjection(source) {
   return {
     state: journal.state,
     blocker: journal.blocker || null,
+    observed_device: typeof phases.validate?.detail?.device === "string"
+      ? phases.validate.detail.device : null,
     baseline_generation: comparison?.baseline?.generation ?? null,
     incumbent_adapter: comparison?.baseline?.adapter_sha256 ?? null,
     candidate_adapter: comparison?.candidate_sha256 ?? null,

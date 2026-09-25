@@ -19,6 +19,22 @@
   --radius-lg: 14px;
   --radius-md: 10px;
 }
+
+[data-desk="mlx"] .panel {
+  margin-bottom: 1.25rem;
+}
+
+[data-desk="mlx"] .panel-body > input {
+  display: block;
+  width: 100%;
+  margin: 0.5rem 0 1rem;
+}
+
+#mlx-release-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 1rem;
+}
 .heading-actions {
   display: flex;
   align-items: center;

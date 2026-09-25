@@ -649,6 +649,7 @@ fn swarmui_workbench_info(state: State<'_, AppState>) -> Result<Value, String> {
         json!({"catalog":workbench::host_catalog(), "controls":workbench::structured_controls(), "roots":config.paths.namespace_roots,
         "connection":active.as_ref().map(|c| json!({"endpoint":c.endpoint,"transport":c.transport,"role":c.role,"delegated":c.ticket.is_some()})),
         "tool_directory":state.tool_dir.lock().map_err(|_| "state locked")?.to_string_lossy(),
+        "local_mlx_host":cfg!(target_os = "macos"),
         "mode":swarmui_mode(state.clone())}),
     )
 }

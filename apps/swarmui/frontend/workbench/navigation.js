@@ -13,6 +13,11 @@ export const desks = {
     "GUIDED OPERATIONS",
     "Find an operation. Set its inputs. Review the exact action.",
   ],
+  mlx: [
+    "Run local MLX",
+    "METAL AND VERIFIED RELEASES",
+    "Plan and follow one admitted local model release on the selected Mac.",
+  ],
   namespaces: [
     "Explore the namespace",
     "FILES WITH AUTHORITY",
@@ -192,6 +197,7 @@ export function initializeNavigation() {
 const screenHelp = {
   hive: "Connect to your controller, then choose Start observing. Select a task worker to see its activity. Connected does not mean work has finished.",
   operations: "Find a task, fill in the form, then review it before running. Results come from the Cohesix program installed on this computer.",
+  mlx: "Select the private deployment file, plan the release, then review its original ticket before starting. Follow its journal and signed result here. A model reply alone does not verify a canary or promotion.",
   namespaces: "Browse files published by the controller. Open a file to read it, or choose Recent activity for its latest lines. Your access permissions still apply.",
   story: "Open a report to follow a past run. Select a step to see the records behind it. Past results do not show what is running now.",
   flight: "See the computer and graphics processor used by a run. Unavailable means no measurement was recorded.",

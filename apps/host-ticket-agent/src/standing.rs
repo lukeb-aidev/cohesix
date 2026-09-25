@@ -78,6 +78,30 @@ pub fn service_generations(observation: &serde_json::Value) -> Result<(u64, u64)
     ))
 }
 
+/// Fence one selected release against a changed accepted generation or
+/// serving artifact. The complete accepted state is retained in the private
+/// release registry; the compact fields only guard admission to dispatch.
+pub fn release_generations(accepted: &serde_json::Value) -> Result<(u64, u64)> {
+    let state: coh::peft::release::DeploymentState = serde_json::from_value(accepted.clone())?;
+    ensure!(
+        state.healthy && state.rollback_verified,
+        "EPERM release-incumbent-unverified"
+    );
+    let state_digest = Sha256::digest(serde_json::to_vec(&state)?);
+    let resource_digest = Sha256::digest(serde_json::to_vec(&(
+        &state.served_artifact_sha256,
+        &state.runtime_sha256,
+    ))?);
+    let mut state_bytes = [0u8; 8];
+    state_bytes.copy_from_slice(&state_digest[..8]);
+    let mut resource_bytes = [0u8; 8];
+    resource_bytes.copy_from_slice(&resource_digest[..8]);
+    Ok((
+        u64::from_be_bytes(state_bytes).max(1),
+        u64::from_be_bytes(resource_bytes).max(1),
+    ))
+}
+
 /// Settle a durable provider result once, independently of pending result
 /// publication. A compatibility failure after dispatch remains uncertain.
 pub fn settle_result(
@@ -365,6 +389,30 @@ mod tests {
         spec.subject_ref = Some("local-model".into());
         spec.args = serde_json::json!({"request_sha256":"c".repeat(64)});
         assert!(verify_ticket(&spec, &record).is_err());
+    }
+
+    #[test]
+    fn release_fence_tracks_generation_and_served_bytes() {
+        let mut incumbent = serde_json::json!({
+            "generation": 0,
+            "adapter_sha256": null,
+            "served_artifact_sha256": "a".repeat(64),
+            "runtime_sha256": "b".repeat(64),
+            "healthy": true,
+            "rollback_verified": true,
+        });
+        let original = release_generations(&incumbent).expect("verified incumbent");
+        incumbent["generation"] = serde_json::json!(1);
+        let next = release_generations(&incumbent).expect("new generation");
+        assert_ne!(next.0, original.0);
+        assert_eq!(next.1, original.1);
+        incumbent["served_artifact_sha256"] = serde_json::json!("c".repeat(64));
+        assert_ne!(release_generations(&incumbent).unwrap().1, original.1);
+        incumbent["healthy"] = serde_json::json!(false);
+        assert!(release_generations(&incumbent).is_err());
+        incumbent["healthy"] = serde_json::json!(true);
+        incumbent["unrecognized"] = serde_json::json!(true);
+        assert!(release_generations(&incumbent).is_err());
     }
 
     #[test]

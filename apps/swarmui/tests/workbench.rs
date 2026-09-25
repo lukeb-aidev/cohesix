@@ -121,6 +121,37 @@ fn host_arguments_reuse_cli_validation_without_shell_or_secret_arguments() {
     )
     .is_err());
 }
+
+#[test]
+fn mlx_release_and_selected_job_forms_keep_parent_gateway_connection() {
+    let active = connection().resolve().unwrap();
+    let deployment = "/private/var/cohesix/mlx-deployment.json";
+    let plan = request(
+        &["peft", "release"],
+        &[("mode", "plan"), ("deployment", deployment)],
+    );
+    let planned = host_arguments(&plan, None, true).unwrap();
+    assert!(planned.contains(&format!("--deployment={deployment}")));
+    assert!(!planned.iter().any(|arg| arg.starts_with("--rest-url=")));
+
+    let apply = request(
+        &["peft", "release"],
+        &[("mode", "apply"), ("deployment", deployment)],
+    );
+    assert!(host_arguments(&apply, None, false).is_err());
+    let submitted = host_arguments(&apply, Some(&active), false).unwrap();
+    assert!(submitted.contains(&"--rest-url=https://gateway.example:8443".to_owned()));
+    assert!(!submitted.iter().any(|arg| arg.contains(&active.credential)));
+
+    let selected_job = request(
+        &["job", "submit"],
+        &[("input", "/private/var/cohesix/mlx-job.json")],
+    );
+    assert!(host_arguments(&selected_job, None, false).is_err());
+    let submitted = host_arguments(&selected_job, Some(&active), false).unwrap();
+    assert!(submitted.contains(&"--rest-url=https://gateway.example:8443".to_owned()));
+    assert!(submitted.contains(&"--input=/private/var/cohesix/mlx-job.json".to_owned()));
+}
 #[test]
 fn offline_and_single_owner_refuse_live_host_actions() {
     let active = connection().resolve().unwrap();

@@ -7,6 +7,7 @@ import { invoke, state, notice } from "./workbench/state.js";
 import { initializeNavigation, initializeHelp } from "./workbench/navigation.js";
 import { initializeSession, reflectSession } from "./workbench/session.js";
 import { initializeOperations } from "./workbench/operations.js";
+import { initializeMlx } from "./workbench/mlx.js";
 import { initializeNamespace } from "./workbench/namespace.js";
 import { initializeArtifacts } from "./workbench/artifacts.js";
 import { initializeControls } from "./workbench/controls.js";
@@ -22,6 +23,7 @@ hydrateIcons();
 setupConsole(invoke);
 const info = await invoke("swarmui_workbench_info");
 initializeOperations(info.ok ? info.result.catalog : null);
+initializeMlx(info.ok && info.result.local_mlx_host === true);
 initializeControls(info.ok ? info.result.controls : []);
 initializeNamespace(info.ok ? info.result.roots : []);
 if (info.ok) {

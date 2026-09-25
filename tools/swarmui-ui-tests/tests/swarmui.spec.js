@@ -269,6 +269,7 @@ const installTauriMock = async (page, options = {}) => {
               connection: state.connection || null,
               roots: hiveBootstrap.namespace_roots,
               tool_directory: "/installed/bin",
+              local_mlx_host: true,
               catalog: {
                 name: "coh",
                 fields: [],
@@ -312,6 +313,29 @@ const installTauriMock = async (page, options = {}) => {
                         ],
                         commands: [],
                       },
+                    ],
+                  },
+                  {
+                    name: "peft",
+                    fields: [],
+                    commands: [{
+                      name: "release",
+                      help: "Follow one admitted adapter release",
+                      fields: [
+                        { id: "mode", required: true, choices: ["plan", "apply", "watch", "verify", "recover"] },
+                        { id: "deployment", required: true, path: true },
+                      ],
+                      commands: [],
+                    }],
+                  },
+                  {
+                    name: "job",
+                    fields: [],
+                    commands: [
+                      { name: "submit", fields: [{ id: "input", required: true, path: true }], commands: [] },
+                      ...["status", "reconcile", "cancel"].map((name) => ({
+                        name, fields: [{ id: "admission_id", required: true }], commands: [],
+                      })),
                     ],
                   },
                 ],
@@ -476,6 +500,27 @@ test("SwarmUI launches without error", async ({ page }) => {
   await expect(page.locator("sp-theme.app-theme")).toBeVisible();
   await expect(page.locator("header.appbar")).toBeVisible();
   await expect(page.locator("#hive-status")).not.toContainText("failed");
+});
+
+test("Local MLX desk opens the selected release and original job forms", async ({ page }) => {
+  await page.locator('[data-view="mlx"]').click();
+  await expect(page.locator('[data-desk="mlx"]')).toBeVisible();
+  await page.locator("#mlx-deployment").fill("relative/model.json");
+  await page.locator('[data-mlx-mode="plan"]').click();
+  await expect(page.locator("#notice")).toContainText("absolute");
+  await page.locator("#mlx-deployment").fill("/private/model.json");
+  await page.locator('[data-mlx-mode="plan"]').click();
+  await expect(page.locator("#operation-editor h2")).toContainText("Release a private adapter");
+  await expect(page.locator("#op-deployment")).toHaveValue("/private/model.json");
+  await expect(page.locator("#op-mode")).toHaveValue("plan");
+  await page.locator('[data-view="mlx"]').click();
+  await page.locator("#mlx-job-file").fill("/private/job.json");
+  await page.locator("#mlx-submit").click();
+  await expect(page.locator("#op-input")).toHaveValue("/private/job.json");
+  await page.locator('[data-view="mlx"]').click();
+  await page.locator("#mlx-admission-id").fill("original-mlx-job");
+  await page.locator('[data-mlx-job="reconcile"]').click();
+  await expect(page.locator("#op-admission_id")).toHaveValue("original-mlx-job");
 });
 
 test("Tauri core invoke bridge powers namespace actions", async ({ page }) => {

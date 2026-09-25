@@ -11,6 +11,7 @@ license = "MIT"
 [dependencies]
 anyhow = { workspace = true }
 cohesix-authority = { workspace = true, features = ["std"] }
+coh = { path = "../coh" }
 host-ticket-agent = { path = "../host-ticket-agent" }
 host-sidecar-bridge = { path = "../host-sidecar-bridge" }
 sha2 = { workspace = true }
