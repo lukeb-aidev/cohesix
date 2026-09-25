@@ -85,10 +85,19 @@ def action_lines(raw: bytes) -> list[str]:
     """Keep only the actual Shortcuts action search observation, not library data."""
     text = raw.decode("utf-8", errors="strict")
     lines = text.splitlines()
-    selected = [line.strip() for line in lines
-                if line.startswith("Window:")
-                or re.match(r"^\s+\d+ search text field \(settable\) Value: Cohesix", line)
-                or re.match(r"^\s+\d+ text " + re.escape(ACTION) + r"$", line)]
+    window = [line.strip() for line in lines if line.startswith("Window:")]
+    search = [line.strip() for line in lines if re.match(
+        r"^\s+\d+ search text field \(settable\) Value: Cohesix", line)]
+    tables = [index for index, line in enumerate(lines)
+              if re.match(r"^\s+\d+ table$", line)]
+    results = []
+    if len(tables) == 1:
+        for line in lines[tables[0] + 1:]:
+            if re.match(r"^\s+\d+ toolbar$", line):
+                break
+            if re.match(r"^\s+\d+ text " + re.escape(ACTION) + r"$", line):
+                results.append(line.strip())
+    selected = window + search + results
     require(len(selected) == 3 and selected[0].startswith("Window:")
             and "Shortcuts" in selected[0]
             and "Value: Cohesix" in selected[1]

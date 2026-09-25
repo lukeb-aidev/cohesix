@@ -48,8 +48,11 @@ def test_reference_refuses_missing_or_changed_identity(tmp_path: Path) -> None:
 
 def test_shortcuts_requires_search_and_exact_action() -> None:
     observed = b"""Window: \"New Shortcut 4\", App: Shortcuts.
+  3 text Check Cohesix Apple Support
   6 search text field (settable) Value: Cohesix, Placeholder: Search
+  9 table
     14 text Check Cohesix Apple Support
+  25 toolbar
 The focused UI element is 6 search text field (settable) Value: Cohesix, Placeholder: Search
 """
     assert platform.action_lines(observed)[2].endswith(platform.ACTION)
@@ -57,6 +60,8 @@ The focused UI element is 6 search text field (settable) Value: Cohesix, Placeho
         platform.action_lines(observed.replace(b"Check Cohesix", b"Check Other"))
     with pytest.raises(ValueError, match="Shortcuts"):
         platform.action_lines(observed.replace(b"Value: Cohesix", b"Value: Other"))
+    with pytest.raises(ValueError, match="Shortcuts"):
+        platform.action_lines(observed.replace(b"    14 text Check Cohesix Apple Support\n", b""))
 
 
 def test_both_signatures_need_matching_keychain_group() -> None:
