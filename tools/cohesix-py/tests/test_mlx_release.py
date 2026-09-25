@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 
@@ -143,3 +144,14 @@ def test_launchd_stop_waits_for_owned_process_to_exit(
     monkeypatch.setattr(mlx_release.time, "sleep", lambda _seconds: None)
     mlx_release._stop_service(label, tmp_path)
     assert checks == [1234, 1234]
+
+
+def test_service_restart_refuses_occupied_loopback_port() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        with pytest.raises(ValueError, match="ambiguous_service_port_occupied"):
+            mlx_release._await_port_available(port, timeout_s=0.05)
+    mlx_release._await_port_available(port, timeout_s=1.0)

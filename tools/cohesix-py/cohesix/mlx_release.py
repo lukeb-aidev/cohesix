@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import socket
 import subprocess
 import sys
 import time
@@ -86,6 +87,20 @@ def _stop_service(label: str, root: Path) -> None:
                 return
         time.sleep(0.1)
     raise ValueError("ambiguous_launchd_stop_or_process")
+
+
+def _await_port_available(port: int, timeout_s: float = 10.0) -> None:
+    """Wait until the old listener has released the selected loopback port."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+                return
+            except OSError:
+                time.sleep(0.1)
+    raise ValueError("ambiguous_service_port_occupied")
 
 
 class Provider:
@@ -425,6 +440,7 @@ class Provider:
     def _start_service(self, runtime: dict[str, Any]) -> dict[str, str]:
         label = self.config["service_label"]
         _stop_service(label, self.root)
+        _await_port_available(self.config["port"])
         selection_path = self._selection_file(runtime)
         logs = self.root / "service-logs"
         logs.mkdir(mode=0o700, exist_ok=True)
