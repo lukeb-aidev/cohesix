@@ -132,7 +132,10 @@ admitted deployment or accepted quality result. M28c requires an installed
 local MLX execution, result inspection and rollback. A pinned 1.5B MLX model
 completed another Metal LoRA attempt and improved held-out loss, but failed its
 predeclared operational response gate. This is not M28c
-completion or Release B acceptance.
+completion or Release B acceptance. A second instruction-formatted 48-step
+local attempt passed its frozen four-question gate and improved held-out loss
+from 5.7968 to 0.8091, but answer templates repeat across the disjoint
+prompts. It remains diagnostic without admission, serving or a signed result.
 
 ## Capability snapshot
 
