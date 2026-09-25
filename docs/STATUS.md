@@ -108,8 +108,9 @@ profiles sign the canonical app and extension with the same Keychain group. A
 fresh staged copy passed exact-profile Developer ID signing, Apple notarisation,
 stapling and Gatekeeper assessment; the final developer journey has not.
 The focused platform case passed with four installed actions visible in
-Shortcuts; the local support action executed. Actual shared Keychain use,
-authenticated Shortcuts jobs and Siri invocation of a user-created Shortcut,
+Shortcuts; the local support action executed. A disposable provisioned Keychain
+cross-identity check passed. Actual SwarmUI enrollment, authenticated Shortcuts
+jobs and Siri invocation of a user-created Shortcut,
 admitted MLX release/rollback and final installed journey notarisation have not passed;
 installed vMLX 1.6.65 additionally served one local model through a detached
 loopback API smoke, with poor answer quality and an observed local weight

@@ -10,7 +10,7 @@ The focused `m28c-platform-live` case observed source `9dafa2bd0634cbcb5749417cc
 on the selected macOS 27 Mac with an installed, provisioned development-signed
 app. The local support action also executed in Shortcuts and returned Apple
 assistance and Metal availability without requesting a hive action. No Siri or
-Shortcuts job operation, admitted MLX release, or distribution outcome is claimed.
+Shortcuts job operation, admitted MLX release, or final distribution outcome is claimed.
 
 ```text
 Title/ID: m28c-apple-platform-feasibility
@@ -21,7 +21,7 @@ Changes:
   - apps/swarmui/native/apple/ + apps/swarmui/src/workbench.rs + apps/swarmui/frontend/ — public App Intents extension, in-app Keychain enrollment source, native capability and synthetic assistance probes, generated Xcode project specification and focused checks.
   - docs/BUILD_PLAN.md and docs/STATUS.md — expose the incomplete platform gate without promoting a host probe to workflow acceptance.
 Commands: sw_vers; xcodebuild -version; xcrun --sdk macosx --show-sdk-version; swift test --package-path apps/swarmui/native/apple; swift run --package-path apps/swarmui/native/apple CohesixAssistanceProbe; xcodebuild -project apps/swarmui/native/apple/SwarmUIApple.xcodeproj -scheme SwarmUIIntents -configuration Release -derivedDataPath out/m28c/DerivedData CODE_SIGNING_ALLOWED=NO build; cargo build --locked -p swarmui --bin swarmui; cargo build --locked -p coh -p hive-gateway; python3 scripts/install/stage_swarmui.py --repo "$PWD" --generated-root "$PWD" --bin-dir "$PWD/target/debug" --profile macos-desktop --apple-extension-dir "$PWD/out/m28c/DerivedData/Build/Products/Release/SwarmUIIntents.appex" --out "$PWD/out/m28c/canonical-stage-02"; codesign --verify --deep --strict out/m28c/SwarmUI-v4.app; pluginkit -m -v -i com.cohesix.swarmui.intents.
-Checks: Public SDK builds, focused native contract tests, local capability probes, provisioned app/extension signing, installed four-action Shortcuts discovery and one local support action execution pass. The source-bound m28c-platform-live runner passes. The new in-app enrollment path, Siri invocation and direct-distribution signing remain outstanding.
+Checks: Public SDK builds, focused native contract tests, local capability probes, provisioned app/extension signing, installed four-action Shortcuts discovery and one local support action execution pass. The source-bound m28c-platform-live runner passes. Later diagnostic Developer ID notarisation and provisioned Keychain sharing pass independently. The new in-app enrollment path, Siri invocation and final journey distribution remain outstanding.
 Deliverables: Source feasibility probe and this measured support/blocker record; no M28c completion claim.
 ```
 
@@ -40,6 +40,7 @@ Deliverables: Source feasibility probe and this measured support/blocker record;
 | Local package | Extension and app passed `codesign --verify --deep --strict` with the local Apple Development identity. `pluginkit` lists `com.cohesix.swarmui.intents` from the installed app, and the Shortcuts action search shows “Check Cohesix Apple Support”. | This establishes action discovery on this Mac; no shortcut or spoken invocation was run. The diagnostic bundle was assembled outside the canonical package pipeline. |
 | Extension sandbox | `com.apple.security.app-sandbox`, `com.apple.security.network.client` and a shared Keychain group are on the diagnostic extension signature. An earlier bundle without the sandbox entitlement was not listed by `pluginkit`. | The sandbox difference is the observed registration fix. A valid signature and `pluginkit` listing do not show that the shared Keychain code can run. |
 | Keychain launch | The manually development-signed enrollment helper with a shared access-group entitlement passed `codesign --verify` but exited 137 before its own argument check. The same helper signed without the restricted entitlement ran and returned its expected missing-argument error. | The controlled difference points to missing provisioning for the restricted entitlement. No real token was entered or stored. |
+| Provisioned Keychain sharing | A later disposable Swift probe used the exact app and extension development profiles and their selected entitlements. Both signatures passed strict verification. The app identity wrote a random item through the default Keychain group, the extension identity read the same bytes through its default group, and the app deleted the item; all three operations exited zero. Ignored probe source SHA-256: `8e67315f90cb3da14b1e2593ef239b890411f00c2ebc21a47fce9edf284b6d8c`. | The test proves the provisioned cross-identity Keychain boundary on this Mac. It did not invoke SwarmUI's enrollment command, the real extension's `GatewayKeychain.load`, or a delegated gateway job. The probe contained no live credential. |
 | Distribution | The chosen channel is direct distribution outside the Mac App Store. Xcode issued exact macOS development profiles for both App IDs. The canonical staged app and extension then passed nested development signing with shared Keychain entitlements and `codesign --verify --deep --strict`; the app executable launches with `--help`. On 25 September, Xcode created a valid `Developer ID Application: Lukas Bower (KB88FQXUX2)` signing identity, SHA-1 `EEF1BF26D2081CEB18AF1F5B0C4A6D720C1F2B98`. Apple issued exact Developer ID profiles for both bundle IDs; fresh staging `canonical-stage-06` passed nested Developer ID signing with hardened runtime and secure timestamp. `notarytool` accepted submission `6b4fdfe9-bbe2-4162-af79-239e3d2d5f2f`; stapler validation and Gatekeeper assessment passed. | This is a diagnostic copy, not the final installed developer journey. [Apple's direct-distribution requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) require final candidate notarisation. The Keychain credential is outside the repository. |
 | Apple App IDs | The Apple Developer team `KB88FQXUX2` lists explicit `com.cohesix.swarmui` and `com.cohesix.swarmui.intents` App IDs. | Registration alone does not provision or sign either executable. |
 | macOS capabilities | The extension registration screen showed In-App Purchase on by default and no other capability selected. It had no Keychain Sharing checkbox. SwarmUI and the extension declare the same Keychain access group in their signing entitlements. Apple's current [macOS guidance](https://developer.apple.com/design/human-interface-guidelines/app-shortcuts) supports App Intents actions inside user-created Shortcuts, not automatic App Shortcuts; [SiriKit capability guidance](https://developer.apple.com/documentation/xcode/configuring-siri-support) excludes macOS. The unused `AppShortcutsProvider` was removed from the macOS extension source. | A user-created Shortcut still needs a live Mac execution and spoken Siri invocation before any M28c action acceptance. No optional portal capability was selected for the extension. |
@@ -61,7 +62,7 @@ focused Swift tests, the unsigned Release extension build and
 `scripts/check-generated.sh` passed. The provisioned extension build and
 canonical development signer passed after fixing a `codesign` diagnostic-stream
 parser defect; eight focused signer/platform tests passed. Installed action
-execution and Keychain sharing still require observation.
+execution and the real SwarmUI enrollment path still require observation.
 
 `coh-rtc` regenerated the canonical host/package/source projections after the
 new files were staged, and `scripts/check-generated.sh` passed. The final
@@ -87,7 +88,7 @@ extension binary SHA-256
 team `KB88FQXUX2`, and the four-action Shortcuts search. The separate
 Shortcuts probe-result accessibility capture has SHA-256
 `98dd311934f627010621189f2dd942c768a498252513db7d3612b4ec5a5b416a`.
-Actual shared Keychain operation and authenticated job actions are dependent
+Actual SwarmUI enrollment and authenticated job actions are dependent
 implementation work, not a claim from this feasibility probe. The later
 Developer ID notarisation is a separate diagnostic distribution observation.
 The fresh Developer ID signing report is retained at ignored
