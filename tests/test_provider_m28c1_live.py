@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import shlex
 import subprocess
 
 import pytest
 
-from provider_m28c1_live import _mac_qemu_image_identity
+from provider_m28c1_live import _mac_qemu_image_identity, _selected
 import provider_m28c1_live as live
 
 
@@ -47,3 +48,29 @@ def test_mac_qemu_identity_binds_pinned_binary_and_source(
                             [], 0, output.replace("-accel hvf", "-accel tcg"), ""))
     with pytest.raises(ValueError, match="pinned HVF process identity"):
         _mac_qemu_image_identity(selected, "abcdef123456" + "0" * 28)
+
+
+def test_live_reference_accepts_observed_adapter_only_for_release(
+        tmp_path: Path) -> None:
+    fields: dict[str, object] = {
+        key: ("a" * 64 if key.endswith("_sha256") else "/tmp/selected")
+        for key in live.MLX | {"qemu_binary", "qemu_sha256"}
+    }
+    fields.update(schema=live.SCHEMA, host_profile="mac-apple-m4-macos27",
+                  scenario="train", source_commit="a" * 40,
+                  target_host="local", target_qemu_pid=42,
+                  gateway_url="http://127.0.0.1:8182",
+                  request_auth_ref="file:/tmp/auth",
+                  delegated_ticket_ref="file:/tmp/ticket",
+                  wait_seconds=10, expected_generation=1,
+                  expected_adapter_sha256="observed")
+    reference = tmp_path / "reference.toml"
+    reference.write_text("\n".join(f"{key} = {json.dumps(value)}"
+                                   for key, value in fields.items()))
+    assert _selected(reference, "mac-apple-m4-macos27",
+                     "m28c1-mlx-live")["expected_adapter_sha256"] == "observed"
+    fields["expected_adapter_sha256"] = "not-a-hash"
+    reference.write_text("\n".join(f"{key} = {json.dumps(value)}"
+                                   for key, value in fields.items()))
+    with pytest.raises(ValueError, match="expected deployment"):
+        _selected(reference, "mac-apple-m4-macos27", "m28c1-mlx-live")

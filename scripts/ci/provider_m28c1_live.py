@@ -75,7 +75,7 @@ def _selected(path: Path, host_profile: str, case: str) -> dict[str, Any]:
         require(isinstance(value[key], str) and Path(value[key]).is_absolute(),
                 f"M28c1 {key} path")
     for key in expected:
-        if key.endswith("_sha256"):
+        if key.endswith("_sha256") and key != "expected_adapter_sha256":
             require(isinstance(value[key], str)
                     and re.fullmatch(r"[0-9a-f]{64}", value[key]) is not None,
                     f"M28c1 {key}")
