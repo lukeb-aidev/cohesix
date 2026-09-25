@@ -12900,6 +12900,19 @@ steps without implementing a second journal or evaluator. Record the held-out
 comparison policy, exact serving generation and rollback observation in the
 28b evidence so later protocol adapters can project them without reinterpretation.
 
+After a bake-off, distributing its winning weights is a separate, planned
+host-artifact operation. An accepted comparison chooses an immutable artifact;
+it does not copy or activate it. Admit an exact source digest, format and
+revision, selected destination host/profile, export authority, capacity and
+retention before payload movement. Keep model bytes on an authenticated
+host-to-host data path. Queen and its bounded `coh-ref-c/v1` namespace may
+record chunk digests and operation evidence, but a reference is neither payload
+delivery nor destination verification. Do not route model bytes through Pi
+FUSE, MCP messages or A2A task artifacts. Distribution never implies format
+conversion or deployment to an incompatible MLX/CUDA runtime. The dedicated
+task below is inactive until selected; existing 28b lifecycle completion does
+not claim weight distribution.
+
 **Deliverables:** Configurable training/import, fixed evaluation and serving contracts, runtime canaries and verified promotion/rollback evidence.
 
 **Task breakdown**
@@ -12946,6 +12959,26 @@ Checks:
   - Python plan/submit/inspect/recover preserves the original operation and request digest across a lost response; wrong-identity, malformed or contradictory reports fail closed. MCP and A2A later project this same result through their separately admitted and activated tasks.
   - Publish negative comparisons and stochastic settings; HTTP success, registry publication and judge scores alone cannot qualify deployment.
 Deliverables: Usable native endpoint, fixed evaluation configuration, comparison/canary/rollback guide and m28b-serving-live report with observed served generations.
+
+Title/ID: m28b-verified-weight-distribution
+Milestone: 28b / m28b-verified-weight-distribution
+Goal: Distribute a bake-off-selected model artifact to admitted compatible hosts and verify exact destination bytes before a separate deployment decision.
+Inputs: Accepted m28b-evaluate-canary-promote-rollback result; shared 28 job/admission/identity/evidence contract; selected source and destination host profiles; bounded coh-ref-c/v1 references when Queen indexing is selected.
+Changes:
+  - apps/coh/src/peft/ + apps/host-ticket-agent/src/executors/ (planned) — one durable transfer identity and host-side data mover with destination capacity reservation, digest-addressed chunks, bounded resume and independent full-file verification; no arbitrary path-copy or provider credential forwarding.
+  - tools/coh-rtc/src/ + selected host profiles — generated transfer bounds and authority for source/destination, artifact digest/size/format, approved export, byte/chunk quotas, retention and cancellation; reject incompatible destination or stale winning generation before effects.
+  - tools/cohesix-py/cohesix/ + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md — plan/submit/inspect/recover the shared operation and show distinct reference-published, bytes-moving, destination-verified and deployment states; Python and UI do not copy bytes or issue their own success verdict.
+  - Host executor/CLI/Python tests + matrix/catalog — m28b-weight-distribution-live using a genuine model weight of at least 1 GiB from a Mac source to one qualified Linux AArch64 NVIDIA destination, with a second destination only when advertised.
+Commands:
+  - cargo test --locked -p coh --test peft_release
+  - cargo test --locked -p host-ticket-agent --lib executors::artifact_transfer
+  - python3 -m pytest -q tools/cohesix-py/tests/test_model_release.py tools/cohesix-py/tests/test_artifact_transfer.py
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28b-weight-distribution-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28b-weight-distribution-live"
+Checks:
+  - The source digest/size and frozen bake-off choice bind every chunk and the destination receipt. A separately observed destination reassembly and full SHA-256 match precede verified transfer; activation needs its own compatible provider admission and serving canary.
+  - Lost response, source/destination restart and interrupted transport recover the same operation, reconcile present chunks by digest and never infer success from a Queen reference, transport exit or A2A/MCP client state. Record actual payload route and bytes; bounded Pi references are measured separately.
+  - Wrong host/format/base, stale choice, revoked export, insufficient space, changed/truncated chunk, unsafe path and cross-subject receipt access refuse or remain explicitly unresolved without a replacement effect.
+Deliverables: Bounded host-transfer contract, source and destination receipts, recovery/operator guide and m28b-weight-distribution-live evidence separating reference publication, payload movement, verification and deployment.
 ```
 
 **Checks / definition of done:** both genuine training and independent import work; a real client uses
@@ -13101,6 +13134,14 @@ qualified OS/driver/CUDA/package profile, including JetPack where applicable;
 one platform's evidence does not qualify another. MCP carries bounded
 references and existing stage/job identities, not implicit raw payload transfer,
 backend conversion, resource escalation or fallback to another host.
+When `m28b-verified-weight-distribution` has been accepted and enabled for a
+selected host pair, expose its shared operation as scoped artifact discovery,
+destination preflight, explicit submit, status/cancel/recover and verified
+destination receipt. A client may then distribute the selected winner after
+the bake-off; promotion/activation remains a separate admitted operation.
+Without that host operation, discovery reports unavailable rather than offering
+a copy-shaped tool. MCP resources and any later read-only FUSE projection carry
+bounded references, never weight bytes or write-triggered transfer effects.
 Include the vMLX desktop application as a named MCP client compatibility path:
 its configured MCP client connects to the Cohesix server through a supported
 authenticated transport, discovers only admitted tools and observes the same
@@ -13147,11 +13188,11 @@ Deliverables: Pinned transport/configuration contract, packaged launch paths and
 Title/ID: m28d-mcp-selected-workflows
 Milestone: 28d / m28d-mcp-selected-workflows
 Goal: Let an ordinary MCP client discover, complete and recover selected CUDA/PEFT and qualified mixed MLX/CUDA workflows.
-Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; accepted 28c MLX provider and approved mixed workflow when selected; shared generated registry; maintained SDK and named standard client; pinned vMLX desktop/client version for its compatibility path.
+Inputs: m28d-mcp-policy-and-transport; accepted 28a/28b actions and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when weight distribution is advertised; accepted 28c MLX provider and approved mixed workflow when selected; shared generated registry; maintained SDK and named standard client; pinned vMLX desktop/client version for its compatibility path.
 Changes:
-  - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors, bounded resources and selected mixed-provider stages/transfer refs.
+  - apps/hive-gateway/src/mcp/ + tools/coh-rtc/src/codegen/ — generated catalogue of selected preflight/submit/status/cancel/recover, compare/promote/rollback and evidence operations with authority, examples, errors, bounded resources and selected mixed-provider stages/transfer refs; add artifact distribution operations only after accepted m28b-verified-weight-distribution.
   - apps/hive-gateway/tests/{mcp_protocol,mcp_workflows}.rs (planned) — mapping parity, visibility, required fields and cross-client idempotency; no direct provider calls or model-authored success.
-  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — review and align selected mixed-provider request/status fields, original stage identities, explicit transfers and recovery with the same generated operation contract; retain the existing CLI/REST execution and verifier path.
+  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — review and align selected mixed-provider request/status fields, original stage identities, explicit transfers and recovery with the same generated operation contract; if distribution is selected, project its transfer identity and destination receipt through the existing CLI/REST execution and verifier path.
   - docs/HOST_TOOLS.md + docs/HOST_API.md + installation/doctor owners — versioned ordinary-client and vMLX MCP configuration, transport/auth setup and recovery examples; matrix/catalog gain m28d-mcp-live and a separate vMLX client compatibility record.
 Commands:
   - cargo test --locked -p hive-gateway --test mcp_protocol --test mcp_workflows
@@ -13162,6 +13203,7 @@ Checks:
   - Each selected operation has generated input/output/authority/lifecycle/evidence mapping; scoped discovery hides inaccessible records. Credential forwarding, arbitrary writes and caller-supplied receipts refuse.
   - PEFT tools project the accepted 28b operation/request identity, held-out comparison and exact serving generation; only the shared verifier's successful requested outcome is labelled verified. Lost tool responses reconcile the original operation, including recovered failure and rollback blockers.
   - When MLX and CUDA are advertised together, the named client completes a selected workflow using both providers and recovers the original stage/job identities. Discovery and preflight expose actual host capabilities, capacity and permitted transfer refs; wrong host, incompatible artifact, exhausted budget and unapproved payload transfer refuse before effects. Queueing or provider unavailability cannot imply completion or silently select another host.
+  - If weight distribution is advertised, a standard MCP client submits a bake-off-selected artifact to one compatible destination through the accepted shared host operation, loses a tool response, then recovers the original transfer identity and destination-verified full digest. Refused export, insufficient space and incompatible format create no payload effect; a Queen reference or successful tool call never counts as delivered bytes.
   - The installed vMLX client, when claimed supported, connects with its actual configured MCP transport and delegated credentials; its session discovers tools and model-backed calls preflight, submit and recover permitted CUDA/PEFT work. Confirm tool names/schema, client-side tool policy, refusal visibility and original operation identity across a lost response. A vMLX model response or MCP tool result alone cannot certify provider completion; no vMLX session or unavailable compatible model is recorded as a blocker, not a passing mock.
   - The installed Python wheel projects the same selected request identity, host/provider selection, pending/refused/terminal states and verified outcome where its API exposes those operations; Python output cannot supply an MCP receipt or independent success verdict.
   - MCP-only operation works; read-only conformance cannot close mutating acceptance. Real shared-budget/revocation tests use CLI/REST and MCP without requiring A2A.
@@ -13192,6 +13234,12 @@ accounting; retry across protocols cannot reset budgets or repeat uncertain work
 Map terminal/failed/cancelled/ambiguous states from observed provider outcomes.
 For a selected mixed MLX/CUDA workflow, the A2A task correlates its existing
 stage/job identities, provider/host selections and authorised artifact transfers.
+If accepted `m28b-verified-weight-distribution` is selected, expose a distinct
+distribution skill backed by its existing durable transfer operation. Task
+progress may link bounded chunk-reference and byte-count evidence, but task
+completion requires the scoped destination verification receipt; deployment
+remains a separate authorised task/action. Without the host operation the skill
+is absent. A2A artifacts never carry the model bytes or create a new copy path.
 Queue delay, capacity refusal, disconnect and revocation remain visible without
 submitting a replacement effect. Delegation cannot change hosts, export private
 inputs, convert incompatible artifacts or expand the workflow's admitted
@@ -13215,12 +13263,12 @@ stay in 36/34.
 Title/ID: m28e-a2a-durable-jobs
 Milestone: 28e / m28e-a2a-durable-jobs
 Goal: Delegate and recover long-running selected jobs, including qualified mixed MLX/CUDA workflows, through a standard A2A peer.
-Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; accepted 28c MLX provider and approved mixed workflow when selected; shared gateway; pinned public A2A revision/binding and maintained SDK; selected NeMo Agent Toolkit native A2A client binding; a pinned vMLX model endpoint and named A2A-capable peer for the vMLX compatibility path; no MCP dependency.
+Inputs: 28 job/authority/control contracts; selected 28a/28b providers and 28b operation/request/outcome/evidence contract; accepted m28b-verified-weight-distribution only when its skill is advertised; accepted 28c MLX provider and approved mixed workflow when selected; shared gateway; pinned public A2A revision/binding and maintained SDK; selected NeMo Agent Toolkit native A2A client binding; a pinned vMLX model endpoint and named A2A-capable peer for the vMLX compatibility path; no MCP dependency.
 Changes:
-  - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency.
+  - tools/coh-rtc/src/{ir,lib}.rs + codegen — pin revision/binding, scoped Agent Card/skills and bounds for task creation, progress, streams, artifacts, reconnect cursors, retention and concurrency; advertise distribution only for an accepted underlying host operation.
   - apps/hive-gateway/src/a2a/ (planned) — canonical task-to-job ID correlation; map pending/running/input-required/terminal/cancel-requested/cancel-confirmed/uncertain states to the selected binding without inventing terminal success.
   - apps/hive-gateway/tests/{agent_protocol_controls,a2a_protocol,a2a_jobs}.rs (planned) — scoped task/artifact access, stream backpressure and cursor expiry, cancellation race, restart/reconnect and independently disabled endpoints.
-  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align the Python view of selected mixed jobs, stage lineage and verified outcomes with the same shared operation after A2A reconnect; do not add a Python-owned task journal or provider executor.
+  - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align the Python view of selected mixed jobs, stage lineage and verified outcomes, including transfer identity and destination receipt when selected, with the same shared operation after A2A reconnect; do not add a Python-owned task journal or provider executor.
   - docs/HOST_API.md + docs/HOST_TOOLS.md + matrix/catalog — named standard peer configuration, vMLX model-endpoint/peer setup and m28e-a2a-live with a separate vMLX composition record; disabled A2A leaves underlying jobs recoverable through existing authenticated surfaces.
 Commands:
   - cargo test --locked -p coh-rtc
@@ -13232,6 +13280,7 @@ Checks:
   - Pending cancellation never means confirmed termination; ambiguous native outcomes remain explicitly uncertain and accounted. Stale/expired cursors return a bounded resynchronisation path.
   - A PEFT task retains the same release operation/request identity, serving generation, verified-outcome verdict and evidence references after reconnect. Task completion alone cannot upgrade a failed comparison, recovered failure or rollback blocker to release success.
   - When a mixed workflow is advertised, an A2A-only peer delegates it across selected MLX and CUDA providers, disconnects during pending or running work, and reconnects to the same stage/job lineage and verified outcome. Wrong-host, over-budget, incompatible-artifact and unapproved-transfer requests refuse; no task state supplies a missing native outcome or authorises a new host.
+  - If weight distribution is advertised, an A2A-only peer delegates the selected winner to a compatible destination, disconnects during real byte movement and reconnects to the same transfer/job identity and destination receipt. Task completion cannot replace the full-file digest check; failed or uncertain transfer remains distinguishable from deployment, and a cross-protocol retry cannot copy the bytes a second time.
   - When vMLX-assisted A2A is claimed, the named peer uses a live pinned vMLX model session or explicitly selected remote endpoint, delegates a permitted CUDA/PEFT job through A2A, and reconnects to the same scoped task/job outcome after interruption. Record model endpoint, peer and provider identities separately; model text, tool calls and task completion do not establish a successful provider outcome.
   - Python observation of that shared operation agrees with the A2A task's underlying job identity, native outcome and evidence reference; protocol task completion cannot upgrade a Python pending or failed result.
   - All master/A2A flag combinations, cross-subject reads, unauthorised sub-actions, malformed/oversize traffic, slow consumers and revoked scopes fail safely; no push callbacks or second scheduler.
@@ -13513,6 +13562,7 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | --- | --- | --- |
 | User CUDA / `m28a-workloads-live`, `m28a-recovery-live` | Pi Queen + Jetson GPU; installed CLI/Python and Mac-originated SwarmUI | Useful reference and independent adaptation, each advertised execution lane, device/output verification, bounded cancel/lost-response recovery; native IDs and signed outcomes. |
 | PEFT lifecycle / `m28b-peft-live`, `m28b-serving-live` | Pi Queen + Jetson; installed training/import and real serving client | Both training and independent import, fixed held-out comparison, actual canary, rejected candidate, interrupted promotion and verified incumbent rollback. |
+| Weight distribution / `m28b-weight-distribution-live` when advertised | Mac source, Pi Queen reference path when selected, and each qualified NVIDIA or MLX destination profile | Real weight at least 1 GiB, exact source and destination SHA-256, observed host payload route/byte count, bounded Queen references, interruption/resume under one identity, and separate activation evidence. Reference-only tests do not close this row. |
 | Native Apple / `m28c-platform-live`, `m28c-actions-live`, `m28c-assistance-live` | Exact macOS 27/SDK/device/language/region; signed SwarmUI, actual Siri and Shortcuts | Availability/signing evidence, speech-driven admitted action and durable result, scoped assistance/proposal; unavailable/disabled Intelligence preserves manual operations. |
 | Local Apple compute / `m28c-mlx-live` | Same supported Mac; pinned MLX/Metal model/data/runtime | Observed local GPU inference/train/evaluate/serve/rollback and bounded cancellation/recovery; no implicit CPU/remote fallback. |
 | Ordinary protocols / `m28d-mcp-live`, `m28e-a2a-live` | Standard named/versioned MCP client and A2A peer; Linux-hosted gateway/provider path without Apple | MCP-only and A2A-only complete selected real work; scoped discovery, denial, cancel and reconnect resolve native outcomes. |

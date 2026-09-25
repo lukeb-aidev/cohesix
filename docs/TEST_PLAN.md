@@ -160,6 +160,21 @@ must project the same shared operation through its CLI/REST path, including
 pending/refused/failed states; focused Python tests cannot replace live MCP,
 A2A, MLX or CUDA evidence. JetPack observations apply only to a host profile
 that actually uses JetPack; another NVIDIA platform needs its own qualification.
+The planned `m28b-verified-weight-distribution` extension is a prerequisite
+before either protocol advertises model-weight distribution. Its separate
+`m28b-weight-distribution-live` case needs an actual model weight of at least
+1 GiB, frozen bake-off winner and source digest, admission before bytes move,
+observed host-to-host payload route and byte count, destination chunk checks,
+reassembly and independent full-file SHA-256. Record Pi/Queen reference bytes
+separately from payload bytes; publishing `coh-ref-c/v1` references through a
+real FUSE mount does not prove that the Pi carried the model. Interrupt the
+transfer and recover the same durable identity without duplicating verified
+chunks; reject wrong host/format, revoked export, insufficient space, corrupt
+chunk and cross-subject receipt access. The MCP-only and A2A-only live cases
+must each invoke and recover that accepted transfer independently if their
+catalogue advertises it. Check that MCP tool success, A2A task completion and
+Python status agree with the scoped destination receipt; none is a substitute
+for the native byte/digest proof or a separate serving activation canary.
 Before claiming vMLX compatibility, pin the installed app, model, MCP SDK,
 transport and peer versions. Run its configured MCP client against the real
 Cohesix server for discovery, admitted CUDA/PEFT work, refusal and recovery;
