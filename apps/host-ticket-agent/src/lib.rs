@@ -73,6 +73,7 @@ const HOST_TICKET_V1_ECHO_COMPAT_MAX_BYTES: u32 = 224;
 const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
 const HOST_TICKET_CURRENT_SCHEMA: &str = "host-ticket-current/v1";
 const HOST_TICKET_CURRENT_MAX_BYTES: usize = 256;
+const ROOT_V2_ADMISSION_WINDOW: u64 = 256;
 const HOST_TICKET_CORRELATION_DOMAIN: &[u8] = b"host-ticket-correlation/v1\0";
 
 /// Host ticket spec line (`/host/tickets/spec`).
@@ -596,6 +597,12 @@ impl HostTicketManifest {
         format!("{}{}", self.mount_root(), "/tickets/spec.snapshot")
     }
 
+    /// Root-owned admitted version-2 specification at one global sequence.
+    #[must_use]
+    pub fn admission_path(&self, sequence: u64) -> String {
+        format!("{}/tickets/admission/{sequence}", self.mount_root())
+    }
+
     /// `/host/tickets/status` path.
     #[must_use]
     pub fn status_path(&self) -> String {
@@ -1084,16 +1091,59 @@ where
         cursor.raw_next_spec_index = raw_specs.len();
     }
 
+    let mut ordered_specs = Vec::with_capacity(admitted_specs.len());
+    let mut expected_sequence = cursor.snapshot_last_admission_sequence;
     for (snapshot_index, spec) in admitted_specs.iter().enumerate() {
+        if spec.schema == HOST_TICKET_V2_SCHEMA {
+            let observed = spec
+                .admission_sequence
+                .ok_or_else(|| anyhow!("version-2 snapshot lacks admission_sequence"))?;
+            if expected_sequence != 0 && observed > expected_sequence.saturating_add(1) {
+                let missing = observed - expected_sequence - 1;
+                if missing >= ROOT_V2_ADMISSION_WINDOW {
+                    return Err(anyhow!(
+                        "version-2 snapshot retention gap exceeds Root's admitted identity window"
+                    ));
+                }
+                for sequence in expected_sequence + 1..observed {
+                    let path = manifest.admission_path(sequence);
+                    let lines = transport.read(session, path.as_str()).with_context(|| {
+                        format!(
+                            "version-2 snapshot retention gap: read admission_sequence {sequence}"
+                        )
+                    })?;
+                    let mut recovered = claim::parse_spec_lines_from(
+                        &lines,
+                        &manifest.accepted_request_schemas,
+                        manifest.max_line_bytes,
+                        claim::SpecSource::AdmittedSnapshot,
+                    )?;
+                    if recovered.len() != 1
+                        || recovered[0].schema != HOST_TICKET_V2_SCHEMA
+                        || recovered[0].admission_sequence != Some(sequence)
+                    {
+                        return Err(anyhow!(
+                            "version-2 snapshot retention gap: admission_sequence {sequence} is unavailable or mismatched"
+                        ));
+                    }
+                    ordered_specs.push((None, recovered.remove(0)));
+                }
+            }
+            expected_sequence = expected_sequence.max(observed);
+        }
+        ordered_specs.push((Some(snapshot_index), spec.clone()));
+    }
+
+    for (snapshot_index, spec) in &ordered_specs {
         if spec.schema == HOST_TICKET_V1_SCHEMA {
             // Version 1 retains its raw compatibility path and cannot be
             // mistaken for root-admitted Worker receipt work.
-            if snapshot_index < cursor.snapshot_next_spec_index {
+            if snapshot_index.is_some_and(|index| index < cursor.snapshot_next_spec_index) {
                 continue;
             }
             cursor.snapshot_next_spec_index = cursor
                 .snapshot_next_spec_index
-                .max(snapshot_index.saturating_add(1));
+                .max(snapshot_index.map_or(0, |index| index.saturating_add(1)));
             continue;
         }
         let admission_sequence = spec
@@ -1149,7 +1199,7 @@ where
         }
         cursor.snapshot_next_spec_index = cursor
             .snapshot_next_spec_index
-            .max(snapshot_index.saturating_add(1));
+            .max(snapshot_index.map_or(0, |index| index.saturating_add(1)));
         cursor.snapshot_last_admission_sequence = admission_sequence;
         if assigned && journal.compact_completed_through(admission_sequence)? {
             journal.save(journal_path)?;
@@ -2863,6 +2913,199 @@ mod tests {
             6u64.saturating_sub(persisted.snapshot_last_admission_sequence)
                 < V2_CURSOR_CHECKPOINT_STRIDE
         );
+    }
+
+    #[test]
+    fn v2_recovers_one_missing_admission_without_replaying_provider_effects() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let cursor = temp.path().join("cursor.json");
+        let journal = temp.path().join("journal.json");
+        let manifest = v2_manifest();
+        let (_, mut missing) = v2_specs();
+        missing.id = "ticket-missing".to_owned();
+        missing.idempotency_key = "idem-missing".to_owned();
+        missing.operation_id = Some("lease-missing".to_owned());
+        missing.admission_sequence = Some(6);
+        let mut observed = missing.clone();
+        observed.id = "ticket-observed".to_owned();
+        observed.idempotency_key = "idem-observed".to_owned();
+        observed.operation_id = Some("lease-observed".to_owned());
+        observed.admission_sequence = Some(7);
+        let mut files = v2_files(&manifest);
+        files.insert(
+            manifest.spec_snapshot_path(),
+            vec![serde_json::to_string(&observed).expect("observed")],
+        );
+        files.insert(
+            manifest.admission_path(6),
+            vec![serde_json::to_string(&missing).expect("missing")],
+        );
+        for spec in [&missing, &observed] {
+            files.insert(
+                host_ticket_current_path(spec).expect("current path"),
+                vec![format!(
+                    "HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission={}",
+                    spec.admission_sequence.expect("admission")
+                )],
+            );
+        }
+        save_cursor_state(
+            &cursor,
+            &CursorState {
+                snapshot_last_admission_sequence: 5,
+                ..CursorState::default()
+            },
+        )
+        .expect("cursor");
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+            fail_after_terminal_write_once: false,
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let mut executed = Vec::new();
+        let summary = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &ExecutorConfig::default(),
+            unix_time_ms_now(),
+            |_transport, _session, spec, _config| {
+                executed.push(spec.admission_sequence.expect("admission"));
+                Ok("committed".to_owned())
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("fresh execution must not reconcile")
+            },
+        )
+        .expect("recover missing admission");
+        assert_eq!(executed, [6, 7]);
+        assert_eq!(summary.succeeded, 2);
+        assert_eq!(
+            load_cursor_state(&cursor)
+                .expect("cursor")
+                .snapshot_last_admission_sequence
+                .max(
+                    wal::ExecutionJournal::load(&journal)
+                        .expect("journal")
+                        .completed_through_admission_sequence()
+                ),
+            7
+        );
+
+        let repeated = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &ExecutorConfig::default(),
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| {
+                unreachable!("a completed admission must not dispatch twice")
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("a completed admission must not reconcile twice")
+            },
+        )
+        .expect("replay completed snapshot");
+        assert_eq!(repeated, ProcessSummary::default());
+    }
+
+    #[test]
+    fn v2_missing_admission_without_exact_root_record_fails_closed() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let cursor = temp.path().join("cursor.json");
+        let journal = temp.path().join("journal.json");
+        let manifest = v2_manifest();
+        let (_, mut observed) = v2_specs();
+        observed.admission_sequence = Some(7);
+        let mut files = v2_files(&manifest);
+        files.insert(
+            manifest.spec_snapshot_path(),
+            vec![serde_json::to_string(&observed).expect("observed")],
+        );
+        save_cursor_state(
+            &cursor,
+            &CursorState {
+                snapshot_last_admission_sequence: 5,
+                ..CursorState::default()
+            },
+        )
+        .expect("cursor");
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+            fail_after_terminal_write_once: false,
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let error = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &ExecutorConfig::default(),
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| {
+                unreachable!("missing root record cannot dispatch")
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("missing root record cannot reconcile")
+            },
+        )
+        .expect_err("missing root record");
+        assert!(error.to_string().contains("unavailable or mismatched"));
+        assert!(transport.files[&manifest.status_path()].is_empty());
+
+        transport.files.insert(
+            manifest.admission_path(6),
+            vec![serde_json::to_string(&observed).expect("wrong admission")],
+        );
+        let mismatch = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &ExecutorConfig::default(),
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| {
+                unreachable!("mismatched root record cannot dispatch")
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("mismatched root record cannot reconcile")
+            },
+        )
+        .expect_err("mismatched root record");
+        assert!(mismatch.to_string().contains("unavailable or mismatched"));
+
+        observed.admission_sequence = Some(262);
+        transport.files.insert(
+            manifest.spec_snapshot_path(),
+            vec![serde_json::to_string(&observed).expect("distant admission")],
+        );
+        let over_window = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &ExecutorConfig::default(),
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| {
+                unreachable!("gap beyond Root window cannot dispatch")
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("gap beyond Root window cannot reconcile")
+            },
+        )
+        .expect_err("gap beyond Root window");
+        assert!(over_window
+            .to_string()
+            .contains("exceeds Root's admitted identity window"));
     }
 
     #[test]

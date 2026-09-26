@@ -79,6 +79,7 @@ const PROC_LEASE_BY_ID_PREFIX: &str = "/proc/lease/by-id/";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const HOST_TICKET_SPEC_SNAPSHOT_PATH: &str = "/host/tickets/spec.snapshot";
 const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
+const HOST_TICKET_ADMISSION_PREFIX: &str = "/host/tickets/admission/";
 const HOST_TICKET_STATUS_PATH: &str = "/host/tickets/status";
 const HOST_TICKET_DEADLETTER_PATH: &str = "/host/tickets/deadletter";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
@@ -4474,7 +4475,8 @@ async fn handle_echo_batch(
 }
 
 fn is_cacheable_read_path(path: &str) -> bool {
-    path.starts_with("/proc/") || path.starts_with("/host/") || path.starts_with("/gpu/")
+    (path.starts_with("/proc/") || path.starts_with("/host/") || path.starts_with("/gpu/"))
+        && !path.starts_with(HOST_TICKET_ADMISSION_PREFIX)
 }
 
 fn is_cacheable_list_path(path: &str) -> bool {
@@ -4551,7 +4553,10 @@ fn write_pool_kind(path: &str) -> PoolKind {
 }
 
 fn read_pool_kind(path: &str) -> PoolKind {
-    if path.starts_with(HOST_TICKET_CURRENT_PREFIX) || path.starts_with(PROC_LEASE_BY_ID_PREFIX) {
+    if path.starts_with(HOST_TICKET_CURRENT_PREFIX)
+        || path.starts_with(HOST_TICKET_ADMISSION_PREFIX)
+        || path.starts_with(PROC_LEASE_BY_ID_PREFIX)
+    {
         PoolKind::Control
     } else {
         PoolKind::Telemetry
@@ -4559,7 +4564,7 @@ fn read_pool_kind(path: &str) -> PoolKind {
 }
 
 fn is_execution_ingress_read_path(path: &str) -> bool {
-    path == HOST_TICKET_SPEC_SNAPSHOT_PATH
+    path == HOST_TICKET_SPEC_SNAPSHOT_PATH || path.starts_with(HOST_TICKET_ADMISSION_PREFIX)
 }
 
 fn is_batchable_telemetry_write_path(path: &str) -> bool {
@@ -5679,6 +5684,7 @@ mod tests {
             "/host/tickets/current/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
         assert!(!is_cacheable_read_path("/queen/ctl"));
+        assert!(!is_cacheable_read_path("/host/tickets/admission/42"));
     }
 
     #[test]
@@ -5882,6 +5888,11 @@ mod tests {
         assert!(is_execution_ingress_read_path(
             HOST_TICKET_SPEC_SNAPSHOT_PATH
         ));
+        assert!(is_execution_ingress_read_path("/host/tickets/admission/42"));
+        assert_eq!(
+            read_pool_kind("/host/tickets/admission/42"),
+            PoolKind::Control
+        );
         assert!(is_host_ticket_result_path(HOST_TICKET_STATUS_PATH));
         assert!(is_host_ticket_result_path(HOST_TICKET_DEADLETTER_PATH));
         assert!(!is_host_ticket_result_path("/host/tickets/spec"));

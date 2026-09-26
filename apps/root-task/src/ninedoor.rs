@@ -192,6 +192,7 @@ const HOST_TICKET_V2_REQUEST_SCHEMA: &str = "host-ticket/v2";
 const HOST_TICKET_V2_RESULT_SCHEMA: &str = "host-ticket-result/v2";
 const HOST_TICKET_CURRENT_SCHEMA: &str = "host-ticket-current/v1";
 const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
+const HOST_TICKET_ADMISSION_PREFIX: &str = "/host/tickets/admission/";
 const HOST_TICKET_MAX_ADMISSIONS: usize = 256;
 const HOST_TICKET_LOG_MAX_BYTES: usize = MAX_STREAM_LINES * DEFAULT_LINE_CAPACITY;
 const CAT_CHUNK_PREFIX: &str = "C1:";
@@ -2472,6 +2473,27 @@ impl NineDoorBridge {
         }
         if self.host.is_ticket_retention_path(path) {
             return self.host.retention_lines_into(output);
+        }
+        if let Some(sequence) = parse_host_ticket_admission_path(path)? {
+            if !self.is_queen() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            {
+                let admission = self
+                    .host
+                    .admissions
+                    .values()
+                    .find(|admission| admission.spec.admission_sequence == sequence)
+                    .ok_or(NineDoorBridgeError::InvalidPath)?;
+                let canonical = serialize_host_ticket(&admission.spec)?;
+                return lines_from_text_into(canonical.as_str(), output);
+            }
+            #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+            {
+                let _ = sequence;
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
         }
         if let Some(correlation_digest) = parse_host_ticket_current_path(path)? {
             #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
@@ -9620,6 +9642,22 @@ fn parse_host_ticket_current_path(path: &str) -> Result<Option<[u8; 32]>, NineDo
         .map_err(|_| NineDoorBridgeError::InvalidPath)
 }
 
+fn parse_host_ticket_admission_path(path: &str) -> Result<Option<u64>, NineDoorBridgeError> {
+    let Some(encoded) = path.strip_prefix(HOST_TICKET_ADMISSION_PREFIX) else {
+        return Ok(None);
+    };
+    if encoded.is_empty()
+        || encoded.starts_with('0')
+        || encoded.bytes().any(|byte| !byte.is_ascii_digit())
+    {
+        return Err(NineDoorBridgeError::InvalidPath);
+    }
+    encoded
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| NineDoorBridgeError::InvalidPath)
+}
+
 fn parse_proc_lease_by_id_path(path: &str) -> Result<Option<&str>, NineDoorBridgeError> {
     let Some(id) = path.strip_prefix(PROC_LEASE_BY_ID_PREFIX) else {
         return Ok(None);
@@ -11686,6 +11724,31 @@ mod tests {
             parse_host_ticket_current_path("/host/tickets/status").expect("unrelated path"),
             None
         );
+    }
+
+    #[test]
+    fn host_ticket_admission_path_accepts_only_canonical_positive_sequence() {
+        assert_eq!(
+            parse_host_ticket_admission_path("/host/tickets/admission/42").expect("sequence"),
+            Some(42)
+        );
+        assert_eq!(
+            parse_host_ticket_admission_path("/host/tickets/status").expect("unrelated"),
+            None
+        );
+        for path in [
+            "/host/tickets/admission/",
+            "/host/tickets/admission/0",
+            "/host/tickets/admission/01",
+            "/host/tickets/admission/-1",
+            "/host/tickets/admission/1/2",
+            "/host/tickets/admission/18446744073709551616",
+        ] {
+            assert!(matches!(
+                parse_host_ticket_admission_path(path),
+                Err(NineDoorBridgeError::InvalidPath)
+            ));
+        }
     }
 
     fn host_ticket_v2_result_fixture(

@@ -1197,6 +1197,7 @@ When host tickets are enabled, the namespace exposes:
 | `/host/tickets/status` | Append-only JSONL | Lifecycle receipts using the generated result schema (`host-ticket-result/v1`). |
 | `/host/tickets/deadletter` | Append-only JSONL | Terminal failure or expiry receipts using the result schema. |
 | `/host/tickets/spec.snapshot` | Read-only | Bounded snapshot of `spec`. |
+| `/host/tickets/admission/<sequence>` | Queen-only, read-only | One canonical Root-admitted `host-ticket/v2` specification by positive global admission sequence while its identity remains in Root's bounded admission window. Missing or retired identities return an error. |
 | `/host/tickets/status.snapshot` | Read-only | Bounded snapshot of `status`. |
 | `/host/tickets/deadletter.snapshot` | Read-only | Bounded snapshot of `deadletter`. |
 
@@ -1215,6 +1216,11 @@ must appear in the selected manifest's allowlists; the checked-in lifecycle is
 `id`, `idempotency_key`, and federation identifiers are at most 128 bytes and
 use only ASCII letters, digits, `.`, `-`, `_`, and `:`. The manifest bounds the
 full JSON line; the Secure9P `msize` remains an independent upper bound.
+The host ticket agent reads an exact admitted sequence if a moving
+`spec.snapshot` window skips it. The returned record is parsed with the same
+admitted-spec validation and is processed under the original identity and
+execution journal. Recovery is bounded by Root's 256-identity window; an
+unavailable or mismatched record refuses dispatch rather than skipping work.
 
 Federated requests and receipts add `source_hive`, `target_hive`, `relay_hop`,
 and `relay_correlation_id`. Source and target are pair-required, `relay_hop` is

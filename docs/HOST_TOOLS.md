@@ -1432,6 +1432,12 @@ cat /host/tickets/deadletter.snapshot
 Find the exact request ID and its terminal result. An admitted specification
 is not a completed status check. A failed or dead-lettered request is a result
 to investigate, not a reason to broaden provider permissions automatically.
+Under load, the agent can recover a sequence skipped by the moving
+`/host/tickets/spec.snapshot` window through Root's Queen-only
+`/host/tickets/admission/<sequence>` read. It validates the exact admitted
+record before using its existing journal. If Root has already retired that
+identity, the agent reports a retention gap and refuses to infer a result;
+inspect the original ticket and reconciled native state before further action.
 
 The ticket agent retains native operation observations under
 `--provider-evidence-root` (default `out/provider-evidence`, private mode 0700).

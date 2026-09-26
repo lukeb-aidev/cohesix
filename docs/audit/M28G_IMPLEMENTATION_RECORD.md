@@ -302,3 +302,39 @@ not prove Claude, Gemini or other vendor clients, cross-user isolation,
 admitted MCP/A2A work, installed Release B, useful native provider outcomes or
 release reliability. Those require the remaining installed-client and live
 acceptance matrix at one final source and package identity.
+
+## Full-plan pressure defect and bounded repair
+
+Discovery task: `m28g-release-b-qualification`. Restoration task:
+`m26e-host-worker-integration`, for the Root admission and host-agent
+delivery boundary found during the selected 26e pressure gate. The initial
+`e1fe34f8c` QEMU Test Plan passed Stages 01–04, including authenticated
+target integration. Stage 05 failed because `EX-2026-0024` expired on
+2026-09-25; the due-diligence subchecks for audit, advisories, attestation,
+secret scan and authority floor passed. This exception requires a new human
+decision and cannot be revived by a source or documentation edit.
+
+The canonical Mac HVF medium-pressure run at that same source accepted
+admissions but left 56 GPU and 57 LoRA Worker receipts pending beyond its
+15-second correlated terminal bound. The host ticket agent logged the first
+global snapshot gap at expected admission 404 versus observed 405 and then
+repeated the gap while newer admissions arrived. The 64-line moving Root
+snapshot can omit a sequence between reads; the agent previously could not
+recover it, so one lane stopped making progress. The failed run and raw logs
+remain in ignored `out/m28g-pressure-e1fe-r2/` in the disposable pressure
+checkout. Aggregate HTTP error rate and zero gateway reconnects do not
+override the failed Worker receipt gate.
+
+The repair adds a Queen-only exact admission read backed by Root's bounded
+256-identity admission window. The agent parses each missing record as a
+Root-admitted version-2 spec, checks the exact sequence and follows its
+existing execution journal and lane assignment. Unavailable, malformed,
+mismatched or 256 or more missing identities fail closed. The gateway sends
+recovery reads on the control lane without caching the record. Focused tests
+cover recovery, no provider replay, absent-record refusal, canonical path
+parsing and gateway routing. This source repair has no pressure, Pi or release
+acceptance until the selected plan is rerun against its committed identity.
+`coh`, `cohsh`, `tools/cohesix-py` and benchmark result formats consume the
+existing ticket identity and result paths; the new read is internal to the
+agent's recovery and adds no client action or success state. Their applicable
+regressions remain in the Test Plan.
