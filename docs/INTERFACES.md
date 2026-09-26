@@ -1197,7 +1197,7 @@ When host tickets are enabled, the namespace exposes:
 | `/host/tickets/status` | Append-only JSONL | Lifecycle receipts using the generated result schema (`host-ticket-result/v1`). |
 | `/host/tickets/deadletter` | Append-only JSONL | Terminal failure or expiry receipts using the result schema. |
 | `/host/tickets/spec.snapshot` | Read-only | Bounded snapshot of `spec`. |
-| `/host/tickets/admission/<sequence>` | Queen-only, read-only | One canonical Root-admitted `host-ticket/v2` specification by positive global admission sequence while its identity remains in Root's bounded admission window. Missing or retired identities return an error. |
+| `/host/tickets/admission/<sequence>` | Queen-only, read-only | One canonical Root-admitted `host-ticket/v2` specification by positive global admission sequence while its identity remains in Root's bounded admission window. Long records use the ordinary bounded CAT chunk framing, which clients reassemble before parsing. Missing or retired identities return an error. |
 | `/host/tickets/status.snapshot` | Read-only | Bounded snapshot of `status`. |
 | `/host/tickets/deadletter.snapshot` | Read-only | Bounded snapshot of `deadletter`. |
 

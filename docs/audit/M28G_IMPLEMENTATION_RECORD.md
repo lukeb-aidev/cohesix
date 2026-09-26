@@ -362,3 +362,16 @@ cases pass with the private reference deliberately present in the parent.
 Production token precedence is unchanged. The failed Stage 01 attempt is
 retained under `out/m28g/full-plan-d310-qemu/`; no later stage or release
 acceptance follows from it. Fresh full-plan and pressure runs remain required.
+
+The committed `2202a95a5` pressure rerun passed the exact QEMU image,
+authenticated control operation, fault injections and live Worker preflight,
+then failed the medium workload: 78 GPU and 55 LoRA operations lacked terminal
+Worker receipts. The first missing admission was sequence 163. The gateway
+recorded repeated `ERR CAT reason=quota detail=buffer-full` for the exact
+admission read, so the agent could not recover the gap and eventually exceeded
+Root's bounded identity window. The read had serialized the admitted JSON as
+one console line even when it exceeded the line cap. It now uses the existing
+bounded CAT chunk framing; the production-feature Root test reconstructs a
+real admitted spec from its frames and passes. The failed medium run remains
+under `out/m28g-pressure-2202/` in its disposable checkout. A new exact-source
+pressure result is required before this repair can be accepted.

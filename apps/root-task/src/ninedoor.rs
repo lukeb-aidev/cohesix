@@ -2486,8 +2486,7 @@ impl NineDoorBridge {
                     .values()
                     .find(|admission| admission.spec.admission_sequence == sequence)
                     .ok_or(NineDoorBridgeError::InvalidPath)?;
-                let canonical = serialize_host_ticket(&admission.spec)?;
-                return lines_from_text_into(canonical.as_str(), output);
+                return host_ticket_admission_lines_into(&admission.spec, output);
             }
             #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
             {
@@ -9604,6 +9603,14 @@ fn serialize_host_ticket<T: Serialize>(value: &T) -> Result<String, NineDoorBrid
     serde_json::to_string(value).map_err(|_| NineDoorBridgeError::InvalidPayload)
 }
 
+fn host_ticket_admission_lines_into(
+    admitted: &HostTicketV2AdmittedSpec,
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    let canonical = serialize_host_ticket(admitted)?;
+    cat_lines_from_text_into(canonical.as_str(), output)
+}
+
 fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
     let digest = Sha256::digest(bytes);
     let mut output = [0u8; 32];
@@ -11749,6 +11756,32 @@ mod tests {
                 Err(NineDoorBridgeError::InvalidPath)
             ));
         }
+    }
+
+    #[test]
+    fn host_ticket_admission_read_chunks_an_admitted_spec() {
+        let admitted = host_ticket_v2_admitted_fixture();
+        let canonical = serialize_host_ticket(&admitted).expect("canonical admitted spec");
+        assert!(canonical.len() > DEFAULT_LINE_CAPACITY);
+
+        let mut output: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        host_ticket_admission_lines_into(&admitted, &mut output).expect("bounded CAT projection");
+        assert!(output.len() > 1);
+
+        let expected_digest = hex::encode(sha256_bytes(canonical.as_bytes()));
+        let mut reconstructed = String::new();
+        for (sequence, wire) in output.iter().enumerate() {
+            assert!(wire.len() <= DEFAULT_LINE_CAPACITY);
+            let fields = wire.splitn(5, ':').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 5);
+            assert_eq!(fields[0], "C1");
+            assert_eq!(fields[1], format!("{sequence:04x}"));
+            assert_eq!(fields[2], format!("{:04x}", output.len()));
+            assert_eq!(fields[3], expected_digest);
+            reconstructed.push_str(fields[4]);
+        }
+        assert_eq!(reconstructed, canonical);
     }
 
     fn host_ticket_v2_result_fixture(
