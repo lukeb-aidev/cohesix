@@ -1001,3 +1001,17 @@ trigger_paths = ["scripts/release_bundle.sh", "scripts/release_inputs.py", "scri
 expected_evidence = ["macos-bundle-result", "linux-bundle-result", "pi4-image-installation-result", "release-qualification-result"]
 test_policy = "artifact-count"
 manual = false
+
+[[action]]
+id = "release.bundle-validation-b"
+stage = 0
+tier = "release"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Require the three exact Release B archives plus independently trusted Mac and Linux native installer readback."
+command = 'python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --macos-installer-result "${TP_RELEASE_MACOS_INSTALLER_RESULT:?}" --linux-installer-result "${TP_RELEASE_LINUX_INSTALLER_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"'
+timeout_seconds = 7200
+trigger_paths = ["scripts/release_bundle.sh", "scripts/release_inputs.py", "scripts/release_qualify.py", "scripts/install/qualify_native_install.py", "configs/implementation_surfaces.toml", "releases/**"]
+expected_evidence = ["macos-bundle-result", "linux-bundle-result", "pi4-image-installation-result", "macos-native-installer-result", "linux-native-installer-result", "release-b-qualification-result"]
+test_policy = "artifact-count"
+manual = false

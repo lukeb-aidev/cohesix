@@ -264,6 +264,10 @@ effective protocol modes and the disabled master override. Then apply the
 complete selected QEMU, physical Pi and conditional release gates at the
 assembled source/image identities. A missing installer, host profile, live
 result or independent clean-install walkthrough blocks M28g completion.
+`release_qualify.py installer` checks independently selected publisher trust,
+package-manager receipt and installed byte readback on the current host; its
+PASS is one input to the Mac or Linux installer row, not the graphical launch,
+lifecycle, independent walkthrough or assembled release verdict.
 
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
@@ -1382,6 +1386,7 @@ from that catalog.
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
+| `release.bundle-validation-b` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --macos-installer-result "${TP_RELEASE_MACOS_INSTALLER_RESULT:?}" --linux-installer-result "${TP_RELEASE_LINUX_INSTALLER_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
 <!-- test-plan-catalog:end -->
 
 `performance.gateway-telemetry` may be selected alongside either target, but
@@ -3405,6 +3410,11 @@ on Mac and the selected Linux ARM64 builder and assemble candidates under
 `releases/`. The catalogued `release.bundle-validation` action is the strict
 exact-archive verifier when the three installation records name the distributed
 archives.
+For 1.2.0-beta, use `release.bundle-validation-b` with both native installer
+readback results as well. The archive verifier rejects Release B when either
+installer result is absent or names different source, archive or package bytes.
+This still leaves the separate GUI, lifecycle, live journey, pressure,
+repeatability, hardware and review gates to be checked before release approval.
 
 Before choosing repeat tests, compare the candidate with the already qualified
 artifacts and record both identities, the changed files/metadata, the comparison

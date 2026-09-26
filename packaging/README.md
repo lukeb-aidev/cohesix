@@ -67,6 +67,27 @@ enrolled public key. Builder output remains **unqualified** until exact native
 installation, byte readback, lifecycle and graphical launch checks pass on the
 advertised host versions. Portable archives remain separate installations.
 
+After installing the exact packages on a clean supported host, run the
+installer qualifier against the same independently selected reference. On
+Linux, select an externally enrolled public keyring and the expected full
+publisher fingerprint; neither may come from the package being checked:
+
+```sh
+export COHESIX_DEB_TRUSTED_KEYRING='<absolute trusted public keyring path>'
+export COHESIX_DEB_PUBLISHER_FINGERPRINT='<expected full fingerprint>'
+python3 scripts/release_qualify.py installer \
+  --reference-config "$RELEASE_B_REFERENCE" \
+  --installer-manifest "$RELEASE_B_EVIDENCE/installers/ubuntu-arm64/installers.json" \
+  --output "$RELEASE_B_EVIDENCE/installers/ubuntu-arm64/result.json"
+```
+
+Use the same command with the Mac installer manifest and result paths on
+macOS; the Mac verifier checks the Developer ID Installer signature, stapled
+package, receipt and installed app signature. Both results cover publisher
+trust and installed-file readback only. Retain separate Finder, Spotlight,
+Dock or GNOME launch, clean-install, migration, upgrade, rollback and removal
+reports for the M28g acceptance matrix.
+
 The compiler emits `contract.deployment_profiles` in
 `configs/generated/provider_registry.json`. The selected profile owns every
 relative artifact path, format, architecture, version, schema and credential

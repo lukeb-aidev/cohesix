@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Verify release archive integrity, SD geometry and complete installation evidence.
+# Purpose: Verify release archive integrity, SD geometry and native installer qualification boundaries.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
@@ -18,6 +18,38 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import release_qualify as qualify  # noqa: E402
+
+
+def test_installer_result_can_share_signed_package_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The package result names exact bytes without treating them as logs."""
+    sys.path.insert(0, str(ROOT / "scripts/install"))
+    import qualify_native_install as native  # noqa: E402
+
+    package_dir = tmp_path / "installers"
+    package_dir.mkdir()
+    (package_dir / "installer.pkg").write_bytes(b"signed package fixture")
+    reference = tmp_path / "reference.json"
+    reference.write_text("{}")
+    manifest = package_dir / "installers.json"
+    manifest.write_text("{}")
+    monkeypatch.setattr(native, "qualify", lambda *_: {
+        "kind": "installer", "host": "macos", "checks": ["publisher"],
+        "proof_limit": "fixture qualifier result",
+    })
+    output = package_dir / "result.json"
+    monkeypatch.setattr(sys, "argv", [
+        "release_qualify.py", "installer", "--reference-config", str(reference),
+        "--installer-manifest", str(manifest), "--output", str(output),
+    ])
+    assert qualify.main() == 0
+    result = json.loads(output.read_text())
+    assert result["claim"] == "native-installer-publisher-and-installed-readback"
+    assert result["logs"] == []
+    assert result["replaces_m26e_acceptance"] is False
+    assert qualify.read_result(output, "installer")["host"] == "macos"
+    assert qualify.main() == 1
 
 
 def sd_fixture(path: Path) -> dict:
@@ -340,3 +372,68 @@ def test_final_gate_rejects_stale_source(release_results, monkeypatch) -> None:
     monkeypatch.setattr(qualify.subprocess, "check_output", lambda *a, **k: "f" * 40)
     with pytest.raises(ValueError, match="current selected source"):
         qualify.verify_release(release_results)
+
+
+def test_release_b_requires_exact_both_native_installers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Portable archive receipts cannot silently replace native install proof."""
+    version, commit = "1.2.0-beta", "b" * 40
+    inventory = tmp_path / "configs/generated/implementation_surface_inventory.json"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text(json.dumps({"release": {"version": version}}))
+    monkeypatch.setattr(qualify, "ROOT", tmp_path)
+    monkeypatch.setattr(qualify.subprocess, "check_output", lambda *a, **k: commit)
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    args = argparse.Namespace(releases_dir=releases)
+    archives = {}
+    for host, suffix in (("macos", "MacOS"), ("linux", "linux"),
+                         ("pi4", "Pi4")):
+        archive = releases / f"Cohesix-{version}-{suffix}.tar.gz"
+        archive.write_bytes(f"{host} exact archive".encode())
+        archives[host] = archive
+        receipt = {"schema": qualify.SCHEMA, "kind": host, "status": "pass",
+                   "bundle": f"Cohesix-{version}-{suffix}", "version": version,
+                   "source_commit": commit, "archive": qualify.file_record(archive),
+                   "checks": qualify.PI_CHECKS if host == "pi4" else qualify.HOST_CHECKS,
+                   "logs": []}
+        receipt["result_sha256"] = hashlib.sha256(
+            qualify.evidence.canonical_bytes(receipt)
+        ).hexdigest()
+        path = tmp_path / f"{host}.json"
+        path.write_text(json.dumps(receipt))
+        setattr(args, f"{host}_result", path)
+    with pytest.raises(ValueError, match="requires macos native installer"):
+        qualify.verify_release(args)
+
+    for host, checks in (("macos", ["publisher", "notarization", "receipt",
+                                    "installed-readback", "app-signature"]),
+                         ("linux", ["publisher", "package-control", "dpkg-receipt",
+                                    "installed-readback"])):
+        directory = tmp_path / f"{host}-installer"
+        directory.mkdir()
+        count = 1 if host == "macos" else 2
+        packages = []
+        for index in range(count):
+            package = directory / f"package-{index}.pkg"
+            package.write_bytes(f"{host} package {index}".encode())
+            packages.append({"path": package.name, "sha256": qualify.digest(package)})
+        result = {"schema": qualify.SCHEMA, "kind": "installer", "status": "pass",
+                  "host": host, "version": version, "source_commit": commit,
+                  "archive_sha256": qualify.digest(archives[host]),
+                  "claim": "native-installer-publisher-and-installed-readback",
+                  "checks": checks, "packages": packages, "logs": []}
+        result["result_sha256"] = hashlib.sha256(
+            qualify.evidence.canonical_bytes(result)
+        ).hexdigest()
+        path = directory / "result.json"
+        path.write_text(json.dumps(result))
+        setattr(args, f"{host}_installer_result", path)
+    record = qualify.verify_release(args)
+    assert record["checks"] == ["macos", "linux", "pi4",
+                                "macos-installer", "linux-installer"]
+    assert len(record["qualifications"]) == 5
+    (tmp_path / "linux-installer/package-1.pkg").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="changed after qualification"):
+        qualify.verify_release(args)

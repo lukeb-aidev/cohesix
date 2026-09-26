@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Qualify extracted native bundles and the distributed Pi SD image before publication.
+# Purpose: Qualify extracted bundles, installed native packages and the distributed Pi SD image before publication.
 # Copyright 2026 Lukas Bower
 
-"""Record installation smoke evidence; never substitute it for M26e acceptance."""
+"""Record exact installation checks without promoting them to target acceptance."""
 
 from __future__ import annotations
 
@@ -513,7 +513,7 @@ def qualify_pi(args: argparse.Namespace, record: dict[str, Any]) -> None:
 
 
 def verify_release(args: argparse.Namespace) -> dict[str, Any]:
-    """Require all three installation results for the exact archives being shipped."""
+    """Bind portable archives and, for Release B, both native installed packages."""
     results = []
     qualifications = []
     for kind, path in (
@@ -550,9 +550,41 @@ def verify_release(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "qualified release differs from the current selected source/version"
         )
+    checks = ["macos", "linux", "pi4"]
+    if results[0]["version"] == "1.2.0-beta":
+        for host, expected_checks in (
+            ("macos", ["publisher", "notarization", "receipt",
+                       "installed-readback", "app-signature"]),
+            ("linux", ["publisher", "package-control", "dpkg-receipt",
+                       "installed-readback"]),
+        ):
+            path = getattr(args, f"{host}_installer_result", None)
+            if path is None:
+                raise ValueError(f"Release B requires {host} native installer result")
+            row = read_result(path, "installer")
+            archive = next(result for result in results if result["bundle"].endswith(
+                "-MacOS" if host == "macos" else "-linux"))
+            if (row.get("host") != host
+                    or row.get("version") != archive["version"]
+                    or row.get("source_commit") != archive["source_commit"]
+                    or row.get("archive_sha256") != archive["archive"]["sha256"]
+                    or row.get("checks") != expected_checks
+                    or row.get("claim") != "native-installer-publisher-and-installed-readback"):
+                raise ValueError(f"{host} native installer differs from the release")
+            packages = row.get("packages")
+            if not isinstance(packages, list) or len(packages) != (1 if host == "macos" else 2):
+                raise ValueError(f"{host} native installer package inventory is invalid")
+            for package in packages:
+                if not isinstance(package, dict) or set(package) != {"path", "sha256"}:
+                    raise ValueError(f"{host} native installer package record is invalid")
+                selected = evidence.safe_relative_file(path.parent, package["path"])
+                if digest(selected) != package["sha256"]:
+                    raise ValueError(f"{host} native installer changed after qualification")
+            qualifications.append({"kind": f"{host}-installer", **file_record(path)})
+            checks.append(f"{host}-installer")
     return {
         "kind": "release",
-        "checks": ["macos", "linux", "pi4"],
+        "checks": checks,
         "version": results[0]["version"],
         "source_commit": results[0]["source_commit"],
         **({"publication_commit": current,
@@ -585,18 +617,30 @@ def main() -> int:
     verify = sub.add_parser("verify")
     for host in ("macos", "linux", "pi4"):
         verify.add_argument(f"--{host}-result", type=Path, required=True)
+    for host in ("macos", "linux"):
+        verify.add_argument(f"--{host}-installer-result", type=Path)
     verify.add_argument("--releases-dir", type=Path, required=True)
     verify.add_argument("--output", type=Path, required=True)
+    installer = sub.add_parser("installer")
+    installer.add_argument("--reference-config", type=Path, required=True)
+    installer.add_argument("--installer-manifest", type=Path, required=True)
+    installer.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if getattr(args, "port", 31337) not in range(1, 65534):
             raise ValueError("port must be between 1 and 65533")
-        if args.output.exists() or (
-            args.output.parent.exists() and any(args.output.parent.iterdir())
-        ):
+        if args.output.exists() or args.output.is_symlink():
+            raise ValueError("qualification output already exists")
+        if (args.command != "installer" and args.output.parent.exists()
+                and any(args.output.parent.iterdir())):
             raise ValueError("use a fresh empty qualification output directory")
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        if args.command == "verify":
+        if args.command == "installer":
+            sys.path.insert(0, str(ROOT / "scripts/install"))
+            from qualify_native_install import qualify
+
+            record = qualify(args.reference_config, args.installer_manifest)
+        elif args.command == "verify":
             record = verify_release(args)
         else:
             args.bundle = args.bundle.resolve(strict=True)
@@ -611,9 +655,10 @@ def main() -> int:
             schema=SCHEMA,
             status="pass",
             recorded_at_ns=time.time_ns(),
-            claim="release-installation-smoke",
+            claim=("native-installer-publisher-and-installed-readback"
+                   if args.command == "installer" else "release-installation-smoke"),
             replaces_m26e_acceptance=False,
-            logs=[
+            logs=[] if args.command == "installer" else [
                 file_record(path)
                 for path in sorted(args.output.parent.iterdir())
                 if path.is_file()
@@ -629,6 +674,7 @@ def main() -> int:
         ValueError,
         KeyError,
         TypeError,
+        tarfile.TarError,
         evidence.EvidenceError,
         subprocess.SubprocessError,
     ) as error:

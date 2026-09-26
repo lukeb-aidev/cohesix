@@ -4,8 +4,8 @@
 
 # M28g implementation record — in progress
 
-This record describes an unqualified 1.2.0-beta source candidate based on
-`b4c6b3f53b7e417047f3e6ac7074165c30f48d12`. It has no sealed final source
+This record describes an unqualified 1.2.0-beta source candidate rebased onto
+GitHub `main` at `2d8ce6a9f5627b0bb16ffd6c4c9b0619f1d2c749`. It has no sealed final source
 commit, native installer artifact, assembled target identity or Release B
 acceptance. The 1.1.0-beta release record remains at its original scope.
 
@@ -59,13 +59,14 @@ case, physical Pi result, integrated Test Plan run or release-owner approval.
 
 ## Current validation and blockers
 
-The focused Python installer, release bundle, release qualification and
-package tests passed 74 cases; generated consistency, Rust formatting,
-workspace check, audit, advisory check and Test Plan listing passed. Focused
+The focused Python installer, release bundle, release qualification, package
+and provider-matrix tests passed 96 cases after rebasing; generated consistency,
+Test Plan catalog, Rust formatting, workspace check and tests, audit and
+advisory checks passed on the rebased candidate. Focused
 `coh` doctor and SwarmUI help tests passed after correcting stale selected
-contract assertions. `cargo test --workspace` passed after those repairs;
-its full output is retained in ignored `out/m28g/cargo-test.log` for this
-worktree state. No exact target or installed-package claim follows from it.
+contract assertions. The rebased Rust suite output is retained in ignored
+`out/m28g/cargo-test-rebased.log`. No exact target or installed-package claim
+follows from it.
 
 The full Clippy baseline fails on untouched source under the installed Rust
 toolchain, including `standing_ledger.rs` large enum, `gpu-bridge-host`
@@ -82,8 +83,11 @@ is a clean signed `.deb` installation. No Ubuntu 26.04 ARM64 installation host
 has been selected. The selected Python and NeMo wheels are source candidates;
 there is no final exact 1.2 archive or installed cross-client parity report.
 
-The source candidate is also incomplete: `release_qualify.py` has no
-`installer` command, and the conformance matrix has no
+The source candidate now has an `installer` qualifier for independently trusted
+publisher signatures, package-manager receipts and installed byte readback. It
+has not run on a signed package or installed host and does not cover GUI launch
+or package lifecycle. The Release B archive verifier now requires both native
+installer results at the same source and archive hashes. The conformance matrix still has no
 `m28g-adoption-live` or `m28g-integration-live` case runner. The required
 capability-by-capability installed-client parity matrix and frozen numeric
 adoption, quality, recovery and control-latency budgets have not been written.
