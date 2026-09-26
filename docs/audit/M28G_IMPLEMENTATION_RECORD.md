@@ -351,3 +351,14 @@ each child, preserving production resolver precedence. All six focused TCP
 script cases passed with the private plan token reference deliberately set
 in the parent environment. Stage 01 and downstream gates still require a
 fresh run at the resulting committed source.
+
+The next full-plan attempt at `d3100e7cb` advanced through the same Stage 01
+Rust and target-build actions. Its Python action completed 2,915 tests and
+116 subtests, with two failing REST harness argument tests. Those tests cleared
+the inline console token variables but inherited the plan's private
+`COH_AUTH_TOKEN_REF`, so their expected empty token assertion was false. The
+tests now also clear that reference in their fixture environment; both focused
+cases pass with the private reference deliberately present in the parent.
+Production token precedence is unchanged. The failed Stage 01 attempt is
+retained under `out/m28g/full-plan-d310-qemu/`; no later stage or release
+acceptance follows from it. Fresh full-plan and pressure runs remain required.

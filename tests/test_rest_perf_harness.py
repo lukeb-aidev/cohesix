@@ -4457,7 +4457,7 @@ def test_parse_args_rejects_mixed_or_missing_target_evidence() -> None:
 def test_parse_args_external_gateway_does_not_require_console_secret(
     monkeypatch,
 ) -> None:
-    for name in ("COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
+    for name in ("COH_AUTH_TOKEN_REF", "COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     original_argv = list(sys.argv)
     try:
@@ -4498,7 +4498,7 @@ def test_parse_args_managed_gateway_mock_needs_no_console_secret(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("HIVE_GATEWAY_MOCK", raising=False)
-    for name in ("COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
+    for name in ("COH_AUTH_TOKEN_REF", "COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     original_argv = list(sys.argv)
     try:
