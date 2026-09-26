@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 from datetime import timedelta
 import importlib.metadata
 from importlib import resources
+import io
 import json
 import os
 from pathlib import Path
@@ -348,9 +350,54 @@ def run_evaluation(mode: str, config: dict[str, str], model: dict[str, str],
             cwd=directory, env=environment, stdout=output, stderr=subprocess.STDOUT,
             timeout=600, check=False,
         )
-    return {"state": "evaluation_exited" if completed.returncode == 0 else "evaluation_failed",
+    profile_complete = (completed.returncode == 0
+                        and native_evaluation_complete(directory, len(rows)))
+    return {"state": "evaluation_exited" if profile_complete else "evaluation_failed",
             "exit_code": completed.returncode, "trace": str(trace),
-            "output_directory": str(directory), "provider_verified": False}
+            "output_directory": str(directory), "native_profile_complete": profile_complete,
+            "provider_verified": False}
+
+
+def native_evaluation_complete(directory: Path, expected_rows: int) -> bool:
+    """Require each native profiler example to contain a real model response."""
+    profile = directory / ".tmp/nat/examples/default/standardized_data_all.csv"
+    try:
+        descriptor = os.open(profile, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as stream:
+            state = os.fstat(stream.fileno())
+            if not stat.S_ISREG(state.st_mode) or state.st_size > 1_048_576:
+                return False
+            raw = stream.read(1_048_577)
+        if len(raw) > 1_048_576:
+            return False
+        reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
+        if not {"example_number", "event_type", "llm_text_output"} <= set(
+                reader.fieldnames or ()):
+            return False
+        events: dict[str, list[dict[str, str | None]]] = {}
+        event_count = 0
+        for row in reader:
+            number = row.get("example_number")
+            if number is None or not number.isdecimal():
+                return False
+            events.setdefault(number, []).append(row)
+            event_count += 1
+            if event_count > 4096:
+                return False
+    except (OSError, UnicodeError, csv.Error, ValueError):
+        return False
+    if set(events) != {str(index) for index in range(expected_rows)}:
+        return False
+    for rows in events.values():
+        types = [row["event_type"] for row in rows]
+        if (types.count("WORKFLOW_START") != 1
+                or types.count("WORKFLOW_END") != 1
+                or "LLM_START" not in types
+                or not any(row["event_type"] == "LLM_END"
+                           and (row["llm_text_output"] or "").strip()
+                           for row in rows)):
+            return False
+    return True
 
 
 def main() -> None:
@@ -412,6 +459,8 @@ def main() -> None:
         if args.output:
             _write_summary(args.output, summary)
         print(json.dumps(summary, sort_keys=True))
+        if args.mode.startswith("eval-") and not summary["native_profile_complete"]:
+            parser.exit(2, "cohesix-nemo: native evaluation incomplete; inspect private profile\n")
     except Exception as exc:
         parser.exit(2, f"cohesix-nemo: {type(exc).__name__}; inspect private evidence and configuration\n")
 

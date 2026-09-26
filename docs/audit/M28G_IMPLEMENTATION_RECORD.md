@@ -175,3 +175,55 @@ standing authority is absent; it continues to refuse job admission. A focused
 gateway integration test covers both protocol projections. This repair needs a
 new exact-source image and host binary for the replacement burn-in; the earlier
 boot is diagnostic evidence for its own source only.
+
+## Direct host compute alongside the Pi diagnostic
+
+At source `05e1facdd008240a12dfe133c033912dcc87d5f5`, the selected
+`1.2.0b0` NeMo kit wheel was installed without editable source on the Jetson
+Orin Nano (`sm_87`, driver 595.78). Its wheel SHA-256 is
+`91535a61c428021fe0167087fa8a6e7a5cfddd857ee56bb225364b4bd293f7e2`;
+the pinned dependency lock and `pip check` passed. The maintained CUDA
+reference runner built the native helper and bridge from that source and
+passed real vector addition, matrix multiplication, wrong-device, over-budget,
+stale-inventory, timeout and cancel cases. The helper SHA-256 is
+`495eb3cd0a8c0591a1c03e59dd32ef3aff2adbf8a29c1ad3c0033a930722271d`;
+the bridge SHA-256 is
+`72780ce2aff934dbef6eead8ab78f10d4c2b5fe8de94bbb65b4ea5a3cd5de6f4`.
+The maintained summary explicitly marks this seven-case reference result
+non-authoritative, without a Worker receipt or admitted workload transport.
+
+On the Mac's Apple M4, pinned MLX 0.32.2 ran a real Metal matrix product and
+matched every element against an independent NumPy result. The 1.5B Qwen2.5
+four-bit model at revision `8b403126fc14f14cfc99bb4cfa72ecbc129ea677`
+was copied to ordinary local files and bound by model-tree SHA-256
+`c0a2253c519413b712780076c9188676bd006859bfa55bf3acb5818cd3274927`.
+The bounded Cohesix MLX service generated the expected one-character answer
+to a fixed arithmetic question on Apple M4 Metal, with output SHA-256
+`4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a`
+and observed 967,437,720 bytes peak Metal allocation.
+
+The Jetson's NeMo Toolkit 1.9.0 then ran its native direct evaluation against
+the same Mac model through a protected reverse SSH tunnel and MLX-LM's local
+OpenAI-compatible server. Its native profiler recorded `WORKFLOW_START`,
+`LLM_START`, `LLM_END` and `WORKFLOW_END`, no error, and the expected answer;
+the trace SHA-256 is
+`e1fc9224fa45f46d469646f00404873c7052d3c1b70341b57d25aad1686e3dca`.
+An earlier diagnostic request to Cohesix's deliberately bounded MLX service
+was refused because NeMo sent system and user messages while omitting explicit
+token and temperature fields; its native eval process still exited zero, but
+the profiler had no `LLM_END`. That attempt is failed compatibility evidence,
+not a successful model evaluation. The second server supports NeMo's request
+shape for this direct host check. Neither model text nor the CUDA reference
+result is an admitted Cohesix job, signed provider outcome or installed-release
+acceptance. Private redacted observations are retained under
+`out/burn-in/20260926-m28g-60min-mcp-a2a/` on the Mac and
+`/mnt/nvme/cohesix-dev/m28g-burnin-05e/` on the Jetson.
+
+Under `m28g-host-clients-as-built-alignment`, the NeMo kit now refuses a
+zero-exit native evaluation when a fixed dataset row has no completed model
+response in Toolkit's bounded profiler CSV. The CLI preserves the private
+trace and reports `evaluation_failed` with a nonzero process exit; it does not
+interpret model text as a provider result. The focused NeMo kit and release
+wheel tests passed 12 cases and `scripts/check-generated.sh` passed for this
+source repair. A fresh installed-wheel run remains required to verify the
+changed client bytes on the Jetson.

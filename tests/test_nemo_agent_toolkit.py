@@ -168,13 +168,21 @@ def test_native_evaluation_uses_private_fixed_dataset(tmp_path: Path,
     calls: list[list[str]] = []
     monkeypatch.setattr(cli, "runtime_env", lambda *_: {})
 
-    def completed(argv: list[str], **_kwargs: object) -> SimpleNamespace:
+    def completed(argv: list[str], **kwargs: object) -> SimpleNamespace:
         calls.append(argv)
+        profile = Path(kwargs["cwd"]) / ".tmp/nat/examples/default/standardized_data_all.csv"
+        profile.parent.mkdir(parents=True)
+        profile.write_text("example_number,event_type,llm_text_output\n"
+                           "0,WORKFLOW_START,\n"
+                           "0,LLM_START,\n"
+                           "0,LLM_END,completed\n"
+                           "0,WORKFLOW_END,\n")
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", completed)
     report = cli.run_evaluation("eval-a2a", {"subject": "alice"}, {}, data, directory)
     assert report["state"] == "evaluation_exited"
+    assert report["native_profile_complete"] is True
     assert "a2a-agent.yaml" in calls[0][3]
     assert calls[0][-1] == "alice"
     assert directory.stat().st_mode & 0o077 == 0
@@ -185,6 +193,31 @@ def test_native_evaluation_uses_private_fixed_dataset(tmp_path: Path,
     with pytest.raises(ValueError):
         cli.run_evaluation("eval-mcp", {"subject": "alice"}, {}, bad, tmp_path / "bad-eval")
     assert not (tmp_path / "bad-eval").exists()
+
+
+def test_native_eval_rejects_zero_exit_without_model_result(tmp_path: Path,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """Toolkit process completion cannot hide a failed model call."""
+    data = private_file(tmp_path, "dataset.json", [
+        {"id": "case-1", "question": "Inspect original task", "answer": "completed"}
+    ])
+    monkeypatch.setattr(cli, "runtime_env", lambda *_: {})
+
+    def failed_model(_argv: list[str], **kwargs: object) -> SimpleNamespace:
+        profile = Path(kwargs["cwd"]) / ".tmp/nat/examples/default/standardized_data_all.csv"
+        profile.parent.mkdir(parents=True)
+        profile.write_text("example_number,event_type,llm_text_output\n"
+                           "0,WORKFLOW_START,\n"
+                           "0,LLM_START,\n"
+                           "0,WORKFLOW_END,\n")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", failed_model)
+    report = cli.run_evaluation("eval-direct", {"subject": "alice"}, {},
+                                data, tmp_path / "failed-eval")
+    assert report["state"] == "evaluation_failed"
+    assert report["exit_code"] == 0
+    assert report["native_profile_complete"] is False
 
 
 def test_profiler_requires_native_completion_and_keeps_tool_identity(tmp_path: Path) -> None:

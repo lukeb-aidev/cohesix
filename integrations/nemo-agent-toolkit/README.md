@@ -157,7 +157,10 @@ must be unused and private; it retains NeMo's native
 `.tmp/nat/examples/default/standardized_data_all.csv`, profiler traces and a
 private `nat-eval.log`. Inspect `WORKFLOW_START/END` and `TOOL_START/END` in
 the CSV and independently check the task ID and signed result. A zero eval
-exit code is insufficient if no dataset row or tool call ran. Use the fixed
+exit code is insufficient if no dataset row or tool call ran. The kit also
+requires a completed native model response for every dataset row and exits
+with an incomplete-evaluation error when Toolkit returns zero without one.
+This check does not verify the answer or any provider effect. Use the fixed
 quality and latency budgets in [BENCHMARKS.md](../../docs/BENCHMARKS.md#nemo-agent-toolkit-190-comparison-m28f).
 
 For two subjects, run two isolated Toolkit processes and repeat both protocol
