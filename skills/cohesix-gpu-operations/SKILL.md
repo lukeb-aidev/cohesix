@@ -30,7 +30,14 @@ For non-public reads, the operator must securely load
 scope and finite quota. These do not authorize writes. Start by inspecting the
 Queen identity, gateway ownership and read-only state
 using [host tools](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_TOOLS.md). Separate the controller, QEMU/Pi Queen
-and external executor. A Mac controller need not have a GPU or CUDA installed.
+and external executor. Run the matching `coh` host tools on macOS or Linux;
+neither controller needs local CUDA when it submits to a remote executor.
+The native CUDA executor itself must be a supported Linux AArch64 NVIDIA host.
+Inspect its actual OS, architecture, device, driver, CUDA runtime and selected
+provider before submission. If any requirement is missing, report the specific
+incompatibility and offer the [AI host setup](../cohesix-ai-host-setup/SKILL.md)
+path or a different compatible executor; do not treat a Mac controller or a
+GPU listing as a CUDA substitute.
 
 ```bash
 : "${COH_REST_URL:?set the existing gateway base URL}"

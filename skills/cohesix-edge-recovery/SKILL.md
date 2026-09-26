@@ -36,6 +36,21 @@ domain-specific action is available only when that provider is actually
 configured and selected. Use the [agent delegation skill](../cohesix-agent-delegation/SKILL.md)
 for MCP/A2A callers.
 
+Choose the provider for the service's **actual host**. On macOS, an enrolled
+`launchd` service can use selected `launchd.start`, `launchd.stop`,
+`launchd.restart` or `launchd.status-check` actions with native account
+permission; follow the
+[macOS provider contract](../../docs/MACOS_PROVIDERS.md#launchd-service-lifecycle).
+On Linux, use the selected `systemd` unit action, or a Docker/Kubernetes action
+only where that provider is configured; follow the
+[host-ticket recipe](../../docs/OPERATOR_RECIPES.md#host-tickets-and-federation).
+The controller may be a different supported Mac or Linux host. Do not infer a
+service action from the controller OS or substitute one provider for another.
+Check the live provider catalogue, service enrollment and native permission
+before suggesting a ticket. If they do not match the service host, explain
+which piece is missing and offer the platform's enrollment or permission path;
+leave the service unchanged until a supported action is selected.
+
 ## Act once and observe
 
 With existing authority, submit the narrow host-ticket action through the

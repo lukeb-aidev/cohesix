@@ -15,6 +15,8 @@ AI tools alongside Cohesix. Read [Mac setup](references/mac.md) for Apple
 Silicon and [Linux setup](references/linux.md) for an NVIDIA host. `MAX` means
 Modular MAX; `MLX` means Apple's array/model stack; `vMLX` is a separate desktop
 app. Select only the requested tools and an actual supported host profile.
+The repository's pinned NeMo Agent Toolkit kit is for Linux AArch64; a Mac
+agent client needs its own qualified MCP/A2A path.
 
 The external model runtime, agent, caches and credentials live on the host,
 not in seL4. The Mac may be a controller without local MLX work; a Linux
@@ -40,6 +42,10 @@ the repository's hash-locked `.venv` unless its owner explicitly changes them.
    compatibility matrix. Pin the exact package versions, image digests, model
    revisions and adapter/base pairing in the environment record. Do not turn
    an unqualified `latest` tag or nightly into a reproducible profile.
+   If the requested OS, architecture, accelerator or tool combination is
+   unsupported, name the exact incompatibility and offer a compatible host,
+   runtime or version before making changes. Do not transplant Mac setup
+   commands onto Linux or Linux service and driver instructions onto macOS.
 3. Reuse a working, compatible environment. Put a user-wide `hf` CLI on PATH;
    install Python model packages in the selected runtime, not in system Python.
    Use a separate NeMo client environment only when dependency compatibility

@@ -56,10 +56,12 @@ agents or machines doing your training and inference.
 - [Delegate one agent action](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-agent-delegation/SKILL.md): Choose MCP or A2A, constrain the request and recover the original result.
 - [Recover a degraded edge service](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-edge-recovery/SKILL.md): Diagnose the first failed boundary, act once and compare before/after health.
 - [Run approved GPU work](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-gpu-operations/SKILL.md): Register or submit a selected CUDA job and verify the native output.
-- [Roll out a selected model](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-model-rollout/SKILL.md): Compare Mac and CUDA stages, verify any transfer and prove the served generation.
+- [Roll out a selected model](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-model-rollout/SKILL.md): Select Mac MLX, Linux CUDA or mixed stages, verify any transfer and prove the served generation.
 - [Release a private adapter](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-private-adapter-release/SKILL.md): Train or import, compare, canary and verify promotion or rollback.
 - [Operate across hives](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-fleet-operations/SKILL.md): Combine read-only fleet state while retaining each hive's authority.
 - [Explain an incident or verify a result](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-evidence/SKILL.md): Compare captures and distinguish confirmed outcomes from partial observations.
+
+These skills inspect the selected Mac or Linux host and provider before acting. If a tool, model, client or service does not fit that profile, they explain the mismatch and offer a compatible path.
 
 ## Availability and fit
 

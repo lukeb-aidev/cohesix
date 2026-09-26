@@ -28,6 +28,11 @@ this guide is not a release certificate. The examples are deployment patterns,
 not claims that Cohesix supplies a finished medical, traffic, manufacturing
 or robotics application.
 
+Mac and Linux hosts can use the same control model while needing different
+native tools. The skills below inspect the relevant OS, accelerator, runtime and
+selected provider, explain incompatible combinations, and suggest a supported
+setup or host before an operator applies a change.
+
 The basic distinction is simple: Cohesix decides and records **whether a
 specific action may run**. The selected Mac, Jetson or other prepared host
 runs the model, service or container. The result needs observation and, when
@@ -107,6 +112,10 @@ A developer explores a candidate on an Apple Silicon Mac, then compares it
 with a CUDA-backed deployment on a Jetson. They need to know which host did
 each stage, whether any private artifact moved, and which generation a real
 client reached after promotion or rollback.
+
+A selected Mac MLX rollout or Linux CUDA rollout can stay on one host. The
+Mac-to-Jetson journey here shows the additional comparison and verified
+transfer steps when both hosts are selected.
 
 **Cohesix's role.** A governed rollout names the provider and host
 for each stage, checks capability and capacity, preserves one job lineage, and

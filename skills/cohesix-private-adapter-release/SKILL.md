@@ -17,6 +17,20 @@ Mac or NVIDIA host; Cohesix owns admission, phase identity and verification.
 If the task is to install CUDA, MLX, PEFT or NeMo, use
 [AI host setup](../cohesix-ai-host-setup/SKILL.md) first.
 
+Select the native path from the **executor host**, not the controller. On
+Apple Silicon macOS, use the explicitly configured `cohesix-mlx-native/v1`
+profile and `launchd`-owned `cohesix.mlx_release` helper; require observed
+Metal work and its direct serving canary. On Linux AArch64 NVIDIA, use the
+`cohesix-hf-native/v1` profile and selected `systemd` user service; require
+real CUDA work and the served generation. A Mac or Linux controller may
+operate the remote admitted path. Do not substitute a profile across hosts
+or treat a CPU fallback as native release proof.
+Inspect the installed helper, model/adapter format, accelerator and service
+identity on that host before applying a plan. If they do not match the native
+profile, explain the blocker and offer the matching
+[host setup](../cohesix-ai-host-setup/SKILL.md) or a supported profile; keep
+the candidate unapplied until the incompatibility is resolved.
+
 ## Freeze the comparison before admission
 
 Record the licensed base revision and digest, adapter or training input digest,

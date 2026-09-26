@@ -13,9 +13,15 @@ license: Apache-2.0
 Start with the same-version [fleet recipe](../../docs/OPERATOR_RECIPES.md#read-a-small-fleet),
 [host tools](../../docs/HOST_TOOLS.md) and
 [authority contract](../../docs/M27A_AUTHORITY.md). Select the actual named
-hives and matching client installation. Use `coh fleet --help` and read-only
+hives and a matching macOS or Linux client installation. Either host can read
+the selected hives; their QEMU, Pi and native provider profiles still determine
+which actions are available. Use `coh fleet --help` and read-only
 `status`, `lease-summary` and `pressure` before any mutation. A missing hive,
 stale timestamp or failed read is **unknown**, not healthy or idle.
+Check the client version and each hive's selected profile separately. If one
+host or provider is incompatible, keep that row unknown and offer the matching
+host bundle or a supported provider configuration for that hive; do not copy
+another hive's authority or capability into it.
 
 ## Produce a useful fleet view
 

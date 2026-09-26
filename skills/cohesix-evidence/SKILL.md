@@ -16,11 +16,15 @@ analysis are separate from acceptance under the [Test Plan](https://raw.githubus
 
 ## Select the source and tools
 
-Set `COH_BIN` to the absolute executable directory of one matching installation
+Recorded-pack review and live capture can run on macOS or Linux with the
+matching host installation. Set `COH_BIN` to its absolute executable directory
 and run from its root. Identify its version/manifest and command help before
-using these source-oriented examples. `inspect` and signed verification may be
-absent from older bundles; use their bundled documentation rather than swapping
-binaries. Use same-revision local references or pin `main` URLs below to the
+using these source-oriented examples. If the host binary, pack schema or
+verifier is incompatible, report the exact mismatch and suggest the matching
+installed tool or a supported pack export; preserve the original pack.
+`inspect` and signed verification may be absent from older bundles; use their
+bundled documentation rather than swapping binaries. Use same-revision local
+references or pin `main` URLs below to the
 selected source commit/tag. Web links work outside the source checkout.
 
 For an operator-supplied recorded pack (no target or credential needed):

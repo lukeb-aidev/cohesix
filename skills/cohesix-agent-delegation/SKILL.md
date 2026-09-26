@@ -13,8 +13,16 @@ license: Apache-2.0
 Use a matching installed Cohesix release and its generated catalogue. Read the
 same-version [host-tool protocol guide](../../docs/HOST_TOOLS.md#selected-mcp-clients),
 [Host API](../../docs/HOST_API.md), and [authority contract](../../docs/M27A_AUTHORITY.md)
-before configuring a client. Check `coh doctor` for the effective master, MCP,
+before configuring a client. The matching gateway and supported MCP/A2A clients
+can be on macOS or Linux when the selected profile qualifies them. The
+repository's pinned [NeMo Agent Toolkit kit](../../integrations/nemo-agent-toolkit/README.md)
+is selected for Linux AArch64; it is not a Mac installation recipe. Mac
+Shortcuts require macOS. Check `coh doctor` for the effective master, MCP,
 and A2A switches. A disabled protocol is unavailable; a client cannot enable it.
+Inspect the real client OS, SDK, transport and selected catalogue. If the
+requested combination is incompatible, name the mismatch and offer a supported
+client or the selected Linux NeMo kit; changing protocol policy requires its
+own operator action. Do not silently switch protocols or clients.
 
 ## Choose the interaction
 

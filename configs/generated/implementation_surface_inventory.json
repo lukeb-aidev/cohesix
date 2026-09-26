@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "0f406c748fafc17f61afb3bd45e4a34289cdca30f29200fd545fb7bcd9c2746a",
+  "source_sha256": "cdc8799a27514b3fc00b5fe456b712f5079efc7b86154d644d5093cc481502da",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -6046,6 +6046,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/audit/M28F_IMPLEMENTATION_RECORD.md",
+      "kind": "tracked_surface",
+      "path": "docs/audit/M28F_IMPLEMENTATION_RECORD.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/audit/M28_IMPLEMENTATION_RECORD.md",
       "kind": "tracked_surface",
       "path": "docs/audit/M28_IMPLEMENTATION_RECORD.md",
@@ -6393,6 +6407,20 @@
       "package_disposition": "selected_release_subset_or_source_only",
       "evidence_requirement": "docs-as-built drift review",
       "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:integrations/nemo-agent-toolkit/README.md",
+      "kind": "tracked_surface",
+      "path": "integrations/nemo-agent-toolkit/README.md",
+      "implementation_class": "contract",
+      "owner": "host-tool-owner",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "selected NeMo Agent Toolkit documentation; rule=nemo-agent-toolkit-readme",
+      "package_disposition": "source_document",
+      "evidence_requirement": "host-tool as-built review",
+      "current_observed_mode": "host_integration_claim",
       "evidence_eligible": false
     },
     {

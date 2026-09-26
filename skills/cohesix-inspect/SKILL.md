@@ -15,7 +15,13 @@ still unknown?” It does not establish GPU execution or release acceptance.
 
 ## Select the installation and backend
 
-Use an installed matching host bundle, or tools built from one source revision.
+On macOS or Linux, use the matching installed host bundle, or tools built for
+that host from one source revision. The read-only workflow is the same on both;
+use each host's own executable and Python environment.
+Check the host OS, architecture, bundle version and command availability
+before connecting. If a binary or Python package does not match, explain the
+mismatch and point to the correct host bundle or matching Python environment;
+keep target inspection read-only while setup is unresolved.
 Set `COH_BIN` to its **absolute executable directory** (bundle `bin/`, or your
 source build's output). Run from that installation's root. Examples use Bash;
 Python needs 3.11+ and the matching installed `cohesix` package in its environment.

@@ -1,36 +1,47 @@
 ---
 name: cohesix-model-rollout
-description: Compare a Mac MLX candidate with a CUDA deployment and trace an approved model choice through transfer, canary, promotion or rollback. Use for cross-host model rollout decisions, not for training an individual PEFT adapter.
+description: Choose and verify a model rollout on a selected Mac MLX host, Linux CUDA host or both. Use for model comparison, optional transfer, canary, promotion or rollback; not for training an individual PEFT adapter.
 license: Apache-2.0
 ---
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Keep cross-host model choice, byte transfer and serving generation distinct and verifiable. -->
+<!-- Purpose: Keep platform-specific model choice, optional byte transfer and serving generation distinct and verifiable. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Roll out a selected model
 
-Use a matching installed release and the deployment's selected Mac and CUDA
-profiles. Read the same-version [Mac operation guide](../../docs/HOST_TOOLS.md#swarmui),
+Use a matching installed release and the deployment's selected host profile:
+Apple Silicon macOS with admitted MLX, Linux AArch64 NVIDIA with admitted CUDA,
+or both. A Mac or Linux controller can coordinate a remote selected host.
+Read the same-version [host operation guide](../../docs/HOST_TOOLS.md#swarmui),
 [private release guide](../../docs/PRIVATE_LORA_RELEASE.md) and
 [Release B host/client contract](../../docs/BUILD_PLAN.md#release-b).
 The Mac's local MLX workbench is useful for exploration; its local observation
-does not itself admit a Cohesix job or certify a remote CUDA deployment.
+does not itself admit a Cohesix job. A Linux CUDA result must come from its
+selected native executor. Use only the stages and transfer path advertised by
+the installed profile.
+Inspect each candidate host's OS, accelerator, model format, runtime and
+capacity before comparing or activating. If a combination is unsupported,
+explain the exact incompatibility and offer a compatible selected host or a
+separately qualified format/runtime change; do not assume Mac and Linux
+installations can load the same artifact.
 
 ## Make the choice reproducible
 
 Before work starts, name the application task, held-out input set, quality
 measure, budget, selected base/model/adapter digests, runtime versions and
-provider/host for each stage. Compare actual outputs and resource use on the
-relevant Mac and NVIDIA hosts. Report unsupported formats, stale capacity or
-incomparable evaluation as blockers, not as a winner. A vMLX model response
-can be a serving observation; its MCP client role and any A2A peer using it
-require separate configured compatibility.
+provider/host for each stage. Compare actual outputs and resource use on each
+selected host. For a single-host rollout, compare candidates on that host;
+for a mixed rollout, keep Mac Metal and Linux CUDA measures separate. Report
+unsupported formats, stale capacity or incomparable evaluation as blockers,
+not as a winner. A vMLX model response can be a serving observation; its MCP
+client role and any A2A peer using it require separate configured compatibility.
 
 Write a decision record with the chosen candidate and why it beat the
-incumbent. Preserve stage/job identities and original admission IDs. When
-the selected operation needs to move model bytes, first establish that the
-installed release and host pair actually advertise verified distribution.
+incumbent. Preserve stage/job identities and original admission IDs. A
+single-host rollout has no cross-host transfer step. When the selected
+operation needs to move model bytes, first establish that the installed
+release and host pair actually advertise verified distribution.
 A Queen reference or FUSE listing is only a reference. Record the authorised
 source, destination and payload route; require the full destination digest
 and receipt before a **separate** activation decision. Do not infer transfer

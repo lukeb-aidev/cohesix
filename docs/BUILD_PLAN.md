@@ -13483,10 +13483,10 @@ Milestone: 28g / m28g-use-case-adoption-skills
 Status: Complete — documentation-only adoption guidance, 26 September 2026.
 Goal: Give agents and operators distinctive, usable procedures for each documented use case and a complete community-facing Release B overview.
 Inputs: docs/USE_CASES.md; existing repo skills; installed-client, provider, evidence and authority contracts; 28–28g evidence boundaries.
-Changes: skills/*/SKILL.md; docs/USE_CASES.md; README.md; llms.txt; this task record. Preserve six generated use-case headings and nine playbooks.
+Changes: skills/*/SKILL.md; docs/USE_CASES.md; README.md; llms.txt; this task record. Host-routing correction also classifies the NeMo kit README in configs/implementation_surfaces.toml and regenerates its dependent outputs. Preserve six generated use-case headings and nine playbooks.
 Commands: skill-creator quick_validate for each new or changed skill; python3 scripts/ci/check_host_integration_inventory.py; scripts/check-generated.sh; git diff --check; local-link and claim review.
 Checks: Skills have distinct triggers and outcomes, route to exact-version contracts, preserve scoped authority and original-identity recovery, and make no unearned installed, Pi, provider or industry claim. USE_CASES keeps all existing use cases and playbook ideas while explaining the assumed Release B workflows.
-Validation: Six skill entrypoints passed quick_validate; host inventory retained six use cases and nine playbooks; check-generated passed its implementation, Test Plan and NIST guards; local links and git diff --check passed. No live target, native provider, installer or release gate was run for this documentation task.
+Validation: Initial addition: six skill entrypoints passed quick_validate; host inventory retained six use cases and nine playbooks; check-generated, local links and git diff --check passed. Host-routing correction: nine skill entrypoints passed quick_validate; eight implementation-surface tests, host inventory, check-generated (including Test Plan and NIST guards), local links and git diff --check passed. Skills inspect actual Mac/Linux compatibility and offer supported fixes; model rollout supports one-host and mixed-host journeys. No live target, native provider, installer or release gate was run for this documentation task.
 Deliverables: Discoverable repo-managed skills, revised use-case guide and focused validation record. This documentation does not qualify or publish Release B.
 
 Title/ID: m28g-macos-native-installer

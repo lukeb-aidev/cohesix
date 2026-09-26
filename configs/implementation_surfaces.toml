@@ -1076,6 +1076,17 @@ evidence_requirement = "docs-as-built drift review"
 current_observed_mode = "documentation_or_generated_claim"
 
 [[tracked_rules]]
+id = "nemo-agent-toolkit-readme"
+exact = "integrations/nemo-agent-toolkit/README.md"
+class = "contract"
+owner = "host-tool-owner"
+production_reachable = false
+selection_source = "selected NeMo Agent Toolkit documentation"
+package_disposition = "source_document"
+evidence_requirement = "host-tool as-built review"
+current_observed_mode = "host_integration_claim"
+
+[[tracked_rules]]
 id = "app-readmes"
 prefix = "apps/"
 suffix = "/README.md"
