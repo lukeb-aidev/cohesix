@@ -13412,7 +13412,10 @@ configured Cohesix deployment, reproducing both workflows from public instructio
 
 **Status:** In Progress — activated by the owner on 26 September 2026 for the
 complete M28g task breakdown. Native installer implementation and exact release
-qualification are pending; no Release B acceptance is claimed.
+qualification are pending. At source checkpoint `020a516300`, QEMU and Pi
+Test Plan Stages 01–04 passed; both Stage 05 attempts failed the expired
+`EX-2026-0024` release guardrail, and selected Jetson KVM pressure remains
+unexecuted. No Release B acceptance is claimed.
 The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
 the selected source-level work and unmet installer, host and release gates.
 
@@ -13509,6 +13512,7 @@ Changes: skills/cohesix-*/SKILL.md, skills/cohesix-ai-host-setup/references/linu
 Commands: Validate each skill with skill-creator quick_validate; check local links and Bash snippets on Mac and Linux; exercise read-only CLI/Python and mock evidence from an unrelated working directory; run python3 scripts/ci/check_host_integration_inventory.py, scripts/check-generated.sh and git diff --check.
 Checks: Instructions work without a source-root current directory, identify installed-version and agent transport constraints, prevent two gateways from claiming one Queen, and require separate subject credentials plus independently observed native job outcomes for any many-user claim. Documentation and mock checks cannot establish installed Release B, live MCP/A2A jobs, native provider work or diverse-vendor acceptance.
 Validation: AI-assisted review and edits; nine skill entrypoints passed quick_validate; 31 local links and anchors resolved; 13 Bash snippets passed syntax checks on both Mac and Jetson; host inventory, generated consistency, and git diff --check passed. Mac source-built mock inspection and Jetson 1.1.0-beta mock pack creation/inspection worked from /tmp. The pinned Jetson NeMo executable worked from a non-login SSH shell by absolute path; Mac Codex MCP help was inspected, but no cross-vendor live Cohesix job was accepted. The M28g implementation record separates these observations from Release B acceptance.
+Refinement at `020a516300`: the delegation and GPU skills describe cumulative standing attempts, caller-ticket operation quotas and publisher-epoch Worker replacement observed in the Pi diagnostic; both amended skills passed quick_validate and the generated implementation inventory remained consistent. This instruction check does not add a cross-vendor live acceptance result.
 Deliverables: Corrected skills and host guide with an exact Mac/Linux validation matrix and proof limits in the M28g implementation record.
 
 Title/ID: m28g-macos-native-installer

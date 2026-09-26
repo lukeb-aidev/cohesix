@@ -65,30 +65,32 @@ historical evidence does not establish release qualification.
 [Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0-beta
 candidate. The selected source now records version-aligned Python packaging,
 native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
-lookup. Focused staging and generated-contract checks are source-level results.
-Signed native installer artifacts, clean platform installs, graphical launch,
-cross-client live parity, physical Pi qualification and integrated Release B
-qualification remain outstanding. The
+lookup. At checkpoint `020a516300`, the canonical QEMU and physical Pi Test
+Plans passed Stages 01–04, including exact-source authenticated TCP and REST;
+both Stage 05 attempts failed on expired `EX-2026-0024`. Medium and high QEMU
+pressure passed on Mac HVF with correlated Worker receipts; the selected Jetson
+KVM pressure lane has not run. Signed native installers,
+clean platform installs, graphical launch, installed cross-client parity and
+integrated Release B qualification remain outstanding. The
 [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
-retains the source-level checkpoint and blocked gates. Release A remains the
-published release.
+retains the exact identities, diagnostic failures and blocked gates. Release A
+remains the published release.
 
 The selected QEMU and Pi production manifests now enable host-side MCP and A2A
-under the compiler-controlled master switch. A fresh exact-source Pi 4 GENET
-RAM image at `05e1facdd` completed a 60-minute authenticated read and empty
-MCP/A2A discovery diagnostic: 60/60 cycles, 19/19 health checks, six successful
-read-ticket renewals and no reconnect. The Mac gateway had no co-located
-standing executor, so MCP/A2A advertised no jobs and no protocol task or native
-provider result was obtained. Jetson CUDA and NeMo and Mac MLX direct host
-checks passed at their separate source/client identities. This is partial
-operational evidence; final-source target, installed-client and release
-qualification remain open.
+under the compiler-controlled master switch. The latest 60-minute Pi 4 GENET
+RAM-image diagnostic completed four MCP and six A2A original jobs with
+target-confirmed, independently checked Jetson CUDA outputs and 122 healthy
+samples. Its collector was amended during the run, and it did not exercise
+installed Mac/Linux packages or the full release matrix. Earlier timed
+read-only and failed job attempts remain separate evidence. Direct Jetson CUDA
+and NeMo and Mac MLX checks passed at their stated host-only scope.
 
 Nine operator skills passed syntax, link and copied-location guidance checks
 on Mac and Jetson. Read-only and mock host operations ran from outside a source
 directory, and the guides now require verified client transport, two private
-protocol headers, one gateway owner and separate user credentials. Those checks
-establish instruction portability on the tested setups. Diverse-vendor live
+protocol headers, one gateway owner and separate user credentials. The agent
+delegation and GPU guides now cover cumulative standing attempts, finite
+caller operations and publisher-epoch Worker replacement. Diverse-vendor live
 jobs, cross-user isolation and useful installed Release B workflows are still
 unproven.
 

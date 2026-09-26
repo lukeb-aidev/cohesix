@@ -417,3 +417,91 @@ conformance summary remains `INCOMPLETE` for production: it has no admitted
 Worker transport, physical lease/revoke, bridge restart, authoritative result
 graph, Worker receipt or NVIDIA container-lane proof. The direct result is
 retained under `/mnt/nvme/cohesix-dev/m28g-1679-source/out/m28g-1679-cuda-conformance/`.
+
+## Exact-source 020a qualification and remaining release gates
+
+The selected checkpoint is clean commit `020a516300b75e55f91606a77106c76ef74f665c`,
+source digest `sha256:a098dd349e07e80249019f6b915289baa826dfda865e6c273e26b41d8b117b64`.
+It includes the Root admission-read and host-model readiness repairs above. The
+selected QEMU and Pi production manifests have the master, MCP and A2A switches
+enabled; both selected Cohesix and NeMo kit wheels carry `1.2.0b0`, the package
+version for Release B `1.2.0-beta`.
+
+The canonical QEMU Test Plan passed Stages 01–04 at this checkpoint,
+including the full common host gate, exact-image target build, authenticated
+TCP regressions and REST multiplexer. Stage 05 verified the earlier stage
+attestations and passed its audit and advisory checks, then failed the release
+guardrail because `EX-2026-0024` expired on 2026-09-25. Its immutable attempt
+is under `out/m28g/full-plan-020a-qemu/`. A separate exact-source Mac HVF
+pressure run passed medium and high: 49,598 operations with zero errors and
+72,268 operations with 61 bounded errors respectively, 256 correlated
+successful Worker receipts in each run and no gateway reconnects. The high
+error fraction was 0.0844%, within the frozen 1% budget. Its evidence is under
+`out/m28g-pressure-020a-r1/` in the pressure checkout. Pressure success does
+not renew an expired risk exception. The existing `EX-2026-0024` controls also
+require Jetson KVM medium/high pressure at the selected identity. That lane has
+not run at `020a516300`: the Jetson checkout has KVM access and the pinned QEMU
+binary but lacks the governed seL4 pressure build and image. Its runner's
+read-only preflight stopped on missing `out/sel4`; a prior-source KVM build
+cannot be relabelled as this checkpoint's pressure evidence.
+
+The physical Pi 4 GENET booted a private RAM image with SHA-256
+`630b35269c483df678c1ef1cad936c04c007297e4587a97fd339e45907fe3ec6`
+and the same `[BUILD]` source identity. Its 60-minute MCP/A2A diagnostic ran
+for 3,600 seconds with four MCP and six A2A original jobs confirmed and
+acknowledged by the Pi target, native Jetson CUDA outputs independently
+verified, 122 health samples and no failed health events. A planned publisher
+epoch handoff at 30 minutes completed with a fresh Worker generation and
+resource reservation. Three preceding attempts remain recorded as failures:
+standing-scope attempt exhaustion, publisher epoch removal of the GPU
+reservation, and delegated caller-ticket operation exhaustion. The fourth
+attempt's collector was amended during its timed window to wait for exact
+Worker READY telemetry and bind the fresh generation; its executed helper
+hash and the deviation are recorded in the private run directory. The final
+event log SHA-256 is
+`49dbd1d5eec70d976e3e1656d3accb2fb92120b2f06fdc99671acd48e033531c`.
+This is a completed diagnostic with a disclosed run deviation, not an
+unchanged frozen installed-release profile: the Pi ran from RAM, and the run
+did not cover installed Mac/Linux packages, FUSE, native NeMo protocol clients,
+PEFT or diverse vendor agents.
+
+The same Pi source/image then passed canonical Stages 01–04. Stage 03 ran 17
+authenticated TCP scripts across four fresh RAM boots, and Stage 04 verified
+same-boot continuity before CLI and Python REST checks through a bound Mac
+gateway. The first Stage 03 preflight and Stage 01 retry exposed stage
+environment selection errors; both failed attempts remain retained, and the
+corrected stage-stable environment produced the recorded passes. Stage 05
+failed the same `EX-2026-0024` release guardrail. The attempts and exact
+source/image attestations are under `out/m28g/full-plan-020a-pi4/`. These
+RAM-boot checks do not establish a cold SD installed-image series. The
+run-owned gateway and Jetson services were stopped after their tests.
+
+Direct host checks at this checkpoint passed seven native Jetson CUDA
+reference cases, an Apple M4 MLX Metal matrix product with independent NumPy
+parity, and NeMo Toolkit 1.9.0 direct evaluation against the Mac MLX-LM model
+endpoint. The CUDA reference conformance summary remains `INCOMPLETE` where it
+requires admitted Worker transport; the direct MLX and NeMo results also do
+not establish Cohesix admission or an installed Release B client matrix. Their
+retained evidence is in the checkpoint's ignored `out/m28g/` roots and the
+Jetson source checkout.
+
+Under `m28g-operator-skill-portability`, the operator guidance now distinguishes
+standing-scope cumulative attempts from caller-ticket operation quotas and
+requires a fresh Worker reservation after a publisher epoch change. The
+amended delegation and GPU skills passed `skill-creator` validation, and the
+implementation inventory still matches the selected release. The earlier
+nine-skill Mac/Linux syntax, links and mock checks remain limited to those
+setups; they do not prove live Cohesix operation across AI-agent vendors.
+This guidance refinement changes no shipped host tool, Python API or benchmark
+measurement contract; the 47-surface host integration inventory still agrees
+with the selected compiler output.
+
+M28g remains **In Progress**. Stage 05 cannot pass without a new human-owned
+decision for `EX-2026-0024` or verified remediation of its underlying unsafe
+boundary; the selected Jetson KVM pressure control also remains unexecuted.
+Native signed/notarized Mac and independently signed Ubuntu ARM64
+packages, clean installs on every advertised host, installed-client parity,
+the full live acceptance matrix, frozen adoption and quality budgets, and
+named release-owner approval remain absent. No exact assembled Release B
+candidate or publication is claimed. Material AI assistance produced this
+checkpoint and its scoped validation record.

@@ -60,6 +60,17 @@ epoch, and independently enrolled evidence custodians for signed proof. Inspect
 actual availability and expiry; do not start or reconfigure these services as a
 side effect of inspection. Missing setup is an operator prerequisite.
 
+Before a submitted workload, check both the active Queen control lease and the
+`/gpu/<id>/lease` resource record for the **same READY Worker identity**. They
+are separate records. Restarting the GPU inventory publisher changes its source
+epoch and withdraws the old GPU resource record, even if the control lease and
+Worker remain visible. During an authorized maintenance handoff, first settle
+or reconcile in-flight original jobs, then verify the new publisher identity,
+retire the old Worker through its normal lifecycle, admit a fresh Worker and
+resource reservation, and grant a new bound control lease. Resume only after
+the agent and request binding name that fresh Worker generation. A refreshed
+inventory or control-lease renewal alone does not restore a missing reservation.
+
 Jetson is one reference host, not the only possible Linux AArch64 CUDA host.
 Check its actual driver/runtime/device and package compatibility; do not replace
 board-managed drivers. MIG is not supported by the recorded Orin reference.

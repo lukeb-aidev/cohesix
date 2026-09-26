@@ -1213,6 +1213,12 @@ native topology digest and publisher epoch. `host-ticket-agent` checks it before
 execution and throughout lease renewal. Snapshot expiry withdraws the device;
 replacement or changed identity revokes an outstanding grant. Legacy inventory
 without this identity remains useful for discovery but cannot admit workloads.
+Restarting the publisher starts a new source epoch and clears the previous
+`/gpu/<id>/lease` control log. An old READY Worker or active
+`/proc/lease/by-id/<id>` control lease does not recreate its GPU memory/stream
+reservation. After reconciling in-flight native jobs, retire that Worker through
+the authorized lifecycle, admit a new Worker and resource record under the new
+publisher epoch, and grant a matching control lease before another submit.
 Model-catalog availability in `/gpu/bridge/status` is separate from physical
 GPU inventory: an empty catalog does not supply model or inference evidence.
 
@@ -1493,6 +1499,16 @@ evidence root, GPU request CAS and native bridge configuration across restarts.
 The ledger rejects a missing, corrupt, full or changed-policy state. Never
 initialize a replacement for lost state while an earlier native outcome may
 still exist; restore or reconcile the original custody first.
+
+The selected `max_retries` value is a **per-scope cumulative attempt bound**:
+one initial attempt plus that many further attempts across all jobs using the
+scope. It is not an allowance for every distinct job. The scope's total-unit
+and concurrency bounds are separate. A spent scope disappears from the
+subject's MCP/A2A available actions. Delegated caller ticket quotas are also
+separate; status reads and recovery polling spend caller operations. Renew the
+caller ticket through its enrolled issuer before exhaustion, preserving the
+standing ledger and every original job ID. A new caller ticket cannot reset a
+spent standing scope or reauthorize an uncertain effect.
 
 When a selected manifest includes `peft.release`, the gateway also requires
 `--peft-release-config` pointing to the same private native release profile as

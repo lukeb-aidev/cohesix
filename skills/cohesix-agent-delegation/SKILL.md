@@ -72,6 +72,18 @@ specific current state. If the action needs approval under the installed
 policy, surface that requirement to the user; do not fabricate or broaden an
 approval. Submit only the approved typed request.
 
+Budget the standing scope and the caller ticket separately. In the current
+standing ledger, `max_retries + 1` bounds **all attempts charged to that
+scope**, even when each attempt uses a different job ID; `max_total_units` is a
+separate capacity limit. Once the attempt cap is spent, the MCP tool or A2A
+skill can disappear from that subject's catalogue. Reads, status polling and
+recovery also consume the caller ticket's finite operation quota. Check both
+remaining budgets before a long workflow. A fresh caller ticket from the
+enrolled issuer can restore caller access within the same standing authority;
+it cannot replenish a spent standing scope or justify replaying an uncertain
+effect. Preserve the original ledger and reconcile its IDs before selecting a
+new authorized scope.
+
 For a multi-user claim, use separately authenticated client state for each
 verified subject. Check the scoped catalogue and a denied cross-subject lookup
 without sharing a ticket, prompt or process credential. Confirm the same
