@@ -48,6 +48,8 @@ fn catalogue() -> Result<Value> {
     ))?)
 }
 
+const RELEASE_VERSION: &str = "1.2.0-beta";
+
 pub(super) fn validate_catalogue(enabled: bool) -> Result<()> {
     let catalogue = catalogue()?;
     let selected = include_bytes!("../../../configs/generated/root_task_resolved.json");
@@ -470,7 +472,7 @@ pub(super) async fn agent_card(State(state): State<AppState>, headers: HeaderMap
         "name":"Cohesix selected durable jobs",
         "description":"Scoped CUDA and PEFT delegation over existing Cohesix admissions and results.",
         "url":format!("http://{host}/a2a"),
-        "version":"1.1.0b1",
+        "version":RELEASE_VERSION,
         "protocolVersion":"0.3.0",
         "preferredTransport":"JSONRPC",
         "capabilities":{"streaming":true,"pushNotifications":false,
@@ -540,6 +542,15 @@ pub(super) async fn post(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_version_matches_selected_release_inventory() {
+        let inventory: Value = serde_json::from_str(include_str!(
+            "../../../configs/generated/implementation_surface_inventory.json"
+        ))
+        .unwrap();
+        assert_eq!(inventory["release"]["version"], RELEASE_VERSION);
+    }
 
     #[test]
     fn terminal_requires_native_outcome_and_uncertain_stays_unknown() {

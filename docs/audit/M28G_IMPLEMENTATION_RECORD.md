@@ -145,6 +145,10 @@ diagnostic evidence only. The enabled Pi selection requires a fresh exact
 image, matching host tools, live MCP and A2A clients, and the M28g integrated
 matrix before a Pi protocol or release claim.
 
+The A2A Agent Card now advertises the selected `1.2.0-beta` release version.
+A focused cross-contract test binds that value to the generated release
+inventory; the two Python wheel distributions remain `1.2.0b0`.
+
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,
 PEFT, Apple and NeMo journeys from installed bytes, full applicable QEMU and
