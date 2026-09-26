@@ -265,6 +265,8 @@ GENERATED_OUTPUT_PATHS=(
     "configs/generated/implementation_surface_inventory.json"
     "configs/generated/host_integration_dependency.json"
     "configs/generated/provider_registry.json"
+    "configs/generated/mcp_catalogue.json"
+    "configs/generated/a2a_catalogue.json"
     "configs/generated/use_case_evidence.json"
     "crates/cohesix-authority/src/provider_generated.rs"
     "tools/cohesix-py/cohesix/provider_generated.py"

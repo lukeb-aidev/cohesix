@@ -182,6 +182,8 @@ def generated_restore_fixture_source(commands: str) -> str:
         "GENERATED_OUTPUT_PATHS=(\n"
         '  "apps/root-task/src/generated"\n'
         '  "configs/generated/existing.json"\n'
+        '  "configs/generated/mcp_catalogue.json"\n'
+        '  "configs/generated/a2a_catalogue.json"\n'
         '  "configs/generated/initially-missing.json"\n'
         ")\n"
         'generated_snapshot_dir=""\n'
@@ -324,6 +326,8 @@ def test_generated_directory_restore_stages_before_replacing_live_path(
         "GENERATED_OUTPUT_PATHS=(", maxsplit=1
     )[1].split("\n)", maxsplit=1)[0]
     assert '"apps/root-task/src/generated"' in production_paths
+    assert '"configs/generated/mcp_catalogue.json"' in production_paths
+    assert '"configs/generated/a2a_catalogue.json"' in production_paths
 
     root = tmp_path / "repo"
     generated = root / "apps" / "root-task" / "src" / "generated"
@@ -335,6 +339,8 @@ def test_generated_directory_restore_stages_before_replacing_live_path(
     existing = root / "configs" / "generated" / "existing.json"
     existing.parent.mkdir(parents=True)
     existing.write_text("snapshot file\n", encoding="utf-8")
+    for name in ("mcp_catalogue.json", "a2a_catalogue.json"):
+        (existing.parent / name).write_text("snapshot catalogue\n", encoding="utf-8")
 
     result = run_generated_restore_fixture(
         root,
@@ -342,6 +348,8 @@ def test_generated_directory_restore_stages_before_replacing_live_path(
         'printf "live bootstrap\\n" '
         '>"$PROJECT_ROOT/apps/root-task/src/generated/bootstrap.rs"\n'
         'printf "live mod\\n" >"$PROJECT_ROOT/apps/root-task/src/generated/mod.rs"\n'
+        'printf "live catalogue\\n" >"$PROJECT_ROOT/configs/generated/mcp_catalogue.json"\n'
+        'printf "live catalogue\\n" >"$PROJECT_ROOT/configs/generated/a2a_catalogue.json"\n'
         "mv() {\n"
         '  if [[ "$1" == */replacement '
         '&& "$2" == "$PROJECT_ROOT/apps/root-task/src/generated" ]]; then\n'
@@ -363,6 +371,10 @@ def test_generated_directory_restore_stages_before_replacing_live_path(
         "snapshot bootstrap\n"
     )
     assert (generated / "mod.rs").read_text(encoding="utf-8") == "snapshot mod\n"
+    for name in ("mcp_catalogue.json", "a2a_catalogue.json"):
+        assert (existing.parent / name).read_text(encoding="utf-8") == (
+            "snapshot catalogue\n"
+        )
     assert_no_generated_transaction_temps(root)
 
 

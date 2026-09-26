@@ -97,8 +97,21 @@ wheel inspector's stale optional-extra list. After provisioning the pinned
 The next Stage 01 attempt passed every preceding action and reached 2,913
 passing Python tests; three release-bundle fixture cases still used the old
 wheel metadata. The fixture now describes the selected `1.2.0b0` wheel and
-the affected nine focused tests pass. A clean-source Stage 01 pass remains
-pending until the complete rerun finishes.
+the affected nine focused tests passed. On clean commit `bf0fd4bda`, Stage
+01 passed completely, including 2,916 Python tests, 116 Python subtests and
+the Rust risk ratchet. Provisioned QEMU Stage 02 passed against the same
+source digest after the Test Plan correctly required a fresh attestation for
+the selected private Queen credential and manifest copies.
+
+QEMU Stage 03 then built separate base/gated exact-source images and ran all
+19 authenticated TCP regression scripts successfully. Its aggregate and both
+artifact verifiers passed, but the stage refused final PASS when generated
+MCP and A2A catalogues differed from their initial contents. The batch
+runner's generated-output snapshot inventory omitted those two newer files.
+The inventory now includes both catalogues, and all 21 focused batch-wrapper
+tests plus `scripts/check-generated.sh` pass after restoring the committed
+generated outputs. The 19-script attempt remains a retained transport result,
+not accepted Stage 03 evidence; the corrected source requires fresh stages.
 
 The Mac test bed lacks a Developer ID Installer identity; a signed, notarized
 `.pkg` and clean Finder/Spotlight/Dock lifecycle observations cannot yet be
