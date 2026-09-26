@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "222ec7f879da8da7725c649caed26b9219118d804361bf8021eb3982d7824202";
+    "0e37eda6eb0734c93a28d8222cc9d03e7d1825ec7faa83716cbb04bbf048be31";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -9831,7 +9831,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "manifest.schema=1.29",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=75c4a3b3ea6ccaf7cd56a71ab919a0ba857927b136e70e1e2abb6192e6197b91",
+    "manifest.sha256=4b36754223dba6ee44f5f267d1e7f0a6cc5bf1f635575d09cf23a6f1cfedb847",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9883,7 +9883,7 @@ pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "attestation.mode=measurement_only",
     "attestation.signed_evidence=unavailable",
     "attestation.ticket_keys=development_static",
-    "measurement.bound_manifest_sha256=75c4a3b3ea6ccaf7cd56a71ab919a0ba857927b136e70e1e2abb6192e6197b91",
+    "measurement.bound_manifest_sha256=4b36754223dba6ee44f5f267d1e7f0a6cc5bf1f635575d09cf23a6f1cfedb847",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

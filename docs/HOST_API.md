@@ -52,7 +52,7 @@ Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 The selected manifest has versioned `[gateway.agent_protocols]`,
 `[gateway.mcp]` and `[gateway.a2a]` enablement switches. Their schema defaults
 are false; effective access requires both the master and protocol switch. The
-selected QEMU profile enables MCP and A2A; the Pi profile keeps both disabled.
+selected QEMU and Pi profiles enable MCP and A2A.
 Each route is registered only when its effective switch is true. REST remains
 available when either protocol is disabled, including authenticated reads used
 to recover an existing job. Gateway launch variables and clients cannot raise

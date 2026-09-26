@@ -13460,6 +13460,12 @@ without macOS/Apple Intelligence. Require at least one independent clean-install
 walkthrough; identify whether the evaluator is a person or agent rather than
 claiming unobserved community adoption.
 
+The assembled Release B QEMU and Pi production profiles select the gateway
+master, MCP and A2A switches enabled. Verify those values in each resolved
+manifest and its matching packaged host gateway. The false schema defaults and
+master/per-protocol disable modes remain available for explicit deployments;
+the enabled Pi selection needs its own live target and client evidence.
+
 Before integrated runs, fix acceptance budgets against the retained baseline:
 installation steps/time/download size, first useful job, manual interventions,
 completion/quality, refusal clarity, interrupted recovery and added control

@@ -72,6 +72,12 @@ remain outstanding. The [M28g implementation record](audit/M28G_IMPLEMENTATION_R
 retains the source-level checkpoint and blocked gates. Release A remains the
 published release.
 
+The selected QEMU and Pi production manifests now enable host-side MCP and A2A
+under the compiler-controlled master switch. This source selection does not
+qualify either protocol on a new Pi image; the prior Pi diagnostic used a
+disabled profile and was stopped for replacement. Fresh Pi and host-client
+evidence is required for the enabled selection.
+
 [Milestone 28](BUILD_PLAN.md#28) is complete at its selected foundation scope.
 The source declares
 false-default, compiler-controlled MCP and A2A access switches and implements

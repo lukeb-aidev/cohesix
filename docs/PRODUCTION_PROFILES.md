@@ -67,7 +67,7 @@ evidence before expansion.
 | Supervisors and LoRA executor budgets | Pi shares core 1 with GENET/serial/USB/HDMI and core 3 with WiFi/SDIO. QEMU can devote more of those cores to supervisors/LoRA. |
 | Worker-supervisor and GPU-executor SC refills | QEMU declares 10 refills for each; Pi retains 2 for its Worker supervisor and 8 for its GPU executor. Both use 256-byte SC objects. These target-specific replenishment allocations preserve the selected scheduling envelopes; parity does not imply identical refill histories. |
 | WCET, response bounds and provenance | Target-specific execution and interference envelopes; equalizing numbers would erase their hardware basis. |
-| Host gateway protocol controls | The selected QEMU manifest enables agent protocols, MCP and A2A; the selected Pi manifest disables all three. These are compiler-enforced host ceilings, not a Pi protocol acceptance claim. Enabling Pi requires a separate selected-manifest change and target qualification. |
+| Host gateway protocol controls | The selected QEMU and Pi manifests enable agent protocols, MCP and A2A. These are compiler-enforced host ceilings. The Pi selection requires separate live protocol qualification before any Pi protocol acceptance claim. |
 | Root serial-I/O allowance | QEMU root services the virtual UART; Pi's declared isolated serial owner owns physical I/O. |
 
 The common admission window is 10000 us with a 1000 us reserve on every core.

@@ -133,12 +133,17 @@ adoption, quality, recovery and control-latency budgets have not been written.
 These source and evidence gaps remain even after signing identities and a
 Ubuntu 26.04 test host become available.
 
-The selected QEMU manifest enables the host MCP/A2A protocol ceiling while
-the selected Pi manifest disables it. The exact values are now guarded by the
-production-profile test and documented as a target difference. Protocol
-composition on a Pi-selected gateway cannot be inferred from QEMU checks;
-the required M28g live matrix must identify its actual selected gateway
-profile and cannot promote a disabled Pi surface.
+The selected QEMU and Pi manifests now both enable the host MCP/A2A protocol
+ceiling. This selection changes the Pi host profile and its generated Python
+contract and target fixture. The schema remains disabled when a switch is
+absent, and the compiler still requires the master and each protocol switch
+to be true. The production-profile test guards the selected values. The
+earlier Pi-selected diagnostic run used a separate source candidate with
+both protocols disabled and stopped after approximately eight minutes at the
+owner's request. Its authenticated TCP and read-only observations remain
+diagnostic evidence only. The enabled Pi selection requires a fresh exact
+image, matching host tools, live MCP and A2A clients, and the M28g integrated
+matrix before a Pi protocol or release claim.
 
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,

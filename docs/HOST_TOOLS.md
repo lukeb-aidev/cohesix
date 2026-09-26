@@ -914,8 +914,8 @@ bounds instead of guessing larger payload sizes.
 `coh doctor` prints the compiled `agent-protocols` master, MCP and A2A
 switches and labels live endpoint state `not-probed`; run an authenticated
 gateway discovery request to establish reachability. The selected QEMU
-manifest enables MCP and A2A under the master
-switch; Pi keeps both disabled. A protocol is effective only when its own switch and
+manifest and the selected Pi manifest enable MCP and A2A under the master
+switch. A protocol is effective only when its own switch and
 the master are true. Changing a deployment's manifest requires rebuilding the
 matching host tools and target profile. Launch environment variables or CLI
 options cannot turn a compiled-off protocol on. Disabling access does not

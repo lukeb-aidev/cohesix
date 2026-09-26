@@ -71,7 +71,7 @@ def test_production_gateway_protocol_controls_are_explicit() -> None:
     """Guard the selected host protocol ceilings on both target profiles."""
     for name, enabled in (
         ("root_task.toml", True),
-        ("root_task_pi4_uboot_aarch64.toml", False),
+        ("root_task_pi4_uboot_aarch64.toml", True),
     ):
         gateway = _manifest(name)["gateway"]
         assert gateway == {
