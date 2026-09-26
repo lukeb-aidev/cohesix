@@ -147,3 +147,10 @@ physical Pi evidence, and assembled release due diligence. These gates must
 bind one final source and package identity before the milestone can be marked
 Complete. Material AI assistance produced this implementation checkpoint;
 every claim above is limited to the executed source and host checks.
+
+During the requested 60-minute operational burn-in setup, the exact Pi image
+builder refused the `d38ab5a4f` source after Pi-profile code generation changed
+the MCP and A2A catalogues. Its generated-output allowlist omitted both files.
+The builder now classifies those compiler-owned outputs correctly while still
+rejecting unregistered changes, and the focused guard test passed. This repair
+does not make the in-progress burn-in, Pi image, or release qualification pass.

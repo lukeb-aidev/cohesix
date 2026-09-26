@@ -2153,6 +2153,8 @@ def test_codegen_guard_accepts_selected_provider_outputs_only(
 
     script = _copy_sourceable_build_script(tmp_path)
     for relative in (
+        "configs/generated/mcp_catalogue.json",
+        "configs/generated/a2a_catalogue.json",
         "configs/generated/provider_registry.json",
         "configs/generated/use_case_evidence.json",
         "crates/cohesix-authority/src/provider_generated.rs",

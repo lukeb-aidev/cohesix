@@ -223,6 +223,8 @@ allowed_exact = {
     "configs/generated/cas_manifest_template.json",
     "configs/generated/cas_manifest_template.json.sha256",
     "configs/generated/cas_verification_key.hex",
+    "configs/generated/mcp_catalogue.json",
+    "configs/generated/a2a_catalogue.json",
     "configs/generated/coh_policy.toml",
     "configs/generated/coh_policy.toml.sha256",
     "configs/generated/cohsh_policy.toml",
