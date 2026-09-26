@@ -127,6 +127,18 @@ fn shard_regression_uses_distinct_admitted_role_slots() {
         spawns,
         vec!["spawn heartbeat ticks=10 ttl_s=60", "spawn lora"]
     );
+    let readiness_waits = tokens
+        .iter()
+        .filter(|token| token.starts_with("WAIT "))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        readiness_waits,
+        vec![
+            "WAIT 2000 TAIL /log/queen.log SUBSTR WORKER_TASK_READY role=worker-heartbeat",
+            "WAIT 2000 TAIL /log/queen.log SUBSTR WORKER_TASK_READY role=worker-lora",
+        ]
+    );
     let rendered = tokens.join("\n");
     for path in [
         "/shard/13/worker/worker-1/telemetry",
@@ -323,7 +335,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
-        "shard_1k.coh:a4823acfb7b74d04992924b8c12a2318f2246e2cacdd8379fb3a2c1786b9d9aa"
+        "shard_1k.coh:55b8b45bab50f262cfe4f30774729c33dbde266da7bdb9f0096c4aeddb29b10f"
             .to_owned(),
         "sidecar_integration.coh:7371003a707d038727841bc7e0e6d005767d048ecdd83806400d9687ad316aa3"
             .to_owned(),

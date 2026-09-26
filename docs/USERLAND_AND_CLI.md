@@ -776,11 +776,13 @@ WAIT 2000 TAIL /proc/lifecycle/state SUBSTR state=ONLINE
 EXPECT OK
 ```
 
-Use the same pattern with the actual Worker telemetry path and its documented
-READY representation after asynchronous admission. The condition is checked
-against completed data, not merely an ACK. A refusal or transport failure stops
-immediately; the wait never repeats a mutation. Each read retains its own
-transport response timeout, so 2000 ms is not an override of network timeouts.
+After asynchronous Worker admission, wait on the existing `/log/queen.log` path
+for that Worker's `WORKER_TASK_READY` record before reading its sharded telemetry
+path. The Worker path can return `invalid-path` before construction, and a
+refusal stops the wait immediately. The condition is checked against completed
+data, not merely an ACK; the wait never repeats a mutation. Each read retains
+its own transport response timeout, so 2000 ms is not an override of network
+timeouts.
 
 A deliberate negative test may place `EXPECT ERR` immediately after the command
 whose refusal is expected. Do not use it to hide an unexpected production write

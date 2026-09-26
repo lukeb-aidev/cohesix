@@ -375,3 +375,16 @@ bounded CAT chunk framing; the production-feature Root test reconstructs a
 real admitted spec from its frames and passes. The failed medium run remains
 under `out/m28g-pressure-2202/` in its disposable checkout. A new exact-source
 pressure result is required before this repair can be accepted.
+
+At `0024e6995`, the complete QEMU plan passed Stages 01 and 02, including the
+full Python gate and target-qualified Root build. Stage 03 built both exact
+images and passed thirteen preceding authenticated scripts, then stopped in
+`shard_1k.coh`: `WAIT TAIL` read a Worker telemetry path before asynchronous
+Worker construction and received `ERR TAIL ... invalid-path`. The script's
+read-condition contract correctly treats that refusal as final. The fixture
+now waits for the role-specific `WORKER_TASK_READY` record on the existing
+Queen log before reading either sharded Worker path; the public CLI guide
+documents that order. The six script-catalog tests and generated-consistency
+check pass. The failed Stage 03 attempt is retained under
+`out/m28g/full-plan-0024-qemu/`; it does not establish complete transport
+acceptance. A fresh source-bound plan run must confirm the changed script.
