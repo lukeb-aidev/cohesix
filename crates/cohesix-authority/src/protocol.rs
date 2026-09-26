@@ -106,9 +106,8 @@ mod tests {
             r#"{"mcp":{"enabled":"yes"}}"#,
             r#"{"mcp":{"enabled":true,"unknown":1}}"#,
         ] {
-            match serde_json::from_str::<ProtocolControls>(raw) {
-                Ok(value) => assert!(value.validate().is_err()),
-                Err(_) => {}
+            if let Ok(value) = serde_json::from_str::<ProtocolControls>(raw) {
+                assert!(value.validate().is_err());
             }
         }
         let old = ProtocolControls::from_resolved_manifest(br#"{"root_task":{}}"#)

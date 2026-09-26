@@ -151,19 +151,19 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
 ])
 def test_python_wheel_inspection_binds_the_selected_native_profile(tmp_path, profile):
     """Exercise the package inspection used on both native build hosts."""
-    wheel = tmp_path / "cohesix-0.1.0-py3-none-any.whl"
+    wheel = tmp_path / "cohesix-1.2.0b0-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         for module in (
             "__init__", "backends", "client", "evidence", "generated",
             "orchestration", "playbooks", "receipts", "worker",
         ):
             archive.writestr(f"cohesix/{module}.py", "")
-        archive.writestr("cohesix-0.1.0.dist-info/METADATA", (
-            "Metadata-Version: 2.1\nName: cohesix\nVersion: 0.1.0\n"
-            "Requires-Python: >=3.11\nProvides-Extra: dev\n"
+        archive.writestr("cohesix-1.2.0b0.dist-info/METADATA", (
+            "Metadata-Version: 2.1\nName: cohesix\nVersion: 1.2.0b0\n"
+            "Requires-Python: >=3.11\nProvides-Extra: apple-mlx\nProvides-Extra: dev\n"
             "Provides-Extra: integrations\nProvides-Extra: ml\n"
         ))
-        archive.writestr("cohesix-0.1.0.dist-info/entry_points.txt", (
+        archive.writestr("cohesix-1.2.0b0.dist-info/entry_points.txt", (
             "[console_scripts]\ncohesix-playbook = cohesix.playbook_cli:main\n"
         ))
     qemu = tmp_path / "qemu.json"

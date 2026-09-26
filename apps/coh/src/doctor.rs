@@ -162,40 +162,6 @@ fn protocol_status() -> Result<String> {
     ))
 }
 
-#[cfg(test)]
-mod protocol_tests {
-    use super::{protocol_status, run, DoctorConfig};
-    use crate::CohAudit;
-    use cohesix_ticket::Role;
-    use std::path::PathBuf;
-
-    #[test]
-    fn selected_profile_reports_enabled_protocols_without_claiming_live_endpoints() {
-        let status = protocol_status().expect("generated controls");
-        assert!(status.contains("master=true mcp=true a2a=true"));
-        assert!(status.ends_with("endpoints=not-probed"));
-    }
-
-    #[test]
-    fn workload_diagnostics_cannot_be_claimed_from_mock_mode() {
-        let config = DoctorConfig {
-            role: Role::Queen,
-            ticket: None,
-            policy_path: PathBuf::from("unused-policy"),
-            mock: true,
-            local_gpu: true,
-            gpu_executor_config: Some(PathBuf::from("unused-executor")),
-            require_fuse: false,
-            developer_tools: false,
-            package: None,
-        };
-        assert!(run(config, &mut CohAudit::new())
-            .unwrap_err()
-            .to_string()
-            .contains("live local host"));
-    }
-}
-
 fn check_provider_contract(audit: &mut CohAudit) -> Result<()> {
     let registry = cohesix_authority::provider::registry()?;
     audit.push_line(format!(
@@ -419,4 +385,38 @@ fn fuse_device_present() -> bool {
             || Path::new("/dev/fuse").exists();
     }
     false
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::{protocol_status, run, DoctorConfig};
+    use crate::CohAudit;
+    use cohesix_ticket::Role;
+    use std::path::PathBuf;
+
+    #[test]
+    fn selected_profile_reports_enabled_protocols_without_claiming_live_endpoints() {
+        let status = protocol_status().expect("generated controls");
+        assert!(status.contains("master=true mcp=true a2a=true"));
+        assert!(status.ends_with("endpoints=not-probed"));
+    }
+
+    #[test]
+    fn workload_diagnostics_cannot_be_claimed_from_mock_mode() {
+        let config = DoctorConfig {
+            role: Role::Queen,
+            ticket: None,
+            policy_path: PathBuf::from("unused-policy"),
+            mock: true,
+            local_gpu: true,
+            gpu_executor_config: Some(PathBuf::from("unused-executor")),
+            require_fuse: false,
+            developer_tools: false,
+            package: None,
+        };
+        assert!(run(config, &mut CohAudit::new())
+            .unwrap_err()
+            .to_string()
+            .contains("live local host"));
+    }
 }

@@ -312,15 +312,14 @@ impl Manifest {
 
     fn validate_gateway(&self) -> Result<()> {
         self.gateway.validate().map_err(anyhow::Error::msg)?;
-        if self.gateway.effective_mcp() || self.gateway.effective_a2a() {
-            if !self.ecosystem.host.enable
+        if (self.gateway.effective_mcp() || self.gateway.effective_a2a())
+            && (!self.ecosystem.host.enable
                 || !self.ecosystem.host.tickets.enable
                 || !self.authority.delegated_rest
                 || !self.authority.strict_queen_intents
-                || !self.authority.execution_wal_required
-            {
-                bail!("enabled gateway agent protocols require host tickets, delegated REST, strict intents and execution WAL");
-            }
+                || !self.authority.execution_wal_required)
+        {
+            bail!("enabled gateway agent protocols require host tickets, delegated REST, strict intents and execution WAL");
         }
         Ok(())
     }

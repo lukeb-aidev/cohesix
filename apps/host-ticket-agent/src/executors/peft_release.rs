@@ -349,7 +349,7 @@ impl Native for Adapter<'_> {
         );
         #[cfg(target_os = "macos")]
         {
-            return self.execute_macos(phase);
+            self.execute_macos(phase)
         }
         #[cfg(not(target_os = "macos"))]
         {

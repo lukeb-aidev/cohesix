@@ -201,7 +201,7 @@ with zipfile.ZipFile(wheel) as archive:
         raise SystemExit("python-compat: wheel metadata or entry point is not exact")
     metadata = message_from_bytes(archive.read(metadata_names[0]))
     extras = sorted(metadata.get_all("Provides-Extra", []))
-    if extras != ["dev", "integrations", "ml"]:
+    if extras != ["apple-mlx", "dev", "integrations", "ml"]:
         raise SystemExit(f"python-compat: declared extras differ: {extras}")
     if metadata.get("Requires-Python") != ">=3.11":
         raise SystemExit("python-compat: wheel Requires-Python must be >=3.11")

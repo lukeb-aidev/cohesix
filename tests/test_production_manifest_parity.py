@@ -17,7 +17,8 @@ def _manifest(name: str) -> dict:
 
 
 def _common_contract(manifest: dict) -> dict:
-    """Remove only documented hardware, memory and temporal-topology fields."""
+    """Remove only documented target-specific fields before parity comparison."""
+    manifest.pop("gateway")
     manifest.pop("hw", None)
     manifest["meta"].pop("purpose")
     manifest["profile"].pop("name")
@@ -64,6 +65,21 @@ def test_common_production_contract_matches() -> None:
     qemu = _manifest("root_task.toml")
     pi = _manifest("root_task_pi4_uboot_aarch64.toml")
     assert _common_contract(qemu) == _common_contract(pi)
+
+
+def test_production_gateway_protocol_controls_are_explicit() -> None:
+    """Guard the selected host protocol ceilings on both target profiles."""
+    for name, enabled in (
+        ("root_task.toml", True),
+        ("root_task_pi4_uboot_aarch64.toml", False),
+    ):
+        gateway = _manifest(name)["gateway"]
+        assert gateway == {
+            "schema": "cohesix-agent-protocol-controls/v1",
+            "agent_protocols": {"enabled": enabled},
+            "mcp": {"enabled": enabled},
+            "a2a": {"enabled": enabled},
+        }
 
 
 def test_target_worker_refill_allocations_preserve_their_exact_bounds() -> None:

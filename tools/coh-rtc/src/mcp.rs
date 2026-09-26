@@ -110,14 +110,34 @@ fn output_schema(reference: &str) -> Value {
     json!({"type":"object","properties":properties})
 }
 
+struct ToolAccess<'a> {
+    path: &'a str,
+    read_only: bool,
+}
+
+impl<'a> ToolAccess<'a> {
+    fn read(path: &'a str) -> Self {
+        Self {
+            path,
+            read_only: true,
+        }
+    }
+
+    fn write(path: &'a str) -> Self {
+        Self {
+            path,
+            read_only: false,
+        }
+    }
+}
+
 fn tool(
     name: &str,
     description: &str,
     properties: Value,
     required: &[&str],
     actions: &[&str],
-    authority_path: &str,
-    read_only: bool,
+    access: ToolAccess<'_>,
     output_schema_ref: &str,
 ) -> Value {
     json!({
@@ -127,8 +147,8 @@ fn tool(
         "output_schema_ref":output_schema_ref,
         "output_schema":output_schema(output_schema_ref),
         "selected_actions":actions,
-        "authority_path":authority_path,
-        "read_only":read_only,
+        "authority_path":access.path,
+        "read_only":access.read_only,
         "lifecycle":"admission-or-observation-only; inspect original identity for terminal result",
         "evidence":"shared verifier and native provider receipt only; MCP result is not proof"
     })
@@ -172,9 +192,9 @@ pub fn emit(resolved: &Path, registry: &Path, output: &Path) -> Result<()> {
     }
     let id = json!({"admission_id":{"type":"string","minLength":1,"maxLength":96}});
     let mut tools = vec![
-        tool("cohesix.inspect_job", "Read original execution and result-delivery state for this subject.", id.clone(), &["admission_id"], &[], "/host/tickets/status", true, "cohesix-selected-job-record/v1"),
-        tool("cohesix.recover_job", "Reconcile the original identity with target result evidence without replaying its effect.", id.clone(), &["admission_id"], &[], "/host/tickets/status", true, "cohesix-selected-job-reconciliation/v1"),
-        tool("cohesix.request_cancel", "Record cancellation for the original identity; this does not prove native termination.", id, &["admission_id"], &[], "/host/tickets/spec", false, "cohesix-selected-job-record/v1"),
+        tool("cohesix.inspect_job", "Read original execution and result-delivery state for this subject.", id.clone(), &["admission_id"], &[], ToolAccess::read("/host/tickets/status"), "cohesix-selected-job-record/v1"),
+        tool("cohesix.recover_job", "Reconcile the original identity with target result evidence without replaying its effect.", id.clone(), &["admission_id"], &[], ToolAccess::read("/host/tickets/status"), "cohesix-selected-job-reconciliation/v1"),
+        tool("cohesix.request_cancel", "Record cancellation for the original identity; this does not prove native termination.", id, &["admission_id"], &[], ToolAccess::write("/host/tickets/spec"), "cohesix-selected-job-record/v1"),
     ];
     if selected.iter().any(|row| row == "systemd.restart") {
         tools.push(tool(
@@ -183,11 +203,10 @@ pub fn emit(resolved: &Path, registry: &Path, output: &Path) -> Result<()> {
             json!({}),
             &[],
             &["systemd.restart"],
-            "/host/tickets/status",
-            true,
+            ToolAccess::read("/host/tickets/status"),
             "cohesix-available-scopes/v1",
         ));
-        tools.push(tool("cohesix.start_approved_service", "Submit one approved service restart with a stable request ID.", json!({"scope_id":{"type":"string","minLength":1,"maxLength":96},"request_id":{"type":"string","minLength":1,"maxLength":96}}), &["scope_id","request_id"], &["systemd.restart"], "/host/tickets/spec", false, "cohesix-selected-job-response/v1"));
+        tools.push(tool("cohesix.start_approved_service", "Submit one approved service restart with a stable request ID.", json!({"scope_id":{"type":"string","minLength":1,"maxLength":96},"request_id":{"type":"string","minLength":1,"maxLength":96}}), &["scope_id","request_id"], &["systemd.restart"], ToolAccess::write("/host/tickets/spec"), "cohesix-selected-job-response/v1"));
     }
     let submitted: Vec<_> = selected
         .iter()
@@ -196,9 +215,9 @@ pub fn emit(resolved: &Path, registry: &Path, output: &Path) -> Result<()> {
         .collect();
     if !submitted.is_empty() {
         let ticket_schema = selected_ticket_schema(&submitted);
-        tools.push(tool("cohesix.available_selected_jobs", "List currently usable CUDA and PEFT standing scopes, finite capacity and exact targets for this subject.", json!({}), &[], &submitted, "/host/tickets/status", true, "cohesix-available-selected-jobs/v1"));
-        tools.push(tool("cohesix.preflight_selected_job", "Observe the selected CUDA or PEFT host and prepare one short-lived exact job request. No effect is submitted; submit rechecks facts and authority.", json!({"scope_id":{"type":"string","minLength":1,"maxLength":96},"ticket":ticket_schema}), &["scope_id","ticket"], &submitted, "/host/tickets/status", true, "cohesix-selected-job-preflight/v1"));
-        tools.push(tool("cohesix.submit_selected_job", "Submit one exact selected CUDA or PEFT host ticket and standing binding. An ACK is admission only.", json!({"binding":job_binding_schema(&submitted),"ticket":selected_ticket_schema(&submitted)}), &["binding","ticket"], &submitted, "/host/tickets/spec", false, "cohesix-selected-job-response/v1"));
+        tools.push(tool("cohesix.available_selected_jobs", "List currently usable CUDA and PEFT standing scopes, finite capacity and exact targets for this subject.", json!({}), &[], &submitted, ToolAccess::read("/host/tickets/status"), "cohesix-available-selected-jobs/v1"));
+        tools.push(tool("cohesix.preflight_selected_job", "Observe the selected CUDA or PEFT host and prepare one short-lived exact job request. No effect is submitted; submit rechecks facts and authority.", json!({"scope_id":{"type":"string","minLength":1,"maxLength":96},"ticket":ticket_schema}), &["scope_id","ticket"], &submitted, ToolAccess::read("/host/tickets/status"), "cohesix-selected-job-preflight/v1"));
+        tools.push(tool("cohesix.submit_selected_job", "Submit one exact selected CUDA or PEFT host ticket and standing binding. An ACK is admission only.", json!({"binding":job_binding_schema(&submitted),"ticket":selected_ticket_schema(&submitted)}), &["binding","ticket"], &submitted, ToolAccess::write("/host/tickets/spec"), "cohesix-selected-job-response/v1"));
     }
     let catalogue = json!({
         "schema":"cohesix-mcp-catalogue/v1",

@@ -222,14 +222,17 @@ fn local_stdio_writes_only_protocol_messages_to_stdout() {
         .spawn()
         .expect("launch local MCP transport");
     let stdin = child.stdin.as_mut().expect("stdio input");
-    writeln!(stdin, "{}", r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}"#)
+    stdin.write_all(concat!(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}"#, "\n").as_bytes())
         .expect("send initialize");
-    writeln!(
-        stdin,
-        "{}",
-        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
-    )
-    .expect("send notification");
+    stdin
+        .write_all(
+            concat!(
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                "\n"
+            )
+            .as_bytes(),
+        )
+        .expect("send notification");
     drop(child.stdin.take());
     let output = child.wait_with_output().expect("local MCP exit");
     assert!(

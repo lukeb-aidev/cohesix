@@ -72,17 +72,33 @@ follows from it.
 
 The release-version wheel alignment passed 47 focused NeMo, Python, package
 and bundle tests. `scripts/check-generated.sh` passed after regenerating the
-compiler inventory, and both newly built wheel METADATA records report
-`1.2.0b0`. The fresh QEMU seL4 production profile in this isolated checkout
-passed release-mode source/artifact validation. Its subsequent Cohesix image
-build was stopped before completion when the wheel source version changed; it
-does not provide a current-source target result.
+compiler inventory, and both built wheel METADATA records report `1.2.0b0`.
+The fresh QEMU seL4 production profile in this isolated checkout passed
+release-mode source/artifact validation. A QEMU image built at predecessor
+commit `616d34b86eab` booted four cores, reached the serial console and
+answered `ping` with `PONG`. The rootserver's `[BUILD]` marker matched that
+commit. This is boot liveness only, without authenticated TCP, live job or
+final-source release evidence.
 
-The full Clippy baseline fails on untouched source under the installed Rust
-toolchain, including `standing_ledger.rs` large enum, `gpu-bridge-host`
-argument count and `coh-rtc` argument count and nested condition warnings.
-These are baseline failures, not an M28g test waiver. No lint suppression was
-retained in this candidate.
+The installed Rust toolchain exposed Clippy warnings in the rebased source.
+The candidate now repairs the large ledger enum and argument grouping without
+changing admission, job or compiler semantics; it also removes narrow style
+warnings. Full `cargo clippy --workspace --all-targets -- -D warnings` passed,
+along with focused ledger, gateway, GPU child and compiler tests. No lint
+suppression was added.
+
+The first Stage 01 retry passed generated consistency, formatting, Clippy,
+workspace check/tests, SwarmUI, `coh`, QEMU and Pi feature tests, Pi runtime
+tests and the AArch64 target check. Its Python action failed 35 cases: 33
+needed the isolated checkout's repository `.venv`, one exposed the existing
+QEMU/Pi gateway-control difference in the parity test, and one found the
+wheel inspector's stale optional-extra list. After provisioning the pinned
+`.venv` and repairing those test contracts, the focused 85-case set passed.
+The next Stage 01 attempt passed every preceding action and reached 2,913
+passing Python tests; three release-bundle fixture cases still used the old
+wheel metadata. The fixture now describes the selected `1.2.0b0` wheel and
+the affected nine focused tests pass. A clean-source Stage 01 pass remains
+pending until the complete rerun finishes.
 
 The Mac test bed lacks a Developer ID Installer identity; a signed, notarized
 `.pkg` and clean Finder/Spotlight/Dock lifecycle observations cannot yet be
@@ -103,6 +119,13 @@ capability-by-capability installed-client parity matrix and frozen numeric
 adoption, quality, recovery and control-latency budgets have not been written.
 These source and evidence gaps remain even after signing identities and a
 Ubuntu 26.04 test host become available.
+
+The selected QEMU manifest enables the host MCP/A2A protocol ceiling while
+the selected Pi manifest disables it. The exact values are now guarded by the
+production-profile test and documented as a target difference. Protocol
+composition on a Pi-selected gateway cannot be inferred from QEMU checks;
+the required M28g live matrix must identify its actual selected gateway
+profile and cannot promote a disabled Pi surface.
 
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,

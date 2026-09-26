@@ -486,12 +486,14 @@ pub fn execute(
         &selected,
         state,
         &arguments,
-        Instant::now() + Duration::from_millis(u64::from(request.deadline_ms)),
-        cancel,
         visibility,
-        8192,
         &environment,
-        Some((registration.max_disk_bytes, registration.max_output_bytes)),
+        reference::InvocationBounds {
+            deadline: Instant::now() + Duration::from_millis(u64::from(request.deadline_ms)),
+            cancel,
+            maximum: 8192,
+            disk_limits: Some((registration.max_disk_bytes, registration.max_output_bytes)),
+        },
     )?;
     ensure!(
         native["schema"] == "cohesix-registered-cuda-result/v1"

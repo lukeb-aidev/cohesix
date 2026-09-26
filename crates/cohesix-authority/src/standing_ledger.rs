@@ -6,6 +6,7 @@
 //! One local durable custody point for a gateway and native ticket executor.
 //! Both processes must use the same private filesystem and policy profile.
 
+use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -84,7 +85,7 @@ pub struct ScopeStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReserveOutcome {
     Reserved(AdmissionDecision),
-    Existing(JobRecord),
+    Existing(Box<JobRecord>),
 }
 
 /// Errors distinguish policy refusals from corrupt or full persistent state.
@@ -364,7 +365,7 @@ impl StandingLedger {
             let digest = binding.intent_sha256()?;
             if let Some(existing) = ledger.jobs.get(&binding.admission_id) {
                 return if existing.intent_sha256 == digest && existing.binding == binding {
-                    Ok((ReserveOutcome::Existing(existing.clone()), false))
+                    Ok((ReserveOutcome::Existing(Box::new(existing.clone())), false))
                 } else {
                     Err(LedgerError::Conflict)
                 };
@@ -837,10 +838,12 @@ mod tests {
             JobExecution::Dispatching
         );
         let (restarted, _, _) = setup(&path);
-        assert!(matches!(
-            restarted.reserve(binding, &facts, 1003),
-            Ok(ReserveOutcome::Existing(_))
-        ));
+        let duplicate = restarted.reserve(binding, &facts, 1003).expect("duplicate");
+        let ReserveOutcome::Existing(record) = duplicate else {
+            panic!("duplicate must return the original retained record");
+        };
+        assert_eq!(record.execution, JobExecution::Dispatching);
+        assert_eq!(record.delivery, JobDelivery::Pending);
         assert_eq!(
             restarted
                 .mark_uncertain("admit-1")

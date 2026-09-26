@@ -629,7 +629,7 @@ scripts/ci/python_compat_run.sh \
 
 The wheel gate requires both CPython 3.11 and 3.13, installs the same wheel
 without dependencies into isolated environments, checks the public entry
-point, verifies the declared `integrations`, `ml`, and `dev` extras, and emits
+point, verifies the declared `apple-mlx`, `integrations`, `ml`, and `dev` extras, and emits
 `cohesix-python-package/v1`. That manifest binds the wheel hash and both target
 contract hashes. `dev` remains test-only. Missing optional providers return a
 typed skipped/degraded probe and never select `MockBackend` implicitly.

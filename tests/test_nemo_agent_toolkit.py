@@ -16,13 +16,15 @@ from types import SimpleNamespace
 import pytest
 
 
-KIT = Path(__file__).resolve().parents[1] / "integrations/nemo-agent-toolkit/src"
+ROOT = Path(__file__).resolve().parents[1]
+KIT = ROOT / "integrations/nemo-agent-toolkit/src"
 sys.path.insert(0, str(KIT))
 from cohesix_nemo_kit import cli  # noqa: E402
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/ci"))
+sys.path.insert(0, str(ROOT / "tools/cohesix-py"))
+sys.path.insert(0, str(ROOT / "scripts/ci"))
 from provider_m28f_live import profiler  # noqa: E402
 
-INSTALLER = Path(__file__).resolve().parents[1] / "scripts/install/install_nemo_agent_toolkit.py"
+INSTALLER = ROOT / "scripts/install/install_nemo_agent_toolkit.py"
 spec = importlib.util.spec_from_file_location("nemo_installer", INSTALLER)
 assert spec and spec.loader
 installer = importlib.util.module_from_spec(spec)

@@ -150,7 +150,7 @@ pub(super) fn selected_ledger(config: &GatewayConfig) -> Result<Option<Arc<Stand
     Ok(Some(Arc::new(ledger)))
 }
 
-pub(super) fn delegated_token<'a>(headers: &'a HeaderMap) -> Option<&'a str> {
+pub(super) fn delegated_token(headers: &HeaderMap) -> Option<&str> {
     if headers.get_all(auth::TICKET_HEADER).iter().count() != 1 {
         return None;
     }
@@ -974,7 +974,7 @@ pub(super) async fn submit(
             StatusCode::OK,
             Json(JobResponse {
                 schema: "cohesix-selected-job-response/v1",
-                record,
+                record: *record,
                 submission: "existing",
             }),
         )

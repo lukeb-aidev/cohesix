@@ -162,6 +162,14 @@ fn read_pipe(pipe: impl Read, maximum: u64) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// One child invocation's deadline, cancellation signal and byte ceilings.
+pub(crate) struct InvocationBounds<'a> {
+    pub(crate) deadline: Instant,
+    pub(crate) cancel: &'a AtomicBool,
+    pub(crate) maximum: u64,
+    pub(crate) disk_limits: Option<(u64, u64)>,
+}
+
 pub(crate) fn invoke(
     helper: &Path,
     state: &Path,
@@ -175,12 +183,14 @@ pub(crate) fn invoke(
         helper,
         state,
         args,
-        deadline,
-        cancel,
         visibility,
-        maximum,
         &BTreeMap::new(),
-        None,
+        InvocationBounds {
+            deadline,
+            cancel,
+            maximum,
+            disk_limits: None,
+        },
     )
 }
 
@@ -219,17 +229,14 @@ pub(crate) fn invoke_with_env(
     helper: &Path,
     state: &Path,
     args: &[String],
-    deadline: Instant,
-    cancel: &AtomicBool,
     visibility: Option<&str>,
-    maximum: u64,
     environment: &BTreeMap<String, String>,
-    disk_limits: Option<(u64, u64)>,
+    bounds: InvocationBounds<'_>,
 ) -> Result<Value> {
-    if cancel.load(Ordering::Acquire) {
+    if bounds.cancel.load(Ordering::Acquire) {
         bail!("cancelled before_dispatch");
     }
-    if Instant::now() >= deadline {
+    if Instant::now() >= bounds.deadline {
         bail!("timeout before_dispatch");
     }
     let mut command = Command::new(helper);
@@ -256,18 +263,18 @@ pub(crate) fn invoke_with_env(
         .stderr
         .take()
         .ok_or_else(|| anyhow!("unavailable child_stderr"))?;
-    let output = thread::spawn(move || read_pipe(stdout, maximum));
-    let errors = thread::spawn(move || read_pipe(stderr, maximum));
+    let output = thread::spawn(move || read_pipe(stdout, bounds.maximum));
+    let errors = thread::spawn(move || read_pipe(stderr, bounds.maximum));
     let outcome = loop {
-        if let Some((max_disk, max_output)) = disk_limits {
+        if let Some((max_disk, max_output)) = bounds.disk_limits {
             if let Err(error) = check_declared_disk(state, max_disk, max_output) {
                 break Err(error);
             }
         }
-        if cancel.load(Ordering::Acquire) {
+        if bounds.cancel.load(Ordering::Acquire) {
             break Err(anyhow!("cancelled cuda_reference"));
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= bounds.deadline {
             break Err(anyhow!("timeout cuda_reference"));
         }
         match child.try_wait() {
@@ -287,11 +294,11 @@ pub(crate) fn invoke_with_env(
     let stderr = errors
         .join()
         .map_err(|_| anyhow!("unavailable child_stderr"))??;
-    if let Some((max_disk, max_output)) = disk_limits {
+    if let Some((max_disk, max_output)) = bounds.disk_limits {
         check_declared_disk(state, max_disk, max_output)?;
     }
     let status = outcome?;
-    if stdout.len() as u64 > maximum || stderr.len() as u64 > maximum {
+    if stdout.len() as u64 > bounds.maximum || stderr.len() as u64 > bounds.maximum {
         bail!("response_limit cuda_reference");
     }
     if !status.success() {
@@ -617,12 +624,14 @@ mod tests {
             &child,
             state.path(),
             &[],
-            Instant::now() + Duration::from_secs(2),
-            &AtomicBool::new(false),
             None,
-            4096,
             &BTreeMap::new(),
-            Some((8192, 64)),
+            InvocationBounds {
+                deadline: Instant::now() + Duration::from_secs(2),
+                cancel: &AtomicBool::new(false),
+                maximum: 4096,
+                disk_limits: Some((8192, 64)),
+            },
         )
         .unwrap_err();
         assert!(error.to_string().starts_with("disk_bound"));
