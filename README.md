@@ -43,14 +43,20 @@ the trusted core stays small.
 ## For AI agents
 
 Start with [llms.txt](llms.txt) for task selection and authoritative references.
-Operational skills cover [Queen inspection](skills/cohesix-inspect/SKILL.md),
-[governed GPU operations](skills/cohesix-gpu-operations/SKILL.md) and
-[evidence review](skills/cohesix-evidence/SKILL.md), including Python workflows.
-For host preparation, use [AI host setup](skills/cohesix-ai-host-setup/SKILL.md)
-for third-party Mac and Linux model, CUDA and agent tools.
-Load the relevant `SKILL.md` directly or copy its folder into your agent's skill
-location with its `references/` directory where present. The skills explain how
-to select references matching an installed version.
+The [use-case guide](docs/USE_CASES.md) routes each workflow to a repo-managed
+skill: [agent delegation](skills/cohesix-agent-delegation/SKILL.md),
+[edge recovery](skills/cohesix-edge-recovery/SKILL.md),
+[GPU operations](skills/cohesix-gpu-operations/SKILL.md),
+[model rollout](skills/cohesix-model-rollout/SKILL.md),
+[private adapter release](skills/cohesix-private-adapter-release/SKILL.md),
+[fleet operations](skills/cohesix-fleet-operations/SKILL.md) and
+[evidence review](skills/cohesix-evidence/SKILL.md). Start with
+[Queen inspection](skills/cohesix-inspect/SKILL.md) or
+[AI host setup](skills/cohesix-ai-host-setup/SKILL.md) when the deployment is
+new to you.
+Load the relevant `SKILL.md` from this repository. If you copy a skill to an
+agent's skill location, bring any companion skills it links to and use the
+matching installed guides in place of repository-relative documentation links.
 [AGENTS.md](AGENTS.md) remains the separate contributor charter.
 
 ## What makes Cohesix different?

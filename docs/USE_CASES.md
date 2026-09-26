@@ -1,6 +1,6 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Explain practical Cohesix use cases, community needs, and the current and planned capability boundaries. -->
+<!-- Purpose: Explain practical Release B Cohesix use cases, community needs, operating skills and proof boundaries. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Use Cases
 
@@ -20,17 +20,18 @@ ordinary hosts. Cohesix is useful when **the decision to run or change something
 must be smaller, clearer, and easier to audit than the system doing the work**.
 A request being accepted is not proof that its external effect happened.
 
-This page describes real engineering problems and the Cohesix patterns that
-address them. It distinguishes what ships in [Release A](STATUS.md), what is
-complete only in current development source, and what [Release B](BUILD_PLAN.md#release-b)
-still has to qualify. The examples are deployment patterns, not claims that
-Cohesix ships a finished medical, traffic, manufacturing, or robotics product.
+This guide describes what to do with a **matching Release B installation**:
+useful CUDA jobs, private adapter releases, Mac MLX work and agent clients
+that share one governed job and evidence model. Check the installed version,
+selected profile and [Status](STATUS.md) before citing present availability;
+this guide is not a release certificate. The examples are deployment patterns,
+not claims that Cohesix supplies a finished medical, traffic, manufacturing
+or robotics application.
 
-| Maturity | How to read it here |
-| --- | --- |
-| Release A | Shipped workflow with the exact evidence and limits recorded in [Status](STATUS.md). |
-| Current development source | Implemented and checked at a named component scope; it is not an installed Release B result. |
-| Release B goal | A release-wide journey that still needs installed, integrated qualification under [28g](BUILD_PLAN.md#28g), even when individual components are complete. |
+The basic distinction is simple: Cohesix decides and records **whether a
+specific action may run**. The selected Mac, Jetson or other prepared host
+runs the model, service or container. The result needs observation and, when
+claimed as verified, the applicable independent evidence check.
 
 ## What you can build
 
@@ -47,19 +48,17 @@ approved effect and reports what it observed. The operator can distinguish the
 proposal, admission, native result, and verified outcome. If an answer is lost,
 the agent inspects the original job instead of blindly retrying the action.
 
-Current CLI, REST, and Python paths use Cohesix's existing control model.
-[Milestone 28d](BUILD_PLAN.md#28d) has checked selected authenticated MCP tools
-for native Jetson CUDA and PEFT work, including refusal and recovery after a
-lost response. [Milestone 28e](BUILD_PLAN.md#28e) has separately checked
-selected A2A CUDA and PEFT tasks, original-task recovery, and a NeMo native
-client's card, lookup, and cancellation behavior. These are component results,
-not an installed Release B journey. The full
-[NeMo Agent Toolkit](BUILD_PLAN.md#28f) integration still needs live proof: an
-ordinary Toolkit workflow should submit useful CUDA work, delegate a PEFT
-release, see a denial, and reconnect to the actual result. Each client must
-preserve the same authority, accounting, and job identity. Cohesix does not
-replace NeMo's planner or model endpoint, and a tool or task response is not
-an independent success receipt.
+An installed agent can discover selected operations over MCP, or delegate a
+durable job over A2A. A person can use CLI, Python or a Mac Shortcut for the
+same underlying action. With [NeMo Agent Toolkit](BUILD_PLAN.md#28f), a useful
+journey is: inspect available work, request a CUDA job or PEFT release, see a
+real denial for an out-of-scope action, disconnect, then recover the original
+result. Each client keeps the same subject, budget and job identity. Cohesix
+does not replace NeMo's planner or model endpoint; tool and task responses do
+not independently certify the native outcome.
+
+Use the [agent delegation skill](../skills/cohesix-agent-delegation/SKILL.md)
+to select MCP versus A2A, scope a request and reconcile a lost response.
 
 ### 2. The Self-Healing Edge Swarm
 
@@ -73,10 +72,13 @@ specific ticket or schedule request, with an observed provider result and a
 visible unresolved state when recovery is uncertain. Raw video, tensors, and
 high-volume event streams remain in the application data plane.
 
-The health and admission primitives exist today. Autonomous diagnosis,
-site-specific fail-safe behavior, and recovery quality need a real deployment
-and its own evidence. The named manufacturing and traffic playbooks below
-rehearse control relationships; they do not run a safety application.
+Start with fresh target and host observations, then request one allowlisted
+recovery action and observe the application afterward. Autonomous diagnosis,
+site-specific fail-safe behavior and recovery quality still need evidence for
+that site. The manufacturing and traffic playbooks below rehearse control
+relationships; they do not run a safety application. Use the
+[edge recovery skill](../skills/cohesix-edge-recovery/SKILL.md) for the
+before/action/after workflow.
 
 ### 3. The GPU Flight Deck
 
@@ -92,12 +94,11 @@ can inspect device freshness, queue and lease state, native execution, output
 hashes, and cancellation or recovery. An active lease is a control decision, not
 a claim of hard GPU isolation.
 
-**Where it stands.** [Release A](STATUS.md) includes the native CUDA foundation
-and recoverable recipes. [Milestone 28a](BUILD_PLAN.md#28a) adds selected,
-source-complete workload registration and independently checked useful work on
-the Orin through systemd and Docker. Release B still needs installed, integrated
-qualification. Other NVIDIA GPUs and deployment profiles need their own proof.
-See [GPU Nodes](GPU_NODES.md).
+The Release B reference uses selected, digest-pinned workloads and independently
+checked useful work on a Jetson Orin through systemd and Docker. A different
+NVIDIA device, driver, container or executor profile needs its own compatibility
+and native-result check. See [GPU Nodes](GPU_NODES.md) and the
+[GPU operations skill](../skills/cohesix-gpu-operations/SKILL.md).
 
 ### 4. Model Rollout with a Flight Recorder
 
@@ -107,7 +108,7 @@ with a CUDA-backed deployment on a Jetson. They need to know which host did
 each stage, whether any private artifact moved, and which generation a real
 client reached after promotion or rollback.
 
-**Cohesix's role.** The planned Release B journey names the provider and host
+**Cohesix's role.** A governed rollout names the provider and host
 for each stage, checks capability and capacity, preserves one job lineage, and
 shows local Metal observations separately from verified remote CUDA outcomes.
 A model reference is not a file transfer. An accepted model choice is not a
@@ -115,24 +116,17 @@ verified deployment. If distribution is selected, the host data path must
 deliver the bytes and verify the full destination hash before a separate
 activation decision.
 
-Cohesix already has bounded model descriptors and an active identifier, while
-Release A's LoRA path adds a recoverable adapter transaction. There is no
-dedicated built-in playbook for a complete model rollout. Release B aims to
-show a real client reaching the exact canary or restored generation.
-
-[Milestone 28c](BUILD_PLAN.md#28c) has checked local MLX/Metal work and native
-Shortcuts and App Intents on a selected Mac. [Milestone 28c1](BUILD_PLAN.md#28c1)
-has separately checked admitted Mac training, recovery after an interrupted
-release, and generation-fenced serving through a pinned
-[vMLX](https://github.com/jjang-ai/vmlx) engine. Those are selected component
-results, not broad Mac or Release B qualification. vMLX's model gateway and
-its MCP client play different roles: the separate vMLX MCP client path was not
-qualified by 28d, and model text cannot certify a Cohesix job.
-[Milestone 28e](BUILD_PLAN.md#28e) checked selected Jetson A2A jobs; a
-separate agent peer using a vMLX model endpoint remains unqualified. Neither
-path makes vMLX itself a Cohesix executor or an A2A peer. Mixed MLX/CUDA
-composition, vMLX as an MCP client or as a model endpoint for an A2A peer,
-and optional weight distribution still need their own live acceptance.
+The Mac path distinguishes local MLX/Metal exploration from an admitted Mac
+release. On an advertised profile, the admitted path can train, compare,
+serve a canary and recover the accepted generation, with optional
+[vMLX](https://github.com/jjang-ai/vmlx) serving bound to that generation.
+vMLX serving, vMLX as an MCP client and a separate A2A peer using its model
+endpoint are different integrations. A model response cannot certify a Cohesix
+job. Mixed MLX/CUDA work and verified weight distribution are usable only
+where the installed profile advertises and qualifies those paths. There is
+still no dedicated built-in Python playbook for a complete model rollout;
+the [model rollout skill](../skills/cohesix-model-rollout/SKILL.md) gives an
+operator a concrete comparison, transfer and serving checklist.
 
 ### 5. The Private LoRA Foundry
 
@@ -150,14 +144,13 @@ is followed under its original operation identity so it cannot quietly start a
 second effect. Private weights and data stay on the selected host unless a
 separately authorised transfer is made.
 
-**Where it stands.** [Release A](STATUS.md) includes the verified private LoRA
-transaction and its [operator guide](PRIVATE_LORA_RELEASE.md).
-[Milestone 28b](BUILD_PLAN.md#28b) has checked configurable PEFT training and
-import, held-out comparison, a real application request to the promoted
-generation, and recovery to the incumbent after an interrupted promotion on a
-selected NVIDIA/KVM component. The installed, integrated Release B journey
-still needs qualification. LoRA, QLoRA, MLX, and other adapter formats are
-compatible only where the exact model and runtime pair has been tested.
+The [private LoRA guide](PRIVATE_LORA_RELEASE.md) covers native training or
+import, evaluation, canary and verified rollback. A registry pointer is not
+proof of serving. The selected model, adapter and runtime pair must be
+compatible; the guide's reference result does not qualify arbitrary LoRA,
+QLoRA or MLX combinations. Use the
+[private adapter release skill](../skills/cohesix-private-adapter-release/SKILL.md)
+to freeze the comparison and follow a real client to the accepted generation.
 
 ### 6. Multi-Hive Mission Control
 
@@ -171,10 +164,12 @@ Receipts retain the source and destination relationship; a relay cannot promise
 exactly-once behavior for an unobserved external effect. Leases, quotas, and
 provider evidence remain separate in the display.
 
-Current host composition and the Python playbooks provide starting points.
-Each live site still needs target, authentication, provider, failure, and
-retention checks. The mixed factory and logistics names below describe possible
-applications of the pattern, not shipped industry integrations.
+Host-side composition and the Python playbooks provide starting points. Each
+live site still needs target, authentication, provider, failure and retention
+checks. The mixed factory and logistics names below describe possible uses of
+the pattern, not shipped industry integrations. Use the
+[fleet operations skill](../skills/cohesix-fleet-operations/SKILL.md) to keep
+each hive's freshness, authority and result visible.
 
 ### Review an incident or a change after the fact
 
@@ -187,15 +182,17 @@ rollout, or federation review. Keep the request, admission, provider observation
 and signed result separate. A retained replay helps explain an event; it does
 not turn an old host observation into fresh target or hardware proof.
 
-This [Release A operator workflow](OPERATOR_EVIDENCE.md) is useful on its own
-and is also the evidence path behind the other scenarios.
+This [operator workflow](OPERATOR_EVIDENCE.md) is useful on its own and is the
+evidence path behind the other scenarios. Use the
+[evidence skill](../skills/cohesix-evidence/SKILL.md) to build a case without
+turning a partial capture into a success claim.
 
 ## What recent community discussions tell us
 
 This is a snapshot of public engineering conversations checked on
-**26 September 2026**. A thread is evidence of a reported problem or design
-question, not proof that every user has it or that Cohesix fixes the underlying
-library. The Release B fit is a proposed control or verification benefit.
+**26 September 2026**. A thread shows a reported problem or design question;
+it does not mean every deployment has that problem or that Cohesix fixes the
+underlying library. It tells an operator what to observe and test.
 
 | Community and where to join | Recent discussion | What that means for a Cohesix use case |
 | --- | --- | --- |
@@ -205,17 +202,18 @@ library. The Release B fit is a proposed control or verification benefit.
 | Hugging Face [PEFT and LoRA issues](https://github.com/huggingface/peft/issues) and [forums](https://discuss.huggingface.co/) | September reports cover [adapter combinations that cannot be reloaded](https://github.com/huggingface/peft/issues/3737) and [merges that change some adapter outputs](https://github.com/huggingface/peft/issues/3761). A [serving discussion](https://discuss.huggingface.co/t/case-study-serving-a-qwen-2-5-32b-raft-adapter-finance-on-zerogpu/172207) asks whether to merge a QLoRA adapter for deployment. | Record base and adapter identity, reject unsupported combinations, compare actual outputs, and verify the served generation before declaring a release successful. |
 | [NeMo Agent Toolkit issues](https://github.com/NVIDIA/NeMo-Agent-Toolkit/issues), [docs](https://docs.nvidia.com/nemo/agent-toolkit/latest/), and [NVIDIA NeMo forum](https://forums.developer.nvidia.com/c/ai-data-science/nvidia-nemo/715) | A [per-user MCP plus A2A configuration report](https://github.com/NVIDIA/NeMo-Agent-Toolkit/issues/2162) and a [schema/result fidelity discussion](https://github.com/NVIDIA/NeMo-Agent-Toolkit/issues/2138) show why protocol labels alone do not prove an agent workflow. | Test the pinned Toolkit's native clients with real delegated credentials, typed results, denial, and reconnect. Trace links help explain work but cannot replace the provider's verified outcome. |
 
-These conversations make the Release B priorities concrete: a useful CUDA job,
-a private adapter whose deployed quality is checked, a Mac path that labels
-local versus remote work, and agent clients that can survive refusal and lost
-responses. Model runners and data stay on their hosts; each model and runtime
-combination needs its own compatibility check.
+Across these conversations, four checks matter: did useful CUDA work really
+run; did a private adapter improve and reach a real client; which work was
+local Metal versus remote CUDA; and could the agent recover after refusal or
+a lost response? Model runners and data stay on their hosts. Each model and
+runtime combination still needs its own compatibility check.
 
 ## Try the nine control-model playbooks
 
-The Python package contains nine named playbooks that let a contributor inspect
-the approvals, schedules, leases, exports, and local provider probes involved
-in these ideas. From a source checkout:
+The Python package contains nine named playbooks for exploring the approvals,
+schedules, leases, exports and local provider probes involved in these ideas.
+They are **control-model rehearsals**. The skills above guide real operating
+work against a matching deployment. From a source checkout:
 
     python3 -m pip install -e tools/cohesix-py
     cohesix-playbook --list
@@ -242,7 +240,8 @@ Mac rehearsal cannot silently discover a remote Jetson.
 The compiler-owned [dependency graph](../configs/generated/host_integration_dependency.json)
 and generated [support table](snippets/host_integration_dependency.md)
 identify the playbook dependencies and evidence modes. The playbook catalogue
-is a way to explore a deployment, not a shortcut past those dependencies.
+helps design a deployment; it does not satisfy those dependencies or confer
+sector acceptance.
 
 ## How to decide whether Cohesix fits
 
@@ -266,29 +265,28 @@ Before adopting a scenario, ask:
    success?
 4. If a reply is lost or a process restarts, how is the original job found?
 5. Where do private inputs, model bytes, credentials, and retained evidence go?
-6. What is verified on this target now, and what is only a fixture, pattern, or
-   Release B goal?
+6. Which operations are qualified on this exact installed profile, and which
+   examples are only fixtures or design patterns?
 
 Start with the [Quickstart](QUICKSTART.md), the [Operator Walkthrough](OPERATOR_WALKTHROUGH.md),
 or the [Private LoRA guide](PRIVATE_LORA_RELEASE.md). The [Build Plan](BUILD_PLAN.md)
 owns milestone scope, [Status](STATUS.md) records current evidence,
 and the [Test Plan](TEST_PLAN.md) defines the proof needed for a claim.
 
-## Build the next reference journey with us
+## Bring a real workflow
 
-The best contribution is one narrow workflow another engineer can reproduce:
-an approved workload, a fixed dataset and quality measure, a real provider
-observation, a failure case, and an honest result. Release B's concrete owners
-are [28a CUDA work](BUILD_PLAN.md#28a), [28b PEFT serving](BUILD_PLAN.md#28b),
-[28c Apple compute](BUILD_PLAN.md#28c), [28c1 governed Mac rollout](BUILD_PLAN.md#28c1),
-[28d MCP](BUILD_PLAN.md#28d),
-[28e A2A](BUILD_PLAN.md#28e), [28f NeMo](BUILD_PLAN.md#28f), and
-[28g installation and qualification](BUILD_PLAN.md#28g).
+A useful contribution is one narrow journey another engineer can reproduce:
+an approved workload, fixed inputs and quality measure, a native provider
+observation, a refusal or interruption, and an honest result. The repo-managed
+skills under [`skills/`](../skills/) give starting procedures; they do not
+activate capabilities or replace the installed guide and operator policy.
+For a new Mac or NVIDIA environment, start with
+[AI host setup](../skills/cohesix-ai-host-setup/SKILL.md). For an unfamiliar
+Queen, start with [read-only inspection](../skills/cohesix-inspect/SKILL.md).
 
-Useful independent work includes better provider fixtures and negative cases,
-readable receipt and recovery views, installed CLI/Python/SwarmUI help,
-repeatable Jetson and Mac examples, and a sector integration that supplies its
-own safety and target evidence. Broader provider catalogues and domain
-applications have separate deferred ownership in the Build Plan. See
-[Contributing](../CONTRIBUTING.md) and [Operator Recipes](OPERATOR_RECIPES.md)
-for the current entry points.
+Good additions include a reproducible model/runtime pair, a negative case
+that shows a refusal clearly, a better receipt or recovery view, or a sector
+integration with its own provider and safety evidence. The
+[Build Plan](BUILD_PLAN.md) owns scope and the [Test Plan](TEST_PLAN.md) owns
+proof. See [Contributing](../CONTRIBUTING.md) and
+[Operator Recipes](OPERATOR_RECIPES.md) for the current entry points.

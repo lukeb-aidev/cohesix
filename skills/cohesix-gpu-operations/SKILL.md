@@ -1,6 +1,6 @@
 ---
 name: cohesix-gpu-operations
-description: Operate or diagnose an approved Cohesix GPU workload and establish its actual outcome across Queen, executor and evidence. Use for existing governed CUDA deployments and conditional PEFT workflows, not standalone training, CUDA installation or unrestricted shell access.
+description: Register, run or diagnose an approved Cohesix CUDA workload and establish its outcome across Queen, executor and evidence. Use for governed GPU jobs, not adapter promotion, CUDA installation or unrestricted shell access.
 license: Apache-2.0
 ---
 <!-- Author: Lukas Bower -->
@@ -124,7 +124,7 @@ need their own current exact authorization; cancellation is confirmed only after
 native termination. Missing/conflicting evidence remains unknown and requires
 the operator or custodian. Never manufacture a receipt to finish a workflow.
 
-## Conditional Python, PEFT and agent protocols
+## Choose the neighboring workflow
 
 - Python `CohesixClient.gpu_workload_ticket(spec)` uses the same admitted path;
   it needs the matching generated target profile and authority. Follow
@@ -132,17 +132,16 @@ the operator or custodian. Never manufacture a receipt to finish a workflow.
 - `coh plan ID` and `coh explain ID` read registered workflow declarations;
   IDs come from `coh providers`. A listed domain playbook can still refuse
   execution with `not_enabled`. Mock/dry-run plans do not establish its use case.
-- For PEFT, establish whether the request means local export/import/registry
-  management or native training/serving. Python activate/rollback changes the
-  host registry with projection pending; publication is separate and does not
-  prove inference reload. Route to [host tools](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_TOOLS.md) and
-  [Python support](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/PYTHON_SUPPORT.md). The complete Verified Private
-  LoRA Release journey remains planned under 27d; do not promise it from an
-  earlier adapter fixture, registry operation or package probe.
-- Current gateway routes are REST. MCP/A2A coverage is planned under 28g;
-  check [Host API](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_API.md) and the
-  [Build Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md) before claiming support. A request for
-  MCP/A2A does not authorize creating a new server or enabling future scope.
+- For native PEFT or MLX training, comparison and served-generation proof,
+  use [private adapter release](../cohesix-private-adapter-release/SKILL.md).
+  Registry activation or a package probe cannot stand in for its native
+  canary and shared-verifier result.
+- For an MCP or A2A caller, use
+  [agent delegation](../cohesix-agent-delegation/SKILL.md) with the matching
+  generated catalogue and effective protocol controls. That client sees the
+  same job identity and budgets; it cannot mint a CUDA outcome.
+- For choosing between Mac MLX and CUDA hosts, approved model transfer and
+  exact serving generation, use [model rollout](../cohesix-model-rollout/SKILL.md).
 
 Report admitted, ready, running, terminal, verified requested outcome and
 acceptance separately. Historical QEMU/native proof is not new Pi qualification.

@@ -13471,9 +13471,24 @@ hardware/evidence is a named blocker, not permission to lower the release promis
 portable archives and guides, integrated acceptance matrix, exact release
 evidence and approval-ready release notes.
 
+The following documentation-only task is active at user direction. It prepares
+use-case guidance for an assumed complete Release B installation; it does not
+change this milestone's release status or supply release acceptance evidence.
+
 **Task breakdown**
 
 ```text
+Title/ID: m28g-use-case-adoption-skills
+Milestone: 28g / m28g-use-case-adoption-skills
+Status: Complete — documentation-only adoption guidance, 26 September 2026.
+Goal: Give agents and operators distinctive, usable procedures for each documented use case and a complete community-facing Release B overview.
+Inputs: docs/USE_CASES.md; existing repo skills; installed-client, provider, evidence and authority contracts; 28–28g evidence boundaries.
+Changes: skills/*/SKILL.md; docs/USE_CASES.md; README.md; llms.txt; this task record. Preserve six generated use-case headings and nine playbooks.
+Commands: skill-creator quick_validate for each new or changed skill; python3 scripts/ci/check_host_integration_inventory.py; scripts/check-generated.sh; git diff --check; local-link and claim review.
+Checks: Skills have distinct triggers and outcomes, route to exact-version contracts, preserve scoped authority and original-identity recovery, and make no unearned installed, Pi, provider or industry claim. USE_CASES keeps all existing use cases and playbook ideas while explaining the assumed Release B workflows.
+Validation: Six skill entrypoints passed quick_validate; host inventory retained six use cases and nine playbooks; check-generated passed its implementation, Test Plan and NIST guards; local links and git diff --check passed. No live target, native provider, installer or release gate was run for this documentation task.
+Deliverables: Discoverable repo-managed skills, revised use-case guide and focused validation record. This documentation does not qualify or publish Release B.
+
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.
