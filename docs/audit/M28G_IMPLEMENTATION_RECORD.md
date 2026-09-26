@@ -338,3 +338,16 @@ acceptance until the selected plan is rerun against its committed identity.
 existing ticket identity and result paths; the new read is internal to the
 agent's recovery and adds no client action or success state. Their applicable
 regressions remain in the Test Plan.
+
+The first full Test Plan attempt at repair commit `2202a95a5` passed Stage
+01 metadata, generated consistency, formatting, Clippy and workspace check,
+then failed four `cohsh` TCP script tests. The authenticated plan environment
+provided `COH_AUTH_TOKEN_REF`; the test children set their fixture
+`COHSH_AUTH_TOKEN`, which has lower resolver precedence. Each mock server
+therefore waited for a different `AUTH` frame and the scripts timed out at
+attach. This is test isolation, not a target or provider failure. The TCP
+script harness now removes both higher-priority ambient token variables from
+each child, preserving production resolver precedence. All six focused TCP
+script cases passed with the private plan token reference deliberately set
+in the parent environment. Stage 01 and downstream gates still require a
+fresh run at the resulting committed source.

@@ -16,6 +16,14 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 const TEST_AUTH_TOKEN: &str = "tcp-cli-script-test-token";
+
+fn isolated_tcp_command() -> Command {
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    command
+        .env_remove("COH_AUTH_TOKEN_REF")
+        .env_remove("COH_AUTH_TOKEN");
+    command
+}
 const NETSTATS_BODY: [&str; 30] = [
     "netstats: rx_pkts=12 tx_pkts=9 rx_used=4 tx_used=2 polls=37",
     "netstats: generation=7 udp_rx=3 udp_tx=5 tcp_accepts=2 tcp_auth=2 tcp_rx_bytes=384 tcp_recv_ready=8 tcp_recv_budget_hits=1 tcp_tx_bytes=512",
@@ -111,7 +119,7 @@ fn tcp_script_executes_against_basic_server() {
         .join("scripts")
         .join("cohsh")
         .join("tcp_basic.coh");
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let mut cmd = isolated_tcp_command();
     let assert = cmd
         .arg("--transport")
         .arg("tcp")
@@ -193,7 +201,7 @@ fn tcp_script_forwards_netstats_and_nettest() {
     )
     .expect("write script");
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let mut cmd = isolated_tcp_command();
     let assert = cmd
         .arg("--transport")
         .arg("tcp")
@@ -293,7 +301,7 @@ fn tcp_script_fails_when_quit_ack_is_not_followed_by_peer_eof() {
     let script_path = std::env::temp_dir().join(format!("cohsh-quit-eof-{unique}.coh"));
     fs::write(&script_path, "attach queen\nquit\n").expect("write script");
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let mut cmd = isolated_tcp_command();
     let assert = cmd
         .arg("--transport")
         .arg("tcp")
@@ -350,7 +358,7 @@ fn tcp_script_fails_when_peer_closes_before_quit_ack() {
     let script_path = std::env::temp_dir().join(format!("cohsh-quit-no-ack-{unique}.coh"));
     fs::write(&script_path, "attach queen\nquit\n").expect("write script");
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let mut cmd = isolated_tcp_command();
     let assert = cmd
         .arg("--transport")
         .arg("tcp")
@@ -384,7 +392,7 @@ fn tcp_script_reports_connection_failure() {
         .join("scripts")
         .join("cohsh")
         .join("tcp_basic.coh");
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let mut cmd = isolated_tcp_command();
     let assert = cmd
         .arg("--transport")
         .arg("tcp")
@@ -406,7 +414,7 @@ fn tcp_interactive_attach_failure_keeps_prompt() {
     let port = unused_listener.local_addr().expect("listener addr").port();
     drop(unused_listener);
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let mut cmd = isolated_tcp_command();
     let assert = cmd
         .arg("--transport")
         .arg("tcp")
