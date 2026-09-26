@@ -103,6 +103,22 @@ lane = "live_safe"
 runner = "provider_m28e_live"
 
 [[cases]]
+id = "m28f-nemo-install"
+group = "packaging"
+providers = []
+proof_class = "live_host"
+lane = "live_safe"
+runner = "provider_m28f_live"
+
+[[cases]]
+id = "m28f-nemo-live"
+group = "executors"
+providers = ["gpu.workload", "peft"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28f_live"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

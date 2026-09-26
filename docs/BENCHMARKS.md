@@ -4,6 +4,32 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
+## NeMo Agent Toolkit 1.9.0 comparison (M28f)
+
+Use the pinned install in [the NeMo kit](../integrations/nemo-agent-toolkit/README.md)
+and one fixed JSON dataset for both `cohesix-nemo eval-direct` and
+`cohesix-nemo eval-a2a`. The selected question asks for the state and original
+ID of one already completed PEFT A2A task. The direct configuration has only
+the same pinned model; the governed configuration adds the authenticated
+per-user A2A group. Neither evaluation submits a fresh effect. Native `nat
+eval` writes `standardized_data_all.csv` and profiler traces in each private
+evaluation directory. Keep the dataset, exact model revision, gateway subject,
+source/image identity, package digests and verifier result with the comparison.
+
+For the selected one-question check, the predeclared quality gate is: direct
+answers must say the unobserved task state is unknown; governed answers must
+name the original task ID and the state independently confirmed by Cohesix.
+The predeclared latency gates are at most 30 seconds for the complete governed
+workflow and at most 1 second for its A2A `get_task` tool span. Record failures
+and all timings even when either gate fails. A single observation gives no
+tail-latency or general model-quality claim. `TOOL_START`/`TOOL_END` measure
+client control time; `WORKFLOW_START`/`WORKFLOW_END` include model planning.
+Compare setup steps, credential exposure, manual intervention and evidence
+utility separately. The direct model has no native receipt or recovery path;
+the backed workflow must still check the signed provider result through the
+shared verifier. NeMo trace text is never promoted to an authoritative CUDA
+or PEFT outcome.
+
 Strict production pressure uses the frozen resolved manifest selected by
 `--authority-manifest` (or `COH_PRESSURE_AUTHORITY_MANIFEST`). The canonical
 QEMU collector sets it for every child, including direct-console fault setup.

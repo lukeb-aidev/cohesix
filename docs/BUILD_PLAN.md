@@ -13314,7 +13314,7 @@ reconnects to its correct scoped outcome. Discovery or mock task completion is i
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** Complete for the selected Linux AArch64 NeMo Toolkit 1.9.0 and Jetson/KVM CUDA/PEFT component scope. The [implementation record](audit/M28F_IMPLEMENTATION_RECORD.md) binds the installed wheel, native client workflows, exact target and model identities, focused checks, adverse results and proof limits. The physical Pi and assembled Release B remain separate acceptance gates.
 
 **Value:** NeMo developers can use Cohesix inside a normal workflow, not only read a compatibility claim.
 **Prerequisites:** 28, selected CUDA/PEFT providers, 28d and 28e. Apple is optional

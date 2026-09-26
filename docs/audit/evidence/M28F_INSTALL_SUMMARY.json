@@ -1,0 +1,22 @@
+{
+  "_file_header": "Author: Lukas Bower\nPurpose: Portable sealed M28f NeMo conformance summary and private evidence digests.\nCopyright 2026 Lukas Bower",
+  "schema": "cohesix-m28f-nemo-summary/v1",
+  "case": "m28f-nemo-install",
+  "result": "PASS",
+  "versions": {
+    "cohesix-nemo-kit": "0.1.0",
+    "nvidia-nat": "1.9.0",
+    "nvidia-nat-mcp": "1.9.0",
+    "nvidia-nat-a2a": "1.9.0",
+    "mcp": "1.29.1",
+    "a2a-sdk": "0.3.26"
+  },
+  "wheel_sha256": "f9bda287604ee085f470195288ba7fefa88d507659430b06f11298ee4b83caad",
+  "lock_sha256": "2d98723f2a4e539ef91048922b25230cb23cd73c76d390915b0781014181c2d8",
+  "proof_class": "live_host",
+  "evidence_sha256": {
+    "a2a_discovery": "8e488691e4c1cdf2e310234dbdb981e5dd7d4ae508977d4bc7296c9b025b0936",
+    "doctor": "4389ded477d5d5106299a93831b2b8115e81856dca0a307a308030d2587ccce2",
+    "mcp_discovery": "d4d3adf0ea1adb0697d1fd4e170029cf737e2842d3cf83897ab2d04d83c1b2fa"
+  }
+}

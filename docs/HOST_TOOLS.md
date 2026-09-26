@@ -1,4 +1,4 @@
-<!-- Copyright © 2026 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Explain how to install, connect, operate and troubleshoot the Cohesix host-tool suite including governed Mac MLX release. -->
 <!-- Author: Lukas Bower -->
@@ -941,8 +941,11 @@ same release can launch a local `stdio` command, but HTTP is the selected
 Linux-hosted network path. The selected M28d run used that installed native
 client to discover the generated recovery schema and return the original
 terminal for an admitted CUDA job. The ordinary MCP SDK client performed the
-effectful CUDA and PEFT submissions. A complete NeMo agent kit and A2A
-workflow belong to M28f.
+effectful CUDA and PEFT submissions. The installable
+[M28f NeMo kit](../integrations/nemo-agent-toolkit/README.md) now supplies a
+locked native MCP CUDA workflow and a separate per-user A2A PEFT workflow.
+The kit's deterministic submission path retains the short lived GPU
+preflight and original ticket identity while the NeMo model owns planning.
 
 For a desktop client that supports standard MCP stdio, configure the installed
 `hive-gateway` as its command with arguments `--mcp-stdio`,
@@ -991,6 +994,20 @@ deployment certificate. Check the original native result and shared verifier
 before treating a CUDA output or PEFT promotion as accepted. The Python
 library reads the same REST job and verifies the same release graph; it owns
 no A2A task journal.
+
+For NeMo Agent Toolkit 1.9.0, install the versioned wheel and selected Linux
+AArch64 dependency lock using the kit installer. The native `mcp_client`
+group selects five generated tools. The native per-user A2A group uses a small
+plugin because this Toolkit release fetches the Agent Card before applying its
+auth interceptor and sends text rather than Cohesix's required data part.
+Run the MCP and A2A agents as separate one-subject processes with private
+gateway credential references. The installed CLI performs discovery, effectful
+submission and original-ID recovery; the signed CUDA output check and `coh
+peft release verify` remain independent acceptance gates. `agent-mcp` and
+`agent-a2a` probe a pinned OpenAI-compatible model endpoint and retain private
+NeMo traces. `eval-direct` and `eval-a2a` run Toolkit's native profiler on
+the same fixed question. See the [benchmark procedure](BENCHMARKS.md#nemo-agent-toolkit-190-comparison-m28f)
+and [M28f implementation record](audit/M28F_IMPLEMENTATION_RECORD.md).
 
 The selected catalogue does not advertise mixed MLX/CUDA, verified model
 weight distribution or vMLX-assisted A2A composition. A vMLX model endpoint

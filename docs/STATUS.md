@@ -100,6 +100,23 @@ and evidence identities. Pi A2A remains disabled; mixed MLX/CUDA, weight
 distribution and vMLX composition were not selected. This component result
 does not qualify a physical Pi or Release B.
 
+[Milestone 28f](BUILD_PLAN.md#28f) is **Complete** for the selected Linux
+AArch64 NeMo Agent Toolkit 1.9.0 component. A digest-pinned kit wheel and
+version-pinned dependency lock installed into a fresh Jetson environment.
+Toolkit's native MCP client submitted and recovered an independently verified
+CUDA job, while its native A2A client delegated a real HF PEFT release whose
+signed verifier accepted serving generation 9. A changed evaluation policy
+refused a second PEFT candidate before training or promotion. Separate
+model-backed NeMo agents connected to the authenticated MCP and A2A paths;
+native Toolkit evaluation and profiling compared the same completed task with
+and without governed lookup. The [M28f implementation
+record](audit/M28F_IMPLEMENTATION_RECORD.md) retains the exact package,
+target, model and evidence identities, focused checks, adverse results and
+limits. One budgeted A2A CUDA attempt remains reserved with no confirmed
+target result; a cross-protocol retry was refused and no success or released
+allocation is claimed. This component result does not qualify a physical Pi
+or Release B.
+
 [Milestone 28a](BUILD_PLAN.md#28a) is complete at its selected Orin scope. The source contains a
 private digest-pinned workload registration path, version 2 request validation,
 native GPU diagnostics and an independently checked batch-edge example. An

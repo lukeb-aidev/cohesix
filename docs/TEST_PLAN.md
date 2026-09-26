@@ -235,7 +235,7 @@ model endpoint, A2A peer and GPU provider separately. A vMLX API response,
 model tool call or task state is not native CUDA/MLX execution or a verified
 PEFT release. If no vMLX model session or compatible peer exists, report the
 live slice blocked and leave generic MCP/A2A and NeMo evidence separate.
-For planned `m28f-nemo-install` and `m28f-nemo-live`, record the pinned NeMo
+For selected `m28f-nemo-install` and `m28f-nemo-live`, record the pinned NeMo
 Agent Toolkit version and exercise its native MCP transport/auth, selected
 tool discovery and call, plus its per-user A2A Agent Card, task lookup and
 cancellation helpers. The workflow must use an actual selected CUDA job and

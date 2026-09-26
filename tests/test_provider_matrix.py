@@ -39,7 +39,10 @@ def test_matrix_rejects_weakened_obligations_unknown_identity_and_unscoped_comma
         "m28-jobs-live", "m28-authority-live", "m28a-workloads-live",
         "m28a-recovery-live", "m28b-peft-live", "m28b-serving-live",
         "m28c1-mlx-live", "m28c1-vmlx-live", "m28d-mcp-live",
-        "m28e-a2a-live",
+        "m28e-a2a-live", "m28f-nemo-live",
+    }
+    assert {case["id"] for case in valid["cases"] if case["proof_class"] == "live_host"} == {
+        "m28c-platform-live", "m28f-nemo-install",
     }
     for old, new in [
         ('"discover", "preflight"', '"discover", "discover"'),
@@ -146,6 +149,8 @@ def test_case_cli_refuses_duplicate_or_incompatible_selection(tmp_path: Path) ->
         ("--case", "missing", "--validate-only"),
         ("--case", "m28-jobs-live"),
         ("--case", "m28-authority-live", "--validate-only"),
+        ("--case", "m28f-nemo-install"),
+        ("--case", "m28f-nemo-live", "--validate-only"),
     ]:
         assert run(*selection).returncode != 0
         assert not state.exists()

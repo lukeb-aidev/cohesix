@@ -9,6 +9,14 @@ through explicit REST, TCP console, mounted Secure9P, or mock backends. This
 thin, non-authoritative SDK mirrors existing control-file and console semantics;
 it does not introduce new protocol behavior.
 
+NeMo Agent Toolkit users can install the separate
+[native-client kit](../../integrations/nemo-agent-toolkit/README.md). It pins
+Toolkit 1.9.0 and uses the gateway's MCP/A2A paths under the same delegated
+subject and standing budget. Python, NeMo tool output and model text all need
+the existing native CUDA output or signed PEFT verifier before they report a
+provider success. The NeMo kit does not require the Python SDK in its client
+venv or pass gateway credentials to the CUDA executor.
+
 ## Install
 
 Install the published Python client (Python 3.11 or later):

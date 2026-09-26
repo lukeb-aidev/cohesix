@@ -1,0 +1,25 @@
+# Author: Lukas Bower
+# Purpose: Package the pinned NeMo Agent Toolkit client integration without an editable checkout.
+# Copyright 2026 Lukas Bower
+[build-system]
+requires = ["setuptools>=80,<85", "wheel>=0.45,<1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cohesix-nemo-kit"
+version = "0.1.0"
+description = "Native NeMo Agent Toolkit clients for selected Cohesix jobs"
+requires-python = ">=3.12,<3.14"
+dependencies = ["nvidia-nat[langchain,profiler]==1.9.0", "nvidia-nat-mcp==1.9.0", "nvidia-nat-a2a==1.9.0", "mcp==1.29.1", "a2a-sdk==0.3.26"]
+
+[project.scripts]
+cohesix-nemo = "cohesix_nemo_kit.cli:main"
+
+[project.entry-points."nat.components"]
+cohesix_nemo_a2a = "cohesix_nemo_kit.nat_plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cohesix_nemo_kit = ["configs/*.yaml"]
