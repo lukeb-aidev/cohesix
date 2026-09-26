@@ -4,6 +4,69 @@
 
 # Host deployment packages
 
+## M28g native installer candidate
+
+The native package builders accept a private reference JSON selected after the
+matching portable archive has been built. It contains `schema` set to
+`cohesix-m28g-installer-reference/v1`, `host` (`macos` or `linux`), absolute
+`bundle` and `archive` paths, the independent `archive_sha256`, the archive's
+`source_commit`, and its `version`. The Mac reference additionally supplies an
+absolute `signed_app` path, its `app_binary_sha256`, the app's `app_version`, and
+Apple `team_id`. Never use an archive's own manifest as publisher trust. The
+builder first compares the extracted tree with the compiler's selected file set
+and the pinned archive bytes; a current source checkout does not repair an old
+archive's file membership.
+
+Build the selected Python and NeMo wheels before assembling the archive. The
+NeMo builder copies only the compiler-registered Toolkit kit sources into an
+isolated staging directory and checks the wheel's file inventory, source
+digests, metadata and RECORD. Set `NEMO_WHEEL_DIR` to its output; the release
+bundle builder rechecks it and includes the wheel, lock, installer and report
+under the same archive hash. Installation of the kit remains explicit because
+its pinned dependencies are Linux AArch64 only:
+
+```sh
+python3 scripts/install/build_nemo_kit.py --out out/nemo-wheels
+```
+
+On a native Apple Silicon build host, select the existing Developer ID signed
+and notarized app, then provide a **Developer ID Installer** identity and a
+stored `notarytool` profile outside the package:
+
+```sh
+export COHESIX_INSTALLER_IDENTITY='<selected certificate SHA-1>'
+export COHESIX_NOTARY_PROFILE='<stored profile name>'
+scripts/install/build_macos_pkg.sh --reference-config "$RELEASE_B_REFERENCE" \
+  --out "$RELEASE_B_EVIDENCE/installers/macos"
+```
+
+The builder checks the app and extension signatures, stapled app, Gatekeeper
+assessment, and Mach-O build UUID against the portable archive before staging
+it at `/Applications/SwarmUI.app`. Controller code goes under
+`/Library/Application Support/Cohesix`; models, evidence, credentials and user
+state do not. The outer `.pkg` is signed, notarized and stapled separately.
+The included `bin/cohesix-uninstall` checks its package receipt and every owned
+file hash before removal, then leaves external state intact.
+
+On native Ubuntu ARM64, select a publisher GPG key already enrolled by the
+recipient independently of the package:
+
+```sh
+export COHESIX_DEB_SIGNING_KEY='<publisher key selector>'
+export COHESIX_DEB_MAINTAINER='<public name and email>'
+scripts/install/build_ubuntu_arm64_deb.sh --reference-config "$RELEASE_B_REFERENCE" \
+  --out "$RELEASE_B_EVIDENCE/installers/ubuntu-arm64"
+```
+
+The controller `.deb` has no GNOME/WebKit dependency. The optional SwarmUI
+`.deb` installs the desktop entry and scalable icon with a fixed executable
+path. Neither package has a maintainer script that starts services, copies
+credentials or downloads models. A detached signature over `installers.json`
+binds both `.deb` hashes; recipients must verify it with an independently
+enrolled public key. Builder output remains **unqualified** until exact native
+installation, byte readback, lifecycle and graphical launch checks pass on the
+advertised host versions. Portable archives remain separate installations.
+
 The compiler emits `contract.deployment_profiles` in
 `configs/generated/provider_registry.json`. The selected profile owns every
 relative artifact path, format, architecture, version, schema and credential

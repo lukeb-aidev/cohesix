@@ -154,7 +154,7 @@ fn protocol_status() -> Result<String> {
     )
     .map_err(anyhow::Error::msg)?;
     Ok(format!(
-        "doctor check=agent-protocols schema={} master={} mcp={} a2a={} endpoints=not-implemented",
+        "doctor check=agent-protocols schema={} master={} mcp={} a2a={} endpoints=not-probed",
         protocols.schema,
         protocols.agent_protocols.enabled,
         protocols.effective_mcp(),
@@ -170,10 +170,10 @@ mod protocol_tests {
     use std::path::PathBuf;
 
     #[test]
-    fn selected_profile_reports_disabled_protocols_without_claiming_endpoints() {
+    fn selected_profile_reports_enabled_protocols_without_claiming_live_endpoints() {
         let status = protocol_status().expect("generated controls");
-        assert!(status.contains("master=false mcp=false a2a=false"));
-        assert!(status.ends_with("endpoints=not-implemented"));
+        assert!(status.contains("master=true mcp=true a2a=true"));
+        assert!(status.ends_with("endpoints=not-probed"));
     }
 
     #[test]

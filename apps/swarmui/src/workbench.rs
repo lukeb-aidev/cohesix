@@ -674,15 +674,52 @@ pub fn tool_directory() -> Result<PathBuf, String> {
     }
     let executable = std::env::current_exe()
         .map_err(|_| "tool_unavailable: executable location unknown".to_owned())?;
-    let directory = executable
-        .parent()
-        .ok_or("tool_unavailable: executable directory unknown")?;
+    Ok(tool_directory_for_executable(&executable))
+}
+
+fn tool_directory_for_executable(executable: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if executable.starts_with("/Applications/SwarmUI.app/Contents/MacOS") {
+        return PathBuf::from("/Library/Application Support/Cohesix/bin");
+    }
+    let directory = executable.parent().unwrap_or_else(|| Path::new("."));
     if directory.ends_with("SwarmUI.app/Contents/MacOS") {
         if let Some(package) = directory.ancestors().nth(3) {
-            return Ok(package.join("bin"));
+            return package.join("bin");
         }
     }
-    Ok(directory.to_owned())
+    directory.to_owned()
+}
+
+#[cfg(test)]
+mod installed_tool_directory_tests {
+    use super::tool_directory_for_executable;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn portable_app_finds_its_matching_bundle_tools() {
+        assert_eq!(
+            tool_directory_for_executable(Path::new(
+                "/tmp/Cohesix/SwarmUI.app/Contents/MacOS/swarmui"
+            )),
+            PathBuf::from("/tmp/Cohesix/bin")
+        );
+        assert_eq!(
+            tool_directory_for_executable(Path::new("/usr/lib/cohesix/bin/swarmui")),
+            PathBuf::from("/usr/lib/cohesix/bin")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn applications_app_finds_the_os_installed_tools() {
+        assert_eq!(
+            tool_directory_for_executable(Path::new(
+                "/Applications/SwarmUI.app/Contents/MacOS/swarmui"
+            )),
+            PathBuf::from("/Library/Application Support/Cohesix/bin")
+        );
+    }
 }
 
 /// Validate the same bounded namespace contract before creating any console text.

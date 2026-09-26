@@ -248,6 +248,23 @@ If a single Toolkit process is claimed to host both protected per-user clients,
 require a startup and authenticated call on each path for that exact version;
 otherwise report separate native workflows and the combined-mode limitation.
 
+M28g starts with the exact 1.2.0-beta archive, version-aligned Python/NeMo
+inputs and independently authenticated native installer artifacts. Qualify the
+Mac `.pkg` on clean supported Apple Silicon sessions and both Ubuntu ARM64
+`.deb` packages on 22.04, 24.04 and 26.04. Retain package-manager receipt,
+installed byte readback, publisher verification, graphical launch from each
+advertised desktop path, headless controller use, 1.1.0-beta migration,
+failed/repeated install, upgrade, rollback, remove and purge observations.
+Archive inspection, synthetic staging and a GUI screenshot alone do not close
+those cases. Run the published CUDA, PEFT, Apple and NeMo journeys from the
+installed candidate, with shared native identity and verifier outcome across
+CLI, Python, SwarmUI, MCP and A2A where advertised. Freeze adoption, quality,
+control-latency and recovery budgets before those runs. Preserve all four
+effective protocol modes and the disabled master override. Then apply the
+complete selected QEMU, physical Pi and conditional release gates at the
+assembled source/image identities. A missing installer, host profile, live
+result or independent clean-install walkthrough blocks M28g completion.
+
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
 | Parsing, bounds, arithmetic, serialization, ABI/layout, policy, replay, pure state transitions | Small deterministic tests with independent expected truth | Stage 01 and AGENTS Test Discipline |

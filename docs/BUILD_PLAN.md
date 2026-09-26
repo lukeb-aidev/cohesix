@@ -13410,7 +13410,11 @@ configured Cohesix deployment, reproducing both workflows from public instructio
 
 [Milestones](#Milestones)
 
-**Status:** Planned — implementation not activated.
+**Status:** In Progress — activated by the owner on 26 September 2026 for the
+complete M28g task breakdown. Native installer implementation and exact release
+qualification are pending; no Release B acceptance is claimed.
+The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
+the selected source-level work and unmet installer, host and release gates.
 
 **Value:** complete capabilities form an adoptable release rather than disconnected adapters.
 **Prerequisites:** every required 28–28f outcome with exact-profile evidence;

@@ -50,6 +50,7 @@ MACOS_OUT_DIR=""
 LINUX_OUT_DIR=""
 IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
 PYTHON_WHEEL_DIR="${PYTHON_WHEEL_DIR:-${ROOT_DIR}/out/python-wheels}"
+NEMO_WHEEL_DIR="${NEMO_WHEEL_DIR:-${ROOT_DIR}/out/nemo-wheels}"
 PYTHON_PACKAGE_MANIFEST="${PYTHON_PACKAGE_MANIFEST:-${ROOT_DIR}/out/python-compat/m26e-python-package.json}"
 LINUX_PYTHON_PACKAGE_MANIFEST="${LINUX_PYTHON_PACKAGE_MANIFEST:-$PYTHON_PACKAGE_MANIFEST}"
 
@@ -100,6 +101,7 @@ Env overrides:
   IMPLEMENTATION_SURFACE_INVENTORY (defaults to the canonical generated inventory;
                                     intended only for non-mutating pre-regeneration validation)
   PYTHON_WHEEL_DIR (defaults to out/python-wheels; must contain one target-neutral wheel)
+  NEMO_WHEEL_DIR (defaults to out/nemo-wheels; must contain the source-checked NeMo kit wheel and report)
   PYTHON_PACKAGE_MANIFEST (defaults to out/python-compat/m26e-python-package.json)
   LINUX_PYTHON_PACKAGE_MANIFEST (native Linux Python package manifest; defaults
                                  to PYTHON_PACKAGE_MANIFEST for --linux-only)
@@ -461,6 +463,9 @@ validate_release_inventory_inputs() {
     validate_python_package_inputs "$LINUX_PYTHON_PACKAGE_MANIFEST" \
       "${LINUX_OUT_DIR}/release-configs/configs/generated"
   fi
+  python3 "${ROOT_DIR}/scripts/install/build_nemo_kit.py" \
+    --repo "$ROOT_DIR" --inventory "$inventory" \
+    --verify-dir "$NEMO_WHEEL_DIR"
 
   INVENTORY_PATH="$inventory" \
   ROOT_DIR="$ROOT_DIR" \
@@ -995,6 +1000,11 @@ bundle_release() {
     "${bundle_dir}/python/dist/$(basename "$PYTHON_RELEASE_WHEEL")"
   cp -p "$package_manifest" \
     "${bundle_dir}/python/m26e-python-package.json"
+  mkdir -p "${bundle_dir}/nemo/dist"
+  cp -p "${NEMO_WHEEL_DIR}/cohesix_nemo_kit-0.1.0-py3-none-any.whl" \
+    "${bundle_dir}/nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl"
+  cp -p "${NEMO_WHEEL_DIR}/nemo-distribution.json" \
+    "${bundle_dir}/nemo/nemo-distribution.json"
 
   while IFS= read -r selected_path; do
     local destination="cas/${selected_path#tests/fixtures/cas/}"

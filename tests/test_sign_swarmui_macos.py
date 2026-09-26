@@ -52,6 +52,16 @@ def test_app_selection_rejects_wrong_identity_and_symlink(tmp_path: Path) -> Non
         }))
     assert signer.select_app(app) == app
     assert signer.select_state(tmp_path / "evidence", app) == tmp_path / "evidence"
+    info = app / "Contents/Info.plist"
+    app_info = plistlib.loads(info.read_bytes())
+    app_info["CFBundleIconFile"] = "SwarmUI.icns"
+    info.write_bytes(plistlib.dumps(app_info))
+    with pytest.raises(ValueError, match="signing input bound"):
+        signer.select_app(app)
+    icon = app / "Contents/Resources/SwarmUI.icns"
+    icon.parent.mkdir()
+    icon.write_bytes(b"icns" + (8).to_bytes(4, "big"))
+    assert signer.select_app(app) == app
     with pytest.raises(ValueError, match="outside"):
         signer.select_state(app / "Contents/evidence", app)
     (extension / "Contents/MacOS/SwarmUIIntents").unlink()

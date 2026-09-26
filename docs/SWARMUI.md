@@ -16,6 +16,13 @@ same Linux desktop contract. Keep the package together: its `bin/coh` supplies
 the matching validated host operations. **Settings → Installed tools** can select
 another matching installation with the native folder chooser.
 
+For a native M28g Mac installation, SwarmUI in `/Applications` looks for `coh`
+and the gateway under `/Library/Application Support/Cohesix/bin` without a
+shell `PATH` or bundle-root working directory. The GNOME desktop entry opens
+`/usr/lib/cohesix/bin/swarmui`; its matching tools are in the same directory.
+These are candidate install paths until the native installer and launch checks
+in the M28g record pass.
+
 1. Select **Connect a hive**. Choose **Hive Gateway** for shared access, or
    **Queen directly** for a single-owner TCP console.
 2. Enter the gateway base URL (`https://gateway.example:8443`) or Queen address

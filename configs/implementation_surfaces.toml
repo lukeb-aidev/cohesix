@@ -1431,8 +1431,19 @@ evidence_requirement = "exact output hash"
 current_observed_mode = "license_contract"
 
 [[tracked_rules]]
-id = "release-previous-notes"
+id = "release-older-notes"
 exact = "releases/RELEASE_NOTES-1.0.0-beta.md"
+class = "contract"
+owner = "release-tooling"
+production_reachable = false
+selection_source = "immutable earlier release referenced by current documentation"
+package_disposition = "versioned_release_document"
+evidence_requirement = "historical version and exact output hash remain unchanged"
+current_observed_mode = "historical_release_notes"
+
+[[tracked_rules]]
+id = "release-previous-notes"
+exact = "releases/RELEASE_NOTES-1.1.0-beta.md"
 class = "contract"
 owner = "release-tooling"
 production_reachable = false
@@ -1443,7 +1454,7 @@ current_observed_mode = "historical_release_notes"
 
 [[tracked_rules]]
 id = "release-current-notes"
-exact = "releases/RELEASE_NOTES-1.1.0-beta.md"
+exact = "releases/RELEASE_NOTES-1.2.0-beta.md"
 class = "contract"
 owner = "release-tooling"
 production_reachable = false
@@ -1542,6 +1553,29 @@ evidence_requirement = "test output requires target-bound receipt"
 current_observed_mode = "integration_test_guide"
 
 [[tracked_rules]]
+id = "nemo-agent-toolkit-source"
+prefix = "integrations/nemo-agent-toolkit/"
+exclude_exact = ["integrations/nemo-agent-toolkit/README.md"]
+class = "production_live"
+owner = "nemo-agent-toolkit-adapter"
+production_reachable = true
+selection_source = "M28f pinned native Toolkit kit"
+package_disposition = "release_nemo_source"
+evidence_requirement = "wheel source digest and installed native-client checks"
+current_observed_mode = "selected_nemo_adapter_source"
+
+[[tracked_rules]]
+id = "nemo-kit-installer"
+exact = "scripts/install/install_nemo_agent_toolkit.py"
+class = "contract"
+owner = "host-packaging"
+production_reachable = false
+selection_source = "M28g offline NeMo kit installation"
+package_disposition = "release_install_support"
+evidence_requirement = "digest-checked clean Toolkit venv installation"
+current_observed_mode = "bounded_nemo_kit_installer"
+
+[[tracked_rules]]
 id = "third-party-readmes"
 prefix = "third_party/"
 suffix = "/README.md"
@@ -1598,7 +1632,7 @@ expected_artifacts = [
 
 [release]
 schema = "cohesix-runtime-release-manifest/v2"
-version = "1.1.0-beta"
+version = "1.2.0-beta"
 host_tools = [
   "bin/cas-tool",
   "bin/coh",
@@ -1878,6 +1912,17 @@ support_files = [
   "tests/fixtures/operator/attestation/result.json",
 
   "LICENSE.txt",
+  "integrations/nemo-agent-toolkit/README.md",
+  "integrations/nemo-agent-toolkit/pyproject.toml",
+  "integrations/nemo-agent-toolkit/requirements-linux-aarch64.lock",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/__init__.py",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/cli.py",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/native.py",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/nat_plugin.py",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/configs/a2a-agent.yaml",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/configs/direct-agent.yaml",
+  "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/configs/mcp-agent.yaml",
+  "scripts/install/install_nemo_agent_toolkit.py",
   "configs/host_integration_acceptance.toml",
   "scripts/worker_task_evidence.py",
   "scripts/driver_runtime_manifest.py",
@@ -1886,6 +1931,7 @@ support_files = [
   "packaging/ci/cohesix-journey.yml",
   "releases/RELEASE_NOTES-1.0.0-beta.md",
   "releases/RELEASE_NOTES-1.1.0-beta.md",
+  "releases/RELEASE_NOTES-1.2.0-beta.md",
   "scripts/ci/python_compat_run.sh",
   "scripts/setup_environment.sh",
 ]
@@ -1896,7 +1942,9 @@ generated_bundle_files = [
   "BUILD_PROVENANCE.json",
   "MANIFEST.sha256",
   "VERSION.txt",
-  "python/dist/cohesix-0.2.0a2-py3-none-any.whl",
+  "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl",
+  "nemo/nemo-distribution.json",
+  "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
   "python/m26e-python-package.json",
   "qemu/run.sh",
   "cas/max_chunks_v1.txt.sha256",

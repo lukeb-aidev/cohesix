@@ -79,13 +79,14 @@ def test_missing_selected_pi_contract_manifest_fails_before_generation(tmp_path)
     assert "unexpected compiler call" not in result.stdout
 
 
-def test_release_a_inventory_selects_current_notes_and_preserves_history() -> None:
-    """Release A selects 1.1.0 while keeping the linked prior notes immutable."""
+def test_release_b_inventory_selects_current_notes_and_preserves_history() -> None:
+    """Release B selects 1.2.0 while keeping both prior notes immutable."""
     inventory = tomllib.loads(
         (ROOT / "configs/implementation_surfaces.toml").read_text()
     )
     release = inventory["release"]
-    assert release["version"] == "1.1.0-beta"
+    assert release["version"] == "1.2.0-beta"
+    assert "releases/RELEASE_NOTES-1.2.0-beta.md" in release["support_files"]
     assert "releases/RELEASE_NOTES-1.1.0-beta.md" in release["support_files"]
     assert "releases/RELEASE_NOTES-1.0.0-beta.md" in release["support_files"]
     for contract in (
@@ -102,7 +103,7 @@ def test_release_a_inventory_selects_current_notes_and_preserves_history() -> No
         row for row in inventory["tracked_rules"]
         if row["id"] == "release-current-notes"
     )
-    assert current["exact"] == "releases/RELEASE_NOTES-1.1.0-beta.md"
+    assert current["exact"] == "releases/RELEASE_NOTES-1.2.0-beta.md"
 
 
 def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
@@ -116,7 +117,7 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
     publication = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(publication)
     for path in (
-        "releases/RELEASE_NOTES-1.1.0-beta.md",
+        "releases/RELEASE_NOTES-1.2.0-beta.md",
         "docs/audit/M27G_IMPLEMENTATION_RECORD.md",
     ):
         assert publication.classify_change(
@@ -135,7 +136,7 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
         ) == "physical-proof-collector"
     for path in (
         "releases/RELEASE_NOTES-1.0.0-beta.md",
-        "releases/RELEASE_NOTES-1.2.0-beta.md",
+        "releases/RELEASE_NOTES-1.1.0-beta.md",
         "docs/audit/M27D_IMPLEMENTATION_RECORD.md",
         "apps/root-task/src/net/mod.rs",
     ):
@@ -342,9 +343,16 @@ def test_release_manifest_selects_hash_bound_python_wheel_and_contracts() -> Non
     assert "tests/fixtures/cas/max_chunks_v1.txt" in release["cas_fixtures"]
     assert "cas/max_chunks_v1.txt.sha256" in release["generated_bundle_files"]
     assert (
-        "python/dist/cohesix-0.2.0a2-py3-none-any.whl"
+        "python/dist/cohesix-1.2.0b0-py3-none-any.whl"
         in release["generated_bundle_files"]
     )
+    assert (
+        "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl"
+        in release["generated_bundle_files"]
+    )
+    assert "nemo/nemo-distribution.json" in release["generated_bundle_files"]
+    assert "scripts/install/install_nemo_agent_toolkit.py" in release["support_files"]
+    assert "--verify-dir \"$NEMO_WHEEL_DIR\"" in source
 
 
 def test_release_manifest_selects_exact_pi4_sd_payload() -> None:

@@ -608,7 +608,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.1.0-beta"
+        "version": "1.2.0-beta"
       },
       {
         "architecture": "aarch64",
@@ -1254,7 +1254,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.1.0-beta"
+        "version": "1.2.0-beta"
       },
       {
         "architecture": "aarch64",
@@ -1353,7 +1353,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.1.0-beta"
+        "version": "1.2.0-beta"
       },
       {
         "architecture": "x86_64",
@@ -2130,7 +2130,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.1.0-beta"
+        "version": "1.2.0-beta"
       },
       {
         "architecture": "aarch64",
@@ -2269,7 +2269,7 @@
           "TCP_AUTH"
         ],
         "schema": "cohesix-host-package-profile/v1",
-        "version": "1.1.0-beta"
+        "version": "1.2.0-beta"
       }
     ],
     "export": {
@@ -7685,7 +7685,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "96121d552677b1f80af0be2a10e9658496162854d90af17ef188486d3b1fa930",
+  "graph_sha256": "4aaa25ed348b82614a3085a16feb19674492dbc947a0036dfc41b20d8ec9afaa",
   "playbooks": [
     {
       "dependencies": [
@@ -8632,7 +8632,7 @@
   ],
   "resolved_manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "494af3bafb72a75a04fcf7bdc11a8efa7dc338b1161bb3657b4234b9246129c2",
+  "source_sha256": "341fac1a815de47fc132224ae740ef74fb83f37d40c3962566e28142803f4cbf",
   "use_cases": [
     {
       "dependencies": [

@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+# Purpose: Launch the installed SwarmUI app from the GNOME application grid without a shell environment.
+# Copyright 2026 Lukas Bower
+[Desktop Entry]
+Type=Application
+Name=SwarmUI
+Comment=Cohesix hive operator console
+Exec=/usr/lib/cohesix/bin/swarmui
+Icon=com.cohesix.swarmui
+Terminal=false
+Categories=System;Monitor;

@@ -3,7 +3,13 @@
 <!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix 1.1.0-beta quickstart
+# Cohesix 1.2.0-beta candidate quickstart
+
+The 1.2.0-beta candidate is still undergoing M28g qualification. Use the
+1.1.0-beta release record for the currently published release. The steps below
+apply to an exact, independently
+verified 1.2.0-beta candidate supplied for qualification; they do not claim
+that Release B has been published.
 
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
 shell, gateway, Python client and desktop UI run on your Mac or Linux host.
@@ -16,9 +22,9 @@ admission, durable journals and signed evidence as the native recipes.
 
 ## Choose your download
 
-Use all files from the same release. For **1.1.0-beta**:
+Use all files from the same release. For **1.2.0-beta**:
 
-When upgrading from 1.0.0-beta, extract into new directories and install the
+When upgrading from 1.1.0-beta, extract into new directories and install the
 bundled Python wheel there. Keep each host's binaries, QEMU image and generated
 contracts together. Export existing evidence before replacing a target image;
 copying an old policy or generated configuration into the new bundle does not
@@ -27,13 +33,46 @@ own package versions; `VERSION.txt` identifies the overall release.
 
 | You want to… | Download | What it contains |
 | --- | --- | --- |
-| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.1.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
-| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.1.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
-| Boot a physical Raspberry Pi 4 | `Cohesix-1.1.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
+| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.2.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
+| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.2.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
+| Boot a physical Raspberry Pi 4 | `Cohesix-1.2.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
+
+### Native host packages in the candidate
+
+The Mac `.pkg` and Linux `.deb` set are separate host installation choices.
+Check their `installers.json` package hashes against the downloaded bytes and
+verify publisher trust independently: macOS must accept the Developer ID
+Installer signature and stapled notarization; Linux must verify
+`installers.json.asc` with an already trusted publisher key. The package
+manifest alone cannot establish publisher identity. Do not install an
+unqualified candidate as a production upgrade.
+
+On a supported Apple Silicon Mac, install the verified
+`Cohesix-1.2.0-beta-MacOS.pkg` with macOS Installer. Open **SwarmUI** from
+Applications, Finder, Spotlight or the Dock. The host tools live in
+`/Library/Application Support/Cohesix/bin`; the app resolves them without a
+Terminal `PATH`. The installed `cohesix-uninstall` helper in that directory
+checks the package receipt and owned file hashes before removing package code.
+It leaves user state, credentials, models and evidence in place.
+
+On Ubuntu ARM64, install the verified
+`cohesix-controller_1.2.0~beta_arm64.deb` with apt. The optional
+`cohesix-swarmui_1.2.0~beta_arm64.deb` adds the GNOME application entry and
+desktop dependencies. Open **SwarmUI** from GNOME search or the application
+grid. Headless controller use needs only the controller package; tools are
+under `/usr/lib/cohesix/bin`. `apt remove` or `apt purge` removes package
+code and desktop registration, while external operator state remains separate.
+Keep the 1.1.0-beta extracted directory intact for side-by-side migration;
+native installation does not adopt its credentials or evidence automatically.
 
 Each archive contains `QUICKSTART.md`, `README.md`, `RELEASE_NOTES.md`,
 `VERSION.txt` and `MANIFEST.sha256`. The Pi archive has no `bin/`, Python
 runtime or `qemu/run.sh`; run the host tools from the Mac or Linux archive.
+Host archives also carry the source-checked NeMo client wheel, Linux ARM64
+dependency lock and explicit installer. Install that optional kit only on a
+compatible Linux client host after checking its recorded hashes and selecting
+a private environment; see the bundled
+`integrations/nemo-agent-toolkit/README.md`.
 You do not need Rust, seL4 build tools, or a GPU to use the prebuilt host tools.
 For a source checkout, use [Build from source](#build-from-source) below.
 
@@ -47,8 +86,8 @@ one you downloaded; do not paste angle-bracket placeholders literally.
 ```bash
 mkdir -p "$HOME/cohesix-releases"
 cd "$HOME/cohesix-releases"
-tar -xzf "$HOME/Downloads/Cohesix-1.1.0-beta-MacOS.tar.gz"
-cd Cohesix-1.1.0-beta-MacOS
+tar -xzf "$HOME/Downloads/Cohesix-1.2.0-beta-MacOS.tar.gz"
+cd Cohesix-1.2.0-beta-MacOS
 ```
 
 Before running anything, verify **all** manifest entries:
@@ -281,7 +320,7 @@ and follow [Hardware Bring-up](HARDWARE_BRINGUP.md) for capture and diagnostics.
 In terminal 2, change into the **Mac or Linux host bundle**. Obtain the Queen
 console credential from the provisioner of the exact target image. For QEMU,
 inspect the `queen` entry in `configs/generated/root_task_resolved.json`; for Pi,
-inspect the image's `cohesix-root-task-resolved.json`. Release A manifests retain
+inspect the image's `cohesix-root-task-resolved.json`. Selected manifests retain
 a `secret_ref`, such as `env:COH_TICKET_QUEEN_KEY`, rather than the credential
 value. Use the value supplied through that reference when the image was built.
 An older development manifest may instead contain a literal `secret`; inspect

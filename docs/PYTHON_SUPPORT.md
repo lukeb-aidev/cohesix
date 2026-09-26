@@ -72,6 +72,12 @@ metadata. It installs the client, not the native host tools or target runtime;
 use the matching host bundle for those components. The sealed Release A archives
 retain their original bundled wheel.
 
+The M28g source selects `cohesix==1.2.0b0` for the unqualified
+`1.2.0-beta` candidate. Its wheel is built from the compiler's exact source
+inventory and must be installed with the matching native host candidate for
+Release B testing. It is not a replacement for the published Release A wheel
+until the assembled release qualifies and is approved for publication.
+
 Optional dependency groups are explicit:
 
 ```bash
@@ -88,6 +94,8 @@ python3 -m pip install -e 'tools/cohesix-py[dev]'
 The Python package version is defined in
 [`tools/cohesix-py/pyproject.toml`](../tools/cohesix-py/pyproject.toml). It is
 independent of a Cohesix release-bundle label.
+For M28g, the installer additionally requires the selected wheel version to
+match the 1.2.0-beta candidate identity.
 
 ## Backends
 

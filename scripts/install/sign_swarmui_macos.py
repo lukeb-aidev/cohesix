@@ -53,6 +53,13 @@ def select_app(value: Path) -> Path:
     require(app_info.get("CFBundleIdentifier") == "com.cohesix.swarmui"
             and ext_info.get("CFBundleIdentifier") == "com.cohesix.swarmui.intents",
             "unexpected app or extension bundle identity")
+    icon_name = app_info.get("CFBundleIconFile")
+    if icon_name is not None:
+        require(icon_name == "SwarmUI.icns", "unexpected Mac app icon name")
+        icon = read_bounded(value / "Contents/Resources/SwarmUI.icns", 4 * 1024 * 1024)
+        require(len(icon) >= 8 and icon[:4] == b"icns"
+                and int.from_bytes(icon[4:8], "big") == len(icon),
+                "invalid Mac app icon")
     return value
 
 

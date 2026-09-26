@@ -62,6 +62,16 @@ Broader providers, agent protocols and other deferred features remain governed
 by the [Build Plan](BUILD_PLAN.md#roadmap-id-mapping). Their existing source or
 historical evidence does not establish release qualification.
 
+[Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0-beta
+candidate. The selected source now records version-aligned Python packaging,
+native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
+lookup. Focused staging and generated-contract checks are source-level results.
+Signed native installer artifacts, clean platform installs, graphical launch,
+cross-client live parity, physical Pi and integrated Release B qualification
+remain outstanding. The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
+retains the source-level checkpoint and blocked gates. Release A remains the
+published release.
+
 [Milestone 28](BUILD_PLAN.md#28) is complete at its selected foundation scope.
 The source declares
 false-default, compiler-controlled MCP and A2A access switches and implements
