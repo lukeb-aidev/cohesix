@@ -782,7 +782,9 @@ path. The Worker path can return `invalid-path` before construction, and a
 refusal stops the wait immediately. The condition is checked against completed
 data, not merely an ACK; the wait never repeats a mutation. Each read retains
 its own transport response timeout, so 2000 ms is not an override of network
-timeouts.
+timeouts. The synchronous host model emits the same role marker with
+`mode=host-model` after creating its Worker namespace; that marker is mock
+readiness, not target Worker evidence.
 
 A deliberate negative test may place `EXPECT ERR` immediately after the command
 whose refusal is expected. Do not use it to hide an unexpected production write

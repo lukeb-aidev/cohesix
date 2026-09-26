@@ -3608,7 +3608,18 @@ impl ControlPlane {
             }
             SpawnTarget::Bus => unreachable!("WorkerBus is rejected before allocation"),
         };
+        let role = match record.kind() {
+            WorkerKind::Heartbeat => "worker-heartbeat",
+            WorkerKind::Gpu(_) => "worker-gpu",
+            WorkerKind::Lora => "worker-lora",
+        };
         self.append_host_model_worker_observation(&worker_id, record.kind())?;
+        self.log_event(
+            "worker",
+            TraceLevel::Info,
+            Some(&worker_id),
+            &format!("WORKER_TASK_READY role={role} mode=host-model"),
+        )?;
         self.workers.insert(worker_id.clone(), record);
         Ok(worker_id)
     }

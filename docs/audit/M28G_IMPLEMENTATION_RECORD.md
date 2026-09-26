@@ -388,3 +388,32 @@ documents that order. The six script-catalog tests and generated-consistency
 check pass. The failed Stage 03 attempt is retained under
 `out/m28g/full-plan-0024-qemu/`; it does not establish complete transport
 acceptance. A fresh source-bound plan run must confirm the changed script.
+
+At `1679e23d7`, a fresh canonical pressure run rebuilt the selected Mac HVF
+image and passed same-boot preflight in separate medium and high boots. The
+medium report recorded 48,869 operations with zero errors and 256 successful
+correlated Worker receipts; the high report recorded 72,885 operations with
+101 bounded lease-quota refusals (0.1386%, under its frozen 1% budget) and
+256 successful correlated Worker receipts. Medium covered 144 GPU and 112 LoRA
+operations; high covered 132 GPU and 124 LoRA operations. These immutable run
+summaries are retained under `out/m28g-pressure-1679-r2/` in the disposable
+checkout. The runner
+then entered the complete staged QEMU plan, where Stage 01 passed metadata,
+generated consistency, formatting, Clippy and workspace check but failed the
+`shard_1k` host-model integration tests. The updated script correctly waited
+for a target `WORKER_TASK_READY` record; the synchronous NineDoor host model
+created its Worker namespace without emitting an equivalent readiness record.
+The host model now logs a role-specific `WORKER_TASK_READY` with explicit
+`mode=host-model` after creating the namespace. Both focused shard tests pass,
+including the disabled-alias refusal. The pressure runner did not reach its
+final collector or establish full Test Plan acceptance at `1679e23d7`; the
+repair requires a new exact-source run. Host CLI, Python and benchmark result
+schemas are unchanged; the extra mock log record is explicitly labelled and
+does not satisfy native Worker evidence.
+
+On the Jetson Orin Nano at that same source, a clean native CUDA helper build
+and bridge build passed all seven direct reference cases. The maintained
+conformance summary remains `INCOMPLETE` for production: it has no admitted
+Worker transport, physical lease/revoke, bridge restart, authoritative result
+graph, Worker receipt or NVIDIA container-lane proof. The direct result is
+retained under `/mnt/nvme/cohesix-dev/m28g-1679-source/out/m28g-1679-cuda-conformance/`.
