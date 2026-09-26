@@ -17,10 +17,11 @@ analysis are separate from acceptance under the [Test Plan](https://raw.githubus
 ## Select the source and tools
 
 Recorded-pack review and live capture can run on macOS or Linux with the
-matching host installation. Set `COH_BIN` to its absolute executable directory
-and run from its root. Identify its version/manifest and command help before
-using these source-oriented examples. If the host binary, pack schema or
-verifier is incompatible, report the exact mismatch and suggest the matching
+matching host installation. Resolve `COH_BIN` to its absolute executable
+directory from the installed receipt or extracted bundle; these commands do
+not require a bundle-root working directory. Identify its version, manifest
+and command help before using these source-oriented examples. If the host
+binary, pack schema or verifier is incompatible, report the exact mismatch and suggest the matching
 installed tool or a supported pack export; preserve the original pack.
 `inspect` and signed verification may be absent from older bundles; use their
 bundled documentation rather than swapping binaries. Use same-revision local

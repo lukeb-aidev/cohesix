@@ -84,6 +84,14 @@ checks passed at their separate source/client identities. This is partial
 operational evidence; final-source target, installed-client and release
 qualification remain open.
 
+Nine operator skills passed syntax, link and copied-location guidance checks
+on Mac and Jetson. Read-only and mock host operations ran from outside a source
+directory, and the guides now require verified client transport, two private
+protocol headers, one gateway owner and separate user credentials. Those checks
+establish instruction portability on the tested setups. Diverse-vendor live
+jobs, cross-user isolation and useful installed Release B workflows are still
+unproven.
+
 [Milestone 28](BUILD_PLAN.md#28) is complete at its selected foundation scope.
 The source declares
 false-default, compiler-controlled MCP and A2A access switches and implements

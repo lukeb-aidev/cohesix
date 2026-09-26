@@ -16,6 +16,8 @@ or both. A Mac or Linux controller can coordinate a remote selected host.
 Read the same-version [host operation guide](../../docs/HOST_TOOLS.md#swarmui),
 [private release guide](../../docs/PRIVATE_LORA_RELEASE.md) and
 [Release B host/client contract](../../docs/BUILD_PLAN.md#release-b).
+If copied outside the repository, use the matching installed guides or pin
+these links to the selected source revision; load companion skills separately.
 The Mac's local MLX workbench is useful for exploration; its local observation
 does not itself admit a Cohesix job. A Linux CUDA result must come from its
 selected native executor. Use only the stages and transfer path advertised by

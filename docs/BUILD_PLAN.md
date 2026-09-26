@@ -13481,9 +13481,10 @@ hardware/evidence is a named blocker, not permission to lower the release promis
 portable archives and guides, integrated acceptance matrix, exact release
 evidence and approval-ready release notes.
 
-The following documentation-only task is active at user direction. It prepares
-use-case guidance for an assumed complete Release B installation; it does not
-change this milestone's release status or supply release acceptance evidence.
+The following documentation-only tasks are active at user direction. They
+prepare and check use-case guidance for a future complete Release B installation;
+they do not change this milestone's release status or supply release acceptance
+evidence.
 
 **Task breakdown**
 
@@ -13498,6 +13499,17 @@ Commands: skill-creator quick_validate for each new or changed skill; python3 sc
 Checks: Skills have distinct triggers and outcomes, route to exact-version contracts, preserve scoped authority and original-identity recovery, and make no unearned installed, Pi, provider or industry claim. USE_CASES keeps all existing use cases and playbook ideas while explaining the assumed Release B workflows.
 Validation: Initial addition: six skill entrypoints passed quick_validate; host inventory retained six use cases and nine playbooks; check-generated, local links and git diff --check passed. Host-routing correction: nine skill entrypoints passed quick_validate; eight implementation-surface tests, host inventory, check-generated (including Test Plan and NIST guards), local links and git diff --check passed. Skills inspect actual Mac/Linux compatibility and offer supported fixes; model rollout supports one-host and mixed-host journeys. No live target, native provider, installer or release gate was run for this documentation task.
 Deliverables: Discoverable repo-managed skills, revised use-case guide and focused validation record. This documentation does not qualify or publish Release B.
+
+Title/ID: m28g-operator-skill-portability
+Milestone: 28g / m28g-operator-skill-portability
+Status: Complete — instruction portability at the stated Mac/Linux scope, 26 September 2026.
+Goal: Make the nine operator skills usable from matching Mac and Linux installations by agents with different skill-loading and MCP/A2A capabilities.
+Inputs: The nine repo-managed skills; README.md; docs/HOST_TOOLS.md; selected host tools and gateway; Mac and Jetson test beds; m28g-use-case-adoption-skills and m28g-host-clients-as-built-alignment.
+Changes: skills/cohesix-*/SKILL.md, skills/cohesix-ai-host-setup/references/linux.md, README.md and docs/HOST_TOOLS.md — resolve copied-skill document routes, absolute installed tool paths, non-login executable discovery, gateway ownership, private protocol headers and subject-scoped multi-user checks. Preserve existing role and authority contracts.
+Commands: Validate each skill with skill-creator quick_validate; check local links and Bash snippets on Mac and Linux; exercise read-only CLI/Python and mock evidence from an unrelated working directory; run python3 scripts/ci/check_host_integration_inventory.py, scripts/check-generated.sh and git diff --check.
+Checks: Instructions work without a source-root current directory, identify installed-version and agent transport constraints, prevent two gateways from claiming one Queen, and require separate subject credentials plus independently observed native job outcomes for any many-user claim. Documentation and mock checks cannot establish installed Release B, live MCP/A2A jobs, native provider work or diverse-vendor acceptance.
+Validation: AI-assisted review and edits; nine skill entrypoints passed quick_validate; 31 local links and anchors resolved; 13 Bash snippets passed syntax checks on both Mac and Jetson; host inventory, generated consistency, and git diff --check passed. Mac source-built mock inspection and Jetson 1.1.0-beta mock pack creation/inspection worked from /tmp. The pinned Jetson NeMo executable worked from a non-login SSH shell by absolute path; Mac Codex MCP help was inspected, but no cross-vendor live Cohesix job was accepted. The M28g implementation record separates these observations from Release B acceptance.
+Deliverables: Corrected skills and host guide with an exact Mac/Linux validation matrix and proof limits in the M28g implementation record.
 
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer

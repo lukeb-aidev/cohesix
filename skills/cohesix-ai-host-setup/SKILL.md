@@ -49,8 +49,11 @@ the repository's hash-locked `.venv` unless its owner explicitly changes them.
 3. Reuse a working, compatible environment. Put a user-wide `hf` CLI on PATH;
    install Python model packages in the selected runtime, not in system Python.
    Use a separate NeMo client environment only when dependency compatibility
-   requires it, and expose its `nat` command on PATH. A GPU container is a
-   distinct native execution runtime, not an incidental Python venv.
+   requires it. Record the absolute `hf` and `nat` executables and verify them
+   in the actual launch context: a login shell's PATH may differ from SSH,
+   systemd or another agent's non-login process. Use those verified paths in
+   automation. A GPU container is a distinct native execution runtime, not
+   an incidental Python venv.
 4. Before changing drivers, containers, Python packages, apps, services or
    caches, inspect dependents, running jobs and retained artifacts. Upgrade or
    remove only the selected surface; preserve a working runtime until its

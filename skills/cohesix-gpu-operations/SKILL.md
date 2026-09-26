@@ -17,9 +17,10 @@ CUDA installer or general remote command runner.
 
 ## Establish fit before acting
 
-Use one matching host-tool installation; `COH_BIN` is its absolute binary
-directory and `COH_REST_URL` is the operator-approved existing gateway. Run from
-the installation root. Check `"$COH_BIN/coh" --help` and
+Use one matching host-tool installation; resolve `COH_BIN` from its installed
+receipt or extracted bundle as an absolute binary directory, and set
+`COH_REST_URL` to the operator-approved existing gateway. The commands do not
+require a bundle-root working directory. Check `"$COH_BIN/coh" --help` and
 `"$COH_BIN/coh" gpu --help`. These instructions describe source interfaces;
 check the installed bundle's VERSION.txt, manifest and bundled help first.
 For copied skills, the web references remain usable; pin `main` to the selected

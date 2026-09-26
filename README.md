@@ -57,6 +57,10 @@ new to you.
 Load the relevant `SKILL.md` from this repository. If you copy a skill to an
 agent's skill location, bring any companion skills it links to and use the
 matching installed guides in place of repository-relative documentation links.
+An agent without automatic `SKILL.md` discovery can read the file as task
+instructions. Loading instructions does not configure an MCP or A2A client;
+verify that client's actual transport, private authentication and per-user
+identity before claiming a useful Cohesix operation.
 [AGENTS.md](AGENTS.md) remains the separate contributor charter.
 
 ## What makes Cohesix different?

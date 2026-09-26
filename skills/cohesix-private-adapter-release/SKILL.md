@@ -14,6 +14,8 @@ Use the exact [Private LoRA release](../../docs/PRIVATE_LORA_RELEASE.md) guide
 and matching installed `coh peft release --help`. Confirm the selected host
 runtime and WorkerLora receipt path. Training and serving stay on the native
 Mac or NVIDIA host; Cohesix owns admission, phase identity and verification.
+If copied outside the repository, use the matching installed guide or a pinned
+source revision and load referenced companion skills separately.
 If the task is to install CUDA, MLX, PEFT or NeMo, use
 [AI host setup](../cohesix-ai-host-setup/SKILL.md) first.
 

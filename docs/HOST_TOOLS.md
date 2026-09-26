@@ -958,6 +958,13 @@ environment using an explicit `file:/absolute/private/request-auth` reference.
 The child emits JSON-RPC only on stdout and logs on stderr. The ticket and
 issuer secret files must be readable only by the invoking account. Closing
 stdin ends this local MCP process; accepted jobs remain in the native ledger.
+This stdio child is itself the gateway and owns the Queen's sole TCP connection;
+use it only when no other gateway owns that target. To share an existing HTTP
+gateway among ordinary clients, each client must support both private
+`x-cohesix-auth` and `x-cohesix-ticket` headers. A bearer-only setting does
+not supply the delegated ticket. A client lacking the required transport or
+header support is unavailable for that route, even when it can load the
+operator skill text.
 
 The selected tool sequence starts with `cohesix.available_selected_jobs`,
 then `cohesix.preflight_selected_job`,

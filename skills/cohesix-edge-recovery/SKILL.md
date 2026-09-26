@@ -13,6 +13,9 @@ license: Apache-2.0
 Use the selected installation and the operator's target identity. Start with
 the read-only [inspection skill](../cohesix-inspect/SKILL.md) and the
 [degradation recipe](../../docs/OPERATOR_RECIPES.md#inspect-sel4-and-mcs-state).
+If copied outside the repository, load the companion skill separately and
+replace relative document links with the matching installed guide or a pinned
+source revision.
 Keep the target's Queen/Worker state separate from the host service or model
 that reported trouble. A heartbeat says the control path answered; it does
 not prove an application is healthy.

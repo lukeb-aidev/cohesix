@@ -272,3 +272,33 @@ and is not final-source target qualification. Full source-bound staged,
 installed-client, native package, Worker VM CUDA and release gates remain
 open. The private `out/burn-in/20260926-m28g-60min-mcp-a2a/` directory retains
 `run-record.md`, `burn-analysis.json`, the event log and host observations.
+
+## Operator skill portability checkpoint
+
+Under `m28g-operator-skill-portability`, the nine repository-managed operator
+skills were checked against Mac and Jetson Ubuntu 24.04 execution contexts.
+All nine passed `skill-creator` quick validation; 31 local document links and
+anchors resolved; 13 Bash snippets passed `bash -n` on each host. The host
+integration inventory retained 47 advertised surfaces, 29 dependencies, nine
+playbooks and six use cases. `scripts/check-generated.sh` and `git diff --check`
+passed. This is instruction and source consistency evidence.
+
+The Mac source-built `cohsh` completed mock Queen `/proc/boot`, schedule and
+lease inspection from `/tmp`, including an absolute executable path containing
+spaces. Mac source-built `coh` help and mock evidence commands worked from
+`/tmp`. On Jetson, retained **1.1.0-beta** `coh` created and inspected a mock
+pack from `/tmp`; a separate stale development binary correctly refused a
+compiled policy hash mismatch. The pinned NeMo Agent Toolkit 1.9.0 executable
+worked by absolute path in a non-login SSH shell where `nat` was absent from
+`PATH`. Mac Codex CLI help exposed MCP stdio and Streamable HTTP setup; that
+help alone did not establish the two Cohesix HTTP headers or a live job.
+
+The instructions now route copied skills to same-version guides, resolve
+installed executables without a source-directory assumption, select one
+gateway process for the Queen connection, and require both private headers and
+separate verified subjects for multi-user claims. These checks cover two hosts
+and two observed agent/client families at limited capability scope. They do
+not prove Claude, Gemini or other vendor clients, cross-user isolation,
+admitted MCP/A2A work, installed Release B, useful native provider outcomes or
+release reliability. Those require the remaining installed-client and live
+acceptance matrix at one final source and package identity.
