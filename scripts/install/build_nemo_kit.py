@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import csv
 from email.parser import BytesParser
@@ -21,6 +22,8 @@ import sys
 import tempfile
 import tomllib
 import zipfile
+
+from packaging.version import Version
 
 from build_python_package import read_regular, safe_path
 
@@ -81,6 +84,19 @@ def inspect_wheel(path: Path, sources: dict[str, str], version: str) -> dict:
     for name, digest in expected.items():
         if hashlib.sha256(contents[name]).hexdigest() != digest:
             raise ValueError("NeMo wheel source digest mismatch")
+    module = ast.parse(contents["cohesix_nemo_kit/__init__.py"].decode("utf-8"))
+    declared_versions = [
+        statement.value.value
+        for statement in module.body
+        if isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance(statement.targets[0], ast.Name)
+        and statement.targets[0].id == "__version__"
+        and isinstance(statement.value, ast.Constant)
+        and isinstance(statement.value.value, str)
+    ]
+    if declared_versions != [version]:
+        raise ValueError("NeMo module version differs from selected release")
     records = list(csv.reader(io.StringIO(contents[prefix + "RECORD"].decode())))
     if (len(records) != len(names) or any(len(row) != 3 for row in records)
             or {row[0] for row in records} != set(names)):
@@ -111,7 +127,9 @@ def inspect_wheel(path: Path, sources: dict[str, str], version: str) -> dict:
 def build(repo: Path, inventory_path: Path, output: Path) -> dict:
     """Stage selected files into an isolated build root and retain exact hashes."""
     inventory_bytes = read_regular(inventory_path)
-    selected = selected_sources(json.loads(inventory_bytes))
+    inventory = json.loads(inventory_bytes)
+    selected = selected_sources(inventory)
+    release_version = str(Version(inventory["release"]["version"]))
     output.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix="cohesix-nemo-") as temporary:
         stage = Path(temporary)
@@ -128,8 +146,8 @@ def build(repo: Path, inventory_path: Path, output: Path) -> dict:
         project = tomllib.loads((stage / "pyproject.toml").read_text())
         if project["project"]["name"] != "cohesix-nemo-kit":
             raise ValueError("unexpected NeMo project")
-        version = project["project"]["version"]
-        if version != "0.1.0":
+        version = str(Version(project["project"]["version"]))
+        if version != release_version:
             raise ValueError("NeMo kit version differs from selected release contract")
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
@@ -160,14 +178,16 @@ def build(repo: Path, inventory_path: Path, output: Path) -> dict:
 def verify(repo: Path, inventory_path: Path, directory: Path) -> dict:
     """Recheck an offline wheel and report before either native archive copies it."""
     inventory_bytes = read_regular(inventory_path)
-    selected = selected_sources(json.loads(inventory_bytes))
+    inventory = json.loads(inventory_bytes)
+    selected = selected_sources(inventory)
+    version = str(Version(inventory["release"]["version"]))
     report = json.loads(read_regular(directory / "nemo-distribution.json", 1024 * 1024))
     source_digests = {
         name: hashlib.sha256(read_regular(repo / PREFIX / name)).hexdigest()
         for name in selected
     }
-    wheel = directory / "cohesix_nemo_kit-0.1.0-py3-none-any.whl"
-    observed = inspect_wheel(wheel, source_digests, "0.1.0")
+    wheel = directory / f"cohesix_nemo_kit-{version}-py3-none-any.whl"
+    observed = inspect_wheel(wheel, source_digests, version)
     if (
         report.get("schema") != "cohesix-nemo-distribution/v1"
         or report.get("authoritative") is not False

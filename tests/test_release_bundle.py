@@ -347,7 +347,7 @@ def test_release_manifest_selects_hash_bound_python_wheel_and_contracts() -> Non
         in release["generated_bundle_files"]
     )
     assert (
-        "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl"
+        "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl"
         in release["generated_bundle_files"]
     )
     assert "nemo/nemo-distribution.json" in release["generated_bundle_files"]

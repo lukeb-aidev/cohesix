@@ -1942,7 +1942,7 @@ generated_bundle_files = [
   "BUILD_PROVENANCE.json",
   "MANIFEST.sha256",
   "VERSION.txt",
-  "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl",
+  "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
   "nemo/nemo-distribution.json",
   "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
   "python/m26e-python-package.json",

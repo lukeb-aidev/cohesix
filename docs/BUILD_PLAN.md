@@ -13555,7 +13555,7 @@ Milestone: 28g / m28g-installation-and-integrated-adoption
 Goal: Make CUDA, PEFT, Apple and NeMo journeys installable and operable from public instructions.
 Inputs: Accepted 28–28f artifacts/evidence; both 28g native installer reports; 27e installation; 27f workbench; scripts/install/; docs/HOST_TOOLS.md; release matrix below. Use the m28g-host-clients-as-built-alignment contract matrix to select cross-client observations and feed the shared live-job result back to that task.
 Changes:
-  - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — bind the installed Mac/Linux packages, Python/NeMo kit, native Apple integration, client configs and recipes to one exact source/profile/hash inventory.
+  - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — bind the installed Mac/Linux packages, release-version-aligned Python/NeMo wheels, native Apple integration, client configs and recipes to one exact source/profile/hash inventory.
   - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — actionable capability/credential/storage/protocol/Apple diagnostics and one coherent job/evidence view.
   - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and independent evaluator walkthrough; explicit downloads and private-data/licence choices.
 Commands:

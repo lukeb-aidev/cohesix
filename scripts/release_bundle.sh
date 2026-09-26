@@ -1001,8 +1001,8 @@ bundle_release() {
   cp -p "$package_manifest" \
     "${bundle_dir}/python/m26e-python-package.json"
   mkdir -p "${bundle_dir}/nemo/dist"
-  cp -p "${NEMO_WHEEL_DIR}/cohesix_nemo_kit-0.1.0-py3-none-any.whl" \
-    "${bundle_dir}/nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl"
+  cp -p "${NEMO_WHEEL_DIR}/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl" \
+    "${bundle_dir}/nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl"
   cp -p "${NEMO_WHEEL_DIR}/nemo-distribution.json" \
     "${bundle_dir}/nemo/nemo-distribution.json"
 

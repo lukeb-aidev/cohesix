@@ -32,8 +32,10 @@ Changes:
   package signing or notarization succeeds. Their staged code permissions allow
   ordinary users to read and launch installed tools, with the copied Mac app
   signature rechecked after permission normalization.
-- The compiler-selected host archives now include a version-aligned Cohesix
-  Python wheel and an exact-source NeMo wheel, lock, installer and digest report.
+- The compiler-selected host archives now include Cohesix Python and NeMo kit
+  wheels at `1.2.0b0`, the PEP 440 spelling of Release B `1.2.0-beta`, plus
+  the NeMo lock, installer and digest report. Both wheel versions must match
+  the selected release before an installer stages them.
 - SwarmUI resolves installed tools from the fixed OS location and stages a
   native Mac icon; app and extension version metadata identify 1.2.0.
 - `coh doctor` reports the selected MCP/A2A switches without claiming a live
@@ -67,6 +69,14 @@ advisory checks passed on the rebased candidate. Focused
 contract assertions. The rebased Rust suite output is retained in ignored
 `out/m28g/cargo-test-rebased.log`. No exact target or installed-package claim
 follows from it.
+
+The release-version wheel alignment passed 47 focused NeMo, Python, package
+and bundle tests. `scripts/check-generated.sh` passed after regenerating the
+compiler inventory, and both newly built wheel METADATA records report
+`1.2.0b0`. The fresh QEMU seL4 production profile in this isolated checkout
+passed release-mode source/artifact validation. Its subsequent Cohesix image
+build was stopped before completion when the wheel source version changed; it
+does not provide a current-source target result.
 
 The full Clippy baseline fails on untouched source under the installed Rust
 toolchain, including `standing_ledger.rs` large enum, `gpu-bridge-host`

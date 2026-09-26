@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "2abbdc9b15878c4e2098a0743be6a8cd5d04131c78f295f2e024d1c394253b46",
+  "source_sha256": "129ba728ce25a58eae9cb2a8778c7ad0ab90726ddab09cb006aa9c85a6e0e70e",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -9912,7 +9912,7 @@
       "BUILD_PROVENANCE.json",
       "MANIFEST.sha256",
       "VERSION.txt",
-      "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl",
+      "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
       "nemo/nemo-distribution.json",
       "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
       "python/m26e-python-package.json",
@@ -10018,7 +10018,7 @@
       "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/configs/mcp-agent.yaml",
       "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/nat_plugin.py",
       "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/native.py",
-      "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl",
+      "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
       "nemo/nemo-distribution.json",
       "packaging/README.md",
       "packaging/ci/cohesix-journey.yml",
@@ -11434,9 +11434,9 @@
         "evidence_eligible": true
       },
       {
-        "id": "release-asset:nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl",
+        "id": "release-asset:nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
         "kind": "generated_bundle_file",
-        "path": "nemo/dist/cohesix_nemo_kit-0.1.0-py3-none-any.whl",
+        "path": "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
         "implementation_class": "contract",
         "owner": "release-tooling",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",

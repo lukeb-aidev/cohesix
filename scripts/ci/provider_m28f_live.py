@@ -21,7 +21,7 @@ from provider_matrix import require
 
 
 SCHEMA = "cohesix-m28f-nemo-reference/v1"
-VERSIONS = {"cohesix-nemo-kit": "0.1.0", "nvidia-nat": "1.9.0",
+VERSIONS = {"cohesix-nemo-kit": "1.2.0b0", "nvidia-nat": "1.9.0",
             "nvidia-nat-mcp": "1.9.0", "nvidia-nat-a2a": "1.9.0",
             "mcp": "1.29.1", "a2a-sdk": "0.3.26"}
 EVIDENCE = {"doctor", "mcp_discovery", "a2a_discovery", "cuda_mcp",

@@ -21,14 +21,14 @@ def test_selected_nemo_wheel_binds_exact_source(tmp_path: Path) -> None:
     report = kit.build(ROOT, inventory, tmp_path / "nemo")
     wheel = tmp_path / "nemo" / report["wheel"]["filename"]
     assert wheel.is_file()
-    assert report["wheel"]["version"] == "0.1.0"
+    assert report["wheel"]["version"] == "1.2.0b0"
     assert report["proof_boundary"]["kit_install_is_target_proof"] is False
     expected = kit.selected_sources(json.loads(inventory.read_text()))
     assert set(report["source_files"]) == set(expected)
     assert kit.verify(ROOT, inventory, tmp_path / "nemo") == report
     changed = {**report["source_files"], "src/cohesix_nemo_kit/native.py": "0" * 64}
     with pytest.raises(ValueError, match="source digest mismatch"):
-        kit.inspect_wheel(wheel, changed, "0.1.0")
+        kit.inspect_wheel(wheel, changed, "1.2.0b0")
     (tmp_path / "nemo/nemo-distribution.json").write_text(
         json.dumps({**report, "inventory_sha256": "0" * 64})
     )
@@ -45,3 +45,15 @@ def test_nemo_release_source_selection_rejects_missing_member() -> None:
     )
     with pytest.raises(ValueError, match="incomplete"):
         kit.selected_sources(inventory)
+
+
+def test_nemo_wheel_version_must_match_selected_release(tmp_path: Path) -> None:
+    """A valid wheel source with a stale package version cannot enter Release B."""
+    inventory = json.loads((
+        ROOT / "configs/generated/implementation_surface_inventory.json"
+    ).read_text())
+    inventory["release"]["version"] = "1.3.0-beta"
+    selected = tmp_path / "inventory.json"
+    selected.write_text(json.dumps(inventory))
+    with pytest.raises(ValueError, match="version differs from selected release"):
+        kit.build(ROOT, selected, tmp_path / "nemo")

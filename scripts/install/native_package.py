@@ -81,6 +81,13 @@ def load_reference(path: Path, host: str) -> dict[str, Any]:
         or wheels[0].is_symlink()
     ):
         raise ValueError("installer requires one version-aligned Cohesix Python wheel")
+    nemo_wheels = list((bundle / "nemo/dist").glob("cohesix_nemo_kit-*.whl"))
+    if (
+        len(nemo_wheels) != 1
+        or nemo_wheels[0].name != f"cohesix_nemo_kit-{python_version}-py3-none-any.whl"
+        or nemo_wheels[0].is_symlink()
+    ):
+        raise ValueError("installer requires one version-aligned Cohesix NeMo wheel")
     return value
 
 
