@@ -13415,7 +13415,10 @@ complete M28g task breakdown. Native installer implementation and exact release
 qualification are pending. At source checkpoint `020a516300`, QEMU and Pi
 Test Plan Stages 01–04 passed; both Stage 05 attempts failed the expired
 `EX-2026-0024` release guardrail, and selected Jetson KVM pressure remains
-unexecuted. No Release B acceptance is claimed.
+unexecuted. The owner renewed that exception on 27 September through
+27 October 2026; the failed attempts retain their result and current-source
+governance and pressure evidence remain required. No Release B acceptance is
+claimed.
 The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
 the selected source-level work and unmet installer, host and release gates.
 

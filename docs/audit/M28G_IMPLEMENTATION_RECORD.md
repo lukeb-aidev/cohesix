@@ -496,9 +496,12 @@ This guidance refinement changes no shipped host tool, Python API or benchmark
 measurement contract; the 47-surface host integration inventory still agrees
 with the selected compiler output.
 
-M28g remains **In Progress**. Stage 05 cannot pass without a new human-owned
-decision for `EX-2026-0024` or verified remediation of its underlying unsafe
-boundary; the selected Jetson KVM pressure control also remains unexecuted.
+M28g remains **In Progress**. After the failed 020a Stage 05 attempts, Lukas
+Bower renewed the existing `EX-2026-0024` P2 scope on 2026-09-27 through
+2026-10-27, as recorded in the
+[exception register](EXCEPTIONS.md#ex-2026-0024-renewal-2026-09-27). The
+earlier attempts remain failed, and fresh exact-source governance is required;
+the selected Jetson KVM pressure control also remains unexecuted.
 Native signed/notarized Mac and independently signed Ubuntu ARM64
 packages, clean installs on every advertised host, installed-client parity,
 the full live acceptance matrix, frozen adoption and quality budgets, and

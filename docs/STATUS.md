@@ -67,7 +67,9 @@ candidate. The selected source now records version-aligned Python packaging,
 native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
 lookup. At checkpoint `020a516300`, the canonical QEMU and physical Pi Test
 Plans passed Stages 01–04, including exact-source authenticated TCP and REST;
-both Stage 05 attempts failed on expired `EX-2026-0024`. Medium and high QEMU
+both Stage 05 attempts failed on the then-expired `EX-2026-0024`. The owner
+renewed the exception on 27 September through 27 October 2026; fresh
+governance evidence is required. Medium and high QEMU
 pressure passed on Mac HVF with correlated Worker receipts; the selected Jetson
 KVM pressure lane has not run. Signed native installers,
 clean platform installs, graphical launch, installed cross-client parity and
