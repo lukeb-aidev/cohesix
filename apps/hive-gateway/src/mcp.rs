@@ -185,6 +185,9 @@ fn catalogue(actions: &[String], can_write: bool) -> Option<Vec<Value>> {
 
 fn visible_catalogue(state: &AppState, headers: &HeaderMap) -> Option<Vec<Value>> {
     let principal = jobs::authorize_status_principal(state, headers).ok()?;
+    if state.inner.standing_ledger.is_none() {
+        return Some(Vec::new());
+    }
     let now = authority_now_ms().ok()?;
     let can_write = state.inner.delegation.lock().ok()?.permits_path(
         &principal.ticket_hash,
@@ -410,6 +413,9 @@ pub(super) async fn post(
         "resources/templates/list" => {
             if jobs::authorize_status(&state, &headers).is_err() {
                 return reject(StatusCode::FORBIDDEN, "delegated read required");
+            }
+            if state.inner.standing_ledger.is_none() {
+                return rpc_result(&id, json!({"resourceTemplates":[]}));
             }
             json!({"resourceTemplates":[{
             "uriTemplate":"cohesix://jobs/{admission_id}",

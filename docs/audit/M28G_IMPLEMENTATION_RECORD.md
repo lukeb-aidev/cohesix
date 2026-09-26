@@ -13,7 +13,8 @@ acceptance. The 1.1.0-beta release record remains at its original scope.
 
 Title/ID: `m28g-macos-native-installer`, `m28g-ubuntu-arm64-native-installer`,
 `m28g-host-clients-as-built-alignment`, `m28g-installation-and-integrated-adoption`,
-`m28g-release-b-qualification`.
+`m28g-release-b-qualification`, `m28g-mcp-tool-catalog`,
+`m28g-a2a-agent-facade`, `m28g-integration-live`.
 
 Milestone: 28g — Installation, Integrated User Qualification and Release B.
 
@@ -163,3 +164,14 @@ the MCP and A2A catalogues. Its generated-output allowlist omitted both files.
 The builder now classifies those compiler-owned outputs correctly while still
 rejecting unregistered changes, and the focused guard test passed. This repair
 does not make the in-progress burn-in, Pi image, or release qualification pass.
+
+The first protocol-enabled Pi candidate at `1870cca48` booted from verified
+RAM bytes and its first authenticated TCP read returned the selected manifest
+hash. The Mac gateway connected, but MCP job discovery and the A2A Agent Card
+returned 403 because no native standing ledger was configured on that host.
+This is a deployment gap, not a Pi protocol-switch failure. The gateway now
+answers authenticated discovery with no job tools, templates or skills when
+standing authority is absent; it continues to refuse job admission. A focused
+gateway integration test covers both protocol projections. This repair needs a
+new exact-source image and host binary for the replacement burn-in; the earlier
+boot is diagnostic evidence for its own source only.

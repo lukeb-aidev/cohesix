@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Check scoped MCP workflow discovery and refusal against the durable selected ledger.
+// Purpose: Check scoped MCP and A2A discovery with and without a durable selected ledger.
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,6 +81,84 @@ fn exchange(port: u16, ticket: &str, request: Value) -> (u16, Value) {
         status,
         serde_json::from_str(body).expect("JSON-RPC response"),
     )
+}
+
+fn card(port: u16, ticket: &str) -> (u16, Value) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("gateway connection");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("gateway timeout");
+    write!(stream, "GET /.well-known/agent-card.json HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nx-cohesix-auth: {AUTH}\r\nx-cohesix-ticket: {ticket}\r\n\r\n")
+        .expect("send Agent Card request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("gateway response");
+    let (head, body) = response.split_once("\r\n\r\n").expect("HTTP framing");
+    let status = head
+        .lines()
+        .next()
+        .expect("status line")
+        .split_whitespace()
+        .nth(1)
+        .expect("HTTP code")
+        .parse()
+        .expect("numeric status");
+    (status, serde_json::from_str(body).expect("Agent Card JSON"))
+}
+
+#[test]
+fn authenticated_discovery_without_standing_ledger_advertises_no_jobs() {
+    let directory = tempfile::tempdir().expect("private fixture root");
+    let issuer = directory.path().join("issuer");
+    private_file(&issuer, ISSUER.as_bytes());
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("reserve loopback port");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut child = GatewayChild(
+        Command::new(env!("CARGO_BIN_EXE_hive-gateway"))
+            .args([
+                "--mock",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+                "--request-auth-token",
+                AUTH,
+                "--delegation-key-ref",
+                &format!("file:{}", issuer.display()),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start selected gateway"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(Instant::now() < deadline, "gateway did not start");
+        assert!(child.0.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(25));
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let delegated = ticket("reader", TicketVerb::Read, now_ms);
+    let (status, list) = exchange(
+        port,
+        &delegated,
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(list["result"]["tools"], json!([]));
+    let (status, templates) = exchange(
+        port,
+        &delegated,
+        json!({"jsonrpc":"2.0","id":2,"method":"resources/templates/list"}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(templates["result"]["resourceTemplates"], json!([]));
+    let (status, card) = card(port, &delegated);
+    assert_eq!(status, 200);
+    assert_eq!(card["skills"], json!([]));
 }
 
 #[test]

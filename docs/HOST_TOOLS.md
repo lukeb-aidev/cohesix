@@ -982,6 +982,11 @@ and private `x-cohesix-auth` plus `x-cohesix-ticket` headers. The same
 standing-ledger, issuer, selected scopes and native provider profiles used by
 REST/MCP must be present. Keep the HTTP bind on loopback or a protected
 connection; the client timeout does not cancel a submitted job.
+With no selected standing ledger, an authenticated Agent Card has an empty
+`skills` list and MCP discovery has no job tools or job resource templates.
+This confirms that the compiled endpoints are reachable without advertising an
+unavailable executor. Configure the same valid ledger and scopes on the gateway
+and native agent before expecting a job to appear or be admitted.
 
 To delegate one selected job, provide an A2A user message with one data part:
 `skillId` is the Agent Card action, `scopeId` is the private selected standing

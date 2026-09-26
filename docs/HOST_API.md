@@ -85,7 +85,10 @@ The generated [A2A catalogue](../configs/generated/a2a_catalogue.json)
 selects JSON-RPC binding 0.3.0, compatible with `a2a-sdk==0.3.26` in the
 installed NeMo Agent Toolkit 1.9.0 client. The Agent Card requires the gateway
 request credential and delegated read ticket; it exposes only actions with a
-currently usable scope for that subject. A peer sends one A2A `message/send`
+currently usable scope for that subject. When no standing ledger is configured,
+authenticated discovery returns an empty Agent Card skill list and an empty MCP
+job-tool list; job admission remains unavailable. A peer sends one A2A
+`message/send`
 or `message/stream` message with a single data part containing `skillId`, the
 private selected `scopeId`, and the existing raw host ticket. The gateway
 preflights fresh provider facts, then submits through the same durable REST

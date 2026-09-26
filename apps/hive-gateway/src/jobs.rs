@@ -182,7 +182,9 @@ pub(super) fn authorize_status(state: &AppState, headers: &HeaderMap) -> Result<
 }
 
 pub(super) fn available_actions(state: &AppState, subject: &str) -> Result<Vec<String>> {
-    let ledger = ledger(state)?;
+    let Some(ledger) = state.inner.standing_ledger.as_deref() else {
+        return Ok(Vec::new());
+    };
     let controls = StandingControls::from_resolved_manifest(include_bytes!(
         "../../../configs/generated/root_task_resolved.json"
     ))
