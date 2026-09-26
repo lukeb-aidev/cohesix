@@ -67,16 +67,22 @@ candidate. The selected source now records version-aligned Python packaging,
 native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
 lookup. Focused staging and generated-contract checks are source-level results.
 Signed native installer artifacts, clean platform installs, graphical launch,
-cross-client live parity, physical Pi and integrated Release B qualification
-remain outstanding. The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
+cross-client live parity, physical Pi qualification and integrated Release B
+qualification remain outstanding. The
+[M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
 retains the source-level checkpoint and blocked gates. Release A remains the
 published release.
 
 The selected QEMU and Pi production manifests now enable host-side MCP and A2A
-under the compiler-controlled master switch. This source selection does not
-qualify either protocol on a new Pi image; the prior Pi diagnostic used a
-disabled profile and was stopped for replacement. Fresh Pi and host-client
-evidence is required for the enabled selection.
+under the compiler-controlled master switch. A fresh exact-source Pi 4 GENET
+RAM image at `05e1facdd` completed a 60-minute authenticated read and empty
+MCP/A2A discovery diagnostic: 60/60 cycles, 19/19 health checks, six successful
+read-ticket renewals and no reconnect. The Mac gateway had no co-located
+standing executor, so MCP/A2A advertised no jobs and no protocol task or native
+provider result was obtained. Jetson CUDA and NeMo and Mac MLX direct host
+checks passed at their separate source/client identities. This is partial
+operational evidence; final-source target, installed-client and release
+qualification remain open.
 
 [Milestone 28](BUILD_PLAN.md#28) is complete at its selected foundation scope.
 The source declares

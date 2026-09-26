@@ -58,7 +58,9 @@ acceptance.
 
 Deliverables: Source-level candidate and focused test logs retained in ignored
 `out/m28g/`. There is no passing native installer qualification, live adoption
-case, physical Pi result, integrated Test Plan run or release-owner approval.
+case, physical Pi release qualification, integrated Test Plan run or release-owner
+approval. A later Pi read/protocol diagnostic is recorded below at its own
+source and image identity.
 
 ## Current validation and blockers
 
@@ -142,9 +144,9 @@ to be true. The production-profile test guards the selected values. The
 earlier Pi-selected diagnostic run used a separate source candidate with
 both protocols disabled and stopped after approximately eight minutes at the
 owner's request. Its authenticated TCP and read-only observations remain
-diagnostic evidence only. The enabled Pi selection requires a fresh exact
-image, matching host tools, live MCP and A2A clients, and the M28g integrated
-matrix before a Pi protocol or release claim.
+diagnostic evidence only. The later enabled Pi run below supplies a fresh exact
+image, matching host tools and empty MCP/A2A discovery. It does not supply
+native protocol jobs or the M28g integrated matrix required for release claims.
 
 The A2A Agent Card now advertises the selected `1.2.0-beta` release version.
 A focused cross-contract test binds that value to the generated release
@@ -206,8 +208,8 @@ The Jetson's NeMo Toolkit 1.9.0 then ran its native direct evaluation against
 the same Mac model through a protected reverse SSH tunnel and MLX-LM's local
 OpenAI-compatible server. Its native profiler recorded `WORKFLOW_START`,
 `LLM_START`, `LLM_END` and `WORKFLOW_END`, no error, and the expected answer;
-the trace SHA-256 is
-`e1fc9224fa45f46d469646f00404873c7052d3c1b70341b57d25aad1686e3dca`.
+the private evaluation log SHA-256 is
+`2104745e1f67d09ce19fe22aa795d6f476e36bccae467c750a751f07e2786a2f`.
 An earlier diagnostic request to Cohesix's deliberately bounded MLX service
 was refused because NeMo sent system and user messages while omitting explicit
 token and temperature fields; its native eval process still exited zero, but
@@ -225,5 +227,48 @@ response in Toolkit's bounded profiler CSV. The CLI preserves the private
 trace and reports `evaluation_failed` with a nonzero process exit; it does not
 interpret model text as a provider result. The focused NeMo kit and release
 wheel tests passed 12 cases and `scripts/check-generated.sh` passed for this
-source repair. A fresh installed-wheel run remains required to verify the
-changed client bytes on the Jetson.
+source repair. The fresh `d3e64749f` wheel at SHA-256
+`252e8e7739ec47c2820b08466008bd40197f623920d3bf08bb81f4bfd5b39ada`
+passed the compiler-selected source verifier and installed on the Jetson with
+`pip check`. The refused service request now exits 2 with
+`native_profile_complete=false`; the supported local MLX-LM route exits zero
+with a real `LLM_END` and the expected answer. These installed-client runs
+remain direct model evaluation, not a Pi admission or release result. The
+Pi diagnostic image remains bound to its earlier `05e1facdd` source.
+
+## Timed physical Pi protocol diagnostic
+
+The Pi 4 GENET Queen at source `05e1facdd008240a12dfe133c033912dcc87d5f5`
+ran from a RAM-only TFTP image with ID
+`8e4212e7a8282c0657ad873b97f36a519dc6bf292b16c4554631bdb0680c7251`
+and SHA-256
+`3a58570dfc69007c5a002cec7ef22840435581e7a17d4c4482d9bc4b51da64ac`.
+The private selected manifest SHA-256 is
+`bff6b94e8f5bf66e1521360b400fa6bb0f30330a9310598ac0fbeb225c5a6085`;
+master, MCP and A2A are all enabled. Host SHA-256 and Pi RAM CRC checks,
+the target `[BUILD]` marker and the first authenticated TCP `/proc/boot` read
+bound the live target to those bytes. No SD image was written.
+
+The requested 60-minute read/protocol diagnostic ran from
+2026-09-26T08:51:13Z to 09:51:13Z, 3,600.008 seconds. Its 60 minute-cadence
+cycles, 19 operator health checks, ten Jetson availability samples and six
+delegated read-ticket renewals all passed; there were zero failed cycles and
+zero gateway reconnects. Authenticated MCP `tools/list` returned HTTP 200
+with `tools=[]`, and the A2A Agent Card returned HTTP 200 with `skills=[]`
+and version `1.2.0-beta`. Planned quiet windows occurred at minutes 20–21
+and 40–41. The retained event log SHA-256 is
+`86229d76b0ab17e29f052f4e8516946be45751a2ca182ddf06fa992aefc3a159`.
+The run-owned Mac gateway, protected SSH tunnel and TFTP server were stopped
+after the finish event; the Pi RAM image and private evidence were preserved.
+
+This is PASS for the executed physical Pi authenticated-read and empty-discovery
+diagnostic. The requested burn-in and M28g release profile remain INCOMPLETE:
+the Mac gateway had no co-located standing ledger, so no MCP-only or A2A-only
+useful job could be admitted and no native task/provider result or recovery
+was measured. The direct Jetson CUDA/NeMo and Mac Metal checks above have
+separate host-only proof. The candidate source after the NeMo repair is
+`d3e64749f`; the timed Pi image was built from its `05e1facdd` predecessor
+and is not final-source target qualification. Full source-bound staged,
+installed-client, native package, Worker VM CUDA and release gates remain
+open. The private `out/burn-in/20260926-m28g-60min-mcp-a2a/` directory retains
+`run-record.md`, `burn-analysis.json`, the event log and host observations.
