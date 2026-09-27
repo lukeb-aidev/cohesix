@@ -574,12 +574,14 @@ def test_pi4_image_build_cleanup_keeps_post_mutation_policy_copy(
     assert "Retry with --policy-recovery-file" in result.stdout
 
 
+@pytest.mark.parametrize("fat_content", ["DOS_FAT_32", "Windows_FAT_32"])
 def test_pi4_image_build_refreshes_exact_child_without_erasing(
     tmp_path: pathlib.Path,
+    fat_content: str,
 ) -> None:
     """Normal reflashes may mount but never recreate partition or FAT topology."""
 
-    fixture = _write_flash_command_fixture(tmp_path)
+    fixture = _write_flash_command_fixture(tmp_path, fat_content=fat_content)
     stage = tmp_path / "stage"
     nested = stage / "overlays"
     nested.mkdir(parents=True)
@@ -626,6 +628,64 @@ def test_pi4_image_build_refreshes_exact_child_without_erasing(
     assert "-dimsu -t 3600 -w" in fixture["caffeinate_log"].read_text(
         encoding="utf-8"
     )
+
+
+def test_pi4_image_build_rejects_non_fat32_child_before_copy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A matching label on another filesystem cannot authorize an SD refresh."""
+
+    fixture = _write_flash_command_fixture(tmp_path, fat_content="Apple_HFS")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+    policy = fixture["volume"] / "cohesix.env"
+    policy.write_bytes(b"coh_net_mode=dhcp\n")
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=0; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "must already contain exactly one MBR FAT32 COHESIX partition" in result.stderr
+    assert policy.read_bytes() == b"coh_net_mode=dhcp\n"
+    assert not (fixture["volume"] / "config.txt").exists()
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert all("erase" not in command for command in commands)
+
+
+def test_pi4_image_build_rejects_mismatched_fat32_filesystem_before_copy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A FAT32 content label alone cannot override the mounted filesystem type."""
+
+    fixture = _write_flash_command_fixture(
+        tmp_path, fat_content="Windows_FAT_32", filesystem_type="exfat"
+    )
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; export DISKUTIL_LOG; "
+            "DISK_LABEL=COHESIX; "
+            "canonical_flash_partition /dev/disk20 COHESIX; "
+            "validated_flash_partition_mount /dev/disk20 /dev/disk20s1 COHESIX"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "partition is not FAT32" in result.stderr
 
 
 def test_pi4_image_build_initializes_whole_disk_only_with_explicit_opt_in(
@@ -1932,6 +1992,8 @@ def _source_function(script: pathlib.Path, command: str) -> subprocess.Completed
 def _write_flash_command_fixture(
     tmp_path: pathlib.Path,
     *,
+    fat_content: str = "DOS_FAT_32",
+    filesystem_type: str = "msdos",
     locked: bool = False,
     change_identity_after_first: bool = False,
     lock_after_check: int | None = None,
@@ -1977,7 +2039,8 @@ def _write_flash_command_fixture(
         "DeviceNode": "/dev/disk20s1",
         "WholeDisk": False,
         "ParentWholeDisk": "disk20",
-        "Content": "DOS_FAT_32",
+        "Content": fat_content,
+        "FilesystemType": filesystem_type,
         "VolumeName": "COHESIX",
         "Writable": True,
         "WritableMedia": True,
@@ -1991,7 +2054,7 @@ def _write_flash_command_fixture(
                 "Partitions": [
                     {
                         "DeviceIdentifier": "disk20s1",
-                        "Content": "DOS_FAT_32",
+                        "Content": fat_content,
                         "VolumeName": "COHESIX",
                     }
                 ],

@@ -651,3 +651,39 @@ the full live acceptance matrix, frozen adoption and quality budgets, and
 named release-owner approval remain absent. No exact assembled Release B
 candidate or publication is claimed. Material AI assistance produced this
 checkpoint and its scoped validation record.
+
+## Pi 4 SD refresh compatibility
+
+Title/ID: `m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Refresh the selected physical Pi card without relaxing whole-disk,
+partition, filesystem or private-policy checks.
+
+Inputs: Removable 63.9 GB SD card in the Mac's built-in reader; one MBR FAT32
+`COHESIX` child; exact staged Pi image; the card's existing private boot policy.
+
+Changes:
+
+- `scripts/pi4-image-build.sh` accepts macOS `diskutil`'s observed
+  `Windows_FAT_32` content spelling as well as `DOS_FAT_32`, and still requires
+  the mounted child's `msdos` filesystem type, exact parent and label.
+- `tests/test_pi4_image_build.py` exercises both valid spellings through the
+  non-destructive refresh, and confirms a non-FAT32 child or mismatched
+  mounted filesystem is rejected before the card is copied or its policy
+  changes.
+
+Commands: `.venv/bin/python -m pytest -q tests/test_pi4_image_build.py`;
+`bash -n scripts/pi4-image-build.sh`; `scripts/check-generated.sh`;
+`git diff --check`.
+
+Checks: An existing exact FAT32 child is refreshed without repartitioning;
+other filesystems are refused; the existing private policy is preserved and
+read back; physical proof remains subject to a fresh exact-image boot and
+separate hardware acceptance.
+
+Deliverables: Compatible flash validator, regression tests and retained
+failure logs under ignored `out/m28g/`. AI assistance identified and repaired
+the observed macOS spelling mismatch; no physical acceptance is inferred from
+the focused host tests.

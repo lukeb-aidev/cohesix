@@ -3007,7 +3007,7 @@ if len(partitions) != 1:
 partition = partitions[0]
 if (
     partition.get("DeviceIdentifier") != expected
-    or partition.get("Content") != "DOS_FAT_32"
+    or partition.get("Content") not in ("DOS_FAT_32", "Windows_FAT_32")
     or partition.get("VolumeName") != label
 ):
     print(f"{identifier} does not contain exact FAT32 {label} child {expected}", file=sys.stderr)
@@ -3041,7 +3041,11 @@ checks = (
     (info.get("DeviceNode") == f"/dev/{partition}", "partition node changed"),
     (info.get("WholeDisk") is False, "child unexpectedly became a whole disk"),
     (info.get("ParentWholeDisk") == disk, "partition parent changed"),
-    (info.get("Content") == "DOS_FAT_32", "partition is not FAT32"),
+    (
+        info.get("Content") in ("DOS_FAT_32", "Windows_FAT_32")
+        and info.get("FilesystemType") == "msdos",
+        "partition is not FAT32",
+    ),
     (info.get("VolumeName") == label, "partition label changed"),
     (
         info.get("Writable") is True and info.get("WritableMedia") is True,
