@@ -811,3 +811,25 @@ pressure result or Release B acceptance is inferred from that preflight.
 
 Deliverables: Honest detached replay selection and regression evidence;
 the exact-source Jetson pressure result remains pending.
+
+## A2A catalogue release selection repair
+
+The first canonical `1.2.0` bundle preflight at `bc2f7f80399f` refused the
+candidate because the compiler generated `a2a_catalogue.json` but the release
+inventory omitted it. This was a real host archive selection defect: the MCP
+catalogue was selected while the A2A catalogue would not be shipped. The
+`m28g-a2a-catalogue-release-selection` repair adds the A2A catalogue to the
+compiler source inventory and a focused release test. Regeneration changes
+the inventory, host graph, use-case evidence, MCP/A2A catalogues and provider
+projections through their normal hash bindings. The earlier `bc2f7f80399f`
+QEMU/Pi boots and protocol observations remain evidence for that source, not
+for the repaired bundle. The focused release suite passed 22 tests and
+`scripts/check-generated.sh` passed after regeneration. The compatibility
+review found no changed CLI, Python call shape, gateway route or benchmark
+threshold. The Rust and Python provider projections embed the new graph
+binding, however, so the earlier native host binaries, Python wheel and
+target artifacts are stale as release inputs. The NeMo kit's source inventory
+binding also needs renewed verification. The focused generated-contract and
+release suites passed 49 tests; `cohesix-authority` passed 16 unit tests.
+Exact repaired-source bundles and their installation checks remain
+outstanding.

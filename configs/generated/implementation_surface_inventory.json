@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "9b63e659a18566a96887f907c925b8cf810d52e6d73aca64f1eb42b74e3492b4",
+  "source_sha256": "ca5202f1adbc5992511e6ddf8541963fd6e1bdea39320a19ec11c5c59a0c8885",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -9716,6 +9716,7 @@
       "u-boot.bin"
     ],
     "generated_configs": [
+      "configs/generated/a2a_catalogue.json",
       "configs/generated/cas_verification_key.hex",
       "configs/generated/cas_manifest_template.json",
       "configs/generated/cas_manifest_template.json.sha256",
@@ -10013,6 +10014,7 @@
       "bin/swarmui",
       "cas/max_chunks_v1.txt",
       "cas/max_chunks_v1.txt.sha256",
+      "configs/generated/a2a_catalogue.json",
       "configs/generated/cas_manifest_template.json",
       "configs/generated/cas_manifest_template.json.sha256",
       "configs/generated/cas_verification_key.hex",
@@ -10544,6 +10546,20 @@
         "package_disposition": "generated_release_contract",
         "evidence_requirement": "exact file-set and SHA-256 validation",
         "current_observed_mode": "generated_release_metadata",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:configs/generated/a2a_catalogue.json",
+        "kind": "generated_config",
+        "path": "configs/generated/a2a_catalogue.json",
+        "implementation_class": "contract",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "compiler-generated exact release manifest; exact release source `configs/generated/a2a_catalogue.json`",
+        "package_disposition": "generated_release_contract",
+        "evidence_requirement": "exact file-set and SHA-256 validation",
+        "current_observed_mode": "generated_contract",
         "evidence_eligible": false
       },
       {

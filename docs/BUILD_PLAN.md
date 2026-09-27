@@ -13684,6 +13684,17 @@ Checks:
   - Install rollback/uninstall preserves declared user data, disables/removes only installer-owned service registration and retains external credentials unless the operator explicitly selects documented removal; no hidden model downloads or automatic loss of active job evidence.
 Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and m28g-adoption-live evidence for the integrated matrix.
 
+Title/ID: m28g-a2a-catalogue-release-selection
+Milestone: 28g / m28g-a2a-catalogue-release-selection; downstream discovery in m28g-release-b-qualification.
+Status: In Progress — compiler selection repaired; exact candidate requalification pending.
+Goal: Ship the generated A2A catalogue with every Release B host archive so installed agent clients can inspect the same selected skills as the gateway.
+Inputs: The exact 1.2.0 release inventory, compiler-generated MCP and A2A catalogues, and the canonical bundle preflight refusal for the omitted A2A file.
+Changes: AI-assisted investigation traced the factory refusal to the missing inventory row. Select configs/generated/a2a_catalogue.json in configs/implementation_surfaces.toml; regenerate its inventory, host graph and dependent generated projections; add a focused release inventory assertion. Record the failed preflight and rebind affected release evidence to the repaired source.
+Commands: .venv/bin/python -m pytest -q tests/test_release_bundle.py; scripts/check-generated.sh; scripts/release_bundle.sh --check-manifest with exact Mac, Linux and Pi production inputs; git diff --check.
+Checks: The bundle factory accepts the exact generated file set and copies the A2A catalogue to both host archives with byte-bound manifests. MCP and A2A remain selected on QEMU and Pi. Regenerated graph/source bindings require renewed affected artifact checks; earlier target results retain their original identities.
+Validation: 49 focused release/Python generated-contract tests, 16 cohesix-authority unit tests, generated consistency and git diff --check passed on the repair working tree. Final exact-source bundle preflight and archive checks remain pending.
+Deliverables: Corrected release selection, regenerated contracts, focused test result and renewed exact-source candidate evidence.
+
 Title/ID: m28g-release-b-qualification
 Milestone: 28g / m28g-release-b-qualification
 Goal: Qualify the assembled ecosystem release with complete applicable target and release evidence.

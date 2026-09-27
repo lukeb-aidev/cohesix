@@ -91,7 +91,8 @@ def test_release_b_inventory_selects_current_notes_and_preserves_history() -> No
     assert "releases/RELEASE_NOTES-1.1.0-beta.md" in release["support_files"]
     assert "releases/RELEASE_NOTES-1.0.0-beta.md" in release["support_files"]
     for contract in (
-        "cuda_recipe.json", "provider_registry.json", "use_case_evidence.json",
+        "a2a_catalogue.json", "mcp_catalogue.json", "cuda_recipe.json",
+        "provider_registry.json", "use_case_evidence.json",
     ):
         assert f"configs/generated/{contract}" in release["generated_configs"]
     assert "packaging/ci/cohesix-journey.yml" in release["support_files"]
