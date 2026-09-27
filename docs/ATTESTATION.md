@@ -4,25 +4,26 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Signed device evidence
 
-This contract belongs to Milestone 26 task
-`m26-device-identity-attestation-closure` and Milestone 27 task
-`m27-attestation-verifier`. `cohesix-attestation` owns the bounded wire parser,
-nonce state, TPM quote checks and host certificate verifier. `coh`,
-`coh-status` and SwarmUI consumers share this vocabulary.
+Use this page to understand what signed device evidence can establish and why
+the selected Pi 4 and QEMU images report it as unavailable.
+`cohesix-attestation` owns the bounded wire parser, nonce state, TPM quote
+checks and host certificate verifier. `coh`, `coh-status` and SwarmUI share
+this vocabulary. For the operator command and pack format, see
+[Operator evidence](OPERATOR_EVIDENCE.md).
 
 ## Selected profiles and the Pi 4 decision
 
 The stock Pi 4 has no onboard TPM. U-Boot measured boot needs a connected TPM;
-enabling a build option cannot supply a missing device. The owner decision of
-2026-09-14 excludes the current Pi 4 from the **positive signed-device
-acceptance requirement**. The selected Pi manifest uses
+enabling a build option cannot supply a missing device. The current Pi 4 is
+excluded from the **positive signed-device acceptance requirement**. The
+selected Pi manifest uses
 `mode = "measurement_only"`, `required = false`. It remains subject to normal
 Pi boot, operator, network and trace acceptance. Secure boot and DICE are not
 enabled or inferred by this exclusion. Adding a TPM module or a provisioned
 DICE boot chain requires a separately declared, isolated device owner and
 fresh enrollment before changing this classification.
 
-Schema 1.20 replaces `enabled`/`tpm-or-dice` with explicit
+The selected manifest schema uses explicit
 `disabled|measurement_only|tpm2_quote|dice_evidence` modes. It also specifies
 `required`, `evidence_max_bytes`, `challenge_max_bytes`, `max_age_ms`,
 `trust_anchor_ref`, and `ticket_key_policy`. No automatic fallback exists.
@@ -36,9 +37,8 @@ their existing development ticket keys and report `development_static`.
 
 There is currently no isolated TPM issuer, DICE CDI handoff or sealed-ticket
 runtime in these selected images. The host verifier does not supply those
-facilities. Their implementation and physical qualification remain owned by
-the reopened Milestone 26 device task; this contract does not claim that task's
-full production admission definition of done.
+facilities. The [Build Plan](BUILD_PLAN.md) owns any future device-provider
+work; this host verifier alone does not establish production device identity.
 
 ## Namespace and request lifecycle
 

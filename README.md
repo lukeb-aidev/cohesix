@@ -338,6 +338,8 @@ the selected resolved manifest.
 | [Current status](docs/STATUS.md) | Distinguish checked-in capability from QEMU, Pi, release, and use-case acceptance |
 | [Architecture](docs/ARCHITECTURE.md) | Understand trust boundaries, components, and major data flows |
 | [Roles and scheduling](docs/ROLES_AND_SCHEDULING.md) | Understand Queen/Worker authority, lifecycle, and scheduling layers |
+| [Worker tickets](docs/WORKER_TICKETS.md) | Understand Worker session authority and how it differs from target execution |
+| [Production profiles](docs/PRODUCTION_PROFILES.md) | Compare selected QEMU and Pi capacity and scheduling bounds |
 | [GPU nodes](docs/GPU_NODES.md) | Understand the host-only GPU boundary, leases, and telemetry |
 | [Use cases](docs/USE_CASES.md) | Assess capability-fit patterns without treating them as acceptance claims |
 | [Security](docs/SECURITY.md) | Understand security objectives, controls, limits, and vulnerability reporting |
@@ -352,6 +354,7 @@ the selected resolved manifest.
 | [Host tools](docs/HOST_TOOLS.md) | Choose host executables and compose transports safely |
 | [Example workflows (source checkout)](https://github.com/lukeb-aidev/cohesix/tree/main/demo) | Run Queen scripts, retained Worker intents, CUDA/LoRA host workflows and evidence demonstrations; check each example's version |
 | [Operator recipes](docs/OPERATOR_RECIPES.md) | Perform advanced evidence, mount, lifecycle, ticket, federation, and PEFT tasks |
+| [Private LoRA release](docs/PRIVATE_LORA_RELEASE.md) | Train or import an adapter on a selected host, verify serving and handle recovery |
 
 ### Guides
 
@@ -361,6 +364,13 @@ the selected resolved manifest.
 | [Boot reference](docs/BOOT_REFERENCE.md) | Interpret boot stages, prompts, and fail-closed markers |
 | [Benchmarks](docs/BENCHMARKS.md) | Run and interpret reproducible performance measurements |
 | [Failure modes](docs/FAILURE_MODES.md) | Diagnose and recover from observable failures |
+| [Operator evidence](docs/OPERATOR_EVIDENCE.md) | Capture, compare and review bounded target observations offline |
+| [Signed device evidence](docs/ATTESTATION.md) | Understand attestation availability, trust enrollment and proof limits |
+| [Causal evidence](docs/CAUSAL_EVIDENCE.md) | Verify how admitted requests, native actions and Worker receipts join |
+| [Failover](docs/FAILOVER.md) | Plan fenced single-writer cutover and handle uncertain recovery |
+| [Host field bus](docs/FIELD_BUS.md) | Enroll bounded MODBUS or DNP3 points and interpret native acknowledgements |
+| [Identity mapping](docs/IDENTITY_MAPPING.md) | Exchange enrolled external identities for scoped gateway tickets |
+| [macOS providers](docs/MACOS_PROVIDERS.md) | Enroll and operate native Mac services and release actions |
 | [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | Build, flash, boot, and prove QEMU or Pi 4 behavior |
 
 ### Develop and contribute
@@ -368,6 +378,7 @@ the selected resolved manifest.
 | Document | Use it to |
 | --- | --- |
 | [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) | Reproduce the pinned macOS build environment and external seL4 contract |
+| [Repository layout](docs/REPO_LAYOUT.md) | Find target code, host tools, compiler inputs and retained evidence |
 | [Drivers](docs/DRIVERS.md) | Design, implement, test, and qualify a physical driver |
 | [Contributing](CONTRIBUTING.md) | Propose, implement, validate, and submit a scoped change |
 | [API guidelines](docs/API_GUIDELINES.md) | Implement against the REST projection and compatibility rules |

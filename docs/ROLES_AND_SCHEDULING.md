@@ -5,14 +5,15 @@
 
 # Roles, Authority, and Scheduling
 
-For the isolated console/network boundary, a child publication remains root
-work until its copied record receives the existing one-shot publication ACK.
-The shared frontier becoming empty does not retire that local credit debt.
-Causal and global root waits validate every shared frontier and return through
-ordinary arbitration while an ACK is owed; the peek cannot grant credit or
-hide a stale identity. This preserves child progress without a timer or retry
-substitute for the missing consumer action.
-
+Start here to answer three questions: what a Queen or Worker may do, when a
+target Worker actually exists and runs, and how the selected MCS budgets keep
+critical services responsive. For an operational first pass, read
+[Worker tickets](WORKER_TICKETS.md) and
+[production profiles](PRODUCTION_PROFILES.md); the detailed tables below are
+the reference for generated roles, lifecycle and scheduling bounds. A
+declared Worker slot is not a running CUDA process. CUDA and PEFT execute on
+external hosts, while target Workers handle their own bounded control and
+receipt duties.
 
 This document owns Cohesix role semantics, ticket authority, target-worker
 lifecycle, and scheduling layers. It does not redefine namespace schemas,
@@ -38,13 +39,6 @@ per instance. WorkerBus remains a model/session-only role. A generated
 executable record proves configured admission; a QEMU or Pi claim still
 requires target evidence for the exact kernel, resolved manifest, root image,
 Worker archive, and ABI version.
-
-At a GENET condition-before-block cut, a newly ready durable child publication
-returns to ordinary arbitration without a causal-wait charge. A coalesced
-notification cannot change that accounting compared with an empty poll observing
-the same publication. Actual receive returns and hints without ready publication
-retain the existing 64-return guard, and productive work retains its separate
-64-quantum guard. This grants no extra polling, timer, SC budget or work authority.
 
 The Pi manifest retains `max_workers=256` and per-role
 `namespace_capacity=256`, and its complete maximum mix declares all 256 as
@@ -1060,6 +1054,21 @@ selected generated tables; client code and prose must not copy them as
 repository-wide constants.
 
 ### 2. Root-task service turns
+
+For the isolated console/network boundary, a child publication remains root
+work until its copied record receives the existing one-shot publication ACK.
+The shared frontier becoming empty does not retire that local credit debt.
+Causal and global root waits validate every shared frontier and return through
+ordinary arbitration while an ACK is owed; the peek cannot grant credit or
+hide a stale identity. This preserves child progress without a timer or retry
+substitute for the missing consumer action.
+
+At a GENET condition-before-block cut, a newly ready durable child publication
+returns to ordinary arbitration without a causal-wait charge. A coalesced
+notification cannot change that accounting compared with an empty poll observing
+the same publication. Actual receive returns and hints without ready publication
+retain the existing 64-return guard, and productive work retains its separate
+64-quantum guard. This grants no extra polling, timer, SC budget or work authority.
 
 For the linked Pi operator rotation, exact authenticated direct GENET may run
 composite root IPC/Worker/bootstrap/output maintenance once in Dispatch when

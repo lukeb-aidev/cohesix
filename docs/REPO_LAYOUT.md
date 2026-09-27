@@ -1,95 +1,37 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document the canonical Cohesix repository layout and app roster. -->
+<!-- Purpose: Help contributors find the owners of target code, host tools, generated contracts and release evidence. -->
 <!-- Author: Lukas Bower -->
-# Repository Layout — 1.0.0-beta
+# Repository layout
 
-```
-/AGENTS.md              ← Repo-wide working agreement
-/docs/
-  ARCHITECTURE.md
-  BUILD_PLAN.md
-  CODING_GUIDELINES.md
-  GPU_NODES.md
-  INTERFACES.md
-  ROLES_AND_SCHEDULING.md
-  SECURE9P.md
-  TEST_PLAN.md
-  TOOLCHAIN_MAC_ARM64.md
-  USERLAND_AND_CLI.md
-  snippets/
-    cohsh_client.md
-    cohsh_grammar.md
-    cohsh_policy.md
-    cohsh_ticket_policy.md
-    root_task_manifest.md
-    ticket_quotas.md
-/configs/
-  root_task.toml
-  generated/
-    root_task_resolved.json
-    coh_policy.toml
-    cohsh_policy.toml
-/releases/              ← Current 1.0.0-beta bundles and release notes
-/seL4/                  ← Required immutable prebuilt artifacts; upstream source is external
-/out/                   ← Ignored disposable build, staging, log, and run output
-/scripts/
-  qemu-run.sh
-  cohsh/
-    cas_roundtrip.coh
-    observe_watch.coh
-  ci/
-    size_guard.sh
-/toolchain/
-  setup_macos_arm64.sh
-/tools/
-  coh-rtc/
-/crates/
-  cohsh-core/
-  host-cuda/
-/apps/
-  cohesix-proto/
-  console-ack-wire/
-  cohsh/
-    src/
-      client.rs
-      queen.rs
-  coh-status/             ← Library/replay surface; no standalone release CLI
-  root-task/
-    README.md            ← Event pump overview, testing commands, and feature flag notes
-  nine-door/
-    src/
-      host/
-        cbor.rs          ← Minimal CBOR writer for UI providers
-        ui.rs            ← UI provider config + path matching
-    tests/
-      ui_providers.rs    ← UI provider bounds + audit tests
-  nine-door-runtime/      ← Selected no_std target namespace-service child
-  console-network-runtime/← Selected no_std target TCP console-network child
-  worker-heart/
-  worker-gpu/
-  worker-lora/
-  pi4-driver-runtime/
-  gpu-bridge-host/       (host-only tools)
-/tests/
-  integration/
-```
+Start with [Quickstart](QUICKSTART.md) if you want to run Cohesix. This map is
+for readers who need to find an implementation, change a selected profile or
+understand where a build result came from.
 
-## Layout Principles
-- **Docs-first**: Any new crate, script, or interface requires accompanying documentation under `/docs`.
-- **Role-labelled crates**: Worker crates encode their role in the crate name to simplify CI filtering.
-- **Host vs VM split**: Host-only tools live under `/apps/gpu-bridge-host` or `/tools/` and must never be packaged into the VM CPIO.
-- **Evidence ownership**: The staged [Test Plan](TEST_PLAN.md) selects host, QEMU, and physical Pi checks. Fixtures and host tests do not establish target acceptance.
+| Directory | What belongs here |
+| --- | --- |
+| `apps/root-task/` | The target Queen, admission, supervision and target service integration. |
+| `apps/nine-door-runtime/`, `apps/console-network-runtime/`, `apps/pi4-driver-runtime/` | Selected target child runtimes. The driver runtime has physical Pi duties; the console child owns the target's sole authenticated TCP listener. |
+| `apps/worker-heart/`, `apps/worker-gpu/`, `apps/worker-lora/` | Packaged passive target Worker roles. CUDA and PEFT run on external hosts, not in these images. |
+| Other `apps/` | Host clients and services such as `coh`, `cohsh`, `hive-gateway`, SwarmUI, `gpu-bridge-host` and `host-ticket-agent`. Check each app's profile before running it. |
+| `crates/` | Shared Rust libraries and protocol types used by the selected apps. |
+| `tools/coh-rtc/` | The compiler for manifest validation and generated target/host contracts. |
+| `tools/cohesix-py/` | Python package, examples and tests. |
+| `configs/` | Source profiles and host integration inputs. `configs/generated/` contains compiler outputs; edit their inputs and regenerate, never patch generated files by hand. |
+| `docs/` | Community guides, architecture and reference contracts. `docs/snippets/` contains generated excerpts; `docs/audit/` retains historical source-bound evidence and decisions. |
+| `scripts/`, `toolchain/`, `packaging/` | Maintained build, test, provider, setup and packaging entry points. |
+| `resources/`, `demo/`, `tests/` | API/resources, labelled examples and integration tests. A demo result has its own proof scope. |
+| `seL4/` | Selected prebuilt kernel artifacts; upstream seL4 source is external. Match each artifact to its target profile. |
+| `releases/` | Retained distribution trees and archive history. Use the [1.2.0 quickstart](QUICKSTART.md) for current archive names and verify each downloaded bundle's `VERSION.txt` and hashes. Older beta trees keep their original names. |
+| `out/` | Ignored local builds, staging, run logs and scratch reports; it is not a published evidence store by itself. |
 
-## Build and release ownership
+The root [AGENTS.md](../AGENTS.md) defines repo-wide invariants.
+[CONTRIBUTING.md](../CONTRIBUTING.md) covers scoped changes and validation.
+The [Build Plan](BUILD_PLAN.md) owns task scope, while the
+[Test Plan](TEST_PLAN.md) selects checks and evidence. The
+[architecture guide](ARCHITECTURE.md) explains which parts run on the target
+and which run on a Mac or Linux host.
 
-[HOST_TOOLS.md](HOST_TOOLS.md#release-factory) describes the native Mac and Linux
-builds and `scripts/release_bundle.sh`. [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md)
-owns Pi image composition and media installation. The selected manifests and
-compiler-generated inventory determine each target and bundle's contents.
-
-The current tree retains the 0.9.0-beta and 1.0.0-beta distributions. Earlier
-distributions remain unchanged at their original Git tags. Retained
-kernel artifacts, firmware, pinned dependencies, test fixtures, and audit
-records still serve current build or evidence workflows; age alone does not
-make them disposable. Put temporary probes and local reports under `out/`.
+To trace an as-built value, start with the selected source manifest, resolve it
+through `coh-rtc`, then compare the generated profile and exact target or host
+artifact. Directory names alone do not establish what a release contains.

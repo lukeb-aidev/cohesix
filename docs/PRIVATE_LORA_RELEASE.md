@@ -5,6 +5,13 @@
 
 # Private LoRA release
 
+Use this guide to release one private adapter on an enrolled CUDA or Mac MLX
+host. Prepare a pinned base and data source, obtain target admission, let the
+host train or import the candidate, compare it with the accepted baseline,
+run a real serving canary, then verify the signed result. Keep the original
+operation identity throughout recovery. The Cohesix target controls
+admission and Worker receipts; it does not run the trainer.
+
 `coh peft release` composes an admitted `peft.release` ticket with the existing
 host phase journal and signed verifier. Native import and native training
 converge on validation, evaluation, scan, stage, load, canary and promotion.
@@ -22,7 +29,7 @@ profile selection alone does not establish physical Pi qualification. Other
 profiles must explicitly select the action before use; a Python projection never
 enables it.
 
-The older `coh peft export/import/activate/rollback` commands keep their existing
+The `coh peft export/import/activate/rollback` commands have separate
 file-registry and GPU snapshot contracts. Their pointer commits do not establish
 native inference. Use the release recipe when native serving verification is
 required. This reference adds no root console command or SwarmUI console verb.
@@ -135,8 +142,8 @@ close the original interrupted effect. The native helper verifies the source
 marker, exact profile and step, rematerializes the immutable files, loads the
 checkpoint with the pinned runtime's restricted state loader and asks HF
 Trainer to resume. Stochastic settings are recorded; matching weights are not
-promised. A completed adapter is only a deployable artifact, and the older
-profile continues to refuse a full-state resume claim.
+promised. A completed adapter is only a deployable artifact; a profile that
+does not retain the full native state must refuse a full-state resume claim.
 
 After a signed successful promotion, use
 [`private_lora_client.py`](../tools/cohesix-py/examples/private_lora_client.py)
@@ -176,12 +183,12 @@ native release. Linux continues to require `cohesix-hf-native/v1`; cross-host
 profile substitution is refused. The Mac can also control a remote admitted
 workflow.
 
-An M28b import input contains the profile, source and attestation references,
+An import input contains the profile, source and attestation references,
 license references, `checkpoint: null`, adapter bundle reference, exact base and
 tokenizer digests, pinned versions, and `training_provenance: unknown`. It makes
 no claim about the supplier's dataset or training settings. A training input
 contains the profile/source/attestation/license references and its checkpoint
-reference, if resuming. The M28b source attestation signs the exact
+reference, if resuming. The source attestation signs the exact
 `cohesix-peft-source-attestation/v2` payload, including the adapter bundle for
 import and the unknown provenance marker. Adapter identity hashes the canonical file-name/digest map of both native
 safetensors and PEFT configuration, so changing configuration cannot reuse an
@@ -242,13 +249,12 @@ Only then can generation compare-and-swap commit the accepted deployment.
 ## Interruption, rollback and cleanup
 
 Workflow position, native checkpoint and deployable adapter are separate records.
-The selected M28b profile retains native optimizer, scheduler, RNG and data
+The selected profile retains native optimizer, scheduler, RNG and data
 position with the adapter at each configured interval. A new, separately
 authorized training operation can resume only from a complete checkpoint of
-the same profile after the original effect is reconciled. The older M27d
-profile saves deployable adapters and read-only training/end observations; it
-refuses a supplied checkpoint with
-`native_resume_unqualified_use_new_authorized_attempt`. Preserve earlier
+the same profile after the original effect is reconciled. A profile with only
+a deployable adapter and read-only training observations cannot resume full
+native state; it refuses the supplied checkpoint. Preserve the original
 evidence when authorizing a fresh operation.
 Verified immutable outputs within the original transaction are reused; native
 phases with durable dispatch intent and unknown outcome are never issued twice.
@@ -288,6 +294,7 @@ remains in use until its owner stops the service. Retained artifacts and evidenc
 are bounded and are not silently deleted. Stop the reference service, verify it
 inactive and remove its private enrollment keys when ending a disposable run.
 Keep failed candidate evidence and the accepted/rollback artifacts needed for
-recovery. Use [Adoption](ADOPTION.md) and [CI workflows](CI_WORKFLOWS.md) for installed
-CLI/Python operation. Native UI and integrated release qualification remain separate;
-these commands do not claim production ticket-to-bundle binding.
+recovery. Use [Adoption](ADOPTION.md) for installed CLI/Python operation and
+[CI workflows](CI_WORKFLOWS.md) for source validation. The signed result
+covers the selected host, target and operation; judge an installed bundle or
+different device from its own evidence.

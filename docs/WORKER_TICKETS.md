@@ -1,34 +1,29 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document worker ticket rationale and minting process. -->
+<!-- Purpose: Explain Worker session tickets, safe host-side minting and their limits. -->
 <!-- Author: Lukas Bower -->
 # Worker Tickets
 
-[Milestone 27a authority policy](M27A_AUTHORITY.md) treats host action tickets and
-REST delegated tickets as host authority. Model/session roles grant no VM
-capabilities. Accepted Milestone 26e Worker and baseline isolated-driver records
-remain the authority for their complete task containment and teardown. A selected
-Milestone 29 storage runtime additionally requires its own accepted containment
-and generation evidence. Production Worker ticket/lease ledger binding, complete
-selected-driver ledger projection and structured quarantine remain Milestone 28d
-work; the compiler rejects those production claims before their evidence exists.
-REST mutations now require a finite scoped delegated ticket even for a Queen
-caller. An optional ticket on a direct Queen console session does not waive that
-REST requirement.
+Use a Worker ticket when a client needs a Worker role's namespace view. The
+ticket narrows an authenticated session; it does not create, start or prove a
+target Worker. [Roles and scheduling](ROLES_AND_SCHEDULING.md) explains the
+separate executable lifecycle. [Host action tickets](HOST_TOOLS.md) and
+[REST delegated tickets](M27A_AUTHORITY.md) authorize different host-side
+paths. Every REST mutation needs a finite scoped delegated ticket, including
+one made by a Queen caller. A direct Queen session's optional Worker ticket
+does not replace it.
 
+The selected target profiles have executable Worker and baseline isolated
+driver authority, but model/session roles alone have no VM capabilities.
+Production Worker ticket/lease ledger binding, the complete selected-driver
+ledger and structured quarantine remain outside the current selected profile;
+the compiler rejects claims that require them. See the [Build Plan](BUILD_PLAN.md)
+for the owning work.
 
-**At a glance**
-- Worker tickets are the **application-layer authority boundary** for worker-role sessions.
-- Tickets are presented during `attach` and determine the namespace slice.
-- Tickets are distinct from console auth tokens; both may be required.
+For path enforcement and limits, see [Secure9P](SECURE9P.md),
+[Userland and CLI](USERLAND_AND_CLI.md) and [Security](SECURITY.md).
 
-**Related docs**
-- `docs/ROLES_AND_SCHEDULING.md` — role-to-namespace rules.
-- `docs/SECURE9P.md` — AccessPolicy enforcement order.
-- `docs/USERLAND_AND_CLI.md` — ticket limits and CLI behavior.
-- `docs/SECURITY.md` — security constraints and quota limits.
-
-The selected Milestone 26e profiles declare `worker-heartbeat`, `worker-gpu`,
+The selected QEMU and Pi profiles declare `worker-heartbeat`, `worker-gpu`,
 and `worker-lora` as executable target roles. Root constructs their generated
 seL4 bundles suspended, and the Worker supervisor resumes a role only after a
 separate bounded `/queen/ctl` admission. `worker-bus` remains model-only. A
@@ -41,7 +36,8 @@ sessions. They:
 - enforce role-scoped access to Secure9P namespaces (no ad-hoc RPC or shared memory shortcuts).
 - bind a worker identity (subject) to the session, so telemetry and leases are attributable.
 - carry optional scopes and quotas that NineDoor enforces deterministically.
-- preserve the tiny TCB by keeping authorization off the VM network surface.
+- keep ticket issuance on the host; the target verifies the ticket during
+  authenticated attachment.
 
 ## 1a. Ticket vs auth token
 - **Auth token** (`COH_AUTH_TOKEN` / `COHSH_AUTH_TOKEN`) authenticates the console session.
@@ -49,7 +45,10 @@ sessions. They:
 - A session can require both; missing either yields deterministic `ERR` on attach.
 
 ## 2. Source of truth
-- Ticket inventory and per-role secrets live in `configs/root_task.toml` under `[[tickets]]`.
+- Ticket inventory and credential references come from the selected source and
+  resolved manifests under `[[tickets]]`. Checked-in development literals
+  are fixtures, not live credentials. The host issuer and target verifier
+  receive matching key material from the selected deployment.
 - Ticket limits and quotas are manifest-driven and emitted by `coh-rtc` into canonical docs:
   - `docs/USERLAND_AND_CLI.md` (ticket policy + limits)
   - `docs/SECURITY.md` (ticket quota limits)
@@ -57,7 +56,8 @@ sessions. They:
 
 ## 3. Ticket structure (claims)
 Worker tickets use the `cohesix-ticket` format and are MACed with a BLAKE3 keyed hash. Claims include:
-- role (`worker-heartbeat`, `worker-gpu`, `worker-bus`, `worker-lora`)
+- role (`worker-heartbeat`, `worker-gpu`, `worker-bus`, `worker-lora`;
+  WorkerBus is a model/session role, not an executable target Worker)
 - budget (ticks/ops/ttl)
 - subject identity (required for worker roles)
 - mounts (optional)
@@ -69,7 +69,8 @@ The encoded token string has the form:
 
 ## 4. Minting a worker ticket (host-side)
 1. Choose the worker role and subject identity (for example, `worker-1`).
-2. Look up the role secret from `configs/root_task.toml` (keep this secret off the VM).
+2. Resolve the role's enrolled issuer secret on the host. Do not copy a
+   checked-in development literal into a live deployment.
 3. Build `TicketClaims` with the role, subject, budget, and issued_at_ms timestamp.
 4. Sign and encode with `TicketIssuer::new(secret).issue(claims)?.encode()?`.
 5. Pass the resulting token to `cohsh` or SwarmUI when attaching.
@@ -181,5 +182,9 @@ without making transaction recovery depend on an aggregate display window.
 - Attach as the correct role or update the mount spec in the ticket.
 
 ## 10. Security hygiene
-- Treat ticket secrets like signing keys; keep them off the VM and out of logs.
-- Rotate secrets by updating `configs/root_task.toml`, regenerating artifacts, and restarting the VM.
+- Treat ticket secrets like signing keys. Keep them out of logs, issues and
+  client arguments; the selected target verifier still needs its matching
+  key material.
+- Rotate a deployed issuer through its selected credential reference and
+  rebuild/restart the affected target or gateway according to the owning
+  authority contract. Keep the old and new ticket domains separate.
