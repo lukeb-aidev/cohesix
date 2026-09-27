@@ -22,6 +22,9 @@ DOCUMENT = ROOT / "docs/ARCHITECTURE.md"
 COMPANION = ROOT / "docs/diagrams/target-host-boundary.svg"
 START = "<!-- target-host-stl:start -->"
 END = "<!-- target-host-stl:end -->"
+# GitHub's native STL camera opens at a fixed distance; this display scale
+# fills its initial viewport without assigning real units to the schematic.
+STL_DISPLAY_SCALE = 2.5
 
 Point = tuple[float, float, float]
 Triangle = tuple[Point, Point, Point]
@@ -209,7 +212,8 @@ def ascii_stl() -> str:
             (f"facet normal {nx:.0f} {ny:.0f} {nz:.0f}", "  outer loop")
         )
         lines.extend(
-            f"    vertex {x:.2f} {y:.2f} {z:.2f}"
+            f"    vertex {x * STL_DISPLAY_SCALE:.2f} "
+            f"{y * STL_DISPLAY_SCALE:.2f} {z * STL_DISPLAY_SCALE:.2f}"
             for x, y, z in triangle
         )
         lines.extend(("  endloop", "endfacet"))
