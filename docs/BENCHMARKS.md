@@ -32,6 +32,15 @@ failed attempt and the evaluator's identity and assistance record.
 | Refusal and recovery | Every negative case returns an explicit bounded reason with no new effect. A host gateway/agent restart must deliver or reconcile the original job within 120 seconds after process readiness, without a fresh effect identity. Queen loss must refuse new effects until a fresh authenticated target identity and authority are established. |
 | Added protocol control latency | For each mode, compare at least 30 authenticated read/control calls with the same installed gateway and target to direct REST calls in one quiet window. Report p50, p95 and every refusal; protocol p95 may exceed direct REST p95 by at most 100 ms and 25% of direct REST p95, whichever is larger. Do not mix model or provider execution time into this measure. |
 
+For the protocol comparison, retain one CSV with
+`mode,protocol,sample,elapsed_ms,status` and contiguous sample numbers starting
+at one for each enabled protocol in each mode. Use nearest-rank p95 over the
+same number of calls in each reported mode. The integration verifier recomputes
+the p95 from the raw samples and rejects gaps, duplicates, failed calls and
+samples for disabled protocols. Keep response bodies, request identities and
+timestamps in the accompanying raw client logs so equal latencies cannot hide
+different target results.
+
 These are acceptance limits, not measurements. The three complete journeys in
 BUILD_PLAN still require their selected native outcomes, installed clients,
 GUI launch, rollback/uninstall and an independent walkthrough. Report any

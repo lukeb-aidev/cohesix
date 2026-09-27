@@ -1385,6 +1385,7 @@ from that catalog.
 | `federation.m28c1-mlx-live` | conditional | `federation` | conditional / qemu, macos | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c1-mlx-live --reference-config "${M28C1_MLX_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28C1_EVIDENCE:?}/mlx-live"` |
 | `federation.m28c1-vmlx-live` | conditional | `federation` | conditional / qemu, macos | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c1-vmlx-live --reference-config "${M28C1_VMLX_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28C1_EVIDENCE:?}/vmlx-live"` |
 | `federation.m28g-adoption-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE:?}/m28g-adoption-live"` |
+| `federation.m28g-integration-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-integration-live --reference-config "${M28G_INTEGRATION_REFERENCE:?}" --host-profile "${M28G_HOST_PROFILE:?}" --state-dir "${M28G_EVIDENCE:?}/m28g-integration-live"` |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
@@ -1404,6 +1405,26 @@ contract check. The live acceptance case still needs an exact installed
 gateway and target, authenticated protocol clients, one shared native job,
 scope/budget/revocation and disable/restart recovery evidence in all four
 effective modes. A gateway route status cannot establish those results.
+
+The live integration reference (`cohesix-m28g-integration-reference/v1`) names
+the clean source commit, extracted qualified host bundle and matching
+installed `hive-gateway`, live Queen host/profile/manifest, private credential
+references, shared standing ledger/scopes and one terminal
+`/host/tickets/current/<digest>` path with its byte hash. The runner starts
+the installed gateway on loopback four times, with only explicit `false`
+launch controls, and rechecks authenticated `/proc/boot`, the exact original
+terminal and enabled/disabled route statuses each time. It then revalidates
+ordinary MCP and A2A SDK records against one native result, an independent
+CUDA output report and separately retained refusal, Queen-loss and latency
+observations. Each external observation has raw SHA-256 attachments; retain
+its collection commands and source/target identities for review. The latency
+attachment contains call-level CSV samples plus a raw client log, and the
+runner recomputes the nearest-rank p95 from those samples. Execute the
+case on each advertised gateway host. Its KVM path binds the live rootserver
+and source marker on JetPack; its physical Pi path requires the packaged SD
+media and fresh-boot qualification record. QEMU and Pi pressure and
+repeatability acceptance remain separate gates. No mode probe or JSON
+attachment alone qualifies a provider or release.
 
 `m28g-adoption-live` uses one private JSON reference with schema
 `cohesix-m28g-adoption-reference/v1`. It names absolute paths for the clean

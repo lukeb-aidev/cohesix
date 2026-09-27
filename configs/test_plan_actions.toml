@@ -975,6 +975,20 @@ test_policy = "nonzero"
 minimum_test_count = 1
 
 [[action]]
+id = "federation.m28g-integration-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Restart the installed gateway in both, MCP-only, A2A-only and neither modes against one authenticated Queen, retain original job result, and recheck native SDK, refusal, Queen-loss and latency evidence."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-integration-live --reference-config "${M28G_INTEGRATION_REFERENCE:?}" --host-profile "${M28G_HOST_PROFILE:?}" --state-dir "${M28G_EVIDENCE:?}/m28g-integration-live"'
+timeout_seconds = 3600
+trigger_paths = ["apps/hive-gateway/**", "scripts/ci/provider_m28g_integration.py", "configs/provider_conformance.toml", "configs/root_task*.toml", "tools/cohesix-py/cohesix/backends.py", "docs/BENCHMARKS.md"]
+expected_evidence = ["m28g-integration-live-summary", "four-live-route-modes", "same-original-native-job", "independent-provider-output", "scope-budget-revocation-refusals", "queen-loss-reconciliation", "frozen-control-latency"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
 id = "federation.three-hive-relay"
 stage = 0
 tier = "federation"

@@ -13694,7 +13694,7 @@ Changes:
   - docs/BENCHMARKS.md + planned M28 implementation record + release notes/status — retained baseline and fixed thresholds, compatibility/non-impact review, exact evidence index, limitations and named release-owner approval binding.
 Commands:
   - python3 -m pytest -q tests/test_release_qualify.py tests/test_release_bundle.py
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-integration-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28g-integration-live"
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-integration-live --reference-config "${M28G_INTEGRATION_REFERENCE}" --host-profile "${M28G_HOST_PROFILE}" --state-dir "${M28G_EVIDENCE}/m28g-integration-live"
   - scripts/ci/test_plan_run.sh --list
   - scripts/ci/test_plan_run.sh --target qemu --state-dir "${RELEASE_B_EVIDENCE}/qemu"
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir "${RELEASE_B_EVIDENCE}/pi4"

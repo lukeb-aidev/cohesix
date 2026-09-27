@@ -127,6 +127,14 @@ lane = "live_safe"
 runner = "provider_m28g_adoption"
 
 [[cases]]
+id = "m28g-integration-live"
+group = "executors"
+providers = ["gpu.workload", "peft"]
+proof_class = "live_target"
+lane = "live_safe"
+runner = "provider_m28g_integration"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

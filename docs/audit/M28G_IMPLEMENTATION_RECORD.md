@@ -247,6 +247,19 @@ the owning provider cases. Focused matrix, parser and catalog checks passed;
 no evaluator walkthrough or native Release B installer result exists yet, so
 the adoption case has not passed.
 
+The `m28g-integration-live` matrix case now starts the exact installed host
+gateway against one private-address Queen in all four effective modes. It
+requires the same authenticated boot manifest and terminal result bytes after
+each process restart. Its retained ordinary MCP and A2A SDK records must share
+the original native admission and independently checked CUDA terminal; the
+separate subject, revocation, budget, Queen-loss and latency observations must
+bind their raw files and stay inside the frozen BENCHMARKS limits. The test
+runner rejects public target addresses and passes only credential references
+to the gateway launch. Focused mode-selection, identity, malformed input and
+latency tests use controlled host fixtures. This is an executable acceptance
+contract, not a passing live case: installed 1.2.0 bundles, a final-source
+Queen, native result and external observations remain to be supplied and run.
+
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,
 PEFT, Apple and NeMo journeys from installed bytes, packaged QEMU and physical

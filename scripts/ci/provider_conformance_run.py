@@ -187,6 +187,16 @@ def main() -> int:
                             args.state_dir)
         except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
             parser.error(str(exc))
+    if args.case and args.case[0] == "m28g-integration-live":
+        if not args.reference_config or args.validate_only:
+            parser.error("M28g integration requires --reference-config and live target")
+        from provider_m28g_integration import run_live
+
+        try:
+            return run_live(args.case[0], args.reference_config, args.host_profile,
+                            args.state_dir)
+        except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
+            parser.error(str(exc))
     if args.reference_config:
         parser.error("--reference-config is only valid for a selected M28 through M28g live case")
     if args.provider == ["mac_release"] and args.live_reference:
