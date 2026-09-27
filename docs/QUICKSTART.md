@@ -3,22 +3,23 @@
 <!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix 1.1.0-beta quickstart
+# Cohesix 1.2.0 quickstart
 
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
 shell, gateway, Python client and desktop UI run on your Mac or Linux host.
 This guide gets you from a release archive to an authenticated console, then
 shows how several clients can share one target through the gateway.
 
-For selected installed CUDA/LoRA CLI and Python workflows, follow
-[Adoption](ADOPTION.md). Its doctor and CI outcome commands use the same
-admission, durable journals and signed evidence as the native recipes.
+After your first connection, use the [use-case guide](USE_CASES.md) to choose a
+1.2.0 workflow. The [host-tool guide](HOST_TOOLS.md) covers the relevant CLI,
+gateway and evidence commands; [Adoption](ADOPTION.md) describes a separate
+selected signed component-package installation.
 
 ## Choose your download
 
-Use all files from the same release. For **1.1.0-beta**:
+Use all files from the same **1.2.0** release.
 
-When upgrading from 1.0.0-beta, extract into new directories and install the
+When upgrading from 1.1.0-beta, extract into new directories and install the
 bundled Python wheel there. Keep each host's binaries, QEMU image and generated
 contracts together. Export existing evidence before replacing a target image;
 copying an old policy or generated configuration into the new bundle does not
@@ -27,9 +28,9 @@ own package versions; `VERSION.txt` identifies the overall release.
 
 | You want to… | Download | What it contains |
 | --- | --- | --- |
-| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.1.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
-| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.1.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
-| Boot a physical Raspberry Pi 4 | `Cohesix-1.1.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
+| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.2.0-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
+| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.2.0-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
+| Boot a physical Raspberry Pi 4 | `Cohesix-1.2.0-Pi4.tar.gz` **plus your host's archive above** | An SD-card image, image metadata and documentation |
 
 Each archive contains `QUICKSTART.md`, `README.md`, `RELEASE_NOTES.md`,
 `VERSION.txt` and `MANIFEST.sha256`. The Pi archive has no `bin/`, Python
@@ -47,8 +48,8 @@ one you downloaded; do not paste angle-bracket placeholders literally.
 ```bash
 mkdir -p "$HOME/cohesix-releases"
 cd "$HOME/cohesix-releases"
-tar -xzf "$HOME/Downloads/Cohesix-1.1.0-beta-MacOS.tar.gz"
-cd Cohesix-1.1.0-beta-MacOS
+tar -xzf "$HOME/Downloads/Cohesix-1.2.0-MacOS.tar.gz"
+cd Cohesix-1.2.0-MacOS
 ```
 
 Before running anything, verify **all** manifest entries:
@@ -281,12 +282,12 @@ and follow [Hardware Bring-up](HARDWARE_BRINGUP.md) for capture and diagnostics.
 In terminal 2, change into the **Mac or Linux host bundle**. Obtain the Queen
 console credential from the provisioner of the exact target image. For QEMU,
 inspect the `queen` entry in `configs/generated/root_task_resolved.json`; for Pi,
-inspect the image's `cohesix-root-task-resolved.json`. Release A manifests retain
-a `secret_ref`, such as `env:COH_TICKET_QUEEN_KEY`, rather than the credential
-value. Use the value supplied through that reference when the image was built.
-An older development manifest may instead contain a literal `secret`; inspect
-it locally without printing it into shared logs. The Pi's `cohesix.env` network
-settings and Wi-Fi password are separate from console authentication.
+inspect the image's `cohesix-root-task-resolved.json`. A release manifest may
+retain a `secret_ref`, such as `env:COH_TICKET_QUEEN_KEY`, rather than the
+credential value. Use the value supplied through that reference when the image
+was built. Source-build manifests may contain development placeholders; inspect
+them locally without printing secrets into shared logs. The Pi's `cohesix.env`
+network settings and Wi-Fi password are separate from console authentication.
 
 Ticket credentials are embedded in the target image. Treat an image built with
 private deployment credentials as private too. A public evaluation image must
@@ -403,6 +404,9 @@ unset COHSH_AUTH_TOKEN COH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 See [Userland and CLI](USERLAND_AND_CLI.md) for commands,
 [Hardware Bring-up](HARDWARE_BRINGUP.md) for Pi diagnostics, and
 [Host tools](HOST_TOOLS.md) for mounts, GPU bridges, tickets and evidence packs.
+For 1.2.0 CUDA/LoRA, Mac MLX, MCP/A2A and NeMo workflows, start with the
+[use-case guide](USE_CASES.md) and check your installed profile against
+[current status](STATUS.md).
 
 ## Build from source
 

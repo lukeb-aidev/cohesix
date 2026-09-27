@@ -190,10 +190,11 @@ production Worker binding and Queen reboot persistence are separate later claims
 
 ### Release packaging
 
-Retain **A = 1.1.0-beta**, **B = 1.2.0-beta**, **C = 1.3.0-beta** and
-`Cohesix-<version>-beta-<platform>`. A delivers recoverable CUDA, Verified Private
-LoRA Release, adoption/CI and the substantial native SwarmUI showcase. B is the
-qualified 28–28g ecosystem release below; C remains reserved. No version is
+Retain **A = 1.1.0-beta**, **B = 1.2.0**, **C = 1.3.0-beta** and
+`Cohesix-<release-version>-<platform>` bundle naming. A delivers recoverable
+CUDA, Verified Private LoRA Release, adoption/CI and the substantial native
+SwarmUI showcase. B is the qualified 28–28g ecosystem release below; C remains
+reserved. No version is
 published or reassigned by this planning change.
 Historical releases and evidence keep original names, IDs and proof classes.
 
@@ -12349,8 +12350,8 @@ separately with exact conditions and uncertainty. Reuse compatible component
 measurements under TEST_PLAN provenance rules; do not invent results, speedups
 or external-user tests, and do not change benchmark thresholds to pass.
 
-Retain reserved Release A = `1.1.0-beta`, B = `1.2.0-beta`, C = `1.3.0-beta`
-and `Cohesix-<version>-beta-<platform>` artifact naming. This is the A cut; B/C
+Retain reserved Release A = `1.1.0-beta`, B = `1.2.0`, C = `1.3.0-beta`
+and `Cohesix-<release-version>-<platform>` artifact naming. This is the A cut; B/C
 remain reserved for later qualified delivery. Existing release files, exception
 records and accepted/historical evidence are immutable. A plan or successful
 build cannot create release acceptance.
@@ -12519,7 +12520,7 @@ pending.
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
 **Status:** Planned — owner-directed scope, 23 September 2026. Milestones
-28–28g together deliver **1.2.0-beta**. Release A and every 0–27g milestone,
+28–28g together deliver **1.2.0**. Release A and every 0–27g milestone,
 including 27g's status, tasks, acceptance and evidence, remain unchanged.
 This planning revision neither activates implementation nor approves a release.
 
@@ -13528,6 +13529,17 @@ Checks: Templates remain valid GitHub issue templates; public reports direct vul
 Validation: Generated outputs matched; YAML front matter parsed with the five GitHub template keys; local metadata, security-link target/anchor, and body with hidden hints removed were reviewed; git diff --check passed. No runtime, target, or release gate was run for this documentation task.
 Deliverables: Two updated issue templates and this documentation validation record.
 
+Title/ID: m28g-community-docs-1-2-stable-alignment
+Milestone: 28g / m28g-community-docs-1-2-stable-alignment
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Give 1.2.0 readers a current starting path and keep user guides focused on workflows, architecture and evidence rather than milestone chronology.
+Inputs: Current Markdown inventory; README.md; docs/QUICKSTART.md; docs/STATUS.md; docs/GLOSSARY.md; docs/USE_CASES.md; docs/ADOPTION.md; tools/cohesix-py/README.md; demo/README.md and demo/peft_adapter/README.md; release naming in scripts/release_bundle.sh; selected manifest and component contracts; historical 1.1.0-beta records.
+Changes: AI-assisted audit updates active 1.2.0 entry points and archive examples, identifies older demos and Python/component packages as historical or selected-scope, and turns STATUS into a concise workflow/evidence map. Historical release archives, audit records, generated files, product behavior and milestone acceptance remain untouched.
+Commands: scripts/check-generated.sh; git diff --check; focused Markdown metadata, local-link, archive-name and source-claim review.
+Checks: Current user paths say 1.2.0 without a beta suffix; historical 1.1.0-beta identifiers retain their meaning; host and target boundaries, selected protocol profiles and native proof limits remain accurate. No new runtime or release-acceptance claim is inferred from this documentation audit.
+Validation: Generated outputs matched; metadata and 261 local Markdown paths across the changed files passed; current-release beta references were removed; bundle names were checked against release_bundle.sh; git diff --check passed. Exact 1.2.0 bundle bytes were unavailable for extraction checks. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
+Deliverables: Community-facing 1.2.0 documentation corrections and this task record.
+
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.
@@ -13622,7 +13634,7 @@ Checks:
   - All required matrix rows, both native installer/GUI-launch records and applicable staged/conditional pressure, repeatability, hardware, due-diligence and promotion gates pass at exact assembled identity; component reports alone cannot qualify the release.
   - Freeze baseline IDs, metric definitions, sample/window selection and numeric quality/resource/latency/adoption thresholds before integrated runs; retain failures without post-failure threshold relaxation.
   - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
-Deliverables: Qualified 1.2.0-beta candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
+Deliverables: Qualified 1.2.0 candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
 ```
 
 

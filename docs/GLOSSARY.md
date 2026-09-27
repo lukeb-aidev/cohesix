@@ -7,8 +7,8 @@
 
 This glossary explains the public language used throughout Cohesix. It assumes
 no prior experience with operating-system design, seL4, Plan 9, 9P, edge AI,
-or the Cohesix Queen/Worker model. It includes the selected Release B
-(`1.2.0-beta`) host workflows and their operator-facing evidence terms.
+or the Cohesix Queen/Worker model. It includes the selected 1.2.0 host
+workflows and their operator-facing evidence terms.
 
 Definitions describe the current source tree unless an entry is explicitly
 labelled **planned**, **historical**, **host-only**, or **simulation-only**.
@@ -106,7 +106,7 @@ See [Hardware Bring-up](HARDWARE_BRINGUP.md#proof-layers).
 A stated contract has passed its specified checks with evidence bound to the
 source, profile, target, and artifact. Acceptance is scoped: a completed CUDA,
 Mac, MCP, A2A, or NeMo component does not by itself accept the assembled
-`1.2.0-beta` release or a physical Pi deployment. See [Current Status](STATUS.md).
+`1.2.0` release or a physical Pi deployment. See [Current Status](STATUS.md).
 
 ### ACK / acknowledgement
 
@@ -1402,7 +1402,7 @@ field grants authority.
 
 ### Release A / Release B
 
-Repository release names: A is `1.1.0-beta`; B is `1.2.0-beta`. A release name
+Repository release names: A is `1.1.0-beta`; B is `1.2.0`. A release name
 identifies an assembled distribution, while a milestone or component result
 names a narrower evidence scope. Consult the installed version and
 [Current Status](STATUS.md) for the exact package, profile, and qualified

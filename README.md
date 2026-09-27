@@ -177,19 +177,21 @@ frames the controls; PixiJS renders the hive and recorded execution story.
 This is the native desktop displaying a signed historical reference, not a new
 live execution. See the [SwarmUI guide](docs/SWARMUI.md),
 [native gallery](docs/SWARMUI_GALLERY.md), and
-[operator walkthrough](docs/OPERATOR_WALKTHROUGH.md). The redesigned workbench
-ships in the 1.1.0-beta Mac and Linux bundles.
+[operator walkthrough](docs/OPERATOR_WALKTHROUGH.md).
 
-## Cohesix 1.1.0-beta
+## Use Cohesix 1.2.0
 
-**1.1.0-beta** brings the completely redesigned SwarmUI workbench, accountable
-native CUDA jobs, private LoRA import and training through a verified release
-decision, and matching 512-entry Queen intent capacity on QEMU and Pi. It ships
-Mac, Linux ARM64 and Raspberry Pi 4 bundles. See the
-[release notes](releases/RELEASE_NOTES-1.1.0-beta.md) for improvements, upgrade
-guidance and measured limits.
+Start with the matching [1.2.0 Quickstart](docs/QUICKSTART.md) for a Mac or Linux
+host and a QEMU or Raspberry Pi 4 target. The [use-case guide](docs/USE_CASES.md)
+shows where native CUDA, private adapter release, Mac MLX and agent clients fit;
+the [status page](docs/STATUS.md) explains the selected profiles and evidence
+boundaries. Check the installed bundle's `VERSION.txt` and `RELEASE_NOTES.md`
+for its exact contents and limitations.
 
-### Watch 1.1.0-beta in action
+### See the earlier system in action
+
+These 1.1.0-beta recordings illustrate the control model; they are historical
+demos, not verification of an installed 1.2.0 bundle.
 
 - [Raspberry Pi 4 boot tour](https://youtu.be/63kroQa_sys) — see the SD image,
   U-Boot, HDMI and serial boot, then explore the root shell with `caps`, `bi`,
@@ -223,7 +225,8 @@ running them.
 
 ### Run a release bundle
 
-Choose the matching **1.1.0-beta** Mac or Linux ARM64 archive under [releases/](releases/)
+Choose the matching **1.2.0** Mac or Linux ARM64 archive from the
+[published releases](https://github.com/lukeb-aidev/cohesix/releases)
 and follow its bundled `QUICKSTART.md` and release notes. After extraction, verify its
 `MANIFEST.sha256` before running tools: use `shasum -a 256 --check MANIFEST.sha256`
 on Mac or `sha256sum --check MANIFEST.sha256` on Linux. The common host-bundle
@@ -246,7 +249,7 @@ QEMU flow is:
    unset COHSH_AUTH_TOKEN
    ```
 
-The `Cohesix-1.1.0-beta-Pi4.tar.gz` archive contains the SD image and
+The `Cohesix-1.2.0-Pi4.tar.gz` archive contains the SD image and
 documentation; it requires the matching host archive for CLI, Python, and
 SwarmUI tools. See the current
 [Quickstart](docs/QUICKSTART.md) for the three-bundle installation workflow.
@@ -347,7 +350,7 @@ the selected resolved manifest.
 | [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | Complete one end-to-end live workflow |
 | [Userland and CLI](docs/USERLAND_AND_CLI.md) | Look up console, `cohsh`, `.coh`, and command semantics |
 | [Host tools](docs/HOST_TOOLS.md) | Choose host executables and compose transports safely |
-| [1.1.0 demos (source checkout)](https://github.com/lukeb-aidev/cohesix/tree/main/demo) | Run comprehensive Queen scripts, retained Worker intents, CUDA/LoRA host workflows and evidence demonstrations |
+| [Example workflows (source checkout)](https://github.com/lukeb-aidev/cohesix/tree/main/demo) | Run Queen scripts, retained Worker intents, CUDA/LoRA host workflows and evidence demonstrations; check each example's version |
 | [Operator recipes](docs/OPERATOR_RECIPES.md) | Perform advanced evidence, mount, lifecycle, ticket, federation, and PEFT tasks |
 
 ### Guides

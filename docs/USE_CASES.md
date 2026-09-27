@@ -1,6 +1,6 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Explain practical Release B Cohesix use cases, community needs, operating skills and proof boundaries. -->
+<!-- Purpose: Explain practical Cohesix 1.2.0 use cases, community needs, operating skills and proof boundaries. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Use Cases
 
@@ -20,7 +20,7 @@ ordinary hosts. Cohesix is useful when **the decision to run or change something
 must be smaller, clearer, and easier to audit than the system doing the work**.
 A request being accepted is not proof that its external effect happened.
 
-This guide describes what to do with a **matching Release B installation**:
+This guide describes what to do with a **matching Cohesix 1.2.0 installation**:
 useful CUDA jobs, private adapter releases, Mac MLX work and agent clients
 that share one governed job and evidence model. Check the installed version,
 selected profile and [Status](STATUS.md) before citing present availability;
@@ -99,7 +99,7 @@ can inspect device freshness, queue and lease state, native execution, output
 hashes, and cancellation or recovery. An active lease is a control decision, not
 a claim of hard GPU isolation.
 
-The Release B reference uses selected, digest-pinned workloads and independently
+The selected CUDA reference uses digest-pinned workloads and independently
 checked useful work on a Jetson Orin through systemd and Docker. A different
 NVIDIA device, driver, container or executor profile needs its own compatibility
 and native-result check. See [GPU Nodes](GPU_NODES.md) and the

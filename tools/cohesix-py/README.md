@@ -19,7 +19,11 @@ venv or pass gateway credentials to the CUDA executor.
 
 ## Install
 
-Install the published Python client (Python 3.11 or later):
+For Cohesix 1.2.0, use the wheel inside the matching Mac or Linux host bundle.
+From its extracted root, run `./scripts/setup_environment.sh` and activate
+`.venv`; see the [Quickstart](../../docs/QUICKSTART.md). The standalone PyPI
+package below is the earlier 1.1.0-beta Python-only distribution. Pair it with
+matching 1.1.0-beta components (Python 3.11 or later):
 
 ```bash
 python3 -m pip install 'cohesix==1.1.0b1'
@@ -37,7 +41,7 @@ target profile, or a live target. In a source checkout, use
 `python3 -m pip install -e tools/cohesix-py` for editable development instead.
 
 For the qualified native import/training workflow, see
-[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PRIVATE_LORA_RELEASE.md).
+[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/main/docs/PRIVATE_LORA_RELEASE.md).
 `cohesix.playbooks.run_peft_release` routes plan/apply/watch/explain/verify/recover
 to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
 prepares the pinned native profile; `examples/private_lora_request.py` prepares
@@ -51,7 +55,7 @@ can set `requested_outcome_verified=True`. See
 Use a wheel built from the matching M28b source; older published wheels may not
 contain this client.
 
-The in-progress M28c source also provides `cohesix.vmlx_compat.VmlxClient`
+The source tree also provides `cohesix.vmlx_compat.VmlxClient`
 for one explicitly selected vMLX model on an HTTP loopback endpoint. Its
 `generate(prompt, max_tokens=32)` returns private text plus an `evidence()`
 view of model identity, token counts and prompt/output SHA-256 digests. It
@@ -104,7 +108,7 @@ Optional REST Worker bounds are declarations only, and missing bounds or
 `backend_class` remain `unknown`. No backend connection, control ACK, local
 file, or JSON object creates Worker READY or target proof.
 
-## Milestone 26e Worker compatibility
+## Worker compatibility
 
 Worker APIs require an explicit generated `cohesix-python-profile/v2`
 contract. The QEMU contract must match the selected `qemu_smp_production` Mac
@@ -194,7 +198,7 @@ cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-por
 ```
 
 Artifacts are written under `out/examples/playbooks/<playbook-id>/`.
-See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/USE_CASES.md) for the capability map and
+See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md) for the capability map and
 the contribution path toward complete generated workflows.
 
 ## Existing examples
@@ -208,7 +212,7 @@ python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
 
-## Evidence pack integration kits (Milestone 25e)
+## Evidence pack integration kits
 
 These examples operate on an evidence pack directory produced by
 `coh evidence pack` and run offline once the pack exists.
@@ -241,7 +245,7 @@ scripts/ci/python_compat_run.sh \
   --state-dir out/python-compat/m26e-wheel
 ```
 
-See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PYTHON_SUPPORT.md) for target
+See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/main/docs/PYTHON_SUPPORT.md) for target
 projection commands and proof-boundary details.
 
 ## Installed CUDA and LoRA journeys
@@ -250,5 +254,5 @@ projection commands and proof-boundary details.
 and signed verifier. `cohesix.journey.run` returns the same versioned outcome
 and exit mapping. Only verified requested completion returns zero; an ACK,
 timeout or recovered failed canary does not. Keep state outside runner scratch.
-See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/CI_WORKFLOWS.md)
+See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/main/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/main/docs/CI_WORKFLOWS.md)
 for exact installation, config, authority and recovery steps.
