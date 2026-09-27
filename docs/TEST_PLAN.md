@@ -2281,6 +2281,10 @@ canary still proves root, NineDoor READY, authentication, attachment, and one
 real operation before pressure. Linux results are QEMU
 performance/integration evidence, not macOS toolchain or final release
 acceptance.
+The `--reuse-artifacts` replay may run from a detached exact-source checkout:
+it preserves `out/` and `target/` and rechecks transferred guest hashes. The
+clean-build lane retains its `main` branch requirement when no explicit
+disposable checkout is selected.
 
 The iterative performance loop is log-only. After one separate correctness
 baseline, run medium, then high, decode `/proc/schedule/qemu-flight` after each

@@ -37,6 +37,32 @@ def test_pressure_runner_documents_explicit_nm_tool() -> None:
     assert "--nm FILE" in result.stdout
 
 
+def test_replay_accepts_detached_source_without_waiving_clean_lane_branch() -> None:
+    """A transferred replay does not clean its checkout; the clean lane still needs main."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    branch_guard = source.split('if [[ -z "$CLEAN_ROOT"', 1)[1].split("\nfi", 1)[0]
+    guard = 'if [[ -z "$CLEAN_ROOT"' + branch_guard + "\nfi\n"
+    harness = (
+        'die() { printf "%s\\n" "$*" >&2; exit 2; }\n'
+        'git() { if [[ "$BRANCH" == detached ]]; then printf "\\n"; '
+        'else printf "main\\n"; fi; }\n'
+        'CLEAN_ROOT=\n' + guard
+    )
+    for replay, branch, expected in (
+        (1, "detached", 0),
+        (0, "detached", 2),
+        (0, "main", 0),
+    ):
+        result = subprocess.run(
+            ["bash", "-eu", "-c", harness],
+            env={"REUSE_ARTIFACTS": str(replay), "BRANCH": branch},
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+        assert result.returncode == expected, result.stderr
+        if expected:
+            assert "worktree must be on main" in result.stderr
+
+
 def test_quiescent_probe_ignores_runner_ancestors_but_refuses_other_process() -> None:
     """A selected QEMU filename in argv cannot make the runner block itself."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()

@@ -395,7 +395,7 @@ else
         die "--gdb must select the compiler contract GDB"
 fi
 [[ ! -e "$RUN_DIR" && ! -L "$RUN_DIR" ]] || die "fresh --run-dir already exists: $RUN_DIR"
-if [[ -z "$CLEAN_ROOT" ]]; then
+if [[ -z "$CLEAN_ROOT" && "$REUSE_ARTIFACTS" -eq 0 ]]; then
     [[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
 fi
 if (( REUSE_ARTIFACTS == 1 )); then

@@ -731,4 +731,36 @@ still required after this source repair.
 Deliverables: Hermetic Test Plan fixture, menu redraw behavior, operator
 guidance and preserved failed/PASS logs. AI assistance investigated and
 repaired both observed host workflow defects; no staged or release acceptance
-is claimed from the focused checks.
+was inferred from the focused checks.
+
+## Detached Jetson KVM replay checkout
+
+Title/ID: `m28g-kvm-pressure-runner-portability`.
+
+Milestone: 28g / m28g-kvm-pressure-runner-portability.
+
+Goal: Run the selected non-cleaning Linux KVM replay from an isolated,
+exact-commit Jetson checkout without presenting that checkout as `main`.
+
+Inputs: The `1a9dc310db4a` guest and clean Jetson source checkout, the
+canonical `--reuse-artifacts --check-only` refusal, and the retained
+`m28g-kvm-pressure-runner-portability` branch and quiescence contracts.
+
+Changes: The pressure runner applies its `main` branch rule only to the
+normal clean-build lane. The replay lane still requires the canonical
+transferred output paths, KVM/GDB/`nm`, immutable guest verification,
+exclusive output ownership, quiescent host and port checks. A focused test
+exercises detached replay acceptance and preserves clean-lane refusal.
+
+Commands: `bash -n scripts/m26e_qemu_pressure.sh`; `.venv/bin/python -m
+pytest -q tests/test_m26e_qemu_pressure_cli.py -k
+'replay_accepts_detached or quiescent_probe_ignores_runner_ancestors'`;
+`.venv/bin/python -m pytest -q tests/test_m26e_qemu_pressure_cli.py` (53
+passed); `scripts/check-generated.sh`; `git diff --check`.
+
+Checks: Both focused tests pass. The initial Jetson check-only attempt
+correctly refused the detached checkout before this repair. No KVM replay,
+pressure result or Release B acceptance is inferred from that preflight.
+
+Deliverables: Honest detached replay selection and regression evidence;
+the exact-source Jetson pressure result remains pending.
