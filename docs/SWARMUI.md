@@ -22,6 +22,8 @@ shell `PATH` or bundle-root working directory. The GNOME desktop entry opens
 `/usr/lib/cohesix/bin/swarmui`; its matching tools are in the same directory.
 These are candidate install paths until the native installer and launch checks
 in the M28g record pass.
+The Mac candidate's Dock icon is a navy tile with the orange Cohesix circuit
+around a three-node swarm; the package embeds it in `SwarmUI.app` before signing.
 
 1. Select **Connect a hive**. Choose **Hive Gateway** for shared access, or
    **Queen directly** for a single-owner TCP console.

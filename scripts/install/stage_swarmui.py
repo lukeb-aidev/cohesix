@@ -17,12 +17,22 @@ from stage_host_package import stage
 
 
 def stage_macos_icon(source: Path, app: Path) -> dict[str, str]:
-    """Render the selected square vector icon before the app is code-signed."""
-    if source.is_symlink() or not source.is_file() or source.stat().st_size > 64 * 1024:
+    """Render the selected square app artwork before the app is code-signed."""
+    if (source.is_symlink() or not source.is_file()
+            or source.stat().st_size > 4 * 1024 * 1024):
         raise ValueError("selected Mac icon source is invalid")
+    artwork = source.read_bytes()
+    if (len(artwork) < 24 or len(artwork) > 4 * 1024 * 1024
+            or artwork[:8] != b"\x89PNG\r\n\x1a\n"
+            or artwork[12:16] != b"IHDR"
+            or int.from_bytes(artwork[16:20], "big") != 1024
+            or int.from_bytes(artwork[20:24], "big") != 1024):
+        raise ValueError("selected Mac icon must be a 1024-pixel square PNG")
     destination = app / "Contents/Resources/SwarmUI.icns"
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="cohesix-icon-") as directory:
+        selected = Path(directory) / "selected.png"
+        selected.write_bytes(artwork)
         iconset = Path(directory) / "SwarmUI.iconset"
         iconset.mkdir()
         for pixels, name in (
@@ -34,7 +44,7 @@ def stage_macos_icon(source: Path, app: Path) -> dict[str, str]:
         ):
             subprocess.run(
                 ["/usr/bin/sips", "-s", "format", "png", "-z", str(pixels),
-                 str(pixels), str(source), "--out", str(iconset / name)],
+                 str(pixels), str(selected), "--out", str(iconset / name)],
                 capture_output=True, check=True, timeout=20,
             )
         subprocess.run(
@@ -47,7 +57,7 @@ def stage_macos_icon(source: Path, app: Path) -> dict[str, str]:
         raise ValueError("generated Mac icon is invalid")
     destination.chmod(0o600)
     return {
-        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "source_sha256": hashlib.sha256(artwork).hexdigest(),
         "icns_sha256": hashlib.sha256(data).hexdigest(),
     }
 
@@ -72,7 +82,7 @@ def main() -> None:
     icon = None
     if args.profile == "macos-desktop":
         icon = stage_macos_icon(
-            args.repo.absolute() / "apps/swarmui/frontend/assets/icons/cohesix-icon.svg",
+            args.repo.absolute() / "apps/swarmui/icons/swarmui-macos-appicon.png",
             output / "package-input/SwarmUI.app",
         )
     source = args.repo.absolute() / "apps/swarmui/frontend"

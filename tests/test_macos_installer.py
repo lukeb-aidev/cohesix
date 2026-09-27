@@ -20,14 +20,24 @@ from stage_swarmui import stage_macos_icon  # noqa: E402
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="uses macOS iconutil")
-def test_selected_vector_icon_stages_as_native_app_icon(tmp_path: Path) -> None:
+def test_selected_artwork_stages_as_native_app_icon(tmp_path: Path) -> None:
     source = Path(__file__).resolve().parents[1] / (
-        "apps/swarmui/frontend/assets/icons/cohesix-icon.svg"
+        "apps/swarmui/icons/swarmui-macos-appicon.png"
     )
     report = stage_macos_icon(source, tmp_path / "SwarmUI.app")
     icon = tmp_path / "SwarmUI.app/Contents/Resources/SwarmUI.icns"
     assert report["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert report["icns_sha256"] == hashlib.sha256(icon.read_bytes()).hexdigest()
+    assert icon.read_bytes()[:4] == b"icns"
+
+
+def test_mac_icon_rejects_wrong_dimensions(tmp_path: Path) -> None:
+    source = tmp_path / "small.png"
+    original = (Path(__file__).resolve().parents[1] /
+                "apps/swarmui/icons/swarmui-macos-appicon.png").read_bytes()
+    source.write_bytes(original[:16] + (64).to_bytes(4, "big") + original[20:])
+    with pytest.raises(ValueError, match="1024-pixel square PNG"):
+        stage_macos_icon(source, tmp_path / "SwarmUI.app")
 
 
 def make_inputs(tmp_path: Path) -> dict[str, str]:

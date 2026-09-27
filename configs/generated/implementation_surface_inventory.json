@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "be308d34dc42bf48f783e1f0d852488cb4116f22af8994e78b06eb879d1ad52c",
+  "source_sha256": "9b63e659a18566a96887f907c925b8cf810d52e6d73aca64f1eb42b74e3492b4",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -4671,6 +4671,20 @@
       "package_disposition": "release_ui_asset",
       "evidence_requirement": "asset hash and authenticated gateway integration",
       "current_observed_mode": "live_host_ui",
+      "evidence_eligible": true
+    },
+    {
+      "id": "tracked:apps/swarmui/icons/swarmui-macos-appicon.png",
+      "kind": "tracked_surface",
+      "path": "apps/swarmui/icons/swarmui-macos-appicon.png",
+      "implementation_class": "production_live",
+      "owner": "swarmui",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "selected Mac native app package; rule=swarmui-macos-app-icon",
+      "package_disposition": "release_app_icon",
+      "evidence_requirement": "source hash and signed installed app icon",
+      "current_observed_mode": "native_desktop_brand_asset",
       "evidence_eligible": true
     },
     {
@@ -9913,6 +9927,7 @@
       "apps/swarmui/frontend/workbench/story.js"
     ],
     "support_files": [
+      "apps/swarmui/icons/swarmui-macos-appicon.png",
       "tests/fixtures/operator/case/case.json",
       "tests/fixtures/operator/case/case.md",
       "tests/fixtures/operator/case/host/tickets/spec",
@@ -9987,6 +10002,7 @@
       "README.md",
       "RELEASE_NOTES.md",
       "VERSION.txt",
+      "apps/swarmui/icons/swarmui-macos-appicon.png",
       "bin/cas-tool",
       "bin/coh",
       "bin/cohsh",
@@ -10375,6 +10391,20 @@
         "evidence_requirement": "exact file-set and SHA-256 validation",
         "current_observed_mode": "generated_release_metadata",
         "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:apps/swarmui/icons/swarmui-macos-appicon.png",
+        "kind": "support_file",
+        "path": "apps/swarmui/icons/swarmui-macos-appicon.png",
+        "implementation_class": "production_live",
+        "owner": "swarmui",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": true,
+        "selection_source": "selected Mac native app package; rule=swarmui-macos-app-icon; exact release source `apps/swarmui/icons/swarmui-macos-appicon.png`",
+        "package_disposition": "release_app_icon",
+        "evidence_requirement": "source hash and signed installed app icon",
+        "current_observed_mode": "native_desktop_brand_asset",
+        "evidence_eligible": true
       },
       {
         "id": "release-asset:bin/cas-tool",
