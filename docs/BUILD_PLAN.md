@@ -13540,6 +13540,17 @@ Checks: Current user paths say 1.2.0 without a beta suffix; historical 1.1.0-bet
 Validation: Generated outputs matched; metadata and 261 local Markdown paths across the changed files passed; current-release beta references were removed; bundle names were checked against release_bundle.sh; git diff --check passed. Exact 1.2.0 bundle bytes were unavailable for extraction checks. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
 Deliverables: Community-facing 1.2.0 documentation corrections and this task record.
 
+Title/ID: m28g-architecture-boundary-diagram-simplification
+Milestone: 28g / m28g-architecture-boundary-diagram-simplification
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Make the architecture boundary explanation easier to read by retaining the diagram that conveys actual location, authority and communication paths.
+Inputs: docs/ARCHITECTURE.md; selected QEMU and Pi manifests; docs/HOST_TOOLS.md; existing Mermaid flowchart and target-host STL cutaway; earlier m28g-user-diagram-as-built-audit record.
+Changes: AI-assisted review removes the embedded ASCII STL, its static SVG companion and their single-use generator. The existing Mermaid boundary chart remains the architecture diagram; a short introduction identifies deployment groups, sole target TCP ingress, Queen authority and external native execution. The earlier diagram task record remains historical.
+Commands: scripts/check-generated.sh; scripts/ci/check_mermaid_github.sh for docs/ARCHITECTURE.md; local-link, orphan-reference and metadata checks; git diff --check.
+Checks: No 3D mesh interrupts the document; the 2D chart and adjacent prose retain host/target separation, target runtime relationships and native provider placement without implying new authority or live qualification.
+Validation: Generated consistency and Test Plan cross-file checks passed; the retained Mermaid block passed GitHub syntax checks with zero warnings; Architecture metadata and 35 local links passed; no STL fence, live asset link or single-use generator remains; git diff --check passed. Only the earlier historical task record still names the removed files. No runtime, QEMU, Pi or release gate was run for this documentation task.
+Deliverables: Simplified architecture section, removal of unused diagram assets, and this task record.
+
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.
