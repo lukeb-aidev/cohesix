@@ -542,7 +542,8 @@ def parse_args() -> argparse.Namespace:
         choices=("auto", "menu", "root"),
         default="auto",
         help=(
-            "Use menu when the Cohesix U-Boot menu is already displayed, "
+            "Use menu when the Cohesix U-Boot choice menu is already displayed "
+            "(it is safely redrawn), "
             "root when the root prompt is already ready, or auto to wait "
             "for fresh serial markers."
         ),
@@ -2230,6 +2231,9 @@ def run() -> int:
             )
         elif args.initial_state == "menu":
             controller.note("assuming Cohesix U-Boot menu is already displayed")
+            # An idle menu has no buffered UART output for a newly opened port.
+            # An invalid choice redraws the current page without changing policy.
+            controller.send_line("x", public_line="<refresh-menu>")
         else:
             first = controller.read_until(
                 (ROOT_PROMPT, *MENU_MARKERS),

@@ -519,6 +519,12 @@ arrives first fails closed. This binds diagnostics to the expected root image;
 U-Boot, DTB, firmware, saved policy, flash/readback, and Pi acceptance remain
 separate proof obligations.
 
+For a Pi already waiting at a U-Boot choice menu, use `--initial-state menu`.
+The helper sends an invalid choice to redraw the current page on its newly
+opened serial port, reads the menu state, then selects the requested lane.
+An empty choice would start the menu's default boot, so it is not a safe way
+to discover the current page.
+
 ```text
 netstats
 smp activity

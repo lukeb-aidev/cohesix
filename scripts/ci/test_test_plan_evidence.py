@@ -303,6 +303,23 @@ class RunnerFixture:
             "TEST_PLAN_TARGET",
             "SEL4_BUILD",
             "SEL4_BUILD_DIR",
+            "COHESIX_GATEWAY_URL",
+            "HIVE_GATEWAY_URL",
+            "COHSH_REST_URL",
+            "COH_REST_URL",
+            "COHSH_BATCH_TARGET",
+            "COHSH_TCP_HOST",
+            "COHSH_HOST",
+            "COHSH_TCP_PORT",
+            "COHSH_BASE_MANIFEST",
+            "COHSH_GATED_MANIFEST",
+            "COHSH_PI4_BOOT_COLLECTOR",
+            "PI4_TARGET_EVIDENCE_FILE",
+            "TEST_PLAN_TARGET_EVIDENCE_FILE",
+            "TP_PI4_HARDWARE_EVIDENCE_FILE",
+            "TP_STAGE4_GATEWAY_BIND",
+            "TP_STAGE4_QEMU_TCP_PORT",
+            "QEMU_BIN",
         ):
             environment.pop(name, None)
         environment["TP_PYTHON_BIN"] = sys.executable
@@ -391,6 +408,26 @@ class TestPlanEvidenceTests(unittest.TestCase):
             0,
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
         )
+
+    def test_fixture_isolates_external_target_selectors(self) -> None:
+        """Synthetic stages cannot inherit the caller's live gateway or Pi."""
+
+        supplied = {
+            "COHESIX_GATEWAY_URL": "http://127.0.0.1:18080",
+            "COHSH_TCP_HOST": "192.168.10.50",
+            "COHSH_PI4_BOOT_COLLECTOR": "/tmp/pi-collector",
+            "QEMU_BIN": "/tmp/qemu-system-aarch64",
+        }
+        with mock.patch.dict(os.environ, supplied):
+            isolated = self.fixture.environment()
+            for key in supplied:
+                self.assertNotIn(key, isolated)
+            selected = self.fixture.environment(
+                {"COHESIX_GATEWAY_URL": supplied["COHESIX_GATEWAY_URL"]}
+            )
+            self.assertEqual(
+                selected["COHESIX_GATEWAY_URL"], supplied["COHESIX_GATEWAY_URL"]
+            )
 
     def test_verified_default_resume_and_force_replacement(self) -> None:
         state = self.fixture.state("resume")

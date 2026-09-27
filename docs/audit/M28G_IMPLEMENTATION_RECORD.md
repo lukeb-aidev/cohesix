@@ -687,3 +687,48 @@ Deliverables: Compatible flash validator, regression tests and retained
 failure logs under ignored `out/m28g/`. AI assistance identified and repaired
 the observed macOS spelling mismatch; no physical acceptance is inferred from
 the focused host tests.
+
+## Staged fixture isolation and idle Pi menu
+
+Title/ID: `m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Keep synthetic Test Plan stages isolated from live host selectors and
+allow the Pi operator helper to read an already idle U-Boot menu.
+
+Inputs: The source-bound `eb1b6f03c9d5` Stage 01 attempt, which retained two
+Python fixture failures when `COHESIX_GATEWAY_URL` leaked into fake Stage 04;
+the exact-image Pi first boot, whose U-Boot menu was visible before the serial
+helper opened the port.
+
+Changes:
+
+- `scripts/ci/test_test_plan_evidence.py` removes inherited gateway, Pi, QEMU
+  and target-evidence selectors from its synthetic runner environment before
+  applying each test's explicit overrides.
+- `scripts/pi4_serial_reboot.py` redraws an already displayed choice menu with
+  an invalid, non-persistent selection before reading its state. The helper
+  still refuses to choose a lane until it has read the current menu page.
+- `tests/test_pi4_serial_reboot.py`, the Test Plan fixture test and
+  `docs/HARDWARE_BRINGUP.md` cover and explain those behavior boundaries.
+
+Commands: `COHESIX_GATEWAY_URL=http://127.0.0.1:18080 .venv/bin/python -m
+pytest -q scripts/ci/test_test_plan_evidence.py -k
+'stage_five_refreshes_while_other_stages_resume or
+upstream_rerun_invalidates_downstream_active_evidence or
+fixture_isolates_external_target_selectors'`; `.venv/bin/python -m pytest -q
+tests/test_pi4_serial_reboot.py -k
+'run_returns_nonzero_after_diagnostic_failure or
+initial_menu_state_reads_current_menu_before_selecting_genet'`;
+`git diff --check`.
+
+Checks: The three selected staged-fixture tests pass under an inherited live
+gateway URL, and both selected serial-helper tests pass. The failed Stage 01
+attempt remains historical; a new exact-source full Test Plan and Pi boot are
+still required after this source repair.
+
+Deliverables: Hermetic Test Plan fixture, menu redraw behavior, operator
+guidance and preserved failed/PASS logs. AI assistance investigated and
+repaired both observed host workflow defects; no staged or release acceptance
+is claimed from the focused checks.

@@ -2959,6 +2959,8 @@ def test_run_returns_nonzero_after_diagnostic_failure(
 
     assert pi4_serial_reboot.run() == 1
     assert controller.closed
+    assert controller.sent == ["x"]
+    assert controller.public_sent == ["<refresh-menu>"]
     assert any(
         note == (
             "image identity matched "
