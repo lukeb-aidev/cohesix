@@ -870,3 +870,41 @@ earlier artifact identities are not promoted to the repaired source.
 
 Deliverables: Portable profile generator, documentation and retained focused
 checks. AI assistance identified and repaired the cross-host build defect.
+
+## EX-2026-0025 bounded renewal for Pi release qualification
+
+Title/ID: `m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Restore a current owner decision for the existing Pi direct-GENET P2
+unsafe boundary without weakening its controls or promoting an earlier test.
+
+Inputs: The expired `EX-2026-0025` and `DD-2026-0025` entries; the retained
+Pi Stage 05 failure at source `7d1ceedb4772`; the selected direct-GENET
+boundary; Lukas Bower's 28 September direction to fix the boundary or extend
+the exception through 31 October.
+
+Changes: AI-assisted review found no verified safe replacement for fixed
+mapped-page atomic access, sealed descriptor reads, suspended-child bootstrap
+aliases or terminal fault transfer. The named owner renewed the same P2 scope
+through 2026-10-31 in the exceptions and findings registers. The original
+unsafe bounds, compensating controls and independent review requirement remain.
+
+Commands: `scripts/ci/due_diligence_gate.sh --check-exceptions-register
+docs/audit/findings.csv docs/audit/EXCEPTIONS.md`; `scripts/ci/due_diligence_gate.sh
+--check-blocking-findings docs/audit/findings.csv docs/audit/EXCEPTIONS.md`;
+`.venv/bin/python -m pytest -q scripts/ci/test_due_diligence_lifecycle.py`;
+`git diff --check`.
+
+Checks: Both register gates accept the dated decision, the lifecycle suite
+retains expired-exception refusal, and the source delta contains no runtime,
+manifest or acceptance-threshold change. The failed Pi Stage 05 attempt is
+historical and must be rerun against a clean exact source.
+
+Validation: The register and blocking-findings gates passed; the lifecycle
+suite passed 36 tests and 51 subtests. The exact-source staged rerun remains
+pending at this checkpoint. No Pi or release PASS is inferred from the renewal.
+
+Deliverables: A bounded, owner-authorized renewal and separate rerun evidence;
+no waiver of physical Pi, KVM pressure or installed-release qualification.
