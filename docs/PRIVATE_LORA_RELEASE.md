@@ -27,6 +27,29 @@ file-registry and GPU snapshot contracts. Their pointer commits do not establish
 native inference. Use the release recipe when native serving verification is
 required. This reference adds no root console command or SwarmUI console verb.
 
+The selected release follows one original operation through evaluation and
+serving. Training and import converge before comparison. A failed candidate
+stays failed even if the incumbent is restored; an unknown native outcome must
+be reconciled under the original identity before another effect is authorized.
+
+```mermaid
+flowchart TD
+  Request["Freeze request, baseline, approval and rollback target"] --> Admit["Admit original peft.release ticket"]
+  Admit --> Prepare["Validate; train or import"]
+  Prepare --> Gates["Held-out comparison, scan and stage"]
+  Gates -->|"fails"| Reject["Failed candidate; no load"]
+  Gates -->|"passes"| Load["Load in selected host runtime"]
+  Load -->|"known failure"| Restore["Restore incumbent under current authority"]
+  Load -->|"load observed"| Canary["Real serving canary"]
+  Load -->|"outcome unknown"| Reconcile["Reconcile original operation; no replay"]
+  Canary -->|"fails"| Restore
+  Canary -->|"outcome unknown"| Reconcile
+  Canary -->|"passes with fresh authority and generation"| Promote["Commit accepted generation"]
+  Promote --> Verify["Signed verify; separate application observes serving"]
+  Restore -->|"baseline verified"| Recovered["recovered_failure; candidate stays failed"]
+  Restore -->|"unknown or failed"| Block["Block new promotion"]
+```
+
 ## Qualified reference configuration
 
 The reference uses Linux AArch64, an NVIDIA CUDA-capable host, Python 3.10,

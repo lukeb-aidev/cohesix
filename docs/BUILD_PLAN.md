@@ -13487,10 +13487,10 @@ hardware/evidence is a named blocker, not permission to lower the release promis
 portable archives and guides, integrated acceptance matrix, exact release
 evidence and approval-ready release notes.
 
-The following documentation-only tasks are active at user direction. They
-prepare and check use-case guidance for a future complete Release B installation;
-they do not change this milestone's release status or supply release acceptance
-evidence.
+The documentation-only tasks below were authorized directly by the owner. They
+prepare use-case, operator-skill, glossary and diagram guidance for Release B
+readers; they do not change this milestone's release status or supply release
+acceptance evidence.
 
 **Task breakdown**
 
@@ -13517,6 +13517,33 @@ Checks: Instructions work without a source-root current directory, identify inst
 Validation: AI-assisted review and edits; nine skill entrypoints passed quick_validate; 31 local links and anchors resolved; 13 Bash snippets passed syntax checks on both Mac and Jetson; host inventory, generated consistency, and git diff --check passed. Mac source-built mock inspection and Jetson 1.1.0-beta mock pack creation/inspection worked from /tmp. The pinned Jetson NeMo executable worked from a non-login SSH shell by absolute path; Mac Codex MCP help was inspected, but no cross-vendor live Cohesix job was accepted. The M28g implementation record separates these observations from Release B acceptance.
 Refinement at `020a516300`: the delegation and GPU skills describe cumulative standing attempts, caller-ticket operation quotas and publisher-epoch Worker replacement observed in the Pi diagnostic; both amended skills passed quick_validate and the generated implementation inventory remained consistent. This instruction check does not add a cross-vendor live acceptance result.
 Deliverables: Corrected skills and host guide with an exact Mac/Linux validation matrix and proof limits in the M28g implementation record.
+Title/ID: m28g-glossary-as-built-alignment
+Milestone: 28g / m28g-glossary-as-built-alignment
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Give Release B readers a complete, source-aligned glossary for the selected host, agent-protocol, model-release and evidence workflows.
+Inputs: docs/GLOSSARY.md; docs/STATUS.md; docs/HOST_API.md; docs/PRIVATE_LORA_RELEASE.md; docs/USE_CASES.md; selected 28–28f component records and generated protocol controls.
+Changes:
+  - docs/GLOSSARY.md — AI-assisted terminology review and drafting define missing Release B operator terms and distinguish selected component behavior, native outcome proof and unselected weight transfer.
+  - docs/BUILD_PLAN.md — retain this documentation-only task and its validation record.
+Commands: scripts/check-generated.sh; git diff --check; local-link, heading and source-claim review.
+Checks: Every added term agrees with its owning as-built contract; glossary sections and links remain usable; no component evidence is promoted into a new target or release claim.
+Validation: Generated consistency, Test Plan cross-file checks, local links and metadata, glossary sections and unique headings, and git diff --check passed. Source-claim review used the selected 28–28f records and owning public contracts. No runtime, native provider, QEMU, Pi or assembled-release gate was run.
+Deliverables: Updated public glossary and focused validation record; no runtime, Pi or release-acceptance evidence.
+
+Title/ID: m28g-user-diagram-as-built-audit
+Milestone: 28g / m28g-user-diagram-as-built-audit
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Help 1.2 users follow the selected cross-protocol job path and private LoRA recovery, and distinguish target runtime address spaces from external host work in a rotatable cutaway.
+Inputs: Tracked Markdown inventory; existing Mermaid diagrams; docs/ARCHITECTURE.md; docs/HOST_TOOLS.md; docs/HOST_API.md; docs/PRIVATE_LORA_RELEASE.md; docs/ROLES_AND_SCHEDULING.md; selected QEMU and Pi manifests; docs/TEST_PLAN.md; selected 28d–28f contracts; GitHub diagram syntax.
+Changes:
+  - docs/HOST_TOOLS.md — AI-assisted as-built review adds one gateway-to-native-job flowchart with original-ID inspection and outcome boundaries.
+  - docs/PRIVATE_LORA_RELEASE.md — AI-assisted as-built review adds one trained-or-imported candidate flowchart with canary, recovery and blocked-promotion branches.
+  - docs/ARCHITECTURE.md + docs/diagrams/target_host_boundary.py + docs/diagrams/target-host-boundary.svg — generate one embedded ASCII STL cutaway and labelled static plan; distinguish target address-space wells, host process pads and the console-only ingress. The source owns both outputs and supports deterministic regeneration.
+  - docs/BUILD_PLAN.md — retain this scoped documentation task and validation record. Existing diagrams stay where they already explain their owning contract; README remains lightweight.
+Commands: scripts/ci/check_mermaid_github.sh against all tracked Markdown; focused Mermaid CLI SVG/PNG renders; python3 docs/diagrams/target_host_boundary.py --check; local STL geometry and rotated-view checks; scripts/check-generated.sh; local-link and metadata checks; git diff --check.
+Checks: New arrows follow the selected gateway or PEFT release contract; the cutaway keeps CUDA/PEFT outside seL4 and shows only selected child runtime isolation. Original-ID recovery, failed-candidate status and independent native verification remain explicit. No diagram implies that a protocol reply proves provider completion or that the target is formally verified.
+Validation: Tracked Markdown inventory, existing-diagram review, GitHub Mermaid compatibility, focused SVG/PNG render and visual review, deterministic STL/SVG regeneration, 296 nondegenerate closed-mesh facets, opening and rotated STL views, generated consistency, local links and metadata, and git diff --check passed. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
+Deliverables: Two as-built user flowcharts, one native GitHub ASCII STL cutaway with labelled SVG companion and source, and a focused documentation validation record; no new release-acceptance evidence.
 
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
