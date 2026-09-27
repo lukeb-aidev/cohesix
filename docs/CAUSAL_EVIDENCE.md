@@ -3,8 +3,9 @@
 <!-- Copyright 2026 Lukas Bower -->
 # Causal evidence custody
 
-Milestone 27b, `m27b-authoritative-receipt-and-evidence-core`, uses
-`cohesix-evidence` for canonical signed records and bounded verification. A
+Use this contract when a gateway result, native host action and Worker receipt
+must be tied to one original request. `cohesix-evidence` provides canonical
+signed records and bounded verification. A
 signed record is accepted only with independently configured public keys,
 phase custody, exact binding, unexpired chronology and verified CAS bytes.
 The final verifier also requires a unique terminal phase and all causal
@@ -72,7 +73,8 @@ the Root-resolved slot, lease epoch and admission sequence. The caller cannot
 supply these fields. The grant retains the exact pending Worker-current record
 before execution. GPU workload facts additionally retain the Root-published
 native GPU identity and, for submit, its active lease/resource projections.
-These observations do not create a reservation or a Milestone 28a decision.
+These observations do not create a reservation or independently authorize a
+native CUDA action.
 A transport ACK is insufficient. Retry preserves the original facts, Worker
 sequence, signatures and expiry.
 

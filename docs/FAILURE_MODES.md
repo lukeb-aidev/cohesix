@@ -58,7 +58,8 @@ before treating a missing path as a failure.
 | `ERR ATTACH` | Role, ticket MAC, expiry, subject, scope, or profile policy does not match | Verify the exact role, ticket issuer, subject, validity window, and active manifest. Mint or provision a valid ticket; do not reuse a ticket for another role or subject. |
 | A previously working operation reports ticket quota/scope denial | `ERR` detail and ticket/audit counters; generated quota policy | Reduce request rate or payload, wait only when the policy permits replenishment, or obtain a correctly scoped ticket. Do not broaden scope client-side. |
 | REST write returns HTTP `401` | JSON `status=ERR`; missing or invalid gateway request-auth header | Supply the gateway request-auth token. This fixes only the HTTP edge; target authority may still refuse the write. |
-| REST caller expects its own role/ticket but sees gateway permissions | Gateway startup role/ticket and shared namespace behavior | Run a separately configured gateway when a distinct upstream identity is required. REST has no per-request delegated target identity. |
+| REST caller expects its own role/ticket but sees gateway permissions | Gateway startup role/ticket, caller's delegated ticket and gateway audit identity | Check the caller's request-auth and scoped delegated ticket. The gateway enforces that ticket per request, while its single upstream console keeps the configured target identity. Use a separate gateway only when a distinct upstream target identity is required. |
+| REST read returns HTTP `403` | Non-public read without a valid scoped delegated read ticket, or a role/path mismatch | Supply request authentication and a read-scoped ticket for the exact path. `--read-compatibility` is a single-caller Queen exception, not a shared-client fix. |
 
 Generated ticket policy and quotas are summarized in
 [snippets/cohsh_ticket_policy.md](snippets/cohsh_ticket_policy.md) and
@@ -83,6 +84,7 @@ See [HOST_TOOLS.md](HOST_TOOLS.md) for the complete composition model.
 | Gateway refuses non-mock startup | TCP auth or request-auth secret is missing, empty, or a rejected placeholder | Provide both secrets through the deployment secret boundary. |
 | Gateway refuses a non-loopback bind | Exposure guard is active | Prefer loopback plus a secure tunnel. Use the explicit non-loopback opt-in only behind an approved authenticated network boundary. |
 | HTTP `400` | Invalid query, path, size, or JSON request | Correct the request using `/v1/meta/bounds` and the OpenAPI schema. |
+| HTTP `403` on a write | Missing, invalid, expired or out-of-scope delegated ticket | Check `x-cohesix-ticket`, the caller's scope, quota and gateway enrollment. Request authentication alone cannot authorize a write. |
 | HTTP `429` | Bounded broker queue backpressure | Respect `Retry-After` when present, apply bounded backoff, and reduce concurrency or request volume. |
 | HTTP `503` | Upstream console/session is unavailable | Check `/v1/meta/status`, the target, console ownership, and gateway logs. Restore upstream connectivity before retrying. |
 | HTTP `504` | Broker response deadline expired | Inspect gateway and target state. For a write, verify the target's read-only status before retrying. |

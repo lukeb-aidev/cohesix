@@ -133,7 +133,7 @@ out/cohesix/host-tools/cohsh \
 
 The script attaches, pings, reads `/proc/boot`, schedule and lease summaries,
 lists `/proc`, then performs a clean quit. A zero exit means its exact
-assertions passed; it does not mean every 26e test or physical target passed.
+assertions passed; it does not qualify a different image or physical target.
 
 This transcript is the before-state for the proposed change. Retain it with the
 change or incident identifier, then repeat the same script after the operation.
@@ -145,11 +145,13 @@ scripts are in
 ## 3. Give the review team one safe session owner
 
 The direct script has exited, so the TCP console is free. In terminal 2, load
-the console secret and a distinct REST write secret, then start the gateway:
+the console secret, the separate REST request credential and the enrolled
+delegated-ticket issuer reference, then start the gateway:
 
 ```bash
 : "${COH_AUTH_TOKEN:?set the Queen console authentication token}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set a distinct REST write token}"
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set gateway request authentication}"
+: "${HIVE_GATEWAY_DELEGATION_KEY_REF:?set the enrolled issuer key reference}"
 export COH_REST_URL="http://127.0.0.1:8080"
 
 out/cohesix/host-tools/hive-gateway \
@@ -158,18 +160,27 @@ out/cohesix/host-tools/hive-gateway \
   --tcp-port 31337
 ```
 
-In terminal 3, set the URL and confirm both host policy and live target state:
+In terminal 3, obtain a scoped delegated **read** ticket from the deployment's
+issuer. Non-public REST reads need both that ticket and gateway request
+authentication. The private header file must carry
+`Authorization: Bearer <request token>` and
+`x-cohesix-ticket: <read ticket>`; see the [Host API](HOST_API.md#examples)
+for its file format. Keep it outside the repository. Confirm host policy and
+live target state:
 
 ```bash
 export COH_REST_URL="http://127.0.0.1:8080"
+: "${COH_REST_AUTH_TOKEN:?set gateway request authentication for host clients}"
+: "${COH_REST_TICKET:?set a scoped delegated read ticket}"
+: "${COH_READ_HEADERS:?set the private read-credential header file}"
 
-curl --fail-with-body --silent --show-error \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error \
   "$COH_REST_URL/v1/meta/status"
 
-curl --fail-with-body --silent --show-error \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error \
   "$COH_REST_URL/v1/meta/bounds"
 
-curl --fail-with-body --silent --show-error --get \
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error --get \
   --data-urlencode 'path=/proc/boot' \
   --data-urlencode 'max_bytes=1024' \
   "$COH_REST_URL/v1/fs/cat"
@@ -222,8 +233,9 @@ These surfaces answer the questions that matter before an edge change:
 | Are the expected Worker roles exposed? | `/shard` | The selected manifest and visible role layout disagree. |
 | Is there a recent warning relevant to the change? | `/log/queen.log` | A retained fault or refusal has not been routed. |
 
-The selected QEMU and Pi profiles declare 256 Worker slots: one Heartbeat, 127
-GPU, and 128 LoRA. A namespace entry or admitted control write is not by itself
+The selected QEMU and Pi profiles declare 256 passive Worker instances: one
+Heartbeat, 127 GPU and 128 LoRA, served by two bounded executor lanes. A
+namespace entry or admitted control write is not by itself
 a READY or execution result. Keep configured, admitted, READY, provider
 completion, target execution, and release acceptance as separate states.
 
@@ -274,17 +286,14 @@ NVML is preferred where complete; feature-limited NVML implementations such as
 some Jetson profiles fall back to CUDA discovery. `--list` is local inventory
 only. To publish one production-mode snapshot through the running gateway:
 
-```bash
-cargo run -p gpu-bridge-host -- \
-  --publish \
-  --rest-url "$COH_REST_URL"
-```
+Publication is a separate write. The read ticket used in this walkthrough
+cannot authorize it. If your deployment has an enrolled GPU publisher, give
+that process a narrow `/gpu/bridge/ctl` write ticket and follow the
+[Host tools GPU publication guide](HOST_TOOLS.md#gpu-bridge-host).
+Without a real model registry, publication reports empty model state rather
+than inventing an active model.
 
-If you maintain a real model registry, add `--registry "$COH_GPU_REGISTRY"`
-after setting that path explicitly. Without a registry, publication reports
-empty model state rather than inventing models or an active selection.
-
-Verify the projected state with REST-backed `cohsh`:
+If publication ran, verify its projection with REST-backed `cohsh`:
 
 ```text
 ls /gpu
@@ -292,7 +301,7 @@ cat /gpu/bridge/status
 ```
 
 GPU discovery and publication do not execute a workload, isolate a CUDA
-context, prove a model runtime, or prove PEFT training. In 26e, CUDA/NVML and AI
+context, prove a model runtime, or prove PEFT training. CUDA/NVML and AI
 execution remain host-side; Cohesix projects bounded inventory and control
 state. A rollout that requires CUDA is a no-go until its separate runtime probe
 and deployment-specific executor also succeed.
@@ -310,7 +319,7 @@ cargo run -p coh -- evidence pack \
   --out "$pack"
 
 cargo run -p coh -- evidence timeline \
-  --input "$pack"
+  --input "$pack" --scenario change
 ```
 
 Review these first:
@@ -320,7 +329,9 @@ Review these first:
 - `meta.json` and `bounds.json` — host-tool and generated-policy provenance;
 - `proc/boot` — target-reported identity;
 - `log/queen.log` — the retained log snapshot; and
-- `timeline.md` — the offline, human-readable correlation view.
+- `timeline.md` and `case.md` — the offline sequence and source-linked
+  review. Follow `case.json` hashes to the original retained records;
+  `incident`, `maintenance` and `rollout` change the review framing only.
 
 An optional path can be absent by design. A non-zero exporter exit, missing
 top-level metadata, or unexplained error is not a publishable pack. The full
@@ -407,15 +418,3 @@ decision from one exact target identity, one shared session, separate target
 and GPU-host observations, and an offline-reviewable evidence pack. That is the
 practical value of Cohesix before it performs any external action: it makes the
 authority, preconditions, unknowns, and eventual result difficult to confuse.
-
-## Read the source-linked case
-
-The existing evidence-pack/timeline walkthrough can now finish with
-`coh evidence timeline --input DIR --scenario federation`. Open `case.md` for
-the cross-hive request stages, then use the canonical event references in
-`case.json` to examine source records. Change the scenario to `incident`,
-`change`, `maintenance`, or `rollout` to frame that review without changing
-its evidence authority. A terminal host status remains a recorded result;
-unknown, missing, error, and ambiguous stages must remain visible. Inspection,
-diffs, trace capture/replay, and typed non-attestation results are documented in
-[Operator inspection and evidence](OPERATOR_EVIDENCE.md).

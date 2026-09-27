@@ -3,12 +3,19 @@
 <!-- Copyright 2026 Lukas Bower -->
 # Host field-bus contract
 
+Use this page when a host must read a selected MODBUS or DNP3 point, or issue
+one bounded control to an enrolled device. The bus endpoint is a host-side
+connection; the Cohesix target receives governed observations and requests,
+not raw bus authority. Before using a device, enroll its exact endpoint and
+point map, then check the native acknowledgement and retained result. A
+protocol acknowledgement does not prove a physical actuator moved.
+
 `sidecar-bus` provides host-only protocol clients. It introduces no target
-listener or device driver. WorkerBus remains model/session-only. The historical
-in-memory `BusAdapter` always queues data, including when its model link is
+listener or device driver. WorkerBus remains model/session-only. The in-memory
+`BusAdapter` queues model data, including when its link is
 marked online; that flag can never discard a frame or produce delivery proof.
-The former MODBUS/DNP3 aliases are replaced by native adapters under the explicit
-`live,modbus,dnp3` feature selection.
+Native MODBUS/DNP3 adapters require explicit `live,modbus,dnp3` feature
+selection.
 
 ## Compiler-owned maps
 

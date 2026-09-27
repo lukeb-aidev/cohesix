@@ -4,14 +4,13 @@
 
 # Production profiles and capacity
 
-The production kernel/capacity profiles below are distinct from a provisioned
-production authority deployment. The checked-in source manifests retain explicit
-development ticket literals for fixture compatibility; live clients reject those
-placeholders. [M27A_AUTHORITY.md](M27A_AUTHORITY.md) defines the Release A compiler
-profile with secret references, strict Queen intents, writer fencing and required
-audit/replay. Select its generated TOML throughout the build and release workflow.
-A production seL4 kernel alone does not establish production credential hygiene,
-provider conformance, failover qualification or audit acceptance.
+This page compares what the selected QEMU and Pi 4 target profiles can admit.
+A production seL4 kernel does not itself provide live credentials or qualify
+a deployment. The checked-in source manifests retain development ticket
+literals for fixtures; live clients reject those placeholders. For a
+provisioned authority build, follow the selected
+[authority profile](M27A_AUTHORITY.md) with secret references, strict Queen
+intents, writer fencing and audit/replay, then verify its exact artifacts.
 
 
 The selected inputs are `configs/root_task.toml` with `qemu_smp_production`
@@ -21,16 +20,21 @@ kernel. Both use release seL4 kernels, four cores, MCS, IPC fastpath, exported
 virtual counters, and disabled kernel debugging, printing, and benchmarking.
 Other repository prebuilt kernels retain their existing identities.
 
-Both manifests enable the implemented production features: isolated services
-and Workers, CAS/signature verification, host tickets/federation, policy,
-audit/replay, models, telemetry and the host Modbus sidecar. Modbus describes
-a host adapter; enabling its namespace does not add an in-VM bus driver.
-Unimplemented WorkerBus and DNP3 execution remain disabled on both targets.
+Both manifests declare isolated services and Workers, CAS/signature
+verification, host ticket and federation surfaces, policy, audit/replay,
+models, telemetry and the host Modbus sidecar. Production federation still
+depends on the separately selected authority profile. Modbus describes a
+host adapter; enabling its namespace does not add an in-VM bus driver.
+WorkerBus is model/session-only. The target DNP3 sidecar is disabled in both
+manifests; the separate [host field-bus client](FIELD_BUS.md) supports a
+bounded DNP3 subset when explicitly enrolled.
 
 ## Capacity means admitted execution
 
-Both profiles expose 256 executable Worker slots (one heartbeat, 127 GPU,
-128 LoRA) and the maximum compiler-supported 8-bit/256-shard namespace.
+Both profiles declare 256 passive executable Worker instances (one heartbeat,
+127 GPU, 128 LoRA), served by two bounded active executor lanes, and the
+maximum compiler-supported 8-bit/256-shard namespace. The count is target
+Worker population, not 256 concurrent CUDA jobs or 256 external GPU hosts.
 This is the current supported execution envelope, not a claim that every
 theoretical object limit has been exercised. Larger host-model namespaces do
 not establish additional executable Worker capacity. Increasing this envelope

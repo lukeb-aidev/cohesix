@@ -101,6 +101,10 @@ repair governance may change those documents atomically, not unrelated product c
 - Documentation describes as-built behavior, not aspiration; drift is a defect.
   Keep affected CLI/UI help, manuals and public guides aligned. Shared manual
   content has one source; only genuine surface differences justify variation.
+- Write `*.md` documents in plain English for community readers.
+  Lead with what readers need to understand or do, and explain unfamiliar terms
+  in context. Use technical jargon when it conveys a precise contract; preserve
+  exact command names, schemas, invariants and evidence boundaries.
 - Console grammar, NineDoor errors, namespaces, `/proc` formats, role authority
   and generated-interface changes are breaking. Update all affected surfaces;
   bump the manifest schema when the contract is manifest/generated controlled.

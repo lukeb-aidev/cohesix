@@ -19,6 +19,14 @@ Commands assume a source checkout from the repository root. Release users
 should replace `cargo run -p <package> --` with the corresponding executable in
 `bin/` and follow the bundle's `QUICKSTART.md` for paths.
 
+For live gateway work, provision `COH_REST_AUTH_TOKEN` and a finite
+`COH_REST_TICKET` for this caller. Non-public reads need a read scope;
+mutations need a write scope for the exact path. The gateway uses its own
+console identity upstream. See [Host tools](HOST_TOOLS.md#authentication-layers)
+for issuer setup and ticket renewal. Switch back to a read-scoped ticket when
+checking a result if the write ticket lacks read access. Clear conflicting
+request-token aliases in the client environment.
+
 The useful habit across every situation is simple:
 
 1. identify the exact target and transport;
@@ -294,7 +302,8 @@ With one healthy gateway, a shell script can read a bounded node without
 parsing an interactive terminal:
 
 ```bash
-curl --fail-with-body --silent --show-error --get \
+: "${COH_READ_HEADERS:?set the private read-credential header file}"
+curl --header "@$COH_READ_HEADERS" --fail-with-body --silent --show-error --get \
   --data-urlencode 'path=/proc/root/reachable' \
   --data-urlencode 'max_bytes=64' \
   "$COH_REST_URL/v1/fs/cat"
@@ -322,9 +331,10 @@ PY
 ```
 
 Use REST or Python for health services, deployment checks, notebooks, and
-incident collection. Writes still require gateway request authentication and
-the gateway's upstream role/ticket, target lifecycle, policy, and schema all
-remain authoritative.
+incident collection. The Python backend reads the provisioned
+`COH_REST_AUTH_TOKEN` and `COH_REST_TICKET` from the environment. Writes
+also need a delegated write scope. The gateway's upstream role/ticket, target
+lifecycle, policy and schema still decide what is allowed.
 
 <a id="read-a-small-fleet"></a>
 ## During a shift: find the hive that needs attention
@@ -415,7 +425,7 @@ Worker or hardware proof.
 <a id="inspect-and-publish-aarch64-nvidia-gpu-state"></a>
 ## Before scheduling AI work: check the real AArch64 NVIDIA accelerator
 
-A Linux AArch64 NVIDIA CUDA system is useful in the 26e topology as a host for
+A Linux AArch64 NVIDIA CUDA system is useful as an external host for
 Cohesix tools, CUDA workloads, models, containers, and evidence. Jetson Orin,
 AWS G5g, NVIDIA DGX Spark, and compatible partner or future systems share this
 architectural role. None is the seL4 Queen in this topology.
@@ -453,7 +463,8 @@ deployment or encrypted-tunnel boundary:
 
 ```bash
 : "${COH_REST_URL:?set the gateway URL}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
+: "${COH_REST_AUTH_TOKEN:?set REST write authentication}"
+: "${COH_REST_TICKET:?set a delegated ticket scoped to GPU publication}"
 
 cargo run -p gpu-bridge-host -- \
   --publish \
@@ -490,7 +501,7 @@ SSD/NVMe when available:
 
 ```bash
 : "${COH_REST_URL:?set the gateway URL}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
+: "${COH_REST_AUTH_TOKEN:?set REST write authentication}"
 : "${COH_PEFT_JOB:?set the admitted LoRA job id}"
 : "${COH_PEFT_MODEL:?set the model or adapter id}"
 : "${COH_PEFT_EXPORT:?set the export directory}"
@@ -499,7 +510,7 @@ SSD/NVMe when available:
 
 cargo run -p coh -- peft export \
   --rest-url "$COH_REST_URL" \
-  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --rest-auth-token "$COH_REST_AUTH_TOKEN" \
   --job "$COH_PEFT_JOB" \
   --out "$COH_PEFT_EXPORT"
 ```
@@ -513,7 +524,7 @@ before import.
 ```bash
 cargo run -p coh -- peft import \
   --rest-url "$COH_REST_URL" \
-  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --rest-auth-token "$COH_REST_AUTH_TOKEN" \
   --model "$COH_PEFT_MODEL" \
   --from "$COH_PEFT_ADAPTER" \
   --job "$COH_PEFT_JOB" \
@@ -523,7 +534,7 @@ cargo run -p coh -- peft import \
 
 cargo run -p coh -- peft activate \
   --rest-url "$COH_REST_URL" \
-  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --rest-auth-token "$COH_REST_AUTH_TOKEN" \
   --model "$COH_PEFT_MODEL" \
   --registry "$COH_GPU_REGISTRY"
 
@@ -550,7 +561,7 @@ If that result fails, roll the pointer back and republish the registry:
 ```bash
 cargo run -p coh -- peft rollback \
   --rest-url "$COH_REST_URL" \
-  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --rest-auth-token "$COH_REST_AUTH_TOKEN" \
   --registry "$COH_GPU_REGISTRY"
 
 cargo run -p gpu-bridge-host -- \
@@ -587,14 +598,14 @@ Run one agent pass with deployment-specific durable state files:
 
 ```bash
 : "${COH_REST_URL:?set the gateway URL}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
+: "${COH_REST_AUTH_TOKEN:?set REST write authentication}"
 
 agent_state="$PWD/out/host-ticket-agent/status-demo"
 mkdir -p "$agent_state"
 
 cargo run -p host-ticket-agent -- \
   --rest-url "$COH_REST_URL" \
-  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --rest-auth-token "$COH_REST_AUTH_TOKEN" \
   --cursor "$agent_state/cursor.json" \
   --execution-journal "$agent_state/execution-journal.json" \
   --agent-lock "$agent_state/agent.lock" \
@@ -733,16 +744,16 @@ adding retries.
 | --- | --- | --- |
 | Checked `.coh` reads, target identity, scheduler/lease observations, and a complete evidence pack | Pre-change gates, incident comparison, support cases, and operator handoff | Whole-milestone, performance, or physical-hardware acceptance |
 | Real AArch64 NVIDIA inventory and bounded `/gpu` publication | Verifying that the intended accelerator host is present and visible to the control plane | CUDA execution, isolation, inference, PEFT training, or NeMo acceptance |
-| Legacy PEFT export/import/activate/rollback and WorkerLora receipt surfaces | Rehearsing and integrating a private adapter lifecycle with explicit rollback | Training provenance, evaluation, scan, inference reload, or successful canary |
+| PEFT export/import/activate/rollback and WorkerLora receipt surfaces | Integrating a file-registry adapter lifecycle with explicit rollback | Training provenance, evaluation, scan, inference reload, or successful canary without separate native verification |
+| Admitted `peft.release` with signed native verification | A selected CUDA or Mac MLX adapter release, with training or import, quality gates, serving canary and recovery under the original operation identity | A different host, Pi image or assembled release that was not independently checked |
 | Host tickets and playbooks | Designing and testing an action airlock or sector workflow with explicit authority and receipts | Production provider behavior, sector certification, or safe autonomous operation |
 | The same script on QEMU and Pi | Comparing exact operator contracts while retaining two proof files | Treating VM evidence as physical-board evidence |
 
 Use [Cohesix Status](STATUS.md) for the current public capability boundary,
 [Use Cases](USE_CASES.md) for maturity-labelled deployment patterns,
 [Host Tools](HOST_TOOLS.md) for exact modes, and the
-[Build Plan](BUILD_PLAN.md) for planned hardening. The practical value already
-available in 26e is not that every integration is finished. It is that an
-operator can make bounded decisions, expose only narrow authority, keep target
+[Build Plan](BUILD_PLAN.md) for scoped work. An operator can make bounded
+decisions, expose only narrow authority, keep target
 and host claims separate, and reconstruct what happened after the live system
 is gone.
 

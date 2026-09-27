@@ -4,7 +4,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Host identity mapping
 
-Milestone 27b / `m27b-identity-mapping` maps OIDC JWTs, SPIFFE JWT-SVIDs,
+Use identity mapping when an already authenticated gateway caller needs a
+short-lived, scoped Cohesix ticket derived from an enrolled external identity.
+An exchange grants gateway authority only; Root must still admit a write and
+the native provider must still prove its outcome. This is the enrollment and
+exchange contract for OIDC JWTs, SPIFFE JWT-SVIDs,
 Kubernetes service-account JWTs and local kernel effective uids through
 `providers.identity_mappings` in the compiler input. Shipped mappings are
 disabled. Enrollment names an exact issuer, one audience, signing algorithm,
@@ -108,10 +112,5 @@ Ordinary `TicketIssuer::issue` and generated fixtures still emit version 1;
 version, so ticket hash/quota identity cannot change during verification.
 Python parsing does not verify a MAC. Tickets too large for the unchanged
 console bound fail with `ELIMIT`; multiple scopes are not silently dropped.
-This is a versioned handwritten ticket-codec extension, not a change to the
-manifest schema, generated ticket defaults, host-ticket request schema, or
-Secure9P framing. Manifest schema 1.23 separately introduces the source-scoped
-host snapshot interface; it does not change this ticket codec contract.
-
-Focused evidence and the whole-host compatibility review are retained in
-[M27b implementation record](audit/M27B_IMPLEMENTATION_RECORD.md).
+This ticket-codec version does not change the manifest schema, generated
+ticket defaults, host-ticket request schema or Secure9P framing.

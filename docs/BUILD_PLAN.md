@@ -13582,6 +13582,17 @@ Checks: No 3D mesh interrupts the document; the 2D chart and adjacent prose reta
 Validation: Generated consistency and Test Plan cross-file checks passed; the retained Mermaid block passed GitHub syntax checks with zero warnings; Architecture metadata and 35 local links passed; no STL fence, live asset link or single-use generator remains; git diff --check passed. Only the earlier historical task record still names the removed files. No runtime, QEMU, Pi or release gate was run for this documentation task.
 Deliverables: Simplified architecture section, removal of unused diagram assets, and this task record.
 
+Title/ID: m28g-community-operator-reference-1-2-audit
+Milestone: 28g / m28g-community-operator-reference-1-2-audit
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Make selected 1.2.0 operator and developer references accurate, readable and discoverable without losing current authority or recovery contracts.
+Inputs: Fifteen requested docs; README.md; selected QEMU and Pi manifests; gateway read/delegation code; failover watchdog; host GPU, Worker, identity, field-bus and Mac provider contracts; CONTRIBUTING.md and TEST_PLAN.md.
+Changes: AI-assisted review corrects REST read and write credential examples, distinguishes target Workers from external execution, replaces the unsafe older failover recipe with the fenced transaction and its current read-policy limit, and makes the repo map and specialist contracts easier to enter. README links every requested guide. Old beta drill transcripts are removed from the active runbook; current safety and recovery rules remain.
+Commands: scripts/check-generated.sh; scripts/ci/check_mermaid_github.sh on changed Markdown; focused metadata, fence, local-link and README-coverage check; git diff --check.
+Checks: Guides match selected source and profile boundaries; no old direct-symlink cutover or unauthenticated non-public REST read is offered as a current procedure; all fifteen requested docs are discoverable from README; no generated output or product behavior changes.
+Validation: Generated consistency passed; two changed Mermaid blocks passed GitHub compatibility with zero warnings; seventeen changed Markdown files passed metadata, balanced-fence and local-link checks, and README linked all fifteen guides; git diff --check passed. No runtime, QEMU, physical Pi, native provider or assembled-release gate was run for this documentation-only task.
+Deliverables: Fifteen focused guide audits, README navigation and this scoped task record.
+
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.

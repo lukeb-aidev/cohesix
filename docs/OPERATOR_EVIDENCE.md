@@ -1,18 +1,21 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Define the bounded M27 operator projections and their evidence authority. -->
+<!-- Purpose: Help operators collect, compare and interpret bounded Cohesix evidence. -->
 <!-- Copyright 2026 Lukas Bower -->
 # Operator inspection and evidence
 
-Milestone 27 adds host commands over the existing console, gateway projection,
-and canonical evidence-pack layout. These commands collect observations and
-explain differences; they grant no authority and do not repair target state.
+The host commands below collect observations through the existing console or
+gateway and package them for offline review. They explain differences; they
+grant no authority and do not repair target state.
 Missing optional facilities remain missing or unknown. They never become a
 health, execution, hardware, or release verdict.
 
 ## Commands
 
-Credentials use the existing host-tool environment resolution. When a gateway
-owns the target console, use its REST URL rather than opening a second console.
+Credentials use the existing host-tool environment resolution. Non-public
+gateway reads need request authentication and a scoped delegated read ticket;
+set `COH_REST_AUTH_TOKEN` and `COH_REST_TICKET` from the deployment's secret
+store before using the examples. When a gateway owns the target console, use
+its REST URL rather than opening a second console.
 For example, with that gateway already running:
 
 ```sh
@@ -70,9 +73,8 @@ timeline-v1 inputs remain readable, with absent inventories classified unknown.
 
 ## Canonical traces
 
-The existing `cohsh-core` trace container has an additive version-2 capture
-header; the original version-1 Secure9P fixtures remain byte-identical.
-Version 2 retains redacted shell output and read observations in the same
+The `cohsh-core` version-2 trace container retains redacted shell output and
+read observations in the same
 bounded frame/ACK container. It is consumed by `cohsh`, `coh trace`,
 `coh-status::captured_namespace`, and SwarmUI's trace replay backend.
 
@@ -131,8 +133,9 @@ namespace path, timeline event index, sequence, and SHA-256 of that canonical
 event. Conflicting terminal records remain ambiguous. Outcomes are limited to
 `recorded-terminal`, `refused`, `deadlettered`, `incomplete`, and `ambiguous`.
 An observed host result does not establish execution, and a missing linked
-decision is not synthesized from a later status. Authoritative receipt and
-execution verification remain Milestone 27b.
+decision is not synthesized from a later status. For an independently
+verified native outcome, use the enrolled [causal evidence](CAUSAL_EVIDENCE.md)
+chain.
 
 Python `CohesixClient.evidence_case(pack_dir)` and
 `CohesixClient.attestation_result(pack_dir)` read these canonical records

@@ -4,16 +4,17 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # macOS native providers
 
-These host adapters were implemented under the original broad 27b scope and are
-retained under the roadmap's `m28a-native-provider-discovery-and-actions` owner.
-A Mac controller controls an explicitly named target hive. CUDA remains
-on its selected remote NVIDIA host; choosing a Mac controller never enables
-local NVML or creates a local Apple GPU executor.
+Use this page when a Mac hosts a Cohesix controller or an enrolled native
+service. A Mac controller controls an explicitly named target hive. CUDA stays
+on its selected NVIDIA host. Local MLX execution needs its own selected Mac
+profile and native helper; choosing a Mac controller alone does not enable it.
+For that workflow, use [Private LoRA release](PRIVATE_LORA_RELEASE.md); a
+launchd action alone does not train or serve a model.
 
 ## launchd service lifecycle
 
-Manifest schema 1.25 adds `launchd.start`, `launchd.stop`, `launchd.restart` and
-`launchd.status-check` to the selectable host-ticket action vocabulary. The
+The selectable host-ticket actions include `launchd.start`, `launchd.stop`,
+`launchd.restart` and `launchd.status-check`. The
 selected root manifest must explicitly allow an action. The canonical QEMU and
 Pi manifests allow all four lifecycle actions; execution and discovery still
 require an exact enrolled service. Configure each native
@@ -32,7 +33,7 @@ executable_sha256 = "<actual SHA-256 of the selected native executable>"
 These are deployment inputs, not working credentials or a ready-to-install
 profile. `system`, `user/<uid>` and `gui/<uid>` are the only domains. Labels,
 paths, digests and unique ids are validated by the compiler. Empty maps mean
-`not_enabled`; environment label lists no longer select live discovery. The
+`not_enabled`; environment label lists do not select live discovery. The
 SDK, gateway metadata and agent consume the same generated action/map contract.
 
 Submit an authorized version-1 host ticket with `target: "owned-agent"` and
@@ -91,7 +92,7 @@ release packaging and use-case qualification. `--provider launchd` without
 
 ## Xcode, release and endpoint targets
 
-Schema 1.26 adds optional `providers.macos_targets` entries. Each entry has a
+Optional `providers.macos_targets` entries each have a
 unique `id` and an `operation` table with one exact `action`. Tickets select
 only `args: {"target_id": "<compiled id>"}` and the same version-1 target id.
 The default map selects only `local-endpoint-compliance`, with the read-only
@@ -119,10 +120,10 @@ credentials, unknown native response shapes and uncorrelated jobs fail closed.
 it changes no setting and neither attests the device nor certifies compliance.
 
 The agent records native evidence under its durable attempt identity; replay
-cannot create another native operation. Root integration, Apple credentialed
-live qualification and package enrollment for these adapters remain open under
-28a. Focused native Xcode build/test/archive passed on the owned one-test fixture;
-signing, notarization and upload are not claimed as live-qualified.
+cannot create another native operation. Action selection and native enrollment
+are separate: an enabled action does not establish Apple credentialed signing,
+notarization, upload or installed-package proof. Verify those outcomes with
+the exact deployment's retained native records.
 
 ```sh
 scripts/ci/provider_conformance_run.sh --provider mac_release --live-reference \
