@@ -13471,8 +13471,8 @@ hardware/evidence is a named blocker, not permission to lower the release promis
 portable archives and guides, integrated acceptance matrix, exact release
 evidence and approval-ready release notes.
 
-The following documentation-only task is active at user direction. It prepares
-use-case guidance for an assumed complete Release B installation; it does not
+The documentation-only tasks below were authorized directly by the owner. They
+prepare use-case and glossary guidance for Release B readers; they do not
 change this milestone's release status or supply release acceptance evidence.
 
 **Task breakdown**
@@ -13488,6 +13488,19 @@ Commands: skill-creator quick_validate for each new or changed skill; python3 sc
 Checks: Skills have distinct triggers and outcomes, route to exact-version contracts, preserve scoped authority and original-identity recovery, and make no unearned installed, Pi, provider or industry claim. USE_CASES keeps all existing use cases and playbook ideas while explaining the assumed Release B workflows.
 Validation: Initial addition: six skill entrypoints passed quick_validate; host inventory retained six use cases and nine playbooks; check-generated, local links and git diff --check passed. Host-routing correction: nine skill entrypoints passed quick_validate; eight implementation-surface tests, host inventory, check-generated (including Test Plan and NIST guards), local links and git diff --check passed. Skills inspect actual Mac/Linux compatibility and offer supported fixes; model rollout supports one-host and mixed-host journeys. No live target, native provider, installer or release gate was run for this documentation task.
 Deliverables: Discoverable repo-managed skills, revised use-case guide and focused validation record. This documentation does not qualify or publish Release B.
+
+Title/ID: m28g-glossary-as-built-alignment
+Milestone: 28g / m28g-glossary-as-built-alignment
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Give Release B readers a complete, source-aligned glossary for the selected host, agent-protocol, model-release and evidence workflows.
+Inputs: docs/GLOSSARY.md; docs/STATUS.md; docs/HOST_API.md; docs/PRIVATE_LORA_RELEASE.md; docs/USE_CASES.md; selected 28–28f component records and generated protocol controls.
+Changes:
+  - docs/GLOSSARY.md — AI-assisted terminology review and drafting define missing Release B operator terms and distinguish selected component behavior, native outcome proof and unselected weight transfer.
+  - docs/BUILD_PLAN.md — retain this documentation-only task and its validation record.
+Commands: scripts/check-generated.sh; git diff --check; local-link, heading and source-claim review.
+Checks: Every added term agrees with its owning as-built contract; glossary sections and links remain usable; no component evidence is promoted into a new target or release claim.
+Validation: Generated consistency, Test Plan cross-file checks, local links and metadata, glossary sections and unique headings, and git diff --check passed. Source-claim review used the selected 28–28f records and owning public contracts. No runtime, native provider, QEMU, Pi or assembled-release gate was run.
+Deliverables: Updated public glossary and focused validation record; no runtime, Pi or release-acceptance evidence.
 
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer

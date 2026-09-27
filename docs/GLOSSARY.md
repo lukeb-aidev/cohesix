@@ -7,10 +7,13 @@
 
 This glossary explains the public language used throughout Cohesix. It assumes
 no prior experience with operating-system design, seL4, Plan 9, 9P, edge AI,
-or the Cohesix Queen/Worker model.
+or the Cohesix Queen/Worker model. It includes the selected Release B
+(`1.2.0-beta`) host workflows and their operator-facing evidence terms.
 
 Definitions describe the current source tree unless an entry is explicitly
 labelled **planned**, **historical**, **host-only**, or **simulation-only**.
+An implemented component and an assembled release have separate acceptance
+gates; [Current Status](STATUS.md) names the evidence available for each.
 Exact profile-selected values, paths, bounds, and enabled features come from
 the selected source manifest, its resolved manifest, and generated outputs.
 Those artifacts remain authoritative when a concise definition here omits a
@@ -77,6 +80,15 @@ documented in [Secure9P](SECURE9P.md), not a Linux or POSIX environment.
 
 ## A
 
+### A2A / Agent2Agent
+
+An agent-to-agent task protocol. The selected `hive-gateway` A2A 0.3 route
+lets an authenticated, delegated peer discover a subject-scoped Agent Card,
+submit a selected job, and inspect or request cancellation of the original
+task. The task ID is the admitted ticket ID. A task state or artifact is not
+independent proof of the native outcome. The compiled QEMU profile enables the
+route; the Pi profile does not. See [Host API](HOST_API.md).
+
 ### AArch64 / ARM64
 
 The 64-bit ARM instruction-set architecture used by Cohesix targets. QEMU uses
@@ -89,18 +101,19 @@ target, and test. A successful build is build evidence, not boot evidence; a
 boot prompt is not device evidence; QEMU success is not Pi hardware evidence.
 See [Hardware Bring-up](HARDWARE_BRINGUP.md#proof-layers).
 
+### Accepted / acceptance
+
+A stated contract has passed its specified checks with evidence bound to the
+source, profile, target, and artifact. Acceptance is scoped: a completed CUDA,
+Mac, MCP, A2A, or NeMo component does not by itself accept the assembled
+`1.2.0-beta` release or a physical Pi deployment. See [Current Status](STATUS.md).
+
 ### ACK / acknowledgement
 
 A generic name for a response that acknowledges a command. Cohesix source and
 tests may call response records or parsers `ack`, but the current console emits
 the literal success token `OK`, refusal token `ERR`, and stream terminator
 `END`. Do not send or expect a literal `ACK` success line.
-
-### Actions queue
-
-`/actions/queue` is a manifest-gated control path for single-use policy
-decisions. An entry identifies an action, its target, and an `approve` or
-`deny` decision; status is read separately under `/actions/<id>/status`.
 
 ### Active / standby
 
@@ -109,11 +122,31 @@ second hive is prepared for host-orchestrated takeover. Cohesix does not treat
 active/active multi-Queen writes to one logical hive as safe. See
 [Failover](FAILOVER.md).
 
+### Actions queue
+
+`/actions/queue` is a manifest-gated control path for single-use policy
+decisions. An entry identifies an action, its target, and an `approve` or
+`deny` decision; status is read separately under `/actions/<id>/status`.
+
+### Admission / admission ID
+
+The decision and retained identity for one bounded selected job. Admission
+checks the subject, action, ticket, current policy and resource facts, limits,
+and standing budget before dispatch. The `admission_id` lets CLI, Python,
+MCP, and A2A clients inspect and reconcile that same job after a lost reply;
+an admission response does not prove native completion.
+
 ### Agent Action Airlock
 
 A use-case name for putting an AI agent's proposed action through explicit
 ticket, policy, lifecycle, and evidence checks before execution. It is a
 deployment pattern, not a separate Cohesix daemon or protocol.
+
+### Agent Card
+
+The subject-scoped A2A discovery document served by `hive-gateway` when the
+selected A2A route is enabled. It lists currently usable selected actions for
+the authenticated peer; it grants no authority on its own.
 
 ### AGI / “infrastructure for AGI”
 
@@ -147,11 +180,28 @@ cannot be overwritten. The provider still validates the expected offset,
 payload, role, ticket, and bounds; “append-only” does not mean “accept any
 write.”
 
+### App Intents / Shortcuts
+
+The selected macOS integration lets a user-created Shortcut call scoped
+Cohesix actions through an installed SwarmUI extension and delegated Keychain
+connection. The Shortcut observes the same durable job as other clients; its
+displayed result is not independent native proof. This does not imply spoken
+Siri support. See [Current Status](STATUS.md).
+
+### Application observation
+
+A separate real client request to the selected serving endpoint after a model
+promotion or rollback. It records which generation and output the application
+actually reached. A registry pointer, runtime health response, or test prompt
+issued only inside a release helper does not replace this observation.
+
 ### Approval
 
-A single-use policy decision submitted through the actions queue. Acceptance
-of an approval record proves only that the decision was recorded, not that the
-controlled action completed.
+A permission for an exact scoped action. Policy approval can be a single-use
+decision in the actions queue; a model-release approval binds the frozen
+candidate and rollback target; overall release publication requires a named
+human release owner. Recording any approval does not prove that its controlled
+effect or release qualification completed.
 
 ### As-built
 
@@ -260,6 +310,31 @@ evidence after rebuilding or flashing.
 
 ## C
 
+### Canary
+
+A small, predeclared check before a wider change is accepted. In the selected
+model-release path, an inference canary sends fixed inputs to the actual
+host-side serving runtime and checks its identity, output, and limits before
+promotion. A failed canary keeps the candidate failed even when rollback
+restores the previous model. A passing canary proves only its stated workload
+and serving generation, not general model quality or Release B acceptance. See
+[Private LoRA release](PRIVATE_LORA_RELEASE.md).
+
+### Cancellation request
+
+An authorized request to stop the original job. The request can be retained
+while native work is still running or its terminal state is unknown; it is not
+proof that the process stopped or its resource reservation was released.
+Inspect the same job and native owner before claiming cancellation.
+
+### Candidate / incumbent / baseline
+
+The **candidate** is the model or adapter proposed for release; the
+**incumbent** is the currently accepted deployment; the **baseline** is the
+frozen comparison and rollback reference. They must be compared under the same
+predeclared inputs, evaluator, runtime, and generation. A score or artifact
+alone does not change the serving deployment.
+
 ### Capability
 
 An unforgeable kernel-managed permission to use a particular seL4 object in
@@ -287,6 +362,14 @@ Some generated telemetry and observability nodes have CBOR forms. CBOR is an
 optional payload format inside a documented node, not the native Secure9P wire
 protocol and not a new control channel.
 
+### Checkpoint / full-state resume
+
+A checkpoint is retained training state. The selected M28b HF Trainer path
+binds adapter, optimizer, scheduler, random-number and data-position state to
+immutable digests so a **newly authorized** operation can resume after the
+original effect is reconciled. A deployable adapter or a `watch` result alone
+is not a full-state checkpoint. Runtime support is profile-specific.
+
 ### Clunk / `Tclunk`
 
 The 9P operation that releases a fid. Secure9P retires that fid for the rest of
@@ -295,9 +378,9 @@ the session; reusing it after clunk is a deterministic error.
 ### `coh`
 
 The host integration CLI for diagnostics, namespace mounts, GPU lease records,
-PEFT workflows, host-command breadcrumbs, telemetry export, fleet views, and
-evidence packs. Its actions remain projections of documented host or target
-interfaces. See [Host Tools](HOST_TOOLS.md#coh).
+durable selected jobs, PEFT releases, host-command breadcrumbs, telemetry
+export, fleet views, and evidence packs. Its actions remain projections of
+documented host or target interfaces. See [Host Tools](HOST_TOOLS.md#coh).
 
 ### `.coh` script
 
@@ -332,6 +415,12 @@ mock backend, attach as a role, issue the documented console grammar, run
 The shared Rust library for command parsing, wire responses, trace records, and
 transport-faithful behavior used by host clients such as `cohsh` and SwarmUI.
 Keeping semantics here prevents a UI or adapter from inventing new verbs.
+
+### Configured
+
+Declared and selected in a source manifest or generated profile. Configured
+roles, protocol switches, and device paths are not proof that their runtime
+objects started, their host providers worked, or a target accepted them.
 
 ### Console
 
@@ -432,6 +521,13 @@ An seL4 untyped-memory capability representing a physical device range rather
 than ordinary RAM. HAL alone may discover, retype, and map admitted device
 untypeds; Workers and driver runtimes do not scan physical address space.
 
+### Digest / SHA-256
+
+A fixed-size cryptographic hash of exact bytes. Cohesix uses SHA-256 digests to
+bind requests, artifacts, native outputs, and evidence records to what was
+observed. A matching digest establishes byte identity; it does not establish
+licence, quality, authority, delivery to another host, or successful serving.
+
 ### Direct mode
 
 A topology in which exactly one host tool owns the target TCP console. Use
@@ -449,6 +545,13 @@ buffers, explicit cache transitions, and the selected protection profile.
 Deferred procedure call, Cohesix shorthand for bounded work scheduled after a
 device interrupt or wake event. It keeps interrupt handling short while making
 deferred work, re-signalling, drops, and budget exhaustion observable.
+
+### Docker / systemd host owners
+
+Host-side process and container managers used by selected native executors.
+The Linux CUDA reference exercises bounded work through systemd and Docker;
+their process, unit, or container identities help verify what ran. Neither
+manager runs inside the Cohesix target or grants target authority.
 
 ### Driver-task ABI
 
@@ -499,6 +602,14 @@ reasons; Secure9P uses bounded `Rerror` codes such as `Permission`, `NotFound`,
 `Busy`, `Invalid`, `TooBig`, and `Closed`. Similar meanings do not imply a
 one-to-one wire mapping.
 
+### Evaluation / held-out comparison
+
+A predeclared measurement of a candidate against a frozen base or incumbent
+using separate held-out inputs and the same evaluator, preprocessing, runtime,
+and resource context. The selected PEFT release refuses regression before
+loading or promoting the candidate. A score alone is not a serving canary or
+an application observation. See [Private LoRA release](PRIVATE_LORA_RELEASE.md).
+
 ### Evidence
 
 Source-backed information used to support a specific claim: generated hashes,
@@ -524,6 +635,13 @@ does not itself authorize a new action.
 An offline NDJSON and Markdown correlation built from an evidence pack by
 `coh evidence timeline`. It orders retained events for investigation without
 creating a live control connection.
+
+### Executor / native execution
+
+The host process or service that performs an admitted effect, such as a CUDA
+workload, service restart, or model release. It runs on the selected Mac or
+Linux GPU host, outside the seL4 target. Target admission, an executor terminal,
+and independently verified output are distinct observations.
 
 ### Export window
 
@@ -577,6 +695,13 @@ specified properties under stated assumptions. seL4 has formal proofs for its
 kernel configurations and assumptions; this does not make all Cohesix code,
 drivers, host tools, firmware, or deployments formally verified.
 
+### Foundation Models
+
+Apple's host-side model framework used by the selected Mac app to explain a
+scoped job and suggest a typed follow-up. Its explanation is advisory: it
+cannot grant Cohesix authority, submit a job by itself, or verify the native
+outcome.
+
 ### FUSE / mount
 
 FUSE lets a userspace program present a filesystem view to the host OS.
@@ -610,11 +735,26 @@ Output produced from validated compiler IR by `coh-rtc`, including Rust tables,
 resolved manifests, snippets, policy defaults, and scripts. Generated output
 defines selected behavior and must not be hand-edited.
 
+### Generation / generation fence
+
+A version of mutable state, such as an accepted model deployment or current
+resource authority. A generation fence rechecks that version before a load,
+promotion, or rollback so stale work cannot overwrite a newer deployment.
+A runtime's diagnostic label is not a Cohesix accepted generation. See
+[Private LoRA release](PRIVATE_LORA_RELEASE.md).
+
 ### GICv3
 
 Arm's Generic Interrupt Controller version 3, used by the QEMU
 `aarch64/virt` target profile. It routes interrupt authority to seL4 tasks;
 its behavior is not Pi 4 interrupt-controller proof.
+
+### Governed job
+
+One selected effect admitted under current delegated authority and policy,
+with a retained original identity, bounded execution, and separately tracked
+result delivery. CLI, Python, MCP, A2A, and Mac Shortcuts can project the same
+job; changing client does not create new authority or erase uncertainty.
 
 ### GPU bridge / `gpu-bridge-host`
 
@@ -682,8 +822,9 @@ a projection, not a second in-target service or authority source.
 The conventional operating system outside the Cohesix target. It runs models,
 agents, CUDA/NVML, storage, networking integrations, REST, UI, bridges, and
 deployment-specific executors. “Host” can mean the build/operator machine or
-the host OS surrounding a deployed target; documentation should qualify it
-when that distinction matters.
+the host OS surrounding a deployed target. The controller and native executor
+may be different machines, such as a Mac operator and Linux CUDA executor;
+documentation should name both when that distinction matters.
 
 ### Host provider / `host-sidecar-bridge`
 
@@ -708,6 +849,13 @@ deadletter receipts. Federation remains host-side and manifest-bounded.
 
 A failover cooldown after cutover that prevents rapid switching between active
 and standby during unstable health signals.
+
+### Hugging Face / HF Trainer
+
+The host-side model and training ecosystem used by the selected private LoRA
+reference. HF Trainer can produce a full training checkpoint in the pinned
+28b configuration. A Hub model reference, downloaded weights, or completed
+Trainer call does not by itself prove Cohesix admission or serving.
 
 ## I
 
@@ -757,11 +905,33 @@ separate source directories but does not by itself prove safe device DMA.
 
 ## J
 
+### Jetson Orin
+
+The Linux AArch64 NVIDIA CUDA reference host used for selected native GPU,
+PEFT, MCP, A2A, and NeMo component checks. It is an example executor, not a
+requirement that every Cohesix controller or client run on Jetson. Other GPU
+hosts need their own compatibility and native evidence.
+
+### Job execution / result delivery
+
+Two separately retained obligations. Execution can be reserved, dispatching,
+uncertain, confirmed, or refused before effect; result delivery can still be
+pending after a native terminal. A lost response or gateway restart requires
+reconciliation under the original admission ID. Pending or unknown is not
+success and does not authorize replay of the effect. See [Host API](HOST_API.md).
+
 ### JSON
 
 JavaScript Object Notation, used for strict structured control and status
 records in selected paths. Cohesix validates required fields, rejects unknown
 fields where the schema says so, and applies independent byte bounds.
+
+### JSON-RPC
+
+A request/response envelope with method names and IDs. The selected MCP and
+A2A gateway routes use it over HTTP, while their methods, authentication and
+task semantics remain distinct. A JSON-RPC success response is not native
+provider verification.
 
 ### JSONL / NDJSON
 
@@ -783,11 +953,24 @@ Generated headers, slot layouts, configuration, timer settings, and metadata
 from the selected seL4 build directory. Target code must match those artifacts;
 a different or stale seL4 build cannot be assumed compatible.
 
+### Keychain
+
+macOS's local credential store. The selected App Intents integration uses a
+delegated Keychain-backed connection instead of embedding a console or gateway
+secret in a Shortcut. Stored access still needs the current ticket, scope,
+policy and target checks for each operation.
+
 ### Kubernetes coexistence intent
 
 A host-ticket action such as cordon, drain, or lease synchronization. Cohesix
 records and constrains the intent; the host-ticket agent and Kubernetes API
 remain host-side, and their receipt is distinct from target acceptance.
+
+### KVM / HVF
+
+Host hypervisor accelerators for the QEMU target: KVM on a supported AArch64
+Linux host and Hypervisor.framework (HVF) on a supported Mac. They identify
+how the VM ran, not a native CUDA or MLX provider and not Pi hardware evidence.
 
 ## L
 
@@ -848,11 +1031,26 @@ A deterministic hash identifying selected manifest truth. Fingerprints tie
 generated artifacts and evidence to a configuration; they do not replace the
 source revision, seL4 build identity, target image hash, or live proof.
 
+### MCP / Model Context Protocol
+
+A tool and resource protocol for AI clients. The selected `hive-gateway` MCP
+route exposes compiler-selected, subject-scoped preflight, submit, inspect,
+recover, and cancellation operations over authenticated Streamable HTTP. A
+tool response reports admission or retained state; it is not a signed native
+result. The compiled QEMU profile enables MCP, while the Pi profile does not.
+See [Host API](HOST_API.md).
+
 ### MCS
 
 Mixed-Criticality Systems, an seL4 kernel configuration with scheduling
 contexts, budgets, and periods for controlled CPU-time allocation. Cohesix
 profiles and generated records must match the selected kernel's MCS behavior.
+
+### Metal
+
+Apple's GPU compute framework on supported Macs. The selected Mac MLX work
+uses the observed Metal device; that local observation is distinct from a
+target-admitted model release and from CUDA execution on a Linux NVIDIA host.
 
 ### Microkernel
 
@@ -860,6 +1058,21 @@ An operating-system kernel designed to keep privileged mechanisms small, moving
 most services and drivers into isolated userspace tasks. Cohesix uses seL4 so
 device drivers and control services do not need to share one large privileged
 kernel address space.
+
+### MLOps
+
+The operational discipline around building, deploying, observing, governing,
+and updating machine-learning systems. Cohesix contributes a small,
+high-assurance authority and evidence layer to MLOps; it is not an end-to-end
+training, registry, serving, or data platform.
+
+### MLX
+
+Apple's host-side machine-learning framework for Apple Silicon. The selected
+Mac path supports local training and evaluation; its separately admitted
+28c1 path binds release, canary, serving generation, and rollback to the shared
+verifier. MLX does not run inside the Cohesix target or imply compatibility
+with a CUDA model or runtime. See [Current Status](STATUS.md).
 
 ### MMIO
 
@@ -874,6 +1087,13 @@ Rust tools commonly use process-local in-memory state; Python `MockBackend` can
 use a shared filesystem root. Neither is QEMU, a live VM, or hardware evidence,
 and two separate in-memory processes do not share state.
 
+### Model artifact / model weights
+
+The actual model or adapter files used by a host runtime. A registry reference,
+CAS digest, or Queen namespace record names bytes but does not move them,
+convert their format, or prove that a destination loaded them. Native payloads
+stay on their selected hosts unless a separately authorized transfer occurs.
+
 ### Model registry
 
 Host storage and metadata for model artifacts. `/gpu/models/*` can expose
@@ -887,12 +1107,13 @@ The host software that loads and executes a model for inference or training.
 Cohesix may constrain and observe its surrounding workflow, but the runtime and
 model weights do not enter the target.
 
-### MLOps
+### Model weight distribution (planned)
 
-The operational discipline around building, deploying, observing, governing,
-and updating machine-learning systems. Cohesix contributes a small,
-high-assurance authority and evidence layer to MLOps; it is not an end-to-end
-training, registry, serving, or data platform.
+A separate host-to-host artifact transfer proposed for a later 28b task. A
+winning comparison or published digest does not deliver weights. The checked-in
+selected 28b lifecycle qualifies training, import, and serving on its reference
+hosts; it does not establish destination-byte verification for a mixed-host
+transfer. See [Build Plan](BUILD_PLAN.md#28b).
 
 ### Mount
 
@@ -926,6 +1147,23 @@ the gateway's upstream role, ticket, and target-side checks.
 A role-scoped tree of named paths representing control files, status, telemetry,
 policy, and evidence. Different roles can see different views of the same
 provider set; a path name alone does not grant permission.
+
+### Native result / provider verification
+
+The observed outcome of work on the selected host, such as an invocation,
+output file, or serving response. The shared verifier checks signed causal
+records; the owning workflow also requires its specified independent native
+output check or application observation. An HTTP `OK`, MCP reply, A2A task
+status, or registry pointer alone cannot certify that requested outcome. See
+[Causal evidence custody](CAUSAL_EVIDENCE.md).
+
+### NeMo Agent Toolkit
+
+NVIDIA's host-side agent framework. The selected Cohesix kit supplies pinned
+native MCP and A2A client workflows for CUDA and PEFT, including denial and
+original-task recovery. NeMo keeps its own planning and model context; it
+does not gain target or provider authority beyond the delegated Cohesix ticket.
+See [NeMo kit](../integrations/nemo-agent-toolkit/README.md).
 
 ### NineDoor
 
@@ -968,12 +1206,35 @@ for example `/proc` nodes, logs, telemetry, status, and audit records.
 Observability reports behavior; it must not become an undocumented control
 surface.
 
+### `OK` / `ERR` / `END`
+
+The current target console response family. `OK <VERB>` means the command was
+accepted at that interface, `ERR <VERB> ...` reports a bounded refusal, and
+`END` terminates streams that use it. An `OK` is not automatically proof that
+an asynchronous host, GPU, device, or lifecycle outcome completed.
+
+### OpenAI-compatible serving
+
+An HTTP request and response shape used by a host inference runtime, such as
+the selected Transformers serving reference. Compatibility describes its API
+surface; the selected private LoRA recipe calls a local service and requires
+no OpenAI account or API key. Its HTTP response alone is not a verified model
+release.
+
 ### Operator / operator host / operator surface
 
 The human or automation controlling a hive; the machine running its tools; and
 the interface used to act, respectively. Operator surfaces include serial,
 local seat, direct `cohsh`, a mounted namespace, gateway REST, and SwarmUI,
 each with distinct transport and authority conditions.
+
+### Original operation identity
+
+The immutable ticket, idempotency, admission, request, and native references
+that tie one attempted effect to its later observations. After a lost response,
+timeout, or restart, clients inspect that identity instead of issuing a new
+effect. A fresh recovery-only ticket may authorize compensation while retaining
+the original failed operation. See [Host API](HOST_API.md).
 
 ### Owner-state proof
 
@@ -982,21 +1243,15 @@ descriptor, owns the declared hot path, and made useful bounded service
 progress without a root-owned steady-state fallback. Merely packaging or
 starting a child image is insufficient.
 
-### `OK` / `ERR` / `END`
-
-The current target console response family. `OK <VERB>` means the command was
-accepted at that interface, `ERR <VERB> ...` reports a bounded refusal, and
-`END` terminates streams that use it. An `OK` is not automatically proof that
-an asynchronous host, GPU, device, or lifecycle outcome completed.
-
 ## P
 
 ### PEFT
 
 Parameter-efficient fine-tuning: techniques that adapt a model by training a
 small set of parameters rather than all weights. LoRA is one PEFT method.
-Cohesix host tools coordinate adapter metadata, activation, rollback, and
-receipts; they do not perform training in the VM.
+Cohesix host tools coordinate selected training or compatible import, held-out
+evaluation, artifact validation, serving canary, promotion, rollback and
+receipts. Native model work remains on the host, outside the VM.
 
 ### Plan 9
 
@@ -1036,6 +1291,13 @@ The Unix-style operating-system interface expected by conventional processes
 and filesystems. Cohesix VM artifacts do not provide a POSIX façade or libc
 emulation layer; heavy POSIX-dependent software stays on the host.
 
+### Preflight / selected-job binding
+
+A read-only preparation step that checks current scope and provider facts and
+returns a short-lived binding for a selected job. Submit rechecks that binding,
+authority, and standing budget before any effect. A successful preflight is
+neither a reservation nor a native result. See [Host API](HOST_API.md).
+
 ### Pressure
 
 Bounded indicators showing that a queue, ring, ingest path, policy surface, or
@@ -1044,10 +1306,18 @@ degraded nonessential output while preserving control liveness.
 
 ### Profile
 
-A selected system configuration for a target and purpose, including platform,
-kernel contract, roles, drivers, mounts, limits, and gates. Default, QEMU, and
-Pi 4 profiles are not interchangeable; commands and evidence must identify the
-profile used.
+A selected configuration and its limits. A **target profile** fixes platform,
+kernel contract, roles, drivers, mounts and gates; a **host profile** fixes the
+OS, accelerator, provider and runtime for native work. QEMU, Pi 4, Mac MLX and
+Linux CUDA evidence must identify the matching profiles and cannot be swapped.
+
+### Promotion
+
+The guarded change from a candidate to an accepted serving generation. The
+selected PEFT path requires the frozen comparison, current authority and
+generation, actual runtime load, and a passing inference canary before the
+generation compare-and-swap commit. Publishing a registry pointer or receiving
+an HTTP response alone is not verified promotion.
 
 ### Proof / proof bundle / proof layers
 
@@ -1058,10 +1328,11 @@ claims separate rather than promoting a lower layer.
 
 ### Provider
 
-A component that owns the behavior and storage contract for a namespace
-subtree. Host NineDoor providers, target adapters, and host bridge projections
-may expose similar paths, but each operates only within its documented
-authority boundary.
+In namespace documentation, a provider owns the behavior and storage contract
+for a subtree. In Release B job documentation, a native provider is the
+selected host-side runtime or executor that performs the effect. A provider
+name or available API grants no authority; each stays within its declared
+ticket, profile, lifecycle and evidence boundary.
 
 ### `/proc`
 
@@ -1077,6 +1348,13 @@ A machine emulator used as Cohesix's reference `aarch64/virt` development and
 regression target. QEMU can prove target software and interface behavior for
 its profile; it cannot prove Pi firmware, BCM2711, GENET, SDIO, CYW43, USB,
 HDMI, or physical timing.
+
+### QLoRA
+
+Quantized LoRA, a memory-saving adapter-training variant. It is not silently
+included whenever LoRA or PEFT is available: the selected 28b reference uses
+LoRA safetensors and does not select QLoRA. A different model/runtime pair
+needs its own declared format and qualification.
 
 ### Queen
 
@@ -1101,12 +1379,34 @@ accepted intent. Host-ticket status, model/PEFT operations, and deployment
 executors use receipts; the exact owning schema determines whether a receipt
 proves acceptance, execution, or observation.
 
+### Recovered failure / `recovered_failure`
+
+A failed model-release candidate whose prior serving deployment was restored
+and verified. Recovery removes the blocker for later work but does not turn the
+candidate into a success. The signed report and any client projection must
+retain the failed outcome. See [Private LoRA release](PRIVATE_LORA_RELEASE.md).
+
+### Recovery-only ticket
+
+A fresh, specifically approved ticket for fencing, quiescing, or restoring the
+frozen baseline after the original release ticket expires or is revoked. It
+keeps the original operation and request digest, but cannot authorize a new
+forward promotion or erase the original failure.
+
 ### Relay / relay correlation
 
 The host-side forwarding of an allowlisted host ticket from a source hive to a
 target hive. `relay_hop` bounds forwarding depth and
 `relay_correlation_id` connects spec, status, and evidence records; neither
 field grants authority.
+
+### Release A / Release B
+
+Repository release names: A is `1.1.0-beta`; B is `1.2.0-beta`. A release name
+identifies an assembled distribution, while a milestone or component result
+names a narrower evidence scope. Consult the installed version and
+[Current Status](STATUS.md) for the exact package, profile, and qualified
+features in use.
 
 ### Replay
 
@@ -1127,6 +1427,14 @@ re-execution facility.
 The manifest-gated `/replay/*` audit-validation surface. It accepts a bounded
 starting cursor and reports `idle`, `ok`, or `err` plus deterministic sequence
 metadata; it creates no alternate authority path.
+
+### Reserved / uncertain
+
+Job states that do not certify a completed effect. A reserved operation has
+retained capacity or authority for possible dispatch; an uncertain operation
+has an unresolved write or native outcome. Keep its original identity and
+reservation until reconciliation establishes what happened. Do not resubmit
+under a different ID merely because a client timed out.
 
 ### Resolved manifest
 
@@ -1154,6 +1462,14 @@ path/verb/rate scopes, operation and tick budgets, lifetime, bandwidth, and
 cursor quotas. Worker roles require one; Queen may attach without one on
 permitted paths. Tickets and their secrets must never appear in logs or docs.
 
+### Rollback
+
+A governed attempt to restore the frozen previous deployment after a failed
+or interrupted transition. It needs current compensation authority, exact
+generation checks, native restoration, and a fresh serving observation. If
+restoration is confirmed after a failed canary, the candidate remains a
+`recovered_failure`; an unknown or failed rollback blocks further promotion.
+
 ### Root task / root-task
 
 The initial and most authoritative userspace task started by seL4. It creates
@@ -1176,6 +1492,13 @@ rings, IRQs, bus links, and optional framebuffer resources; accepting it is
 necessary but not sufficient owner-state proof.
 
 ## S
+
+### safetensors
+
+A host-side tensor-file format used by the selected LoRA adapter path. The
+importer validates the exact file bytes, tensor names, shapes and compatible
+base/configuration before use. A safetensors file is not proof of training
+provenance, licence, model quality, or authorized deployment.
 
 ### Scheduling context
 
@@ -1210,6 +1533,14 @@ protocol even where NineDoorBridge exposes overlapping paths.
 `Topen/Ropen` open a fid; `Tread/Rread` and `Twrite/Rwrite` transfer bounded
 bytes; `Tclunk/Rclunk` retire a fid; `Rerror` reports a bounded error. Create,
 remove, and stat are not in the current accepted subset.
+
+### Selected job
+
+A generated and allowlisted host action admitted through the shared durable
+job path. The selected profile covers CUDA workload submission, PEFT release,
+and a scoped systemd restart; availability still depends on current standing
+scope, delegated ticket, provider facts, and compiled protocol switches. See
+[Host API](HOST_API.md).
 
 ### Serial console
 
@@ -1257,6 +1588,15 @@ Security information and event management software used to collect and analyze
 security evidence. Cohesix evidence packs can feed a SIEM after deployment
 redaction and classification; the SIEM remains outside the target.
 
+### Signed causal evidence / shared verifier
+
+Enrolled gateway, native, and Worker custodians sign their own bounded phases.
+The shared verifier checks the exact binding, keys, chronology, retained CAS
+bytes, causal predecessors, and terminal state. A signed admission record
+alone cannot sign for native execution, and a successful provider response
+does not waive independent outcome checks. See
+[Causal evidence custody](CAUSAL_EVIDENCE.md).
+
 ### Single writer
 
 The rule that exactly one active owner may mutate a logical control path or hive
@@ -1276,6 +1616,12 @@ A small Rust TCP/IP stack used by the target's permitted authenticated console
 listener. It does not introduce general in-VM network services; all other TCP
 services remain host-side.
 
+### Source / source status
+
+The checked-in implementation and selected generated artifacts. In status
+tables, **source** or **configured** says what code and profile declare; it
+does not assert a current live run, installed package, or release acceptance.
+
 ### Source manifest
 
 See [Manifest](#manifest--source-manifest). It is the human-authored compiler
@@ -1287,6 +1633,20 @@ A failure in which more than one writer believes it is active for the same
 logical hive. Fencing, health thresholds, WAL handling, and host-orchestrated
 cutover are intended to prevent it.
 
+### SSE / server-sent events
+
+A bounded one-way HTTP event stream used for A2A task snapshots. The stream
+does not own execution or make a task terminal; when it ends, a client can
+inspect or resubscribe to the original task ID. See [Host API](HOST_API.md).
+
+### Standing scope / standing authority
+
+A revocable, expiring permission for repeated selected jobs within cumulative
+budget, concurrency, and cooldown limits shared across clients. Every new
+effect still receives a fresh decision against current policy and resource
+facts. A standing scope is not an unrestricted host credential or a promise
+that a provider will succeed.
+
 ### SPSC ring
 
 A fixed single-producer/single-consumer shared ring used by selected driver-task
@@ -1297,8 +1657,10 @@ escape hatch.
 ### SwarmUI
 
 The host-side desktop workbench for bounded telemetry, status, replay, Live
-Hive visualization, and the shared operator console. It reuses `cohsh-core`
-and documented transports, and it adds no target verbs or authority.
+Hive visualization, selected job and PEFT views, the local Mac MLX desk, and
+the shared operator console. It reuses documented transports and release
+contracts; a displayed result adds no target authority or independent native
+verification.
 
 ## T
 
@@ -1345,6 +1707,14 @@ A ring retains a bounded moving window and can overwrite old bytes under its
 documented policy. Queen ingest uses OS-named segments under
 `/queen/telemetry/<device_id>/seg/*`. A segment is an ingest record container,
 not a disk partition or unbounded data lake.
+
+### Terminal outcome
+
+A confirmed end state of the original native operation, distinct from an
+accepted request, reservation, cancellation request, or pending result
+delivery. Successful requested outcomes require the applicable signed
+verification and independent native observation; `failed`,
+`recovered_failure`, and `refused_no_effect` retain their different meanings.
 
 ### Test Plan / stage
 
@@ -1414,6 +1784,14 @@ separate surface.
 
 ## V
 
+### Verified outcome
+
+A result supported by the applicable signed evidence chain and required
+independent native output or serving observation under the original job
+identity. It is stronger than an interface `OK`, a client task status, or
+configured capability, and remains scoped to the observed provider, target,
+profile, and run.
+
 ### Virtual counter / `CNTVCT_EL0`
 
 The read-only Arm counter used for Pi hardware deadlines when the selected seL4
@@ -1426,6 +1804,14 @@ registers.
 The Raspberry Pi 4 USB controller device reached behind PCIe. Cohesix requires
 separate PCIe identity/link/resource proof and xHCI/keyboard functional proof;
 seeing VL805 in firmware or U-Boot is not live Cohesix ownership.
+
+### vMLX
+
+A separate, host-side MLX serving engine used in the selected Mac work. Local
+compatibility output in 28c was diagnostic; the 28c1 component fenced a
+content-bound serving copy to the accepted generation and checked its
+responses after promotion and rollback. It is not a Cohesix Worker, a CUDA
+provider, or proof that its MCP client path was qualified.
 
 ### VM
 
