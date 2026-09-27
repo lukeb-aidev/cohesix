@@ -917,10 +917,18 @@ gateway discovery request to establish reachability. The selected QEMU
 manifest and the selected Pi manifest enable MCP and A2A under the master
 switch. A protocol is effective only when its own switch and
 the master are true. Changing a deployment's manifest requires rebuilding the
-matching host tools and target profile. Launch environment variables or CLI
-options cannot turn a compiled-off protocol on. Disabling access does not
-cancel underlying tickets, effects or pending results; use existing
-authenticated REST and CLI recovery to inspect them.
+matching host tools and target profile. To close a route for one gateway
+process without rebuilding, set `HIVE_GATEWAY_MCP_ENABLED=false`,
+`HIVE_GATEWAY_A2A_ENABLED=false`, or
+`HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED=false` before launch. The last setting
+closes both routes. Only the exact value `false` is accepted; every other
+explicit value fails startup. These settings cannot turn a compiled-off
+protocol on. The generated catalogue is still checked against the selected
+manifest before the process applies its narrower route set. `coh doctor`
+reports the compiled ceiling, so inspect the running gateway for effective
+endpoint state. Disabling access does not cancel underlying tickets, effects
+or pending results; use existing authenticated REST and CLI recovery to inspect
+them.
 
 The selected gateway mode gives REST, MCP and A2A clients one durable job path.
 This diagram shows the shared path after the relevant protocol is compiled on

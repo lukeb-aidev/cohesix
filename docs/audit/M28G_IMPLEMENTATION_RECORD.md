@@ -4,7 +4,7 @@
 
 # M28g implementation record — in progress
 
-This record describes an unqualified 1.2.0-beta source candidate rebased onto
+This record describes an unqualified 1.2.0 source candidate rebased onto
 GitHub `main` at `2d8ce6a9f5627b0bb16ffd6c4c9b0619f1d2c749`. It has no sealed final source
 commit, native installer artifact, assembled target identity or Release B
 acceptance. The 1.1.0-beta release record remains at its original scope.
@@ -23,7 +23,7 @@ Goal: Build one version-bound host candidate and qualify native installation,
 cross-client operation and the assembled release on every selected profile.
 
 Inputs: M28–M28f source and component records; selected compiler inventory and
-host integration matrix; 1.2.0-beta release source; local Mac, Linux ARM64 and
+host integration matrix; 1.2.0 release source; local Mac, Linux ARM64 and
 Pi 4 test-bed descriptions. Private signing identities, publisher trust and
 target credentials remain outside this record.
 
@@ -209,9 +209,29 @@ diagnostic evidence only. The later enabled Pi run below supplies a fresh exact
 image, matching host tools and empty MCP/A2A discovery. It does not supply
 native protocol jobs or the M28g integrated matrix required for release claims.
 
-The A2A Agent Card now advertises the selected `1.2.0-beta` release version.
-A focused cross-contract test binds that value to the generated release
-inventory; the two Python wheel distributions remain `1.2.0b0`.
+At the earlier beta-source checkpoint, the A2A Agent Card advertised
+`1.2.0-beta` and both Python wheels carried `1.2.0b0`. The later stable-version
+change below supersedes these packaging values; the earlier observations
+remain bound to their original source.
+
+## M28g protocol-mode deployment repair
+
+Discovery task: `m28g-release-b-qualification`. Restoration task:
+`m28g-integration-live`. The selected release builds MCP and A2A on, but the
+host gateway previously rejected every launch setting for those routes. A
+single installed gateway could therefore serve only the both-enabled mode;
+the required MCP-only, A2A-only and neither modes needed different compiled
+catalogues. The gateway now validates both generated catalogues against their
+selected manifest before accepting the exact launch value `false` for the
+master, MCP or A2A switch. Each value only closes a route for that process;
+other values fail startup, and generated-disabled routes cannot be opened.
+The focused live-process test starts the actual gateway binary in all four
+modes, checks its route statuses and retained authenticated REST route, and
+checks malformed or widening launch values. Three focused tests passed at the
+working source. These use a mock Queen and prove gateway routing only; they
+are not `m28g-integration-live` native-target, job, revocation or recovery
+evidence. Host CLI, Python and benchmark clients retain the same endpoint
+contracts and original identities; only gateway route availability narrows.
 
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,

@@ -1310,10 +1310,10 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let protocol_controls = generated_protocol_controls()?;
-    mcp::validate_catalogue(protocol_controls.effective_mcp())?;
-    a2a::validate_catalogue(protocol_controls.effective_a2a())?;
-    reject_runtime_protocol_overrides()?;
+    let selected_protocol_controls = generated_protocol_controls()?;
+    mcp::validate_catalogue(selected_protocol_controls.effective_mcp())?;
+    a2a::validate_catalogue(selected_protocol_controls.effective_a2a())?;
+    let protocol_controls = narrowed_protocol_controls(selected_protocol_controls)?;
     let cli = Cli::parse();
     let config = GatewayConfig::from_cli(cli)?;
     anyhow::ensure!(
@@ -1746,20 +1746,33 @@ fn generated_protocol_controls() -> Result<cohesix_authority::protocol::Protocol
     .map_err(anyhow::Error::msg)
 }
 
-fn reject_runtime_protocol_overrides() -> Result<()> {
-    // Runtime launch settings cannot turn a compiler-controlled entry point on.
-    for key in [
-        "HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED",
-        "HIVE_GATEWAY_MCP_ENABLED",
-        "HIVE_GATEWAY_A2A_ENABLED",
+fn narrowed_protocol_controls(
+    mut controls: cohesix_authority::protocol::ProtocolControls,
+) -> Result<cohesix_authority::protocol::ProtocolControls> {
+    // The generated manifest owns the ceiling. An operator may close a route
+    // for this process, but no environment value may open one.
+    for (key, switch) in [
+        (
+            "HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED",
+            &mut controls.agent_protocols,
+        ),
+        ("HIVE_GATEWAY_MCP_ENABLED", &mut controls.mcp),
+        ("HIVE_GATEWAY_A2A_ENABLED", &mut controls.a2a),
     ] {
-        if env::var_os(key).is_some() {
-            return Err(anyhow::anyhow!(
-                "EPERM {key} cannot override generated agent protocol controls"
-            ));
+        match env::var(key) {
+            Ok(value) if value == "false" => switch.enabled = false,
+            Ok(_) => {
+                return Err(anyhow::anyhow!(
+                    "EPERM {key} can only disable a generated agent protocol with false"
+                ));
+            }
+            Err(env::VarError::NotPresent) => {}
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(anyhow::anyhow!("EINVAL {key} must be UTF-8"));
+            }
         }
     }
-    Ok(())
+    Ok(controls)
 }
 
 fn env_flag(key: &str) -> bool {

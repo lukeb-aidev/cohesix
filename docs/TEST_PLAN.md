@@ -1394,6 +1394,16 @@ from that catalog.
 its retained evidence is Conditional D's host-model gateway comparator; it is
 not QEMU or Pi target-performance evidence.
 
+For `m28g-integration-live`, first run
+`cargo test --locked -p hive-gateway --test agent_protocol_controls` against
+the selected source. Its real gateway processes use a mock Queen to check
+both, MCP-only, A2A-only and neither route availability, plus explicit
+launch-value refusal and REST route retention. This is a focused gateway
+contract check. The live acceptance case still needs an exact installed
+gateway and target, authenticated protocol clients, one shared native job,
+scope/budget/revocation and disable/restart recovery evidence in all four
+effective modes. A gateway route status cannot establish those results.
+
 Resumable critical service loops use the selected generated NaturalPostpone
 policy. Retain their reserved timeout caps and independent standard-fault
 routing, and require successful

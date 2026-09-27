@@ -80,20 +80,92 @@ fn selected_protocol_routes_preserve_authenticated_rest() {
 }
 
 #[test]
-fn runtime_overrides_cannot_widen_generated_controls() {
+fn explicit_runtime_disables_cover_each_effective_protocol_mode() {
+    for (mode, disabled, mcp, a2a) in [
+        ("both", None, true, true),
+        ("mcp-only", Some("HIVE_GATEWAY_A2A_ENABLED"), true, false),
+        ("a2a-only", Some("HIVE_GATEWAY_MCP_ENABLED"), false, true),
+        (
+            "neither",
+            Some("HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED"),
+            false,
+            false,
+        ),
+    ] {
+        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve test port");
+        let port = reserved.local_addr().expect("local address").port();
+        drop(reserved);
+        let mut process = command();
+        process.args(["--mock", "--bind", &format!("127.0.0.1:{port}")]);
+        if let Some(key) = disabled {
+            process.env(key, "false");
+        }
+        let mut child = GatewayChild(
+            process
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("start gateway"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while response_code(port, "/docs") != Some(200) {
+            assert!(Instant::now() < deadline, "{mode} gateway did not start");
+            assert!(
+                child.0.try_wait().expect("poll gateway").is_none(),
+                "{mode}"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(
+            response_code(port, "/mcp"),
+            Some(if mcp { 401 } else { 404 }),
+            "{mode}"
+        );
+        assert_eq!(
+            response_code(port, "/.well-known/agent-card.json"),
+            Some(if a2a { 401 } else { 404 }),
+            "{mode}"
+        );
+        assert_eq!(
+            response_code(port, "/a2a"),
+            Some(if a2a { 405 } else { 404 }),
+            "{mode}"
+        );
+        assert_ne!(
+            response_code(port, "/v1/fs/cat?path=/host/tickets/status&max_bytes=2048"),
+            Some(404),
+            "{mode} authenticated REST recovery route"
+        );
+    }
+}
+
+#[test]
+fn runtime_overrides_cannot_widen_or_ambiguously_change_generated_controls() {
     for key in [
         "HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED",
         "HIVE_GATEWAY_MCP_ENABLED",
         "HIVE_GATEWAY_A2A_ENABLED",
     ] {
-        let output = command()
-            .arg("--mock")
-            .env(key, "true")
-            .output()
-            .expect("run gateway");
-        assert!(!output.status.success(), "{key}");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot override generated"));
+        for value in ["true", "1", "yes", "", "FALSE"] {
+            let output = command()
+                .arg("--mock")
+                .env(key, value)
+                .output()
+                .expect("run gateway");
+            assert!(!output.status.success(), "{key}={value:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("can only disable"));
+        }
     }
+    let output = command()
+        .arg("--mock")
+        .env("HIVE_GATEWAY_AGENT_PROTOCOLS_ENABLED", "false")
+        .env("HIVE_GATEWAY_MCP_ENABLED", "true")
+        .output()
+        .expect("run gateway");
+    assert!(
+        !output.status.success(),
+        "subordinate override cannot reopen the master"
+    );
     let output = command()
         .args(["--mock", "--mcp-enabled"])
         .output()
