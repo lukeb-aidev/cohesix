@@ -13472,7 +13472,7 @@ portable archives and guides, integrated acceptance matrix, exact release
 evidence and approval-ready release notes.
 
 The documentation-only tasks below were authorized directly by the owner. They
-prepare use-case and glossary guidance for Release B readers; they do not
+prepare use-case, glossary and diagram guidance for Release B readers; they do not
 change this milestone's release status or supply release acceptance evidence.
 
 **Task breakdown**
@@ -13501,6 +13501,21 @@ Commands: scripts/check-generated.sh; git diff --check; local-link, heading and 
 Checks: Every added term agrees with its owning as-built contract; glossary sections and links remain usable; no component evidence is promoted into a new target or release claim.
 Validation: Generated consistency, Test Plan cross-file checks, local links and metadata, glossary sections and unique headings, and git diff --check passed. Source-claim review used the selected 28–28f records and owning public contracts. No runtime, native provider, QEMU, Pi or assembled-release gate was run.
 Deliverables: Updated public glossary and focused validation record; no runtime, Pi or release-acceptance evidence.
+
+Title/ID: m28g-user-diagram-as-built-audit
+Milestone: 28g / m28g-user-diagram-as-built-audit
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Help 1.2 users follow the selected cross-protocol job path and private LoRA recovery, and distinguish target runtime address spaces from external host work in a rotatable cutaway.
+Inputs: Tracked Markdown inventory; existing Mermaid diagrams; docs/ARCHITECTURE.md; docs/HOST_TOOLS.md; docs/HOST_API.md; docs/PRIVATE_LORA_RELEASE.md; docs/ROLES_AND_SCHEDULING.md; selected QEMU and Pi manifests; docs/TEST_PLAN.md; selected 28d–28f contracts; GitHub diagram syntax.
+Changes:
+  - docs/HOST_TOOLS.md — AI-assisted as-built review adds one gateway-to-native-job flowchart with original-ID inspection and outcome boundaries.
+  - docs/PRIVATE_LORA_RELEASE.md — AI-assisted as-built review adds one trained-or-imported candidate flowchart with canary, recovery and blocked-promotion branches.
+  - docs/ARCHITECTURE.md + docs/diagrams/target_host_boundary.py + docs/diagrams/target-host-boundary.svg — generate one embedded ASCII STL cutaway and labelled static plan; distinguish target address-space wells, host process pads and the console-only ingress. The source owns both outputs and supports deterministic regeneration.
+  - docs/BUILD_PLAN.md — retain this scoped documentation task and validation record. Existing diagrams stay where they already explain their owning contract; README remains lightweight.
+Commands: scripts/ci/check_mermaid_github.sh against all tracked Markdown; focused Mermaid CLI SVG/PNG renders; python3 docs/diagrams/target_host_boundary.py --check; local STL geometry and rotated-view checks; scripts/check-generated.sh; local-link and metadata checks; git diff --check.
+Checks: New arrows follow the selected gateway or PEFT release contract; the cutaway keeps CUDA/PEFT outside seL4 and shows only selected child runtime isolation. Original-ID recovery, failed-candidate status and independent native verification remain explicit. No diagram implies that a protocol reply proves provider completion or that the target is formally verified.
+Validation: Tracked Markdown inventory, existing-diagram review, GitHub Mermaid compatibility, focused SVG/PNG render and visual review, deterministic STL/SVG regeneration, 296 nondegenerate closed-mesh facets, opening and rotated STL views, generated consistency, local links and metadata, and git diff --check passed. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
+Deliverables: Two as-built user flowcharts, one native GitHub ASCII STL cutaway with labelled SVG companion and source, and a focused documentation validation record; no new release-acceptance evidence.
 
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer

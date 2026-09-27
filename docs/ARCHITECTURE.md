@@ -148,6 +148,2114 @@ contained a Worker TCB. See
 
 ### 2.2 Current system boundary
 
+**Target and host cutaway (logical deployment and address-space view).**
+The open outer frames separate the seL4 target from host-side processes, which
+may run on one or more hosts. Inside the target, each tall open well represents
+a distinct root, service, Worker, or physical-driver runtime address-space
+domain. The Worker and Pi driver wells show one representative child each, not
+the full admitted population. The low host pads represent gateway and native
+CUDA/PEFT responsibilities; they are not seL4 compartments.
+
+![Labelled plan of separate target runtime wells, host-side processes, and the console-only host ingress](diagrams/target-host-boundary.svg)
+
+**Legend and what to notice:** Five wells sit inside the target frame: root /
+Queen authority at left; NineDoor and the console-network child at the rear;
+one executable Worker and one Pi physical-driver child at the front. The two
+low pads outside the target are the gateway and native GPU/PEFT provider. The
+single narrow bridge marks the documented host-to-target TCP console ingress;
+it reaches the console child, not a Worker, driver, or direct GPU runtime in
+the target. Rotate the model to see that the target wells remain separate
+behind one another and the host pads remain outside the target frame. Open
+space is intentional: no surface represents a shared target address space.
+
+This is a topology schematic, not hardware layout, byte capacity, scheduling
+priority, physical wiring, or a formal-verification claim. It shows the
+selected architecture, not a particular image's live qualification. Serial
+and local-seat input, internal target calls, and host-provider dispatch are
+described in the detailed flowchart and contracts below.
+
+<!-- target-host-stl:start -->
+```stl
+solid target_host_boundary
+facet normal 0 0 1
+  outer loop
+    vertex 14.00 7.25 0.75
+    vertex 13.80 7.25 0.75
+    vertex 13.80 0.20 0.75
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.80 9.80 0.75
+    vertex 13.80 8.15 0.75
+    vertex 14.00 8.15 0.75
+  endloop
+endfacet
+facet normal -0 0 1
+  outer loop
+    vertex 13.80 9.80 0.75
+    vertex 14.00 8.15 0.75
+    vertex 14.00 10.00 0.75
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 0.20 9.80 0.75
+    vertex 13.80 9.80 0.75
+    vertex 14.00 10.00 0.75
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 0.20 9.80 0.75
+    vertex 14.00 10.00 0.75
+    vertex 0.00 10.00 0.75
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 0.20 0.20 0.75
+    vertex 0.20 9.80 0.75
+    vertex 0.00 10.00 0.75
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 0.20 0.20 0.75
+    vertex 0.00 10.00 0.75
+    vertex 0.00 0.00 0.75
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.80 0.20 0.75
+    vertex 0.20 0.20 0.75
+    vertex 0.00 0.00 0.75
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.80 0.20 0.75
+    vertex 0.00 0.00 0.75
+    vertex 14.00 0.00 0.75
+  endloop
+endfacet
+facet normal -0 0 1
+  outer loop
+    vertex 13.80 0.20 0.75
+    vertex 14.00 0.00 0.75
+    vertex 14.00 7.25 0.75
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.80 0.20 0.00
+    vertex 13.80 7.25 0.00
+    vertex 14.00 7.25 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 14.00 8.15 0.00
+    vertex 13.80 8.15 0.00
+    vertex 13.80 9.80 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 14.00 10.00 0.00
+    vertex 14.00 8.15 0.00
+    vertex 13.80 9.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 14.00 10.00 0.00
+    vertex 13.80 9.80 0.00
+    vertex 0.20 9.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 0.00 10.00 0.00
+    vertex 14.00 10.00 0.00
+    vertex 0.20 9.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 0.00 10.00 0.00
+    vertex 0.20 9.80 0.00
+    vertex 0.20 0.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 0.00 0.00 0.00
+    vertex 0.00 10.00 0.00
+    vertex 0.20 0.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 0.00 0.00 0.00
+    vertex 0.20 0.20 0.00
+    vertex 13.80 0.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 14.00 0.00 0.00
+    vertex 0.00 0.00 0.00
+    vertex 13.80 0.20 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 14.00 7.25 0.00
+    vertex 14.00 0.00 0.00
+    vertex 13.80 0.20 0.00
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.80 7.25 0.00
+    vertex 13.80 0.20 0.00
+    vertex 13.80 0.20 0.75
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.80 7.25 0.00
+    vertex 13.80 0.20 0.75
+    vertex 13.80 7.25 0.75
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.80 0.20 0.00
+    vertex 0.20 0.20 0.00
+    vertex 0.20 0.20 0.75
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 13.80 0.20 0.00
+    vertex 0.20 0.20 0.75
+    vertex 13.80 0.20 0.75
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 0.20 0.20 0.00
+    vertex 0.20 9.80 0.00
+    vertex 0.20 9.80 0.75
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 0.20 0.20 0.00
+    vertex 0.20 9.80 0.75
+    vertex 0.20 0.20 0.75
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0.20 9.80 0.00
+    vertex 13.80 9.80 0.00
+    vertex 13.80 9.80 0.75
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0.20 9.80 0.00
+    vertex 13.80 9.80 0.75
+    vertex 0.20 9.80 0.75
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.80 9.80 0.00
+    vertex 13.80 8.15 0.00
+    vertex 13.80 8.15 0.75
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.80 9.80 0.00
+    vertex 13.80 8.15 0.75
+    vertex 13.80 9.80 0.75
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 13.80 8.15 0.00
+    vertex 14.00 8.15 0.00
+    vertex 14.00 8.15 0.75
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 13.80 8.15 0.00
+    vertex 14.00 8.15 0.75
+    vertex 13.80 8.15 0.75
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 14.00 8.15 0.00
+    vertex 14.00 10.00 0.00
+    vertex 14.00 10.00 0.75
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 14.00 8.15 0.00
+    vertex 14.00 10.00 0.75
+    vertex 14.00 8.15 0.75
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 14.00 10.00 0.00
+    vertex 0.00 10.00 0.00
+    vertex 0.00 10.00 0.75
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 14.00 10.00 0.00
+    vertex 0.00 10.00 0.75
+    vertex 14.00 10.00 0.75
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 0.00 10.00 0.00
+    vertex 0.00 0.00 0.00
+    vertex 0.00 0.00 0.75
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 0.00 10.00 0.00
+    vertex 0.00 0.00 0.75
+    vertex 0.00 10.00 0.75
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0.00 0.00 0.00
+    vertex 14.00 0.00 0.00
+    vertex 14.00 0.00 0.75
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0.00 0.00 0.00
+    vertex 14.00 0.00 0.75
+    vertex 0.00 0.00 0.75
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 14.00 0.00 0.00
+    vertex 14.00 7.25 0.00
+    vertex 14.00 7.25 0.75
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 14.00 0.00 0.00
+    vertex 14.00 7.25 0.75
+    vertex 14.00 0.00 0.75
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 14.00 7.25 0.00
+    vertex 13.80 7.25 0.00
+    vertex 13.80 7.25 0.75
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 14.00 7.25 0.00
+    vertex 13.80 7.25 0.75
+    vertex 14.00 7.25 0.75
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.20 7.25 0.35
+    vertex 18.00 7.25 0.35
+    vertex 18.00 0.00 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.00 10.00 0.35
+    vertex 18.00 8.15 0.35
+    vertex 18.20 8.15 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.00 10.00 0.35
+    vertex 18.20 8.15 0.35
+    vertex 18.20 9.80 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 27.00 10.00 0.35
+    vertex 18.00 10.00 0.35
+    vertex 18.20 9.80 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 27.00 10.00 0.35
+    vertex 18.20 9.80 0.35
+    vertex 26.80 9.80 0.35
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 27.00 0.00 0.35
+    vertex 27.00 10.00 0.35
+    vertex 26.80 9.80 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 27.00 0.00 0.35
+    vertex 26.80 9.80 0.35
+    vertex 26.80 0.20 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.00 0.00 0.35
+    vertex 27.00 0.00 0.35
+    vertex 26.80 0.20 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.00 0.00 0.35
+    vertex 26.80 0.20 0.35
+    vertex 18.20 0.20 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.00 0.00 0.35
+    vertex 18.20 0.20 0.35
+    vertex 18.20 7.25 0.35
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 18.00 0.00 0.00
+    vertex 18.00 7.25 0.00
+    vertex 18.20 7.25 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 18.20 8.15 0.00
+    vertex 18.00 8.15 0.00
+    vertex 18.00 10.00 0.00
+  endloop
+endfacet
+facet normal -0 -0 -1
+  outer loop
+    vertex 18.20 9.80 0.00
+    vertex 18.20 8.15 0.00
+    vertex 18.00 10.00 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 18.20 9.80 0.00
+    vertex 18.00 10.00 0.00
+    vertex 27.00 10.00 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 26.80 9.80 0.00
+    vertex 18.20 9.80 0.00
+    vertex 27.00 10.00 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 26.80 9.80 0.00
+    vertex 27.00 10.00 0.00
+    vertex 27.00 0.00 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 26.80 0.20 0.00
+    vertex 26.80 9.80 0.00
+    vertex 27.00 0.00 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 26.80 0.20 0.00
+    vertex 27.00 0.00 0.00
+    vertex 18.00 0.00 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 18.20 0.20 0.00
+    vertex 26.80 0.20 0.00
+    vertex 18.00 0.00 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 18.20 7.25 0.00
+    vertex 18.20 0.20 0.00
+    vertex 18.00 0.00 0.00
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 18.00 7.25 0.00
+    vertex 18.00 0.00 0.00
+    vertex 18.00 0.00 0.35
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 18.00 7.25 0.00
+    vertex 18.00 0.00 0.35
+    vertex 18.00 7.25 0.35
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.00 0.00 0.00
+    vertex 27.00 0.00 0.00
+    vertex 27.00 0.00 0.35
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.00 0.00 0.00
+    vertex 27.00 0.00 0.35
+    vertex 18.00 0.00 0.35
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 27.00 0.00 0.00
+    vertex 27.00 10.00 0.00
+    vertex 27.00 10.00 0.35
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 27.00 0.00 0.00
+    vertex 27.00 10.00 0.35
+    vertex 27.00 0.00 0.35
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 27.00 10.00 0.00
+    vertex 18.00 10.00 0.00
+    vertex 18.00 10.00 0.35
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 27.00 10.00 0.00
+    vertex 18.00 10.00 0.35
+    vertex 27.00 10.00 0.35
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 18.00 10.00 0.00
+    vertex 18.00 8.15 0.00
+    vertex 18.00 8.15 0.35
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 18.00 10.00 0.00
+    vertex 18.00 8.15 0.35
+    vertex 18.00 10.00 0.35
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.00 8.15 0.00
+    vertex 18.20 8.15 0.00
+    vertex 18.20 8.15 0.35
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.00 8.15 0.00
+    vertex 18.20 8.15 0.35
+    vertex 18.00 8.15 0.35
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 18.20 8.15 0.00
+    vertex 18.20 9.80 0.00
+    vertex 18.20 9.80 0.35
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 18.20 8.15 0.00
+    vertex 18.20 9.80 0.35
+    vertex 18.20 8.15 0.35
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.20 9.80 0.00
+    vertex 26.80 9.80 0.00
+    vertex 26.80 9.80 0.35
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.20 9.80 0.00
+    vertex 26.80 9.80 0.35
+    vertex 18.20 9.80 0.35
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 26.80 9.80 0.00
+    vertex 26.80 0.20 0.00
+    vertex 26.80 0.20 0.35
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 26.80 9.80 0.00
+    vertex 26.80 0.20 0.35
+    vertex 26.80 9.80 0.35
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 26.80 0.20 0.00
+    vertex 18.20 0.20 0.00
+    vertex 18.20 0.20 0.35
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 26.80 0.20 0.00
+    vertex 18.20 0.20 0.35
+    vertex 26.80 0.20 0.35
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 18.20 0.20 0.00
+    vertex 18.20 7.25 0.00
+    vertex 18.20 7.25 0.35
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 18.20 0.20 0.00
+    vertex 18.20 7.25 0.35
+    vertex 18.20 0.20 0.35
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 18.20 7.25 0.00
+    vertex 18.00 7.25 0.00
+    vertex 18.00 7.25 0.35
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 18.20 7.25 0.00
+    vertex 18.00 7.25 0.35
+    vertex 18.20 7.25 0.35
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 1.00 3.40 1.50
+    vertex 4.20 3.40 1.50
+    vertex 4.06 3.54 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 1.00 3.40 1.50
+    vertex 4.06 3.54 1.50
+    vertex 1.14 3.54 1.50
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 4.20 3.40 1.50
+    vertex 4.20 6.60 1.50
+    vertex 4.06 6.46 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 4.20 3.40 1.50
+    vertex 4.06 6.46 1.50
+    vertex 4.06 3.54 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 4.20 6.60 1.50
+    vertex 1.00 6.60 1.50
+    vertex 1.14 6.46 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 4.20 6.60 1.50
+    vertex 1.14 6.46 1.50
+    vertex 4.06 6.46 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 1.00 6.60 1.50
+    vertex 1.00 3.40 1.50
+    vertex 1.14 3.54 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 1.00 6.60 1.50
+    vertex 1.14 3.54 1.50
+    vertex 1.14 6.46 1.50
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 4.06 3.54 0.00
+    vertex 4.20 3.40 0.00
+    vertex 1.00 3.40 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 1.14 3.54 0.00
+    vertex 4.06 3.54 0.00
+    vertex 1.00 3.40 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 4.06 6.46 0.00
+    vertex 4.20 6.60 0.00
+    vertex 4.20 3.40 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 4.06 3.54 0.00
+    vertex 4.06 6.46 0.00
+    vertex 4.20 3.40 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 1.14 6.46 0.00
+    vertex 1.00 6.60 0.00
+    vertex 4.20 6.60 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 4.06 6.46 0.00
+    vertex 1.14 6.46 0.00
+    vertex 4.20 6.60 0.00
+  endloop
+endfacet
+facet normal -0 0 -1
+  outer loop
+    vertex 1.14 3.54 0.00
+    vertex 1.00 3.40 0.00
+    vertex 1.00 6.60 0.00
+  endloop
+endfacet
+facet normal -0 -0 -1
+  outer loop
+    vertex 1.14 6.46 0.00
+    vertex 1.14 3.54 0.00
+    vertex 1.00 6.60 0.00
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 1.00 3.40 0.00
+    vertex 4.20 3.40 0.00
+    vertex 4.20 3.40 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 1.00 3.40 0.00
+    vertex 4.20 3.40 1.50
+    vertex 1.00 3.40 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 4.06 3.54 0.00
+    vertex 1.14 3.54 0.00
+    vertex 1.14 3.54 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 4.06 3.54 0.00
+    vertex 1.14 3.54 1.50
+    vertex 4.06 3.54 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 4.20 3.40 0.00
+    vertex 4.20 6.60 0.00
+    vertex 4.20 6.60 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 4.20 3.40 0.00
+    vertex 4.20 6.60 1.50
+    vertex 4.20 3.40 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 4.06 6.46 0.00
+    vertex 4.06 3.54 0.00
+    vertex 4.06 3.54 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 4.06 6.46 0.00
+    vertex 4.06 3.54 1.50
+    vertex 4.06 6.46 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 4.20 6.60 0.00
+    vertex 1.00 6.60 0.00
+    vertex 1.00 6.60 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 4.20 6.60 0.00
+    vertex 1.00 6.60 1.50
+    vertex 4.20 6.60 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 1.14 6.46 0.00
+    vertex 4.06 6.46 0.00
+    vertex 4.06 6.46 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 1.14 6.46 0.00
+    vertex 4.06 6.46 1.50
+    vertex 1.14 6.46 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 1.00 6.60 0.00
+    vertex 1.00 3.40 0.00
+    vertex 1.00 3.40 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 1.00 6.60 0.00
+    vertex 1.00 3.40 1.50
+    vertex 1.00 6.60 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 1.14 3.54 0.00
+    vertex 1.14 6.46 0.00
+    vertex 1.14 6.46 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 1.14 3.54 0.00
+    vertex 1.14 6.46 1.50
+    vertex 1.14 3.54 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 6.20 1.50
+    vertex 8.50 6.20 1.50
+    vertex 8.36 6.34 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 6.20 1.50
+    vertex 8.36 6.34 1.50
+    vertex 5.44 6.34 1.50
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 8.50 6.20 1.50
+    vertex 8.50 9.20 1.50
+    vertex 8.36 9.06 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 8.50 6.20 1.50
+    vertex 8.36 9.06 1.50
+    vertex 8.36 6.34 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 8.50 9.20 1.50
+    vertex 5.30 9.20 1.50
+    vertex 5.44 9.06 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 8.50 9.20 1.50
+    vertex 5.44 9.06 1.50
+    vertex 8.36 9.06 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 9.20 1.50
+    vertex 5.30 6.20 1.50
+    vertex 5.44 6.34 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 9.20 1.50
+    vertex 5.44 6.34 1.50
+    vertex 5.44 9.06 1.50
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 8.36 6.34 0.00
+    vertex 8.50 6.20 0.00
+    vertex 5.30 6.20 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 5.44 6.34 0.00
+    vertex 8.36 6.34 0.00
+    vertex 5.30 6.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 8.36 9.06 0.00
+    vertex 8.50 9.20 0.00
+    vertex 8.50 6.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 8.36 6.34 0.00
+    vertex 8.36 9.06 0.00
+    vertex 8.50 6.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 5.44 9.06 0.00
+    vertex 5.30 9.20 0.00
+    vertex 8.50 9.20 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 8.36 9.06 0.00
+    vertex 5.44 9.06 0.00
+    vertex 8.50 9.20 0.00
+  endloop
+endfacet
+facet normal -0 0 -1
+  outer loop
+    vertex 5.44 6.34 0.00
+    vertex 5.30 6.20 0.00
+    vertex 5.30 9.20 0.00
+  endloop
+endfacet
+facet normal -0 -0 -1
+  outer loop
+    vertex 5.44 9.06 0.00
+    vertex 5.44 6.34 0.00
+    vertex 5.30 9.20 0.00
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.30 6.20 0.00
+    vertex 8.50 6.20 0.00
+    vertex 8.50 6.20 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.30 6.20 0.00
+    vertex 8.50 6.20 1.50
+    vertex 5.30 6.20 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 8.36 6.34 0.00
+    vertex 5.44 6.34 0.00
+    vertex 5.44 6.34 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 8.36 6.34 0.00
+    vertex 5.44 6.34 1.50
+    vertex 8.36 6.34 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 8.50 6.20 0.00
+    vertex 8.50 9.20 0.00
+    vertex 8.50 9.20 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 8.50 6.20 0.00
+    vertex 8.50 9.20 1.50
+    vertex 8.50 6.20 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 8.36 9.06 0.00
+    vertex 8.36 6.34 0.00
+    vertex 8.36 6.34 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 8.36 9.06 0.00
+    vertex 8.36 6.34 1.50
+    vertex 8.36 9.06 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 8.50 9.20 0.00
+    vertex 5.30 9.20 0.00
+    vertex 5.30 9.20 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 8.50 9.20 0.00
+    vertex 5.30 9.20 1.50
+    vertex 8.50 9.20 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.44 9.06 0.00
+    vertex 8.36 9.06 0.00
+    vertex 8.36 9.06 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.44 9.06 0.00
+    vertex 8.36 9.06 1.50
+    vertex 5.44 9.06 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 5.30 9.20 0.00
+    vertex 5.30 6.20 0.00
+    vertex 5.30 6.20 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 5.30 9.20 0.00
+    vertex 5.30 6.20 1.50
+    vertex 5.30 9.20 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 5.44 6.34 0.00
+    vertex 5.44 9.06 0.00
+    vertex 5.44 9.06 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 5.44 6.34 0.00
+    vertex 5.44 9.06 1.50
+    vertex 5.44 6.34 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.20 7.25 1.50
+    vertex 13.06 7.25 1.50
+    vertex 13.06 6.34 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.06 9.06 1.50
+    vertex 13.06 8.15 1.50
+    vertex 13.20 8.15 1.50
+  endloop
+endfacet
+facet normal -0 0 1
+  outer loop
+    vertex 13.06 9.06 1.50
+    vertex 13.20 8.15 1.50
+    vertex 13.20 9.20 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 10.14 9.06 1.50
+    vertex 13.06 9.06 1.50
+    vertex 13.20 9.20 1.50
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 10.14 9.06 1.50
+    vertex 13.20 9.20 1.50
+    vertex 10.00 9.20 1.50
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 10.14 6.34 1.50
+    vertex 10.14 9.06 1.50
+    vertex 10.00 9.20 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 10.14 6.34 1.50
+    vertex 10.00 9.20 1.50
+    vertex 10.00 6.20 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.06 6.34 1.50
+    vertex 10.14 6.34 1.50
+    vertex 10.00 6.20 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.06 6.34 1.50
+    vertex 10.00 6.20 1.50
+    vertex 13.20 6.20 1.50
+  endloop
+endfacet
+facet normal -0 0 1
+  outer loop
+    vertex 13.06 6.34 1.50
+    vertex 13.20 6.20 1.50
+    vertex 13.20 7.25 1.50
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.06 6.34 0.00
+    vertex 13.06 7.25 0.00
+    vertex 13.20 7.25 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.20 8.15 0.00
+    vertex 13.06 8.15 0.00
+    vertex 13.06 9.06 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 13.20 9.20 0.00
+    vertex 13.20 8.15 0.00
+    vertex 13.06 9.06 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.20 9.20 0.00
+    vertex 13.06 9.06 0.00
+    vertex 10.14 9.06 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 10.00 9.20 0.00
+    vertex 13.20 9.20 0.00
+    vertex 10.14 9.06 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 10.00 9.20 0.00
+    vertex 10.14 9.06 0.00
+    vertex 10.14 6.34 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 10.00 6.20 0.00
+    vertex 10.00 9.20 0.00
+    vertex 10.14 6.34 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 10.00 6.20 0.00
+    vertex 10.14 6.34 0.00
+    vertex 13.06 6.34 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.20 6.20 0.00
+    vertex 10.00 6.20 0.00
+    vertex 13.06 6.34 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 13.20 7.25 0.00
+    vertex 13.20 6.20 0.00
+    vertex 13.06 6.34 0.00
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.06 7.25 0.00
+    vertex 13.06 6.34 0.00
+    vertex 13.06 6.34 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.06 7.25 0.00
+    vertex 13.06 6.34 1.50
+    vertex 13.06 7.25 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.06 6.34 0.00
+    vertex 10.14 6.34 0.00
+    vertex 10.14 6.34 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 13.06 6.34 0.00
+    vertex 10.14 6.34 1.50
+    vertex 13.06 6.34 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 10.14 6.34 0.00
+    vertex 10.14 9.06 0.00
+    vertex 10.14 9.06 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 10.14 6.34 0.00
+    vertex 10.14 9.06 1.50
+    vertex 10.14 6.34 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.14 9.06 0.00
+    vertex 13.06 9.06 0.00
+    vertex 13.06 9.06 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.14 9.06 0.00
+    vertex 13.06 9.06 1.50
+    vertex 10.14 9.06 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.06 9.06 0.00
+    vertex 13.06 8.15 0.00
+    vertex 13.06 8.15 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.06 9.06 0.00
+    vertex 13.06 8.15 1.50
+    vertex 13.06 9.06 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 13.06 8.15 0.00
+    vertex 13.20 8.15 0.00
+    vertex 13.20 8.15 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 13.06 8.15 0.00
+    vertex 13.20 8.15 1.50
+    vertex 13.06 8.15 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 13.20 8.15 0.00
+    vertex 13.20 9.20 0.00
+    vertex 13.20 9.20 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 13.20 8.15 0.00
+    vertex 13.20 9.20 1.50
+    vertex 13.20 8.15 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.20 9.20 0.00
+    vertex 10.00 9.20 0.00
+    vertex 10.00 9.20 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 13.20 9.20 0.00
+    vertex 10.00 9.20 1.50
+    vertex 13.20 9.20 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 10.00 9.20 0.00
+    vertex 10.00 6.20 0.00
+    vertex 10.00 6.20 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 10.00 9.20 0.00
+    vertex 10.00 6.20 1.50
+    vertex 10.00 9.20 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.00 6.20 0.00
+    vertex 13.20 6.20 0.00
+    vertex 13.20 6.20 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.00 6.20 0.00
+    vertex 13.20 6.20 1.50
+    vertex 10.00 6.20 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 13.20 6.20 0.00
+    vertex 13.20 7.25 0.00
+    vertex 13.20 7.25 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 13.20 6.20 0.00
+    vertex 13.20 7.25 1.50
+    vertex 13.20 6.20 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.20 7.25 0.00
+    vertex 13.06 7.25 0.00
+    vertex 13.06 7.25 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 13.20 7.25 0.00
+    vertex 13.06 7.25 1.50
+    vertex 13.20 7.25 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 0.80 1.50
+    vertex 8.50 0.80 1.50
+    vertex 8.36 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 0.80 1.50
+    vertex 8.36 0.94 1.50
+    vertex 5.44 0.94 1.50
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 8.50 0.80 1.50
+    vertex 8.50 4.00 1.50
+    vertex 8.36 3.86 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 8.50 0.80 1.50
+    vertex 8.36 3.86 1.50
+    vertex 8.36 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 8.50 4.00 1.50
+    vertex 5.30 4.00 1.50
+    vertex 5.44 3.86 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 8.50 4.00 1.50
+    vertex 5.44 3.86 1.50
+    vertex 8.36 3.86 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 4.00 1.50
+    vertex 5.30 0.80 1.50
+    vertex 5.44 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 5.30 4.00 1.50
+    vertex 5.44 0.94 1.50
+    vertex 5.44 3.86 1.50
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 8.36 0.94 0.00
+    vertex 8.50 0.80 0.00
+    vertex 5.30 0.80 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 5.44 0.94 0.00
+    vertex 8.36 0.94 0.00
+    vertex 5.30 0.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 8.36 3.86 0.00
+    vertex 8.50 4.00 0.00
+    vertex 8.50 0.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 8.36 0.94 0.00
+    vertex 8.36 3.86 0.00
+    vertex 8.50 0.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 5.44 3.86 0.00
+    vertex 5.30 4.00 0.00
+    vertex 8.50 4.00 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 8.36 3.86 0.00
+    vertex 5.44 3.86 0.00
+    vertex 8.50 4.00 0.00
+  endloop
+endfacet
+facet normal -0 0 -1
+  outer loop
+    vertex 5.44 0.94 0.00
+    vertex 5.30 0.80 0.00
+    vertex 5.30 4.00 0.00
+  endloop
+endfacet
+facet normal -0 -0 -1
+  outer loop
+    vertex 5.44 3.86 0.00
+    vertex 5.44 0.94 0.00
+    vertex 5.30 4.00 0.00
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.30 0.80 0.00
+    vertex 8.50 0.80 0.00
+    vertex 8.50 0.80 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.30 0.80 0.00
+    vertex 8.50 0.80 1.50
+    vertex 5.30 0.80 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 8.36 0.94 0.00
+    vertex 5.44 0.94 0.00
+    vertex 5.44 0.94 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 8.36 0.94 0.00
+    vertex 5.44 0.94 1.50
+    vertex 8.36 0.94 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 8.50 0.80 0.00
+    vertex 8.50 4.00 0.00
+    vertex 8.50 4.00 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 8.50 0.80 0.00
+    vertex 8.50 4.00 1.50
+    vertex 8.50 0.80 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 8.36 3.86 0.00
+    vertex 8.36 0.94 0.00
+    vertex 8.36 0.94 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 8.36 3.86 0.00
+    vertex 8.36 0.94 1.50
+    vertex 8.36 3.86 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 8.50 4.00 0.00
+    vertex 5.30 4.00 0.00
+    vertex 5.30 4.00 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 8.50 4.00 0.00
+    vertex 5.30 4.00 1.50
+    vertex 8.50 4.00 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.44 3.86 0.00
+    vertex 8.36 3.86 0.00
+    vertex 8.36 3.86 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 5.44 3.86 0.00
+    vertex 8.36 3.86 1.50
+    vertex 5.44 3.86 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 5.30 4.00 0.00
+    vertex 5.30 0.80 0.00
+    vertex 5.30 0.80 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 5.30 4.00 0.00
+    vertex 5.30 0.80 1.50
+    vertex 5.30 4.00 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 5.44 0.94 0.00
+    vertex 5.44 3.86 0.00
+    vertex 5.44 3.86 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 5.44 0.94 0.00
+    vertex 5.44 3.86 1.50
+    vertex 5.44 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 10.00 0.80 1.50
+    vertex 13.20 0.80 1.50
+    vertex 13.06 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 10.00 0.80 1.50
+    vertex 13.06 0.94 1.50
+    vertex 10.14 0.94 1.50
+  endloop
+endfacet
+facet normal 0 -0 1
+  outer loop
+    vertex 13.20 0.80 1.50
+    vertex 13.20 4.00 1.50
+    vertex 13.06 3.86 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.20 0.80 1.50
+    vertex 13.06 3.86 1.50
+    vertex 13.06 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.20 4.00 1.50
+    vertex 10.00 4.00 1.50
+    vertex 10.14 3.86 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.20 4.00 1.50
+    vertex 10.14 3.86 1.50
+    vertex 13.06 3.86 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 10.00 4.00 1.50
+    vertex 10.00 0.80 1.50
+    vertex 10.14 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 10.00 4.00 1.50
+    vertex 10.14 0.94 1.50
+    vertex 10.14 3.86 1.50
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 13.06 0.94 0.00
+    vertex 13.20 0.80 0.00
+    vertex 10.00 0.80 0.00
+  endloop
+endfacet
+facet normal 0 -0 -1
+  outer loop
+    vertex 10.14 0.94 0.00
+    vertex 13.06 0.94 0.00
+    vertex 10.00 0.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.06 3.86 0.00
+    vertex 13.20 4.00 0.00
+    vertex 13.20 0.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.06 0.94 0.00
+    vertex 13.06 3.86 0.00
+    vertex 13.20 0.80 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 10.14 3.86 0.00
+    vertex 10.00 4.00 0.00
+    vertex 13.20 4.00 0.00
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.06 3.86 0.00
+    vertex 10.14 3.86 0.00
+    vertex 13.20 4.00 0.00
+  endloop
+endfacet
+facet normal -0 0 -1
+  outer loop
+    vertex 10.14 0.94 0.00
+    vertex 10.00 0.80 0.00
+    vertex 10.00 4.00 0.00
+  endloop
+endfacet
+facet normal -0 -0 -1
+  outer loop
+    vertex 10.14 3.86 0.00
+    vertex 10.14 0.94 0.00
+    vertex 10.00 4.00 0.00
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.00 0.80 0.00
+    vertex 13.20 0.80 0.00
+    vertex 13.20 0.80 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.00 0.80 0.00
+    vertex 13.20 0.80 1.50
+    vertex 10.00 0.80 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.06 0.94 0.00
+    vertex 10.14 0.94 0.00
+    vertex 10.14 0.94 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 13.06 0.94 0.00
+    vertex 10.14 0.94 1.50
+    vertex 13.06 0.94 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 13.20 0.80 0.00
+    vertex 13.20 4.00 0.00
+    vertex 13.20 4.00 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 13.20 0.80 0.00
+    vertex 13.20 4.00 1.50
+    vertex 13.20 0.80 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.06 3.86 0.00
+    vertex 13.06 0.94 0.00
+    vertex 13.06 0.94 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.06 3.86 0.00
+    vertex 13.06 0.94 1.50
+    vertex 13.06 3.86 1.50
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.20 4.00 0.00
+    vertex 10.00 4.00 0.00
+    vertex 10.00 4.00 1.50
+  endloop
+endfacet
+facet normal 0 1 -0
+  outer loop
+    vertex 13.20 4.00 0.00
+    vertex 10.00 4.00 1.50
+    vertex 13.20 4.00 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.14 3.86 0.00
+    vertex 13.06 3.86 0.00
+    vertex 13.06 3.86 1.50
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 10.14 3.86 0.00
+    vertex 13.06 3.86 1.50
+    vertex 10.14 3.86 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 10.00 4.00 0.00
+    vertex 10.00 0.80 0.00
+    vertex 10.00 0.80 1.50
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 10.00 4.00 0.00
+    vertex 10.00 0.80 1.50
+    vertex 10.00 4.00 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 10.14 0.94 0.00
+    vertex 10.14 3.86 0.00
+    vertex 10.14 3.86 1.50
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 10.14 0.94 0.00
+    vertex 10.14 3.86 1.50
+    vertex 10.14 0.94 1.50
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 18.80 6.20 0.00
+    vertex 18.80 9.20 0.00
+    vertex 22.00 9.20 0.00
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.80 6.20 0.22
+    vertex 22.00 6.20 0.22
+    vertex 22.00 9.20 0.22
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.80 6.20 0.00
+    vertex 22.00 6.20 0.00
+    vertex 22.00 6.20 0.22
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 18.80 9.20 0.00
+    vertex 18.80 9.20 0.22
+    vertex 22.00 9.20 0.22
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 18.80 6.20 0.00
+    vertex 18.80 6.20 0.22
+    vertex 18.80 9.20 0.22
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 22.00 6.20 0.00
+    vertex 22.00 9.20 0.00
+    vertex 22.00 9.20 0.22
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 18.80 6.20 0.00
+    vertex 22.00 9.20 0.00
+    vertex 22.00 6.20 0.00
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 18.80 6.20 0.22
+    vertex 22.00 9.20 0.22
+    vertex 18.80 9.20 0.22
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 18.80 6.20 0.00
+    vertex 22.00 6.20 0.22
+    vertex 18.80 6.20 0.22
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 18.80 9.20 0.00
+    vertex 22.00 9.20 0.22
+    vertex 22.00 9.20 0.00
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 18.80 6.20 0.00
+    vertex 18.80 9.20 0.22
+    vertex 18.80 9.20 0.00
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 22.00 6.20 0.00
+    vertex 22.00 9.20 0.22
+    vertex 22.00 6.20 0.22
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 23.00 2.20 0.00
+    vertex 23.00 5.40 0.00
+    vertex 26.20 5.40 0.00
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 23.00 2.20 0.22
+    vertex 26.20 2.20 0.22
+    vertex 26.20 5.40 0.22
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 23.00 2.20 0.00
+    vertex 26.20 2.20 0.00
+    vertex 26.20 2.20 0.22
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 23.00 5.40 0.00
+    vertex 23.00 5.40 0.22
+    vertex 26.20 5.40 0.22
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 23.00 2.20 0.00
+    vertex 23.00 2.20 0.22
+    vertex 23.00 5.40 0.22
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 26.20 2.20 0.00
+    vertex 26.20 5.40 0.00
+    vertex 26.20 5.40 0.22
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 23.00 2.20 0.00
+    vertex 26.20 5.40 0.00
+    vertex 26.20 2.20 0.00
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 23.00 2.20 0.22
+    vertex 26.20 5.40 0.22
+    vertex 23.00 5.40 0.22
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 23.00 2.20 0.00
+    vertex 26.20 2.20 0.22
+    vertex 23.00 2.20 0.22
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 23.00 5.40 0.00
+    vertex 26.20 5.40 0.22
+    vertex 26.20 5.40 0.00
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 23.00 2.20 0.00
+    vertex 23.00 5.40 0.22
+    vertex 23.00 5.40 0.00
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 26.20 2.20 0.00
+    vertex 26.20 5.40 0.22
+    vertex 26.20 2.20 0.22
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.30 7.58 0.18
+    vertex 13.30 7.82 0.18
+    vertex 18.70 7.82 0.18
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.30 7.58 0.42
+    vertex 18.70 7.58 0.42
+    vertex 18.70 7.82 0.42
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 13.30 7.58 0.18
+    vertex 18.70 7.58 0.18
+    vertex 18.70 7.58 0.42
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.30 7.82 0.18
+    vertex 13.30 7.82 0.42
+    vertex 18.70 7.82 0.42
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.30 7.58 0.18
+    vertex 13.30 7.58 0.42
+    vertex 13.30 7.82 0.42
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 18.70 7.58 0.18
+    vertex 18.70 7.82 0.18
+    vertex 18.70 7.82 0.42
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 13.30 7.58 0.18
+    vertex 18.70 7.82 0.18
+    vertex 18.70 7.58 0.18
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 13.30 7.58 0.42
+    vertex 18.70 7.82 0.42
+    vertex 13.30 7.82 0.42
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 13.30 7.58 0.18
+    vertex 18.70 7.58 0.42
+    vertex 13.30 7.58 0.42
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 13.30 7.82 0.18
+    vertex 18.70 7.82 0.42
+    vertex 18.70 7.82 0.18
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 13.30 7.58 0.18
+    vertex 13.30 7.82 0.42
+    vertex 13.30 7.82 0.18
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 18.70 7.58 0.18
+    vertex 18.70 7.82 0.42
+    vertex 18.70 7.58 0.42
+  endloop
+endfacet
+endsolid target_host_boundary
+```
+<!-- target-host-stl:end -->
+
+The following flowchart names the control and data paths omitted from the
+cutaway:
+
 ```mermaid
 flowchart TB
   subgraph BuildHost[Build host]

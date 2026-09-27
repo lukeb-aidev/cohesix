@@ -920,6 +920,24 @@ options cannot turn a compiled-off protocol on. Disabling access does not
 cancel underlying tickets, effects or pending results; use existing
 authenticated REST and CLI recovery to inspect them.
 
+The selected gateway mode gives REST, MCP and A2A clients one durable job path.
+This diagram shows the shared path after the relevant protocol is compiled on
+and the caller has a usable delegated ticket and standing scope. A client reply
+can report admission or status; verify the native outcome separately.
+
+```mermaid
+flowchart TB
+  Rest["REST: coh, Python, SwarmUI, Shortcuts"] --> Gateway["hive-gateway selected-job path"]
+  Mcp["MCP tool client: HTTP or local stdio"] --> Gateway
+  A2a["A2A peer: Agent Card and task"] --> Gateway
+  Gateway -->|"fresh scope, budget and provider checks"| Queen["Queen: original admission ID"]
+  Queen -->|"admitted host ticket"| Agent["host-ticket-agent: native dispatch"]
+  Agent --> Provider["selected host provider: CUDA, PEFT or systemd"]
+  Provider -->|"observed result"| Agent
+  Agent -->|"durable status and delivery"| Queen
+  Queen -->|"read original ID"| Inspect["inspect or recover same job"]
+```
+
 ### Selected MCP clients
 
 The selected host gateway serves MCP revision `2025-11-25` at `/mcp` over
