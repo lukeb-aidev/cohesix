@@ -12,6 +12,7 @@ IMAGE_BUILD_SCRIPT="${SCRIPT_DIR}/pi4-image-build.sh"
 TRACE_NORMALIZER="${SCRIPT_DIR}/pi4_trace_normalize.py"
 SERIAL_REBOOT_HELPER="${SCRIPT_DIR}/pi4_serial_reboot.py"
 MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
+STAGE_DIR="${ROOT_DIR}/out/pi4-sd"
 VENV_DIR="${COHESIX_PI4_VENV:-${ROOT_DIR}/.venv}"
 PYTHON="${VENV_DIR}/bin/python"
 COHSH_PATH="${COHESIX_PI4_COHSH:-${ROOT_DIR}/out/cohesix/host-tools/cohsh}"
@@ -110,6 +111,8 @@ Cohesix serial proof commands, and summarizes the current USB/WiFi gates.
 Options:
   --manifest <path>          Root-task Pi 4 manifest
                              (default: configs/root_task_pi4_uboot_aarch64.toml)
+  --stage-dir <dir>          Exact image stage used for this boot and its proof
+                             (default: out/pi4-sd)
   --venv <dir>               Python virtualenv for local scripts
                              (default: <repo>/.venv)
   --cohsh <path>             Canonical authenticated TCP client used by the
@@ -1188,6 +1191,8 @@ run_image_build() {
         "${IMAGE_BUILD_SCRIPT}"
         "--manifest"
         "${MANIFEST_PATH}"
+        "--stage-dir"
+        "${STAGE_DIR}"
         "--venv"
         "${VENV_DIR}"
     )
@@ -2410,13 +2415,64 @@ runtime_dma_proof_path() {
     printf '%s.runtime-dma-proof.env\n' "${LOG_PATH%.*}"
 }
 
+verify_stage_boot_pair() {
+    local serial_log="$1"
+    local build_proof="$2"
+    local identity="${STAGE_DIR}/pi4-image-identity.json"
+    local image="${STAGE_DIR}/cohesix-image-arm-bcm2711"
+    require_file "${build_proof}"
+    require_file "${identity}"
+    require_file "${image}"
+    "${PYTHON}" - "${serial_log}" "${build_proof}" "${identity}" "${image}" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+serial_path, proof_path, identity_path, image_path = map(Path, sys.argv[1:])
+identity = json.loads(identity_path.read_text(encoding="utf-8"))
+proof = {}
+for line in proof_path.read_text(encoding="utf-8").splitlines():
+    if "=" not in line:
+        raise SystemExit("stage proof contains a malformed field")
+    key, value = line.split("=", 1)
+    if key in proof:
+        raise SystemExit("stage proof contains a duplicate field")
+    proof[key] = value
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+image_hash = digest(image_path)
+if (
+    identity.get("source_tree_clean") is not True
+    or identity.get("image_sha256") != image_hash
+    or proof.get("PI4_RUNTIME_DMA_STAGED_IMAGE_SHA256") != image_hash
+    or proof.get("PI4_IMAGE_IDENTITY_METADATA_SHA256") != digest(identity_path)
+    or proof.get("PI4_IMAGE_IDENTITY_GIT_COMMIT") != identity.get("git_commit")
+):
+    raise SystemExit("stage proof, image identity, and staged image disagree")
+marker = identity.get("build_marker")
+if not isinstance(marker, str) or not marker.startswith("[BUILD] "):
+    raise SystemExit("stage image identity has no valid BUILD marker")
+observed = {
+    line.strip()
+    for line in serial_path.read_text(encoding="utf-8", errors="replace")
+    .replace("\r", "\n").split("\n")
+    if line.strip().startswith("[BUILD] ")
+}
+if observed != {marker}:
+    raise SystemExit("live Pi BUILD marker does not match the exact stage")
+PY
+}
+
 write_runtime_dma_proof() {
     local summary="$1"
     local proof_path
     local proof_temp_path
     local proof_temp_seal
     local serial_proof_source
-    local build_proof="${ROOT_DIR}/out/pi4-sd/pi4-runtime-dma-proof.env"
+    local build_proof="${STAGE_DIR}/pi4-runtime-dma-proof.env"
     proof_path="$(runtime_dma_proof_path)"
     [[ -n "${RUNTIME_OUTPUT_SEAL}" ]] \
       || fail "runtime/DMA proof output path was not prepared"
@@ -2428,6 +2484,7 @@ write_runtime_dma_proof() {
     else
         serial_proof_source="${LOG_PATH}"
     fi
+    verify_stage_boot_pair "${serial_proof_source}" "${build_proof}"
     if ! {
         printf 'PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION=1\n'
         printf 'PI4_RUNTIME_DMA_SERIAL_LOG=%s\n' "${LOG_PATH}"
@@ -2469,10 +2526,8 @@ write_runtime_dma_proof() {
         if [[ -n "${TEST_PLAN_STATE_DIR:-}" ]]; then
             printf 'PI4_RUNTIME_DMA_TEST_PLAN_STATE_DIR=%s\n' "${TEST_PLAN_STATE_DIR}"
         fi
-        if [[ -f "${build_proof}" ]]; then
-            printf 'PI4_RUNTIME_DMA_STAGE_BUILD_PROOF=%s\n' "${build_proof}"
-            printf 'PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256=%s\n' "$(shasum -a 256 "${build_proof}" | awk '{print $1}')"
-        fi
+        printf 'PI4_RUNTIME_DMA_STAGE_BUILD_PROOF=%s\n' "${build_proof}"
+        printf 'PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256=%s\n' "$(shasum -a 256 "${build_proof}" | awk '{print $1}')"
         while IFS= read -r line; do
             case "${line}" in
                 PI4_RUNTIME_DMA_*|DRIVER_TASK_DMA_*|DRIVER_TASK_COUNTER_*|DRIVER_TASK_RESOURCE_*|DRIVER_TASK_RING_CALL_*|DRIVER_TASK_BOOTSTRAP_DEFERRED=*|DRIVER_TASK_ACTIVE_NET=*|DRIVER_TASK_OWNER_STATE_PROOF=*|DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_*|DRIVER_TASK_POINTER_FREE_IPC_PROOF=*|DRIVER_TASK_VSPACE_PROOF=*|TIMER_BACKEND=*|TIMER_CLOCK_HZ=*|TIMER_EL0_COUNTER=*|DUMMY_TIMER_SEEN=*)
@@ -2857,6 +2912,11 @@ while [[ $# -gt 0 ]]; do
         --cohsh-policy)
             require_arg "$1" "$#"
             COHSH_POLICY_PATH="$2"
+            shift 2
+            ;;
+        --stage-dir)
+            require_arg "$1" "$#"
+            STAGE_DIR="$2"
             shift 2
             ;;
         --flash-disk)

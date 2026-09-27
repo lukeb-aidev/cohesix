@@ -4142,7 +4142,7 @@ def _validate_gdb_markers(
         (
             "pre-ready",
             "_start",
-            "zero-x0",
+            "redirect-standard-fault",
         ),
         (
             "during-ipc",
@@ -5051,7 +5051,7 @@ def _qemu_gdb(args: argparse.Namespace) -> None:
     shared_page_vaddr, role_raw = _worker_gdb_runtime_binding(
         generated, args.inject_role
     )
-    # Retire the entry breakpoint before resuming the invalid-init child.
+    # Retire the entry breakpoint before resuming the faulting child.
     # Stepping over a retained entry breakpoint and stopping each healthy
     # replacement distorts its 400-us bootstrap SC. Bind each later generation
     # at its validated passive Call, using that VSpace's actual init page.
@@ -5071,8 +5071,8 @@ commands 1
       if *(unsigned short *)($x0 + {WORKER_RUNTIME_INIT_IDENTITY_ROLE_OFFSET}) == {role_raw}
         set $m26e_worker_ttbr0 = $TTBR0_EL1
         printf "M26E_GDB_VSPACE_BIND role={args.inject_role} phase=pre-ready register=TTBR0_EL1 result=bound\\n"
-        printf "M26E_GDB_INJECTION role={args.inject_role} phase=pre-ready symbol=_start action=zero-x0 result=continued\\n"
-        set $x0 = 0
+        printf "M26E_GDB_INJECTION role={args.inject_role} phase=pre-ready symbol=_start action=redirect-standard-fault result=continued\\n"
+        set $pc = 0x{standard:x}
         disable 1
         enable 2
       end
@@ -5162,7 +5162,7 @@ continue
         (row["phase"], row["symbol"], row["action"], row["result"])
         for row in injection_rows
     } != {
-        ("pre-ready", "_start", "zero-x0", "continued"),
+        ("pre-ready", "_start", "redirect-standard-fault", "continued"),
         (
             "during-ipc",
             "cohesix_worker_qemu_evidence_call_dispatch",

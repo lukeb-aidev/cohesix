@@ -5,6 +5,7 @@
 """Tests for scripts/pi4_gate_proof.sh."""
 
 import http.server
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -2075,6 +2076,36 @@ def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
     assert "DRIVER_TASK_OWNER_STATE_PROOF expected yes got no" in result.stderr
 
 
+def _stage_matching_fixture_boot(
+    tmp_path: pathlib.Path, log_path: pathlib.Path,
+) -> pathlib.Path:
+    """Give a positive fixture an independently bound stage and BUILD marker."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    image = stage / "cohesix-image-arm-bcm2711"
+    image.write_bytes(b"fixture-image")
+    image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
+    marker = "[BUILD] fixture-source image-id=fixture"
+    log_path.write_text(
+        marker + "\n" + log_path.read_text(encoding="utf-8"), encoding="utf-8",
+    )
+    identity = stage / "pi4-image-identity.json"
+    identity.write_text(json.dumps({
+        "source_tree_clean": True,
+        "image_sha256": image_hash,
+        "git_commit": "a" * 40,
+        "build_marker": marker,
+    }) + "\n", encoding="utf-8")
+    (stage / "pi4-runtime-dma-proof.env").write_text(
+        "PI4_RUNTIME_DMA_STAGED_IMAGE_SHA256=" + image_hash + "\n"
+        "PI4_IMAGE_IDENTITY_METADATA_SHA256="
+        + hashlib.sha256(identity.read_bytes()).hexdigest() + "\n"
+        "PI4_IMAGE_IDENTITY_GIT_COMMIT=" + "a" * 40 + "\n",
+        encoding="utf-8",
+    )
+    return stage
+
+
 def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -2087,12 +2118,15 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     log_path = tmp_path / "pi4-serial.log"
     lines = _strong_driver_task_proof_lines()
     log_path.write_text("\n".join(lines), encoding="utf-8")
+    stage = _stage_matching_fixture_boot(tmp_path, log_path)
 
     result = subprocess.run(
         [
             str(SCRIPT_PATH),
             "--normalize-only",
             "--require-driver-task-proof",
+            "--stage-dir",
+            str(stage),
             "--venv",
             str(venv_dir),
             "--log",
@@ -2218,12 +2252,15 @@ def test_gate_proof_driver_task_proof_does_not_require_usb_first_byte(
         )
     ]
     log_path.write_text("\n".join(lines), encoding="utf-8")
+    stage = _stage_matching_fixture_boot(tmp_path, log_path)
 
     result = subprocess.run(
         [
             str(SCRIPT_PATH),
             "--normalize-only",
             "--require-driver-task-proof",
+            "--stage-dir",
+            str(stage),
             "--venv",
             str(venv_dir),
             "--log",
@@ -2256,12 +2293,15 @@ def test_gate_proof_accepts_wired_driver_task_proof_without_sdio(
         "\n".join(_strong_wired_driver_task_proof_lines()),
         encoding="utf-8",
     )
+    stage = _stage_matching_fixture_boot(tmp_path, log_path)
 
     result = subprocess.run(
         [
             str(SCRIPT_PATH),
             "--normalize-only",
             "--require-driver-task-proof",
+            "--stage-dir",
+            str(stage),
             "--require-wired-ready",
             "--venv",
             str(venv_dir),
@@ -2297,12 +2337,15 @@ def test_gate_proof_accepts_wifi_selected_driver_task_proof_without_genet(
         "\n".join(_strong_wifi_selected_driver_task_proof_lines()),
         encoding="utf-8",
     )
+    stage = _stage_matching_fixture_boot(tmp_path, log_path)
 
     result = subprocess.run(
         [
             str(SCRIPT_PATH),
             "--normalize-only",
             "--require-driver-task-proof",
+            "--stage-dir",
+            str(stage),
             "--expect",
             "DRIVER_TASK_ACTIVE_NET=cyw43",
             "--venv",
@@ -2503,6 +2546,7 @@ def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
         *_oldgood_wifi_replay_lines(),
     ]
     log_path.write_text("\n".join(lines), encoding="utf-8")
+    stage = _stage_matching_fixture_boot(tmp_path, log_path)
 
     result = subprocess.run(
         [
@@ -2510,6 +2554,8 @@ def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
             "--normalize-only",
             "--require-ready",
             "--require-driver-task-proof",
+            "--stage-dir",
+            str(stage),
             "--venv",
             str(venv_dir),
             "--log",
@@ -2898,3 +2944,57 @@ def test_gate_proof_rejects_summary_only_ready_requirements(
         "--allow-summary-only cannot be combined with ready-gate requirements"
         in result.stderr
     )
+
+
+@pytest.mark.parametrize("corruption", [None, "image", "proof", "marker"])
+def test_runtime_proof_binds_exact_stage_to_live_build_marker(
+    tmp_path: pathlib.Path,
+    corruption: str | None,
+) -> None:
+    """A valid runtime proof must link the selected image and its live boot."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    image = stage / "cohesix-image-arm-bcm2711"
+    image.write_bytes(b"qualified-pi-image")
+    image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
+    marker = "[BUILD] exact-pi-boot image-id=qualified"
+    identity = stage / "pi4-image-identity.json"
+    identity.write_text(
+        json.dumps({
+            "source_tree_clean": True,
+            "image_sha256": image_hash,
+            "git_commit": "a" * 40,
+            "build_marker": marker,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    proof = stage / "pi4-runtime-dma-proof.env"
+    proof.write_text(
+        "PI4_RUNTIME_DMA_STAGED_IMAGE_SHA256=" + image_hash + "\n"
+        "PI4_IMAGE_IDENTITY_METADATA_SHA256="
+        + hashlib.sha256(identity.read_bytes()).hexdigest() + "\n"
+        "PI4_IMAGE_IDENTITY_GIT_COMMIT=" + "a" * 40 + "\n",
+        encoding="utf-8",
+    )
+    serial = tmp_path / "live.log"
+    serial.write_text(marker + "\n", encoding="utf-8")
+    if corruption == "image":
+        image.write_bytes(b"different-image")
+    elif corruption == "proof":
+        proof.write_text(
+            proof.read_text(encoding="utf-8").replace(image_hash, "0" * 64, 1),
+            encoding="utf-8",
+        )
+    elif corruption == "marker":
+        serial.write_text("[BUILD] another-boot\n", encoding="utf-8")
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'STAGE_DIR="$4"\nverify_stage_boot_pair "$5" "$6"\n',
+        str(stage),
+        str(serial),
+        str(proof),
+    )
+    assert (result.returncode == 0) is (corruption is None)
+    if corruption is not None:
+        assert "disagree" in result.stderr or "does not match" in result.stderr

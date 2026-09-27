@@ -2630,7 +2630,7 @@ def write_fault_logs(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path
     gdb_lines.extend(
         (
             "M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready "
-            "symbol=fault action=zero-x0 result=continued",
+            "symbol=fault action=redirect-standard-fault result=continued",
             "M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc "
             "symbol=fault action=redirect-standard-fault result=continued",
             "M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion "

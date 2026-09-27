@@ -908,3 +908,53 @@ pending at this checkpoint. No Pi or release PASS is inferred from the renewal.
 
 Deliverables: A bounded, owner-authorized renewal and separate rerun evidence;
 no waiver of physical Pi, KVM pressure or installed-release qualification.
+
+## Exact Pi stage binding and KVM fault-probe repair
+
+Title/ID: `m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Keep physical Pi proof tied to the image that actually booted and make
+the pre-READY KVM fault probe reach a target-observable standard fault.
+
+Inputs: The `5de8fdc4ebb6` Pi RAM boot, its passing Stage 03 and Stage 04
+records, and the Stage 05 refusal of a missing live runtime/DMA artifact;
+the Jetson KVM pressure preflight where a GDB `zero-x0` marker was followed
+by a Worker `ready-timeout` rather than the required Standard fault.
+
+Changes: `pi4_gate_proof.sh` now accepts the exact `--stage-dir` used to boot
+the Pi. Before issuing runtime/DMA proof it checks the staged image digest,
+stage proof, identity metadata and live `[BUILD]` marker together. This
+prevents its former default stage path from silently linking a different
+image. The external GDB pre-READY probe now redirects the role-bound Worker
+entry to its existing standard-fault hook. The validator still requires the
+role- and phase-matched fault from the target; an injection transcript alone
+does not pass. The Test Plan names the exact stage input.
+
+Commands: `bash -n scripts/pi4_gate_proof.sh`; `.venv/bin/python -m pytest -q
+tests/test_pi4_gate_proof.py`; `.venv/bin/python -m pytest -q
+tests/test_worker_task_evidence.py tests/test_rest_perf_harness.py`;
+`scripts/pi4_gate_proof.sh --normalize-only --stage-dir
+out/m28g/pi4-stage-5de8-dev --manifest
+out/m28g/release-eval-5de8-dev/pi4-development.toml --log
+out/m28g/full-plan-5de8-pi4-dev/pi4-stage5-base-boot-and-queenlog.raw.log
+--require-wired-ready --require-driver-task-proof --runtime-dma-proof-out
+out/m28g/full-plan-5de8-pi4-dev/pi4-runtime-dma-proof.env`.
+
+Checks: All 81 Pi proof tests and 404 Worker/performance evidence tests passed.
+The exact older Pi boot plus same-boot authenticated Queen log normalizes to
+`PI4_RUNTIME_DMA_PROOF=fresh-pi` and `COUNTER_PROOF=counter-qualified`, with
+the correct image stage linked. This is a diagnostic run over retained bytes;
+it is not the active controlled serial/packet capture required by physical
+performance acceptance. The KVM probe change has focused host coverage but
+still requires a fresh Jetson run to prove a target Standard fault.
+
+Validation: Source-bound staged tests, physical Pi release profile, KVM
+pressure and assembled release acceptance must be rerun after this commit.
+The earlier `5de8` Stage 03/04 and failed Stage 05 records stay immutable at
+their original source identity.
+
+Deliverables: Exact-stage Pi proof linkage, a fault-probe correction and
+explicitly bounded regression evidence. AI assistance identified and
+implemented these repairs; independent target qualification remains open.

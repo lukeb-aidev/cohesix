@@ -2524,6 +2524,7 @@ PI_WIFI_TARGET_IP="${PI_WIFI_TARGET_IP:?set the serial-reported Wi-Fi IPv4 addre
 COH_REST_URL="${COH_REST_URL:?set the exact already-running gateway base URL}"
 PI_WIFI_EVIDENCE_DIR="${PI_WIFI_EVIDENCE_DIR:?set a private existing directory}"
 PI_SESSION_DIR="${PI_SESSION_DIR:?set a new output directory below out/}"
+PI_STAGE_DIR="${PI_STAGE_DIR:?set the exact stage directory for the image booted on this Pi}"
 PI_WIFI_SERIAL_LOG="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-serial.log"
 PI_WIFI_NETWORK_CAPTURE="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-network.pcap"
 PI_WIFI_RUNTIME_DMA_PROOF="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-runtime-proof.env"
@@ -2537,6 +2538,7 @@ test ! -e "$PI_WIFI_CYW43_RECORD"
 
 scripts/pi4_gate_proof.sh \
   --skip-build \
+  --stage-dir "$PI_STAGE_DIR" \
   --serial-device "$PI_SERIAL_DEVICE" \
   --log "$PI_WIFI_SERIAL_LOG" \
   --require-wifi-ready \
