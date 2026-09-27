@@ -191,9 +191,10 @@ production Worker binding and Queen reboot persistence are separate later claims
 ### Release packaging
 
 Retain **A = 1.1.0-beta**, **B = 1.2.0**, **C = 1.3.0-beta** and
-`Cohesix-<version>-<platform>`. A delivers recoverable CUDA, Verified Private
-LoRA Release, adoption/CI and the substantial native SwarmUI showcase. B is the
-qualified 28–28g ecosystem release below; C remains reserved. No version is
+`Cohesix-<release-version>-<platform>` bundle naming. A delivers recoverable
+CUDA, Verified Private LoRA Release, adoption/CI and the substantial native
+SwarmUI showcase. B is the qualified 28–28g ecosystem release below; C remains
+reserved. No version is
 published or reassigned by this planning change.
 Historical releases and evidence keep original names, IDs and proof classes.
 
@@ -12350,7 +12351,7 @@ measurements under TEST_PLAN provenance rules; do not invent results, speedups
 or external-user tests, and do not change benchmark thresholds to pass.
 
 Retain reserved Release A = `1.1.0-beta`, B = `1.2.0`, C = `1.3.0-beta`
-and `Cohesix-<version>-<platform>` artifact naming. This is the A cut; B/C
+and `Cohesix-<release-version>-<platform>` artifact naming. This is the A cut; B/C
 remain reserved for later qualified delivery. Existing release files, exception
 records and accepted/historical evidence are immutable. A plan or successful
 build cannot create release acceptance.
@@ -13419,6 +13420,8 @@ cross-client qualification, selected Jetson KVM pressure and the other
 assembled release gates remain outstanding. No Release B acceptance is claimed.
 On 27 September the owner selected stable `1.2.0`; earlier beta-source
 observations retain their historical identity and do not qualify this source.
+The Linux release reference is JetPack 7.2.1 (L4T 39.2.1, Ubuntu 24.04),
+selected by the owner in place of the earlier three-Ubuntu-version matrix.
 The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
 the selected source-level work and unmet installer, host and release gates.
 
@@ -13441,8 +13444,9 @@ cannot silently adopt its state. Install code separately from user-owned state,
 CAS, evidence, models and credential references. QEMU, a graphical desktop and
 GPU/model runtimes are required only for the selected journey; host-only use
 must not require all three. Preserve existing advertised macOS 26 base-host
-operation while qualifying macOS 27 for the Apple-specific journeys, and test
-every advertised Ubuntu ARM64 release (22.04, 24.04 and 26.04).
+operation while qualifying macOS 27 for the Apple-specific journeys. The Linux
+release reference is JetPack 7.2.1 (L4T 39.2.1, Ubuntu 24.04) on ARM64;
+other Ubuntu and JetPack releases are outside this cut's acceptance claim.
 
 SwarmUI launches as a normal signed Mac app from Applications/Finder, Spotlight
 and the Dock, and as a GNOME app from its application grid/search on Linux.
@@ -13545,6 +13549,28 @@ Checks: New arrows follow the selected gateway or PEFT release contract; the cut
 Validation: Tracked Markdown inventory, existing-diagram review, GitHub Mermaid compatibility, focused SVG/PNG render and visual review, deterministic STL/SVG regeneration, 296 nondegenerate closed-mesh facets, opening and rotated STL views, generated consistency, local links and metadata, and git diff --check passed. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
 Deliverables: Two as-built user flowcharts, one native GitHub ASCII STL cutaway with labelled SVG companion and source, and a focused documentation validation record; no new release-acceptance evidence.
 
+Title/ID: m28g-issue-templates-1-2-alignment
+Milestone: 28g / m28g-issue-templates-1-2-alignment
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Make public Cohesix 1.2 bug and feature reports easy to file while capturing enough context to reproduce a problem or assess a user need.
+Inputs: .github/ISSUE_TEMPLATE/bug_report.md; .github/ISSUE_TEMPLATE/feature_request.md; docs/SECURITY.md; docs/HOST_TOOLS.md; docs/GLOSSARY.md; CONTRIBUTING.md; selected 28g documentation and evidence boundaries.
+Changes: AI-assisted review replaces generic browser/mobile prompts with concise host/target, reproduction, and evidence questions in the bug template; the feature template asks for user need, desired behavior, observable success, and optional context. This task record retains scope and validation.
+Commands: scripts/check-generated.sh; git diff --check; focused front-matter, metadata, link, and visible-body review.
+Checks: Templates remain valid GitHub issue templates; public reports direct vulnerabilities to private reporting and prompt redaction; job recovery asks for the original identity without treating a lost reply as proof of success. No runtime or release-acceptance claim changes.
+Validation: Generated outputs matched; YAML front matter parsed with the five GitHub template keys; local metadata, security-link target/anchor, and body with hidden hints removed were reviewed; git diff --check passed. No runtime, target, or release gate was run for this documentation task.
+Deliverables: Two updated issue templates and this documentation validation record.
+
+Title/ID: m28g-community-docs-1-2-stable-alignment
+Milestone: 28g / m28g-community-docs-1-2-stable-alignment
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Give 1.2.0 readers a current starting path and keep user guides focused on workflows, architecture and evidence rather than milestone chronology.
+Inputs: Current Markdown inventory; README.md; docs/QUICKSTART.md; docs/STATUS.md; docs/GLOSSARY.md; docs/USE_CASES.md; docs/ADOPTION.md; tools/cohesix-py/README.md; demo/README.md and demo/peft_adapter/README.md; release naming in scripts/release_bundle.sh; selected manifest and component contracts; historical 1.1.0-beta records.
+Changes: AI-assisted audit updates active 1.2.0 entry points and archive examples, identifies older demos and Python/component packages as historical or selected-scope, and turns STATUS into a concise workflow/evidence map. Historical release archives, audit records, generated files, product behavior and milestone acceptance remain untouched.
+Commands: scripts/check-generated.sh; git diff --check; focused Markdown metadata, local-link, archive-name and source-claim review.
+Checks: Current user paths say 1.2.0 without a beta suffix; historical 1.1.0-beta identifiers retain their meaning; host and target boundaries, selected protocol profiles and native proof limits remain accurate. No new runtime or release-acceptance claim is inferred from this documentation audit.
+Validation: Generated outputs matched; metadata and 261 local Markdown paths across the changed files passed; current-release beta references were removed; bundle names were checked against release_bundle.sh; git diff --check passed. Exact 1.2.0 bundle bytes were unavailable for extraction checks. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
+Deliverables: Community-facing 1.2.0 documentation corrections and this task record.
+
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.
@@ -13579,18 +13605,18 @@ Deliverables: Reviewed trusted-publishing workflow, approved distribution handof
 Title/ID: m28g-ubuntu-arm64-native-installer
 Milestone: 28g / m28g-ubuntu-arm64-native-installer
 Goal: Install the exact Release B host candidate through Ubuntu ARM64 packages with GNOME launch and headless operation.
-Inputs: Accepted 27e Linux signed host/desktop profiles; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; supported Ubuntu 22.04/24.04/26.04 ARM64 dependency and service contracts.
+Inputs: Accepted 27e Linux signed host/desktop profiles; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; selected JetPack 7.2.1 / L4T 39.2.1 ARM64 dependency and service contracts.
 Changes:
   - scripts/install/build_ubuntu_arm64_deb.py + packaging/debian/** + scripts/release_bundle.sh + scripts/setup_environment.sh — produce versioned controller and optional SwarmUI `.deb` packages from the compiler-registered payload, offline Python/NeMo kit and selected Linux assets without mandatory QEMU setup; declare release-specific dependencies and a separately verifiable publisher identity for downloaded packages without adding a distribution service. The dedicated publisher key is passphrase protected outside the checkout, and the native builder may read its passphrase from inherited standard input without a secret argument or environment value.
   - scripts/install/qemu_compat.py + scripts/setup_environment.sh + skills/cohesix-ai-host-setup/** — use Ubuntu's `qemu-system-arm` package for an optional guest and verify the selected Linux KVM startup; offer `--headless` so server setup omits graphical packages. Retain separate boot/authenticated-client proof.
   - packaging/debian/com.cohesix.swarmui.desktop + packaging/debian/icons/** + native app resource lookup — install the desktop entry and icon in freedesktop locations with a stable executable path and `Terminal=false`; keep WebKit/GTK dependencies out of the headless controller package.
-  - tests/test_ubuntu_arm64_installer.py + scripts/release_qualify.py + docs/TEST_PLAN.md + docs/QUICKSTART.md — add exact installed-payload, package-manager lifecycle and GNOME-launch checks on each advertised Ubuntu ARM64 release, including 1.1.0-beta side-by-side migration.
+  - tests/test_ubuntu_arm64_installer.py + scripts/release_qualify.py + docs/TEST_PLAN.md + docs/QUICKSTART.md — add exact installed-payload, package-manager lifecycle and GNOME-launch checks on the selected JetPack reference, including 1.1.0-beta side-by-side migration.
 Commands:
   - python3 -m pytest -q tests/test_ubuntu_arm64_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_qemu_compat.py tests/test_release_qualify.py
   - python3 scripts/install/build_ubuntu_arm64_deb.py --reference-config "${RELEASE_B_REFERENCE}" --out "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64"
   - python3 scripts/release_qualify.py installer --reference-config "${RELEASE_B_REFERENCE}" --installer-manifest "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64/installers.json" --output "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64/result.json"
 Checks:
-  - On Ubuntu 22.04, 24.04 and 26.04 ARM64, package-manager install resolves declared dependencies and installed bytes match the exact source/profile/SBOM; independent publisher trust covers each `.deb` and the embedded Cohesix signature is verified without self-enrollment.
+  - On JetPack 7.2.1 / L4T 39.2.1 ARM64, package-manager install resolves declared dependencies and installed bytes match the exact source/profile/SBOM; independent publisher trust covers each `.deb` and the embedded Cohesix signature is verified without self-enrollment.
   - A GNOME user opens SwarmUI from application grid/search with its icon and a useful connect/doctor state, with no Terminal, inherited shell variables or checkout. The controller package installs and runs headlessly without GNOME/WebKit, QEMU or CUDA driver installation.
   - Upgrade, failed/repeated install, rollback, remove and purge preserve or remove state/evidence/configuration only as explicitly documented; service enrollment and activation remain opt-in, and no maintainer script downloads models or copies credentials.
 Deliverables: Reproducible Ubuntu ARM64 `.deb` set, installer manifest/publisher proof, GNOME and headless lifecycle reports, and public Linux install/upgrade/removal guidance.
@@ -13692,7 +13718,7 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | Protocol composition / `m28g-integration-live` | MCP-only, A2A-only, both, neither; each advertised gateway host | Live endpoint/disabled-surface checks, shared identity/budget/revocation, disable/restart with existing jobs retained and authenticated CLI/REST recovery. Master false defeats every subordinate flag/override. |
 | Client as-built alignment / `m28g-host-clients-as-built-alignment` | Exact installed host CLI tools, Python wheel and SwarmUI from each selected package | Capability-by-capability inventory and contract parity; matching authority, validation, identity, refusal/recovery and evidence across shared operations, with unavailable and client-specific surfaces stated; shared live job observed through m28g-adoption-live. |
 | Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |
-| Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean Ubuntu 22.04/24.04/26.04 ARM64 hosts; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
+| Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean JetPack 7.2.1 / L4T 39.2.1 ARM64 host; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
 | Python index / `m28g-pypi-1.2.0-publication` | Approved Release B tag and reviewer-gated trusted publisher | Public wheel and sdist version, source, metadata and SHA-256 match the approved exact distributions; isolated install and CLI smoke pass. |
 | Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and independent evaluator walkthrough within frozen step/time/size/intervention budgets. |
 | Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |

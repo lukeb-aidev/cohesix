@@ -56,7 +56,9 @@ model-quality journey in the Release B matrix.
 ## Installation and release status
 
 The planned distribution includes portable Mac, Linux ARM64 and Pi 4 archives,
-a signed and notarized macOS `.pkg`, and signed Ubuntu ARM64 `.deb` packages.
+a signed and notarized macOS `.pkg`, and signed ARM64 `.deb` packages qualified
+against JetPack 7.2.1 / L4T 39.2.1 (Ubuntu 24.04 base). Other JetPack and
+Ubuntu releases have no Release B installer qualification claim.
 The Debian publisher's public key has fingerprint
 `7E27 A4AB 355D 2EA5 6571 8CA4 1059 A516 E53B 0B70`; verify it through an
 independent trusted release announcement before trusting package signatures.

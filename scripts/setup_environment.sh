@@ -19,7 +19,7 @@ usage() {
 Usage: scripts/setup_environment.sh [--check] [--with-qemu] [--headless]
 
 Install the runtime dependencies for a Cohesix release bundle on macOS 26 or
-later on Apple Silicon, or Ubuntu 22.04, 24.04, or 26.04 on ARM64. When the
+later on Apple Silicon, or JetPack 7.2.1 (Ubuntu 24.04) on ARM64. When the
 bundle contains its Python wheel, setup also creates .venv and installs it.
 QEMU is optional for host-only operation.
 
@@ -308,9 +308,9 @@ setup_ubuntu() {
   local ubuntu_version="${VERSION_ID:-unknown}"
 
   case "$ubuntu_version" in
-    22.04|24.04|26.04) ;;
+    24.04) ;;
     *)
-      fail "unsupported Ubuntu version: ${ubuntu_version} (expected 22.04, 24.04, or 26.04)"
+      fail "unsupported Ubuntu base: ${ubuntu_version} (selected JetPack 7.2.1 uses 24.04)"
       ;;
   esac
 
@@ -322,31 +322,20 @@ setup_ubuntu() {
 
   local -a runtime_pkgs=("libfuse3-3")
   if [[ "$HEADLESS" -eq 0 ]]; then
-    local gtk_runtime
-    if [[ "$ubuntu_version" == "22.04" ]]; then
-      gtk_runtime="libgtk-3-0"
-    else
-      gtk_runtime="libgtk-3-0t64"
-    fi
     runtime_pkgs+=(
       "libwebkit2gtk-4.1-0"
       "libjavascriptcoregtk-4.1-0"
       "libayatana-appindicator3-1"
       "librsvg2-2"
       "libxdo3"
-      "$gtk_runtime"
+      "libgtk-3-0t64"
     )
   fi
 
   local release_python=""
   if [[ -n "$RELEASE_WHEEL" ]]; then
-    if [[ "$ubuntu_version" == "22.04" ]]; then
-      runtime_pkgs+=("python3.11" "python3.11-venv")
-      release_python="python3.11"
-    else
-      runtime_pkgs+=("python3" "python3-venv")
-      release_python="python3"
-    fi
+    runtime_pkgs+=("python3" "python3-venv")
+    release_python="python3"
   fi
   for pkg in "${runtime_pkgs[@]}"; do
     if ! ensure_pkg_ubuntu "$pkg"; then

@@ -110,13 +110,13 @@ def test_repository_venv_is_locked_bounded_and_shared() -> None:
 def test_release_setup_is_fail_closed_and_uses_runtime_package_names() -> None:
     setup = _read(RELEASE_SETUP)
 
-    assert "22.04|24.04|26.04" in setup
+    assert "24.04)" in setup
+    assert "selected JetPack 7.2.1" in setup
     assert "COHESIX_ALLOW_UNSUPPORTED_UBUNTU" not in setup
     assert 'missing+=("qemu-system-arm")' in setup
     assert '[[ "$WITH_QEMU" -eq 1 ]]' in setup
     assert 'missing+=("qemu-system-aarch64")' not in setup
-    assert 'gtk_runtime="libgtk-3-0"' in setup
-    assert 'gtk_runtime="libgtk-3-0t64"' in setup
+    assert '"libgtk-3-0t64"' in setup
     assert '"libfuse3-3"' in setup
     assert '"libxdo3"' in setup
     assert 'if [[ "$HEADLESS" -eq 0 ]]' in setup
@@ -134,7 +134,6 @@ def test_release_setup_is_fail_closed_and_uses_runtime_package_names() -> None:
     assert "--no-deps" in setup
     assert "--force-reinstall" in setup
     assert "refusing symlinked release Python environment" in setup
-    assert 'runtime_pkgs+=("python3.11" "python3.11-venv")' in setup
     assert 'runtime_pkgs+=("python3" "python3-venv")' in setup
 
     inventory = _read(REPO_ROOT / "configs" / "implementation_surfaces.toml")

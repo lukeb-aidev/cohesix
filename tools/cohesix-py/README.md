@@ -19,7 +19,9 @@ venv or pass gateway credentials to the CUDA executor.
 
 ## Install
 
-For the 1.2.0 release, install the Python client (Python 3.11 or later):
+For the 1.2.0 candidate, use the wheel inside the matching Mac or Linux host
+bundle with Python 3.11 or later. After the approved release publishes to
+PyPI, the matching standalone Python client can be installed with:
 
 ```bash
 python3 -m pip install 'cohesix==1.2.0'
@@ -37,7 +39,7 @@ target profile, or a live target. In a source checkout, use
 `python3 -m pip install -e tools/cohesix-py` for editable development instead.
 
 For the qualified native import/training workflow, see
-[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/PRIVATE_LORA_RELEASE.md).
+[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/main/docs/PRIVATE_LORA_RELEASE.md).
 `cohesix.playbooks.run_peft_release` routes plan/apply/watch/explain/verify/recover
 to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
 prepares the pinned native profile; `examples/private_lora_request.py` prepares
@@ -104,7 +106,7 @@ Optional REST Worker bounds are declarations only, and missing bounds or
 `backend_class` remain `unknown`. No backend connection, control ACK, local
 file, or JSON object creates Worker READY or target proof.
 
-## Milestone 26e Worker compatibility
+## Worker compatibility
 
 Worker APIs require an explicit generated `cohesix-python-profile/v2`
 contract. The QEMU contract must match the selected `qemu_smp_production` Mac
@@ -194,7 +196,7 @@ cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-por
 ```
 
 Artifacts are written under `out/examples/playbooks/<playbook-id>/`.
-See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/USE_CASES.md) for the capability map and
+See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md) for the capability map and
 the contribution path toward complete generated workflows.
 
 ## Existing examples
@@ -208,7 +210,7 @@ python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
 
-## Evidence pack integration kits (Milestone 25e)
+## Evidence pack integration kits
 
 These examples operate on an evidence pack directory produced by
 `coh evidence pack` and run offline once the pack exists.
@@ -241,7 +243,7 @@ scripts/ci/python_compat_run.sh \
   --state-dir out/python-compat/m26e-wheel
 ```
 
-See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/PYTHON_SUPPORT.md) for target
+See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/main/docs/PYTHON_SUPPORT.md) for target
 projection commands and proof-boundary details.
 
 ## Installed CUDA and LoRA journeys
@@ -250,5 +252,5 @@ projection commands and proof-boundary details.
 and signed verifier. `cohesix.journey.run` returns the same versioned outcome
 and exit mapping. Only verified requested completion returns zero; an ACK,
 timeout or recovered failed canary does not. Keep state outside runner scratch.
-See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/CI_WORKFLOWS.md)
+See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/main/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/main/docs/CI_WORKFLOWS.md)
 for exact installation, config, authority and recovery steps.

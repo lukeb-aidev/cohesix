@@ -59,9 +59,12 @@ def test_package_roots_keep_desktop_dependencies_optional(
     controller_control = (controller_root / "DEBIAN/control").read_text()
     desktop_control = (desktop_root / "DEBIAN/control").read_text()
     assert "libwebkit" not in controller_control
+    assert "libc6 (>= 2.39)" in controller_control
     assert f"Maintainer: {maintainer}" in controller_control
     assert "cohesix-controller (= 1.2.0)" in desktop_control
-    assert "libgtk-3-0t64 | libgtk-3-0" in desktop_control
+    assert "libc6 (>= 2.39)" in desktop_control
+    assert "libgtk-3-0t64" in desktop_control
+    assert "libgtk-3-0 |" not in desktop_control
     assert "libwebkit2gtk-4.1-0" in desktop_control
     desktop_entry = desktop_root / "usr/share/applications/com.cohesix.swarmui.desktop"
     assert "Exec=/usr/lib/cohesix/bin/swarmui" in desktop_entry.read_text()

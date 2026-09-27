@@ -1,66 +1,34 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Summarize current Cohesix implementation and evidence status without duplicating planning or run history. -->
+<!-- Purpose: Help Cohesix 1.2.0 readers locate current capabilities, execution boundaries and source-bound evidence. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix Release Status
+# Cohesix 1.2.0 status
 
-This page is the public snapshot of what the checked-in Cohesix source declares
-and what that declaration does—and does not—prove. It is intentionally short.
-The [Build Plan](BUILD_PLAN.md) remains the complete record of authorized and
-implemented scope, while target-qualified evidence and acceptance procedures
-remain governed by the [Test Plan](TEST_PLAN.md).
+Use this page to find the right workflow and understand what its evidence means.
+The installed bundle's `VERSION.txt`, `RELEASE_NOTES.md` and manifest identify
+its exact contents. The [Build Plan](BUILD_PLAN.md) owns task scope and the
+[Test Plan](TEST_PLAN.md) owns acceptance checks; neither a source declaration
+nor a component result transfers proof to a different image or host.
 
-Status terms such as **source**, **configured**, **target-qualified**, and
-**accepted** are defined in the [Glossary](GLOSSARY.md). They are not
-interchangeable.
+## Where work runs
 
-## Release 1.1.0-beta
-
-Release A (`1.1.0-beta`) completes [Milestone 27g](BUILD_PLAN.md#27g).
-The integrated CUDA and private LoRA journeys, CLI, Python, CI and native
-SwarmUI were exercised during a measured two-hour Pi 4 GENET, Mac and Linux
-AArch64 NVIDIA operator run. The applicable staged [Test Plan](TEST_PLAN.md)
-passed after that burn-in. Subsequent changes received focused source and
-physical checks; the unchanged staged and pressure records retain their exact
-source identities rather than being relabelled as new-image runs.
-
-The physically installed candidate Pi SD image passed independent raw
-readback, fresh numbered U-Boot-menu boots with GENET static, GENET DHCP and
-Wi-Fi DHCP, packaged authenticated TCP checks, and a final GENET cold boot.
-The final archive's raw SD image differs in FAT metadata but contains the same
-27 embedded files; its exact raw bytes were not written and read back. Mac and
-Linux archives passed independent extracted installation checks. The final
-three-archive verifier therefore has no passing result. The HDMI output was
-visually checked through the capture card. Earlier physical USB keypress and
-Wi-Fi repeatability records remain at their original image identities; this
-release does not claim a new 512-entry-image Wi-Fi repeatability series. Lukas
-Bower accepted these disclosed release limits after selecting the final GENET
-cold boot; they do not extend earlier Wi-Fi hardware acceptance to the new image. The
-[qualification record](audit/M27G_IMPLEMENTATION_RECORD.md) identifies each
-proof, limitation and carried-forward result.
-
-The release's implemented workflows and their qualified component records are:
-
-| Workflow | Operator guide | Component evidence |
+| Place | Cohesix role | Start here |
 | --- | --- | --- |
-| Admitted native CUDA execution and recoverable recipes | [GPU nodes](GPU_NODES.md) | [Host foundation](audit/M27B_IMPLEMENTATION_RECORD.md), [recovery and reuse](audit/M27C_IMPLEMENTATION_RECORD.md) |
-| Private LoRA import/training, evaluation, promotion and rollback | [Private LoRA release](PRIVATE_LORA_RELEASE.md) | [Native execution and recovery](audit/M27D_IMPLEMENTATION_RECORD.md) |
-| Signed package installation, Python and CI | [Adoption](ADOPTION.md), [CI workflows](CI_WORKFLOWS.md) | [Package and installation checks](audit/M27E_IMPLEMENTATION_RECORD.md) |
-| Native desktop operations, evidence and signed replay | [SwarmUI](SWARMUI.md), [gallery](SWARMUI_GALLERY.md) | [Native app and packaged checks](audit/M27F_IMPLEMENTATION_RECORD.md) |
-| Delegated authority, failover, inspection and evidence | [Authority](M27A_AUTHORITY.md), [operator evidence](OPERATOR_EVIDENCE.md) | [Authority qualification](audit/M27A_COMPLETION_EVIDENCE.md), [operator utilities](audit/M27_COMPLETION_EVIDENCE.md) |
+| QEMU or Raspberry Pi 4 target | The seL4 root task supplies Queen authority; passive Heartbeat, GPU and LoRA Workers have bounded target roles. Selected child runtimes own the console, namespace or physical devices. | [Architecture](ARCHITECTURE.md), [roles](ROLES_AND_SCHEDULING.md) |
+| Mac or Linux controller | `cohsh`, `coh`, Hive Gateway, SwarmUI, Python and agent clients use the target's documented control surfaces. One process owns the target TCP console at a time. | [Quickstart](QUICKSTART.md), [host tools](HOST_TOOLS.md) |
+| Linux AArch64 NVIDIA executor | CUDA/NVML, model weights, native jobs and their output checks stay on the GPU host. A target Worker records control and receipts; it does not execute CUDA. | [GPU nodes](GPU_NODES.md), [private LoRA release](PRIVATE_LORA_RELEASE.md) |
+| Apple Silicon Mac | Local MLX and vMLX execution stay on macOS. The selected Mac workflow can submit governed work through a separate Cohesix target. | [Mac providers](MACOS_PROVIDERS.md), [SwarmUI](SWARMUI.md) |
 
-These records retain exact source, package, target and trust identities,
-failures and accepted gaps. Replay and component evidence retain their original
-scope. The previous [1.0.0-beta](../releases/RELEASE_NOTES-1.0.0-beta.md)
-acceptance and provenance exceptions remain in the
-[audit record](audit/AUDIT_REPORT_2026-09-13.md). The current
-[exceptions register](audit/EXCEPTIONS.md) records DD30 as an owner-accepted
-retired gap; dynamic fault/wake testing remains unexecuted.
+The QEMU and Pi manifests each declare 256 passive Worker instances across
+Heartbeat, GPU and LoRA roles. Both selected production profiles enable
+authenticated MCP and A2A routes at the host gateway.
+Check the installed manifest and profile before using an agent client. Host
+protocol replies and target admission are distinct from independently verified
+native provider outcomes. See [Host API](HOST_API.md) and the
+[Glossary](GLOSSARY.md) for those terms.
 
-Broader providers, agent protocols and other deferred features remain governed
-by the [Build Plan](BUILD_PLAN.md#roadmap-id-mapping). Their existing source or
-historical evidence does not establish release qualification.
+## Release B qualification
 
 [Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0
 candidate. The selected source now records version-aligned Python packaging,
@@ -84,7 +52,8 @@ workflow is prepared to build from the reviewed `v1.2.0` tag and compare
 the exact public distributions after reviewer-gated publishing. The tag and
 public files do not yet exist. Optional QEMU setup now probes a real four-core
 startup; Mac can build the verified pinned 10.1.0 HVF fix when its installed
-QEMU fails, while supported Ubuntu ARM64 uses `qemu-system-arm` from apt.
+QEMU fails, while the selected JetPack 7.2.1 / L4T 39.2.1 ARM64 reference
+uses `qemu-system-arm` from apt.
 The pinned Mac source build passed its entitlement, startup and setup checks.
 A dedicated Debian publisher key also passed Mac and Jetson detached-signature
 probes. These checks do not supply a signed installer, packaged guest or
@@ -199,32 +168,37 @@ The final installed **Local MLX** panel ran bounded inference and 16-row held-ou
 
 Focused Python MLX (6), vMLX (12), frontend (3), SwarmUI workbench (12), native compile, Rust formatting and generated-consistency checks passed; the installed Metal inference/evaluation and final Apple signing path were exercised. The full suite was not run. M28c adds no Pi hardware, mixed MLX/CUDA, accepted Mac deployment, broad model-quality or integrated Release B claim.
 
-## Capability snapshot
+## Choose a workflow
 
-| Surface | Checked-in implementation | Evidence boundary |
+| Need | Guide | Evidence to retain |
 | --- | --- | --- |
-| Kernel and target profiles | Upstream seL4 16.0.0, pure-Rust `no_std` userspace, four-core SMP+MCS QEMU and Pi 4 profiles, and no operational classic-scheduler fallback. | Selected source and generated-profile truth; exact target execution and acceptance remain separate. |
-| Root services | Root control, restricted fault/emergency/supervisor duties, a passive NineDoor namespace child, and an isolated active console-network child are compiler-declared. | Construction and offline validation do not prove runtime progress, fault containment, or teardown on a target. |
-| Workers | Passive `worker-heartbeat`, `worker-gpu`, and `worker-lora` instances use two bounded executor lanes; QEMU and Pi each declare 1/127/128 instances. `worker-bus` remains model/session-only. | Target-qualified QEMU evidence covers the selected 256-Worker population and receipt path; the Pi configuration still requires separate fresh physical evidence. |
-| Physical drivers | Pi 4 serial, display, USB, GENET, SDIO, and CYW43 paths use manifest-declared isolated runtimes admitted through HAL. | Board evidence from another source tree or image does not qualify a newly composed image. |
-| QEMU | `aarch64/virt` with GICv3 is the reference target on macOS HVF and AArch64 Linux KVM. | Target-qualified evidence applies only to the exact VM artifacts and proof lanes exercised; see the [Milestone 26e result record](BUILD_PLAN.md#26e). It is not Pi 4 hardware proof. |
-| Raspberry Pi 4 | Pi firmware → numbered U-Boot menu → seL4 binary image → root task is the supported hardware boot path. | The installed candidate image passed raw SD readback, GENET static/DHCP, Wi-Fi DHCP and packaged TCP checks; the final archive has identical embedded files but lacks exact-byte card readback. Earlier keyboard and Wi-Fi repeatability evidence remains source-bound. |
-| Host tools | `cohsh`, `coh`, Hive Gateway, SwarmUI, Python, GPU, sidecar, ticket, CAS, and evidence tools run beside the target on macOS or Linux. | Host, mock, fixture, and package success cannot create target Worker, driver, or use-case acceptance. |
-| GPU and AI execution | GPU drivers, CUDA/NVML, model training, inference, PEFT execution, and deployment-specific automation remain host-side. | Cohesix records bounded authority, lifecycle, telemetry, and receipts; it does not execute GPU workloads in the VM. |
-| AWS/UEFI | Planned only. | No current Cohesix AWS target or production-use claim. |
+| Boot or connect to a target | [Quickstart](QUICKSTART.md), [hardware bring-up](HARDWARE_BRINGUP.md) | Exact image/profile, boot, transport and authenticated response; QEMU results do not establish Pi hardware behavior. |
+| Inspect or operate a hive | [Host tools](HOST_TOOLS.md), [operator walkthrough](OPERATOR_WALKTHROUGH.md) | Original request identity, bounded response and relevant target or host observation. |
+| Run a CUDA job or release an adapter | [GPU nodes](GPU_NODES.md), [private LoRA release](PRIVATE_LORA_RELEASE.md) | Native output or signed release verification as well as the admitted job and Worker receipt. Reconcile an uncertain reply under its original identity. |
+| Use MCP, A2A or NeMo | [Host API](HOST_API.md), [use cases](USE_CASES.md) | Selected protocol/profile, delegated subject, original task or ticket, and native outcome verification. |
+| Use the Mac MLX workflow | [Mac providers](MACOS_PROVIDERS.md), [SwarmUI](SWARMUI.md) | Local Metal/model identity and, for governed work, the separate target admission and signed native result. |
 
-## How to verify a claim
+## Read evidence at its original scope
 
-- For source and generated-profile truth, inspect the selected
-  `configs/root_task*.toml` manifest, its resolved output, and generated
-  snippets.
-- For QEMU or Pi acceptance, use the exact staged workflow in the
-  [Test Plan](TEST_PLAN.md).
-- For build, flash, readback, boot, network, and console proof, follow
-  [Hardware Bring-up](HARDWARE_BRINGUP.md).
-- For performance claims, follow [Benchmarking](BENCHMARKS.md) and retain the
-  complete result artifact.
+Selected component records cover the [host job foundation](audit/M28_IMPLEMENTATION_RECORD.md),
+[CUDA workload](audit/M28A_IMPLEMENTATION_RECORD.md),
+[private adapter](audit/M28B_IMPLEMENTATION_RECORD.md),
+[Mac MLX and governed serving](audit/M28C1_IMPLEMENTATION_RECORD.md),
+[MCP](audit/M28D_IMPLEMENTATION_RECORD.md),
+[A2A](audit/M28E_IMPLEMENTATION_RECORD.md) and
+[NeMo](audit/M28F_IMPLEMENTATION_RECORD.md). The
+[Mac app and Shortcuts record](audit/M28C_APPLE_ACTIONS_RECORD.md) covers its
+separate installed client path. Each record identifies the exercised source,
+profile, host or target and limits; use the release's own evidence to judge an
+assembled 1.2.0 distribution.
 
-This snapshot describes the repository on 24 September 2026. A change that alters
-one of these public capability boundaries must update this page in the same
-change.
+The earlier [1.1.0-beta release notes](../releases/RELEASE_NOTES-1.1.0-beta.md)
+and [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md) retain their
+original Pi, host and package evidence, including disclosed limits. They remain
+useful for history and comparison, but do not qualify a new 1.2.0 image.
+
+To verify a specific claim, match its source and selected manifest to the
+installed bundle, then use [Hardware Bring-up](HARDWARE_BRINGUP.md) for physical
+proof, the [Test Plan](TEST_PLAN.md) for acceptance, and
+[Benchmarks](BENCHMARKS.md) for measured performance. The
+[exceptions register](audit/EXCEPTIONS.md) retains accepted historical gaps.

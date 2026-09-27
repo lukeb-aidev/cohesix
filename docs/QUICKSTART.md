@@ -16,9 +16,10 @@ shell, gateway, Python client and desktop UI run on your Mac or Linux host.
 This guide gets you from a release archive to an authenticated console, then
 shows how several clients can share one target through the gateway.
 
-For selected installed CUDA/LoRA CLI and Python workflows, follow
-[Adoption](ADOPTION.md). Its doctor and CI outcome commands use the same
-admission, durable journals and signed evidence as the native recipes.
+After your first connection, use the [use-case guide](USE_CASES.md) to choose a
+1.2.0 workflow. The [host-tool guide](HOST_TOOLS.md) covers the relevant CLI,
+gateway and evidence commands; [Adoption](ADOPTION.md) describes a separate
+selected signed component-package installation.
 
 ## Choose your download
 
@@ -61,7 +62,7 @@ Terminal `PATH`. The installed `cohesix-uninstall` helper in that directory
 checks the package receipt and owned file hashes before removing package code.
 It leaves user state, credentials, models and evidence in place.
 
-On Ubuntu ARM64, install the verified
+On the JetPack 7.2.1 ARM64 reference host, install the verified
 `cohesix-controller_1.2.0_arm64.deb` with apt. The optional
 `cohesix-swarmui_1.2.0_arm64.deb` adds the GNOME application entry and
 desktop dependencies. Open **SwarmUI** from GNOME search or the application
@@ -157,9 +158,9 @@ Python and optional QEMU dependencies.
 | Host | Requirements and behavior |
 | --- | --- |
 | Mac | macOS 26 or later and Apple Silicon. Homebrew supplies build dependencies if pinned QEMU is needed. The four-core HVF startup probe must pass; advertising HVF is insufficient. Use a native ARM64 terminal, not Rosetta. |
-| Linux | Ubuntu 22.04, 24.04 or 26.04 on ARM64. Setup uses apt and enables Universe for required runtime packages; the default desktop path includes WebKitGTK 4.1. Other distributions and x86-64 are not supported by this installer. |
+| Linux | The release reference is JetPack 7.2.1 / L4T 39.2.1 on ARM64, with Ubuntu 24.04 as its package base. Setup uses apt and enables Universe for required runtime packages; the default desktop path includes WebKitGTK 4.1. Other releases and x86-64 have no Release B qualification claim. |
 | Linux QEMU | For the native release profile, `/dev/kvm` must be readable/writable by your user and the host counter must be 31.25 MHz. The Linux guest is built for that counter; the Mac guest is built for 24 MHz. The setup probe checks startup; a guest boot and authenticated client check remain separate. |
-| NVIDIA host | Jetson is one reference Linux ARM64 host. Optional GPU discovery needs the host's compatible CUDA/NVML stack. Keep Jetson's board-managed driver packages; the runtime installer does not replace them. |
+| NVIDIA host | The selected Jetson has JetPack 7.2.1, L4T 39.2.1 and CUDA toolkit 13.2.2. Optional GPU discovery needs the compatible CUDA/NVML stack. Keep Jetson's board-managed driver packages; the runtime installer does not replace them. |
 
 Verify the tools without a target:
 
@@ -473,6 +474,9 @@ unset COHSH_AUTH_TOKEN COH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 See [Userland and CLI](USERLAND_AND_CLI.md) for commands,
 [Hardware Bring-up](HARDWARE_BRINGUP.md) for Pi diagnostics, and
 [Host tools](HOST_TOOLS.md) for mounts, GPU bridges, tickets and evidence packs.
+For 1.2.0 CUDA/LoRA, Mac MLX, MCP/A2A and NeMo workflows, start with the
+[use-case guide](USE_CASES.md) and check your installed profile against
+[current status](STATUS.md).
 
 ## Build from source
 

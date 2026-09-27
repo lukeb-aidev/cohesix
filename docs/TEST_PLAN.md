@@ -250,8 +250,9 @@ otherwise report separate native workflows and the combined-mode limitation.
 
 M28g starts with the exact 1.2.0 archive, version-aligned Python/NeMo
 inputs and independently authenticated native installer artifacts. Qualify the
-Mac `.pkg` on clean supported Apple Silicon sessions and both Ubuntu ARM64
-`.deb` packages on 22.04, 24.04 and 26.04. Retain package-manager receipt,
+Mac `.pkg` on clean supported Apple Silicon sessions and both ARM64 `.deb`
+packages on the selected JetPack 7.2.1 / L4T 39.2.1 reference. Retain its
+JetPack, L4T, Ubuntu base, CUDA toolkit and package-manager identities alongside the receipt,
 installed byte readback, publisher verification, graphical launch from each
 advertised desktop path, headless controller use, 1.1.0-beta migration,
 failed/repeated install, upgrade, rollback, remove and purge observations.

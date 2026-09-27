@@ -72,12 +72,12 @@ def make_package(reference: dict[str, str], root: Path, subset: str,
         reference=reference, records=records, package=package,
     )
     if subset == "controller":
-        depends = "libc6 (>= 2.35)"
+        depends = "libc6 (>= 2.39)"
         description = "Cohesix host controller and offline Python client assets"
     else:
         depends = (
             f"cohesix-controller (= {debian_version(reference['version'])}), "
-            "libc6 (>= 2.35), libgtk-3-0t64 | libgtk-3-0, "
+            "libc6 (>= 2.39), libgtk-3-0t64, "
             "libwebkit2gtk-4.1-0"
         )
         description = "Cohesix SwarmUI GNOME desktop client"

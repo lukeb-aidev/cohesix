@@ -8,8 +8,6 @@
 These demos cover the **1.1.0-beta** release line: strict Queen authority,
 bounded control and telemetry, recoverable CUDA recipes, verified private LoRA
 release, installed Python/CI journeys, and the SwarmUI workbench.
-Integrated release qualification remains in progress under
-[27g / assembled-journeys-and-recovery](../docs/BUILD_PLAN.md#27g).
 A demo transcript is evidence only of the commands and environment it exercised.
 
 Run commands from the **source checkout root**, in host Bash. Each `.coh`

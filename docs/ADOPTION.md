@@ -4,6 +4,11 @@
 
 # Install and run an approved CUDA or LoRA workflow
 
+This guide is for the selected signed **component-package** workflow below.
+For a general Cohesix 1.2.0 host bundle and first target connection, start
+with the [Quickstart](QUICKSTART.md); use the exact package and trust profile
+named by this guide only when you have that component deployment.
+
 A controller runs the CLI/Python tools. A control target runs Cohesix admission and
 Workers. A Linux AArch64 NVIDIA CUDA executor owns GPU drivers, weights, data and
 native execution. The reference is a Mac controller, Pi control target and Jetson
