@@ -13677,7 +13677,7 @@ Commands:
   - python3 -m pytest -q tests/test_host_package_stage.py tests/test_python_package.py tests/test_release_bundle.py
   - cargo test --locked -p coh --lib doctor::
   - cargo test --locked -p swarmui --lib
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${RELEASE_B_REFERENCE}" --host-profile "${RELEASE_B_HOST_PROFILE}" --state-dir "${RELEASE_B_EVIDENCE}/m28g-adoption-live"
+  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE}/m28g-adoption-live"
 Checks:
   - All acceptance-matrix journeys run from the native installed candidate artifacts with no source patches, hidden credentials, terminal-only SwarmUI launch or developer-only setup; same job/outcome is inspectable across applicable clients.
   - At least one independent person or agent completes clean installation and useful work; record identity, assistance, steps/time/downloads and blockers against frozen adoption budgets.

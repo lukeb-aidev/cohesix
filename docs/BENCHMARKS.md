@@ -4,6 +4,39 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
+## Release B adoption and integration budgets (M28g)
+
+Freeze these limits before running `m28g-adoption-live` and
+`m28g-integration-live`. The retained 1.1.0-beta Mac and Linux archives are
+26,501,100 and 28,513,510 bytes respectively; they are the comparable core
+download baseline. They contain neither the Release B native installers nor
+optional QEMU, GPU runtimes or models, so report those downloads separately.
+The earlier M28f one-question model comparison below is the selected quality
+and client-latency baseline for that exact question, not a general model score.
+
+Count an operator step when the evaluator must choose, enter or confirm an
+action. Count an intervention when a published step fails and needs an
+undocumented correction; record expected credential, data and model-licence
+choices separately. Start the setup clock at the first native installer
+action; stop it when `coh doctor` identifies the selected endpoint, client and
+provider correctly. Start the first-work clock after required credentials,
+target and model/artifact inputs are available; stop only at an independently
+verified useful result. Keep raw timestamps, download byte counts, every
+failed attempt and the evaluator's identity and assistance record.
+
+| Measure | Frozen Release B limit |
+| --- | --- |
+| Core installation on either selected host | At most 30 operator steps, 45 minutes, 100 MiB of package/archive downloads and two undocumented interventions. Explicit optional QEMU, GPU runtimes, models and datasets are measured separately and require an opt-in. |
+| First useful CUDA result from the installed client | At most 20 minutes after the provisioned target and allowlisted workload are available; the output and original admission identity must pass the independent native verifier. |
+| PEFT and agent journey quality | Every selected held-out/canary, native deployment and same-input NeMo comparison check must meet its already fixed M28b/M28f criterion; a missing native receipt, refusal or ambiguous result is never counted as success. |
+| Refusal and recovery | Every negative case returns an explicit bounded reason with no new effect. A host gateway/agent restart must deliver or reconcile the original job within 120 seconds after process readiness, without a fresh effect identity. Queen loss must refuse new effects until a fresh authenticated target identity and authority are established. |
+| Added protocol control latency | For each mode, compare at least 30 authenticated read/control calls with the same installed gateway and target to direct REST calls in one quiet window. Report p50, p95 and every refusal; protocol p95 may exceed direct REST p95 by at most 100 ms and 25% of direct REST p95, whichever is larger. Do not mix model or provider execution time into this measure. |
+
+These are acceptance limits, not measurements. The three complete journeys in
+BUILD_PLAN still require their selected native outcomes, installed clients,
+GUI launch, rollback/uninstall and an independent walkthrough. Report any
+failure against these limits without changing them during qualification.
+
 ## NeMo Agent Toolkit 1.9.0 comparison (M28f)
 
 Use the pinned install in [the NeMo kit](../integrations/nemo-agent-toolkit/README.md)

@@ -1384,6 +1384,7 @@ from that catalog.
 | `ui.m28c-platform-live` | conditional | `ui` | conditional / macos | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c-platform-live --reference-config "${M28C_PLATFORM_REFERENCE:?}" --host-profile macos-apple-silicon --state-dir "${M28C_EVIDENCE:?}/m28c-platform-live"` |
 | `federation.m28c1-mlx-live` | conditional | `federation` | conditional / qemu, macos | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c1-mlx-live --reference-config "${M28C1_MLX_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28C1_EVIDENCE:?}/mlx-live"` |
 | `federation.m28c1-vmlx-live` | conditional | `federation` | conditional / qemu, macos | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28c1-vmlx-live --reference-config "${M28C1_VMLX_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28C1_EVIDENCE:?}/vmlx-live"` |
+| `federation.m28g-adoption-live` | conditional | `federation` | conditional / qemu, pi4 | `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE:?}/m28g-adoption-live"` |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
@@ -1403,6 +1404,24 @@ contract check. The live acceptance case still needs an exact installed
 gateway and target, authenticated protocol clients, one shared native job,
 scope/budget/revocation and disable/restart recovery evidence in all four
 effective modes. A gateway route status cannot establish those results.
+
+`m28g-adoption-live` uses one private JSON reference with schema
+`cohesix-m28g-adoption-reference/v1`. It names absolute paths for the clean
+qualified source root, its commit, the assembled `release_qualify.py verify`
+result, both native `installer` results and an independent evaluator's
+walkthrough. Keep the reference and walkthrough in ignored private evidence,
+with credentials omitted. The walkthrough schema is
+`cohesix-m28g-adoption-walkthrough/v1`: record the evaluator's kind, identity,
+independence and assistance; separate Mac and JetPack Linux installation
+steps/time/downloads/interventions and package hashes; time to the first
+verified CUDA result; the three selected journey IDs and original job IDs;
+Finder/Spotlight/Dock and GNOME grid/search launch; doctor and data-preserving
+rollback/uninstall results. Bind raw Mac/Linux GUI, doctor, lifecycle and
+journey reports by absolute path, byte size and SHA-256. The runner rechecks
+both native installer qualifications, exact source and every attachment
+against the frozen BENCHMARKS limits. Its `live_host` PASS is an installed
+adoption record; the native outcomes and target still need their separate
+live provider and integrated release cases.
 
 Resumable critical service loops use the selected generated NaturalPostpone
 policy. Retain their reserved timeout caps and independent standard-fault

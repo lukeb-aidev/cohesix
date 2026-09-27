@@ -961,6 +961,20 @@ test_policy = "nonzero"
 minimum_test_count = 1
 
 [[action]]
+id = "federation.m28g-adoption-live"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Recheck both exact native installer qualifications and the independent clean-install walkthrough against frozen Release B steps, time, download and intervention budgets; native target outcomes retain separate owning cases."
+command = 'scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE:?}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE:?}/m28g-adoption-live"'
+timeout_seconds = 1800
+trigger_paths = ["scripts/install/**", "scripts/release_bundle.sh", "scripts/release_qualify.py", "scripts/ci/provider_m28g_adoption.py", "configs/provider_conformance.toml", "docs/QUICKSTART.md", "docs/HOST_TOOLS.md", "docs/PYTHON_SUPPORT.md"]
+expected_evidence = ["m28g-adoption-live-summary", "macos-and-linux-installer-qualifications", "independent-evaluator-raw-attachments", "frozen-adoption-budget-comparison"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
 id = "federation.three-hive-relay"
 stage = 0
 tier = "federation"

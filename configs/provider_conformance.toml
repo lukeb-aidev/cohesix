@@ -119,6 +119,14 @@ lane = "live_safe"
 runner = "provider_m28f_live"
 
 [[cases]]
+id = "m28g-adoption-live"
+group = "packaging"
+providers = []
+proof_class = "live_host"
+lane = "live_safe"
+runner = "provider_m28g_adoption"
+
+[[cases]]
 id = "native-identity-and-postcondition"
 group = "executors"
 providers = ["systemd", "docker", "k8s"]

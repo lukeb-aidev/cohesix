@@ -42,7 +42,7 @@ def test_matrix_rejects_weakened_obligations_unknown_identity_and_unscoped_comma
         "m28e-a2a-live", "m28f-nemo-live",
     }
     assert {case["id"] for case in valid["cases"] if case["proof_class"] == "live_host"} == {
-        "m28c-platform-live", "m28f-nemo-install",
+        "m28c-platform-live", "m28f-nemo-install", "m28g-adoption-live",
     }
     for old, new in [
         ('"discover", "preflight"', '"discover", "discover"'),
@@ -56,6 +56,7 @@ def test_matrix_rejects_weakened_obligations_unknown_identity_and_unscoped_comma
         ("maximum_output_bytes = 1048576", "maximum_output_bytes = 1048577"),
         ('id = "identity-exact-delegation"', 'id = "signed-causal-graph-refusals"'),
         ('runner = "provider_m28_live"', 'runner = "unregistered_runner"'),
+        ('runner = "provider_m28g_adoption"', 'runner = "provider_m28f_live"'),
     ]:
         with pytest.raises(ValueError):
             load(tmp_path, (old, new))
@@ -151,6 +152,8 @@ def test_case_cli_refuses_duplicate_or_incompatible_selection(tmp_path: Path) ->
         ("--case", "m28-authority-live", "--validate-only"),
         ("--case", "m28f-nemo-install"),
         ("--case", "m28f-nemo-live", "--validate-only"),
+        ("--case", "m28g-adoption-live"),
+        ("--case", "m28g-adoption-live", "--validate-only"),
     ]:
         assert run(*selection).returncode != 0
         assert not state.exists()

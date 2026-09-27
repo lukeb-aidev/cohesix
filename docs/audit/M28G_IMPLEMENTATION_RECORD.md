@@ -233,6 +233,20 @@ are not `m28g-integration-live` native-target, job, revocation or recovery
 evidence. Host CLI, Python and benchmark clients retain the same endpoint
 contracts and original identities; only gateway route availability narrows.
 
+Under `m28g-installation-and-integrated-adoption`, the conformance matrix and
+Test Plan now select a bounded `m28g-adoption-live` verifier. It binds the
+assembled release qualification, both native installer results and an
+independent evaluator's raw, hashed walkthrough at one source commit. The
+walkthrough records the three journeys, native desktop launch, doctor,
+data-preserving rollback/uninstall and per-host steps, time, core downloads
+and interventions. The numerical limits were frozen in BENCHMARKS before this
+integrated case ran: the comparable 1.1.0-beta archive baselines are
+26,501,100 Mac and 28,513,510 Linux bytes. The new adoption verifier reports
+`live_host` only and explicitly leaves native target outcome reverification to
+the owning provider cases. Focused matrix, parser and catalog checks passed;
+no evaluator walkthrough or native Release B installer result exists yet, so
+the adoption case has not passed.
+
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,
 PEFT, Apple and NeMo journeys from installed bytes, packaged QEMU and physical
