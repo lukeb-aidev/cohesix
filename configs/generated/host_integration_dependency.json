@@ -5,9 +5,9 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "d420ecd0c26a234bf7c9066cb53e9f307f712bd5e82abbbd0ebdd1cda4822169",
+    "source_sha256": "b1e498b4af0de89b2c07cabbdac1327285bce4cb591dbfea071f554ad6acaa56",
     "resolved_manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
-    "implementation_surface_inventory_sha256": "faf8c55fce99aad2e855b925cbb90dc2ae16bd4835777e11dc19e5346329f546"
+    "implementation_surface_inventory_sha256": "db4c93d3d87dd366716da5187481b801e0eaa09c29aceefa7a3891ff14cad96f"
   },
   "host_profiles": [
     {
@@ -8828,7 +8828,7 @@
         "id": "linux-aarch64-controller",
         "os": "linux",
         "architecture": "aarch64",
-        "version": "1.2.0-beta",
+        "version": "1.2.0",
         "integration_surfaces": [
           "coh",
           "cohsh",
@@ -9437,7 +9437,7 @@
         "id": "linux-aarch64-cuda",
         "os": "linux",
         "architecture": "aarch64",
-        "version": "1.2.0-beta",
+        "version": "1.2.0",
         "integration_surfaces": [
           "coh",
           "cohsh",
@@ -10083,7 +10083,7 @@
         "id": "linux-aarch64-desktop",
         "os": "linux",
         "architecture": "aarch64",
-        "version": "1.2.0-beta",
+        "version": "1.2.0",
         "integration_surfaces": [
           "coh",
           "evidence",
@@ -10367,7 +10367,7 @@
         "id": "macos-controller",
         "os": "macos",
         "architecture": "aarch64",
-        "version": "1.2.0-beta",
+        "version": "1.2.0",
         "integration_surfaces": [
           "coh",
           "cohsh",
@@ -10959,7 +10959,7 @@
         "id": "macos-desktop",
         "os": "macos",
         "architecture": "aarch64",
-        "version": "1.2.0-beta",
+        "version": "1.2.0",
         "integration_surfaces": [
           "coh",
           "evidence",

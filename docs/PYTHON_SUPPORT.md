@@ -72,8 +72,8 @@ metadata. It installs the client, not the native host tools or target runtime;
 use the matching host bundle for those components. The sealed Release A archives
 retain their original bundled wheel.
 
-The M28g source selects `cohesix==1.2.0b0` and
-`cohesix-nemo-kit==1.2.0b0` for the unqualified `1.2.0-beta` candidate.
+The M28g source selects `cohesix==1.2.0` and
+`cohesix-nemo-kit==1.2.0` for the unqualified `1.2.0` candidate.
 Both wheels are built from the compiler's exact source inventory and must be
 installed with the matching native host candidate for Release B testing.
 They do not replace the published Release A client until the assembled release
@@ -95,8 +95,7 @@ python3 -m pip install -e 'tools/cohesix-py[dev]'
 The Python package versions are defined in
 [`tools/cohesix-py/pyproject.toml`](../tools/cohesix-py/pyproject.toml) and
 [`integrations/nemo-agent-toolkit/pyproject.toml`](../integrations/nemo-agent-toolkit/pyproject.toml).
-For M28g, both use the PEP 440 spelling `1.2.0b0` of the Release B
-`1.2.0-beta` label. The installer requires both selected wheel versions to
+For M28g, both use the stable Release B version `1.2.0`. The installer requires both selected wheel versions to
 match that candidate identity.
 
 ## Backends

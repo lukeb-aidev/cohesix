@@ -34,7 +34,7 @@ def test_package_roots_keep_desktop_dependencies_optional(
         manifest.append(f"{hashlib.sha256(data).hexdigest()}  {relative}")
     (bundle / "MANIFEST.sha256").write_text("\n".join(manifest) + "\n")
     reference = {
-        "bundle": str(bundle), "version": "1.2.0-beta", "host": "linux",
+        "bundle": str(bundle), "version": "1.2.0", "host": "linux",
         "source_commit": "a" * 40, "archive_sha256": "b" * 64,
     }
 
@@ -60,7 +60,7 @@ def test_package_roots_keep_desktop_dependencies_optional(
     desktop_control = (desktop_root / "DEBIAN/control").read_text()
     assert "libwebkit" not in controller_control
     assert f"Maintainer: {maintainer}" in controller_control
-    assert "cohesix-controller (= 1.2.0~beta)" in desktop_control
+    assert "cohesix-controller (= 1.2.0)" in desktop_control
     assert "libgtk-3-0t64 | libgtk-3-0" in desktop_control
     assert "libwebkit2gtk-4.1-0" in desktop_control
     desktop_entry = desktop_root / "usr/share/applications/com.cohesix.swarmui.desktop"
@@ -76,7 +76,7 @@ def test_signing_failure_leaves_no_publishable_output(
     monkeypatch.setattr(deb.platform, "machine", lambda: "aarch64")
     monkeypatch.setattr(deb.shutil, "which", lambda *_: "/usr/bin/tool")
     monkeypatch.setattr(deb, "load_reference", lambda *_: {
-        "version": "1.2.0-beta", "source_commit": "a" * 40,
+        "version": "1.2.0", "source_commit": "a" * 40,
         "archive_sha256": "b" * 64,
     })
 
@@ -110,3 +110,33 @@ def test_builder_refuses_unselected_public_maintainer(
     for invalid in (None, "Lukas Bower", "Lukas <bad\nInjected: yes>"):
         with pytest.raises(ValueError, match="public Debian maintainer"):
             deb.build(tmp_path / "reference.json", tmp_path / "out", "KEY", invalid)
+
+
+def test_signing_passphrase_comes_from_inherited_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allow a remote native builder to sign without a secret in argv or files."""
+    monkeypatch.setattr(deb.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(deb.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(deb.shutil, "which", lambda *_: "/usr/bin/tool")
+    monkeypatch.setattr(deb, "load_reference", lambda *_: {
+        "version": "1.2.0", "source_commit": "a" * 40,
+        "archive_sha256": "b" * 64,
+    })
+    monkeypatch.setattr(deb, "make_package", lambda _r, _p, subset, _o, _m: {
+        "package": subset, "path": f"{subset}.deb",
+    })
+    monkeypatch.setenv("COHESIX_DEB_SIGNING_PASSPHRASE_STDIN", "1")
+    observed: list[str] = []
+
+    def fake_sign(command: list[str]) -> None:
+        observed.extend(command)
+        Path(command[command.index("--output") + 1]).write_text("signature")
+
+    monkeypatch.setattr(deb, "checked", fake_sign)
+    result = deb.build(tmp_path / "reference.json", tmp_path / "packages",
+                       "PUBLISHER", "Lukas Bower <release@example.com>")
+    assert result["version"] == "1.2.0"
+    assert observed[:7] == ["gpg", "--batch", "--yes", "--pinentry-mode",
+                            "loopback", "--passphrase-fd", "0"]
+    assert (tmp_path / "packages/installers.json.asc").is_file()

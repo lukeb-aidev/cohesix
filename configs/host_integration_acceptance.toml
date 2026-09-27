@@ -3946,7 +3946,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "macos-controller"
 os = "macos"
 architecture = "aarch64"
-version = "1.2.0-beta"
+version = "1.2.0"
 integration_surfaces = ["coh", "cohsh", "direct_console", "evidence", "fleet", "fuse_direct", "fuse_rest", "hive_gateway", "host_sidecar", "host_ticket_agent", "otel", "prometheus", "rest", "siem"]
 required_credentials = ["TCP_AUTH", "ROOT_TICKET", "REQUEST_AUTH", "DELEGATION_KEY", "AGENT_TICKET"]
 
@@ -4385,7 +4385,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "linux-aarch64-controller"
 os = "linux"
 architecture = "aarch64"
-version = "1.2.0-beta"
+version = "1.2.0"
 integration_surfaces = ["coh", "cohsh", "direct_console", "evidence", "fleet", "fuse_direct", "fuse_rest", "hive_gateway", "host_sidecar", "host_ticket_agent", "otel", "prometheus", "rest", "siem"]
 required_credentials = ["TCP_AUTH", "ROOT_TICKET", "REQUEST_AUTH", "DELEGATION_KEY", "AGENT_TICKET", "SIDECAR_TICKET"]
 
@@ -4967,7 +4967,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "linux-aarch64-cuda"
 os = "linux"
 architecture = "aarch64"
-version = "1.2.0-beta"
+version = "1.2.0"
 integration_surfaces = ["coh", "cohsh", "direct_console", "evidence", "fleet", "fuse_direct", "fuse_rest", "gpu_bridge", "hive_gateway", "host_sidecar", "host_ticket_agent", "jetson", "network", "otel", "prometheus", "rest", "siem"]
 required_credentials = ["TCP_AUTH", "ROOT_TICKET", "REQUEST_AUTH", "DELEGATION_KEY", "AGENT_TICKET", "SIDECAR_TICKET", "GPU_MAC", "GPU_INVENTORY_TICKET"]
 
@@ -5443,7 +5443,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "macos-desktop"
 os = "macos"
 architecture = "aarch64"
-version = "1.2.0-beta"
+version = "1.2.0"
 integration_surfaces = ["coh", "evidence", "swarmui", "rest"]
 required_credentials = ["TCP_AUTH", "REQUEST_AUTH"]
 
@@ -5545,7 +5545,7 @@ schema = "cohesix-host-package-profile/v1"
 id = "linux-aarch64-desktop"
 os = "linux"
 architecture = "aarch64"
-version = "1.2.0-beta"
+version = "1.2.0"
 integration_surfaces = ["coh", "evidence", "swarmui", "rest"]
 required_credentials = ["TCP_AUTH", "REQUEST_AUTH"]
 

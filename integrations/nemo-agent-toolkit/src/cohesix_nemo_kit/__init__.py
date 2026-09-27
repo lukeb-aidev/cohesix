@@ -5,4 +5,4 @@ Purpose: Expose the installed kit version without importing optional clients.
 Copyright 2026 Lukas Bower
 """
 
-__version__ = "1.2.0b0"
+__version__ = "1.2.0"

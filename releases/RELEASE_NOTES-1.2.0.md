@@ -2,7 +2,7 @@
 <!-- Purpose: Explain the Release B candidate in plain English with measured evidence and publication limits. -->
 <!-- Copyright 2026 Lukas Bower -->
 
-# Cohesix 1.2.0-beta candidate
+# Cohesix 1.2.0 candidate
 
 Release B brings more of an edge AI job into one governed journey. An operator
 can ask the Queen to admit work, run it on the appropriate host, inspect the
@@ -34,7 +34,7 @@ locally on a supported Mac. Cohesix does not run GPU libraries inside seL4.
   MCP and A2A clients separate from the CUDA provider environment. A model's
   text is never treated as a signed Cohesix job outcome.
 - **One version across the Python clients.** The Cohesix and NeMo wheels use
-  `1.2.0b0`, Python's spelling of `1.2.0-beta`. The host tools, generated
+  `1.2.0`. The host tools, generated
   contracts and selected package inventory are checked together.
 
 ## Evidence so far
@@ -57,6 +57,9 @@ model-quality journey in the Release B matrix.
 
 The planned distribution includes portable Mac, Linux ARM64 and Pi 4 archives,
 a signed and notarized macOS `.pkg`, and signed Ubuntu ARM64 `.deb` packages.
+The Debian publisher's public key has fingerprint
+`7E27 A4AB 355D 2EA5 6571 8CA4 1059 A516 E53B 0B70`; verify it through an
+independent trusted release announcement before trusting package signatures.
 The native installers and exact distributed archives are still being assembled
 and qualified. Do not install a candidate by treating a source build or an
 unsigned package as a published release. Release 1.1.0-beta remains the

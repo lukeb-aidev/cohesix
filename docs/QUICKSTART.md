@@ -3,12 +3,12 @@
 <!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix 1.2.0-beta candidate quickstart
+# Cohesix 1.2.0 candidate quickstart
 
-The 1.2.0-beta candidate is still undergoing M28g qualification. Use the
+The 1.2.0 candidate is still undergoing M28g qualification. Use the
 1.1.0-beta release record for the currently published release. The steps below
 apply to an exact, independently
-verified 1.2.0-beta candidate supplied for qualification; they do not claim
+verified 1.2.0 candidate supplied for qualification; they do not claim
 that Release B has been published.
 
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
@@ -22,7 +22,7 @@ admission, durable journals and signed evidence as the native recipes.
 
 ## Choose your download
 
-Use all files from the same release. For **1.2.0-beta**:
+Use all files from the same release. For **1.2.0**:
 
 When upgrading from 1.1.0-beta, extract into new directories and install the
 bundled Python wheel there. Keep each host's binaries, QEMU image and generated
@@ -33,9 +33,9 @@ own package versions; `VERSION.txt` identifies the overall release.
 
 | You want to… | Download | What it contains |
 | --- | --- | --- |
-| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.2.0-beta-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
-| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.2.0-beta-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
-| Boot a physical Raspberry Pi 4 | `Cohesix-1.2.0-beta-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
+| Run QEMU or operate a Pi from an Apple Silicon Mac | `Cohesix-1.2.0-MacOS.tar.gz` | Mac binaries, a Mac QEMU guest, Python wheel and runtime setup |
+| Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.2.0-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
+| Boot a physical Raspberry Pi 4 | `Cohesix-1.2.0-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
 
 ### Native host packages in the candidate
 
@@ -47,8 +47,14 @@ Installer signature and stapled notarization; Linux must verify
 manifest alone cannot establish publisher identity. Do not install an
 unqualified candidate as a production upgrade.
 
+The Debian publisher key fingerprint is
+`7E27 A4AB 355D 2EA5 6571 8CA4 1059 A516 E53B 0B70`. Its public copy is
+[`cohesix-debian-publisher-2026.asc`](../releases/cohesix-debian-publisher-2026.asc).
+Confirm this fingerprint through a trusted release announcement before
+using the key to verify a package signature.
+
 On a supported Apple Silicon Mac, install the verified
-`Cohesix-1.2.0-beta-MacOS.pkg` with macOS Installer. Open **SwarmUI** from
+`Cohesix-1.2.0-MacOS.pkg` with macOS Installer. Open **SwarmUI** from
 Applications, Finder, Spotlight or the Dock. The host tools live in
 `/Library/Application Support/Cohesix/bin`; the app resolves them without a
 Terminal `PATH`. The installed `cohesix-uninstall` helper in that directory
@@ -56,8 +62,8 @@ checks the package receipt and owned file hashes before removing package code.
 It leaves user state, credentials, models and evidence in place.
 
 On Ubuntu ARM64, install the verified
-`cohesix-controller_1.2.0~beta_arm64.deb` with apt. The optional
-`cohesix-swarmui_1.2.0~beta_arm64.deb` adds the GNOME application entry and
+`cohesix-controller_1.2.0_arm64.deb` with apt. The optional
+`cohesix-swarmui_1.2.0_arm64.deb` adds the GNOME application entry and
 desktop dependencies. Open **SwarmUI** from GNOME search or the application
 grid. Headless controller use needs only the controller package; tools are
 under `/usr/lib/cohesix/bin`. `apt remove` or `apt purge` removes package
@@ -68,7 +74,7 @@ native installation does not adopt its credentials or evidence automatically.
 These native packages install the host controller and, where selected, SwarmUI.
 They do not install the seL4 QEMU guest image, `qemu/run.sh`, or a QEMU
 executable. To run the VM, keep the matching Mac or Linux release archive and
-its guest files together, install QEMU through the supported host setup, and
+its guest files together, select QEMU with `setup_environment.sh --with-qemu`, and
 follow [Boot the QEMU guest](#3-boot-the-qemu-guest). Package installation by
 itself does not provision a bootable VM.
 
@@ -93,8 +99,8 @@ one you downloaded; do not paste angle-bracket placeholders literally.
 ```bash
 mkdir -p "$HOME/cohesix-releases"
 cd "$HOME/cohesix-releases"
-tar -xzf "$HOME/Downloads/Cohesix-1.2.0-beta-MacOS.tar.gz"
-cd Cohesix-1.2.0-beta-MacOS
+tar -xzf "$HOME/Downloads/Cohesix-1.2.0-MacOS.tar.gz"
+cd Cohesix-1.2.0-MacOS
 ```
 
 Before running anything, verify **all** manifest entries:
@@ -126,15 +132,33 @@ access; run the script as your normal user:
 source .venv/bin/activate
 ```
 
-The script installs runtime dependencies and the bundled Python wheel into
-this bundle's `.venv`. It does not build Cohesix or install CUDA drivers.
-`--check` verifies an already prepared installation without installing packages.
+The script installs host runtime dependencies and the bundled Python wheel into
+this bundle's `.venv`. It does not build Cohesix or install CUDA drivers. QEMU
+is optional for host-only or Pi operation. Before Step 3, run:
+
+```bash
+./scripts/setup_environment.sh --with-qemu
+./scripts/setup_environment.sh --check --with-qemu
+```
+
+On Mac, setup checks the actual four-core HVF startup envelope. If the current
+Homebrew QEMU fails it, setup builds the pinned QEMU 10.1.0 with the Cohesix
+HVF fix from hash-checked upstream source in your user directory. This needs
+Homebrew build dependencies and at least 2 GiB free; it does not replace the
+system QEMU. On Linux, setup uses Ubuntu's `qemu-system-arm` package and checks
+four-core KVM startup. If your system QEMU cannot start that profile, setup
+stops with a clear error instead of silently using TCG. `--check` never
+installs or builds packages. The release launcher selects the verified QEMU
+from this bundle's `.venv` when present.
+On a Linux host without a desktop, add `--headless` to both setup commands;
+this omits SwarmUI's graphical libraries while retaining the controller,
+Python and optional QEMU dependencies.
 
 | Host | Requirements and behavior |
 | --- | --- |
-| Mac | macOS 26 or later, Apple Silicon, and Homebrew available if packages need installing. QEMU must advertise HVF. Use a native ARM64 terminal, not Rosetta. |
-| Linux | Ubuntu 22.04, 24.04 or 26.04 on ARM64. Setup uses apt and enables Universe for required runtime packages, including WebKitGTK 4.1. Other distributions and x86-64 are not supported by this installer. |
-| Linux QEMU | For the native release profile, `/dev/kvm` must be readable/writable by your user and the host counter must be 31.25 MHz. The Linux guest is built for that counter; the Mac guest is built for 24 MHz. A successful package install alone does not check KVM eligibility. |
+| Mac | macOS 26 or later and Apple Silicon. Homebrew supplies build dependencies if pinned QEMU is needed. The four-core HVF startup probe must pass; advertising HVF is insufficient. Use a native ARM64 terminal, not Rosetta. |
+| Linux | Ubuntu 22.04, 24.04 or 26.04 on ARM64. Setup uses apt and enables Universe for required runtime packages; the default desktop path includes WebKitGTK 4.1. Other distributions and x86-64 are not supported by this installer. |
+| Linux QEMU | For the native release profile, `/dev/kvm` must be readable/writable by your user and the host counter must be 31.25 MHz. The Linux guest is built for that counter; the Mac guest is built for 24 MHz. The setup probe checks startup; a guest boot and authenticated client check remain separate. |
 | NVIDIA host | Jetson is one reference Linux ARM64 host. Optional GPU discovery needs the host's compatible CUDA/NVML stack. Keep Jetson's board-managed driver packages; the runtime installer does not replace them. |
 
 Verify the tools without a target:

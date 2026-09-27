@@ -14,7 +14,8 @@ acceptance. The 1.1.0-beta release record remains at its original scope.
 Title/ID: `m28g-macos-native-installer`, `m28g-ubuntu-arm64-native-installer`,
 `m28g-host-clients-as-built-alignment`, `m28g-installation-and-integrated-adoption`,
 `m28g-release-b-qualification`, `m28g-mcp-tool-catalog`,
-`m28g-a2a-agent-facade`, `m28g-integration-live`.
+`m28g-a2a-agent-facade`, `m28g-integration-live`,
+`m28g-pypi-1.2.0b0-publication`.
 
 Milestone: 28g — Installation, Integrated User Qualification and Release B.
 
@@ -562,6 +563,85 @@ After the failed 020a Stage 05 attempts, Lukas Bower renewed the existing
 earlier attempts remain failed. The fresh `522463fa1ade` QEMU and Pi Stage 05
 governance results above close their staged lane; the selected Jetson KVM
 pressure control remains unexecuted.
+
+## Optional QEMU setup and Python index preparation
+
+Under `m28g-macos-native-installer`, `m28g-ubuntu-arm64-native-installer` and
+`m28g-pypi-1.2.0b0-publication`, the release setup now makes QEMU an explicit
+`--with-qemu` choice. Its Python probe starts the selected four-core HVF or KVM
+machine briefly, rather than accepting version and accelerator listings alone.
+The Mac fallback builds from the pinned upstream QEMU 10.1.0 source archive
+and the selected HVF state-sync patch in a user-owned prefix; it is separate
+from the native Cohesix installer. Ubuntu ARM64 selects apt's
+`qemu-system-arm`. The repository setup skill and quickstart describe that
+choice and distinguish a startup check from a booted, authenticated guest.
+On Mac, installed Homebrew QEMU 11.0.3 advertised HVF but aborted this startup
+probe; the previously selected patched 10.1.0 passed. On Jetson Ubuntu 24.04,
+apt QEMU 8.2.2 booted the earlier exact-source 522 guest and completed an
+authenticated Queen ping. Neither check qualifies every advertised host.
+
+The Python index workflow now selects the future annotated `v1.2.0-beta` tag
+on main, builds `cohesix` 1.2.0b0 from the compiler-selected source inventory,
+retains wheel/sdist hashes, and hands the exact files to the protected `pypi`
+environment for OIDC publishing. The source README carries the matching pip
+command. A local candidate wheel/sdist build, normalized version check,
+Twine metadata check and 38 focused setup/release tests passed. An isolated
+copy of the bundle setup installed the 1.2.0b0 wheel, selected the known-good
+Mac QEMU binary and passed `--check --with-qemu`. The new probe also passed on
+the Jetson's apt 8.2.2 KVM binary, where the copied setup script passed
+`--check --headless --with-qemu` without requiring graphical runtime packages.
+The first from-source Mac fallback build
+failed because QEMU's unused Apple Paravirtualized Graphics module calls APIs
+obsoleted by the installed macOS 27 SDK; the builder now disables that feature,
+and its corrected build is pending. Public PyPI upload remains pending the
+final approved release tag and independently checked public hashes. The
+generated inventory was refreshed through `coh-rtc` and
+`scripts/check-generated.sh` passed.
+The [current PyPI project](https://pypi.org/pypi/cohesix/json) still lists
+`1.1.0b1` and the `Cohesix` user owner, with no organization owner; the
+historical organization request and transfer remain pending. GitHub's `pypi`
+environment still requires the named `lukeb-aidev` reviewer. The new workflow
+passed `actionlint` before publication.
+
+On 27 September 2026 the release owner changed Release B from the planned
+`1.2.0-beta` to stable `1.2.0`. The source inventory, both wheel metadata,
+NeMo kit, A2A Agent Card, installer names, release notes, PyPI workflow and
+build-plan acceptance text now select the stable version. Earlier
+`1.2.0-beta`/`1.2.0b0` observations above remain historical evidence for
+their original source and artifacts. They do not qualify the new `1.2.0`
+candidate; source-bound release checks, installed package checks and live
+acceptance must be repeated on the exact stable source.
+
+The release owner also authorized a dedicated Debian signing key. A new
+passphrase-protected Ed25519 key was created in a separate macOS GPG home,
+with its passphrase in the login keychain. Its fingerprint is
+`7E27A4AB355D2EA565718CA41059A516E53B0B70`; an independent `gpgv`
+probe verified a detached signature against the exported public key.
+The public key copy is tracked under `releases/`. This probe establishes key
+control and verification mechanics, not a signed or qualified `.deb` package.
+The encrypted key was imported into the selected Jetson builder's private GPG
+home. A Jetson-created detached signature was independently verified on the
+Mac with `gpgv` against the exported public key. The native builder can read
+the passphrase through inherited standard input, keeping it out of arguments,
+environment values and the package payload.
+
+The pinned Mac QEMU 10.1.0 source builder completed after preserving upstream's
+`com.apple.security.hypervisor` signing entitlement on the staged executable.
+Its new user-owned prefix passed the four-core HVF startup check and
+`scripts/setup_environment.sh --check --with-qemu`; the codesign entitlement
+was read back from the final binary. Homebrew 11.0.3 remains the observed
+failing selection on this Mac. This does not yet prove a booted stable
+`1.2.0` Queen or every supported Mac.
+
+The stable source's focused Python release, NeMo, installer, setup and archive
+checks passed after a NeMo wheel filename selector and packaged public-key
+link were corrected. `cohesix-1.2.0` wheel and sdist and the
+`cohesix_nemo_kit-1.2.0` wheel built from the selected inventory; strict
+Twine metadata passed for the SDK distributions. The selected A2A Agent Card
+version Rust test and an isolated stable SDK install, import and both CLI help
+checks passed. `actionlint`, `shellcheck`, `git diff --check` and
+`scripts/check-generated.sh` passed. All are source checks; the stable
+candidate's installed and live acceptance gates remain outstanding.
 
 M28g remains **In Progress**. The `522463fa1ade` staged results are source
 and target evidence, not qualification of the installed release.

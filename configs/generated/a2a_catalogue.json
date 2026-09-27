@@ -11,7 +11,7 @@
   "card_path": "/.well-known/agent-card.json",
   "enabled": true,
   "http_path": "/a2a",
-  "provider_graph_sha256": "69cffd8cc62dd100006f068d75c844b444ece2a9c39025309b7c241b7c8800ed",
+  "provider_graph_sha256": "e4de7bbee6c63362c22ab7400eb777ef97ac24472bb4b879feac7fcdc7459330",
   "resolved_manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
   "revision": "0.3.0",
   "schema": "cohesix-a2a-catalogue/v1",

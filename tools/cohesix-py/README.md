@@ -19,17 +19,17 @@ venv or pass gateway credentials to the CUDA executor.
 
 ## Install
 
-Install the published Python client (Python 3.11 or later):
+For the 1.2.0 release, install the Python client (Python 3.11 or later):
 
 ```bash
-python3 -m pip install 'cohesix==1.1.0b1'
+python3 -m pip install 'cohesix==1.2.0'
 ```
 
 For optional host integration adapters or PEFT/LoRA helper package probes:
 
 ```bash
-python3 -m pip install 'cohesix[integrations]==1.1.0b1'
-python3 -m pip install 'cohesix[ml]==1.1.0b1'
+python3 -m pip install 'cohesix[integrations]==1.2.0'
+python3 -m pip install 'cohesix[ml]==1.2.0'
 ```
 
 These install the Python client, not the matching native Cohesix host tools,
@@ -37,7 +37,7 @@ target profile, or a live target. In a source checkout, use
 `python3 -m pip install -e tools/cohesix-py` for editable development instead.
 
 For the qualified native import/training workflow, see
-[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PRIVATE_LORA_RELEASE.md).
+[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/PRIVATE_LORA_RELEASE.md).
 `cohesix.playbooks.run_peft_release` routes plan/apply/watch/explain/verify/recover
 to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
 prepares the pinned native profile; `examples/private_lora_request.py` prepares
@@ -48,10 +48,10 @@ subsequent requests from reviewed provenance. Preparation is not execution evide
 operation/request identity and uncertain or failed states; only CLI `verify`
 can set `requested_outcome_verified=True`. See
 [Python support](../../docs/PYTHON_SUPPORT.md) for the complete example.
-Use a wheel built from the matching M28b source; older published wheels may not
-contain this client.
+Use the 1.2.0 wheel for the matching selected client contracts; older
+published wheels may not contain this client.
 
-The in-progress M28c source also provides `cohesix.vmlx_compat.VmlxClient`
+The 1.2.0 client also provides `cohesix.vmlx_compat.VmlxClient`
 for one explicitly selected vMLX model on an HTTP loopback endpoint. Its
 `generate(prompt, max_tokens=32)` returns private text plus an `evidence()`
 view of model identity, token counts and prompt/output SHA-256 digests. It
@@ -59,7 +59,7 @@ rejects redirects, ambiguous model listings, tool calls and oversized
 responses. The client does not admit a Cohesix ticket, verify an outcome or
 manage a model generation. See [the M28c host contract](../../docs/HOST_TOOLS.md)
 for the installed vMLX test and its model-byte mutation limit; this source API
-is not in the published 1.1.0b1 wheel.
+was not in the 1.1.0b1 wheel.
 
 With a separately started local server that names the selected model, a
 developer can inspect a bounded response:
@@ -194,7 +194,7 @@ cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-por
 ```
 
 Artifacts are written under `out/examples/playbooks/<playbook-id>/`.
-See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/USE_CASES.md) for the capability map and
+See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/USE_CASES.md) for the capability map and
 the contribution path toward complete generated workflows.
 
 ## Existing examples
@@ -241,7 +241,7 @@ scripts/ci/python_compat_run.sh \
   --state-dir out/python-compat/m26e-wheel
 ```
 
-See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/PYTHON_SUPPORT.md) for target
+See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/PYTHON_SUPPORT.md) for target
 projection commands and proof-boundary details.
 
 ## Installed CUDA and LoRA journeys
@@ -250,5 +250,5 @@ projection commands and proof-boundary details.
 and signed verifier. `cohesix.journey.run` returns the same versioned outcome
 and exit mapping. Only verified requested completion returns zero; an ACK,
 timeout or recovered failed canary does not. Keep state outside runner scratch.
-See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/docs/CI_WORKFLOWS.md)
+See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/v1.2.0/docs/CI_WORKFLOWS.md)
 for exact installation, config, authority and recovery steps.

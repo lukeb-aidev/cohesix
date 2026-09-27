@@ -21,14 +21,14 @@ def test_selected_nemo_wheel_binds_exact_source(tmp_path: Path) -> None:
     report = kit.build(ROOT, inventory, tmp_path / "nemo")
     wheel = tmp_path / "nemo" / report["wheel"]["filename"]
     assert wheel.is_file()
-    assert report["wheel"]["version"] == "1.2.0b0"
+    assert report["wheel"]["version"] == "1.2.0"
     assert report["proof_boundary"]["kit_install_is_target_proof"] is False
     expected = kit.selected_sources(json.loads(inventory.read_text()))
     assert set(report["source_files"]) == set(expected)
     assert kit.verify(ROOT, inventory, tmp_path / "nemo") == report
     changed = {**report["source_files"], "src/cohesix_nemo_kit/native.py": "0" * 64}
     with pytest.raises(ValueError, match="source digest mismatch"):
-        kit.inspect_wheel(wheel, changed, "1.2.0b0")
+        kit.inspect_wheel(wheel, changed, "1.2.0")
     (tmp_path / "nemo/nemo-distribution.json").write_text(
         json.dumps({**report, "inventory_sha256": "0" * 64})
     )

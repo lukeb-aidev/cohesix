@@ -1365,6 +1365,28 @@ evidence_requirement = "shell validation and exact output hash"
 current_observed_mode = "host_setup_entrypoint"
 
 [[tracked_rules]]
+id = "release-qemu-compat-probe"
+exact = "scripts/install/qemu_compat.py"
+class = "production_live"
+owner = "release-tooling"
+production_reachable = true
+selection_source = "exact release support-file list"
+package_disposition = "release_host_setup"
+evidence_requirement = "startup probe and source-checked file hash"
+current_observed_mode = "host_setup_entrypoint"
+
+[[tracked_rules]]
+id = "release-macos-qemu-installer"
+exact = "scripts/install/setup_qemu_macos.py"
+class = "production_live"
+owner = "release-tooling"
+production_reachable = true
+selection_source = "exact release support-file list"
+package_disposition = "release_host_setup"
+evidence_requirement = "pinned source and patch hashes, signed startup probe"
+current_observed_mode = "host_setup_entrypoint"
+
+[[tracked_rules]]
 id = "python-compatibility-runner-release"
 exact = "scripts/ci/python_compat_run.sh"
 class = "production_live"
@@ -1454,7 +1476,7 @@ current_observed_mode = "historical_release_notes"
 
 [[tracked_rules]]
 id = "release-current-notes"
-exact = "releases/RELEASE_NOTES-1.2.0-beta.md"
+exact = "releases/RELEASE_NOTES-1.2.0.md"
 class = "contract"
 owner = "release-tooling"
 production_reachable = false
@@ -1462,6 +1484,17 @@ selection_source = "release.version"
 package_disposition = "versioned_release_document"
 evidence_requirement = "version and exact output hash must agree"
 current_observed_mode = "current_release_notes"
+
+[[tracked_rules]]
+id = "release-debian-publisher-key"
+exact = "releases/cohesix-debian-publisher-2026.asc"
+class = "contract"
+owner = "release-tooling"
+production_reachable = false
+selection_source = "approved native Debian publisher fingerprint"
+package_disposition = "release_support_file"
+evidence_requirement = "verify fingerprint against the independently approved publisher identity"
+current_observed_mode = "public_verification_key"
 
 [[tracked_rules]]
 id = "release-logo"
@@ -1632,7 +1665,7 @@ expected_artifacts = [
 
 [release]
 schema = "cohesix-runtime-release-manifest/v2"
-version = "1.2.0-beta"
+version = "1.2.0"
 host_tools = [
   "bin/cas-tool",
   "bin/coh",
@@ -1733,6 +1766,7 @@ public_documents = [
   "docs/WORKER_TICKETS.md",
   "docs/M27A_AUTHORITY.md",
   "packaging/README.md",
+  "releases/cohesix-debian-publisher-2026.asc",
 ]
 host_assets = [
   "docs/COHESIX_LOGO.png",
@@ -1931,9 +1965,11 @@ support_files = [
   "packaging/ci/cohesix-journey.yml",
   "releases/RELEASE_NOTES-1.0.0-beta.md",
   "releases/RELEASE_NOTES-1.1.0-beta.md",
-  "releases/RELEASE_NOTES-1.2.0-beta.md",
+  "releases/RELEASE_NOTES-1.2.0.md",
   "scripts/ci/python_compat_run.sh",
   "scripts/setup_environment.sh",
+  "scripts/install/qemu_compat.py",
+  "scripts/install/setup_qemu_macos.py",
 ]
 
 versioned_migrations = []
@@ -1942,9 +1978,9 @@ generated_bundle_files = [
   "BUILD_PROVENANCE.json",
   "MANIFEST.sha256",
   "VERSION.txt",
-  "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
+  "nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl",
   "nemo/nemo-distribution.json",
-  "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
+  "python/dist/cohesix-1.2.0-py3-none-any.whl",
   "python/m26e-python-package.json",
   "qemu/run.sh",
   "cas/max_chunks_v1.txt.sha256",

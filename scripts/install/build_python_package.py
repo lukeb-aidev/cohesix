@@ -192,7 +192,7 @@ def build(repo: Path, inventory_path: Path, out: Path) -> dict:
         project = tomllib.loads((stage / "pyproject.toml").read_text())
         if project["project"]["name"] != "cohesix":
             raise ValueError("unexpected Python project")
-        # The existing version has an alpha spelling normalized by packaging.
+        # Normalize the selected version under Python packaging rules.
         from packaging.version import Version
         version = str(Version(project["project"]["version"]))
         environment = os.environ.copy()

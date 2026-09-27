@@ -115,6 +115,9 @@ def build(reference_path: Path, output: Path, key: str | None,
         maintainer,
     ):
         raise ValueError("select a public Debian maintainer name and email")
+    passphrase_stdin = os.environ.get("COHESIX_DEB_SIGNING_PASSPHRASE_STDIN", "")
+    if passphrase_stdin not in ("", "1"):
+        raise ValueError("invalid Debian signing passphrase input mode")
     reference = load_reference(reference_path, "linux")
     if output.exists() or output.is_symlink():
         raise ValueError("installer output already exists")
@@ -138,11 +141,14 @@ def build(reference_path: Path, output: Path, key: str | None,
         }
         manifest_path = published / "installers.json"
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        checked([
-            "gpg", "--batch", "--yes", "--armor", "--detach-sign",
-            "--local-user", key, "--output", str(published / "installers.json.asc"),
-            str(manifest_path),
+        signing = ["gpg", "--batch", "--yes"]
+        if passphrase_stdin == "1":
+            signing.extend(["--pinentry-mode", "loopback", "--passphrase-fd", "0"])
+        signing.extend([
+            "--armor", "--detach-sign", "--local-user", key, "--output",
+            str(published / "installers.json.asc"), str(manifest_path),
         ])
+        checked(signing)
         os.replace(published, output)
     return manifest
 

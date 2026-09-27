@@ -61,7 +61,7 @@ def test_installer_manifest_refuses_duplicate_keys_and_path_escape(tmp_path: Pat
 
 
 def test_reference_fields_rejects_changed_archive_identity() -> None:
-    selected = {"host": "linux", "version": "1.2.0-beta",
+    selected = {"host": "linux", "version": "1.2.0",
                 "source_commit": "a" * 40, "archive_sha256": "b" * 64}
     manifest = {"schema": "cohesix-m28g-installers/v1", **selected}
     native.reference_fields(selected, manifest)

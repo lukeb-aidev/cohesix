@@ -141,9 +141,9 @@ owned by their specific contracts.
 | [28c](#28c) | macOS Developer Actions and Local Metal Workbench | Complete — selected Mac developer journey |
 | [28c1](#28c1) | Governed Mac MLX Release and vMLX Rollout | Complete — selected Mac component |
 | [28d](#28d) | MCP Access to Complete Selected Workflows | Complete — selected MCP-only Jetson Orin component |
-| [28e](#28e) | A2A Delegation of Durable Selected Jobs | In Progress |
-| [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Planned |
-| [28g](#28g) | Installation, Integrated User Qualification and Release B | Planned |
+| [28e](#28e) | A2A Delegation of Durable Selected Jobs | Complete — selected A2A Jetson Orin component |
+| [28f](#28f) | NeMo Agent Toolkit Adoption Kit and Live Integration | Complete — selected Jetson/KVM component |
+| [28g](#28g) | Installation, Integrated User Qualification and Release B | In Progress |
 | [29](#29) | Extended Formal Assurance and NIST Evidence | Deferred — explicit activation |
 | [30](#30) | Broader Providers, Federation, Deployment and Domain Workflows | Deferred — explicit activation |
 | [31](#31) | Semantic Object Fabric and Context Capsules | Deferred — explicit activation |
@@ -190,8 +190,8 @@ production Worker binding and Queen reboot persistence are separate later claims
 
 ### Release packaging
 
-Retain **A = 1.1.0-beta**, **B = 1.2.0-beta**, **C = 1.3.0-beta** and
-`Cohesix-<version>-beta-<platform>`. A delivers recoverable CUDA, Verified Private
+Retain **A = 1.1.0-beta**, **B = 1.2.0**, **C = 1.3.0-beta** and
+`Cohesix-<version>-<platform>`. A delivers recoverable CUDA, Verified Private
 LoRA Release, adoption/CI and the substantial native SwarmUI showcase. B is the
 qualified 28–28g ecosystem release below; C remains reserved. No version is
 published or reassigned by this planning change.
@@ -12349,8 +12349,8 @@ separately with exact conditions and uncertainty. Reuse compatible component
 measurements under TEST_PLAN provenance rules; do not invent results, speedups
 or external-user tests, and do not change benchmark thresholds to pass.
 
-Retain reserved Release A = `1.1.0-beta`, B = `1.2.0-beta`, C = `1.3.0-beta`
-and `Cohesix-<version>-beta-<platform>` artifact naming. This is the A cut; B/C
+Retain reserved Release A = `1.1.0-beta`, B = `1.2.0`, C = `1.3.0-beta`
+and `Cohesix-<version>-<platform>` artifact naming. This is the A cut; B/C
 remain reserved for later qualified delivery. Existing release files, exception
 records and accepted/historical evidence are immutable. A plan or successful
 build cannot create release acceptance.
@@ -12519,7 +12519,7 @@ pending.
 ## Release B — Governed CUDA, PEFT, Apple and NeMo Workflows <a id="release-b"></a>
 
 **Status:** Planned — owner-directed scope, 23 September 2026. Milestones
-28–28g together deliver **1.2.0-beta**. Release A and every 0–27g milestone,
+28–28g together deliver **1.2.0**. Release A and every 0–27g milestone,
 including 27g's status, tasks, acceptance and evidence, remain unchanged.
 This planning revision neither activates implementation nor approves a release.
 
@@ -13417,6 +13417,8 @@ due diligence under the owner's renewed `EX-2026-0024` exception. Earlier
 failed attempts retain their results. Signed native installers, installed
 cross-client qualification, selected Jetson KVM pressure and the other
 assembled release gates remain outstanding. No Release B acceptance is claimed.
+On 27 September the owner selected stable `1.2.0`; earlier beta-source
+observations retain their historical identity and do not qualify this source.
 The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
 the selected source-level work and unmet installer, host and release gates.
 
@@ -13522,10 +13524,11 @@ Goal: Install the exact Release B host candidate as a signed, notarized macOS pa
 Inputs: Accepted 27e signed host/desktop profiles and 28c Apple app/entitlements; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; packaging/swarmui/Info.plist; supported Apple Silicon/macOS versions and external signing identities.
 Changes:
   - scripts/install/build_macos_pkg.sh + packaging/macos/** + scripts/release_bundle.sh + scripts/setup_environment.sh — stage the compiler-registered host payload, offline Python/NeMo kit and selected Mac assets at stable locations without mandatory QEMU setup; sign nested code before freezing its Cohesix file manifest, then sign/notarize/staple the outer `.pkg`. Supply a receipt-bound removal helper; signing credentials remain outside the payload.
+  - scripts/install/{qemu_compat,setup_qemu_macos}.py + skills/cohesix-ai-host-setup/** — make guest QEMU optional, select a system binary only after a real four-core HVF startup, and build the pinned upstream 10.1.0 HVF fix in a separate user prefix when necessary. Do not replace Homebrew's binary or imply startup is guest acceptance.
   - apps/swarmui/tauri.conf.json + packaging/swarmui/Info.plist + native app resource lookup — ship the accepted 28c App Intents integration, icon, version and required resources in `/Applications/SwarmUI.app`; resolve installed `coh` and gateway without a terminal environment.
   - tests/test_macos_installer.py + scripts/release_qualify.py + docs/TEST_PLAN.md + docs/QUICKSTART.md — add exact installed-payload and GUI-launch checks, clean install, 1.1.0-beta side-by-side migration, interrupted/repeated install, replacement/rollback and uninstall evidence on the advertised Mac support envelope.
 Commands:
-  - python3 -m pytest -q tests/test_macos_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_release_qualify.py
+  - python3 -m pytest -q tests/test_macos_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_qemu_compat.py tests/test_release_qualify.py
   - scripts/install/build_macos_pkg.sh --reference-config "${RELEASE_B_REFERENCE}" --out "${RELEASE_B_EVIDENCE}/installers/macos"
   - python3 scripts/release_qualify.py installer --reference-config "${RELEASE_B_REFERENCE}" --installer-manifest "${RELEASE_B_EVIDENCE}/installers/macos/installers.json" --output "${RELEASE_B_EVIDENCE}/installers/macos/result.json"
 Checks:
@@ -13534,17 +13537,30 @@ Checks:
   - Failed/repeated installation leaves the previous usable version and external state/evidence intact; explicit rollback and receipt-bound uninstall remove owned code/registration and only installer-owned service enrollment without deleting user data or credentials by default.
 Deliverables: Reproducible signed/notarized `.pkg`, installer manifest, native launch and lifecycle test reports, and public Mac install/upgrade/removal guidance.
 
+Title/ID: m28g-pypi-1.2.0-publication
+Milestone: 28g / m28g-pypi-1.2.0-publication
+Status: In Progress — distribution source is prepared; upload requires the accepted release tag and owner-approved publication.
+Goal: Publish the matching Cohesix Python SDK wheel and source distribution on PyPI as stable `1.2.0`.
+Inputs: Exact accepted Release B source and `v1.2.0` tag; compiler-selected Python inventory; registered `cohesix` PyPI trusted publisher and protected GitHub `pypi` environment; release-owner approval packet.
+Changes:
+  - tools/cohesix-py/README.md and public Python guidance — show the matching pre-release install command and selected source links.
+  - .github/workflows/release-pypi.yml — build only the annotated Release B tag after verifying it is on main, inspect wheel and sdist contents and metadata, retain exact SHA-256 handoff bytes, then publish through reviewer-gated OIDC. Refuse a partial or different existing PyPI version.
+Commands: Validate workflow syntax and permissions; build `scripts/install/build_python_package.py` from the selected inventory; check PEP 440 project/wheel/sdist alignment, Twine metadata and isolated install/CLI smoke; inspect the GitHub artifact and PyPI trusted publisher before approving and dispatching the exact tag; independently compare public PyPI file digests after upload.
+Checks: Both PyPI distributions carry `1.2.0`, come from the same approved tagged source as the native release, and have public hashes matching the reviewed workflow artifact. A prepared workflow or local wheel alone is not PyPI publication.
+Deliverables: Reviewed trusted-publishing workflow, approved distribution handoff and verified public `1.2.0` PyPI files and provenance.
+
 Title/ID: m28g-ubuntu-arm64-native-installer
 Milestone: 28g / m28g-ubuntu-arm64-native-installer
 Goal: Install the exact Release B host candidate through Ubuntu ARM64 packages with GNOME launch and headless operation.
 Inputs: Accepted 27e Linux signed host/desktop profiles; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; supported Ubuntu 22.04/24.04/26.04 ARM64 dependency and service contracts.
 Changes:
-  - scripts/install/build_ubuntu_arm64_deb.sh + packaging/debian/** + scripts/release_bundle.sh + scripts/setup_environment.sh — produce versioned controller and optional SwarmUI `.deb` packages from the compiler-registered payload, offline Python/NeMo kit and selected Linux assets without mandatory QEMU setup; declare release-specific dependencies and a separately verifiable publisher identity for downloaded packages without adding a distribution service.
+  - scripts/install/build_ubuntu_arm64_deb.py + packaging/debian/** + scripts/release_bundle.sh + scripts/setup_environment.sh — produce versioned controller and optional SwarmUI `.deb` packages from the compiler-registered payload, offline Python/NeMo kit and selected Linux assets without mandatory QEMU setup; declare release-specific dependencies and a separately verifiable publisher identity for downloaded packages without adding a distribution service. The dedicated publisher key is passphrase protected outside the checkout, and the native builder may read its passphrase from inherited standard input without a secret argument or environment value.
+  - scripts/install/qemu_compat.py + scripts/setup_environment.sh + skills/cohesix-ai-host-setup/** — use Ubuntu's `qemu-system-arm` package for an optional guest and verify the selected Linux KVM startup; offer `--headless` so server setup omits graphical packages. Retain separate boot/authenticated-client proof.
   - packaging/debian/com.cohesix.swarmui.desktop + packaging/debian/icons/** + native app resource lookup — install the desktop entry and icon in freedesktop locations with a stable executable path and `Terminal=false`; keep WebKit/GTK dependencies out of the headless controller package.
   - tests/test_ubuntu_arm64_installer.py + scripts/release_qualify.py + docs/TEST_PLAN.md + docs/QUICKSTART.md — add exact installed-payload, package-manager lifecycle and GNOME-launch checks on each advertised Ubuntu ARM64 release, including 1.1.0-beta side-by-side migration.
 Commands:
-  - python3 -m pytest -q tests/test_ubuntu_arm64_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_release_qualify.py
-  - scripts/install/build_ubuntu_arm64_deb.sh --reference-config "${RELEASE_B_REFERENCE}" --out "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64"
+  - python3 -m pytest -q tests/test_ubuntu_arm64_installer.py tests/test_host_package_stage.py tests/test_toolchain_setup.py tests/test_qemu_compat.py tests/test_release_qualify.py
+  - python3 scripts/install/build_ubuntu_arm64_deb.py --reference-config "${RELEASE_B_REFERENCE}" --out "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64"
   - python3 scripts/release_qualify.py installer --reference-config "${RELEASE_B_REFERENCE}" --installer-manifest "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64/installers.json" --output "${RELEASE_B_EVIDENCE}/installers/ubuntu-arm64/result.json"
 Checks:
   - On Ubuntu 22.04, 24.04 and 26.04 ARM64, package-manager install resolves declared dependencies and installed bytes match the exact source/profile/SBOM; independent publisher trust covers each `.deb` and the embedded Cohesix signature is verified without self-enrollment.
@@ -13610,7 +13626,7 @@ Checks:
   - All required matrix rows, both native installer/GUI-launch records and applicable staged/conditional pressure, repeatability, hardware, due-diligence and promotion gates pass at exact assembled identity; component reports alone cannot qualify the release.
   - Freeze baseline IDs, metric definitions, sample/window selection and numeric quality/resource/latency/adoption thresholds before integrated runs; retain failures without post-failure threshold relaxation.
   - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
-Deliverables: Qualified 1.2.0-beta candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
+Deliverables: Qualified 1.2.0 candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
 
 Title/ID: m28g-kvm-pressure-runner-portability
 Milestone: 28g / m28g-kvm-pressure-runner-portability; downstream discovery in m28g-release-b-qualification, restoring the selected M26e Conditional B2 runner without reopening M26e runtime scope.
@@ -13650,6 +13666,7 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | Client as-built alignment / `m28g-host-clients-as-built-alignment` | Exact installed host CLI tools, Python wheel and SwarmUI from each selected package | Capability-by-capability inventory and contract parity; matching authority, validation, identity, refusal/recovery and evidence across shared operations, with unavailable and client-specific surfaces stated; shared live job observed through m28g-adoption-live. |
 | Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |
 | Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean Ubuntu 22.04/24.04/26.04 ARM64 hosts; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
+| Python index / `m28g-pypi-1.2.0-publication` | Approved Release B tag and reviewer-gated trusted publisher | Public wheel and sdist version, source, metadata and SHA-256 match the approved exact distributions; isolated install and CLI smoke pass. |
 | Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and independent evaluator walkthrough within frozen step/time/size/intervention budgets. |
 | Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |
 
@@ -13670,6 +13687,8 @@ hash-bound parity evidence, consistent shared job/outcome views and explicit
 unavailable or client-specific surfaces. Public help and manuals reflect those
 installed behaviors; the complete host-tool/Python/benchmark compatibility
 review records affected and unaffected surfaces.
+The approved `1.2.0` SDK wheel and source distribution are published on PyPI
+with independently verified public hashes and tagged-source provenance.
 
 Every required journey and matrix row passes from those installed artifacts with
 fixed budgets and accessible evidence, including an independent clean-install

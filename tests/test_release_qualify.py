@@ -378,7 +378,7 @@ def test_release_b_requires_exact_both_native_installers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Portable archive receipts cannot silently replace native install proof."""
-    version, commit = "1.2.0-beta", "b" * 40
+    version, commit = "1.2.0", "b" * 40
     inventory = tmp_path / "configs/generated/implementation_surface_inventory.json"
     inventory.parent.mkdir(parents=True)
     inventory.write_text(json.dumps({"release": {"version": version}}))

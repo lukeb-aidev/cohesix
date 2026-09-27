@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cohesix-nemo-kit"
-version = "1.2.0b0"
+version = "1.2.0"
 description = "Native NeMo Agent Toolkit clients for selected Cohesix jobs"
 requires-python = ">=3.12,<3.14"
 dependencies = ["nvidia-nat[langchain,profiler]==1.9.0", "nvidia-nat-mcp==1.9.0", "nvidia-nat-a2a==1.9.0", "mcp==1.29.1", "a2a-sdk==0.3.26"]

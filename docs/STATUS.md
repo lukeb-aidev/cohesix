@@ -62,7 +62,7 @@ Broader providers, agent protocols and other deferred features remain governed
 by the [Build Plan](BUILD_PLAN.md#roadmap-id-mapping). Their existing source or
 historical evidence does not establish release qualification.
 
-[Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0-beta
+[Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0
 candidate. The selected source now records version-aligned Python packaging,
 native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
 lookup. At clean source `522463fa1ade`, the canonical QEMU and physical Pi
@@ -78,6 +78,18 @@ integrated Release B qualification remain outstanding. The
 [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
 retains the exact identities, diagnostic failures and blocked gates. Release A
 remains the published release.
+
+The Release B Python SDK source and manual now use `1.2.0`. Its PyPI
+workflow is prepared to build from the reviewed `v1.2.0` tag and compare
+the exact public distributions after reviewer-gated publishing. The tag and
+public files do not yet exist. Optional QEMU setup now probes a real four-core
+startup; Mac can build the verified pinned 10.1.0 HVF fix when its installed
+QEMU fails, while supported Ubuntu ARM64 uses `qemu-system-arm` from apt.
+The pinned Mac source build passed its entitlement, startup and setup checks.
+A dedicated Debian publisher key also passed Mac and Jetson detached-signature
+probes. These checks do not supply a signed installer, packaged guest or
+release acceptance. The owner's change from the earlier beta plan to stable
+`1.2.0` requires fresh exact-source release qualification.
 
 The selected QEMU and Pi production manifests now enable host-side MCP and A2A
 under the compiler-controlled master switch. The latest 60-minute Pi 4 GENET

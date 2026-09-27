@@ -6,20 +6,27 @@
 set -euo pipefail
 
 CHECK_ONLY=0
+WITH_QEMU=0
+HEADLESS=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RELEASE_WHEEL=""
+SELECTED_QEMU=""
+QEMU_PYTHON=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/setup_environment.sh [--check]
+Usage: scripts/setup_environment.sh [--check] [--with-qemu] [--headless]
 
 Install the runtime dependencies for a Cohesix release bundle on macOS 26 or
 later on Apple Silicon, or Ubuntu 22.04, 24.04, or 26.04 on ARM64. When the
 bundle contains its Python wheel, setup also creates .venv and installs it.
+QEMU is optional for host-only operation.
 
 Options:
   --check  Verify the host and dependencies without installing packages.
+  --with-qemu  Install or verify an accelerator-compatible QEMU for this host.
+  --headless  On Ubuntu, omit SwarmUI graphical runtime packages.
 EOF
 }
 
@@ -36,6 +43,14 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check)
       CHECK_ONLY=1
+      shift
+      ;;
+    --with-qemu)
+      WITH_QEMU=1
+      shift
+      ;;
+    --headless)
+      HEADLESS=1
       shift
       ;;
     -h|--help)
@@ -169,18 +184,70 @@ enable_ubuntu_universe() {
   "${privilege_prefix[@]}" add-apt-repository -y universe
 }
 
-require_qemu_accel() {
-  local accel="$1"
-  local advertised
-  advertised="$(qemu-system-aarch64 -accel help 2>/dev/null || true)"
-  if [[ -z "$advertised" ]] || ! grep -Eq \
-    "(^|[[:space:]])${accel}($|[[:space:]])" <<<"$advertised"
-  then
-    fail "qemu-system-aarch64 does not advertise the required ${accel} accelerator"
+qemu_compatible() {
+  local binary="$1" profile="$2"
+  "$QEMU_PYTHON" "${SCRIPT_DIR}/install/qemu_compat.py" \
+    --binary "$binary" --profile "$profile" >/dev/null 2>&1
+}
+
+select_qemu_python() {
+  if ensure_cmd python3 && python_is_supported "$(command -v python3)"; then
+    QEMU_PYTHON="$(command -v python3)"
+  elif ensure_cmd python3.11 && python_is_supported "$(command -v python3.11)"; then
+    QEMU_PYTHON="$(command -v python3.11)"
+  elif [[ "$(uname -s)" == "Darwin" ]] && ensure_cmd brew; then
+    local brew_python
+    brew_python="$(brew --prefix python@3.13 2>/dev/null || true)/bin/python3.13"
+    if [[ -x "$brew_python" ]] && python_is_supported "$brew_python"; then
+      QEMU_PYTHON="$brew_python"
+    elif [[ "$CHECK_ONLY" -eq 0 ]]; then
+      log "Installing Python 3.13 for the QEMU compatibility check."
+      brew install python@3.13
+      QEMU_PYTHON="$(brew --prefix python@3.13)/bin/python3.13"
+    fi
+  fi
+  [[ -n "$QEMU_PYTHON" ]] || \
+    fail "QEMU setup needs Python 3.11 or later; install it and rerun"
+}
+
+select_macos_qemu() {
+  local pinned="${HOME}/.local/share/cohesix/qemu/10.1.0-hvf-gic-sync/bin/qemu-system-aarch64"
+  if [[ -n "${QEMU_BIN:-}" ]]; then
+    qemu_compatible "$QEMU_BIN" macos-hvf || \
+      fail "selected QEMU_BIN fails the four-core HVF startup check: $QEMU_BIN"
+    SELECTED_QEMU="$QEMU_BIN"
+  elif [[ -x "$pinned" ]] && qemu_compatible "$pinned" macos-hvf; then
+    SELECTED_QEMU="$pinned"
+  elif ensure_cmd qemu-system-aarch64 && \
+       qemu_compatible "$(command -v qemu-system-aarch64)" macos-hvf; then
+    SELECTED_QEMU="$(command -v qemu-system-aarch64)"
+  elif [[ "$CHECK_ONLY" -eq 1 ]]; then
+    fail "no compatible Mac QEMU; rerun --with-qemu without --check to build pinned 10.1.0"
+  else
+    log "Homebrew QEMU is absent or fails four-core HVF startup; building pinned 10.1.0."
+    SELECTED_QEMU="$("$QEMU_PYTHON" "${SCRIPT_DIR}/install/setup_qemu_macos.py")" || \
+      fail "pinned Mac QEMU installation failed"
+    qemu_compatible "$SELECTED_QEMU" macos-hvf || \
+      fail "pinned Mac QEMU failed its post-install startup check"
+  fi
+  log "Selected QEMU: ${SELECTED_QEMU}"
+  if [[ -n "$RELEASE_WHEEL" && -d "${BUNDLE_ROOT}/.venv/bin" ]]; then
+    local link="${BUNDLE_ROOT}/.venv/bin/qemu-system-aarch64"
+    if [[ "$CHECK_ONLY" -eq 1 ]]; then
+      [[ -L "$link" && "$(readlink "$link")" == "$SELECTED_QEMU" ]] || \
+        fail "release .venv does not select the checked QEMU; rerun without --check"
+    elif [[ ! -e "$link" || -L "$link" ]]; then
+      ln -sfn "$SELECTED_QEMU" "$link"
+    else
+      fail "release .venv QEMU path is an existing non-symlink file"
+    fi
   fi
 }
 
 setup_macos() {
+  if [[ "$HEADLESS" -eq 1 ]]; then
+    fail "--headless is for Ubuntu ARM64; macOS host setup has no GUI packages"
+  fi
   if [[ "$(uname -m)" != "arm64" ]]; then
     fail "the macOS release bundle requires Apple Silicon; detected $(uname -m)"
   fi
@@ -194,22 +261,6 @@ setup_macos() {
   if [[ ! "$major" =~ ^[0-9]+$ ]] || (( major < 26 )); then
     fail "macOS 26 or later is required; detected ${version}"
   fi
-
-  if ensure_cmd qemu-system-aarch64; then
-    log "qemu-system-aarch64 already available."
-  elif [[ "$CHECK_ONLY" -eq 1 ]]; then
-    fail "qemu-system-aarch64 is missing; rerun without --check to install it"
-  else
-    if ! ensure_cmd brew; then
-      fail "Homebrew not found. Install from https://brew.sh and re-run."
-    fi
-    log "qemu-system-aarch64 not found; installing qemu via Homebrew."
-    brew install qemu
-  fi
-
-  ensure_cmd qemu-system-aarch64 || \
-    fail "qemu-system-aarch64 is unavailable after setup"
-  require_qemu_accel hvf
 
   if [[ -n "$RELEASE_WHEEL" ]]; then
     local release_python=""
@@ -233,6 +284,10 @@ setup_macos() {
       release_python="$(brew --prefix python@3.13)/bin/python3.13"
     fi
     setup_release_venv "$release_python"
+  fi
+  if [[ "$WITH_QEMU" -eq 1 ]]; then
+    select_qemu_python
+    select_macos_qemu
   fi
 }
 
@@ -261,26 +316,27 @@ setup_ubuntu() {
 
   local -a missing=()
 
-  if ! ensure_cmd qemu-system-aarch64; then
+  if [[ "$WITH_QEMU" -eq 1 ]] && ! ensure_cmd qemu-system-aarch64; then
     missing+=("qemu-system-arm")
   fi
 
-  local gtk_runtime
-  if [[ "$ubuntu_version" == "22.04" ]]; then
-    gtk_runtime="libgtk-3-0"
-  else
-    gtk_runtime="libgtk-3-0t64"
+  local -a runtime_pkgs=("libfuse3-3")
+  if [[ "$HEADLESS" -eq 0 ]]; then
+    local gtk_runtime
+    if [[ "$ubuntu_version" == "22.04" ]]; then
+      gtk_runtime="libgtk-3-0"
+    else
+      gtk_runtime="libgtk-3-0t64"
+    fi
+    runtime_pkgs+=(
+      "libwebkit2gtk-4.1-0"
+      "libjavascriptcoregtk-4.1-0"
+      "libayatana-appindicator3-1"
+      "librsvg2-2"
+      "libxdo3"
+      "$gtk_runtime"
+    )
   fi
-
-  local -a runtime_pkgs=(
-    "libwebkit2gtk-4.1-0"
-    "libjavascriptcoregtk-4.1-0"
-    "libayatana-appindicator3-1"
-    "librsvg2-2"
-    "libfuse3-3"
-    "libxdo3"
-    "$gtk_runtime"
-  )
 
   local release_python=""
   if [[ -n "$RELEASE_WHEEL" ]]; then
@@ -307,13 +363,18 @@ setup_ubuntu() {
     install_apt_packages "${missing[@]}"
   fi
 
-  ensure_cmd qemu-system-aarch64 || \
-    fail "qemu-system-aarch64 is unavailable after setup"
   for pkg in "${runtime_pkgs[@]}"; do
     ensure_pkg_ubuntu "$pkg" || \
       fail "runtime package is unavailable after setup: ${pkg}"
   done
-  require_qemu_accel tcg
+  if [[ "$WITH_QEMU" -eq 1 ]]; then
+    select_qemu_python
+    SELECTED_QEMU="${QEMU_BIN:-$(command -v qemu-system-aarch64 || true)}"
+    [[ -n "$SELECTED_QEMU" ]] || fail "qemu-system-aarch64 is unavailable after setup"
+    qemu_compatible "$SELECTED_QEMU" linux-kvm || \
+      fail "selected apt QEMU cannot start the four-core KVM profile; check /dev/kvm and host support"
+    log "Selected QEMU: ${SELECTED_QEMU}"
+  fi
   if [[ -n "$release_python" ]]; then
     setup_release_venv "$release_python"
   fi

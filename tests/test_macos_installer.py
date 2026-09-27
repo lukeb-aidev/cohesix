@@ -69,7 +69,7 @@ def make_inputs(tmp_path: Path) -> dict[str, str]:
     return {
         "signed_app": str(app), "app_binary_sha256": hashlib.sha256(b"desktop").hexdigest(),
         "app_version": "1.2.0", "team_id": "ABCDEFGHIJ",
-        "bundle": str(bundle), "host": "macos", "version": "1.2.0-beta",
+        "bundle": str(bundle), "host": "macos", "version": "1.2.0",
         "source_commit": "a" * 40, "archive_sha256": "b" * 64,
     }
 
@@ -137,7 +137,7 @@ def test_notary_failure_leaves_no_publishable_output(
     monkeypatch.setattr(macos.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(macos.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(macos, "load_reference", lambda *_: {
-        "version": "1.2.0-beta", "source_commit": "a" * 40,
+        "version": "1.2.0", "source_commit": "a" * 40,
         "archive_sha256": "b" * 64, "team_id": "ABCDEFGHIJ",
     })
     monkeypatch.setattr(macos, "stage", lambda *_: [])

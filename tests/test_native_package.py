@@ -24,7 +24,7 @@ def fixture_bundle(root: Path) -> Path:
         "bin/coh": b"controller",
         "bin/swarmui": b"desktop",
         "ui/swarmui/index.html": b"<html></html>",
-        "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl": b"kit",
+        "nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl": b"kit",
         "qemu/run.sh": b"guest",
     }
     lines = []
@@ -44,7 +44,7 @@ def test_stage_separates_headless_desktop_and_optional_guest(tmp_path: Path) -> 
     controller = stage_subset(bundle, tmp_path / "controller", "controller")
     desktop = stage_subset(bundle, tmp_path / "desktop", "desktop")
     assert [row["path"] for row in controller] == [
-        "bin/coh", "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
+        "bin/coh", "nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl",
     ]
     assert {row["path"] for row in desktop} == {
         "bin/swarmui", "ui/swarmui/index.html"
@@ -54,7 +54,7 @@ def test_stage_separates_headless_desktop_and_optional_guest(tmp_path: Path) -> 
     assert (tmp_path / "controller/bin/coh").stat().st_mode & 0o111
     assert classify("qemu/run.sh") == "optional-guest"
     reference = {
-        "host": "linux", "version": "1.2.0-beta",
+        "host": "linux", "version": "1.2.0",
         "source_commit": "a" * 40, "archive_sha256": "b" * 64,
     }
     manifest = tmp_path / "controller/payload.json"
@@ -125,20 +125,20 @@ def test_reference_requires_version_aligned_wheel(
         "schema": native_package.REFERENCE_SCHEMA,
         "host": "linux", "bundle": str(bundle), "archive": str(archive),
         "archive_sha256": archive_hash, "source_commit": "a" * 40,
-        "version": "1.2.0-beta",
+        "version": "1.2.0",
     }
     reference = tmp_path / "reference.json"
     reference.write_text(json.dumps(value))
     monkeypatch.setattr(native_package, "digest", lambda *_: archive_hash)
     monkeypatch.setattr(native_package, "inspect_bundle", lambda *_: {
-        "source_commit": "a" * 40, "version": "1.2.0-beta",
-        "archive": {"sha256": archive_hash}, "bundle": "Cohesix-1.2.0-beta-linux",
+        "source_commit": "a" * 40, "version": "1.2.0",
+        "archive": {"sha256": archive_hash}, "bundle": "Cohesix-1.2.0-linux",
     })
     old = wheel_dir / "cohesix-0.2.0a2-py3-none-any.whl"
     old.write_bytes(b"old")
     with pytest.raises(ValueError, match="version-aligned"):
         native_package.load_reference(reference, "linux")
-    old.rename(wheel_dir / "cohesix-1.2.0b0-py3-none-any.whl")
+    old.rename(wheel_dir / "cohesix-1.2.0-py3-none-any.whl")
     with pytest.raises(ValueError, match="version-aligned Cohesix NeMo wheel"):
         native_package.load_reference(reference, "linux")
     nemo_dir = bundle / "nemo/dist"
@@ -147,7 +147,7 @@ def test_reference_requires_version_aligned_wheel(
     stale_kit.write_bytes(b"stale kit")
     with pytest.raises(ValueError, match="version-aligned Cohesix NeMo wheel"):
         native_package.load_reference(reference, "linux")
-    stale_kit.rename(nemo_dir / "cohesix_nemo_kit-1.2.0b0-py3-none-any.whl")
+    stale_kit.rename(nemo_dir / "cohesix_nemo_kit-1.2.0-py3-none-any.whl")
     assert native_package.load_reference(reference, "linux") == value
     value["version"] = 12
     reference.write_text(json.dumps(value))

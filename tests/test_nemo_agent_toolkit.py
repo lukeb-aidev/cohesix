@@ -123,7 +123,7 @@ def test_recovery_keeps_original_admission_and_native_state() -> None:
 
 def test_installer_hashes_bounded_regular_artifacts(tmp_path: Path) -> None:
     """Refuse mutable links and oversized wheel or lock inputs before installation."""
-    assert installer.WHEEL.fullmatch("cohesix_nemo_kit-1.2.0b0-py3-none-any.whl")
+    assert installer.WHEEL.fullmatch("cohesix_nemo_kit-1.2.0-py3-none-any.whl")
     assert not installer.WHEEL.fullmatch("cohesix_nemo_kit-0.1.0-py3-none-any.whl")
     artifact = tmp_path / "artifact.whl"
     artifact.write_bytes(b"candidate")

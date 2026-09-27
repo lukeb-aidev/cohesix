@@ -17,7 +17,7 @@ Build the wheel once on a trusted packaging host:
 
 ```sh
 python3 -m pip wheel --no-deps --wheel-dir dist integrations/nemo-agent-toolkit
-shasum -a 256 dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl
+shasum -a 256 dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl
 shasum -a 256 integrations/nemo-agent-toolkit/requirements-linux-aarch64.lock
 ```
 
@@ -30,7 +30,7 @@ from an editable checkout:
 ```sh
 python3 install_nemo_agent_toolkit.py \
   --venv /absolute/private/nemo-client-1.9.0 \
-  --wheel /absolute/kit/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl \
+  --wheel /absolute/kit/cohesix_nemo_kit-1.2.0-py3-none-any.whl \
   --sha256 EXPECTED_WHEEL_SHA256 \
   --lock /absolute/kit/requirements-linux-aarch64.lock \
   --lock-sha256 EXPECTED_LOCK_SHA256

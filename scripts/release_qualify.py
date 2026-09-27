@@ -551,7 +551,7 @@ def verify_release(args: argparse.Namespace) -> dict[str, Any]:
             "qualified release differs from the current selected source/version"
         )
     checks = ["macos", "linux", "pi4"]
-    if results[0]["version"] == "1.2.0-beta":
+    if results[0]["version"] == "1.2.0":
         for host, expected_checks in (
             ("macos", ["publisher", "notarization", "receipt",
                        "installed-readback", "app-signature"]),

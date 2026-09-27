@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 
-WHEEL = re.compile(r"cohesix_nemo_kit-1\.2\.0b0-py3-none-any\.whl\Z")
+WHEEL = re.compile(r"cohesix_nemo_kit-1\.2\.0-py3-none-any\.whl\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -71,7 +71,7 @@ def main() -> None:
     parser.add_argument("--lock-sha256", required=True)
     args = parser.parse_args()
     install(args.venv, args.wheel, args.sha256, args.lock, args.lock_sha256)
-    print(f"installed Cohesix NeMo kit 1.2.0b0 at {args.venv}")
+    print(f"installed Cohesix NeMo kit 1.2.0 at {args.venv}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "129ba728ce25a58eae9cb2a8778c7ad0ab90726ddab09cb006aa9c85a6e0e70e",
+  "source_sha256": "be308d34dc42bf48f783e1f0d852488cb4116f22af8994e78b06eb879d1ad52c",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -6858,9 +6858,9 @@
       "evidence_eligible": false
     },
     {
-      "id": "tracked:releases/RELEASE_NOTES-1.2.0-beta.md",
+      "id": "tracked:releases/RELEASE_NOTES-1.2.0.md",
       "kind": "tracked_surface",
-      "path": "releases/RELEASE_NOTES-1.2.0-beta.md",
+      "path": "releases/RELEASE_NOTES-1.2.0.md",
       "implementation_class": "contract",
       "owner": "release-tooling",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -6869,6 +6869,20 @@
       "package_disposition": "versioned_release_document",
       "evidence_requirement": "version and exact output hash must agree",
       "current_observed_mode": "current_release_notes",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:releases/cohesix-debian-publisher-2026.asc",
+      "kind": "tracked_surface",
+      "path": "releases/cohesix-debian-publisher-2026.asc",
+      "implementation_class": "contract",
+      "owner": "release-tooling",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "approved native Debian publisher fingerprint; rule=release-debian-publisher-key",
+      "package_disposition": "release_support_file",
+      "evidence_requirement": "verify fingerprint against the independently approved publisher identity",
+      "current_observed_mode": "public_verification_key",
       "evidence_eligible": false
     },
     {
@@ -7640,6 +7654,34 @@
       "evidence_requirement": "digest-checked clean Toolkit venv installation",
       "current_observed_mode": "bounded_nemo_kit_installer",
       "evidence_eligible": false
+    },
+    {
+      "id": "tracked:scripts/install/qemu_compat.py",
+      "kind": "tracked_surface",
+      "path": "scripts/install/qemu_compat.py",
+      "implementation_class": "production_live",
+      "owner": "release-tooling",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "exact release support-file list; rule=release-qemu-compat-probe",
+      "package_disposition": "release_host_setup",
+      "evidence_requirement": "startup probe and source-checked file hash",
+      "current_observed_mode": "host_setup_entrypoint",
+      "evidence_eligible": true
+    },
+    {
+      "id": "tracked:scripts/install/setup_qemu_macos.py",
+      "kind": "tracked_surface",
+      "path": "scripts/install/setup_qemu_macos.py",
+      "implementation_class": "production_live",
+      "owner": "release-tooling",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "exact release support-file list; rule=release-macos-qemu-installer",
+      "package_disposition": "release_host_setup",
+      "evidence_requirement": "pinned source and patch hashes, signed startup probe",
+      "current_observed_mode": "host_setup_entrypoint",
+      "evidence_eligible": true
     },
     {
       "id": "tracked:scripts/setup_environment.sh",
@@ -9611,7 +9653,7 @@
   ],
   "release": {
     "schema": "cohesix-runtime-release-manifest/v2",
-    "version": "1.2.0-beta",
+    "version": "1.2.0",
     "host_tools": [
       "bin/cas-tool",
       "bin/coh",
@@ -9711,7 +9753,8 @@
       "docs/USE_CASES.md",
       "docs/WORKER_TICKETS.md",
       "docs/M27A_AUTHORITY.md",
-      "packaging/README.md"
+      "packaging/README.md",
+      "releases/cohesix-debian-publisher-2026.asc"
     ],
     "host_assets": [
       "docs/COHESIX_LOGO.png",
@@ -9903,18 +9946,20 @@
       "packaging/ci/cohesix-journey.yml",
       "releases/RELEASE_NOTES-1.0.0-beta.md",
       "releases/RELEASE_NOTES-1.1.0-beta.md",
-      "releases/RELEASE_NOTES-1.2.0-beta.md",
+      "releases/RELEASE_NOTES-1.2.0.md",
       "scripts/ci/python_compat_run.sh",
-      "scripts/setup_environment.sh"
+      "scripts/setup_environment.sh",
+      "scripts/install/qemu_compat.py",
+      "scripts/install/setup_qemu_macos.py"
     ],
     "versioned_migrations": [],
     "generated_bundle_files": [
       "BUILD_PROVENANCE.json",
       "MANIFEST.sha256",
       "VERSION.txt",
-      "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
+      "nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl",
       "nemo/nemo-distribution.json",
-      "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
+      "python/dist/cohesix-1.2.0-py3-none-any.whl",
       "python/m26e-python-package.json",
       "qemu/run.sh",
       "cas/max_chunks_v1.txt.sha256",
@@ -10018,7 +10063,7 @@
       "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/configs/mcp-agent.yaml",
       "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/nat_plugin.py",
       "integrations/nemo-agent-toolkit/src/cohesix_nemo_kit/native.py",
-      "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
+      "nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl",
       "nemo/nemo-distribution.json",
       "packaging/README.md",
       "packaging/ci/cohesix-journey.yml",
@@ -10063,11 +10108,12 @@
       "python/cohesix-py/examples/telemetry_write_pull.py",
       "python/cohesix-py/examples/use_case_playbook.py",
       "python/cohesix-py/pyproject.toml",
-      "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
+      "python/dist/cohesix-1.2.0-py3-none-any.whl",
       "python/m26e-python-package.json",
       "qemu/run.sh",
       "releases/RELEASE_NOTES-1.0.0-beta.md",
       "releases/RELEASE_NOTES-1.1.0-beta.md",
+      "releases/cohesix-debian-publisher-2026.asc",
       "resources/keys/cas_verification_key.hex",
       "resources/systemd/hive-gateway.service",
       "scripts/ci/python_compat_run.sh",
@@ -10104,6 +10150,8 @@
       "scripts/cohsh/worker_host_model.coh",
       "scripts/driver_runtime_manifest.py",
       "scripts/install/install_nemo_agent_toolkit.py",
+      "scripts/install/qemu_compat.py",
+      "scripts/install/setup_qemu_macos.py",
       "scripts/setup_environment.sh",
       "scripts/worker_image_manifest.py",
       "scripts/worker_task_evidence.py",
@@ -10226,7 +10274,8 @@
       "image/cohesix-pi4-sd.img",
       "image/cohesix-pi4-sd.img.sha256",
       "image/cohesix-pi4-sd.json",
-      "packaging/README.md"
+      "packaging/README.md",
+      "releases/cohesix-debian-publisher-2026.asc"
     ],
     "asset_records": [
       {
@@ -10307,7 +10356,7 @@
         "owner": "release-tooling",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
-        "selection_source": "release.version; rule=release-current-notes; exact release source `releases/RELEASE_NOTES-1.2.0-beta.md`",
+        "selection_source": "release.version; rule=release-current-notes; exact release source `releases/RELEASE_NOTES-1.2.0.md`",
         "package_disposition": "versioned_release_document",
         "evidence_requirement": "version and exact output hash must agree",
         "current_observed_mode": "current_release_notes",
@@ -11434,9 +11483,9 @@
         "evidence_eligible": true
       },
       {
-        "id": "release-asset:nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
+        "id": "release-asset:nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl",
         "kind": "generated_bundle_file",
-        "path": "nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl",
+        "path": "nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl",
         "implementation_class": "contract",
         "owner": "release-tooling",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -12064,9 +12113,9 @@
         "evidence_eligible": false
       },
       {
-        "id": "release-asset:python/dist/cohesix-1.2.0b0-py3-none-any.whl",
+        "id": "release-asset:python/dist/cohesix-1.2.0-py3-none-any.whl",
         "kind": "generated_bundle_file",
-        "path": "python/dist/cohesix-1.2.0b0-py3-none-any.whl",
+        "path": "python/dist/cohesix-1.2.0-py3-none-any.whl",
         "implementation_class": "contract",
         "owner": "release-tooling",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
@@ -12131,6 +12180,20 @@
         "package_disposition": "versioned_release_document",
         "evidence_requirement": "historical version and exact output hash remain unchanged",
         "current_observed_mode": "historical_release_notes",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:releases/cohesix-debian-publisher-2026.asc",
+        "kind": "public_document",
+        "path": "releases/cohesix-debian-publisher-2026.asc",
+        "implementation_class": "contract",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "approved native Debian publisher fingerprint; rule=release-debian-publisher-key; exact release source `releases/cohesix-debian-publisher-2026.asc`",
+        "package_disposition": "release_support_file",
+        "evidence_requirement": "verify fingerprint against the independently approved publisher identity",
+        "current_observed_mode": "public_verification_key",
         "evidence_eligible": false
       },
       {
@@ -12636,6 +12699,34 @@
         "evidence_requirement": "digest-checked clean Toolkit venv installation",
         "current_observed_mode": "bounded_nemo_kit_installer",
         "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:scripts/install/qemu_compat.py",
+        "kind": "support_file",
+        "path": "scripts/install/qemu_compat.py",
+        "implementation_class": "production_live",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": true,
+        "selection_source": "exact release support-file list; rule=release-qemu-compat-probe; exact release source `scripts/install/qemu_compat.py`",
+        "package_disposition": "release_host_setup",
+        "evidence_requirement": "startup probe and source-checked file hash",
+        "current_observed_mode": "host_setup_entrypoint",
+        "evidence_eligible": true
+      },
+      {
+        "id": "release-asset:scripts/install/setup_qemu_macos.py",
+        "kind": "support_file",
+        "path": "scripts/install/setup_qemu_macos.py",
+        "implementation_class": "production_live",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": true,
+        "selection_source": "exact release support-file list; rule=release-macos-qemu-installer; exact release source `scripts/install/setup_qemu_macos.py`",
+        "package_disposition": "release_host_setup",
+        "evidence_requirement": "pinned source and patch hashes, signed startup probe",
+        "current_observed_mode": "host_setup_entrypoint",
+        "evidence_eligible": true
       },
       {
         "id": "release-asset:scripts/setup_environment.sh",

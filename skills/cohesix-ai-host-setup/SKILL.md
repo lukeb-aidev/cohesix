@@ -1,6 +1,6 @@
 ---
 name: cohesix-ai-host-setup
-description: Configure and verify third-party AI tools on a Cohesix macOS Apple Silicon or Linux NVIDIA host. Use for MLX, Modular MAX, vMLX, Hugging Face, PEFT, CUDA, and NeMo Agent Toolkit environment setup or repair, not for claiming Cohesix target acceptance.
+description: Configure and verify Cohesix host AI tools and optional QEMU on Apple Silicon macOS or Ubuntu ARM64. Use for MLX, MAX, vMLX, Hugging Face, PEFT, CUDA, NeMo, or VM runtime setup and repair; do not claim target acceptance from installation.
 license: Apache-2.0
 ---
 <!-- Author: Lukas Bower -->
@@ -10,13 +10,19 @@ license: Apache-2.0
 
 # Prepare an AI host
 
-Use this skill when the user asks to set up, repair, or inventory third-party
-AI tools alongside Cohesix. Read [Mac setup](references/mac.md) for Apple
-Silicon and [Linux setup](references/linux.md) for an NVIDIA host. `MAX` means
+Use this skill when the user asks to set up, repair, or inventory host AI tools
+or optional QEMU alongside Cohesix. Read [Mac setup](references/mac.md) for
+Apple Silicon and [Linux setup](references/linux.md) for Ubuntu ARM64. `MAX` means
 Modular MAX; `MLX` means Apple's array/model stack; `vMLX` is a separate desktop
 app. Select only the requested tools and an actual supported host profile.
 The repository's pinned NeMo Agent Toolkit kit is for Linux AArch64; a Mac
 agent client needs its own qualified MCP/A2A path.
+For a host-only or Pi journey, do not require QEMU. For a QEMU journey, use the
+selected release archive's `scripts/setup_environment.sh --with-qemu` and
+`--check --with-qemu`; it checks real HVF/KVM startup and keeps the Mac pinned
+fallback separate from the Cohesix host installer. A version print or
+accelerator list alone cannot establish guest compatibility.
+On headless Ubuntu, add `--headless` to omit SwarmUI graphical packages.
 
 The external model runtime, agent, caches and credentials live on the host,
 not in seL4. The Mac may be a controller without local MLX work; a Linux

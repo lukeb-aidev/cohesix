@@ -7,6 +7,8 @@ from __future__ import annotations
 import pathlib
 import re
 import subprocess
+import os
+import shutil
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -111,18 +113,22 @@ def test_release_setup_is_fail_closed_and_uses_runtime_package_names() -> None:
     assert "22.04|24.04|26.04" in setup
     assert "COHESIX_ALLOW_UNSUPPORTED_UBUNTU" not in setup
     assert 'missing+=("qemu-system-arm")' in setup
+    assert '[[ "$WITH_QEMU" -eq 1 ]]' in setup
     assert 'missing+=("qemu-system-aarch64")' not in setup
     assert 'gtk_runtime="libgtk-3-0"' in setup
     assert 'gtk_runtime="libgtk-3-0t64"' in setup
     assert '"libfuse3-3"' in setup
     assert '"libxdo3"' in setup
+    assert 'if [[ "$HEADLESS" -eq 0 ]]' in setup
     assert "enable_ubuntu_universe" in setup
     assert "the Linux release bundle requires ARM64" in setup
     assert "the macOS release bundle requires Apple Silicon" in setup
     assert "macOS 26 or later is required" in setup
-    assert "require_qemu_accel hvf" in setup
-    assert "require_qemu_accel tcg" in setup
+    assert "qemu_compatible \"$SELECTED_QEMU\" macos-hvf" in setup
+    assert "qemu_compatible \"$SELECTED_QEMU\" linux-kvm" in setup
     assert "--check" in setup
+    assert "--with-qemu" in _run_help(RELEASE_SETUP)
+    assert "--headless" in _run_help(RELEASE_SETUP)
     assert 'wheels=("${BUNDLE_ROOT}"/python/dist/*.whl)' in setup
     assert 'local venv_dir="${BUNDLE_ROOT}/.venv"' in setup
     assert "--no-deps" in setup
@@ -135,6 +141,35 @@ def test_release_setup_is_fail_closed_and_uses_runtime_package_names() -> None:
     release_bundle = _read(REPO_ROOT / "scripts" / "release_bundle.sh")
     assert '"scripts/setup_environment.sh"' in inventory
     assert 'require_file "${ROOT_DIR}/scripts/setup_environment.sh"' in release_bundle
+
+
+def test_release_host_only_check_does_not_require_qemu(tmp_path: pathlib.Path) -> None:
+    """The native host package can be checked without installing a VM runtime."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copyfile(RELEASE_SETUP, scripts / "setup_environment.sh")
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    uname = commands / "uname"
+    uname.write_text("#!/bin/sh\nif [ \"$1\" = -s ]; then echo Darwin; else echo arm64; fi\n")
+    uname.chmod(0o755)
+    sw_vers = commands / "sw_vers"
+    sw_vers.write_text("#!/bin/sh\necho 27.0\n")
+    sw_vers.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{commands}:/usr/bin:/bin"
+    result = subprocess.run(
+        ["bash", str(scripts / "setup_environment.sh"), "--check"],
+        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Environment setup complete" in result.stdout
+    rejected = subprocess.run(
+        ["bash", str(scripts / "setup_environment.sh"), "--check", "--headless"],
+        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10,
+    )
+    assert rejected.returncode != 0
+    assert "--headless is for Ubuntu ARM64" in rejected.stderr
 
 
 def test_readme_projects_source_setup_and_quickstart_projects_release_setup() -> None:

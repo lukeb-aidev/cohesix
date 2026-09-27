@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cohesix"
-version = "1.2.0b0"
+version = "1.2.0"
 description = "Python client for Cohesix REST, TCP console, Secure9P, and mock workflows"
 readme = "README.md"
 requires-python = ">=3.11"

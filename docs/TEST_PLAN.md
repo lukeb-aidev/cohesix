@@ -248,7 +248,7 @@ If a single Toolkit process is claimed to host both protected per-user clients,
 require a startup and authenticated call on each path for that exact version;
 otherwise report separate native workflows and the combined-mode limitation.
 
-M28g starts with the exact 1.2.0-beta archive, version-aligned Python/NeMo
+M28g starts with the exact 1.2.0 archive, version-aligned Python/NeMo
 inputs and independently authenticated native installer artifacts. Qualify the
 Mac `.pkg` on clean supported Apple Silicon sessions and both Ubuntu ARM64
 `.deb` packages on 22.04, 24.04 and 26.04. Retain package-manager receipt,
@@ -3412,7 +3412,7 @@ on Mac and the selected Linux ARM64 builder and assemble candidates under
 `releases/`. The catalogued `release.bundle-validation` action is the strict
 exact-archive verifier when the three installation records name the distributed
 archives.
-For 1.2.0-beta, use `release.bundle-validation-b` with both native installer
+For 1.2.0, use `release.bundle-validation-b` with both native installer
 readback results as well. The archive verifier rejects Release B when either
 installer result is absent or names different source, archive or package bytes.
 This still leaves the separate GUI, lifecycle, live journey, pressure,

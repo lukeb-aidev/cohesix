@@ -48,7 +48,7 @@ fn catalogue() -> Result<Value> {
     ))?)
 }
 
-const RELEASE_VERSION: &str = "1.2.0-beta";
+const RELEASE_VERSION: &str = "1.2.0";
 
 pub(super) fn validate_catalogue(enabled: bool) -> Result<()> {
     let catalogue = catalogue()?;

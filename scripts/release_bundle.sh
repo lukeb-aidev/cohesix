@@ -1001,8 +1001,8 @@ bundle_release() {
   cp -p "$package_manifest" \
     "${bundle_dir}/python/m26e-python-package.json"
   mkdir -p "${bundle_dir}/nemo/dist"
-  cp -p "${NEMO_WHEEL_DIR}/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl" \
-    "${bundle_dir}/nemo/dist/cohesix_nemo_kit-1.2.0b0-py3-none-any.whl"
+  cp -p "${NEMO_WHEEL_DIR}/cohesix_nemo_kit-1.2.0-py3-none-any.whl" \
+    "${bundle_dir}/nemo/dist/cohesix_nemo_kit-1.2.0-py3-none-any.whl"
   cp -p "${NEMO_WHEEL_DIR}/nemo-distribution.json" \
     "${bundle_dir}/nemo/nemo-distribution.json"
 
@@ -1065,7 +1065,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_DIR="${ROOT_DIR}/image"
 
-QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
+if [[ -z "${QEMU_BIN:-}" && -x "${ROOT_DIR}/.venv/bin/qemu-system-aarch64" ]]; then
+  QEMU_BIN="${ROOT_DIR}/.venv/bin/qemu-system-aarch64"
+else
+  QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
+fi
 HOST_OS="$(uname -s 2>/dev/null || true)"
 RELEASE_PROFILE="$(
   python3 - "$ROOT_DIR/BUILD_PROVENANCE.json" <<'PY_PROFILE'
