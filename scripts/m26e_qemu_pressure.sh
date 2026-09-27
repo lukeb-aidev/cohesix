@@ -38,6 +38,7 @@ Options:
   --qemu FILE            qemu-system-aarch64 executable
                          (default: /opt/homebrew/bin/qemu-system-aarch64)
   --gdb FILE             aarch64-none-elf-gdb executable
+  --nm FILE              AArch64 nm executable (defaults beside --gdb)
   --jobs N               seL4 build jobs, 1..32 (default: 10)
   --reuse-artifacts      Replay already-transferred immutable guest artifacts.
                         Rebuild only the four native pressure host tools, bind
@@ -286,6 +287,7 @@ COMPILER_DIR="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-non
 COMPILER_ARCHIVE="out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
 QEMU_BIN="/opt/homebrew/bin/qemu-system-aarch64"
 GDB_BIN="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gdb"
+NM_BIN=""
 SOURCE_MANIFEST="${COH_RTC_MANIFEST:-$REPO_ROOT/configs/root_task.toml}"
 RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 JOBS=10
@@ -304,6 +306,7 @@ while [[ $# -gt 0 ]]; do
         --compiler-archive) [[ $# -ge 2 ]] || die "--compiler-archive requires a value"; COMPILER_ARCHIVE=$2; shift 2 ;;
         --qemu) [[ $# -ge 2 ]] || die "--qemu requires a value"; QEMU_BIN=$2; shift 2 ;;
         --gdb) [[ $# -ge 2 ]] || die "--gdb requires a value"; GDB_BIN=$2; shift 2 ;;
+        --nm) [[ $# -ge 2 ]] || die "--nm requires a value"; NM_BIN=$2; shift 2 ;;
         --jobs) [[ $# -ge 2 ]] || die "--jobs requires a value"; JOBS=$2; shift 2 ;;
         --reuse-artifacts) REUSE_ARTIFACTS=1; shift ;;
         --check-only) CHECK_ONLY=1; shift ;;
@@ -316,15 +319,23 @@ done
     die "--jobs must be an integer in 1..32"
 
 cd "$REPO_ROOT"
+if (( REUSE_ARTIFACTS == 1 )) && [[ -n "$CLEAN_ROOT" ]]; then
+    die "--clean-root cannot be used with --reuse-artifacts"
+fi
 PRESSURE_HOST_OS="$(uname -s)"
+PRESSURE_HOST_ARCH="$(uname -m)"
 if (( REUSE_ARTIFACTS == 1 )); then
     SEL4_PROFILE=qemu_smp_kvm_production
+    [[ "$PRESSURE_HOST_OS" == Linux && "$PRESSURE_HOST_ARCH" == aarch64 ]] || \
+        die "--reuse-artifacts requires a Linux AArch64 KVM host"
+    PRESSURE_HOST_PROFILE=linux-aarch64
     if (( SEL4_BUILD_EXPLICIT == 0 )); then
         SEL4_BUILD="out/sel4/profile-v2/qemu-smp-kvm-production"
     fi
+else
+    PRESSURE_HOST_PROFILE=macos-arm64
 fi
 if [[ -n "$CLEAN_ROOT" ]]; then
-    (( REUSE_ARTIFACTS == 0 )) || die "--clean-root cannot be used with --reuse-artifacts"
     [[ "$CLEAN_ROOT" == "$REPO_ROOT" && "$CLEAN_ROOT" != / && "$CLEAN_ROOT" != "$HOME" ]] || \
         die "--clean-root must equal this exact checkout root: $REPO_ROOT"
     [[ "$(git rev-parse --show-toplevel)" == "$REPO_ROOT" ]] || \
@@ -353,6 +364,7 @@ if (( REUSE_ARTIFACTS == 1 )); then
     [[ "$PRESSURE_HOST_OS" == "Linux" ]] || die "--reuse-artifacts is Linux-only"
     SEL4_BUILD="$(canonical_existing_dir "$SEL4_BUILD" "$OUT_DIR/sel4")"
     GDB_BIN="$(canonical_existing_file "$GDB_BIN" "" yes)"
+    NM_BIN="$(canonical_existing_file "${NM_BIN:-$(dirname "$GDB_BIN")/aarch64-none-elf-nm}" "" yes)"
     [[ "$SEL4_BUILD" == "$OUT_DIR/sel4/profile-v2/qemu-smp-kvm-production" ]] || \
         die "--sel4-build must select the transferred qemu_smp_kvm_production path"
 else
@@ -363,6 +375,7 @@ else
     COMPILER_DIR="$(canonical_existing_dir "$COMPILER_DIR" "$OUT_DIR/toolchain")"
     COMPILER_ARCHIVE="$(canonical_existing_file "$COMPILER_ARCHIVE" "$OUT_DIR/toolchain" no)"
     GDB_BIN="$(canonical_existing_file "$GDB_BIN" "$COMPILER_DIR" yes)"
+    NM_BIN="$(canonical_existing_file "${NM_BIN:-$(dirname "$GDB_BIN")/aarch64-none-elf-nm}" "$COMPILER_DIR" yes)"
     [[ "$SEL4_BUILD" != "$SEL4_SOURCE" && "$SEL4_SOURCE" != "$SEL4_BUILD"/* ]] || \
         die "seL4 build must not alias or contain the preserved source"
     [[ "$PROFILE_VENV" != "$COMPILER_DIR" && "$COMPILER_ARCHIVE" != "$COMPILER_DIR"/* ]] || \
@@ -393,7 +406,7 @@ else
     [[ -x "$HARNESS_PYTHON" ]] || die "repository .venv Python is unavailable"
 fi
 
-REQUIRED_EXECUTABLES=(cargo git lsof /usr/bin/script "$QEMU_BIN" "$GDB_BIN" "$HARNESS_PYTHON")
+REQUIRED_EXECUTABLES=(cargo git lsof /usr/bin/script "$QEMU_BIN" "$GDB_BIN" "$NM_BIN" "$HARNESS_PYTHON")
 if (( REUSE_ARTIFACTS == 0 )); then
     REQUIRED_EXECUTABLES+=(cpio shasum "$PROFILE_PYTHON")
 fi
@@ -546,8 +559,24 @@ PY
 }
 
 require_quiescent_host() {
-    if pgrep -f 'cargo|rustc|cmake|ninja|sel4_profile.py|test_plan_run.sh|qemu-system-aarch64|hive-gateway|rest_perf_harness.py|worker_task_evidence.py|aarch64-none-elf-gdb|host-ticket-agent|gpu-bridge-host|cohesix-build-run.sh|(^|/)cohsh( |$)' >/dev/null 2>&1; then
-        die "build, target, or gateway writer process is already active"
+    local ancestor=$$ ancestors=" " parent matches pid status
+    while [[ "$ancestor" =~ ^[0-9]+$ ]] && (( ancestor > 1 )); do
+        ancestors+="$ancestor "
+        parent="$(ps -p "$ancestor" -o ppid= | tr -d '[:space:]')" || \
+            die "cannot inspect pressure runner ancestry"
+        [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$ancestor" ]] || \
+            die "invalid pressure runner ancestry"
+        ancestor="$parent"
+    done
+    if matches="$(pgrep -f 'cargo|rustc|cmake|ninja|sel4_profile.py|test_plan_run.sh|qemu-system-aarch64|hive-gateway|rest_perf_harness.py|worker_task_evidence.py|aarch64-none-elf-gdb|host-ticket-agent|gpu-bridge-host|cohesix-build-run.sh|(^|/)cohsh( |$)')"; then
+        while IFS= read -r pid; do
+            [[ "$pid" =~ ^[0-9]+$ ]] || die "invalid active process identity"
+            [[ "$ancestors" == *" $pid "* ]] || \
+                die "build, target, or gateway writer process is already active"
+        done <<< "$matches"
+    else
+        status=$?
+        (( status == 1 )) || die "cannot inspect active processes"
     fi
     require_no_repo_output_writers
     local port
@@ -1944,6 +1973,7 @@ drive_worker_fault_plan() {
     ready_before=$(worker_marker_count "$boot_dir/worker.live.log" "WORKER_TASK_READY role=$role ")
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-gdb \
         --gdb "$GDB_BIN" \
+        --nm "$NM_BIN" \
         --remote 127.0.0.1:1234 \
         --target-session "$TARGET_SESSION" \
         --generated-inventory "$GENERATED_INVENTORY" \
@@ -2009,6 +2039,7 @@ drive_service_fault_plan() {
     local runner=(
         "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-service-gdb
         --gdb "$GDB_BIN"
+        --nm "$NM_BIN"
         --remote 127.0.0.1:1234
         --target-session "$TARGET_SESSION"
         --generated-inventory "$GENERATED_INVENTORY"
@@ -2650,6 +2681,7 @@ out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encodi
 PY
     scripts/ci/host_integration_run.sh \
         --matrix configs/host_integration_acceptance.toml \
+        --host-profile "$PRESSURE_HOST_PROFILE" \
         --mode live \
         --target qemu \
         --target-session "$boot_dir/target-session.json" \
@@ -2677,6 +2709,7 @@ run_critical_observation_boot() {
     verify_qemu_command "$critical_dir" yes
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-critical-gdb \
         --gdb "$GDB_BIN" \
+        --nm "$NM_BIN" \
         --remote 127.0.0.1:1234 \
         --target-session "$boot_dir/target-session.json" \
         --generated-inventory "$GENERATED_INVENTORY" \

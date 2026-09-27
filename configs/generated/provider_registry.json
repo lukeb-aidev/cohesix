@@ -7685,7 +7685,7 @@
     }
   },
   "graph_schema": "host-integration-dependency/v1",
-  "graph_sha256": "a680f3f60f517cf27ff0d028e7ef9142fbfaede29f01411571f28200000afce4",
+  "graph_sha256": "69cffd8cc62dd100006f068d75c844b444ece2a9c39025309b7c241b7c8800ed",
   "playbooks": [
     {
       "dependencies": [
@@ -8632,7 +8632,7 @@
   ],
   "resolved_manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
   "schema": "cohesix-provider-registry/v1",
-  "source_sha256": "341fac1a815de47fc132224ae740ef74fb83f37d40c3962566e28142803f4cbf",
+  "source_sha256": "d420ecd0c26a234bf7c9066cb53e9f307f712bd5e82abbbd0ebdd1cda4822169",
   "use_cases": [
     {
       "dependencies": [

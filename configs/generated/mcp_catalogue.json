@@ -44,7 +44,7 @@
   },
   "enabled": true,
   "http_path": "/mcp",
-  "provider_graph_sha256": "a680f3f60f517cf27ff0d028e7ef9142fbfaede29f01411571f28200000afce4",
+  "provider_graph_sha256": "69cffd8cc62dd100006f068d75c844b444ece2a9c39025309b7c241b7c8800ed",
   "resolved_manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
   "resources": [
     {

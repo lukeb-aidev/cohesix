@@ -27,6 +27,44 @@ from scripts.lib.host_ticket_result_barrier import TerminalResultBarrier
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_pressure_runner_documents_explicit_nm_tool() -> None:
+    """Linux GDB and nm installations need not use the same target triplet."""
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/m26e_qemu_pressure.sh"), "--help"],
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--nm FILE" in result.stdout
+
+
+def test_quiescent_probe_ignores_runner_ancestors_but_refuses_other_process() -> None:
+    """A selected QEMU filename in argv cannot make the runner block itself."""
+    source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
+    function = "require_quiescent_host() {" + source.split(
+        "require_quiescent_host() {", 1,
+    )[1].split("\n}\n\nvalidate_clean_ownership() {", 1)[0] + "\n}\n"
+    harness = '''
+die() { printf '%s\\n' "$*" >&2; exit 2; }
+require_no_repo_output_writers() { :; }
+lsof() { return 1; }
+mode=$1
+pgrep() {
+    printf '%s\\n' "$$" "$PPID"
+    if [[ "$mode" == foreign ]]; then printf '999999\\n'; fi
+    return 0
+}
+''' + function + "require_quiescent_host\n"
+    for mode, expected in (("self", 0), ("foreign", 2)):
+        result = subprocess.run(
+            ["bash", "-c", harness, "pressure-probe", mode,
+             "--qemu", "/tmp/qemu-system-aarch64"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+        assert result.returncode == expected, result.stderr
+        if mode == "foreign":
+            assert "writer process is already active" in result.stderr
+
+
 def test_linux_replay_preserves_source_record_and_exclusive_session(tmp_path: Path) -> None:
     """Replay custody must not precreate the collector's exclusively owned output."""
     source = (ROOT / "scripts/m26e_qemu_pressure.sh").read_text()
@@ -785,6 +823,7 @@ def test_fault_plan_drives_two_passive_lifecycle_calls(tmp_path: Path, role: str
         ["bash", "-eu", "-c", function + '''
 HARNESS_PYTHON=true
 GDB_BIN=fixture
+NM_BIN=fixture
 TARGET_SESSION=fixture
 GENERATED_INVENTORY=fixture
 WORKER_MANIFEST=fixture
@@ -880,7 +919,7 @@ def test_service_fault_waits_for_armed_debugger_before_operator(tmp_path: Path) 
     (tmp_path / "uart.live.log").write_text("")
     result = subprocess.run(
         ["bash", "-eu", "-c", function + '''
-HARNESS_PYTHON=true GDB_BIN=fixture TARGET_SESSION=fixture
+HARNESS_PYTHON=true GDB_BIN=fixture NM_BIN=fixture TARGET_SESSION=fixture
 GENERATED_INVENTORY=fixture OUT_ROOT=fixture AUTH_OBSERVATION=fixture
 sleep() { exit 42; }
 wait_for_marker_count() { printf 'wait %s\n' "$2"; }

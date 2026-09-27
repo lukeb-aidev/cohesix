@@ -119,6 +119,7 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
     for path in (
         "releases/RELEASE_NOTES-1.2.0-beta.md",
         "docs/audit/M27G_IMPLEMENTATION_RECORD.md",
+        "docs/audit/M28G_IMPLEMENTATION_RECORD.md",
     ):
         assert publication.classify_change(
             tmp_path, tmp_path, path, False

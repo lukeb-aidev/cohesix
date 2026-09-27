@@ -2269,7 +2269,9 @@ no log evidence after a refused export.
 
 For the AArch64 Linux KVM comparison, transfer the exact source and reviewed
 patch, build the selected `qemu_smp_kvm_production` seL4 profile, and run the
-equivalent documented workload. Its launch record binds the profile-qualified
+equivalent documented workload. Select the native AArch64-capable GDB and `nm`
+explicitly when their Linux target-triplet names differ; keep their executable
+identities with the pressure result. Its launch record binds the profile-qualified
 guest to KVM, `-cpu host`, the native 31.25 MHz architectural counter, and the
 in-kernel GICv3. Mac and Linux guest hashes are recorded separately; they are
 comparable only when source/patch identity, topology, Worker population,

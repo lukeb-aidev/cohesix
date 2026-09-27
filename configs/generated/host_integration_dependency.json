@@ -5,7 +5,7 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "341fac1a815de47fc132224ae740ef74fb83f37d40c3962566e28142803f4cbf",
+    "source_sha256": "d420ecd0c26a234bf7c9066cb53e9f307f712bd5e82abbbd0ebdd1cda4822169",
     "resolved_manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
     "implementation_surface_inventory_sha256": "faf8c55fce99aad2e855b925cbb90dc2ae16bd4835777e11dc19e5346329f546"
   },
@@ -591,6 +591,7 @@
       "class": "target-runtime",
       "obligation": "role_required",
       "host_profiles": [
+        "linux-aarch64",
         "linux-x86-64",
         "macos-arm64"
       ],
@@ -1077,6 +1078,7 @@
       "class": "target-runtime",
       "obligation": "role_required",
       "host_profiles": [
+        "linux-aarch64",
         "linux-x86-64",
         "macos-arm64"
       ],
@@ -1707,6 +1709,7 @@
       "class": "target-runtime",
       "obligation": "role_required",
       "host_profiles": [
+        "linux-aarch64",
         "linux-x86-64",
         "macos-arm64"
       ],

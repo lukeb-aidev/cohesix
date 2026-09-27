@@ -13411,14 +13411,12 @@ configured Cohesix deployment, reproducing both workflows from public instructio
 [Milestones](#Milestones)
 
 **Status:** In Progress — activated by the owner on 26 September 2026 for the
-complete M28g task breakdown. Native installer implementation and exact release
-qualification are pending. At source checkpoint `020a516300`, QEMU and Pi
-Test Plan Stages 01–04 passed; both Stage 05 attempts failed the expired
-`EX-2026-0024` release guardrail, and selected Jetson KVM pressure remains
-unexecuted. The owner renewed that exception on 27 September through
-27 October 2026; the failed attempts retain their result and current-source
-governance and pressure evidence remain required. No Release B acceptance is
-claimed.
+complete M28g task breakdown. At clean source `522463fa1ade`, the canonical
+QEMU and physical Pi Test Plans passed Stages 01–05, including fresh Stage 05
+due diligence under the owner's renewed `EX-2026-0024` exception. Earlier
+failed attempts retain their results. Signed native installers, installed
+cross-client qualification, selected Jetson KVM pressure and the other
+assembled release gates remain outstanding. No Release B acceptance is claimed.
 The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
 the selected source-level work and unmet installer, host and release gates.
 
@@ -13613,6 +13611,21 @@ Checks:
   - Freeze baseline IDs, metric definitions, sample/window selection and numeric quality/resource/latency/adoption thresholds before integrated runs; retain failures without post-failure threshold relaxation.
   - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
 Deliverables: Qualified 1.2.0-beta candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
+
+Title/ID: m28g-kvm-pressure-runner-portability
+Milestone: 28g / m28g-kvm-pressure-runner-portability; downstream discovery in m28g-release-b-qualification, restoring the selected M26e Conditional B2 runner without reopening M26e runtime scope.
+Status: In Progress — Jetson KVM acceptance is pending.
+Goal: Let the canonical pressure runner select pinned Linux QEMU and AArch64 debugger tools, then verify the Linux KVM host-integration rows without treating its own invocation as a competing writer.
+Inputs: scripts/m26e_qemu_pressure.sh; configs/host_integration_acceptance.toml; Conditional B2; exact-source Mac guest and Jetson KVM profile; retained failed preflight, toolchain and host-profile attempts.
+Changes:
+  - scripts/m26e_qemu_pressure.sh — exclude only the runner's process ancestry from the existing active-process probe; preserve external writer and output-descriptor refusal. Accept an explicit AArch64 `nm` path when Linux GDB and `nm` use different target-triplet names.
+  - configs/host_integration_acceptance.toml and compiler-generated graph, provider and protocol projections — permit the three mandatory executable-Worker target rows on Linux AArch64; select that host profile explicitly in the KVM runner.
+  - tests/test_m26e_qemu_pressure_cli.py and tests/test_host_integration_run.py — exercise self/ancestor false matches, an unrelated active-process match, the documented `nm` option and exactly three Linux AArch64 target rows.
+  - docs/BENCHMARKS.md and docs/TEST_PLAN.md — document the pinned Linux GDB/`nm` selection, bounded stripped QEMU artifact and selected host profile.
+  - docs/audit/M28G_IMPLEMENTATION_RECORD.md — retain the failed attempts, focused tests and exact replay result without relabeling earlier pressure evidence.
+Commands: bash -n scripts/m26e_qemu_pressure.sh; python3 -m pytest -q tests/test_m26e_qemu_pressure_cli.py tests/test_rest_perf_harness.py -k 'm26e_qemu_pressure or quiescent_probe'; canonical scripts/m26e_qemu_pressure.sh --reuse-artifacts on the selected Jetson KVM host.
+Checks: Direct pinned QEMU selection passes quiescence only when no other writer is active; a real competing process or open output writer still blocks; selected GDB and `nm` both read AArch64 ELFs; Linux AArch64 receives only the three mandatory target-runtime rows, with no provider-live promotion; the native KVM replay retains its original source, guest and host identities.
+Deliverables: Portable pressure preflight and a separate, exact-identity Jetson pressure record or an explicit failed gate.
 ```
 
 

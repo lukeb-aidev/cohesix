@@ -173,6 +173,46 @@ def test_qemu_target_session_emits_exact_three_hash_bound_records(tmp_path: Path
         worker_evidence.validate_integration(evidence, "qemu")
 
 
+def test_linux_aarch64_kvm_target_uses_exact_runtime_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The selected Linux KVM host can verify the same three target rows."""
+    monkeypatch.setattr(host_integration.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(host_integration.platform, "machine", lambda: "aarch64")
+    target_input = tmp_path / "target.json"
+    observations = tmp_path / "observations.json"
+    _write_json(target_input, _target_input())
+    _write_json(observations, _target_observations())
+    record = host_integration.run_matrix(
+        repo_root=ROOT,
+        matrix_path=MATRIX_PATH,
+        graph_path=GRAPH_PATH,
+        manifest_path=MANIFEST_PATH,
+        inventory_path=INVENTORY_PATH,
+        state_dir=tmp_path / "state",
+        matrix_only=False,
+        mode="live",
+        target="qemu",
+        target_session_path=target_input,
+        observations_path=observations,
+        dependencies=[],
+        use_case=None,
+        playbook=None,
+        host_profile="linux-aarch64",
+        max_session_age_s=86400,
+    )
+    assert record["verdict"] == "PASS"
+    assert tuple(item["id"] for item in record["evidence_records"]) == (
+        "gpu-receipt-path", "peft-receipt-path", "worker-control",
+    )
+    for row_id in host_integration.MANDATORY_TARGET_ROWS:
+        evidence = json.loads(
+            (tmp_path / f"state/integration/{row_id}.json").read_text()
+        )
+        assert evidence["host"]["profile"] == "linux-aarch64"
+        worker_evidence.validate_integration(evidence, "qemu")
+
+
 def test_mock_cannot_satisfy_provider_live_row(tmp_path: Path) -> None:
     graph, graph_raw = _graph()
     observation = {

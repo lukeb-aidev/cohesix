@@ -116,10 +116,70 @@ tests plus `scripts/check-generated.sh` pass after restoring the committed
 generated outputs. The 19-script attempt remains a retained transport result,
 not accepted Stage 03 evidence; the corrected source requires fresh stages.
 
-The Mac test bed lacks a Developer ID Installer identity; a signed, notarized
-`.pkg` and clean Finder/Spotlight/Dock lifecycle observations cannot yet be
-produced. The available Linux ARM64 hosts have no selected publisher signing
-key or public Debian maintainer identity. Ubuntu 22.04 package candidates were
+At clean commit `522463fa1ade7fcf01092ab4754825fe71dcf5dd` (source digest
+`sha256:a730a325a7055c5614e9b93dffc6342db67462046c3183c26e2c1283621dfc73`),
+the canonical QEMU and physical Pi 4 plans each passed Stages 01–05. The QEMU
+Stage 05 record is under ignored `out/m28g/full-plan-522-qemu`; the Pi record
+is under `out/m28g/full-plan-522-pi4-v3`. Both due-diligence gates passed with
+the owner's renewed `EX-2026-0024` exception. The earlier failed Stage 05
+attempts remain failed at their original identities. Pi runtime/DMA acceptance
+uses same-boot UART and authenticated Queen-log captures, whose separate hashes
+and composition are recorded in `pi4-stage5-proof-provenance.json`; it is not
+one uninterrupted serial capture. These staged results do not qualify a native
+installer, Jetson KVM pressure, packaged SD image or assembled Release B.
+
+The `020a516300` to `522463fa1ade` change contains only BUILD_PLAN, STATUS,
+HOST_TOOLS and audit prose, two operator skills, and the renewed exception
+register/finding. The tracked runtime, manifest, generated contracts, pressure
+runner and benchmark workload are byte-identical across those commits. For the
+Mac HVF pressure contract, this is a nonmaterial source change: retain the
+original medium and high results under `out/m28g-pressure-020a-r1/` in the
+pressure checkout, with summary SHA-256 values
+`130403cc91d43e064d521cb467437782671cd1621b9bdcb5632a89677fd2cd92`
+and `8ccbb60a5678a040bebe098854d6c1321e9d4f6da38d9abc9e34814c279f7cef`.
+This equivalence decision does not rename those results as `522463fa1ade`
+tests, supply Jetson KVM pressure or apply automatically to later code changes.
+
+During the M28g Jetson KVM preflight, the M26e pressure runner's process-name
+probe matched the runner or its launching shell when the pinned QEMU path or
+Cargo path appeared in its own arguments. The canonical check stopped before
+measurement; selecting the same binary through a short private alias proved
+that the original false match was in process scanning. A separate attempt
+correctly refused a live log descriptor under `out/`; its rerun writes the
+live log outside the checkout. Under `m28g-kvm-pressure-runner-portability`,
+the runner now exempts only its own process ancestry and still checks unrelated
+processes, open output writers and ports. Bash syntax and 60 focused pressure
+tests passed. The Jetson replay at source `522463fa1ade` passed authenticated
+NineDoor target operation, three service fault injections, critical duties and
+three Worker fault injections. It then failed before medium-load acceptance:
+host integration selected `macos-arm64` on the Linux AArch64 KVM host. That run
+remains a failed KVM acceptance attempt; it cannot qualify this repair or a
+later release source. The selected Linux AArch64 matrix now includes only the
+three target-runtime rows, and the runner passes `linux-aarch64` explicitly.
+The focused host-profile and pressure CLI tests and a fresh exact-source KVM
+replay are required before this restoration task can close.
+
+Six pre-existing Jetson user services were stopped for the KVM quiescence
+preflight. Three GPU session services and the original LoRA reference service
+restarted. Two older LoRA unit files referenced an absent source checkout;
+their service processes therefore failed on restart. The `hf_native.py` file
+at that path was restored byte-for-byte from the M28b implementation commit
+`8c0147bad1c7dc893bac84d791da0166ec3d2c48` (SHA-256
+`b4504c4807f9fc7c3af0d9f0e8981cdf9bc1d110ee16ba45cbcc5040aa6855e7`).
+Both units then reported `active/running`. This is test-bed restoration, not
+new provider or release acceptance evidence.
+
+On 27 September 2026, Apple issued the G2 Developer ID Installer certificate
+`CJ48JZP37S` for team `KB88FQXUX2`, valid through 17 September 2031. Its
+public key matches the locally generated CSR; the private key stays in the
+login keychain. `security find-identity` lists the installed identity
+`5F2F0CCE752EE22658176BBE0A99111F03878A8C`. A disposable probe package
+passed `productsign` and `pkgutil --check-signature` with Apple's trusted
+timestamp, and the stored `cohesix-m28c` notarytool profile authenticated to
+the same team. These checks establish usable signing credentials, not a signed
+Release B installer or installed lifecycle acceptance. The available Linux
+ARM64 hosts have no selected publisher signing key or public Debian maintainer
+identity. Ubuntu 22.04 package candidates were
 observed in a Jammy chroot and Ubuntu 24.04 packages on a native host; neither
 is a clean signed `.deb` installation. No Ubuntu 26.04 ARM64 installation host
 has been selected. The selected Python and NeMo wheels are source candidates;
@@ -154,8 +214,8 @@ inventory; the two Python wheel distributions remain `1.2.0b0`.
 
 M28g also still requires frozen adoption and quality budgets, independently
 evaluated clean installation, the four effective protocol modes, native CUDA,
-PEFT, Apple and NeMo journeys from installed bytes, full applicable QEMU and
-physical Pi evidence, and assembled release due diligence. These gates must
+PEFT, Apple and NeMo journeys from installed bytes, packaged QEMU and physical
+Pi installation evidence, and assembled release due diligence. These gates must
 bind one final source and package identity before the milestone can be marked
 Complete. Material AI assistance produced this implementation checkpoint;
 every claim above is limited to the executed source and host checks.
@@ -418,9 +478,9 @@ Worker transport, physical lease/revoke, bridge restart, authoritative result
 graph, Worker receipt or NVIDIA container-lane proof. The direct result is
 retained under `/mnt/nvme/cohesix-dev/m28g-1679-source/out/m28g-1679-cuda-conformance/`.
 
-## Exact-source 020a qualification and remaining release gates
+## Earlier exact-source 020a qualification
 
-The selected checkpoint is clean commit `020a516300b75e55f91606a77106c76ef74f665c`,
+This earlier checkpoint is clean commit `020a516300b75e55f91606a77106c76ef74f665c`,
 source digest `sha256:a098dd349e07e80249019f6b915289baa826dfda865e6c273e26b41d8b117b64`.
 It includes the Root admission-read and host-model readiness repairs above. The
 selected QEMU and Pi production manifests have the master, MCP and A2A switches
@@ -496,12 +556,15 @@ This guidance refinement changes no shipped host tool, Python API or benchmark
 measurement contract; the 47-surface host integration inventory still agrees
 with the selected compiler output.
 
-M28g remains **In Progress**. After the failed 020a Stage 05 attempts, Lukas
-Bower renewed the existing `EX-2026-0024` P2 scope on 2026-09-27 through
-2026-10-27, as recorded in the
+After the failed 020a Stage 05 attempts, Lukas Bower renewed the existing
+`EX-2026-0024` P2 scope on 2026-09-27 through 2026-10-27, as recorded in the
 [exception register](EXCEPTIONS.md#ex-2026-0024-renewal-2026-09-27). The
-earlier attempts remain failed, and fresh exact-source governance is required;
-the selected Jetson KVM pressure control also remains unexecuted.
+earlier attempts remain failed. The fresh `522463fa1ade` QEMU and Pi Stage 05
+governance results above close their staged lane; the selected Jetson KVM
+pressure control remains unexecuted.
+
+M28g remains **In Progress**. The `522463fa1ade` staged results are source
+and target evidence, not qualification of the installed release.
 Native signed/notarized Mac and independently signed Ubuntu ARM64
 packages, clean installs on every advertised host, installed-client parity,
 the full live acceptance matrix, frozen adoption and quality budgets, and

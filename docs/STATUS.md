@@ -65,13 +65,14 @@ historical evidence does not establish release qualification.
 [Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0-beta
 candidate. The selected source now records version-aligned Python packaging,
 native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
-lookup. At checkpoint `020a516300`, the canonical QEMU and physical Pi Test
-Plans passed Stages 01–04, including exact-source authenticated TCP and REST;
-both Stage 05 attempts failed on the then-expired `EX-2026-0024`. The owner
-renewed the exception on 27 September through 27 October 2026; fresh
-governance evidence is required. Medium and high QEMU
-pressure passed on Mac HVF with correlated Worker receipts; the selected Jetson
-KVM pressure lane has not run. Signed native installers,
+lookup. At clean source `522463fa1ade`, the canonical QEMU and physical Pi
+Test Plans passed Stages 01–05, including exact-source authenticated TCP, REST
+and fresh due diligence under the owner's renewed `EX-2026-0024` exception.
+Earlier failed Stage 05 attempts retain their results. Medium and high QEMU
+pressure passed on Mac HVF with correlated Worker receipts. The selected Jetson
+KVM pressure replay reached authenticated target and fault checks, then failed
+when host integration selected a Mac profile on Linux; a corrected replay is
+pending. Signed native installers,
 clean platform installs, graphical launch, installed cross-client parity and
 integrated Release B qualification remain outstanding. The
 [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)

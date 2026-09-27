@@ -571,6 +571,8 @@ export HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 scripts/m26e_qemu_pressure.sh \
   --reuse-artifacts \
   --qemu /path/to/qemu-system-aarch64 \
+  --gdb /path/to/aarch64-capable-gdb \
+  --nm /path/to/aarch64-capable-nm \
   --sel4-build out/sel4/profile-v2/qemu-smp-kvm-production \
   --run-dir out/m26e-qemu-pressure-linux
 
@@ -584,7 +586,10 @@ separately and are not expected to match. Results are comparable when their
 generated topology, Worker population, root/service bounds, workload, and
 source patch are equivalent; they are not a substitute for the macOS lane's
 seL4 profile validation or complete staged release acceptance. A launch record
-must match the selected host profile before load.
+must match the selected host profile before load. Select an `nm` that reads
+AArch64 ELFs; Linux GDB and `nm` may have different target-triplet names. Use
+the pinned QEMU's stripped executable when its debug-symbol build exceeds the
+collector's 64 MiB artifact bound, and record the stripped binary's own hash.
 
 To preserve development outputs, run from a fresh disposable Git checkout with
 `--clean-root "$PWD"`. Provision its own `out/sel4` source and `out/toolchain`

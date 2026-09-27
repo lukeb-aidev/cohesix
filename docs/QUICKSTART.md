@@ -65,6 +65,13 @@ code and desktop registration, while external operator state remains separate.
 Keep the 1.1.0-beta extracted directory intact for side-by-side migration;
 native installation does not adopt its credentials or evidence automatically.
 
+These native packages install the host controller and, where selected, SwarmUI.
+They do not install the seL4 QEMU guest image, `qemu/run.sh`, or a QEMU
+executable. To run the VM, keep the matching Mac or Linux release archive and
+its guest files together, install QEMU through the supported host setup, and
+follow [Boot the QEMU guest](#3-boot-the-qemu-guest). Package installation by
+itself does not provision a bootable VM.
+
 Each archive contains `QUICKSTART.md`, `README.md`, `RELEASE_NOTES.md`,
 `VERSION.txt` and `MANIFEST.sha256`. The Pi archive has no `bin/`, Python
 runtime or `qemu/run.sh`; run the host tools from the Mac or Linux archive.
