@@ -111,15 +111,21 @@ Manifest schema 1.21 introduces `[authority]` and ticket `secret_ref`. The
 compiler materializes the selected single-writer Release A source as follows:
 
 ```sh
+mkdir -p out/release-a/resources/keys
+cp /absolute/deployment/cas-verification.hex \
+  out/release-a/resources/keys/cas_verification_key.hex
 cargo run -p coh-rtc --bin coh-rtc-authority-profile -- \
   --base configs/root_task.toml \
-  --verification-key /absolute/deployment/cas-verification.hex \
+  --verification-key out/release-a/resources/keys/cas_verification_key.hex \
   --writer-epoch 1 --out out/release-a/root_task.toml
 ```
 
 Select that generated TOML as the manifest for every subsequent target build,
 compiler invocation, host tool build and evidence run. The deployment public key
-must exist and differ from the published fixture key. Materialization enables
+must be below the new profile output directory and differ from the published
+fixture key. Keep that public key beside the manifest when moving the profile
+between build hosts; use a fresh output directory for a new candidate rather
+than replacing evidence inputs. Materialization enables
 audit/replay, strict intents and required writer epochs, disables arbitrary
 memory diagnostics and federation, and replaces ticket literals with
 `env:COH_TICKET_QUEEN_KEY`, `env:COH_TICKET_WORKER_HEARTBEAT_KEY`,

@@ -833,3 +833,40 @@ binding also needs renewed verification. The focused generated-contract and
 release suites passed 49 tests; `cohesix-authority` passed 16 unit tests.
 Exact repaired-source bundles and their installation checks remain
 outstanding.
+
+## Portable production profile for both release builders
+
+Title/ID: `m28g-release-b-qualification`, discovered while preparing the
+`m28g-ubuntu-arm64-native-installer` Jetson artifact.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Let Mac and Jetson compile the same exact production manifest and public
+CAS verification key without recreating a developer-specific filesystem path.
+
+Inputs: The `7c29b8cbb211` QEMU/Pi production profiles; the passing exact
+source Mac/Pi release preflight; the source-bound JetPack 7.2.1 ARM64 host-tool
+build; the `coh-rtc-authority-profile` output containing a Mac absolute key
+path. The `7c29b8cbb211` physical Pi RAM boot, MCP/A2A smoke and QEMU base
+transport remain valid only for that original manifest and source.
+
+Changes: The authority-profile CLI requires the deployment public key below
+the new profile output directory, checks it there, and serializes a path
+relative to that directory. The private signing key remains outside the
+profile. The security and authority guides show how to place and move the
+public key with a generated profile. Focused tests cover a relocated profile
+and refusal of a key outside the selected output directory.
+
+Commands: `cargo test --locked -p coh-rtc --test authority --bin
+coh-rtc-authority-profile`; both QEMU and Pi profile CLI generations into a
+private ignored output directory; `cargo fmt --package coh-rtc -- --check`;
+`scripts/check-generated.sh`; `git diff --check`.
+
+Checks: Seven focused Rust tests passed. Both generated profiles retain
+production authority, MCP and A2A while recording the same relative public
+key path. Generated consistency passed. New exact-source target artifacts,
+native packages, installed use cases and release acceptance remain pending;
+earlier artifact identities are not promoted to the repaired source.
+
+Deliverables: Portable profile generator, documentation and retained focused
+checks. AI assistance identified and repaired the cross-host build defect.

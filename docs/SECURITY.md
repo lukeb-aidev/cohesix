@@ -469,6 +469,10 @@ validates a public Ed25519 point and emits only those public bytes. The
 corresponding signing key remains in an external secret store. The checked-in
 fixture signing seed and its public counterpart are test-only and cannot be
 selected by the QEMU/Pi runtime or release manifest.
+For a generated production profile, place the deployment public key below the
+profile output directory. `coh-rtc-authority-profile` writes its path relative
+to that directory, so the same manifest and public key can be copied to Mac
+and Linux builders without embedding the build host's absolute path.
 
 <!-- coh-rtc:ticket-quotas:start -->
 ### Ticket quota limits (generated)
