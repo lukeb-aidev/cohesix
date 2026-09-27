@@ -13517,6 +13517,17 @@ Checks: New arrows follow the selected gateway or PEFT release contract; the cut
 Validation: Tracked Markdown inventory, existing-diagram review, GitHub Mermaid compatibility, focused SVG/PNG render and visual review, deterministic STL/SVG regeneration, 296 nondegenerate closed-mesh facets, opening and rotated STL views, generated consistency, local links and metadata, and git diff --check passed. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
 Deliverables: Two as-built user flowcharts, one native GitHub ASCII STL cutaway with labelled SVG companion and source, and a focused documentation validation record; no new release-acceptance evidence.
 
+Title/ID: m28g-issue-templates-1-2-alignment
+Milestone: 28g / m28g-issue-templates-1-2-alignment
+Status: Complete — documentation-only owner request, 27 September 2026.
+Goal: Make public Cohesix 1.2 bug and feature reports easy to file while capturing enough context to reproduce a problem or assess a user need.
+Inputs: .github/ISSUE_TEMPLATE/bug_report.md; .github/ISSUE_TEMPLATE/feature_request.md; docs/SECURITY.md; docs/HOST_TOOLS.md; docs/GLOSSARY.md; CONTRIBUTING.md; selected 28g documentation and evidence boundaries.
+Changes: AI-assisted review replaces generic browser/mobile prompts with concise host/target, reproduction, and evidence questions in the bug template; the feature template asks for user need, desired behavior, observable success, and optional context. This task record retains scope and validation.
+Commands: scripts/check-generated.sh; git diff --check; focused front-matter, metadata, link, and visible-body review.
+Checks: Templates remain valid GitHub issue templates; public reports direct vulnerabilities to private reporting and prompt redaction; job recovery asks for the original identity without treating a lost reply as proof of success. No runtime or release-acceptance claim changes.
+Validation: Generated outputs matched; YAML front matter parsed with the five GitHub template keys; local metadata, security-link target/anchor, and body with hidden hints removed were reviewed; git diff --check passed. No runtime, target, or release gate was run for this documentation task.
+Deliverables: Two updated issue templates and this documentation validation record.
+
 Title/ID: m28g-macos-native-installer
 Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.

@@ -1,38 +1,43 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a Cohesix 1.2 problem
 title: ''
 labels: ''
 assignees: ''
-
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Collect reproducible, public-safe Cohesix 1.2 bug reports across host and target surfaces. -->
+<!-- Author: Lukas Bower -->
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+For a suspected vulnerability, use [private reporting](https://github.com/lukeb-aidev/cohesix/blob/main/docs/SECURITY.md#reporting-a-vulnerability) instead of a public issue. Remove credentials, console tickets, private model data and personal information from anything you attach.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## What happened?
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+<!-- Describe the unexpected result and quote the exact error, if there is one. -->
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+## How can we reproduce it?
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+<!-- Give the shortest steps you know. If it is intermittent, say how often. -->
 
-**Additional context**
-Add any other context about the problem here.
+1.
+2.
+3.
+
+## What did you expect?
+
+<!-- Describe the result you expected from those steps. -->
+
+## Where did it happen?
+
+<!-- Unknown or not applicable is fine. Host tools and GPU providers run outside the Cohesix target. -->
+
+- Cohesix version or source commit:
+- Tool or client (for example `cohsh`, `coh`, Hive Gateway, SwarmUI, Python, MCP or A2A):
+- Host OS/architecture and target (QEMU, Pi 4 or none):
+- Target profile/image or GPU provider/runtime, if relevant:
+
+## Evidence (if available)
+
+<!-- Add redacted logs, command output or a screenshot. For a lost reply to an effectful job, include its original job ID and last observed state so it can be reconciled without replaying the action. -->
