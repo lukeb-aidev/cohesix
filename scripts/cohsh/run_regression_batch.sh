@@ -119,6 +119,21 @@ BASE_SCRIPTS=(
     "session_pool.coh"
 )
 
+# The production authority deliberately refuses legacy /queen/ctl writes.
+# Keep the full development matrix above and select only contracts that can
+# execute under the strict release policy for its separate package input.
+PRODUCTION_BASE_SCRIPTS=(
+    "boot_v0.coh"
+    "9p_batch.coh"
+    "host_absent.coh"
+    "observe_watch.coh"
+    "root_cut_basic.coh"
+    "session_lifecycle.coh"
+    "busy_backpressure.coh"
+    "cas_fixture_signature_rejected.coh"
+    "tcp_basic.coh"
+)
+
 BASE_TELEMETRY_SCRIPTS=(
     "telemetry_ring.coh"
     "telemetry_push_create.coh"
@@ -147,6 +162,11 @@ QEMU_GATED_FIXTURE_SCRIPTS=(
 
 BASE_MANIFEST="${COHSH_BASE_MANIFEST:-${PROJECT_ROOT}/configs/root_task.toml}"
 GATED_MANIFEST="${COHSH_GATED_MANIFEST:-${PROJECT_ROOT}/configs/root_task_regression.toml}"
+PRODUCTION_STRICT="${COHSH_PRODUCTION_STRICT:-0}"
+case "$PRODUCTION_STRICT" in
+    0|1) ;;
+    *) echo "COHSH_PRODUCTION_STRICT must be 0 or 1" >&2; exit 2 ;;
+esac
 READY_MARKER="[mark] root-console.start.ok"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
@@ -164,7 +184,41 @@ case "$BATCH_TARGET" in
         exit 2
         ;;
 esac
-if [[ "$BATCH_TARGET" == "qemu" ]]; then
+if [[ "$PRODUCTION_STRICT" == "1" ]]; then
+    [[ "$BATCH_TARGET" == "qemu" && "${COHSH_BATCH_GROUPS:-}" == "base" ]] || {
+        echo "strict production smoke requires QEMU and only the base group" >&2
+        exit 2
+    }
+    [[ "${TEST_PLAN_ACTION_ID:-qemu.production-tcp-smoke}" == "qemu.production-tcp-smoke" ]] || {
+        echo "strict production smoke requires its own action identity" >&2
+        exit 2
+    }
+    python3 - "$BASE_MANIFEST" <<'PY'
+from pathlib import Path
+import sys
+import tomllib
+
+path = Path(sys.argv[1])
+if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+    raise SystemExit("strict production manifest must be a bounded regular file")
+manifest = tomllib.loads(path.read_text())
+authority = manifest.get("authority", {})
+gateway = manifest.get("gateway", {})
+if not (
+    authority.get("production") is True
+    and authority.get("legacy_queen_ctl") is False
+    and authority.get("strict_queen_intents") is True
+    and gateway.get("agent_protocols", {}).get("enabled") is True
+    and gateway.get("mcp", {}).get("enabled") is True
+    and gateway.get("a2a", {}).get("enabled") is True
+    and manifest.get("standing_authority", {}).get("enabled") is True
+):
+    raise SystemExit("strict production smoke requires selected release authority and protocols")
+PY
+    BASE_SCRIPTS=("${PRODUCTION_BASE_SCRIPTS[@]}")
+    TEST_ACTION_ID="qemu.production-tcp-smoke"
+    TEST_CLAIM_TIER="qemu-integration"
+elif [[ "$BATCH_TARGET" == "qemu" ]]; then
     TEST_ACTION_ID="${TEST_PLAN_ACTION_ID:-qemu.tcp-regression}"
     TEST_CLAIM_TIER="qemu-integration"
 else
@@ -233,6 +287,7 @@ case "${COHSH_BATCH_PRINT_PATHS:-0}" in
         printf 'QEMU_ARTIFACT_ROOT=%s\n' "$QEMU_ARTIFACT_ROOT"
         printf 'TRANSPORT_RESULT_ROOT=%s\n' "$TRANSPORT_RESULT_ROOT"
         printf 'TRANSPORT_EVIDENCE_ROOT=%s\n' "$TRANSPORT_EVIDENCE_ROOT"
+        printf 'BASE_SCRIPTS=%s\n' "${BASE_SCRIPTS[*]}"
         exit 0
         ;;
     *)

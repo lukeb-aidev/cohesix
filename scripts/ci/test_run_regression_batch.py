@@ -162,6 +162,85 @@ def run_path_admission(
     )
 
 
+def test_strict_production_smoke_selects_only_release_safe_scripts(
+    tmp_path: Path,
+) -> None:
+    """A production profile selects a distinct base result before any target run."""
+    manifest = tmp_path / "production.toml"
+    manifest.write_text(
+        "[authority]\nproduction = true\nlegacy_queen_ctl = false\n"
+        "strict_queen_intents = true\n"
+        "[gateway.agent_protocols]\nenabled = true\n"
+        "[gateway.mcp]\nenabled = true\n"
+        "[gateway.a2a]\nenabled = true\n"
+        "[standing_authority]\nenabled = true\n"
+    )
+    env = {
+        **os.environ,
+        "COHSH_BATCH_PRINT_PATHS": "1",
+        "COHSH_LOG_ROOT": str(tmp_path / "transport"),
+        "COHSH_BASE_MANIFEST": str(manifest),
+        "COHSH_BATCH_TARGET": "qemu",
+        "COHSH_BATCH_GROUPS": "base",
+        "COHSH_PRODUCTION_STRICT": "1",
+        "TEST_PLAN_ACTION_ID": "qemu.production-tcp-smoke",
+        "TEST_PLAN_SOURCE_DIGEST": "sha256:" + "a" * 64,
+    }
+    selected = subprocess.run(
+        ["bash", str(SCRIPT)], cwd=REPO_ROOT, env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert selected.returncode == 0, selected.stderr
+    scripts = selected.stdout.split("BASE_SCRIPTS=", 1)[1].splitlines()[0].split()
+    assert scripts == [
+        "boot_v0.coh", "9p_batch.coh", "host_absent.coh", "observe_watch.coh",
+        "root_cut_basic.coh", "session_lifecycle.coh", "busy_backpressure.coh",
+        "cas_fixture_signature_rejected.coh", "tcp_basic.coh",
+    ]
+    assert "session_pool.coh" not in scripts
+
+    for key, value in (
+        ("COHSH_BATCH_TARGET", "pi4"),
+        ("COHSH_BATCH_GROUPS", "all"),
+        ("TEST_PLAN_ACTION_ID", "qemu.tcp-regression"),
+    ):
+        rejected = subprocess.run(
+            ["bash", str(SCRIPT)], cwd=REPO_ROOT, env={**env, key: value},
+            capture_output=True, text=True, check=False,
+        )
+        assert rejected.returncode != 0
+
+    for field, old, new in (
+        ("production", "true", "false"),
+        ("legacy_queen_ctl", "false", "true"),
+        ("strict_queen_intents", "true", "false"),
+    ):
+        changed = manifest.read_text().replace(f"{field} = {old}", f"{field} = {new}")
+        manifest.write_text(changed)
+        rejected = subprocess.run(
+            ["bash", str(SCRIPT)], cwd=REPO_ROOT, env=env,
+            capture_output=True, text=True, check=False,
+        )
+        assert rejected.returncode != 0
+        manifest.write_text(changed.replace(f"{field} = {new}", f"{field} = {old}"))
+
+    for section in ("gateway.agent_protocols", "gateway.mcp", "gateway.a2a",
+                    "standing_authority"):
+        original = manifest.read_text()
+        changed = original.replace(
+            f"[{section}]\nenabled = true",
+            f"[{section}]\nenabled = false",
+        )
+        assert changed != original
+        manifest.write_text(changed)
+        rejected = subprocess.run(
+            ["bash", str(SCRIPT)], cwd=REPO_ROOT, env=env,
+            capture_output=True, text=True, check=False,
+        )
+        assert rejected.returncode != 0
+        manifest.write_text(original)
+
+
 def generated_restore_source() -> str:
     """Extract the production generated-output transaction helpers."""
 

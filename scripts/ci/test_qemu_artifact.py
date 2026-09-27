@@ -181,6 +181,7 @@ def record_artifact(
     *,
     accelerator: str | None = None,
     source_digest: str = "sha256:" + ("a" * 64),
+    action_id: str = "stage-03-qemu-tcp",
 ) -> str:
     """Record one fixture artifact and return its ID."""
 
@@ -288,7 +289,7 @@ def record_artifact(
             "--detect-gic-script",
             str(inputs["detector"]),
             "--action-id",
-            "stage-03-qemu-tcp",
+            action_id,
             "--catalog-action-digest",
             CATALOG_DIGEST,
         ]

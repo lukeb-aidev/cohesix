@@ -70,9 +70,15 @@ def accepted_inputs(
         "--artifact-dir", str(inputs["artifact"]),
     ]) == 0
     artifact = tmp_path / "artifact.json"
-    support.record_artifact(helper, inputs, artifact, source_digest=source)
-    log = tmp_path / "tcp.log"
-    log.write_text("fixture: authenticated boot smoke passed\n")
+    support.record_artifact(
+        helper, inputs, artifact, source_digest=source,
+        action_id="qemu.production-tcp-smoke",
+    )
+    script_args = []
+    for index, script in enumerate(release.PRODUCTION_TCP_RESULT_SCRIPTS):
+        log = tmp_path / ("tcp.log" if index == 0 else f"{script}.log")
+        log.write_text("fixture: authenticated boot smoke passed\n")
+        script_args.extend(("--script", script, "--log", str(log)))
     result = tmp_path / "result.json"
     assert (
         helper.main(
@@ -81,7 +87,7 @@ def accepted_inputs(
                 "--output",
                 str(result),
                 "--action-id",
-                "qemu.tcp-regression",
+                "qemu.production-tcp-smoke",
                 "--catalog-action-digest",
                 support.CATALOG_DIGEST,
                 "--claim-tier",
@@ -95,7 +101,7 @@ def accepted_inputs(
                 "--artifact-manifest",
                 str(artifact),
                 "--artifact-action-id",
-                "stage-03-qemu-tcp",
+                "qemu.production-tcp-smoke",
                 "--artifact-catalog-action-digest",
                 support.CATALOG_DIGEST,
                 "--boot-id",
@@ -104,10 +110,7 @@ def accepted_inputs(
                 "base",
                 "--status",
                 "pass",
-                "--script",
-                "boot_v0.coh",
-                "--log",
-                str(log),
+                *script_args,
             ]
         )
         == 0
@@ -289,7 +292,7 @@ def test_another_valid_artifact_does_not_satisfy_the_tcp_binding(accepted):
     ("field", "value"),
     [("group", "diagnostic"), ("scripts", ["status.coh"])],
 )
-def test_release_requires_the_default_boot_regression(accepted, field, value):
+def test_release_requires_the_complete_production_base(accepted, field, value):
     artifact, result, source, _ = accepted
     document = json.loads(result.read_text())
     document[field] = value
@@ -299,5 +302,5 @@ def test_release_requires_the_default_boot_regression(accepted, field, value):
         )
     )
     result.write_text(json.dumps(document))
-    with pytest.raises(release.evidence.EvidenceError, match="default base TCP"):
+    with pytest.raises(release.evidence.EvidenceError, match="strict-production base TCP"):
         release.verified_inputs(artifact, result, source, "macos")

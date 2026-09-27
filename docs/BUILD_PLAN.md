@@ -13715,6 +13715,16 @@ Checks:
   - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
 Deliverables: Qualified 1.2.0 candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
 
+Title/ID: m28g-production-tcp-release-proof
+Milestone: 28g / m28g-production-tcp-release-proof; discovery in m28g-release-b-qualification.
+Status: In Progress — native Mac and Jetson target replay remains required.
+Goal: Bind each release archive to authenticated TCP from its own strict-production QEMU artifact while retaining the complete development-authority transport plan.
+Inputs: The retained 4a469 Pi production Stage 03 refusal of legacy `/queen/ctl`; selected production manifests with `legacy_queen_ctl=false`; canonical native artifact and release factory contracts.
+Changes: Give the production-safe base scripts a distinct catalog action and exact script-set check in the release factory. Refuse a development policy, missing default MCP/A2A or standing control, wrong target/group/action, partial script result, and a different artifact. Preserve the full Stage 03 matrix and production authority.
+Commands: `bash -n scripts/cohsh/run_regression_batch.sh`; `.venv/bin/python -m pytest -q scripts/ci/test_run_regression_batch.py tests/test_release_inputs.py`; `scripts/ci/test_plan_catalog.py validate`; `scripts/check-generated.sh`; native strict-production smoke on Mac HVF and Jetson KVM.
+Checks: Each native smoke boots and authenticates the exact production artifact, passes its fixed response matrix and nine safe scripts, and emits a retained base result with matching action, source, manifest, host and artifact identities. The full development Stage 03, production MCP/A2A live cases and physical Pi acceptance remain separate requirements.
+Deliverables: Production TCP records usable by the canonical release factory, focused refusal tests, and explicit profile boundaries in the Test Plan and host guide.
+
 Title/ID: m28g-kvm-pressure-runner-portability
 Milestone: 28g / m28g-kvm-pressure-runner-portability; downstream discovery in m28g-release-b-qualification, restoring the selected M26e Conditional B2 runner without reopening M26e runtime scope.
 Status: In Progress — Jetson KVM acceptance is pending.

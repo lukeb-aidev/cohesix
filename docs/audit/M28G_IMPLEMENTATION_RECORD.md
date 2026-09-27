@@ -958,3 +958,44 @@ their original source identity.
 Deliverables: Exact-stage Pi proof linkage, a fault-probe correction and
 explicitly bounded regression evidence. AI assistance identified and
 implemented these repairs; independent target qualification remains open.
+
+## Strict-production TCP release input
+
+Title/ID: `m28g-production-tcp-release-proof`; downstream discovery in
+`m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-production-tcp-release-proof.
+
+Goal: Keep production Queen authority strict while producing a native QEMU TCP
+result that the canonical release factory can bind to the shipped guest.
+
+Inputs: The `4a46989432ae` production Pi TFTP/RAM boot and Stage 01–02 PASS;
+the retained Stage 03 failure at `base-telemetry/telemetry_ring.coh`, where
+`spawn heartbeat` received the production policy's `EPERM` for `/queen/ctl`;
+the development suite's separate legacy-control contract.
+
+Changes: `run_regression_batch.sh` now selects nine production-safe base
+scripts only under an explicit, validated strict-production mode and gives
+that boot `qemu.production-tcp-smoke` identity. The selector refuses an
+incorrect target, group, action, authority policy, MCP/A2A or standing control.
+`release_inputs.py` requires the complete safe script set and matching
+artifact/action instead of promoting a development Stage 03 result. The
+catalog, Test Plan and host release guide distinguish the two proof lanes.
+The full development suite and the production denial remain intact.
+
+Commands: `bash -n scripts/cohsh/run_regression_batch.sh`;
+`.venv/bin/python -m pytest -q scripts/ci/test_run_regression_batch.py
+tests/test_release_inputs.py`; focused catalog and release-bundle tests;
+`scripts/ci/test_plan_catalog.py validate` and `check-doc`;
+`scripts/check-generated.sh`; `git diff --check`.
+
+Checks: The selector and release-input tests passed 39 cases, focused catalog
+and bundle tests passed 37 cases with two subtests, and catalog/generated
+consistency passed. No native strict-production QEMU boot has passed at this
+checkpoint. The `4a469` production Pi refusal is a failed suite/profile
+selection, not evidence that production should enable legacy Queen control.
+All target, installed-package and release acceptance gates remain open until
+fresh exact-source results pass.
+
+Deliverables: A production-safe proof path and retained failed discovery;
+native Mac/Jetson replay and separate physical Pi acceptance are pending.

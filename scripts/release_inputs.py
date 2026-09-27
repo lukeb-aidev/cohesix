@@ -21,6 +21,14 @@ HOSTS = {
     "macos": ("Darwin", "qemu_smp_production", 24_000_000),
     "linux": ("Linux", "qemu_smp_kvm_production", 31_250_000),
 }
+PRODUCTION_TCP_SCRIPTS = (
+    "boot_v0.coh", "9p_batch.coh", "host_absent.coh", "observe_watch.coh",
+    "root_cut_basic.coh", "session_lifecycle.coh", "busy_backpressure.coh",
+    "cas_fixture_signature_rejected.coh", "tcp_basic.coh",
+)
+PRODUCTION_TCP_RESULT_SCRIPTS = tuple(sorted((
+    *PRODUCTION_TCP_SCRIPTS, "qemu_tcp_response_matrix.fixed",
+)))
 IMAGE_PATHS = {
     "image/elfloader": "staging/elfloader",
     "image/kernel.elf": "staging/kernel.elf",
@@ -89,7 +97,7 @@ def verified_inputs(
         expected_source_digest=source,
         expected_target="qemu",
         expected_tier="qemu-integration",
-        expected_action_id="qemu.tcp-regression",
+        expected_action_id="qemu.production-tcp-smoke",
         expected_catalog_action_digest=artifact["catalog_action_digest"],
         expected_evidence_root=result_path.parent / root,
         verify_local_runtime=False,
@@ -98,9 +106,12 @@ def verified_inputs(
         raise evidence.EvidenceError(
             "release input differs from the artifact that passed TCP"
         )
-    if result.get("group") != "base" or "boot_v0.coh" not in result.get("scripts", []):
+    if artifact.get("action_id") != "qemu.production-tcp-smoke":
+        raise evidence.EvidenceError("release artifact lacks the strict-production TCP action")
+    if (result.get("group") != "base"
+            or result.get("scripts") != list(PRODUCTION_TCP_RESULT_SCRIPTS)):
         raise evidence.EvidenceError(
-            "release requires the default base TCP boot result"
+            "release requires the complete strict-production base TCP result"
         )
     return artifact
 

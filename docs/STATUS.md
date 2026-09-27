@@ -47,6 +47,15 @@ integrated Release B qualification remain outstanding. The
 retains the exact identities, diagnostic failures and blocked gates. Release A
 remains the published release.
 
+At later source `4a46989432ae`, the exact production Pi image booted by
+TFTP/RAM with verified image hash, post-reset CRCs and build marker. QEMU and
+Pi Stages 01–02 passed. The production Pi Stage 03 attempt then failed because
+its development-authority fixture tried legacy `/queen/ctl`, which production
+correctly denied. The release factory now has a separate strict-production
+QEMU TCP proof path, but its native target runs and the complete development
+and physical Pi gates remain pending. No SD rebuild is requested before the
+production Pi release lane passes.
+
 The Release B Python SDK source and manual now use `1.2.0`. Its PyPI
 workflow is prepared to build from the reviewed `v1.2.0` tag and compare
 the exact public distributions after reviewer-gated publishing. The tag and

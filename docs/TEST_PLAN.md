@@ -1358,6 +1358,7 @@ from that catalog.
 | `target.pi4-profile` | 2 | `pi4-transport` | provisioned-target / pi4 | `"${TEST_PLAN_ROOT}/.venv/bin/python" scripts/sel4_profile.py validate --repo-managed --profile pi4_production --build-dir "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --require-artifacts --for-runtime` |
 | `target.root-task-pi4-release` | 2 | `pi4-transport` | provisioned-target / pi4 | `scripts/ci/test_plan_target_root_check.sh --target pi4 --sel4-build "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --profile pi4_production --features release-pi4 --timer-clock-hz 54000000` |
 | `qemu.tcp-regression` | 3 | `qemu-integration` | target / qemu | `scripts/cohsh/run_regression_batch.sh` |
+| `qemu.production-tcp-smoke` | conditional | `qemu-integration` | conditional / qemu | `COHSH_PRODUCTION_STRICT=1 COHSH_BATCH_GROUPS=base scripts/cohsh/run_regression_batch.sh` |
 | `pi4.tcp-regression` | 3 | `pi4-transport` | target / pi4 | `scripts/cohsh/run_regression_batch.sh` |
 | `qemu.rest-regression` | 4 | `qemu-integration` | target / qemu | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
 | `pi4.rest-regression` | 4 | `pi4-transport` | target / pi4 | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
@@ -1692,6 +1693,19 @@ cannot be repaired by a passing compile or a historical transcript.
   fresh boot for focused diagnosis; it cannot produce full Stage 03 PASS.
   `COHSH_LOG_ROOT` selects the evidence directory; the default remains
   `out/regression-logs/pi4-full-<utc>`.
+- The full Stage 03 scripts exercise development authority, including legacy
+  `/queen/ctl` operations. A production manifest has `legacy_queen_ctl=false`;
+  its refusal is required. Release assembly instead requires the separate
+  catalogued `qemu.production-tcp-smoke` result on each native QEMU host. Set
+  `COHSH_BASE_MANIFEST` to the selected production TOML,
+  `COHSH_PRODUCTION_STRICT=1`, `COHSH_BATCH_GROUPS=base`, and
+  `TEST_PLAN_ACTION_ID=qemu.production-tcp-smoke` when invoking
+  `scripts/cohsh/run_regression_batch.sh`. Retain its `base.json` and exact
+  `qemu-artifact.json` together. This boot runs nine production-safe scripts
+  and the fixed response matrix, with selected MCP, A2A and standing controls
+  checked before launch. It supplies production TCP proof for the archive;
+  the full development Stage 03 and live protocol/provider cases remain
+  separate gates.
 - The operator-owned collector is invoked without shell evaluation with
   `--group <name> --out <new-group-directory> --prior-evidence <json>` and
   `--source-digest sha256:<digest>`. It must boot the selected image, retain

@@ -2310,6 +2310,24 @@ COHSH_LOG_ROOT="$PWD/out/regression-logs/release-linux" \
   scripts/cohsh/run_regression_batch.sh
 ```
 
+The full staged regression above uses development authority. For the strict
+production archive input on **each** native host, select that host's
+provisioned production TOML and a fresh evidence root, then run:
+
+```bash
+COHSH_BASE_MANIFEST="${RELEASE_B_PRODUCTION_MANIFEST:?}" \
+COHSH_LOG_ROOT="${RELEASE_B_PRODUCTION_TCP_EVIDENCE:?}" \
+COHSH_PRODUCTION_STRICT=1 COHSH_BATCH_GROUPS=base \
+TEST_PLAN_ACTION_ID=qemu.production-tcp-smoke \
+  scripts/cohsh/run_regression_batch.sh
+```
+
+Provide the private Queen key through the documented inherited environment,
+the selected native seL4 build, and a verified HVF or KVM QEMU binary. The
+factory requires this result's complete production-safe base script set and
+the artifact it actually booted. Keep the development full-plan result as a
+separate gate; production policy must retain `legacy_queen_ctl=false`.
+
 Retain each native evidence tree intact: logs, relative paths,
 `qemu-artifact.json`, matching passing `base.json` and
 `release-configs/configs/generated/`. `scripts/release_inputs.py` verifies the

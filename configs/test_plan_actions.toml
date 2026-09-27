@@ -561,6 +561,19 @@ expected_evidence = ["qemu-artifact-manifest", "qemu-boot-result-manifests", "re
 test_policy = "artifact-count"
 
 [[action]]
+id = "qemu.production-tcp-smoke"
+stage = 0
+tier = "qemu-integration"
+scope = "conditional"
+targets = ["qemu"]
+description = "Boot the exact strict-production QEMU artifact and prove authenticated TCP, 9P, refusal and close behavior without enabling legacy Queen control. The full development-profile Stage 03 remains a separate gate."
+command = "COHSH_PRODUCTION_STRICT=1 COHSH_BATCH_GROUPS=base scripts/cohsh/run_regression_batch.sh"
+timeout_seconds = 3600
+trigger_paths = ["apps/root-task/**", "apps/cohsh/**", "scripts/cohsh/**", "scripts/qemu_tcp_response_matrix.py", "configs/root_task*.toml", "crates/**"]
+expected_evidence = ["qemu-artifact-manifest", "production-base-tcp-result", "regression-summary"]
+test_policy = "artifact-count"
+
+[[action]]
 id = "pi4.tcp-regression"
 stage = 3
 tier = "pi4-transport"
