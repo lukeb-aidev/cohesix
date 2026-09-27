@@ -22,9 +22,6 @@ DOCUMENT = ROOT / "docs/ARCHITECTURE.md"
 COMPANION = ROOT / "docs/diagrams/target-host-boundary.svg"
 START = "<!-- target-host-stl:start -->"
 END = "<!-- target-host-stl:end -->"
-# Tilt the derived mesh for GitHub's near-plan opening camera. Source layout and
-# the static companion remain in plan coordinates; orientation has no meaning.
-STL_OPENING_TILT_DEGREES = 32
 
 Point = tuple[float, float, float]
 Triangle = tuple[Point, Point, Point]
@@ -117,7 +114,7 @@ def open_frame(
     *,
     height: float,
     gap: tuple[str, float, float] | None = None,
-    width: float = 0.14,
+    width: float = 0.35,
 ) -> list[Triangle]:
     """Make one open, watertight wall volume, with an optional side ingress."""
     outer = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
@@ -169,15 +166,15 @@ def geometry() -> list[Triangle]:
     """Show an open target boundary, separate wells, and one console ingress."""
     parts = [
         # The large frames are deployment boundaries, not physical chassis.
-        open_frame(0, 0, 14, 10, height=0.75, gap=("east", 7.25, 8.15), width=0.20),
-        open_frame(18, 0, 27, 10, height=0.35, gap=("west", 7.25, 8.15), width=0.20),
+        open_frame(0, 0, 14, 10, height=0.75, gap=("east", 7.25, 8.15)),
+        open_frame(18, 0, 27, 10, height=0.35, gap=("west", 7.25, 8.15)),
         # Each smaller open well stands for a distinct target runtime domain.
-        open_frame(1.0, 3.4, 4.2, 6.6, height=1.50),  # root / Queen
-        open_frame(5.3, 6.2, 8.5, 9.2, height=1.50),  # NineDoor child
-        open_frame(10.0, 6.2, 13.2, 9.2, height=1.50,
+        open_frame(1.0, 3.4, 4.2, 6.6, height=2.00),  # root / Queen
+        open_frame(5.3, 6.2, 8.5, 9.2, height=2.00),  # NineDoor child
+        open_frame(10.0, 6.2, 13.2, 9.2, height=2.00,
                    gap=("east", 7.25, 8.15)),  # console-network child
-        open_frame(5.3, 0.8, 8.5, 4.0, height=1.50),  # one Worker child
-        open_frame(10.0, 0.8, 13.2, 4.0, height=1.50),  # one Pi driver child
+        open_frame(5.3, 0.8, 8.5, 4.0, height=2.00),  # one Worker child
+        open_frame(10.0, 0.8, 13.2, 4.0, height=2.00),  # one Pi driver child
         # Low pads are host-side responsibilities, not seL4 compartments.
         box(18.8, 6.2, 0, 22.0, 9.2, 0.22),  # gateway
         box(23.0, 2.2, 0, 26.2, 5.4, 0.22),  # CUDA/PEFT provider
@@ -203,29 +200,10 @@ def normal(triangle: Triangle) -> Point:
     return tuple(value / length for value in cross)  # type: ignore[return-value]
 
 
-def display_geometry() -> list[Triangle]:
-    """Present the open wells at an angle without changing their topology."""
-    tilt = math.radians(STL_OPENING_TILT_DEGREES)
-    sine, cosine = math.sin(tilt), math.cos(tilt)
-    rotated = [
-        tuple(
-            (x, 5 + (y - 5) * cosine - z * sine,
-             (y - 5) * sine + z * cosine)
-            for x, y, z in triangle
-        )
-        for triangle in geometry()
-    ]
-    floor = min(point[2] for triangle in rotated for point in triangle)
-    return [
-        tuple((x, y, z - floor) for x, y, z in triangle)
-        for triangle in rotated
-    ]
-
-
 def ascii_stl() -> str:
     """Serialize the model in GitHub's supported ASCII STL syntax."""
     lines = ["solid target_host_boundary"]
-    for triangle in display_geometry():
+    for triangle in geometry():
         nx, ny, nz = normal(triangle)
         lines.extend(
             (f"facet normal {nx:.4f} {ny:.4f} {nz:.4f}", "  outer loop")
