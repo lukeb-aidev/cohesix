@@ -22,9 +22,9 @@ DOCUMENT = ROOT / "docs/ARCHITECTURE.md"
 COMPANION = ROOT / "docs/diagrams/target-host-boundary.svg"
 START = "<!-- target-host-stl:start -->"
 END = "<!-- target-host-stl:end -->"
-# GitHub's native STL camera opens at a fixed distance; this display scale
-# fills its initial viewport without assigning real units to the schematic.
-STL_DISPLAY_SCALE = 2.5
+# Tilt the derived mesh for GitHub's near-plan opening camera. Source layout and
+# the static companion remain in plan coordinates; orientation has no meaning.
+STL_OPENING_TILT_DEGREES = 32
 
 Point = tuple[float, float, float]
 Triangle = tuple[Point, Point, Point]
@@ -203,17 +203,35 @@ def normal(triangle: Triangle) -> Point:
     return tuple(value / length for value in cross)  # type: ignore[return-value]
 
 
+def display_geometry() -> list[Triangle]:
+    """Present the open wells at an angle without changing their topology."""
+    tilt = math.radians(STL_OPENING_TILT_DEGREES)
+    sine, cosine = math.sin(tilt), math.cos(tilt)
+    rotated = [
+        tuple(
+            (x, 5 + (y - 5) * cosine - z * sine,
+             (y - 5) * sine + z * cosine)
+            for x, y, z in triangle
+        )
+        for triangle in geometry()
+    ]
+    floor = min(point[2] for triangle in rotated for point in triangle)
+    return [
+        tuple((x, y, z - floor) for x, y, z in triangle)
+        for triangle in rotated
+    ]
+
+
 def ascii_stl() -> str:
     """Serialize the model in GitHub's supported ASCII STL syntax."""
     lines = ["solid target_host_boundary"]
-    for triangle in geometry():
+    for triangle in display_geometry():
         nx, ny, nz = normal(triangle)
         lines.extend(
-            (f"facet normal {nx:.0f} {ny:.0f} {nz:.0f}", "  outer loop")
+            (f"facet normal {nx:.4f} {ny:.4f} {nz:.4f}", "  outer loop")
         )
         lines.extend(
-            f"    vertex {x * STL_DISPLAY_SCALE:.2f} "
-            f"{y * STL_DISPLAY_SCALE:.2f} {z * STL_DISPLAY_SCALE:.2f}"
+            f"    vertex {x:.2f} {y:.2f} {z:.2f}"
             for x, y, z in triangle
         )
         lines.extend(("  endloop", "endfacet"))
