@@ -614,6 +614,7 @@ validate_host_tools_inputs() {
   HOST_TOOLS_DIR="$host_tools_dir" \
   HOST_PLATFORM="$platform" \
   HOST_PROVENANCE="$provenance" \
+  SELECTED_MANIFEST="$RELEASE_AUTHORITY_MANIFEST" \
   REPO_HEAD="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)" \
   EXPECTED_MAX_GLIBC="$LINUX_BUILDER_MAX_GLIBC" \
   python3 - <<'PY'
@@ -677,6 +678,10 @@ if platform == "linux" and os.environ["HOST_PROVENANCE"]:
     builder = manifest.get("builder", {})
     if builder.get("source_commit") != os.environ["REPO_HEAD"]:
         raise SystemExit("Linux host tools were built from a different source commit")
+    manifest_path = Path(os.environ["SELECTED_MANIFEST"])
+    selected_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    if builder.get("selected_manifest_sha256") != selected_hash:
+        raise SystemExit("Linux host tools were built from a different selected manifest")
     if builder.get("architecture") not in {"aarch64", "arm64"}:
         raise SystemExit("Linux host-tool provenance has the wrong architecture")
     if builder.get("rustc_host") != "aarch64-unknown-linux-gnu":
@@ -1617,6 +1622,7 @@ if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
       [[ -n "$required" ]] || fail "Linux rebuild requires all documented build/output arguments"
     done
     sync_args=(build-tools --host "$LINUX_BUILDER_HOST" --user "$LINUX_BUILDER_USER"
+      --manifest "$RELEASE_AUTHORITY_MANIFEST"
       --remote-build-dir "$LINUX_BUILDER_BUILD_DIR" --remote-cargo "$LINUX_BUILDER_CARGO"
       --remote-cargo-home "$LINUX_BUILDER_CARGO_HOME" --local-out "$LINUX_HOST_TOOLS_DIR"
       --manifest-out "$LINUX_HOST_TOOLS_MANIFEST" --max-glibc-version "$LINUX_BUILDER_MAX_GLIBC")

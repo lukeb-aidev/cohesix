@@ -13725,6 +13725,16 @@ Commands: `bash -n scripts/cohsh/run_regression_batch.sh`; `.venv/bin/python -m 
 Checks: Each native smoke boots and authenticates the exact production artifact, passes its fixed response matrix and nine safe scripts, and emits a retained base result with matching action, source, manifest, host and artifact identities. The full development Stage 03, production MCP/A2A live cases and physical Pi acceptance remain separate requirements.
 Deliverables: Production TCP records usable by the canonical release factory, focused refusal tests, and explicit profile boundaries in the Test Plan and host guide.
 
+Title/ID: m28g-linux-host-policy-selection
+Milestone: 28g / m28g-linux-host-policy-selection; downstream discovery in m28g-production-tcp-release-proof.
+Status: In Progress — exact-source native rebuild and TCP replay pending.
+Goal: Build Linux host clients against the same selected production policy as their accepted KVM guest.
+Inputs: The retained Jetson KVM production TCP attempt whose response matrix passed but `cohsh` refused the generated policy hash; selected production manifest; native builder and release factory provenance.
+Changes: `scripts/linux_host_tools_sync.sh build-tools` accepts a selected manifest, transfers and hashes it separately from the clean source archive, generates host policies and Python defaults from it, and records manifest/policy digests. The release factory forwards its selected manifest and refuses Linux provenance for another manifest. Focused tests and the host guide cover this binding.
+Commands: `bash -n scripts/linux_host_tools_sync.sh scripts/release_bundle.sh`; `.venv/bin/python -m pytest -q tests/test_linux_host_tools_sync.py tests/test_release_bundle.py`; `scripts/check-generated.sh`; native Jetson ARM64 host-tool rebuild and strict-production KVM TCP replay with the selected manifest.
+Checks: A missing or changed selected manifest fails before publication; the native `cohsh` loads the exact generated policy and completes the fixed strict-production TCP script set from the KVM artifact. The initial failed attempt remains a failure at its original identity; a new source-bound attempt is required.
+Deliverables: Selected-manifest native host-tool provenance, passing or explicitly failed new KVM TCP result, and the corrected release-factory contract.
+
 Title/ID: m28g-kvm-pressure-runner-portability
 Milestone: 28g / m28g-kvm-pressure-runner-portability; downstream discovery in m28g-release-b-qualification, restoring the selected M26e Conditional B2 runner without reopening M26e runtime scope.
 Status: In Progress — Jetson KVM acceptance is pending.

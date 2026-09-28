@@ -1041,3 +1041,60 @@ original source and image identity; they do not accept this change.
 Deliverables: Bounded synchronous-response repair and host-level regression
 proof. AI assistance identified the root cause and implemented the repair;
 independent physical and release evidence remains open.
+
+## Linux production host-policy selection
+
+Title/ID: `m28g-linux-host-policy-selection`; discovery in
+`m28g-production-tcp-release-proof`.
+
+Milestone: 28g / m28g-linux-host-policy-selection.
+
+Goal: Bind native Linux host clients to the selected production KVM policy.
+
+Inputs: Clean source `547a65a9fd4a`; dedicated KVM guest at
+`out/m28g/kvm-prod-547a-mac`; native Linux host-tool manifest at
+`out/m28g/linux-host-tools-547a.json`; retained failed Jetson TCP attempt at
+`out/m28g/jetson-production-tcp-547a`.
+
+Changes: The first Jetson attempt booted the dedicated KVM guest and passed
+the authenticated TCP response matrix, then `cohsh` refused `boot_v0.coh`:
+the binary expected policy SHA-256 `d5a5d49e62abb9a7353cb8fcb7c8d75df30550174d16546b108516331e8699ad`
+while the selected production artifact supplied
+`f77a645d43347d50eaef1e832b1b729918d1818d1b7f603b4988928036cd321c`.
+The native builder generated host policies from `configs/root_task.toml`
+instead of the guest's selected production manifest. The builder now accepts
+that manifest as an explicit input, verifies its transfer digest, and records
+the manifest and generated policy hashes. The release factory forwards its
+selected manifest and checks native-tool provenance against it. No policy
+validation or production authority was relaxed.
+
+Commands: `bash -n scripts/linux_host_tools_sync.sh scripts/release_bundle.sh`;
+`.venv/bin/python -m pytest -q tests/test_linux_host_tools_sync.py
+tests/test_release_bundle.py`; `scripts/check-generated.sh`; `git diff --check`.
+
+Checks: Shell syntax passed, 31 focused tests passed and generated consistency
+passed for the repair working tree. The original KVM attempt remains failed.
+Fresh clean-source Linux host-tool build, native KVM TCP replay and all
+assembled-release gates remain pending.
+
+Deliverables: Corrected native builder and factory binding, focused tests,
+host guide and retained failure. AI assistance traced and repaired the
+builder mismatch; no target acceptance is inferred from the repair tests.
+
+## Exact-image Pi Wi-Fi smoke
+
+At source `547a65a9fd4a`, the production Pi image in
+`out/m28g/pi4-stage-547a-release-prod` was loaded through TFTP/RAM with three
+completed transfers and post-reset CRC checks. The SD card's saved policy
+remained Ethernet, so a private local Wi-Fi policy was applied for this boot
+through a redacted serial handoff without writing the card. The retained
+`wifi-smoke-private-ram-attempt3` receipt binds the exact build marker and
+records a settled Wi-Fi supervisor with no runtime recovery. Same-boot serial
+`netstats` reports active Wi-Fi and a bound DHCP lease. The first TCP client
+attempt was rejected because its transport token was a minted ticket; the
+retry used the selected transport credential and received `OK AUTH`, Queen
+attach and `OK PING reply=pong`. Retained serial/TCP logs were checked for
+the private Wi-Fi values and Queen credential. This is a quick same-image
+Wi-Fi smoke, not the full physical Pi, pressure, repeatability or final SD
+release gate. The subsequent source change for Linux host-tool selection
+requires its own exact-source qualification.

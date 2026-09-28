@@ -20,6 +20,7 @@ Common options:
   --key <path>                  Optional SSH private key; omit for normal SSH agent/config auth
 
 build-tools options:
+  --manifest <path>             Selected target manifest for native host policy generation
   --remote-build-dir <path>     Absolute remote source/target/staging root
   --remote-cargo <path>         Absolute remote cargo executable
   --remote-cargo-home <path>    Absolute remote Cargo registry/cache directory
@@ -64,6 +65,7 @@ KEY_PATH=""
 REMOTE_BUILD_DIR=""
 REMOTE_CARGO=""
 REMOTE_CARGO_HOME=""
+SELECTED_MANIFEST=""
 LOCAL_OUT=""
 MANIFEST_OUT=""
 MAX_GLIBC_VERSION=""
@@ -103,6 +105,11 @@ while [[ $# -gt 0 ]]; do
     --remote-cargo-home)
       [[ $# -ge 2 ]] || fail "--remote-cargo-home requires a path"
       REMOTE_CARGO_HOME="$2"
+      shift 2
+      ;;
+    --manifest)
+      [[ $# -ge 2 ]] || fail "--manifest requires a path"
+      SELECTED_MANIFEST="$2"
       shift 2
       ;;
     --local-out)
@@ -243,6 +250,13 @@ build_tools() {
   validate_remote_dir "--remote-cargo-home" "$REMOTE_CARGO_HOME"
   validate_local_mutation_path "--local-out" "$LOCAL_OUT"
   validate_local_mutation_path "--manifest-out" "$MANIFEST_OUT"
+  if [[ -z "$SELECTED_MANIFEST" ]]; then
+    SELECTED_MANIFEST="${ROOT_DIR}/configs/root_task.toml"
+  fi
+  [[ -f "$SELECTED_MANIFEST" && ! -L "$SELECTED_MANIFEST" ]] || \
+    fail "--manifest must name a regular file, not a symlink"
+  local selected_manifest_sha256
+  selected_manifest_sha256="$(sha256_file "$SELECTED_MANIFEST")"
 
   local source_status
   source_status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)"
@@ -254,6 +268,7 @@ build_tools() {
   trap 'rm -rf "${temp_dir}"' RETURN
   local source_tarball="${temp_dir}/cohesix-host-tools-source.tar.gz"
   local remote_source_tarball="${REMOTE_BUILD_DIR}/cohesix-host-tools-source.tar.gz"
+  local remote_manifest="${REMOTE_BUILD_DIR}/selected-manifest.toml"
   local remote_tools_tarball="${REMOTE_BUILD_DIR}/host-tools-linux.tar.gz"
   local remote_build_info="${REMOTE_BUILD_DIR}/host-tools-build-info.env"
   local source_commit
@@ -275,11 +290,14 @@ build_tools() {
   run_ssh "mkdir -p '${REMOTE_BUILD_DIR}'"
   scp "${SSH_OPTS[@]}" "$source_tarball" \
     "${SSH_DESTINATION}:${remote_source_tarball}"
+  scp "${SSH_OPTS[@]}" "$SELECTED_MANIFEST" \
+    "${SSH_DESTINATION}:${remote_manifest}"
 
   log "Building the exact Linux ARM64 host-tool set on ${HOST}"
   ssh "${SSH_OPTS[@]}" "$SSH_DESTINATION" bash -s -- \
     "$REMOTE_BUILD_DIR" "$REMOTE_CARGO" "$REMOTE_CARGO_HOME" \
-    "$MAX_GLIBC_VERSION" "$source_sha256" "$source_commit" "$CLEAN" "$source_tree" <<'REMOTE_BUILD'
+    "$MAX_GLIBC_VERSION" "$source_sha256" "$source_commit" "$CLEAN" "$source_tree" \
+    "$selected_manifest_sha256" <<'REMOTE_BUILD'
 set -euo pipefail
 
 build_root="$1"
@@ -290,7 +308,9 @@ expected_source_sha="$5"
 source_commit="$6"
 clean="$7"
 source_tree="$8"
+expected_manifest_sha="$9"
 source_tarball="${build_root}/cohesix-host-tools-source.tar.gz"
+selected_manifest="${build_root}/selected-manifest.toml"
 source_dir="${build_root}/source"
 target_dir="${build_root}/target"
 stage_dir="${build_root}/host-tools-linux"
@@ -315,6 +335,11 @@ done
 actual_source_sha="$(sha256sum "$source_tarball" | awk '{print $1}')"
 [[ "$actual_source_sha" == "$expected_source_sha" ]] || {
   echo "remote source archive digest mismatch" >&2
+  exit 1
+}
+actual_manifest_sha="$(sha256sum "$selected_manifest" | awk '{print $1}')"
+[[ "$actual_manifest_sha" == "$expected_manifest_sha" ]] || {
+  echo "remote selected manifest digest mismatch" >&2
   exit 1
 }
 
@@ -365,11 +390,11 @@ print(profile['profiles']['qemu_smp_kvm_production']['timer_clock_hz'])
 PY_TIMER
 )"
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc -- \
-  configs/root_task.toml --timer-clock-hz "$qemu_timer" \
+  "$selected_manifest" --timer-clock-hz "$qemu_timer" \
   --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
 # Linux tools embed the same generated policies and Python contract as the guest.
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc-python-profile -- \
-  configs/root_task.toml --sel4-profiles configs/sel4/profiles.toml \
+  "$selected_manifest" --sel4-profiles configs/sel4/profiles.toml \
   --profile qemu_smp_kvm_production \
   --out configs/generated/cohesix_python_qemu_smp_production.json
 
@@ -412,6 +437,8 @@ os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-unknown}")"
   printf 'source_commit=%s\n' "$source_commit"
   printf 'source_tree=%s\n' "$source_tree"
   printf 'source_archive_sha256=%s\n' "$actual_source_sha"
+  printf 'selected_manifest_sha256=%s\n' "$actual_manifest_sha"
+  printf 'cohsh_policy_sha256=%s\n' "$(sha256sum configs/generated/cohsh_policy.toml | awk '{print $1}')"
   printf 'qemu_profile=qemu_smp_kvm_production\n'
   printf 'qemu_contract_sha256=%s\n' "$(sha256sum configs/generated/cohesix_python_qemu_smp_production.json | awk '{print $1}')"
   printf 'architecture=%s\n' "$(uname -m)"
@@ -533,7 +560,7 @@ PY
 }
 
 archive_bundle() {
-  if [[ -n "$REMOTE_BUILD_DIR" || -n "$REMOTE_CARGO" || -n "$REMOTE_CARGO_HOME" || -n "$LOCAL_OUT" || -n "$MANIFEST_OUT" || -n "$MAX_GLIBC_VERSION" || "$CLEAN" -ne 1 ]]; then
+  if [[ -n "$REMOTE_BUILD_DIR" || -n "$REMOTE_CARGO" || -n "$REMOTE_CARGO_HOME" || -n "$SELECTED_MANIFEST" || -n "$LOCAL_OUT" || -n "$MANIFEST_OUT" || -n "$MAX_GLIBC_VERSION" || "$CLEAN" -ne 1 ]]; then
     fail "build-tools options are not valid with archive-bundle"
   fi
   [[ -n "$REMOTE_RELEASE_DIR" ]] || fail "--remote-release-dir is required"

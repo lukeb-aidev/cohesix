@@ -16,6 +16,7 @@ def test_remote_builder_has_no_embedded_environment_locations() -> None:
 
     for required in (
         "--remote-build-dir",
+        "--manifest",
         "--remote-release-dir",
         "--remote-cargo",
         "--remote-cargo-home",
@@ -143,6 +144,37 @@ def test_remote_builder_fails_before_ssh_when_locations_are_missing() -> None:
     assert "--remote-build-dir is required" in result.stderr
 
 
+def test_remote_builder_rejects_missing_selected_manifest_before_ssh(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing.toml"
+    result = subprocess.run(
+        [
+            str(SCRIPT), "build-tools", "--host", "builder.example",
+            "--user", "builder", "--remote-build-dir", "/srv/cohesix-build",
+            "--remote-cargo", "/usr/bin/cargo", "--remote-cargo-home", "/srv/cargo",
+            "--local-out", str(tmp_path / "tools"),
+            "--manifest-out", str(tmp_path / "tools.json"),
+            "--max-glibc-version", "2.39", "--manifest", str(missing),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "--manifest must name a regular file" in result.stderr
+
+
+def test_native_builder_generates_and_records_selected_manifest_policy() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert '"$selected_manifest" --timer-clock-hz "$qemu_timer"' in source
+    assert '"$selected_manifest" --sel4-profiles configs/sel4/profiles.toml' in source
+    assert 'actual_manifest_sha="$(sha256sum "$selected_manifest"' in source
+    assert 'printf \'selected_manifest_sha256=%s\\n\' "$actual_manifest_sha"' in source
+    assert 'printf \'cohsh_policy_sha256=%s\\n\'' in source
+
+
 def test_remote_builder_rejects_mode_mismatched_options() -> None:
     result = subprocess.run(
         [
@@ -163,3 +195,11 @@ def test_remote_builder_rejects_mode_mismatched_options() -> None:
 
     assert result.returncode != 0
     assert "build-tools options are not valid" in result.stderr
+
+    selected = subprocess.run(
+        [str(SCRIPT), "archive-bundle", "--host", "builder.example",
+         "--user", "builder", "--manifest", str(ROOT / "configs/root_task.toml")],
+        cwd=ROOT, check=False, capture_output=True, text=True,
+    )
+    assert selected.returncode != 0
+    assert "build-tools options are not valid" in selected.stderr
