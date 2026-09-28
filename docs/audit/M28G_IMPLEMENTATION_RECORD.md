@@ -1521,3 +1521,50 @@ bytes remain the exact qualified set.
 Deliverables: Exact sealed release files, the selected Test Plan gate, owner
 walkthrough attestation and hash-bound acceptance index. PyPI publication and
 its public distribution hashes receive a separate post-tag record.
+
+## Cohesix 1.2.0 publication
+
+Title/ID: `m28g-release-b-publication`.
+
+Milestone: 28g / stable 1.2.0 release publication.
+
+Goal: Publish the owner-approved sealed release and exact tagged Python SDK.
+
+Inputs: Lukas Bower's approval of the six artifact hashes and local commit
+`e3fa7657773236e3e7b0147fee9c400771bfad39`; the accepted results and
+distribution hashes above; his separate approval of the CI-built wheel and
+sdist hashes below.
+
+Changes: Fast-forwarded `origin/main` to the approved commit, pushed annotated
+`v1.2.0` with peeled target `e3fa7657773236e3e7b0147fee9c400771bfad39`,
+and published the [GitHub Release](https://github.com/lukeb-aidev/cohesix/releases/tag/v1.2.0)
+with the six distribution files, installer manifest, signature and publisher
+key. GitHub reports the six asset SHA-256 values listed above. The release is
+neither a draft nor a prerelease.
+
+Commands and results: GitHub Actions
+[run 36417223728](https://github.com/lukeb-aidev/cohesix/actions/runs/36417223728)
+built and checked the tagged `cohesix==1.2.0` SDK, including Twine and an
+isolated installation smoke. The retained distribution artifact's SHA256SUMS,
+source commit, package metadata and wheel RECORD were checked locally. After
+Lukas Bower approved these exact files, the reviewer-gated PyPI deployment
+succeeded on attempt 2. Public PyPI downloads were read back and independently
+hashed:
+
+| Public PyPI file | SHA-256 | Result |
+| --- | --- | --- |
+| `cohesix-1.2.0-py3-none-any.whl` | `371e625c9f7a8bf73200f1cb94cce11d0eafa3054be1493d31573e57e31cfd07` | Matches the approved CI artifact. |
+| `cohesix-1.2.0.tar.gz` | `f0f9672a2f21e1549d7b83766113f85b21b8ac01dffadedfe86f196479f60ffd` | Matches the approved CI artifact. |
+
+Checks: Remote main and the tag's peeled target matched the approved commit;
+GitHub asset digests matched the local sealed files; the `pypi` environment
+reviewer gate accepted the owner's exact-file approval; both public PyPI file
+bytes matched the reviewed hashes. The PyPI wheel is a tagged-source build and
+has its own bytes, distinct from the wheel inside the native archives.
+
+Validation: GitHub main, tag and asset identities matched; GitHub Actions
+completed its tagged build and reviewer-gated upload; both public PyPI file
+hashes matched the approved CI distributions.
+
+Deliverables: [Cohesix 1.2.0](https://github.com/lukeb-aidev/cohesix/releases/tag/v1.2.0)
+and [cohesix 1.2.0 on PyPI](https://pypi.org/project/cohesix/1.2.0/).

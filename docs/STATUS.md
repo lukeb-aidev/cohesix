@@ -65,8 +65,11 @@ indexes the exact archives, installers and selected test results. GitHub and
 PyPI publication are recorded separately after promotion.
 
 The Python SDK and NeMo kit wheels are version `1.2.0`. The SDK's PyPI
-workflow awaits the accepted `v1.2.0` tag, reviewer-gated publication and
-public file hash comparison. Optional QEMU setup probes a real four-core
+distribution is [published as `cohesix==1.2.0`](https://pypi.org/project/cohesix/1.2.0/)
+from the owner-approved `v1.2.0` tag; both public file hashes match the reviewed
+GitHub Actions build. The [GitHub Release](https://github.com/lukeb-aidev/cohesix/releases/tag/v1.2.0)
+contains the three portable archives and signed native installers. Optional
+QEMU setup probes a real four-core
 startup and offers a pinned 10.1.0 build when the installed binary is
 incompatible. The selected QEMU and Pi production manifests enable host-side
 MCP and A2A under the compiler-controlled master switch.
