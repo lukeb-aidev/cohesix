@@ -75,6 +75,15 @@ jobs:
       - name: Check shipped host code
         run: cargo check --workspace
 
+      - name: Compile default workspace tests
+        run: cargo test --workspace --no-run
+
+      # The reference child clears its environment and resolves python3 from
+      # /usr/bin:/bin. Start that interpreter after compilation so its first
+      # launch cannot consume the child's two-second execution deadline.
+      - name: Prepare isolated child Python
+        run: /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/env python3 -c 'from pathlib import Path'
+
       - name: Run default workspace tests
         run: cargo test --workspace -- --test-threads=1
 
