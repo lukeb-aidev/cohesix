@@ -463,8 +463,14 @@ validate_release_inventory_inputs() {
     validate_python_package_inputs "$LINUX_PYTHON_PACKAGE_MANIFEST" \
       "${LINUX_OUT_DIR}/release-configs/configs/generated"
   fi
+  local nemo_source_root="$ROOT_DIR"
+  local nemo_inventory="$inventory"
+  if [[ -n "$QUALIFIED_SOURCE_ROOT" ]]; then
+    nemo_source_root="$QUALIFIED_SOURCE_ROOT"
+    nemo_inventory="${QUALIFIED_SOURCE_ROOT}/configs/generated/implementation_surface_inventory.json"
+  fi
   python3 "${ROOT_DIR}/scripts/install/build_nemo_kit.py" \
-    --repo "$ROOT_DIR" --inventory "$inventory" \
+    --repo "$nemo_source_root" --inventory "$nemo_inventory" \
     --verify-dir "$NEMO_WHEEL_DIR"
 
   INVENTORY_PATH="$inventory" \
