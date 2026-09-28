@@ -169,13 +169,17 @@ def test_remote_builder_rejects_missing_selected_manifest_before_ssh(
 def test_native_builder_generates_and_records_selected_manifest_policy() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert '"$selected_manifest" --timer-clock-hz "$qemu_timer"' in source
+    assert '--cohsh-policy configs/generated/cohsh_policy.toml' in source
+    assert '--coh-policy configs/generated/coh_policy.toml' in source
+    assert '--swarmui-defaults configs/generated/swarmui_defaults.toml' in source
     assert '"$selected_manifest" --sel4-profiles configs/sel4/profiles.toml' in source
     assert 'actual_manifest_sha="$(sha256sum "$selected_manifest"' in source
     assert 'manifest["cas"]["signing"]["verification_key_path"]' in source
     assert 'remote selected CAS verification key digest mismatch' in source
     assert 'printf \'cas_verification_key_sha256=%s\\n\'' in source
     assert 'printf \'selected_manifest_sha256=%s\\n\' "$actual_manifest_sha"' in source
-    assert 'printf \'cohsh_policy_sha256=%s\\n\'' in source
+    assert '"${target_dir}/release/cohsh" --policy configs/generated/cohsh_policy.toml' in source
+    assert 'printf \'cohsh_policy_sha256=%s\\n\' "$(sha256sum configs/generated/cohsh_policy.toml' in source
 
 
 def test_remote_builder_rejects_mode_mismatched_options() -> None:

@@ -1144,3 +1144,40 @@ source.
 
 Deliverables: Aligned public key, quickstart and release notes. AI assistance
 identified the trust mismatch; the native package gate remains open.
+
+## Linux selected-policy provenance correction
+
+Title/ID: `m28g-linux-host-policy-selection`; continuation after the native
+Jetson build at `b5d6897e002f`.
+
+Milestone: 28g / m28g-linux-host-policy-selection.
+
+Goal: Make the installed Linux policy file and builder provenance identify
+the policy actually embedded in the native host clients.
+
+Inputs: The completed eight-tool JetPack 7.2.1 native build, its provenance,
+the selected production manifest and independent native `cohsh --check`.
+
+Changes: The `b5d6897e002f` builder did compile `cohsh` against the selected
+production policy and the native binary accepted that policy at SHA-256
+`f77a645d43347d50eaef1e832b1b729918d1818d1b7f603b4988928036cd321c`.
+Its provenance instead reported the untouched tracked default policy at
+`ad39ddfc70f5e0519738403304069384e8fbdd9a9eabc8d3e9ce84edc7d4a769`.
+The compiler had written the selected external TOML under `out/` while the
+builder read `configs/generated/`. The builder now directs selected `cohsh`,
+`coh` and SwarmUI policy files to their native default paths, and requires
+the compiled `cohsh` to accept the selected external policy before packaging.
+The earlier native build remains a failed provenance attempt.
+
+Commands: `bash -n scripts/linux_host_tools_sync.sh`;
+`.venv/bin/python -m pytest -q tests/test_linux_host_tools_sync.py`;
+`scripts/check-generated.sh`; exact-source native Jetson rebuild and KVM TCP
+replay pending.
+
+Checks: Shell syntax, nine focused tests and generated consistency passed.
+The updated builder has not yet produced a new native host-tool set or a
+passing KVM TCP result, so the release gate remains open.
+
+Deliverables: Source and focused regression repair with preserved native
+failure evidence. AI assistance traced the provenance mismatch and corrected
+the selected external policy paths; live qualification still controls closure.

@@ -445,8 +445,12 @@ PY_TIMER
 )"
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc -- \
   "$selected_manifest" --timer-clock-hz "$qemu_timer" \
-  --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
-# Linux tools embed the same generated policies and Python contract as the guest.
+  --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json \
+  --cohsh-policy configs/generated/cohsh_policy.toml \
+  --coh-policy configs/generated/coh_policy.toml \
+  --swarmui-defaults configs/generated/swarmui_defaults.toml
+# Linux tools and their external policy files use the same selected manifest
+# and public CAS verification key as the guest.
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc-python-profile -- \
   "$selected_manifest" --sel4-profiles configs/sel4/profiles.toml \
   --profile qemu_smp_kvm_production \
@@ -458,6 +462,10 @@ PY_TIMER
 "$cargo_bin" build --locked --release -p host-ticket-agent
 "$cargo_bin" build --locked --release -p host-sidecar-bridge --features tcp
 "$cargo_bin" build --locked --release -p cohsh --features tcp
+# Check the compiled policy hash against the selected external policy before
+# its binary can enter an installable archive or provenance record.
+"${target_dir}/release/cohsh" --policy configs/generated/cohsh_policy.toml \
+  --check scripts/cohsh/boot_v0.coh >/dev/null
 "$cargo_bin" build --locked --release -p coh --features fuse,nvml
 RUSTFLAGS='-C debuginfo=0' "$cargo_bin" build --locked --release -p swarmui
 
