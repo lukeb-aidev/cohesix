@@ -1506,12 +1506,17 @@ The controller and SwarmUI `.deb` SHA-256 values are
 `76a76cde3805d0efb4b50aa886d05c0dd917967dd62626edf070acf8d83b1826`
 and `1f5b5b4dd21bed2e92465d70392e06ac119266a1ba07b1d983b98902ca65c10a`.
 
-Checks: `scripts/check-generated.sh` passed with the sealed artifacts retained
-outside the compiler's source scan, and the 27 focused adoption/bundle tests
-passed. `git diff --check` passed. The current source changed release prose
-and proof collectors after the qualified runtime commit; selected runtime
-binaries, image, packages and signed distribution bytes remain the exact
-qualified set.
+Checks: `scripts/check-generated.sh` passed with the release files staged.
+Regeneration added ten extracted release README rows to the implementation
+inventory and updated only its dependent graph and provider digest bindings;
+the existing inventory rows and other graph fields were unchanged. The 27
+focused adoption/bundle tests passed. `git diff --cached --check` passed for
+the changed build plan and status text; the sealed archive members retain
+their qualified bytes. The publication bridge passed at clean documentation
+commit `8596cd315`, recorded in `out/m28g/publication-8596.json`. The current
+source changed release prose and proof collectors after the qualified runtime
+commit; selected runtime binaries, image, packages and signed distribution
+bytes remain the exact qualified set.
 
 Deliverables: Exact sealed release files, the selected Test Plan gate, owner
 walkthrough attestation and hash-bound acceptance index. PyPI publication and

@@ -1,0 +1,6 @@
+OK ECHO path=/gpu/GPU-0/lease bytes=133
+OK CAT path=/gpu/GPU-0/lease
+OK ECHO path=/gpu/GPU-0/status bytes=86
+OK ECHO path=/gpu/GPU-0/status bytes=94
+OK CAT path=/gpu/GPU-0/status
+OK ECHO path=/gpu/GPU-0/lease bytes=135

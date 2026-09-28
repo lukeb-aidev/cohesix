@@ -1,0 +1,48 @@
+# Author: Lukas Bower
+# Purpose: Define packaging and optional integrations for the Cohesix Python client.
+# Copyright 2026 Lukas Bower
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cohesix"
+version = "1.2.0"
+description = "Python client for Cohesix REST, TCP console, Secure9P, and mock workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[project.urls]
+Homepage = "https://lukeb-aidev.github.io/cohesix/"
+Source = "https://github.com/lukeb-aidev/cohesix"
+Documentation = "https://github.com/lukeb-aidev/cohesix/blob/main/docs/PYTHON_SUPPORT.md"
+
+[project.optional-dependencies]
+integrations = [
+  "docker>=7.0.0",
+  "kubernetes>=29.0.0",
+  "nvidia-ml-py>=12.560.30",
+]
+ml = [
+  "peft>=0.15.0",
+  "transformers>=4.48.0",
+]
+apple-mlx = [
+  "mlx==0.32.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+cohesix-playbook = "cohesix.playbook_cli:main"
+cohesix-journey = "cohesix.journey:main"
+
+# Only the public SDK package is importable from built distributions.
+[tool.setuptools]
+packages = ["cohesix"]
+include-package-data = false

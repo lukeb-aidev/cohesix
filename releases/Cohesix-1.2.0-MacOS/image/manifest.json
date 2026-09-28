@@ -1,0 +1,172 @@
+{
+  "profile": "release",
+  "target": "aarch64-unknown-none",
+  "binaries": [
+    {
+      "name": "nine-door-runtime",
+      "path": "cohesix/bin/nine-door-runtime",
+      "size": 13464,
+      "sha256": "c83b3282d3ee4202576fddced14df63ec334d68c01d490b3878708ef4a790a9d"
+    },
+    {
+      "name": "console-network-runtime",
+      "path": "cohesix/artifacts/console-network-runtime",
+      "size": 88984,
+      "sha256": "a165f077e73519e05659812efbd4778e9ec8b06360aa907cd43f583afea52e40"
+    }
+  ],
+  "console_network_runtime": {
+    "image_id": "console-network-runtime",
+    "path": "cohesix/artifacts/console-network-runtime",
+    "size": 88984,
+    "sha256": "a165f077e73519e05659812efbd4778e9ec8b06360aa907cd43f583afea52e40",
+    "entry_symbol": "_start",
+    "listener_port": 31337
+  },
+  "worker_images": {
+    "archive_path": "cohesix/artifacts/cohesix-worker-images.cpio",
+    "archive_sha256": "239aa0934d9dcf4762410e815254744412d57e71a4a899ebc71540e0b37f435d",
+    "manifest_path": "cohesix/artifacts/cohesix-worker-image-manifest.json",
+    "manifest_sha256": "eaddb3f33fa1a9a9cddb125b96d9a971408c63aa9559ff6531d87d118d868edc",
+    "embedded_in_rootserver": true,
+    "target_load_source": "rootserver-embedded",
+    "images": [
+      {
+        "abi_version": 2,
+        "archive_path": "cohesix/worker/worker-heart",
+        "entry_symbol": "_start",
+        "entry_vaddr": 2164964,
+        "entry_version": 2,
+        "flags": [
+          "pointer-free",
+          "init-page-in-x0"
+        ],
+        "image_bytes": 11336,
+        "image_sha256": "040c6f9f2f51550576929f4f817c9a7a27b5fc6ddfeb0a3710e1431a2c9b0402",
+        "ipc_buffer_bytes": 1024,
+        "load_base_vaddr": 2097152,
+        "load_limit_vaddr": 2239576,
+        "load_span_bytes": 142424,
+        "metadata_sha256": "d0a0f7d8ca3a8a5e6249881390153695a515d397de840db44c44cf7e288c592b",
+        "metadata_vaddr": 2098480,
+        "name": "worker-heart",
+        "role": "worker-heartbeat",
+        "shared_page_bytes": 4096,
+        "source_sha256": "dd8725828fe79db70844a3de2e9a53f56924990ce7b77086cb33c26593023209",
+        "stack_bytes": 16384
+      },
+      {
+        "abi_version": 2,
+        "archive_path": "cohesix/worker/worker-gpu",
+        "entry_symbol": "_start",
+        "entry_vaddr": 2164964,
+        "entry_version": 2,
+        "flags": [
+          "pointer-free",
+          "init-page-in-x0"
+        ],
+        "image_bytes": 11336,
+        "image_sha256": "fe89a39a4454c3affd21eb7bb444cb41986378771031d9b7a6ec278d211ee3f8",
+        "ipc_buffer_bytes": 1024,
+        "load_base_vaddr": 2097152,
+        "load_limit_vaddr": 2239576,
+        "load_span_bytes": 142424,
+        "metadata_sha256": "3face0e5bcf81a1a7ac65a85cec1177333f75c0cac97003db6b74d70a218c4b8",
+        "metadata_vaddr": 2098480,
+        "name": "worker-gpu",
+        "role": "worker-gpu",
+        "shared_page_bytes": 4096,
+        "source_sha256": "67a6a225f5c7a6adcb7b82fbe6d0dd89a866b7a16c2283e08bc540a02996c9e6",
+        "stack_bytes": 16384
+      },
+      {
+        "abi_version": 2,
+        "archive_path": "cohesix/worker/worker-lora",
+        "entry_symbol": "_start",
+        "entry_vaddr": 2164964,
+        "entry_version": 2,
+        "flags": [
+          "pointer-free",
+          "init-page-in-x0"
+        ],
+        "image_bytes": 11336,
+        "image_sha256": "e3ffc0839ea5b3983a9b6b61e25cb60ecc40bcb077fd37d46fa2be0ca1ce7db8",
+        "ipc_buffer_bytes": 1024,
+        "load_base_vaddr": 2097152,
+        "load_limit_vaddr": 2239576,
+        "load_span_bytes": 142424,
+        "metadata_sha256": "f2cb01341803e960324396400d8db024f4d6196e1cf11c027e3583b4ba09bb89",
+        "metadata_vaddr": 2098480,
+        "name": "worker-lora",
+        "role": "worker-lora",
+        "shared_page_bytes": 4096,
+        "source_sha256": "4349ca68ab02dc50b64ce45879b1cabff17ea1f657612393b4e9d3918cc0ebb7",
+        "stack_bytes": 16384
+      }
+    ]
+  },
+  "driver_runtimes": {
+    "archive_path": "driver-runtimes/cohesix-driver-runtimes.cpio",
+    "archive_path_scope": "build-output",
+    "archive_sha256": "978eeb394e37126106d264206da21d61b0cb4e3f608638475f2f1ae5c83bbe52",
+    "embedded_in_rootserver": true,
+    "manifest_path": "cohesix/artifacts/cohesix-driver-runtime-manifest.json",
+    "manifest_sha256": "31f6d67257c43f70428d8f13209cedd992f9f13af78367d462bb940537a06732",
+    "classic_comparator": {
+      "provenance": "retired-26d-classic-driver-archive",
+      "record_sha256": "c41770f1ffec850b4268cd5b77ce8d9d5b9ed632c3c91078dc094dd1839f9264",
+      "sha256": "db2e353327cde2f91b37f40a7bf17905bb5f70cd27a999ba880a9fa7c2de9835"
+    },
+    "components": [
+      {
+        "archive_path": "cohesix/bin/pi4-driver-serial",
+        "bytes": 773048,
+        "hot_path": "serial-console",
+        "name": "pi4-driver-serial",
+        "sha256": "9955cffd995dcdec88d99646e991a1fb837c7fdd8dec78e1a26f414e99e76056"
+      },
+      {
+        "archive_path": "cohesix/bin/pi4-driver-usb",
+        "bytes": 773040,
+        "hot_path": "usb-keyboard",
+        "name": "pi4-driver-usb",
+        "sha256": "8786bbb4109ab6e283399dad2d6b86b35820f4401557089e944f76200d03d01f"
+      },
+      {
+        "archive_path": "cohesix/bin/pi4-driver-hdmi",
+        "bytes": 773040,
+        "hot_path": "hdmi-text",
+        "name": "pi4-driver-hdmi",
+        "sha256": "fb179d7645216c347850e9e09c24079e04de0c1fba8afb7fb60db9ea1d9c0d8b"
+      },
+      {
+        "archive_path": "cohesix/bin/pi4-driver-genet",
+        "bytes": 773048,
+        "hot_path": "genet-nic",
+        "name": "pi4-driver-genet",
+        "sha256": "eced77b980b5a623bbd7791532cc6cffa59d72033dfddacb97342f026f5dec49"
+      },
+      {
+        "archive_path": "cohesix/bin/pi4-driver-cyw43",
+        "bytes": 773048,
+        "hot_path": "cyw43-wifi",
+        "name": "pi4-driver-cyw43",
+        "sha256": "f5822173595ddaa2cce95f236cef151c513a5d28b9f724cdbd229e7b74544605"
+      },
+      {
+        "archive_path": "cohesix/bin/pi4-driver-sdio",
+        "bytes": 773040,
+        "hot_path": "sdio-host",
+        "name": "pi4-driver-sdio",
+        "sha256": "93de4004ec96497148c7b0a267a361953c35eb9744fcdce10d3384c26c7999a5"
+      },
+      {
+        "archive_path": "cohesix/bin/pi4-driver-pcie",
+        "bytes": 773040,
+        "hot_path": "pcie-root",
+        "name": "pi4-driver-pcie",
+        "sha256": "cf3810340a9973a78a6b288f2fdf3aae2aee78c141c56bbba278b7fb915ca36e"
+      }
+    ]
+  }
+}

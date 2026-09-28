@@ -1,0 +1,17 @@
+{
+  "schema": "cohesix-attestation-result/v1",
+  "verdict": "PASS",
+  "reason": "valid-recorded-signature",
+  "evidence_class": "offline-fixture",
+  "source_class": "offline-pack",
+  "verified": {
+    "evidence_class": "offline-fixture",
+    "evidence_sha256": "39681c17409b5e96ccea53f2756107771f48413e11199b466da84a6249795c2c",
+    "trust_policy_sha256": "c2c34edd0c73887f512b1557913a776259ce251f165be35f319cd310f8dc8155",
+    "nonce_sha256": "55b8015b7c0a0c0366cba1028feb1207b4d5ab597b78a22448f5be90ef35aa3d",
+    "clock": 1000,
+    "reset_count": 1,
+    "restart_count": 2
+  },
+  "proof_scope": "offline-signature"
+}

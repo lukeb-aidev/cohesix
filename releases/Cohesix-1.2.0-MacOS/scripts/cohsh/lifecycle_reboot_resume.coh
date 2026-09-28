@@ -1,0 +1,13 @@
+# Author: Lukas Bower
+# Purpose: Validate reset and resume lifecycle controls.
+attach queen
+EXPECT OK
+lifecycle cordon
+EXPECT OK
+lifecycle drain
+EXPECT OK
+lifecycle reset
+EXPECT OK
+lifecycle resume
+EXPECT OK
+quit

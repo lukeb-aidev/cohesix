@@ -1,0 +1,256 @@
+<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Describe Cohesix Python SDK installation, orchestration playbooks, native Mac release and integration adapters. -->
+<!-- Author: Lukas Bower -->
+# cohesix (Python)
+
+Use `cohesix` to connect Python applications to Cohesix control and telemetry
+through explicit REST, TCP console, mounted Secure9P, or mock backends. This
+thin, non-authoritative SDK mirrors existing control-file and console semantics;
+it does not introduce new protocol behavior.
+
+NeMo Agent Toolkit users can install the separate
+[native-client kit](../../integrations/nemo-agent-toolkit/README.md). It pins
+Toolkit 1.9.0 and uses the gateway's MCP/A2A paths under the same delegated
+subject and standing budget. Python, NeMo tool output and model text all need
+the existing native CUDA output or signed PEFT verifier before they report a
+provider success. The NeMo kit does not require the Python SDK in its client
+venv or pass gateway credentials to the CUDA executor.
+
+## Install
+
+For the 1.2.0 candidate, use the wheel inside the matching Mac or Linux host
+bundle with Python 3.11 or later. After the approved release publishes to
+PyPI, the matching standalone Python client can be installed with:
+
+```bash
+python3 -m pip install 'cohesix==1.2.0'
+```
+
+For optional host integration adapters or PEFT/LoRA helper package probes:
+
+```bash
+python3 -m pip install 'cohesix[integrations]==1.2.0'
+python3 -m pip install 'cohesix[ml]==1.2.0'
+```
+
+These install the Python client, not the matching native Cohesix host tools,
+target profile, or a live target. In a source checkout, use
+`python3 -m pip install -e tools/cohesix-py` for editable development instead.
+
+For the qualified native import/training workflow, see
+[Private LoRA release](https://github.com/lukeb-aidev/cohesix/blob/main/docs/PRIVATE_LORA_RELEASE.md).
+`cohesix.playbooks.run_peft_release` routes plan/apply/watch/explain/verify/recover
+to the same Rust CLI, journal and signed verifier. `examples/private_lora_release.py`
+prepares the pinned native profile; `examples/private_lora_request.py` prepares
+subsequent requests from reviewed provenance. Preparation is not execution evidence.
+`cohesix.PeftReleaseClient` wraps that CLI path for Python applications: call
+`plan`, explicitly `apply` with credential references, then `inspect` or
+`recover` using the same deployment. Its `PeftReleaseStatus` preserves the
+operation/request identity and uncertain or failed states; only CLI `verify`
+can set `requested_outcome_verified=True`. See
+[Python support](../../docs/PYTHON_SUPPORT.md) for the complete example.
+Use the 1.2.0 wheel for the matching selected client contracts; older
+published wheels may not contain this client.
+
+The 1.2.0 client also provides `cohesix.vmlx_compat.VmlxClient`
+for one explicitly selected vMLX model on an HTTP loopback endpoint. Its
+`generate(prompt, max_tokens=32)` returns private text plus an `evidence()`
+view of model identity, token counts and prompt/output SHA-256 digests. It
+rejects redirects, ambiguous model listings, tool calls and oversized
+responses. The client does not admit a Cohesix ticket, verify an outcome or
+manage a model generation. See [the M28c host contract](../../docs/HOST_TOOLS.md)
+for the installed vMLX test and its model-byte mutation limit; this source API
+was not in the 1.1.0b1 wheel.
+
+With a separately started local server that names the selected model, a
+developer can inspect a bounded response:
+
+```python
+from cohesix.vmlx_compat import VmlxClient
+
+client = VmlxClient("http://127.0.0.1:18081", "cohesix-smollm2-135m")
+reply = client.generate("Summarize the local test result.", max_tokens=24)
+print(reply.text)
+print(reply.evidence())
+```
+
+Treat that result as local model output until an admitted Cohesix generation,
+held-out evaluation and rollback bind it to a verified release.
+
+The selected M28c1 Mac source adds `cohesix.mlx_release` for native
+`peft.release` phases under host-agent launchd custody. The helper accepts
+only the frozen request, private model/data/adapter references and phase
+authority from the agent; use `PeftReleaseClient` to plan, admit and inspect
+the original signed operation from Python. `cohesix.vmlx_governed` is an
+optional serving session for an already verified accepted generation. The
+caller supplies the verified release graph, exact signed installed engine,
+fused model copy and frozen quality/resource bounds. It rechecks accepted
+state around inference and records process custody; it cannot admit work or
+interpret a local result as a signed promotion.
+
+Release compatibility is tested
+on CPython 3.11 and 3.13. The wheel is target-neutral; it does not bundle or
+select a QEMU/Pi manifest.
+
+## Backends
+
+- `TcpBackend`: direct console (`AUTH` + `ATTACH`) for single-client workflows.
+- `RestBackend`: hive-gateway REST projection for multiplexed clients,
+  including request-auth headers.
+- `FilesystemBackend`: mounted Secure9P namespace (`coh mount`).
+- `MockBackend`: deterministic `host-model` backend for tests and local demos;
+  never target evidence.
+
+Optional REST Worker bounds are declarations only, and missing bounds or
+`backend_class` remain `unknown`. No backend connection, control ACK, local
+file, or JSON object creates Worker READY or target proof.
+
+## Worker compatibility
+
+Worker APIs require an explicit generated `cohesix-python-profile/v2`
+contract. The QEMU contract must match the selected `qemu_smp_production` Mac
+or `qemu_smp_kvm_production` Linux build. Use the Pi contract only with
+`pi4_production`:
+
+```python
+from cohesix import CohesixClient, MockBackend, load_profile_contract
+
+contract = load_profile_contract(
+    "configs/generated/cohesix_python_qemu_smp_production.json",
+    expected_target="qemu",
+)
+client = CohesixClient(
+    MockBackend("out/examples/worker-model"),
+    profile_contract=contract,
+)
+
+admitted = client.worker_spawn("gpu", "gpu-receipt-1")
+ready = client.worker_wait_ready("gpu", "gpu-receipt-1")
+closing = client.worker_teardown("gpu", "gpu-receipt-1")
+```
+
+`admitted.lifecycle == "queued"` is only request admission. `ready` is a
+separate bounded telemetry observation; under Mock its proof class is
+`host-model`. Heartbeat, GPU, and LoRA are executable. WorkerBus is model-only
+and is refused before any backend write. Telemetry uses the generated canonical
+`/shard/<label>/worker/<id>/telemetry` path; legacy `/worker` is gated by the
+selected contract. A bound `MockBackend` derives the same target-specific shard
+width from that contract before it creates any Worker observation.
+
+`parse_receipt` preserves version-1 compatibility and accepts the
+generation-bound GPU/LoRA receipt encodings only when classified as
+`source="local-admitted"`. The exact actions are GPU grant/renew/release and
+PEFT export/import/activate/rollback. Python receipt objects remain
+non-authoritative; stale identity is reported as `stale`, never rebound.
+
+The independent state axes are request admission, READY, provider completion,
+receipt, artifact, execution proof, Python projection compatibility,
+runtime-release acceptance, and production-use-case acceptance. The last two
+remain false until their separate evidence gates promote them.
+
+## High-level orchestration
+
+- `CohesixOrchestrator`: typed schedule/lease/export/approval controls.
+- `/proc` observability snapshots for scheduler and lease state.
+- Host integration probes for `systemd`, Docker, Kubernetes, NVML, and PEFT
+  runtime versions.
+- Native evidence + receipt APIs on `CohesixClient`:
+
+  - `evidence_pack(...)` and `evidence_timeline(...)`
+  - `gpu_lease_with_receipt(...)` and `run_command_with_receipt(...)`
+
+## Playbooks (bounded deployment rehearsal)
+
+The nine built-in playbooks are control-model fixtures. They make approvals,
+schedules, leases, exports, and selected local provider probes visible before a
+team writes deployment-specific integration code. Their names describe the
+intended composition; they do not run the named industry application, train or
+serve a model, or establish provider, target, safety, or compliance acceptance.
+
+`--list` reports each playbook's linked use-case id, current capability summary,
+selected provider probes, planned control counts, and the milestone that owns
+the complete live workflow:
+
+List playbooks:
+
+```bash
+cohesix-playbook --list
+```
+
+Dry-run a playbook with no control writes, then inspect the explicit boundary:
+
+```bash
+cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+jq '{workflow_kind, use_case_id, plan_summary, production_use_case_accepted}' \
+  out/examples/playbooks/mixed-closed-loop-ai-factory/report.json
+```
+
+The expected `workflow_kind` is `control-model`, and
+`production_use_case_accepted` remains `false`. Remove `--dry-run --mock` only
+after selecting and reviewing a live backend; doing so submits the existing
+generic control plan, not the complete sector workflow. For example:
+
+```bash
+cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-port 31337
+```
+
+Artifacts are written under `out/examples/playbooks/<playbook-id>/`.
+See [`docs/USE_CASES.md`](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md) for the capability map and
+the contribution path toward complete generated workflows.
+
+## Existing examples
+
+These scripts and the evidence-pack commands below require a source checkout
+with the matching native tools.
+
+```bash
+python3 tools/cohesix-py/examples/lease_run.py --mock
+python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
+python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
+```
+
+## Evidence pack integration kits
+
+These examples operate on an evidence pack directory produced by
+`coh evidence pack` and run offline once the pack exists.
+
+```bash
+cargo run -p coh -- --mock evidence pack --out out/evidence/mock
+python3 tools/cohesix-py/examples/ci_evidence_pack.py --pack out/evidence/mock \
+  --out out/evidence/mock/ci_summary.json
+python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack out/evidence/mock \
+  --out out/evidence/mock/siem.ndjson
+```
+
+## Notes
+
+- Target-neutral fallback bounds are generated in `cohesix/generated.py`;
+  Worker identity and bounds come from an explicit target profile contract.
+- Keep one TCP console client at a time (or use REST via `hive-gateway`).
+- `RestBackend` sends request-auth headers when `request_auth_token` is set or
+  when `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, or
+  `COH_REST_AUTH_TOKEN` is present.
+
+Build and verify the target-neutral wheel on both supported interpreters:
+
+```bash
+python3 -m pip wheel --no-deps --wheel-dir out/python-wheels tools/cohesix-py
+scripts/ci/python_compat_run.sh \
+  --wheel-smoke \
+  --wheel-dir out/python-wheels \
+  --package-manifest out/python-compat/m26e-python-package.json \
+  --state-dir out/python-compat/m26e-wheel
+```
+
+See [`docs/PYTHON_SUPPORT.md`](https://github.com/lukeb-aidev/cohesix/blob/main/docs/PYTHON_SUPPORT.md) for target
+projection commands and proof-boundary details.
+
+## Installed CUDA and LoRA journeys
+
+`cohesix-journey identity|validate|doctor|run` wraps the existing Rust lifecycle
+and signed verifier. `cohesix.journey.run` returns the same versioned outcome
+and exit mapping. Only verified requested completion returns zero; an ACK,
+timeout or recovered failed canary does not. Keep state outside runner scratch.
+See [Adoption](https://github.com/lukeb-aidev/cohesix/blob/main/docs/ADOPTION.md) and [CI workflows](https://github.com/lukeb-aidev/cohesix/blob/main/docs/CI_WORKFLOWS.md)
+for exact installation, config, authority and recovery steps.

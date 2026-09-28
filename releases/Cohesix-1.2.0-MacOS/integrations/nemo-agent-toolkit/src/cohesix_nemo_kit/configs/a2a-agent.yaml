@@ -1,0 +1,37 @@
+# Author: Lukas Bower
+# Purpose: Select the authenticated native NeMo A2A per-user workflow.
+# Copyright 2026 Lukas Bower
+function_groups:
+  cohesix_tasks:
+    _type: cohesix_a2a_client
+    url: ${COHESIX_A2A_BASE_URL}
+    request_auth_ref: ${COHESIX_REQUEST_AUTH_REF}
+    delegated_ticket_ref: ${COHESIX_DELEGATED_TICKET_REF}
+    task_timeout: 45
+    streaming: false
+llms:
+  agent_model:
+    _type: openai
+    model_name: ${NEMO_MODEL_NAME}
+    base_url: ${NEMO_MODEL_BASE_URL}
+    api_key: ${NEMO_MODEL_API_KEY}
+    max_retries: 0
+    request_timeout: 45
+workflow:
+  _type: per_user_react_agent
+  llm_name: agent_model
+  tool_names:
+    - cohesix_tasks
+  verbose: false
+  max_tool_calls: 4
+  tool_call_max_retries: 1
+  pass_tool_call_errors_to_agent: false
+eval:
+  general:
+    dataset:
+      _type: json
+      file_path: ${NEMO_EVAL_DATASET}
+    max_concurrency: 1
+    per_input_user_id: false
+    profiler:
+      base_metrics: true

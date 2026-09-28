@@ -1,0 +1,43 @@
+{
+  "binding": "JSONRPC",
+  "bounds": {
+    "concurrent_requests": 16,
+    "request_bytes": 8192,
+    "response_bytes": 16384,
+    "stream_events": 64,
+    "stream_interval_ms": 500,
+    "stream_seconds": 30
+  },
+  "card_path": "/.well-known/agent-card.json",
+  "enabled": true,
+  "http_path": "/a2a",
+  "provider_graph_sha256": "8db7b51f1e7cb59fb5a3b1689dc48de49498ad18821c1dded0c674ded8caff19",
+  "resolved_manifest_sha256": "77a6d2d7ea8aaf97efec2082a396bfcdc68816701f11849c3ec53e963a9ae914",
+  "revision": "0.3.0",
+  "schema": "cohesix-a2a-catalogue/v1",
+  "sdk_client": "a2a-sdk==0.3.26",
+  "skills": [
+    {
+      "action": "gpu.workload.submit",
+      "authority_path": "/host/tickets/spec",
+      "correlation_fields": [
+        "ticket_id",
+        "subject_id",
+        "action_id",
+        "idempotency_key",
+        "writer_epoch",
+        "evidence_id"
+      ],
+      "description": "Submit one selected standing job; inspect the original admission for native outcome and evidence. A task state is not a provider verification receipt.",
+      "id": "gpu.workload.submit",
+      "intent_schema_ref": "host-ticket/v2",
+      "name": "CUDA selected job",
+      "receipt_schema_ref": "unavailable",
+      "status_path": "/host/tickets/status",
+      "tags": [
+        "cohesix",
+        "durable-job"
+      ]
+    }
+  ]
+}

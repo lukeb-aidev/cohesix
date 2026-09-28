@@ -1,0 +1,33 @@
+# Author: Lukas Bower
+# Purpose: Generated cohsh client policy derived from configs/root_task.toml.
+# Copyright 2026 Lukas Bower
+[meta]
+manifest_sha256 = "77a6d2d7ea8aaf97efec2082a396bfcdc68816701f11849c3ec53e963a9ae914"
+
+[cohsh.pool]
+control_sessions = 2
+telemetry_sessions = 24
+
+[cohsh.tail]
+poll_ms_default = 1000
+poll_ms_min = 250
+poll_ms_max = 10000
+
+[cohsh.host_telemetry]
+nvidia_poll_ms = 1000
+systemd_poll_ms = 2000
+docker_poll_ms = 2000
+k8s_poll_ms = 5000
+
+[retry]
+max_attempts = 3
+backoff_ms = 200
+ceiling_ms = 2000
+timeout_ms = 5000
+
+[heartbeat]
+interval_ms = 15000
+
+[trace]
+max_duration_ms = 60000
+max_bytes = 1048576

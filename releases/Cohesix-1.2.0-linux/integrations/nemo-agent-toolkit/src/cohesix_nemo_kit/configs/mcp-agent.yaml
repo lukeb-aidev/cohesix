@@ -1,0 +1,47 @@
+# Author: Lukas Bower
+# Purpose: Select native NeMo MCP tools for a bounded Cohesix CUDA workflow.
+# Copyright 2026 Lukas Bower
+function_groups:
+  cohesix_jobs:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: ${COHESIX_MCP_URL}
+      custom_headers:
+        x-cohesix-auth: ${COHESIX_REQUEST_AUTH}
+        x-cohesix-ticket: ${COHESIX_DELEGATED_TICKET}
+    include:
+      - cohesix.available_selected_jobs
+      - cohesix.preflight_selected_job
+      - cohesix.submit_selected_job
+      - cohesix.inspect_job
+      - cohesix.recover_job
+    tool_call_timeout: 30
+    reconnect_enabled: true
+    reconnect_max_attempts: 1
+    reconnect_initial_backoff: 0.25
+    reconnect_max_backoff: 1
+llms:
+  agent_model:
+    _type: openai
+    model_name: ${NEMO_MODEL_NAME}
+    base_url: ${NEMO_MODEL_BASE_URL}
+    api_key: ${NEMO_MODEL_API_KEY}
+    max_retries: 0
+    request_timeout: 45
+workflow:
+  _type: tool_calling_agent
+  llm_name: agent_model
+  tool_names:
+    - cohesix_jobs
+  verbose: false
+  handle_tool_errors: false
+eval:
+  general:
+    dataset:
+      _type: json
+      file_path: ${NEMO_EVAL_DATASET}
+    max_concurrency: 1
+    per_input_user_id: false
+    profiler:
+      base_metrics: true

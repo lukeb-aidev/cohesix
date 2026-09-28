@@ -1,0 +1,15 @@
+# Author: Lukas Bower
+# Purpose: SMP parity script for comparing ACK/ERR transcripts across core counts.
+attach queen
+EXPECT OK
+ping
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+cat /proc/schedule/summary
+EXPECT OK
+cat /proc/lease/summary
+EXPECT OK
+ls /proc
+EXPECT OK
+quit

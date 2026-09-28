@@ -13430,7 +13430,7 @@ configured Cohesix deployment, reproducing both workflows from public instructio
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — release publication is pending. The owner selected
+**Status:** Complete — the owner selected
 the focused 1.2.0 acceptance gate below on 28 September 2026. Canonical QEMU
 and physical Pi Test Plans passed Stages 01–05; native Mac and Jetson host
 qualification, signed installer readback, Jetson KVM pressure, protocol
@@ -13439,7 +13439,8 @@ have retained results at their original identities. The three archives and
 native installers selected for release are the exact `869737b03982`
 publication set. The Linux reference is JetPack 7.2.1 / L4T 39.2.1. The
 [implementation record](audit/M28G_IMPLEMENTATION_RECORD.md) indexes the
-evidence and its original source and artifact hashes.
+evidence and its original source and artifact hashes. Publication to GitHub
+and PyPI has its own post-acceptance record.
 
 **Value:** complete capabilities form an adoptable release rather than disconnected adapters.
 **Prerequisites:** every required 28–28f outcome with exact-profile evidence;

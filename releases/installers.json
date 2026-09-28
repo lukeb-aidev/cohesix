@@ -1,0 +1,23 @@
+{
+  "archive_sha256": "28115fa5153938ee64925142706c3eed01b74f9a63e2f5aed3714989801a6674",
+  "host": "linux",
+  "packages": [
+    {
+      "package": "cohesix-controller",
+      "path": "cohesix-controller_1.2.0_arm64.deb",
+      "sha256": "76a76cde3805d0efb4b50aa886d05c0dd917967dd62626edf070acf8d83b1826",
+      "size": 11838134
+    },
+    {
+      "package": "cohesix-swarmui",
+      "path": "cohesix-swarmui_1.2.0_arm64.deb",
+      "sha256": "1f5b5b4dd21bed2e92465d70392e06ac119266a1ba07b1d983b98902ca65c10a",
+      "size": 3460196
+    }
+  ],
+  "publisher_key": "684071A2AF498008930CF6AEEBB8ECC49397F8C2",
+  "schema": "cohesix-m28g-installers/v1",
+  "source_commit": "b68a2c2a1a38d6f6b1dfe430845dfc4f0f024298",
+  "state": "built-signed-unqualified",
+  "version": "1.2.0"
+}

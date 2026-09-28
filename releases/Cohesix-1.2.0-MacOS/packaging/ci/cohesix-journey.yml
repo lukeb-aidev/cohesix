@@ -1,0 +1,42 @@
+# Author: Lukas Bower
+# Purpose: Separate untrusted validation from protected packaged workflow execution with durable operation reconciliation.
+# Copyright 2026 Lukas Bower
+name: Cohesix verified journey
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate pure identity and outcome contracts without credentials
+        run: PYTHONPATH=tools/cohesix-py python3 -m unittest discover -s tools/cohesix-py/tests -p test_journey.py
+  execute:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: validate
+    environment: cohesix-production
+    runs-on: [self-hosted, cohesix-controller]
+    timeout-minutes: 20
+    concurrency:
+      group: cohesix-selected-journey
+      cancel-in-progress: false
+    env:
+      # Protected environment variable: an operator-owned config on durable storage.
+      # Its package, journal, trust, CAS and secret references are NOT workflow inputs.
+      COH_JOURNEY_CONFIG: ${{ vars.COH_JOURNEY_CONFIG }}
+    steps:
+      # No checkout or artifact from a PR reaches this enrolled runner.
+      - name: Reconcile stable identity and verify requested completion
+        run: cohesix-journey run --config "$COH_JOURNEY_CONFIG" --submit --wait-seconds 900 > outcome.json
+      - name: Retain sanitized outcome and evidence references
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cohesix-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: outcome.json
+          if-no-files-found: error

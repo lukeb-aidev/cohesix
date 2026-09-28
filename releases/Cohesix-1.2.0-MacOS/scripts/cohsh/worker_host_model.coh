@@ -1,0 +1,13 @@
+# Author: Lukas Bower
+# Purpose: Validate host-model LoRA Worker admission and deterministic WorkerBus spawn refusal.
+# Copyright 2026 Lukas Bower
+attach queen
+EXPECT OK
+spawn lora
+EXPECT OK
+kill worker-1
+EXPECT OK
+spawn worker-bus
+EXPECT ERR
+EXPECT SUBSTR model-only
+quit

@@ -30,14 +30,13 @@ native provider outcomes. See [Host API](HOST_API.md) and the
 
 ## Release B qualification
 
-[Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0
-candidate. At clean source `522463fa1ade`, the canonical QEMU and physical Pi
-Test Plans passed Stages 01–05 under the owner's renewed `EX-2026-0024`
-exception. Those results retain that source identity. Medium and high QEMU
-pressure passed on Mac HVF. The corrected Jetson KVM replay also passed medium
-and high loads with 256 READY executable Workers and zero request errors in
-each window. Its immutable host replay result is retained at the selected
-`b68a2c2a1a38` guest identity; earlier failed attempts remain separate.
+[Milestone 28g](BUILD_PLAN.md#28g) is **Complete** for the owner's selected
+1.2.0 acceptance gate. At clean source `522463fa1ade`, the canonical QEMU
+and physical Pi Test Plans passed Stages 01–05 under the owner's renewed
+`EX-2026-0024` exception. Those results retain that source identity. Medium
+and high QEMU pressure passed on Mac HVF. The corrected Jetson KVM replay
+passed medium and high loads with 256 READY executable Workers and zero
+request errors in each window at the `b68a2c2a1a38` guest identity.
 
 At clean source `b68a2c2a1a38`, the strict-production Mac and Jetson QEMU TCP
 replays passed against their selected native host tools and policy. The
@@ -48,8 +47,8 @@ image through TFTP/RAM with verified post-reset transfers, completed wired
 production TCP checks and passed a separate private Wi-Fi quick smoke. The Pi
 archive contains the same image bytes in its compact `.img`. The exact packaged
 image passed physical SD readback, one fresh boot and packaged-client
-authenticated TCP qualification. Those results belong to the earlier archive
-hash and remain subject to final publication-byte comparison.
+authenticated TCP qualification. The distributed archives and installers
+are byte-identical to that five-part qualified set.
 
 The Mac `.pkg` is Developer ID signed, notarized and stapled. The JetPack
 7.2.1 / L4T 39.2.1 ARM64 controller and SwarmUI `.deb` files are bound by a
@@ -57,13 +56,13 @@ detached manifest signature verified with the tracked Debian publisher key.
 Both native installer sets were installed and passed publisher, package-manager
 receipt and installed-byte readback checks. Lukas Bower personally completed
 the full adoption walkthrough and marked it PASS. The bounded verifier accepted
-his written report as `owner_attested_host` at the prior candidate identity;
-its step, time and download measurements are unrecorded. This attestation does
-not close separate native outcomes, cross-client parity, four-mode live
-integration or final publication-byte qualification.
-The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md) keeps
-the hashes, corrected package-signing and qualification defects, earlier
-failures and open gates separate. Release A remains the published release.
+his written report as `owner_attested_host` at the installed package identity;
+its step, time and download measurements are unrecorded. Separate MCP, A2A,
+NeMo, CUDA, PEFT and MLX results retain their original component and host
+identities. Three focused real-gateway tests passed the four effective
+protocol modes. The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
+indexes the exact archives, installers and selected test results. GitHub and
+PyPI publication are recorded separately after promotion.
 
 The Python SDK and NeMo kit wheels are version `1.2.0`. The SDK's PyPI
 workflow awaits the accepted `v1.2.0` tag, reviewer-gated publication and
@@ -75,19 +74,15 @@ MCP and A2A under the compiler-controlled master switch.
 The latest 60-minute Pi 4 GENET
 RAM-image diagnostic completed four MCP and six A2A original jobs with
 target-confirmed, independently checked Jetson CUDA outputs and 122 healthy
-samples. Its collector was amended during the run, and it did not exercise
-installed Mac/Linux packages or the full release matrix. Earlier timed
-read-only and failed job attempts remain separate evidence. Direct Jetson CUDA
-and NeMo and Mac MLX checks passed at their stated host-only scope.
+samples. Its collector was amended during the run. Direct Jetson CUDA and
+NeMo and Mac MLX checks passed at their stated host-only scope.
 
 Nine operator skills passed syntax, link and copied-location guidance checks
 on Mac and Jetson. Read-only and mock host operations ran from outside a source
 directory, and the guides now require verified client transport, two private
 protocol headers, one gateway owner and separate user credentials. The agent
 delegation and GPU guides now cover cumulative standing attempts, finite
-caller operations and publisher-epoch Worker replacement. Diverse-vendor live
-jobs, cross-user isolation and useful installed Release B workflows are still
-unproven.
+caller operations and publisher-epoch Worker replacement.
 
 [Milestone 28](BUILD_PLAN.md#28) is complete at its selected foundation scope.
 The source declares

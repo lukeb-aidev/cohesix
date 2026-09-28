@@ -1,0 +1,81 @@
+{
+  "schema": "cohesix-evidence-pack/case-v1",
+  "scenario": "federation",
+  "evidence_class": "offline-review",
+  "proof": "none",
+  "inventory": {
+    "host/tickets/deadletter": "missing",
+    "host/tickets/spec": "observed",
+    "host/tickets/status": "observed"
+  },
+  "chains": [
+    {
+      "correlation": [
+        "fixture-1",
+        "attempt-1",
+        "hive-a",
+        "hive-b"
+      ],
+      "outcome": "recorded-terminal",
+      "stages": [
+        {
+          "name": "request",
+          "status": "observed",
+          "sources": [
+            {
+              "path": "host/tickets/spec",
+              "timeline_event": 0,
+              "event_sha256": "1b42d32fdb34f70625ee7403a03487e6b4085bf33f5583f178f0a5cdbf09dd0a",
+              "sequence": null
+            }
+          ]
+        },
+        {
+          "name": "decision",
+          "status": "unknown",
+          "sources": []
+        },
+        {
+          "name": "state-lease-lifecycle",
+          "status": "unknown",
+          "sources": []
+        },
+        {
+          "name": "host-result",
+          "status": "observed",
+          "sources": [
+            {
+              "path": "host/tickets/status",
+              "timeline_event": 1,
+              "event_sha256": "7a1c291626d55a21ab7d0940c666e41c84df6dfe16de7909b1fb95422bc91803",
+              "sequence": null
+            }
+          ]
+        },
+        {
+          "name": "receipt-deadletter",
+          "status": "missing",
+          "sources": []
+        },
+        {
+          "name": "federation-relay",
+          "status": "observed",
+          "sources": [
+            {
+              "path": "host/tickets/spec",
+              "timeline_event": 0,
+              "event_sha256": "1b42d32fdb34f70625ee7403a03487e6b4085bf33f5583f178f0a5cdbf09dd0a",
+              "sequence": null
+            },
+            {
+              "path": "host/tickets/status",
+              "timeline_event": 1,
+              "event_sha256": "7a1c291626d55a21ab7d0940c666e41c84df6dfe16de7909b1fb95422bc91803",
+              "sequence": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

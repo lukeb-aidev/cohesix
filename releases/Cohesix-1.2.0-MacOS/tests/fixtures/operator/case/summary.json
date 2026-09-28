@@ -1,0 +1,32 @@
+{
+  "captured": 2,
+  "errors": 0,
+  "items": [
+    {
+      "bytes": null,
+      "detail": null,
+      "path": "/host/tickets/spec",
+      "saved_as": "host/tickets/spec",
+      "status": "captured",
+      "verb": "CAT"
+    },
+    {
+      "bytes": null,
+      "detail": null,
+      "path": "/host/tickets/status",
+      "saved_as": "host/tickets/status",
+      "status": "captured",
+      "verb": "CAT"
+    },
+    {
+      "bytes": null,
+      "detail": null,
+      "path": "/host/tickets/deadletter",
+      "saved_as": "host/tickets/deadletter",
+      "status": "missing",
+      "verb": "CAT"
+    }
+  ],
+  "missing": 1,
+  "schema": "cohesix-evidence-pack/summary-v1"
+}

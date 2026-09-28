@@ -1,0 +1,219 @@
+# Author: Lukas Bower
+# Purpose: Provide a CLI for bounded Cohesix control-model playbooks and reports.
+# Copyright 2026 Lukas Bower
+
+"""Inspect or run bounded Cohesix deployment-rehearsal playbooks."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Optional
+
+from .audit import CohesixAudit
+from .auth import resolve_tcp_auth_token
+from .backends import FilesystemBackend, MockBackend, RestBackend, TcpBackend
+from .errors import CohesixError
+from .orchestration import CohesixOrchestrator
+from .playbooks import describe_playbooks, execute_playbook, load_playbook, playbook_ids
+
+
+def _resolve_auth_token(value: Optional[str]) -> str:
+    try:
+        return resolve_tcp_auth_token(value)
+    except ValueError as exc:
+        raise CohesixError(str(exc)) from exc
+
+
+def _build_backend(args: argparse.Namespace):
+    if args.mock:
+        return MockBackend(root=str(args.mock_root), include_mig=args.include_mig)
+    if args.mount_root is not None:
+        return FilesystemBackend(str(args.mount_root))
+    if args.rest_url:
+        return RestBackend(
+            args.rest_url,
+            timeout_s=args.timeout_s,
+            request_auth_token=args.auth_token,
+        )
+    return TcpBackend(
+        host=args.tcp_host,
+        port=args.tcp_port,
+        auth_token=_resolve_auth_token(args.auth_token),
+        role=args.role,
+        ticket=args.ticket,
+        timeout_s=args.timeout_s,
+        max_retries=args.max_retries,
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "lifecycle",
+        nargs="?",
+        choices=["plan", "apply", "watch", "explain", "verify", "recover"],
+    )
+    parser.add_argument("--coh-binary", type=Path)
+    parser.add_argument("--deployment", type=Path)
+    parser.add_argument(
+        "--recipe", action="store_true",
+        help="durable CUDA recipe over admitted host tickets",
+    )
+    parser.add_argument(
+        "--cancel-stage",
+        help="with recover --recipe, use a separately authorized cancellation ticket",
+    )
+    parser.add_argument("--auth-ref")
+    parser.add_argument("--ticket-ref")
+    parser.add_argument(
+        "--rehearsal",
+        action="store_true",
+        help="explicit control-model rehearsal; never workflow execution proof",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="list available built-in playbooks and exit",
+    )
+    parser.add_argument(
+        "--playbook",
+        default=playbook_ids()[0],
+        help="playbook id to execute",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="render the plan and local provider probes without control writes",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("out/examples/playbooks"),
+        help="output directory for report and audit artifacts",
+    )
+
+    parser.add_argument(
+        "--mock", action="store_true", help="use deterministic mock backend"
+    )
+    parser.add_argument(
+        "--mock-root",
+        type=Path,
+        default=Path("out/examples/mockfs"),
+        help="mock backend filesystem root",
+    )
+    parser.add_argument(
+        "--include-mig", action="store_true", help="seed MIG mock GPU entries"
+    )
+    parser.add_argument(
+        "--mount-root",
+        type=Path,
+        default=None,
+        help="mounted Secure9P root for filesystem backend",
+    )
+    parser.add_argument(
+        "--rest-url",
+        default=None,
+        help="hive-gateway base URL (RestBackend)",
+    )
+    parser.add_argument("--tcp-host", default="127.0.0.1", help="TCP console host")
+    parser.add_argument("--tcp-port", type=int, default=31337, help="TCP console port")
+    parser.add_argument(
+        "--auth-token",
+        default=None,
+        help="auth token override (TCP AUTH token or REST request auth token)",
+    )
+    parser.add_argument("--role", default="queen", help="attach role for TCP backend")
+    parser.add_argument("--ticket", default=None, help="capability ticket payload")
+    parser.add_argument(
+        "--timeout-s", type=float, default=2.0, help="transport timeout"
+    )
+    parser.add_argument(
+        "--max-retries", type=int, default=3, help="transport retry count"
+    )
+
+    parser.add_argument(
+        "--no-proc-snapshot",
+        action="store_true",
+        help="skip reading /proc schedule and lease snapshots",
+    )
+    parser.add_argument(
+        "--no-host-snapshot",
+        action="store_true",
+        help="skip host integration probes",
+    )
+    parser.add_argument(
+        "--no-push-host-snapshot",
+        action="store_true",
+        help="do not push host snapshot to telemetry",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.list:
+        print(json.dumps(describe_playbooks(), indent=2, sort_keys=True))
+        return
+
+    if args.lifecycle:
+        from .playbooks import execute_workflow
+
+        if args.coh_binary is None or args.mock or args.auth_token or args.ticket:
+            parser.error(
+                "workflow lifecycle requires --coh-binary and credential references"
+            )
+        result = execute_workflow(
+            args.playbook,
+            args.lifecycle,
+            coh_binary=args.coh_binary,
+            deployment=args.deployment,
+            rest_url=args.rest_url,
+            host=None if args.rest_url else args.tcp_host,
+            port=args.tcp_port,
+            auth_ref=args.auth_ref,
+            ticket_ref=args.ticket_ref,
+            recipe=args.recipe,
+            cancel_stage=args.cancel_stage,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    playbook = load_playbook(args.playbook)
+    backend = _build_backend(args)
+    orchestrator = CohesixOrchestrator(backend=backend)
+    audit = CohesixAudit()
+
+    try:
+        report = execute_playbook(
+            orchestrator=orchestrator,
+            playbook=playbook,
+            dry_run=args.dry_run,
+            include_proc_snapshot=not args.no_proc_snapshot,
+            include_host_snapshot=not args.no_host_snapshot,
+            push_host_snapshot=not args.no_push_host_snapshot,
+            audit=audit,
+            rehearsal=args.rehearsal,
+        )
+    finally:
+        orchestrator.close()
+
+    out_dir = args.out / playbook.playbook_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = out_dir / "report.json"
+    report_path.write_text(
+        json.dumps(report.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    audit_path = out_dir / "audit.txt"
+    audit_path.write_text(
+        "\n".join(audit.lines) + ("\n" if audit.lines else ""), encoding="utf-8"
+    )
+    print(json.dumps({"report": str(report_path), "audit": str(audit_path)}))
+
+
+if __name__ == "__main__":
+    main()

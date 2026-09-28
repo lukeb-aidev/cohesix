@@ -1,0 +1,882 @@
+# Author: Lukas Bower
+# Purpose: Define and execute bounded Cohesix control-model playbooks.
+# Copyright 2026 Lukas Bower
+
+"""Built-in Cohesix control-model playbooks for deployment rehearsal."""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
+import json
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+from .audit import CohesixAudit
+from .client import validate_component
+from .integrations import HostSnapshot, collect_host_snapshot, snapshot_to_ndjson
+from .orchestration import (
+    ApprovalRequest,
+    CohesixOrchestrator,
+    ControlPlan,
+    ExportRequest,
+    LeaseRequest,
+    PlanExecution,
+    ProcSnapshot,
+    ScheduleRequest,
+)
+
+
+@dataclass(frozen=True)
+class ProbeSpec:
+    """Host integration probe selection for a playbook."""
+
+    systemd_services: Tuple[str, ...] = ()
+    include_docker: bool = False
+    include_k8s: bool = False
+    include_nvml: bool = False
+    include_peft: bool = False
+    k8s_namespace: str = "default"
+    k8s_label_selector: str = ""
+
+    def dependency_ids(self) -> Tuple[str, ...]:
+        """Return compiler graph rows exercised by the selected local probes."""
+
+        dependencies = []
+        if self.include_docker:
+            dependencies.append("docker-provider")
+        if self.include_k8s:
+            dependencies.append("kubernetes-provider")
+        if self.include_nvml:
+            dependencies.append("gpu-host-provider")
+        if self.include_peft:
+            dependencies.append("peft-host-provider")
+        if self.systemd_services:
+            dependencies.append("systemd-provider")
+        return tuple(sorted(dependencies))
+
+
+@dataclass(frozen=True)
+class UseCasePlaybook:
+    """Declarative use-case playbook composed of existing Cohesix controls."""
+
+    playbook_id: str
+    title: str
+    fleet: str
+    objective: str
+    telemetry_device_id: str
+    plan: ControlPlan
+    probes: ProbeSpec
+    use_case_id: str = "unclassified"
+    capability_summary: str = "Custom bounded control-model playbook."
+
+    def __post_init__(self) -> None:
+        validate_component(self.playbook_id)
+        validate_component(self.use_case_id)
+        validate_component(self.telemetry_device_id)
+        if not self.capability_summary.strip():
+            raise ValueError("capability_summary must not be empty")
+
+
+@dataclass
+class PlaybookReport:
+    """Execution report with control writes, `/proc` snapshot, and host probe data."""
+
+    playbook_id: str
+    title: str
+    fleet: str
+    objective: str
+    dry_run: bool
+    run_id: Optional[str]
+    plan_execution: PlanExecution
+    proc_snapshot: ProcSnapshot
+    host_snapshot: Optional[HostSnapshot]
+    telemetry_push: Optional[Dict[str, object]]
+    python_projection_compatible: bool = True
+    runtime_release_accepted: bool = False
+    production_use_case_accepted: bool = False
+    use_case_id: str = "unclassified"
+    capability_summary: str = "Custom bounded control-model playbook."
+    workflow_kind: str = "control-model"
+    next_milestone: str = "m27b-live-reference-workflows"
+    plan_summary: Dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        if self.host_snapshot is None:
+            payload["host_snapshot"] = None
+        return payload
+
+
+def built_in_playbooks() -> Dict[str, UseCasePlaybook]:
+    """Return bounded control-model playbooks for high-impact use cases."""
+
+    shared_approvals = (
+        ApprovalRequest(approval_id="approve-queen-ctl", target_path="/queen/ctl"),
+        ApprovalRequest(
+            approval_id="approve-schedule", target_path="/queen/schedule/ctl"
+        ),
+        ApprovalRequest(approval_id="approve-lease", target_path="/queen/lease/ctl"),
+    )
+    return {
+        "mac-release-factory": UseCasePlaybook(
+            playbook_id="mac-release-factory",
+            use_case_id="self-healing-edge-swarm",
+            title="Mac App Release Factory",
+            fleet="mac",
+            objective="Rehearse deterministic release-wave scheduling and auditable control state.",
+            capability_summary=(
+                "Models approvals and two bounded release waves; it does not "
+                "build, sign, notarize, or publish an application."
+            ),
+            telemetry_device_id="mac-release-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="mac-rel-wave-1",
+                        role="worker-heartbeat",
+                        priority=4,
+                        ticks=10,
+                        budget_ms=250,
+                    ),
+                    ScheduleRequest(
+                        request_id="mac-rel-wave-2",
+                        role="worker-heartbeat",
+                        priority=5,
+                        ticks=12,
+                        budget_ms=300,
+                    ),
+                ),
+            ),
+            probes=ProbeSpec(
+                include_docker=True,
+            ),
+        ),
+        "mac-private-peft-grid": UseCasePlaybook(
+            playbook_id="mac-private-peft-grid",
+            use_case_id="private-lora-foundry",
+            title="Mac Private PEFT Grid",
+            fleet="mac",
+            objective=(
+                "Rehearse LoRA control, GPU lease, and export boundaries for a "
+                "private training pool."
+            ),
+            capability_summary=(
+                "Models WorkerLora scheduling, one GPU lease, one export "
+                "window, and selected local provider probes; it does not train "
+                "or activate an adapter."
+            ),
+            telemetry_device_id="mac-peft-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="mac-peft-train-1",
+                        role="worker-lora",
+                        priority=6,
+                        ticks=8,
+                        budget_ms=200,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="mac-peft-lease-1",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=600,
+                        priority=6,
+                    ),
+                ),
+                exports=(
+                    ExportRequest(op="open", export_id="mac-peft-export", ttl_s=900),
+                ),
+            ),
+            probes=ProbeSpec(
+                include_docker=True,
+                include_k8s=True,
+                include_nvml=True,
+                include_peft=True,
+                k8s_namespace="ml",
+                k8s_label_selector="app=trainer",
+            ),
+        ),
+        "mac-endpoint-compliance": UseCasePlaybook(
+            playbook_id="mac-endpoint-compliance",
+            use_case_id="agent-action-airlock",
+            title="Mac Endpoint Compliance",
+            fleet="mac",
+            objective=(
+                "Rehearse bounded endpoint-review scheduling and quota state "
+                "for an action airlock."
+            ),
+            capability_summary=(
+                "Models approvals, a heartbeat review wave, a quota record, "
+                "and Docker availability; it does not perform or certify an "
+                "endpoint compliance scan."
+            ),
+            telemetry_device_id="mac-compliance-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="mac-comp-scan",
+                        role="worker-heartbeat",
+                        priority=5,
+                        ticks=6,
+                        budget_ms=180,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="quota",
+                        subject="queen",
+                        resource="gpu0",
+                        max_active=2,
+                        max_preemptions=4,
+                    ),
+                ),
+            ),
+            probes=ProbeSpec(
+                include_docker=True,
+            ),
+        ),
+        "jetson-traffic-safety": UseCasePlaybook(
+            playbook_id="jetson-traffic-safety",
+            use_case_id="self-healing-edge-swarm",
+            title="Jetson Traffic Safety Mesh",
+            fleet="jetson",
+            objective=(
+                "Rehearse bounded edge-work scheduling and lease governance "
+                "for a traffic-safety integration."
+            ),
+            capability_summary=(
+                "Models one WorkerGpu schedule and lease plus Kubernetes and "
+                "systemd availability; it does not run perception or "
+                "traffic-control software."
+            ),
+            telemetry_device_id="jetson-traffic-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="jetson-traffic-wave-1",
+                        role="worker-gpu",
+                        priority=7,
+                        ticks=8,
+                        budget_ms=160,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="jetson-traffic-lease",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=300,
+                        priority=7,
+                    ),
+                ),
+            ),
+            probes=ProbeSpec(
+                systemd_services=("docker.service",),
+                include_k8s=True,
+                k8s_namespace="edge",
+                k8s_label_selector="app=traffic",
+            ),
+        ),
+        "jetson-manufacturing-safety": UseCasePlaybook(
+            playbook_id="jetson-manufacturing-safety",
+            use_case_id="self-healing-edge-swarm",
+            title="Jetson Manufacturing Safety + QA",
+            fleet="jetson",
+            objective=(
+                "Rehearse bounded scheduling, quota, and lease controls for a "
+                "manufacturing integration."
+            ),
+            capability_summary=(
+                "Models one WorkerGpu wave, a lease, and quota with Kubernetes "
+                "and systemd availability; it does not run visual QA or safety "
+                "detectors."
+            ),
+            telemetry_device_id="jetson-factory-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="jetson-qa-line-1",
+                        role="worker-gpu",
+                        priority=8,
+                        ticks=10,
+                        budget_ms=190,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="jetson-qa-lease",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=420,
+                        priority=8,
+                    ),
+                    LeaseRequest(
+                        op="quota",
+                        subject="queen",
+                        resource="gpu0",
+                        max_active=8,
+                        max_preemptions=8,
+                    ),
+                ),
+            ),
+            probes=ProbeSpec(
+                systemd_services=("docker.service",),
+                include_k8s=True,
+            ),
+        ),
+        "jetson-critical-infra": UseCasePlaybook(
+            playbook_id="jetson-critical-infra",
+            use_case_id="agent-action-airlock",
+            title="Jetson Critical Infrastructure Mesh",
+            fleet="jetson",
+            objective=(
+                "Rehearse a narrow action-airlock control plan for a "
+                "critical-infrastructure integration."
+            ),
+            capability_summary=(
+                "Models WorkerGpu scheduling, one lease, one export window, "
+                "and Kubernetes/systemd availability; it does not operate a "
+                "sensor network."
+            ),
+            telemetry_device_id="jetson-infra-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="jetson-infra-scan",
+                        role="worker-gpu",
+                        priority=9,
+                        ticks=12,
+                        budget_ms=220,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="jetson-infra-lease",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=480,
+                        priority=9,
+                    ),
+                ),
+                exports=(
+                    ExportRequest(
+                        op="open", export_id="jetson-infra-export", ttl_s=1200
+                    ),
+                ),
+            ),
+            probes=ProbeSpec(
+                systemd_services=("cohesix-agent.service",),
+                include_k8s=True,
+                k8s_namespace="infra",
+                k8s_label_selector="tier=critical",
+            ),
+        ),
+        "mixed-closed-loop-ai-factory": UseCasePlaybook(
+            playbook_id="mixed-closed-loop-ai-factory",
+            use_case_id="multi-hive-mission-control",
+            title="Mixed Closed-Loop AI Factory",
+            fleet="mixed",
+            objective=(
+                "Rehearse linked adaptation-wave and inference-wave control "
+                "records across a mixed fleet."
+            ),
+            capability_summary=(
+                "Models WorkerLora and WorkerGpu scheduling, one GPU lease, "
+                "one export window, and Kubernetes availability; it does not "
+                "train, deploy, or run a model."
+            ),
+            telemetry_device_id="mixed-closed-loop-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="mixed-train-wave",
+                        role="worker-lora",
+                        priority=6,
+                        ticks=9,
+                        budget_ms=210,
+                    ),
+                    ScheduleRequest(
+                        request_id="mixed-infer-wave",
+                        role="worker-gpu",
+                        priority=5,
+                        ticks=9,
+                        budget_ms=180,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="mixed-lease-1",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=540,
+                        priority=6,
+                    ),
+                ),
+                exports=(
+                    ExportRequest(op="open", export_id="mixed-export", ttl_s=900),
+                ),
+            ),
+            probes=ProbeSpec(
+                include_k8s=True,
+                k8s_namespace="ai",
+                k8s_label_selector="pipeline=closed-loop",
+            ),
+        ),
+        "mixed-medical-edge-ai": UseCasePlaybook(
+            playbook_id="mixed-medical-edge-ai",
+            use_case_id="gpu-flight-deck",
+            title="Mixed Medical Edge AI",
+            fleet="mixed",
+            objective=(
+                "Rehearse narrow GPU lease, quota, and export controls for a "
+                "medical-edge integration."
+            ),
+            capability_summary=(
+                "Models one WorkerGpu wave, a constrained lease/quota, one "
+                "export window, and GPU/Kubernetes availability; it does not "
+                "process medical data or establish compliance."
+            ),
+            telemetry_device_id="mixed-medical-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="medical-edge-wave",
+                        role="worker-gpu",
+                        priority=9,
+                        ticks=6,
+                        budget_ms=160,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="medical-lease-1",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=360,
+                        priority=9,
+                    ),
+                    LeaseRequest(
+                        op="quota",
+                        subject="queen",
+                        resource="gpu0",
+                        max_active=2,
+                        max_preemptions=2,
+                    ),
+                ),
+                exports=(
+                    ExportRequest(op="open", export_id="medical-export", ttl_s=1800),
+                ),
+            ),
+            probes=ProbeSpec(
+                include_k8s=True,
+                include_nvml=True,
+                k8s_namespace="medical",
+                k8s_label_selector="compliance=hipaa",
+            ),
+        ),
+        "mixed-logistics-digital-twin": UseCasePlaybook(
+            playbook_id="mixed-logistics-digital-twin",
+            use_case_id="multi-hive-mission-control",
+            title="Mixed Logistics Digital Twin",
+            fleet="mixed",
+            objective=(
+                "Rehearse planning, edge-work, lease, and preemption records "
+                "across a mixed fleet."
+            ),
+            capability_summary=(
+                "Models Heartbeat and WorkerGpu scheduling, lease preemption, "
+                "and Kubernetes availability; it does not operate a digital "
+                "twin or logistics system."
+            ),
+            telemetry_device_id="mixed-logistics-audit",
+            plan=ControlPlan(
+                approvals=shared_approvals,
+                schedule=(
+                    ScheduleRequest(
+                        request_id="logistics-plan-wave",
+                        role="worker-heartbeat",
+                        priority=6,
+                        ticks=7,
+                        budget_ms=175,
+                    ),
+                    ScheduleRequest(
+                        request_id="logistics-edge-wave",
+                        role="worker-gpu",
+                        priority=7,
+                        ticks=7,
+                        budget_ms=175,
+                    ),
+                ),
+                leases=(
+                    LeaseRequest(
+                        op="grant",
+                        lease_id="logistics-lease-1",
+                        subject="queen",
+                        resource="gpu0",
+                        ttl_s=420,
+                        priority=7,
+                    ),
+                    LeaseRequest(
+                        op="preempt",
+                        lease_id="logistics-lease-1",
+                        reason="maintenance",
+                    ),
+                ),
+            ),
+            probes=ProbeSpec(
+                include_k8s=True,
+                k8s_namespace="logistics",
+                k8s_label_selector="app=digital-twin",
+            ),
+        ),
+    }
+
+
+def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
+    """Return built-in playbooks through the legacy public API name."""
+
+    return built_in_playbooks()
+
+
+def execute_playbook(
+    orchestrator: CohesixOrchestrator,
+    playbook: UseCasePlaybook,
+    dry_run: bool = False,
+    include_proc_snapshot: bool = True,
+    include_host_snapshot: bool = True,
+    push_host_snapshot: bool = True,
+    audit: Optional[CohesixAudit] = None,
+    rehearsal: bool = False,
+) -> PlaybookReport:
+    """Execute a playbook via existing control-plane semantics."""
+
+    from .backends import MockBackend
+    from .errors import CohesixError
+
+    if (
+        not dry_run
+        and not rehearsal
+        and not isinstance(orchestrator.backend, MockBackend)
+    ):
+        raise CohesixError(
+            "not_enabled staged deployment; select a generated workflow or explicit control rehearsal"
+        )
+    run_id = None if dry_run else _generate_run_id()
+    plan = _apply_run_id(playbook.plan, run_id) if run_id is not None else playbook.plan
+    plan_execution = orchestrator.execute_plan(plan, dry_run=dry_run, audit=audit)
+
+    proc_snapshot = ProcSnapshot()
+    if include_proc_snapshot and not dry_run:
+        proc_snapshot = orchestrator.read_proc_snapshot(audit=audit)
+
+    host_snapshot: Optional[HostSnapshot] = None
+    telemetry_push: Optional[Dict[str, object]] = None
+    if include_host_snapshot:
+        host_snapshot = collect_host_snapshot(
+            systemd_services=playbook.probes.systemd_services,
+            include_docker=playbook.probes.include_docker,
+            include_k8s=playbook.probes.include_k8s,
+            include_nvml=playbook.probes.include_nvml,
+            include_peft=playbook.probes.include_peft,
+            k8s_namespace=playbook.probes.k8s_namespace,
+            k8s_label_selector=playbook.probes.k8s_label_selector,
+        )
+        if push_host_snapshot and not dry_run:
+            payload = snapshot_to_ndjson(host_snapshot)
+            if payload.strip():
+                telemetry_push = orchestrator.client.telemetry_push(
+                    device_id=playbook.telemetry_device_id,
+                    payload=payload,
+                    mime="application/x-ndjson",
+                    audit=audit,
+                )
+
+    return PlaybookReport(
+        playbook_id=playbook.playbook_id,
+        use_case_id=playbook.use_case_id,
+        title=playbook.title,
+        fleet=playbook.fleet,
+        objective=playbook.objective,
+        capability_summary=playbook.capability_summary,
+        workflow_kind="control-model",
+        next_milestone="m27b-live-reference-workflows",
+        plan_summary=summarize_plan(plan),
+        dry_run=dry_run,
+        run_id=run_id,
+        plan_execution=plan_execution,
+        proc_snapshot=proc_snapshot,
+        host_snapshot=host_snapshot,
+        telemetry_push=telemetry_push,
+    )
+
+
+def playbook_ids() -> List[str]:
+    """List built-in playbook ids in deterministic order."""
+
+    return sorted(built_in_playbooks().keys())
+
+
+def load_playbook(playbook_id: str) -> UseCasePlaybook:
+    """Resolve a playbook by id or raise a clear error."""
+
+    lookup = built_in_playbooks()
+    key = playbook_id.strip()
+    if key not in lookup:
+        known = ", ".join(sorted(lookup.keys()))
+        raise ValueError(f"unknown playbook '{playbook_id}'. expected one of: {known}")
+    return lookup[key]
+
+
+def summarize_plan(plan: ControlPlan) -> Dict[str, int]:
+    """Summarize plan complexity for UX and dry-run output."""
+
+    return {
+        "approvals": len(plan.approvals),
+        "schedule": len(plan.schedule),
+        "leases": len(plan.leases),
+        "exports": len(plan.exports),
+    }
+
+
+def describe_playbooks(
+    playbooks: Optional[Sequence[UseCasePlaybook]] = None,
+) -> List[Dict[str, object]]:
+    """Render concise playbook metadata for UI/CLI listing."""
+
+    items = (
+        list(playbooks)
+        if playbooks is not None
+        else list(built_in_playbooks().values())
+    )
+    rendered: List[Dict[str, object]] = []
+    for item in sorted(items, key=lambda value: value.playbook_id):
+        rendered.append(
+            {
+                "playbook_id": item.playbook_id,
+                "use_case_id": item.use_case_id,
+                "title": item.title,
+                "fleet": item.fleet,
+                "objective": item.objective,
+                "capability_summary": item.capability_summary,
+                "workflow_kind": "control-model",
+                "generated_workflow": generated_workflows()[item.playbook_id][
+                    "workflow"
+                ],
+                "provider_probes": list(item.probes.dependency_ids()),
+                "next_milestone": "m27b-live-reference-workflows",
+                "plan": summarize_plan(item.plan),
+            }
+        )
+    return rendered
+
+
+def iter_playbooks() -> Iterable[UseCasePlaybook]:
+    """Yield playbooks in deterministic id order."""
+
+    for key in playbook_ids():
+        yield load_playbook(key)
+
+
+def _generate_run_id() -> str:
+    return format(time.time_ns(), "x")
+
+
+def _apply_run_id(plan: ControlPlan, run_id: str) -> ControlPlan:
+    approvals = tuple(
+        replace(
+            item,
+            approval_id=_append_run_suffix(item.approval_id, run_id, max_bytes=128),
+        )
+        for item in plan.approvals
+    )
+    schedule = tuple(
+        replace(
+            item,
+            request_id=_append_run_suffix(item.request_id, run_id, max_bytes=128),
+        )
+        for item in plan.schedule
+    )
+    leases = tuple(
+        replace(
+            item,
+            lease_id=(
+                _append_run_suffix(item.lease_id, run_id, max_bytes=128)
+                if item.lease_id is not None
+                else None
+            ),
+        )
+        for item in plan.leases
+    )
+    exports = tuple(
+        replace(
+            item,
+            export_id=_append_run_suffix(item.export_id, run_id, max_bytes=128),
+        )
+        for item in plan.exports
+    )
+    return ControlPlan(
+        approvals=approvals,
+        schedule=schedule,
+        leases=leases,
+        exports=exports,
+    )
+
+
+def _append_run_suffix(token: str, run_id: str, max_bytes: int) -> str:
+    suffix = run_id.strip()
+    if not suffix:
+        return token
+    candidate = f"{token}-{suffix}"
+    if len(candidate.encode("utf-8")) <= max_bytes:
+        return candidate
+
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:8]
+    budget = max_bytes - len(suffix) - len(digest) - 2
+    if budget <= 0:
+        clipped = suffix[: max(1, max_bytes - len(digest) - 1)]
+        compact = f"{clipped}-{digest}"
+        return compact[:max_bytes]
+    base = token[:budget]
+    compact = f"{base}-{suffix}-{digest}"
+    if len(compact.encode("utf-8")) <= max_bytes:
+        return compact
+    return compact[:max_bytes]
+
+
+def generated_workflows() -> dict[str, dict[str, object]]:
+    """Return detached compiler-owned DAGs; their presence is not deployment acceptance."""
+    from copy import deepcopy
+    from .providers import registry
+
+    return {row["id"]: deepcopy(row) for row in registry()["playbooks"]}
+
+
+def execute_workflow(
+    playbook_id: str,
+    lifecycle: str,
+    *,
+    coh_binary: Path,
+    deployment: Path | None = None,
+    rest_url: str | None = None,
+    host: str | None = None,
+    port: int = 31337,
+    auth_ref: str | None = None,
+    ticket_ref: str | None = None,
+    recipe: bool = False,
+    cancel_stage: str | None = None,
+) -> dict[str, object]:
+    """Use the shared Rust lifecycle and verifier; secrets never enter command arguments."""
+    from .native_providers import bounded_command
+    from .providers import ProviderUnavailable
+    from .auth import resolve_secret_reference
+
+    if lifecycle not in {"plan", "apply", "watch", "explain", "verify", "recover"}:
+        raise ProviderUnavailable("invalid_lifecycle", "workflow")
+    registered = (
+        playbook_id == "cuda-reference"
+        if recipe else playbook_id in generated_workflows()
+    )
+    if not registered or not coh_binary.is_absolute():
+        raise ProviderUnavailable("not_registered", "workflow")
+    if cancel_stage is not None and (not recipe or lifecycle != "recover"):
+        raise ProviderUnavailable("invalid_cancellation", "workflow")
+    command = [str(coh_binary.resolve(strict=True))]
+    if ticket_ref is not None:
+        # The Rust process resolves the same explicit source. Validate before spawning.
+        resolve_secret_reference(ticket_ref)
+        command.extend(["--ticket-ref", ticket_ref])
+    command.extend([lifecycle, playbook_id])
+    if recipe:
+        command.append("--recipe")
+    if cancel_stage is not None:
+        command.extend(["--cancel-stage", cancel_stage])
+    if lifecycle not in {"plan", "explain"} or (recipe and deployment is not None):
+        if deployment is None:
+            raise ProviderUnavailable("not_enabled", "workflow_deployment")
+        command.extend(["--deployment", str(deployment.resolve(strict=True))])
+    credentials = {}
+    if lifecycle in {"apply", "recover"} or (lifecycle == "watch" and not recipe):
+        if (rest_url is None) == (host is None) or auth_ref is None:
+            raise ProviderUnavailable("not_enabled", "workflow_endpoint")
+        if rest_url is not None:
+            command.extend(["--rest-url", rest_url])
+            credentials["COH_REST_AUTH_TOKEN"] = auth_ref
+        else:
+            command.extend(["--host", str(host), "--port", str(port)])
+            credentials["COH_AUTH_TOKEN"] = auth_ref
+    # Credential-reference environment variables for a delegated ticket must be
+    # resolved by the child too; require file references for this separate key.
+    if ticket_ref is not None and not ticket_ref.startswith("file:"):
+        raise ProviderUnavailable(
+            "invalid_credential_reference", "workflow_ticket_requires_file"
+        )
+    result = json.loads(
+        bounded_command(command, timeout_s=30, credential_refs=credentials)
+    )
+    if (
+        result.get("authoritative") is not False
+        or result.get("production_use_case_accepted") is not False
+    ):
+        raise ProviderUnavailable("invalid_operation_report", "workflow")
+    return result
+
+
+def run_peft_release(
+    lifecycle: str,
+    *,
+    deployment: Path,
+    coh_binary: Path,
+    rest_url: str | None = None,
+    host: str | None = None,
+    port: int = 31337,
+    auth_ref: str | None = None,
+    ticket_ref: str | None = None,
+) -> dict[str, object]:
+    """Use the Rust release journal and verifier; Python creates no receipts or scores."""
+    from .native_providers import bounded_command
+    from .providers import ProviderUnavailable
+
+    if lifecycle not in {"plan", "apply", "watch", "explain", "verify", "recover"}:
+        raise ProviderUnavailable("invalid_lifecycle", "peft_release")
+    if not coh_binary.is_absolute() or not deployment.is_absolute():
+        raise ProviderUnavailable("invalid_path", "peft_release")
+    command = [str(coh_binary.resolve(strict=True))]
+    if ticket_ref is not None:
+        if not ticket_ref.startswith("file:"):
+            raise ProviderUnavailable("invalid_credential_reference", "peft_release_ticket_requires_file")
+        command.extend(["--ticket-ref", ticket_ref])
+    command.extend(["peft", "release", lifecycle, "--deployment", str(deployment.resolve(strict=True))])
+    credentials = {}
+    if lifecycle == "apply":
+        if (rest_url is None) == (host is None) or auth_ref is None or ticket_ref is None:
+            raise ProviderUnavailable("not_enabled", "peft_release_endpoint")
+        if rest_url is not None:
+            command.extend(["--rest-url", rest_url])
+            credentials["COH_REST_AUTH_TOKEN"] = auth_ref
+        else:
+            command.extend(["--host", str(host), "--port", str(port)])
+            credentials["COH_AUTH_TOKEN"] = auth_ref
+    result = json.loads(bounded_command(command, timeout_s=30, credential_refs=credentials))
+    if (result.get("schema") != "cohesix-peft-report/v1"
+            or result.get("authoritative") is not False
+            or result.get("production_use_case_accepted") is not False):
+        raise ProviderUnavailable("invalid_operation_report", "peft_release")
+    return result

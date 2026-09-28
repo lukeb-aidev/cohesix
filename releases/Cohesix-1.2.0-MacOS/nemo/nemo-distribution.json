@@ -1,0 +1,27 @@
+{
+  "authoritative": false,
+  "inventory_sha256": "5a284e05493cb426fc0133adf043401563884deeab1c73c6c562a29657e87851",
+  "proof_boundary": {
+    "kit_install_is_target_proof": false,
+    "toolkit_output_is_native_outcome": false
+  },
+  "schema": "cohesix-nemo-distribution/v1",
+  "source_files": {
+    "README.md": "ba8127393a2cf19a84cce6290d49bd4acc97a9e5d6f18b639bc521fca74a66f6",
+    "pyproject.toml": "ff61e57f51c8f98ac8791d16f03d0a9b8478b541d06effa2f6621ccce007a3e1",
+    "requirements-linux-aarch64.lock": "2d98723f2a4e539ef91048922b25230cb23cd73c76d390915b0781014181c2d8",
+    "src/cohesix_nemo_kit/__init__.py": "61db435e46fd580d7180371ba73c84259ce12c1440c5e90d4fa26144dd147e0c",
+    "src/cohesix_nemo_kit/cli.py": "1f800a7354cb689382c516b448aadbd582c3b6cc28eebf0653dd5521bed4e1a4",
+    "src/cohesix_nemo_kit/configs/a2a-agent.yaml": "2b7b330df34ce9c4a159b56404b7a635e722b0de78a2b669954e70f36f35bce0",
+    "src/cohesix_nemo_kit/configs/direct-agent.yaml": "0324b445191ee25fadb40f0c189c0b18d0234e9768b0272edc975db7a08ba59b",
+    "src/cohesix_nemo_kit/configs/mcp-agent.yaml": "ab5b13dd41c652552f663848c5a179dcd70a17891c842d4e4c4200ba4eabb969",
+    "src/cohesix_nemo_kit/nat_plugin.py": "1a5848ba51e425aa3e4586bb7fa8851329127d0341a479f5712b69c24ad6c88c",
+    "src/cohesix_nemo_kit/native.py": "28b60c885fbea772a911963bc154cd3146a77429d124811693471513bdb00ce3"
+  },
+  "wheel": {
+    "filename": "cohesix_nemo_kit-1.2.0-py3-none-any.whl",
+    "sha256": "526a16c54dac26d5a0099ad9ce78a819bb1acedac90d731d89d3214d9f5af4f6",
+    "size": 13197,
+    "version": "1.2.0"
+  }
+}

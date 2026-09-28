@@ -1,0 +1,21 @@
+# Author: Lukas Bower
+# Purpose: Validate PEFT export/import/activate/rollback transcript parity.
+attach queen
+EXPECT OK
+ls /queen/export/lora_jobs
+EXPECT OK
+ls /queen/export/lora_jobs/job_8932
+EXPECT OK
+cat /queen/export/lora_jobs/job_8932/telemetry.cbor
+EXPECT OK
+cat /queen/export/lora_jobs/job_8932/base_model.ref
+EXPECT OK
+cat /queen/export/lora_jobs/job_8932/policy.toml
+EXPECT OK
+cat /gpu/models/available/llama3-edge-v7/manifest.toml
+EXPECT OK
+echo llama3-edge-v7 > /gpu/models/active
+EXPECT OK
+echo vision-base-v1 > /gpu/models/active
+EXPECT OK
+quit

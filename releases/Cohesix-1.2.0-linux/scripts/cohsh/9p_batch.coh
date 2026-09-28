@@ -1,0 +1,16 @@
+# Author: Lukas Bower
+# Purpose: Append three records and read the full stream; batch runners verify exact record order.
+# Copyright 2026 Lukas Bower
+attach queen
+EXPECT OK
+echo batch-1 > /log/queen.log
+EXPECT OK
+echo batch-2 > /log/queen.log
+EXPECT OK
+echo batch-3 > /log/queen.log
+EXPECT OK
+cat /log/queen.log
+EXPECT OK
+echo {{msize_overflow}} > /log/queen.log
+EXPECT ERR
+quit
