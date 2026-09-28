@@ -1405,3 +1405,45 @@ Deliverables: Named owner attestation, bounded verifier and focused regression
 tests, aligned acceptance documents and retained result with its exact proof
 scope. AI assistance implemented the separate manual route and verified the
 package/source bindings; the owner supplied the human evaluation.
+
+## Qualified-source NeMo preflight repair
+
+Title/ID: `m28g-release-b-qualification`; defect found in final canonical
+release-manifest preflight.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Check the already qualified NeMo wheel against the same immutable source
+and generated inventory used to build it during a publication-only release cut.
+
+Inputs: Clean qualified source `b68a2c2a1a38`, its `1.2.0` NeMo wheel and
+distribution report, publication source `2ed62aab0`, and the failing canonical
+preflight. The publication inventory legitimately differs from the qualified
+inventory because historical release rows were retired; the publication bridge
+already checks that the selected runtime graph is unchanged.
+
+Changes: `release_bundle.sh` now passes the qualified source root and its
+generated inventory to `build_nemo_kit.py --verify-dir` when
+`--qualified-source-root` is selected. Ordinary same-source assembly still
+checks the current root and inventory. The wheel and its source digests are
+unchanged. Host CLI, Python SDK, SwarmUI, benchmark and target paths are
+unaffected.
+
+Commands: `bash -n scripts/release_bundle.sh`; canonical
+`scripts/release_bundle.sh --check-manifest --linux
+--linux-use-accepted-tools --qualified-source-root <clean-b68-source>` with
+the exact retained Mac/Linux QEMU artifacts and passing TCP results, clean Pi
+stage, selected production source manifest, both host Python package reports,
+and version-aligned Python/NeMo wheel directories; `git diff --check`.
+
+Checks: Before the repair, preflight refused `NeMo distribution differs from
+selected release source`. After it, the compiler-selected implementation
+inventory, exact source and release manifest agreed; the NeMo verifier reported
+`PASS` for `cohesix_nemo_kit-1.2.0-py3-none-any.whl`; the canonical preflight
+reported `Native artifacts and exact compiler-selected release inputs verified
+(build-only=0)`. This is input selection and integrity proof, not assembled
+archive qualification or live integration.
+
+Deliverables: Corrected canonical preflight with the original qualified wheel
+and a passing exact-input run. AI assistance traced the mismatch to the
+publication inventory selection and applied the source-bound repair.
