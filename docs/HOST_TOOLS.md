@@ -2389,12 +2389,13 @@ the complete clean tree, including `third_party/fuser`, verifies archive/tree
 hashes and regenerates KVM-owned policies and Python defaults. Pass the same
 production manifest used to build the accepted KVM guest with `--manifest PATH`;
 the builder transfers that file separately, checks its SHA-256 on the Linux
-host, and records the selected manifest and generated cohsh policy hashes in
-its provenance. Omitting the option selects the development manifest and does
-not qualify production host tools. The release factory forwards its
-`--release-manifest` when it rebuilds Linux tools and rejects provenance for a
-different manifest. `--no-clean` retains Cargo cache, never stale source; each
-build replaces source from the exact archive.
+host, transfers only its referenced public CAS verification key with a separate
+digest check, and records the selected manifest, CAS key and generated cohsh
+policy hashes in its provenance. Omitting the option selects the development
+manifest and does not qualify production host tools. The release factory
+forwards its `--release-manifest` when it rebuilds Linux tools and rejects
+provenance for a different manifest. `--no-clean` retains Cargo cache, never
+stale source; each build replaces source from the exact archive.
 
 ### Keep assembly modes distinct
 

@@ -257,6 +257,46 @@ build_tools() {
     fail "--manifest must name a regular file, not a symlink"
   local selected_manifest_sha256
   selected_manifest_sha256="$(sha256_file "$SELECTED_MANIFEST")"
+  local cas_key_reference cas_key_path cas_key_sha256
+  cas_key_reference="$(python3 - "$SELECTED_MANIFEST" <<'PY'
+from pathlib import Path, PurePosixPath
+import sys
+import tomllib
+
+manifest = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+reference = manifest["cas"]["signing"]["verification_key_path"]
+if not isinstance(reference, str):
+    raise SystemExit("selected manifest CAS verification key path is invalid")
+path = PurePosixPath(reference)
+if (not reference.isascii() or str(path) != reference
+        or path.is_absolute() or not reference.endswith(".hex")
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or any(token in reference.lower() for token in ("secret", "private", "signing_key"))
+        or any(not (part.replace("_", "").replace("-", "").replace(".", "").isalnum())
+               for part in path.parts)):
+    raise SystemExit("selected manifest CAS verification key path is unsafe")
+print(reference)
+PY
+)"
+  [[ -n "$cas_key_reference" ]] || fail "selected manifest omitted its CAS verification key"
+  cas_key_path="$(python3 - "$SELECTED_MANIFEST" "$cas_key_reference" <<'PY'
+from pathlib import Path
+import sys
+
+manifest = Path(sys.argv[1]).resolve()
+relative = Path(sys.argv[2])
+for base in (manifest.parent, manifest.parent.parent):
+    candidate = base / relative
+    if (candidate.is_file() and not candidate.is_symlink()
+            and 0 < candidate.stat().st_size <= 4096
+            and candidate.resolve().is_relative_to(base.resolve())):
+        print(candidate.resolve())
+        break
+else:
+    raise SystemExit("selected manifest CAS verification key is unavailable")
+PY
+)"
+  cas_key_sha256="$(sha256_file "$cas_key_path")"
 
   local source_status
   source_status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)"
@@ -269,6 +309,7 @@ build_tools() {
   local source_tarball="${temp_dir}/cohesix-host-tools-source.tar.gz"
   local remote_source_tarball="${REMOTE_BUILD_DIR}/cohesix-host-tools-source.tar.gz"
   local remote_manifest="${REMOTE_BUILD_DIR}/selected-manifest.toml"
+  local remote_cas_key="${REMOTE_BUILD_DIR}/${cas_key_reference}"
   local remote_tools_tarball="${REMOTE_BUILD_DIR}/host-tools-linux.tar.gz"
   local remote_build_info="${REMOTE_BUILD_DIR}/host-tools-build-info.env"
   local source_commit
@@ -287,17 +328,19 @@ build_tools() {
   local source_sha256
   source_sha256="$(sha256_file "$source_tarball")"
 
-  run_ssh "mkdir -p '${REMOTE_BUILD_DIR}'"
+  run_ssh "mkdir -p '${REMOTE_BUILD_DIR}' '${REMOTE_BUILD_DIR}/$(dirname "$cas_key_reference")'"
   scp "${SSH_OPTS[@]}" "$source_tarball" \
     "${SSH_DESTINATION}:${remote_source_tarball}"
   scp "${SSH_OPTS[@]}" "$SELECTED_MANIFEST" \
     "${SSH_DESTINATION}:${remote_manifest}"
+  scp "${SSH_OPTS[@]}" "$cas_key_path" \
+    "${SSH_DESTINATION}:${remote_cas_key}"
 
   log "Building the exact Linux ARM64 host-tool set on ${HOST}"
   ssh "${SSH_OPTS[@]}" "$SSH_DESTINATION" bash -s -- \
     "$REMOTE_BUILD_DIR" "$REMOTE_CARGO" "$REMOTE_CARGO_HOME" \
     "$MAX_GLIBC_VERSION" "$source_sha256" "$source_commit" "$CLEAN" "$source_tree" \
-    "$selected_manifest_sha256" <<'REMOTE_BUILD'
+    "$selected_manifest_sha256" "$cas_key_reference" "$cas_key_sha256" <<'REMOTE_BUILD'
 set -euo pipefail
 
 build_root="$1"
@@ -309,8 +352,11 @@ source_commit="$6"
 clean="$7"
 source_tree="$8"
 expected_manifest_sha="$9"
+cas_key_reference="${10}"
+expected_cas_key_sha="${11}"
 source_tarball="${build_root}/cohesix-host-tools-source.tar.gz"
 selected_manifest="${build_root}/selected-manifest.toml"
+cas_key="${build_root}/${cas_key_reference}"
 source_dir="${build_root}/source"
 target_dir="${build_root}/target"
 stage_dir="${build_root}/host-tools-linux"
@@ -340,6 +386,11 @@ actual_source_sha="$(sha256sum "$source_tarball" | awk '{print $1}')"
 actual_manifest_sha="$(sha256sum "$selected_manifest" | awk '{print $1}')"
 [[ "$actual_manifest_sha" == "$expected_manifest_sha" ]] || {
   echo "remote selected manifest digest mismatch" >&2
+  exit 1
+}
+actual_cas_key_sha="$(sha256sum "$cas_key" | awk '{print $1}')"
+[[ "$actual_cas_key_sha" == "$expected_cas_key_sha" ]] || {
+  echo "remote selected CAS verification key digest mismatch" >&2
   exit 1
 }
 
@@ -382,15 +433,9 @@ git -c core.autocrlf=false -c core.filemode=true add --force --all
   echo "native source index differs from the selected Git tree" >&2
   exit 1
 }
-# The compiler resolves manifest-relative public resources from the manifest's
-# directory. Place the verified external profile at the source root only after
-# checking the tracked tree, so that resolution matches the native source.
-install -m 0600 "$selected_manifest" "$source_dir/selected-manifest.toml"
-selected_manifest="$source_dir/selected-manifest.toml"
-[[ "$(sha256sum "$selected_manifest" | awk '{print $1}')" == "$expected_manifest_sha" ]] || {
-  echo "staged selected manifest digest mismatch" >&2
-  exit 1
-}
+# The selected manifest and its separately verified public CAS key remain in
+# the build root. This prevents the tracked source's fixture key from replacing
+# the release key or contaminating the source tree identity.
 qemu_timer="$(python3 - <<'PY_TIMER'
 from pathlib import Path
 import tomllib
@@ -447,6 +492,7 @@ os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-unknown}")"
   printf 'source_tree=%s\n' "$source_tree"
   printf 'source_archive_sha256=%s\n' "$actual_source_sha"
   printf 'selected_manifest_sha256=%s\n' "$actual_manifest_sha"
+  printf 'cas_verification_key_sha256=%s\n' "$actual_cas_key_sha"
   printf 'cohsh_policy_sha256=%s\n' "$(sha256sum configs/generated/cohsh_policy.toml | awk '{print $1}')"
   printf 'qemu_profile=qemu_smp_kvm_production\n'
   printf 'qemu_contract_sha256=%s\n' "$(sha256sum configs/generated/cohesix_python_qemu_smp_production.json | awk '{print $1}')"

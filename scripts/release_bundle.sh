@@ -623,6 +623,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tomllib
 
 inventory = json.loads(Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8"))
 expected = {Path(path).name for path in inventory["release"]["host_tools"]}
@@ -682,6 +683,23 @@ if platform == "linux" and os.environ["HOST_PROVENANCE"]:
     selected_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     if builder.get("selected_manifest_sha256") != selected_hash:
         raise SystemExit("Linux host tools were built from a different selected manifest")
+    selected = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    key_reference = selected["cas"]["signing"]["verification_key_path"]
+    if (not isinstance(key_reference, str) or Path(key_reference).is_absolute()
+            or ".." in Path(key_reference).parts):
+        raise SystemExit("selected CAS verification key path is invalid")
+    key_candidates = (
+        manifest_path.parent / key_reference,
+        manifest_path.parent.parent / key_reference,
+    )
+    key_path = next(
+        (path for path in key_candidates if path.is_file() and not path.is_symlink()),
+        None,
+    )
+    if key_path is None or builder.get("cas_verification_key_sha256") != hashlib.sha256(
+        key_path.read_bytes()
+    ).hexdigest():
+        raise SystemExit("Linux host tools were built with a different CAS verification key")
     if builder.get("architecture") not in {"aarch64", "arm64"}:
         raise SystemExit("Linux host-tool provenance has the wrong architecture")
     if builder.get("rustc_host") != "aarch64-unknown-linux-gnu":

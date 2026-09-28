@@ -171,8 +171,9 @@ def test_native_builder_generates_and_records_selected_manifest_policy() -> None
     assert '"$selected_manifest" --timer-clock-hz "$qemu_timer"' in source
     assert '"$selected_manifest" --sel4-profiles configs/sel4/profiles.toml' in source
     assert 'actual_manifest_sha="$(sha256sum "$selected_manifest"' in source
-    assert 'install -m 0600 "$selected_manifest" "$source_dir/selected-manifest.toml"' in source
-    assert 'staged selected manifest digest mismatch' in source
+    assert 'manifest["cas"]["signing"]["verification_key_path"]' in source
+    assert 'remote selected CAS verification key digest mismatch' in source
+    assert 'printf \'cas_verification_key_sha256=%s\\n\'' in source
     assert 'printf \'selected_manifest_sha256=%s\\n\' "$actual_manifest_sha"' in source
     assert 'printf \'cohsh_policy_sha256=%s\\n\'' in source
 

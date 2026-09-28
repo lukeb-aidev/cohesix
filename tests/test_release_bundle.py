@@ -427,6 +427,7 @@ def test_release_linux_builder_locations_are_argument_driven() -> None:
     assert "cohesix-linux-host-tools-build/v1" in source
     assert '--manifest "$RELEASE_AUTHORITY_MANIFEST"' in source
     assert 'builder.get("selected_manifest_sha256") != selected_hash' in source
+    assert 'builder.get("cas_verification_key_sha256")' in source
     assert "archive_args+=(--force)" in source
     assert 'BUNDLE_DIR="$bundle_dir" python3 -' in source
     # Relative documentation links may name releases; the extraction destination
