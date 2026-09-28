@@ -13430,19 +13430,16 @@ configured Cohesix deployment, reproducing both workflows from public instructio
 
 [Milestones](#Milestones)
 
-**Status:** In Progress — activated by the owner on 26 September 2026 for the
-complete M28g task breakdown. At clean source `522463fa1ade`, the canonical
-QEMU and physical Pi Test Plans passed Stages 01–05, including fresh Stage 05
-due diligence under the owner's renewed `EX-2026-0024` exception. Earlier
-failed attempts retain their results. Signed native installers, installed
-cross-client qualification, selected Jetson KVM pressure and the other
-assembled release gates remain outstanding. No Release B acceptance is claimed.
-On 27 September the owner selected stable `1.2.0`; earlier beta-source
-observations retain their historical identity and do not qualify this source.
-The Linux release reference is JetPack 7.2.1 (L4T 39.2.1, Ubuntu 24.04),
-selected by the owner in place of the earlier three-Ubuntu-version matrix.
-The [implementation checkpoint](audit/M28G_IMPLEMENTATION_RECORD.md) records
-the selected source-level work and unmet installer, host and release gates.
+**Status:** In Progress — release publication is pending. The owner selected
+the focused 1.2.0 acceptance gate below on 28 September 2026. Canonical QEMU
+and physical Pi Test Plans passed Stages 01–05; native Mac and Jetson host
+qualification, signed installer readback, Jetson KVM pressure, protocol
+component runs, focused four-mode gateway tests and owner-evaluated adoption
+have retained results at their original identities. The three archives and
+native installers selected for release are the exact `869737b03982`
+publication set. The Linux reference is JetPack 7.2.1 / L4T 39.2.1. The
+[implementation record](audit/M28G_IMPLEMENTATION_RECORD.md) indexes the
+evidence and its original source and artifact hashes.
 
 **Value:** complete capabilities form an adoptable release rather than disconnected adapters.
 **Prerequisites:** every required 28–28f outcome with exact-profile evidence;
@@ -13481,31 +13478,41 @@ remedies. Secrets never appear in example arguments/logs. CLI, SwarmUI, Siri and
 agents show the same job and distinguish local MLX from remote CUDA. Improve
 existing task views and explanations, not the UI theme or rendering architecture.
 
-Run all three product journeys from clean supported environments and published
-instructions without source patches or developer-only setup. Qualify MCP-only,
-A2A-only, both and neither, without losing existing job state. Include Mac-originated
-remote CUDA/PEFT, local MLX and both NeMo flows; protocol services must work
-without macOS/Apple Intelligence. Require a named clean-install walkthrough;
-Lukas Bower may perform it as the sole developer and tester, recorded as
-owner-evaluated. Identify whether another evaluator is a person or agent rather
-than claiming unobserved community adoption.
+For 1.2.0, use the executed native CUDA/PEFT, Mac MLX, MCP, A2A and NeMo
+component journeys with their original source, host and target identities.
+Check the four effective gateway modes with the focused real-process protocol
+control test. The owner-evaluated full installation and client walkthrough
+binds the installed package hashes; report its measurements as unrecorded.
+Protocol services work without macOS/Apple Intelligence. Do not claim
+unobserved community adoption or numerical setup and latency results.
 
 The assembled Release B QEMU and Pi production profiles select the gateway
 master, MCP and A2A switches enabled. Verify those values in each resolved
 manifest and its matching packaged host gateway. The false schema defaults and
-master/per-protocol disable modes remain available for explicit deployments;
-the enabled Pi selection needs its own live target and client evidence.
+master/per-protocol disable modes remain available for explicit deployments.
+The Pi has exact-image SD boot and TCP qualification and a separately
+identified MCP/A2A hardware diagnostic.
 
-Before integrated runs, fix acceptance budgets against the retained baseline:
-installation steps/time/download size, first useful job, manual interventions,
-completion/quality, refusal clarity, interrupted recovery and added control
-latency. Do not relax budgets after failure. Compare output quality as well as
-mechanics; no invented savings or deterministic model-output promises.
+Retain the frozen installation, quality and latency definitions for measured
+checks. The owner's manual walkthrough has no measured steps, time, downloads
+or first-job latency; do not claim a numeric result from it. Compare native
+output quality where a component run measured it; no invented savings or
+deterministic model-output promises.
 
 Keep host-process recovery separate from Queen reboot persistence. Queen loss
 must fail closed and reconcile safely; automatic VM-local durable resumption
 remains 37, not a Release B claim. A missing required API/package/credential/
-hardware/evidence is a named blocker, not permission to lower the release promise.
+hardware/evidence for the selected 1.2.0 gate is a named blocker.
+
+The owner selected the [focused 1.2.0 release gate](TEST_PLAN.md#m28g-release-selection-2026-09-28)
+on 28 September 2026. It accepts the already completed staged QEMU/Pi,
+physical SD, host, installer, pressure, component-live, focused gateway-mode
+and owner-attested adoption results at their original identities. The exact
+`869737b03982` archive and signed-installer set is the distribution input;
+publication-only documentation and pressure/adoption proof-tool changes in
+later commits do not require a new target image or native installer. The
+catalogued same-job four-mode live case and a separate raw client-parity
+matrix remain available for expanded qualification outside this cut.
 
 **Deliverables:** Native Mac and Ubuntu ARM64 installers, launchable SwarmUI apps,
 portable archives and guides, integrated acceptance matrix, exact release
@@ -13682,7 +13689,7 @@ Changes:
   - apps/{coh,cohsh,hive-gateway,gpu-bridge-host,host-sidecar-bridge,host-ticket-agent,cas-tool}/** + crates/coh-cli/src/** + their tests — review all seven shipped host executables against their selected implementation; reconcile commands, parser/help/manuals, inputs, authority, errors, status and recovery, and clearly gate any advertised operation lacking a reachable implementation.
   - tools/cohesix-py/cohesix/** + tools/cohesix-py/tests/** — align typed requests, authentication, identity, bounded inputs, refusal and pending/terminal outcome mapping with the same selected operations in the installed wheel, including selected MLX/CUDA host choice, transfer refs and stage lineage.
   - apps/swarmui/src/** + apps/swarmui/frontend/** + apps/swarmui/tests/** — align the `coh --ui-schema` handshake, visible controls, availability/disabled states, job identity and evidence views with the selected contracts in the installed app; fixture/replay content remains labelled as retained evidence.
-  - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/SWARMUI.md + docs/USERLAND_AND_CLI.md + docs/TEST_PLAN.md + release evidence index — record one capability-by-capability as-built parity matrix, corrected public help/examples and the complete host-tool/Python/benchmark compatibility review, including unaffected surfaces.
+  - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/SWARMUI.md + docs/USERLAND_AND_CLI.md + docs/TEST_PLAN.md + release evidence index — align public help/examples and record the selected host-tool/Python/benchmark compatibility review.
 Commands:
   - cargo test --locked -p coh -p cohsh -p hive-gateway -p gpu-bridge-host -p host-sidecar-bridge -p host-ticket-agent -p cas-tool
   - cargo test --locked -p swarmui --test workbench --test console_parity
@@ -13692,13 +13699,13 @@ Checks:
   - For each advertised selected capability, trace the generated inventory and implementation to installed CLI, Python and SwarmUI entry points where applicable; record supported, unavailable and deliberately client-specific surfaces with reasons. No client claims a selected capability solely from a fixture, planned task, stale package or documentation.
   - Shared operations agree on admission/authority, validated inputs and bounds, native job identity, denial/error, cancellation, ambiguous or pending recovery, terminal outcome and evidence. Unsupported or disabled operations refuse visibly and consistently; SwarmUI resource resolution and `coh --ui-schema` match the installed binary without a source checkout.
   - For an advertised mixed MLX/CUDA operation, Python and the protocol projections preserve selected provider/host and approved transfer boundaries, original stage identity and the shared verifier's outcome; no Python status, MCP tool result or A2A task state independently promotes success.
-  - Verify exact source/profile/generated-policy/package identity for all three installed client surfaces. Reuse a shared job from m28g-adoption-live for cross-client observation; focused tests and fixtures prove client contracts only, while live provider, target and release claims retain their separate acceptance cases.
-Deliverables: Hash-bound as-built client parity matrix, corrected shipped surfaces and manuals, focused test reports, and an explicit host-tool/Python/benchmark compatibility record in the Release B evidence index.
+  - Verify source/profile/generated-policy/package identity for the three installed client surfaces. The owner-evaluated full client walkthrough and focused contract tests support the 1.2.0 selection; component-native outcomes keep their original records.
+Deliverables: Corrected shipped surfaces and manuals, focused client tests, owner walkthrough, and a host-tool/Python/benchmark compatibility record in the Release B evidence index. A separate raw capability matrix is optional extended qualification.
 
 Title/ID: m28g-installation-and-integrated-adoption
 Milestone: 28g / m28g-installation-and-integrated-adoption
 Goal: Make CUDA, PEFT, Apple and NeMo journeys installable and operable from public instructions.
-Inputs: Accepted 28–28f artifacts/evidence; both 28g native installer reports; 27e installation; 27f workbench; scripts/install/; docs/HOST_TOOLS.md; release matrix below. Use the m28g-host-clients-as-built-alignment contract matrix to select cross-client observations and feed the shared live-job result back to that task.
+Inputs: Accepted 28–28f artifacts/evidence; both 28g native installer reports; 27e installation; 27f workbench; scripts/install/; docs/HOST_TOOLS.md; selected release matrix below.
 Changes:
   - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — bind the installed Mac/Linux packages, release-version-aligned Python/NeMo wheels, native Apple integration, client configs and recipes to one exact source/profile/hash inventory.
   - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — actionable capability/credential/storage/protocol/Apple diagnostics and one coherent job/evidence view.
@@ -13709,10 +13716,10 @@ Commands:
   - cargo test --locked -p swarmui --lib
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE}/m28g-adoption-live"
 Checks:
-  - All acceptance-matrix journeys run from the native installed candidate artifacts with no source patches, hidden credentials, terminal-only SwarmUI launch or developer-only setup; same job/outcome is inspectable across applicable clients.
+  - The selected native component and owner-evaluated installed journeys retain their source, package and proof identities; no hidden credentials, terminal-only SwarmUI launch or developer-only setup is claimed in the walkthrough.
   - A named person or agent completes clean installation and useful work; record identity, independence or owner-evaluated scope, assistance, steps/time/downloads and blockers against frozen adoption budgets when measured. Lukas Bower may evaluate this sole-developer release without an independence claim. His full manual PASS can close the qualitative adoption walkthrough with unrecorded metrics; it cannot establish numerical budget compliance or native outcomes.
   - Install rollback/uninstall preserves declared user data, disables/removes only installer-owned service registration and retains external credentials unless the operator explicitly selects documented removal; no hidden model downloads or automatic loss of active job evidence.
-Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and m28g-adoption-live evidence for the integrated matrix.
+Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and source/package-bound owner manual adoption evidence.
 
 Title/ID: m28g-a2a-catalogue-release-selection
 Milestone: 28g / m28g-a2a-catalogue-release-selection; downstream discovery in m28g-release-b-qualification.
@@ -13727,23 +13734,23 @@ Deliverables: Corrected release selection, regenerated contracts, focused test r
 
 Title/ID: m28g-release-b-qualification
 Milestone: 28g / m28g-release-b-qualification
-Goal: Qualify the assembled ecosystem release with complete applicable target and release evidence.
-Inputs: Exact candidate, both native installer identities/reports and m28g-host-clients-as-built-alignment parity report; accepted component case reports; TEST_PLAN catalog; fixed adoption/quality/overhead budgets; release evidence/exception rules.
+Goal: Qualify the selected 1.2.0 ecosystem release using the completed target, host, installer, component and owner-evaluated evidence.
+Inputs: Exact `869737b03982` archive and installer set; native installer readback and strict five-part release result; accepted component reports; staged QEMU/Pi, SD, pressure and owner-adoption results; TEST_PLAN 1.2.0 selection.
 Changes:
-  - scripts/release_qualify.py + tests/test_release_qualify.py — verify the required matrix and exact source/native-installer/installed-payload/profile/target bindings; missing live/platform evidence cannot promote.
-  - Existing conformance cases + configs/test_plan_actions.toml + docs/TEST_PLAN.md — m28g-integration-live for four effective protocol modes, master override negatives, cross-client identity/budget/revocation, Queen loss and host-process recovery.
-  - docs/BENCHMARKS.md + planned M28 implementation record + release notes/status — retained baseline and fixed thresholds, compatibility/non-impact review, exact evidence index, limitations and named release-owner approval binding.
+  - scripts/release_qualify.py + tests/test_release_qualify.py — verify exact source/native-installer/installed-payload/profile/target bindings; a missing selected-gate result cannot promote.
+  - Existing component cases, focused protocol-control tests and docs/TEST_PLAN.md — retain actual live MCP/A2A/NeMo, native provider and four-effective-mode gateway observations at their original identities.
+  - docs/BENCHMARKS.md + M28g implementation record + release notes/status — retain measured results, owner-attested unmeasured adoption, exact evidence index and named release-owner approval binding.
 Commands:
   - python3 -m pytest -q tests/test_release_qualify.py tests/test_release_bundle.py
-  - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-integration-live --reference-config "${M28G_INTEGRATION_REFERENCE}" --host-profile "${M28G_HOST_PROFILE}" --state-dir "${M28G_EVIDENCE}/m28g-integration-live"
+  - cargo test --locked -p hive-gateway --test agent_protocol_controls
   - scripts/ci/test_plan_run.sh --list
   - scripts/ci/test_plan_run.sh --target qemu --state-dir "${RELEASE_B_EVIDENCE}/qemu"
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir "${RELEASE_B_EVIDENCE}/pi4"
 Checks:
-  - All required matrix rows, both native installer/GUI-launch records and applicable staged/conditional pressure, repeatability, hardware, due-diligence and promotion gates pass at exact assembled identity; component reports alone cannot qualify the release.
-  - Freeze baseline IDs, metric definitions, sample/window selection and numeric quality/resource/latency/adoption thresholds before integrated runs; retain failures without post-failure threshold relaxation.
-  - Queen loss fails closed and reconciles safely without a VM persistence claim; missing required platform/API/package/credential/evidence blocks qualification. Publish only with the named human release owner’s approval.
-Deliverables: Qualified 1.2.0 candidate, complete hash-bound acceptance matrix/evidence index and measured release notes; publication remains separately owner-approved.
+  - The strict five-part verifier passes for the distributed archive and installer hashes; canonical QEMU/Pi staged, physical SD, native host, Jetson pressure, component-live and focused gateway-mode records pass at their stated source and proof class.
+  - Owner manual adoption attestation names the installed package hashes and full walkthrough. Numerical setup, download and first-job results remain unrecorded.
+  - Publication-only changes are reviewed against the qualified runtime source; only the named human release owner approves publication of the exact artifact set.
+Deliverables: Qualified 1.2.0 artifact set, hash-bound evidence index and plain-English release notes.
 
 Title/ID: m28g-production-tcp-release-proof
 Milestone: 28g / m28g-production-tcp-release-proof; discovery in m28g-release-b-qualification.
@@ -13785,11 +13792,12 @@ Deliverables: Portable pressure preflight and a separate, exact-identity Jetson 
 ```
 
 
-**Acceptance matrix:** Each live row binds exact candidate/reference identities,
-case reports and raw evidence using the shared execution contract. Repeat a
-journey only where a client/platform/configuration changes its contract; do not
-multiply every workload by every flag combination. Protocol-control tests cover
-all eight master/MCP/A2A combinations; live checks cover the four effective modes.
+**Capability and extended-case matrix:** Each recorded live result keeps its
+exact candidate/reference identities, case report and raw evidence. The
+focused 1.2.0 selection above identifies the release gate; rows below also
+describe optional extended qualifications. Repeat a journey only where a
+client, platform or configuration changes its contract. Protocol-control
+tests cover the four effective modes and generated master settings.
 
 | Required row / owning case | Profile and clients | Deterministic acceptance / retained evidence |
 | --- | --- | --- |
@@ -13802,43 +13810,30 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | vMLX client composition / separate M28d/M28e compatibility records | Pinned installed vMLX app and model, configured MCP transport; named A2A peer using the selected vMLX model endpoint | vMLX MCP tool execution reaches admitted CUDA/PEFT work with original identity and refusal/recovery; vMLX-backed A2A peer delegates and reconnects without promoting model text or task state to a native outcome. Missing session or peer is recorded as blocked. |
 | Selected mixed MLX/CUDA / mixed subcases of `m28d-mcp-live`, `m28e-a2a-live` | Supported Mac MLX and compatible NVIDIA CUDA host profiles when both providers are advertised; JetPack where applicable | Each protocol independently projects selected work that uses both providers with explicit host selection, bounded transfer, capacity refusal, original stage identities and verified outcome after disconnect; each advertised NVIDIA platform has its own live qualification. |
 | NeMo / `m28f-nemo-install`, `m28f-nemo-live` | Clean pinned Toolkit host and configured model endpoint; Pi Queen and qualified NVIDIA CUDA host, JetPack where applicable; Apple absent | Native MCP CUDA and per-user A2A journeys using a real HF PEFT candidate, denied/failed/interrupted cases, task recovery and subject isolation, same-input direct comparison and reproducible configuration. |
-| Protocol composition / `m28g-integration-live` | MCP-only, A2A-only, both, neither; each advertised gateway host | Live endpoint/disabled-surface checks, shared identity/budget/revocation, disable/restart with existing jobs retained and authenticated CLI/REST recovery. Master false defeats every subordinate flag/override. |
-| Client as-built alignment / `m28g-host-clients-as-built-alignment` | Exact installed host CLI tools, Python wheel and SwarmUI from each selected package | Capability-by-capability inventory and contract parity; matching authority, validation, identity, refusal/recovery and evidence across shared operations, with unavailable and client-specific surfaces stated; shared live job observed through m28g-adoption-live. |
+| Protocol composition / focused 1.2.0 selection | MCP-only, A2A-only, both, neither in the real gateway process; separate live MCP and A2A component journeys | Focused endpoint/disabled-surface and master-override checks, with earlier live component identity, budget, refusal and recovery records retained at their original sources. |
+| Client as-built alignment / `m28g-host-clients-as-built-alignment` | Installed host CLI tools, Python wheel and SwarmUI from the qualified packages | Generated-contract and focused client tests, installed package identity/readback, and the owner's full client-composition walkthrough. State only the capabilities and journeys actually exercised. |
 | Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |
 | Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean JetPack 7.2.1 / L4T 39.2.1 ARM64 host; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
 | Python index / `m28g-pypi-1.2.0-publication` | Approved Release B tag and reviewer-gated trusted publisher | Public wheel and sdist version, source, metadata and SHA-256 match the approved exact distributions; isolated install and CLI smoke pass. |
 | Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and a named evaluator walkthrough. Lukas Bower may record a full owner-attested manual PASS bound to source and installed package receipts when measurements were not retained; numeric budgets remain unverified and must not be claimed. Native outcomes and integrated release cases remain separate. |
-| Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |
+| Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Owner-selected 1.2.0 Test Plan gate, staged and physical evidence, native installer readback, Jetson pressure, focused protocol and component-live results, and approval-bound evidence index. |
 
-**Checks / definition of done:** The signed/notarized Mac `.pkg`, independently
-authenticated Ubuntu ARM64 `.deb` set and portable archives install from
-published instructions on every advertised host profile. Installed bytes,
-generated contracts, source, package manifest, SBOM and Python/NeMo inputs
-resolve to one exact candidate identity. SwarmUI opens from Finder, Spotlight
-and Dock on Mac and GNOME application grid/search on Linux without Terminal,
-checkout paths or shell-only configuration; the Linux controller also works
-headlessly. Clean install, 1.1.0-beta migration, repeated/interrupted install,
-upgrade, rollback and uninstall have retained package-manager, launch and
-state/evidence records; credentials, models and user evidence follow explicit
-retention/removal choices, and services never gain authority through install.
-The shipped host CLI tools, Python library and SwarmUI match the selected
-as-built code and generated contracts for every advertised operation, with
-hash-bound parity evidence, consistent shared job/outcome views and explicit
-unavailable or client-specific surfaces. Public help and manuals reflect those
-installed behaviors; the complete host-tool/Python/benchmark compatibility
-review records affected and unaffected surfaces.
-The approved `1.2.0` SDK wheel and source distribution are published on PyPI
-with independently verified public hashes and tagged-source provenance.
-
-Every required journey and matrix row passes from those installed artifacts with
-fixed budgets and accessible evidence, including a named clean-install
-walkthrough. Lukas Bower may record a full manual walkthrough as owner-attested
-PASS; absent measurements are disclosed and do not become numerical PASS claims.
-Component, host installation, GUI launch, QEMU, physical Pi,
-model-quality and release proof remain separate. Missing required evidence
-blocks closure; optional/deferred capabilities cannot substitute. The qualified
-candidate is ready for named human release-owner approval; milestone completion
-itself is not publication approval.
+**Checks / definition of done for 1.2.0:** The three portable archives,
+Developer ID signed/notarized Mac `.pkg` and publisher-signed JetPack ARM64
+`.deb` set match the strict five-part release verifier's exact hashes. Native
+package-manager receipts and installed-byte readback passed on Mac and the
+Jetson reference. The selected Python and NeMo wheels are version 1.2.0.
+Canonical QEMU and Pi Stages 01–05, the packaged physical Pi SD boot and TCP
+qualification, Mac and Jetson host archive checks, and Jetson medium/high KVM
+pressure passed at their recorded identities. The focused gateway test passed
+all four effective modes; separate live MCP, A2A, NeMo, CUDA, PEFT and MLX
+results retain their native/component scopes. Lukas Bower's full manual
+adoption walkthrough passed against the installed package receipts, with
+steps, time and downloads unrecorded. The selected source and publication
+delta pass the release-publication bridge, and the named human release owner
+approves the assembled artifact hashes before public promotion. After the tag,
+the PyPI workflow publishes and verifies the 1.2.0 SDK wheel and source
+distribution; record that result separately from release acceptance.
 
 ## Deferred milestones — preserved designs, separate activation <a id="deferred-milestones"></a>
 

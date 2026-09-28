@@ -2,12 +2,13 @@
 <!-- Purpose: Retain the M28g implementation checkpoint and its distinct source, installer and release proof limits. -->
 <!-- Copyright 2026 Lukas Bower -->
 
-# M28g implementation record — in progress
+# M28g implementation and 1.2.0 release record
 
-This record describes an unqualified 1.2.0 source candidate rebased onto
-GitHub `main` at `2d8ce6a9f5627b0bb16ffd6c4c9b0619f1d2c749`. It has no sealed final source
-commit, native installer artifact, assembled target identity or Release B
-acceptance. The 1.1.0-beta release record remains at its original scope.
+This chronological record begins with the 1.2.0 source candidate rebased onto
+GitHub `main` at `2d8ce6a9f5627b0bb16ffd6c4c9b0619f1d2c749` and ends with
+the owner-selected release evidence below. Intermediate statements retain
+their original checkpoint date and scope. The 1.1.0-beta release record
+remains at its original scope.
 
 ## Task record
 
@@ -1460,3 +1461,58 @@ pending at this record.
 Deliverables: Corrected package-input selection with preserved failed
 candidate and no factory behavior change. AI assistance identified and
 reversed the inappropriate verifier shortcut before publication.
+
+## Owner-selected 1.2.0 release evidence
+
+Title/ID: `m28g-release-b-qualification`, `m28g-host-clients-as-built-alignment`,
+`m28g-installation-and-integrated-adoption`.
+
+Milestone: 28g / stable 1.2.0 release acceptance.
+
+Goal: Apply the owner's 28 September 2026 focused release selection to the
+exact tested archives and installed packages.
+
+Inputs: Qualified runtime source `b68a2c2a1a38d6f6b1dfe430845dfc4f0f024298`,
+the `869737b03982a87e4a14c85a605659b48cbf16cc` publication archives,
+and the existing Stage 05, hardware, host, native installer, pressure,
+component-live, protocol-control and adoption records.
+
+Changes: BUILD_PLAN and TEST_PLAN select the completed evidence at its original
+identity for 1.2.0. The three sealed archives and their matching signed
+installers were copied byte-for-byte into `releases/`. The release notes
+describe the selected user workflows and JetPack reference in plain English.
+
+Commands and results:
+
+| Check | Retained result |
+| --- | --- |
+| QEMU and Pi Stages 01–05 | PASS at clean `522463fa1ade`; `out/m28g/full-plan-522-qemu` and `out/m28g/full-plan-522-pi4-v3`, under renewed `EX-2026-0024`. |
+| Packaged Pi SD readback, fresh boot and TCP | PASS at `b68a2c2a1a38`; `out/m28g/release-qualify-pi4-sd-8697/result.json`, SHA-256 `cb981f832a54e4ba24c3c948fd818cac127a5720c370cdff5cf65eab19af62c1`. |
+| Mac and Jetson host archives | PASS at `b68a2c2a1a38`; `out/m28g/release-qualify-macos-8697/result.json` and `out/m28g/release-qualify-linux-8697/result.json`, SHA-256 `143520e99e00457d6a0beff4a5924e583e637299d6ab9340b9800fb6b1117cca` and `3283da9c1da81ff81c72f1364270168bfc3fcdc5b7dc655a49797a5d022c4e9d`. |
+| Native installers | Developer ID signed/notarized/stapled Mac `.pkg` and publisher-signed JetPack `.deb` set passed package-manager receipt and installed-byte readback at the package hashes below. Local `pkgutil`, `stapler` and independent `gpgv` checks accepted the restored files. |
+| Jetson KVM pressure | Medium and high PASS at `b68a2c2a1a38`; `out/m28g/pressure/r4-evidence/host-replay-result.json`, SHA-256 `1513bd3b8f28091fb3067f812cb6f67ed327e969cca929a44e3d2819d56ba6a3`. |
+| Agent and provider components | M28d MCP, M28e A2A and M28f NeMo live results, independent Jetson CUDA/PEFT checks and Mac MLX host checks retain the source and proof scope in their component records above. `cargo test --locked -p hive-gateway --test agent_protocol_controls` passed 3/3 real-process protocol-control tests covering the four effective route modes. |
+| Owner adoption | Lukas Bower's full manual walkthrough passed as `owner_attested_host` against the installed package receipts; `out/m28g/owner-manual-adoption-20260928-final/summary.json`, SHA-256 `73a6187068c9f011a3419e6b4f64697a799ff9c4ef084217bc2f0e150b5ca038`. Its numerical measurements are `not-recorded`. |
+| Assembled release | Strict Mac/Linux/Pi plus both-installer verifier `pass` at publication `869737b03982`; `out/m28g/release-verify-8697/result.json`, SHA-256 `0601a3836c32a2a39451a5f4fab7a013550e69c51559df635f02214445f5e124`. |
+
+Distributed archive SHA-256 values are Mac
+`663ef55d9360aab536dbbee2486770171ea28b89093c01cfaffbf86eb3514d6d`,
+JetPack Linux
+`28115fa5153938ee64925142706c3eed01b74f9a63e2f5aed3714989801a6674`,
+and Pi 4 `128917dbf6f67188f5143c22c0563bfdb82626db894b5ac4f257fc687961e505`.
+The Mac `.pkg` SHA-256 is
+`416004f05ff419cca8116255824d2dec8f1c0eed842289c6cace7c4b35ccb77c`.
+The controller and SwarmUI `.deb` SHA-256 values are
+`76a76cde3805d0efb4b50aa886d05c0dd917967dd62626edf070acf8d83b1826`
+and `1f5b5b4dd21bed2e92465d70392e06ac119266a1ba07b1d983b98902ca65c10a`.
+
+Checks: `scripts/check-generated.sh` passed with the sealed artifacts retained
+outside the compiler's source scan, and the 27 focused adoption/bundle tests
+passed. `git diff --check` passed. The current source changed release prose
+and proof collectors after the qualified runtime commit; selected runtime
+binaries, image, packages and signed distribution bytes remain the exact
+qualified set.
+
+Deliverables: Exact sealed release files, the selected Test Plan gate, owner
+walkthrough attestation and hash-bound acceptance index. PyPI publication and
+its public distribution hashes receive a separate post-tag record.

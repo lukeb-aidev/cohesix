@@ -1406,6 +1406,34 @@ from that catalog.
 its retained evidence is Conditional D's host-model gateway comparator; it is
 not QEMU or Pi target-performance evidence.
 
+### M28g release selection — 2026-09-28 <a id="m28g-release-selection-2026-09-28"></a>
+
+For the stable 1.2.0 cut, the release owner selected the completed checks
+below as the acceptance gate. Keep each result's original source, artifact,
+host and proof class; this selection does not rewrite test output.
+
+1. Canonical QEMU and physical Pi Stages 01–05; physical packaged-SD readback,
+   fresh boot and TCP qualification; exact Mac and Jetson host-archive checks;
+   Jetson medium/high KVM pressure and the retained 60-minute Pi diagnostic.
+2. The five-part strict `release.bundle-validation-b` result for the same three
+   distributed archives and both native installer sets. Publisher signatures,
+   package-manager receipts and installed-byte readback were checked at their
+   recorded hashes. Review later documentation and proof-tool commits through
+   `scripts/release_publication.py`; keep the sealed artifacts byte-identical.
+3. Live M28d MCP, M28e A2A and M28f NeMo component results, their independent
+   CUDA/PEFT outcome checks, the Mac MLX component result, and the focused
+   `agent_protocol_controls` real-gateway test covering both, MCP-only,
+   A2A-only and neither. These are separate component and host observations.
+4. The named owner's full `m28g-adoption-live` manual-attestation PASS bound to
+   the installed package receipts. Report absent numeric setup, download and
+   first-job measurements as `not-recorded`.
+
+The catalogued `m28g-integration-live` case and an additional raw
+capability-by-capability cross-client matrix remain available for expanded
+qualification; they are not selected gates for this 1.2.0 cut. Public claims
+use the focused, component-live, installed and target results above. Release
+approval and PyPI publication retain their own records.
+
 For `m28g-integration-live`, first run
 `cargo test --locked -p hive-gateway --test agent_protocol_controls` against
 the selected source. Its real gateway processes use a mock Queen to check
