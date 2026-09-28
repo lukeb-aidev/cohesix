@@ -198,6 +198,25 @@ reserved. No version is
 published or reassigned by this planning change.
 Historical releases and evidence keep original names, IDs and proof classes.
 
+### Superseded 0.9.0-beta distribution retirement
+
+**Status:** Complete — owner-directed repository maintenance on 28 September 2026.
+
+```text
+Title/ID: repo-release-090-tree-retirement
+Milestone: Release packaging / repo-release-090-tree-retirement
+Goal: Remove the superseded 0.9.0-beta distribution from the current release tree without changing later bundles or historical Git evidence.
+Inputs: releases/Cohesix-0.9.0-beta-{MacOS,linux}, their tarballs and release notes; compiler-owned implementation and host-integration inventories.
+Changes:
+  - releases/ — remove the two unpacked bundles, two archives and version-bound notes.
+  - configs/generated/, crates/cohesix-authority/src/provider_generated.rs and tools/cohesix-py/cohesix/provider_generated.py — regenerate the inventory and dependent catalogue/hash projections.
+Commands:
+  - scripts/check-generated.sh
+  - git diff --cached --check
+Checks: No 0.9.0-beta distribution file remains under releases/; generated contracts match the selected source and tracked paths.
+Deliverables: Scoped release-tree deletion and generated metadata, with AI-assisted inventory and verification; no runtime, target or release-acceptance claim.
+```
+
 ### Milestone ownership and historical references <a id="roadmap-id-mapping"></a>
 
 The 23 September 2026 revision keeps 0–27g scope, evidence, status and
