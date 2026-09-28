@@ -102,6 +102,36 @@ def test_owner_walkthrough_is_accepted_without_independence_claim(
         adoption.validate_walkthrough(record, SOURCE, PACKAGES)
 
 
+def test_owner_manual_attestation_keeps_measurements_unclaimed() -> None:
+    record = {
+        "schema": adoption.MANUAL_SCHEMA, "source_commit": SOURCE,
+        "evaluator": {"kind": "person", "id": "Lukas Bower",
+                      "independent": False},
+        "method": "manual", "result": "PASS",
+        "scope": sorted(adoption.MANUAL_SCOPE),
+        "statement": "I completed the full adoption walkthrough manually and marked it PASS.",
+        "package_sha256": {host: sorted(hashes) for host, hashes in PACKAGES.items()},
+        "reported_at": "2026-09-28", "measurements": "not-recorded",
+    }
+    accepted = adoption.validate_manual_attestation(record, SOURCE, PACKAGES)
+    assert accepted["evaluation_scope"] == "owner-attested"
+    assert accepted["measurement_status"] == "not-recorded"
+    assert accepted["native_journey_reverified"] is False
+    for change in (
+        lambda row: row["scope"].remove("peft"),
+        lambda row: row["scope"].__setitem__(0, {}),
+        lambda row: row["evaluator"].update(id="unknown"),
+        lambda row: row["package_sha256"]["macos"].clear(),
+        lambda row: row["package_sha256"]["macos"].__setitem__(0, {}),
+        lambda row: row.update(measurements="PASS"),
+        lambda row: row.update(source_commit="b" * 40),
+    ):
+        altered = json.loads(json.dumps(record))
+        change(altered)
+        with pytest.raises(ValueError):
+            adoption.validate_manual_attestation(altered, SOURCE, PACKAGES)
+
+
 def test_aggregate_binds_release_and_both_installer_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,6 +177,21 @@ def test_aggregate_binds_release_and_both_installer_results(
     summary = json.loads((tmp_path / "result/summary.json").read_text())
     assert summary["result"] == "PASS"
     assert summary["native_outcome_reverified"] is False
+    packet = {
+        "schema": adoption.MANUAL_SCHEMA, "source_commit": source,
+        "evaluator": {"kind": "person", "id": "Lukas Bower",
+                      "independent": False},
+        "method": "manual", "result": "PASS", "scope": sorted(adoption.MANUAL_SCOPE),
+        "statement": "I completed the full adoption walkthrough manually and marked it PASS.",
+        "package_sha256": {host: sorted(hashes) for host, hashes in PACKAGES.items()},
+        "reported_at": "2026-09-28", "measurements": "not-recorded",
+    }
+    walk_path.write_text(json.dumps(packet))
+    assert adoption.run_live("m28g-adoption-live", reference,
+                             "mac-apple-m4-macos27", tmp_path / "manual-result") == 0
+    manual = json.loads((tmp_path / "manual-result/summary.json").read_text())
+    assert manual["proof_class"] == "owner_attested_host"
+    assert manual["measurement_status"] == "not-recorded"
     with pytest.raises(ValueError, match="aggregate host"):
         adoption.run_live("m28g-adoption-live", reference,
                           "jetson-orin-nano-jp7", tmp_path / "wrong-host")

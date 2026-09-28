@@ -63,8 +63,14 @@ BENCHMARKS_OWNER_AFTER = (
     "GUI launch, rollback/uninstall and a named evaluator's walkthrough. For this\n"
     "sole-developer release, Lukas Bower may evaluate the installation, but must\n"
     "record `independent=false` and report the result as owner-evaluated. The raw\n"
-    "attachments, separate native outcome checks and fixed budgets still apply.\n"
-    "Report any failure against these limits without changing them during qualification.\n"
+    "attachments, separate native outcome checks and fixed budgets still apply for\n"
+    "the measured walkthrough. The owner may instead give a written manual PASS for\n"
+    "the full qualitative adoption walkthrough, bound to source and installed\n"
+    "package receipts. Label that route `owner_attested_host`, report missing step,\n"
+    "time and download measurements as `not-recorded`, and make no numeric budget\n"
+    "claim from it. Native outcomes, protocol integration and target checks remain\n"
+    "independent. Report any measured failure against the frozen limits without\n"
+    "changing them during qualification.\n"
 )
 HELP_ONLY = frozenset({
     "scripts/failover_watchdog.py", "scripts/rest_perf_harness.py",

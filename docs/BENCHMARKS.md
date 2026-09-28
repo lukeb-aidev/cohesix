@@ -46,8 +46,14 @@ BUILD_PLAN still require their selected native outcomes, installed clients,
 GUI launch, rollback/uninstall and a named evaluator's walkthrough. For this
 sole-developer release, Lukas Bower may evaluate the installation, but must
 record `independent=false` and report the result as owner-evaluated. The raw
-attachments, separate native outcome checks and fixed budgets still apply.
-Report any failure against these limits without changing them during qualification.
+attachments, separate native outcome checks and fixed budgets still apply for
+the measured walkthrough. The owner may instead give a written manual PASS for
+the full qualitative adoption walkthrough, bound to source and installed
+package receipts. Label that route `owner_attested_host`, report missing step,
+time and download measurements as `not-recorded`, and make no numeric budget
+claim from it. Native outcomes, protocol integration and target checks remain
+independent. Report any measured failure against the frozen limits without
+changing them during qualification.
 
 ## NeMo Agent Toolkit 1.9.0 comparison (M28f)
 

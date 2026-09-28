@@ -13702,7 +13702,7 @@ Inputs: Accepted 28–28f artifacts/evidence; both 28g native installer reports;
 Changes:
   - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — bind the installed Mac/Linux packages, release-version-aligned Python/NeMo wheels, native Apple integration, client configs and recipes to one exact source/profile/hash inventory.
   - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — actionable capability/credential/storage/protocol/Apple diagnostics and one coherent job/evidence view.
-  - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and a named evaluator walkthrough; explicit downloads and private-data/licence choices. For this sole-developer release, Lukas Bower may be the evaluator when recorded as owner-evaluated, without an independence claim.
+  - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and a named evaluator walkthrough; explicit downloads and private-data/licence choices. For this sole-developer release, Lukas Bower may be the evaluator when recorded as owner-evaluated, without an independence claim. His written manual attestation may satisfy the qualitative walkthrough when its source and installed package identities are verified; record missing measurements explicitly and retain the separate native gates.
 Commands:
   - python3 -m pytest -q tests/test_host_package_stage.py tests/test_python_package.py tests/test_release_bundle.py
   - cargo test --locked -p coh --lib doctor::
@@ -13710,7 +13710,7 @@ Commands:
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE}/m28g-adoption-live"
 Checks:
   - All acceptance-matrix journeys run from the native installed candidate artifacts with no source patches, hidden credentials, terminal-only SwarmUI launch or developer-only setup; same job/outcome is inspectable across applicable clients.
-  - A named person or agent completes clean installation and useful work; record identity, independence or owner-evaluated scope, assistance, steps/time/downloads and blockers against frozen adoption budgets. Lukas Bower may evaluate this sole-developer release without an independence claim.
+  - A named person or agent completes clean installation and useful work; record identity, independence or owner-evaluated scope, assistance, steps/time/downloads and blockers against frozen adoption budgets when measured. Lukas Bower may evaluate this sole-developer release without an independence claim. His full manual PASS can close the qualitative adoption walkthrough with unrecorded metrics; it cannot establish numerical budget compliance or native outcomes.
   - Install rollback/uninstall preserves declared user data, disables/removes only installer-owned service registration and retains external credentials unless the operator explicitly selects documented removal; no hidden model downloads or automatic loss of active job evidence.
 Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and m28g-adoption-live evidence for the integrated matrix.
 
@@ -13807,7 +13807,7 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |
 | Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean JetPack 7.2.1 / L4T 39.2.1 ARM64 host; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
 | Python index / `m28g-pypi-1.2.0-publication` | Approved Release B tag and reviewer-gated trusted publisher | Public wheel and sdist version, source, metadata and SHA-256 match the approved exact distributions; isolated install and CLI smoke pass. |
-| Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and a named evaluator walkthrough within frozen step/time/size/intervention budgets. Lukas Bower may record an owner-evaluated walkthrough; the separate native verifier and raw attachments remain mandatory. |
+| Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and a named evaluator walkthrough. Lukas Bower may record a full owner-attested manual PASS bound to source and installed package receipts when measurements were not retained; numeric budgets remain unverified and must not be claimed. Native outcomes and integrated release cases remain separate. |
 | Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |
 
 **Checks / definition of done:** The signed/notarized Mac `.pkg`, independently
@@ -13831,8 +13831,9 @@ The approved `1.2.0` SDK wheel and source distribution are published on PyPI
 with independently verified public hashes and tagged-source provenance.
 
 Every required journey and matrix row passes from those installed artifacts with
-fixed budgets and accessible evidence, including a named, raw-backed clean-install
-walkthrough. Lukas Bower may record the walkthrough as owner-evaluated.
+fixed budgets and accessible evidence, including a named clean-install
+walkthrough. Lukas Bower may record a full manual walkthrough as owner-attested
+PASS; absent measurements are disclosed and do not become numerical PASS claims.
 Component, host installation, GUI launch, QEMU, physical Pi,
 model-quality and release proof remain separate. Missing required evidence
 blocks closure; optional/deferred capabilities cannot substitute. The qualified

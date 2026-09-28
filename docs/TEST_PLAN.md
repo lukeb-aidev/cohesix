@@ -264,7 +264,12 @@ control-latency and recovery budgets before those runs. Preserve all four
 effective protocol modes and the disabled master override. Then apply the
 complete selected QEMU, physical Pi and conditional release gates at the
 assembled source/image identities. A missing installer, host profile, live
-result or a named, raw-backed clean-install walkthrough blocks M28g completion.
+result or a named clean-install walkthrough blocks M28g completion. The release
+owner may attest a personally completed full walkthrough in writing when raw
+timings, screenshots or notes were not retained. Record the exact scope and
+source/package identities, label it owner-attested, and report measurements as
+unrecorded. This accepts only the human adoption evaluation; it does not supply
+native job, protocol, target, installer receipt or quantitative budget proof.
 `release_qualify.py installer` checks independently selected publisher trust,
 package-manager receipt and installed byte readback on the current host; its
 PASS is one input to the Mac or Linux installer row, not the graphical launch,
@@ -1450,7 +1455,16 @@ journey reports by absolute path, byte size and SHA-256. The runner rechecks
 both native installer qualifications, exact source and every attachment
 against the frozen BENCHMARKS limits. Its `live_host` PASS is an installed
 adoption record; the native outcomes and target still need their separate
-live provider and integrated release cases.
+live provider and integrated release cases. Alternatively, the named release
+owner may submit `cohesix-m28g-owner-manual-attestation/v1` after personally
+completing the full walkthrough. It records his statement, date, exact seven
+walkthrough areas and native installer package hashes. The runner checks the
+owner identity, selected source, five-part release result and both installed
+package receipts, then reports `owner_attested_host` with measurements
+`not-recorded`. This route makes no numeric setup or first-work claim and
+does not reverify CUDA/PEFT/client outcomes. Preserve the owner's original
+statement and any independently retained native evidence; a manual PASS may
+not be reused for `m28g-integration-live` or a target/provider gate.
 
 Resumable critical service loops use the selected generated NaturalPostpone
 policy. Retain their reserved timeout caps and independent standard-fault

@@ -55,10 +55,12 @@ The Mac `.pkg` is Developer ID signed, notarized and stapled. The JetPack
 7.2.1 / L4T 39.2.1 ARM64 controller and SwarmUI `.deb` files are bound by a
 detached manifest signature verified with the tracked Debian publisher key.
 Both native installer sets were installed and passed publisher, package-manager
-receipt and installed-byte readback checks. Lukas Bower reported that he
-evaluated the installations and marked them PASS. Graphical launch, lifecycle,
-the raw owner-evaluated adoption walkthrough and cross-client parity remain
-open; installation receipts alone do not close those rows.
+receipt and installed-byte readback checks. Lukas Bower personally completed
+the full adoption walkthrough and marked it PASS. The bounded verifier accepted
+his written report as `owner_attested_host` at the prior candidate identity;
+its step, time and download measurements are unrecorded. This attestation does
+not close separate native outcomes, cross-client parity, four-mode live
+integration or final publication-byte qualification.
 The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md) keeps
 the hashes, corrected package-signing and qualification defects, earlier
 failures and open gates separate. Release A remains the published release.

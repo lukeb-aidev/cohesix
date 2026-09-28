@@ -1355,3 +1355,53 @@ collector. This closes the KVM pressure subtask at its original target source,
 without promoting the still-open integrated adoption or overall Release B.
 Material AI assistance traced the GDB-consumed breakpoint behavior and
 verified the real target fault path.
+
+## Owner manual adoption attestation
+
+Title/ID: `m28g-installation-and-integrated-adoption`; owner-directed
+acceptance-route change under `m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-installation-and-integrated-adoption.
+
+Goal: Record the sole developer's personally completed full adoption
+walkthrough without inventing measurements or confusing it with native proof.
+
+Inputs: Lukas Bower's 28 September 2026 statements, “I did the walkthrough
+and marked it PASS,” “I did it manually,” and his confirmation that it covered
+the full 28g adoption walkthrough; qualified source
+`b68a2c2a1a38d6f6b1dfe430845dfc4f0f024298`; the five-part prior-candidate
+release verifier and native Mac/Jetson installed-package receipts.
+
+Changes: TEST_PLAN and BUILD_PLAN allow a written owner manual PASS for the
+qualitative walkthrough. The adoption verifier accepts a separate bounded
+`cohesix-m28g-owner-manual-attestation/v1` packet, checks Lukas Bower's identity,
+seven attested areas, exact source and both installed package hashes, and emits
+`owner_attested_host`. The earlier measured, raw-backed walkthrough route remains
+available. BENCHMARKS retains every numeric limit but labels the absent manual
+measurements `not-recorded`; no numerical result is claimed. The release
+publication bridge admits only this exact benchmark prose change. Host CLI,
+Python SDK, SwarmUI, native verifier, target and protocol integration behavior
+are unaffected.
+
+Commands: `scripts/ci/provider_conformance_run.sh --matrix
+configs/provider_conformance.toml --case m28g-adoption-live
+--reference-config out/m28g/owner-manual-adoption-reference-20260928.json
+--host-profile mac-apple-m4-macos27 --state-dir
+out/m28g/owner-manual-adoption-20260928-final`;
+`.venv/bin/python -m pytest -q tests/test_provider_m28g_adoption.py
+tests/test_release_bundle.py`; `scripts/check-generated.sh`; `git diff --check`.
+
+Checks: The owner-attested adoption runner passed at the prior `869737b03982`
+candidate, source `b68a2c2a1a38`. Its retained private attestation SHA-256 is
+`2f4cf955b16838388e687add3d8760ebbbb0c835fdbc3d205aa031a0388c1d5c`;
+the final summary SHA-256 is
+`73a6187068c9f011a3419e6b4f64697a799ff9c4ef084217bc2f0e150b5ca038`.
+The summary explicitly reports `measurement_status=not-recorded` and
+`native_outcome_reverified=false`. The manual statement does not fill the
+still-open four-mode `m28g-integration-live` case, native provider results or
+final publication-byte comparison.
+
+Deliverables: Named owner attestation, bounded verifier and focused regression
+tests, aligned acceptance documents and retained result with its exact proof
+scope. AI assistance implemented the separate manual route and verified the
+package/source bindings; the owner supplied the human evaluation.

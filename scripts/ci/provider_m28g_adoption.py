@@ -23,6 +23,7 @@ from release_qualify import read_result  # noqa: E402
 
 SCHEMA = "cohesix-m28g-adoption-reference/v1"
 WALKTHROUGH_SCHEMA = "cohesix-m28g-adoption-walkthrough/v2"
+MANUAL_SCHEMA = "cohesix-m28g-owner-manual-attestation/v1"
 JOURNEYS = {"cuda", "peft", "client-composition"}
 ATTACHMENTS = {"macos-gui", "linux-gui", "doctor", "rollback", "uninstall",
                "cuda", "peft", "client-composition"}
@@ -31,6 +32,10 @@ MAX_SETUP_SECONDS = 45 * 60
 MAX_CORE_DOWNLOAD_BYTES = 100 * 1024 * 1024
 MAX_INTERVENTIONS = 2
 MAX_FIRST_CUDA_SECONDS = 20 * 60
+MANUAL_SCOPE = {
+    "macos-finder-spotlight-dock", "linux-gnome-grid-search", "doctor",
+    "rollback-uninstall-data-retained", "cuda", "peft", "client-composition",
+}
 
 
 def document(path: Path, maximum: int = 1024 * 1024) -> dict[str, Any]:
@@ -159,6 +164,47 @@ def validate_walkthrough(record: dict[str, Any], source: str,
             "journey_ids": sorted(JOURNEYS), "attachment_count": len(attachments)}
 
 
+def validate_manual_attestation(record: dict[str, Any], source: str,
+                                package_hashes: dict[str, set[str]]) -> dict[str, Any]:
+    """Accept a named owner's qualitative PASS without inventing raw measurements."""
+    require(set(record) == {"schema", "source_commit", "evaluator", "method",
+                            "result", "scope", "statement", "package_sha256",
+                            "reported_at", "measurements"}
+            and record["schema"] == MANUAL_SCHEMA
+            and record["source_commit"] == source
+            and record["method"] == "manual"
+            and record["result"] == "PASS"
+            and record["measurements"] == "not-recorded",
+            "M28g manual attestation identity or result")
+    evaluator = record["evaluator"]
+    require(isinstance(evaluator, dict)
+            and evaluator == {"kind": "person", "id": "Lukas Bower",
+                              "independent": False},
+            "M28g manual attestation must name the owner")
+    require(isinstance(record["scope"], list)
+            and len(record["scope"]) == len(MANUAL_SCOPE)
+            and all(isinstance(item, str) for item in record["scope"])
+            and set(record["scope"]) == MANUAL_SCOPE,
+            "M28g manual attestation scope")
+    require(isinstance(record["statement"], str)
+            and 10 <= len(record["statement"]) <= 2048
+            and isinstance(record["reported_at"], str)
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", record["reported_at"]),
+            "M28g manual attestation statement or date")
+    packages = record["package_sha256"]
+    require(isinstance(packages, dict) and set(packages) == set(package_hashes)
+            and all(isinstance(packages[host], list)
+                    and len(packages[host]) == len(package_hashes[host])
+                    and all(isinstance(value, str) for value in packages[host])
+                    and set(packages[host]) == package_hashes[host]
+                    for host in package_hashes),
+            "M28g manual attestation package binding")
+    return {"evaluator_kind": "person", "evaluator_id": "Lukas Bower",
+            "evaluation_scope": "owner-attested", "evidence_mode": "manual",
+            "measurement_status": "not-recorded", "attested_scope": sorted(MANUAL_SCOPE),
+            "package_sha256": packages, "native_journey_reverified": False}
+
+
 def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> int:
     """Revalidate both native installer receipts and the named walkthrough."""
     require(case == "m28g-adoption-live" and host_profile == "mac-apple-m4-macos27",
@@ -205,11 +251,15 @@ def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> 
         packages[host] = {row["sha256"] for row in result["packages"]}
         require(len(packages[host]) == len(result["packages"]),
                 f"M28g {host} duplicate native package")
-    walkthrough = validate_walkthrough(document(paths["walkthrough"]), current,
-                                       packages)
+    record = document(paths["walkthrough"])
+    walkthrough = (validate_manual_attestation(record, current, packages)
+                   if record.get("schema") == MANUAL_SCHEMA else
+                   validate_walkthrough(record, current, packages))
     state_dir.mkdir(parents=True, exist_ok=False)
     summary = {"schema": "cohesix-m28g-adoption-live-summary/v1",
-               "case": case, "result": "PASS", "proof_class": "live_host",
+               "case": case, "result": "PASS",
+               "proof_class": ("owner_attested_host" if record.get("schema") == MANUAL_SCHEMA
+                               else "live_host"),
                "source_commit": current, "version": release["version"],
                "release_result_sha256": hashlib.sha256(
                    read_artifact(paths["release_result"], 1024 * 1024)).hexdigest(),
