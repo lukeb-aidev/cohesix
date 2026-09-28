@@ -1450,7 +1450,12 @@ reversed. The publication-source NeMo wheel has the same bytes as the
 qualified wheel. The freshly built publication Python wheel has identical
 unpacked members to the earlier installed wheel; its ZIP bytes differ, so
 the installed wheel is retained as the exact distribution input. Final
-canonical preflight and archive qualification remain pending at this record.
+canonical preflight with the publication-inventory NeMo report, installed
+Python wheel and both installed package reports passed: the compiler inventory,
+source selection and release manifest agreed, the NeMo verifier reported
+`PASS`, and the factory reported `Native artifacts and exact compiler-selected
+release inputs verified (build-only=0)`. Archive qualification remains
+pending at this record.
 
 Deliverables: Corrected package-input selection with preserved failed
 candidate and no factory behavior change. AI assistance identified and
