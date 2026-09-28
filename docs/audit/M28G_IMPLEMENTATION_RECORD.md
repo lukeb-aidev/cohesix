@@ -999,3 +999,45 @@ fresh exact-source results pass.
 
 Deliverables: A production-safe proof path and retained failed discovery;
 native Mac/Jetson replay and separate physical Pi acceptance are pending.
+
+## Production Pi NETSTATS response repair
+
+Title/ID: `m28g-release-b-qualification`; defect discovered during the
+production Pi 4 authenticated TCP acceptance run.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Return the complete bounded `netstats` response on the physical Pi 4
+without changing the existing namespace or log stream batch contract.
+
+Inputs: Source `5cd8e9ef057f` and its production Pi TFTP/RAM image at
+`out/m28g/pi4-stage-5cd8-release-prod`; the retained authenticated TCP
+`netstats` refusal in `out/m28g/pi4-prod-5cd8-boot2/netstats.out.log`; and
+the same boot's successful 67-body-line serial diagnostic in
+`out/m28g/pi4-prod-5cd8-boot2/serial-netstats.log`.
+
+Changes: The root event pump previously held synchronous TCP diagnostic bodies
+in a 64-line log-export batch. A live wired Pi emits 67 `netstats` body lines,
+so capture replaced the whole response with a typed bounded-overflow error.
+Synchronous capture now retains up to the existing 69-line physical-console
+body bound. Five extra lines are held separately and drained after the ordinary
+64-line batch. Log and namespace streams keep their prior 64-line type and
+limit; overflow still fails with one typed terminal.
+The host-tool, Python, SwarmUI and benchmark compatibility review found no
+client grammar, wire terminal, status, schema, or benchmark definition change;
+fresh Pi replay must establish that the selected diagnostic arrives complete.
+
+Commands: `cargo test -p root-task --lib --no-default-features --features
+release-pi4 bounded_sync_capture_`; the same command with `release-qemu`;
+`cargo fmt --all -- --check`; `git diff --check`.
+
+Checks: Both feature profiles passed the three focused capture tests, including
+ordered delivery of 67 body lines and one terminal and deterministic refusal
+at the 70th line. Fresh production Pi image build, authenticated TCP replay,
+full staged plan and release acceptance remain required for the repaired
+source. The prior `5cd8` boot and all its valid observations retain their
+original source and image identity; they do not accept this change.
+
+Deliverables: Bounded synchronous-response repair and host-level regression
+proof. AI assistance identified the root cause and implemented the repair;
+independent physical and release evidence remains open.

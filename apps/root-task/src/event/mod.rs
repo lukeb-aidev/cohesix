@@ -1221,6 +1221,14 @@ const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
 // permitting an unbounded producer queue.
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 72;
 const CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE: usize = 3;
+// A synchronous TCP diagnostic can use every physical-console body slot.
+// The log export batch is smaller and must not cap complete Pi NETSTATS.
+#[cfg(feature = "kernel")]
+const CONSOLE_SYNC_CAPTURE_LINES: usize =
+    CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE;
+#[cfg(feature = "kernel")]
+const CONSOLE_SYNC_CAPTURE_EXTRA_LINES: usize =
+    CONSOLE_SYNC_CAPTURE_LINES - log_buffer::LOG_EXPORT_BATCH_LINES;
 #[cfg(feature = "kernel")]
 const USB_GATE_DEVICE_ADDRESSED: u8 = 6;
 #[cfg(feature = "kernel")]
@@ -8393,6 +8401,10 @@ enum PendingStreamMode {
 struct PendingStream {
     lines:
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, { log_buffer::LOG_EXPORT_BATCH_LINES }>,
+    // Only synchronous diagnostics may need the remaining console body slots.
+    // Namespace and log streams retain their existing 64-line batch contract.
+    sync_extra:
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_SYNC_CAPTURE_EXTRA_LINES>,
     next_line: usize,
     bandwidth_bytes: u64,
     cursor: Option<PendingCursor>,
@@ -8421,6 +8433,7 @@ impl PendingStream {
     fn new() -> Self {
         Self {
             lines: HeaplessVec::new(),
+            sync_extra: HeaplessVec::new(),
             next_line: 0,
             bandwidth_bytes: 0,
             cursor: None,
@@ -8438,6 +8451,7 @@ impl PendingStream {
 
     fn reset(&mut self) {
         self.lines.clear();
+        self.sync_extra.clear();
         self.next_line = 0;
         self.bandwidth_bytes = 0;
         self.cursor = None;
@@ -8460,6 +8474,7 @@ impl PendingStream {
             return;
         }
         self.lines.clear();
+        self.sync_extra.clear();
         self.next_line = 0;
         self.bandwidth_bytes = 0;
         self.log_cursor = None;
@@ -8494,6 +8509,7 @@ impl PendingStream {
         let mut terminal = HeaplessString::new();
         let _ = write!(terminal, "ERR {verb} reason={reason} detail={detail}");
         self.lines.clear();
+        self.sync_extra.clear();
         self.next_line = 0;
         self.cache_snapshot = None;
         self.terminal_line = Some(terminal);
@@ -20312,9 +20328,15 @@ where
         if bounded
             .push_str(line.trim_end_matches(['\r', '\n']))
             .is_ok()
-            && pending.lines.push(bounded).is_ok()
         {
-            return true;
+            match pending.lines.push(bounded) {
+                Ok(()) => return true,
+                Err(extra) => {
+                    if pending.sync_extra.push(extra).is_ok() {
+                        return true;
+                    }
+                }
+            }
         }
         pending.replace_with_sync_error("busy", "bounded-response-overflow");
         true
@@ -20756,6 +20778,18 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn refill_sync_cache_line(pending: &mut PendingStream) -> bool {
         if pending.next_line < pending.lines.len() {
+            return true;
+        }
+        if !pending.sync_extra.is_empty() {
+            pending.lines.clear();
+            pending.next_line = 0;
+            for line in pending.sync_extra.iter() {
+                if pending.lines.push(line.clone()).is_err() {
+                    pending.replace_with_sync_error("busy", "bounded-response-overflow");
+                    return false;
+                }
+            }
+            pending.sync_extra.clear();
             return true;
         }
         let Some(snapshot) = pending.cache_snapshot.as_mut() else {
@@ -45726,6 +45760,54 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn bounded_sync_capture_retains_pi_netstats_body_across_stream_batch() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        net.response_batch_capacity = Some(8);
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+            pump.last_input_source = ConsoleInputSource::Net;
+            assert!(pump.begin_sync_response_capture("NETSTATS"));
+            for index in 0..67 {
+                let line = format!("netstats: row={index}");
+                assert!(pump.try_emit_console_line(line.as_str()));
+            }
+            pump.emit_terminal_console_line("OK NETSTATS");
+            assert!(!pump.seal_sync_response_capture());
+            for _ in 0..256 {
+                if pump.pending_stream.is_none()
+                    && pump
+                        .net
+                        .as_ref()
+                        .and_then(|net| net.console_response_lane())
+                        .is_none()
+                {
+                    break;
+                }
+                pump.poll_split_ordinary_virtio_compact();
+            }
+            assert!(pump.pending_stream.is_none());
+        }
+
+        assert_eq!(net.sent.len(), 68);
+        for index in 0..67 {
+            assert_eq!(net.sent[index].as_str(), format!("netstats: row={index}"));
+        }
+        assert_eq!(net.sent[67].as_str(), "OK NETSTATS");
+        assert_eq!(net.terminal_sent.len(), 1);
+        assert_eq!(net.terminal_sent[0].as_str(), "OK NETSTATS");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics() {
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -45743,7 +45825,7 @@ mod tests {
             pump.last_input_source = ConsoleInputSource::Net;
             assert!(pump.begin_sync_response_capture("HELP"));
             pump.metrics.accepted_commands = 1;
-            for index in 0..=log_buffer::LOG_EXPORT_BATCH_LINES {
+            for index in 0..=CONSOLE_SYNC_CAPTURE_LINES {
                 let line = format!("body-{index}");
                 assert!(pump.try_emit_console_line(line.as_str()));
             }
