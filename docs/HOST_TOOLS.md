@@ -2342,8 +2342,15 @@ Stage the Pi image from the same clean source. Build one target-neutral wheel
 and run this in each native checkout after its selected-profile build:
 
 ```bash
-scripts/ci/python_compat_run.sh --wheel-smoke
+scripts/ci/python_compat_run.sh --wheel-smoke \
+  --qemu-profile-contract <native-release-configs/configs/generated/cohesix_python_qemu_smp_production.json> \
+  --wheel-dir <wheel-directory> --package-manifest <native-package-manifest> \
+  --state-dir <fresh-evidence-directory>
 ```
+
+Select the QEMU contract from the same native artifact that supplies the host
+tools. The smoke refuses a missing or linked selected contract; its package
+manifest must match the contract copied into that host's release archive.
 
 Retain `PYTHON_PACKAGE_MANIFEST` for Mac and
 `LINUX_PYTHON_PACKAGE_MANIFEST` for the downloaded Linux record. Both must bind

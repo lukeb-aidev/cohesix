@@ -26,6 +26,28 @@ package = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(package)
 
 
+def test_python_compat_refuses_missing_selected_qemu_profile(tmp_path: Path) -> None:
+    """An explicit native profile may not silently fall back to repo defaults."""
+    fake_python = tmp_path / "python3.11"
+    fake_python.write_text("#!/bin/sh\nexit 0\n")
+    fake_python.chmod(0o700)
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    (wheel_dir / "cohesix-test.whl").write_bytes(b"fixture")
+    result = subprocess.run(
+        ["bash", str(MODULE.parents[1] / "ci/python_compat_run.sh"),
+         "--wheel-smoke", "--wheel-dir", str(wheel_dir),
+         "--package-manifest", str(tmp_path / "package.json"),
+         "--state-dir", str(tmp_path / "state"),
+         "--python-matrix", "3.11", "--qemu-profile-contract",
+         str(tmp_path / "missing-qemu-profile.json")],
+        env={"PATH": "/usr/bin:/bin", "COHESIX_PYTHON_3_11": str(fake_python)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 2
+    assert "QEMU profile contract must be a regular non-symlink file" in result.stderr
+
+
 def test_python_sources_are_explicit_product_files() -> None:
     rows = ["README.md", "pyproject.toml", "cohesix/__init__.py", "cohesix/client.py"]
     inventory = {"schema": "cohesix-implementation-surface-inventory/v1",

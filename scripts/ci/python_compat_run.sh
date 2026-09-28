@@ -9,6 +9,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 wheel_smoke=false
 wheel_dir=""
 package_manifest=""
+qemu_profile_contract=""
 python_matrix="3.11,3.13"
 target=""
 profile_contract=""
@@ -17,7 +18,7 @@ state_dir=""
 target_session="${COHESIX_PYTHON_TARGET_SESSION:-}"
 
 usage() {
-  echo "usage: $0 [--wheel-smoke] --wheel-dir DIR --package-manifest FILE --state-dir DIR [--python-matrix 3.11,3.13] [--target qemu|pi4 --profile-contract FILE --matrix FILE --target-session FILE]" >&2
+  echo "usage: $0 [--wheel-smoke] --wheel-dir DIR --package-manifest FILE --state-dir DIR [--qemu-profile-contract FILE] [--python-matrix 3.11,3.13] [--target qemu|pi4 --profile-contract FILE --matrix FILE --target-session FILE]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --package-manifest)
       package_manifest=${2:-}
+      shift 2
+      ;;
+    --qemu-profile-contract)
+      qemu_profile_contract=${2:-}
       shift 2
       ;;
     --python-matrix)
@@ -160,8 +165,12 @@ if [[ ! -f "$wheel" || -L "$wheel" ]]; then
   exit 2
 fi
 
-qemu_contract="$repo_root/configs/generated/cohesix_python_qemu_smp_production.json"
+qemu_contract="${qemu_profile_contract:-$repo_root/configs/generated/cohesix_python_qemu_smp_production.json}"
 pi4_contract="$repo_root/configs/generated/cohesix_python_pi4_production.json"
+if [[ ! -f "$qemu_contract" || -L "$qemu_contract" ]]; then
+  echo "python-compat: QEMU profile contract must be a regular non-symlink file" >&2
+  exit 2
+fi
 
 inspect_wheel() {
   local output=$1
