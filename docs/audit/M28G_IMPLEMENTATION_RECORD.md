@@ -1406,44 +1406,52 @@ tests, aligned acceptance documents and retained result with its exact proof
 scope. AI assistance implemented the separate manual route and verified the
 package/source bindings; the owner supplied the human evaluation.
 
-## Qualified-source NeMo preflight repair
+## Publication-inventory package input correction
 
-Title/ID: `m28g-release-b-qualification`; defect found in final canonical
-release-manifest preflight.
+Title/ID: `m28g-release-b-qualification`; package-input mismatch found in
+final canonical release-manifest preflight.
 
 Milestone: 28g / m28g-release-b-qualification.
 
-Goal: Check the already qualified NeMo wheel against the same immutable source
-and generated inventory used to build it during a publication-only release cut.
+Goal: Bind the version-aligned NeMo and Python distributions to the inventory
+actually included in the publication archive, while retaining their tested
+source and installed-byte identities.
 
-Inputs: Clean qualified source `b68a2c2a1a38`, its `1.2.0` NeMo wheel and
-distribution report, publication source `2ed62aab0`, and the failing canonical
-preflight. The publication inventory legitimately differs from the qualified
-inventory because historical release rows were retired; the publication bridge
-already checks that the selected runtime graph is unchanged.
+Inputs: Clean qualified source `b68a2c2a1a38`, publication inventory SHA-256
+`5a284e05493cb426fc0133adf043401563884deeab1c73c6c562a29657e87851`,
+the prior installed `1.2.0` package receipts, and the failed preflight using
+the qualified-source NeMo distribution report. Historical release rows changed
+the publication inventory digest without changing the selected NeMo wheel.
 
-Changes: `release_bundle.sh` now passes the qualified source root and its
-generated inventory to `build_nemo_kit.py --verify-dir` when
-`--qualified-source-root` is selected. Ordinary same-source assembly still
-checks the current root and inventory. The wheel and its source digests are
-unchanged. Host CLI, Python SDK, SwarmUI, benchmark and target paths are
-unaffected.
+Changes: The attempted qualified-source verification shortcut was withdrawn:
+the canonical factory continues to verify the package report against the
+publication inventory it will ship. A publication-source NeMo report was
+rebuilt from that inventory; its wheel SHA-256 remains
+`526a16c54dac26d5a0099ad9ce78a819bb1acedac90d731d89d3214d9f5af4f6`.
+The earlier installed Python wheel is selected for final assembly only after
+its unpacked members are compared with a fresh publication-source build; its
+source/package report must remain exact. No host, target or provider runtime
+code changed.
 
-Commands: `bash -n scripts/release_bundle.sh`; canonical
+Commands: `build_nemo_kit.py --out` and `build_python_package.py --out` against
+the publication inventory; unpacked wheel member comparison; canonical
 `scripts/release_bundle.sh --check-manifest --linux
 --linux-use-accepted-tools --qualified-source-root <clean-b68-source>` with
 the exact retained Mac/Linux QEMU artifacts and passing TCP results, clean Pi
-stage, selected production source manifest, both host Python package reports,
-and version-aligned Python/NeMo wheel directories; `git diff --check`.
+stage, selected production source manifest, installed package reports and
+publication-inventory wheel reports; `git diff --check`.
 
-Checks: Before the repair, preflight refused `NeMo distribution differs from
-selected release source`. After it, the compiler-selected implementation
-inventory, exact source and release manifest agreed; the NeMo verifier reported
-`PASS` for `cohesix_nemo_kit-1.2.0-py3-none-any.whl`; the canonical preflight
-reported `Native artifacts and exact compiler-selected release inputs verified
-(build-only=0)`. This is input selection and integrity proof, not assembled
-archive qualification or live integration.
+Checks: The initial preflight refused `NeMo distribution differs from selected
+release source` because its input report named the qualified inventory. A
+temporary factory change made that preflight pass but produced a bundle whose
+NeMo report did not match the bundled inventory; that candidate is retained
+outside `releases/` and is not qualified. The attempted code change was
+reversed. The publication-source NeMo wheel has the same bytes as the
+qualified wheel. The freshly built publication Python wheel has identical
+unpacked members to the earlier installed wheel; its ZIP bytes differ, so
+the installed wheel is retained as the exact distribution input. Final
+canonical preflight and archive qualification remain pending at this record.
 
-Deliverables: Corrected canonical preflight with the original qualified wheel
-and a passing exact-input run. AI assistance traced the mismatch to the
-publication inventory selection and applied the source-bound repair.
+Deliverables: Corrected package-input selection with preserved failed
+candidate and no factory behavior change. AI assistance identified and
+reversed the inappropriate verifier shortcut before publication.
