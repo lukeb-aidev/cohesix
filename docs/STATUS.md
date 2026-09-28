@@ -34,8 +34,10 @@ native provider outcomes. See [Host API](HOST_API.md) and the
 candidate. At clean source `522463fa1ade`, the canonical QEMU and physical Pi
 Test Plans passed Stages 01–05 under the owner's renewed `EX-2026-0024`
 exception. Those results retain that source identity. Medium and high QEMU
-pressure passed on Mac HVF. The corrected Jetson KVM pressure replay remains
-open; earlier attempts stopped before medium-load acceptance.
+pressure passed on Mac HVF. The corrected Jetson KVM replay also passed medium
+and high loads with 256 READY executable Workers and zero request errors in
+each window. Its immutable host replay result is retained at the selected
+`b68a2c2a1a38` guest identity; earlier failed attempts remain separate.
 
 At clean source `b68a2c2a1a38`, the strict-production Mac and Jetson QEMU TCP
 replays passed against their selected native host tools and policy. The
@@ -44,14 +46,19 @@ Both extracted host archives passed native-tool, packaged Python, authenticated
 TCP and SwarmUI UI qualification. The physical Pi booted the exact production
 image through TFTP/RAM with verified post-reset transfers, completed wired
 production TCP checks and passed a separate private Wi-Fi quick smoke. The Pi
-archive contains the same image bytes in its compact `.img`; physical SD
-readback and boot are still pending.
+archive contains the same image bytes in its compact `.img`. The exact packaged
+image passed physical SD readback, one fresh boot and packaged-client
+authenticated TCP qualification. Those results belong to the earlier archive
+hash and remain subject to final publication-byte comparison.
 
 The Mac `.pkg` is Developer ID signed, notarized and stapled. The JetPack
 7.2.1 / L4T 39.2.1 ARM64 controller and SwarmUI `.deb` files are bound by a
 detached manifest signature verified with the tracked Debian publisher key.
-These are built candidates: privileged installation, receipt and installed-file
-readback, graphical launch, lifecycle and cross-client parity have not passed.
+Both native installer sets were installed and passed publisher, package-manager
+receipt and installed-byte readback checks. Lukas Bower reported that he
+evaluated the installations and marked them PASS. Graphical launch, lifecycle,
+the raw owner-evaluated adoption walkthrough and cross-client parity remain
+open; installation receipts alone do not close those rows.
 The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md) keeps
 the hashes, corrected package-signing and qualification defects, earlier
 failures and open gates separate. Release A remains the published release.

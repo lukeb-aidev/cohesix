@@ -49,6 +49,23 @@ PHYSICAL_PROOF = frozenset({
     "scripts/pi4_trace_normalize.py", "tests/test_pi4_gate_proof.py",
     "tests/test_pi4_serial_reboot.py", "tests/test_pi4_trace_normalize.py",
 })
+PRESSURE_PROOF = frozenset({
+    "scripts/worker_task_evidence.py", "tests/test_worker_task_evidence.py",
+})
+ADOPTION_PROOF = frozenset({
+    "scripts/ci/provider_m28g_adoption.py", "tests/test_provider_m28g_adoption.py",
+})
+BENCHMARKS_OWNER_BEFORE = (
+    "GUI launch, rollback/uninstall and an independent walkthrough. Report any\n"
+    "failure against these limits without changing them during qualification.\n"
+)
+BENCHMARKS_OWNER_AFTER = (
+    "GUI launch, rollback/uninstall and a named evaluator's walkthrough. For this\n"
+    "sole-developer release, Lukas Bower may evaluate the installation, but must\n"
+    "record `independent=false` and report the result as owner-evaluated. The raw\n"
+    "attachments, separate native outcome checks and fixed budgets still apply.\n"
+    "Report any failure against these limits without changing them during qualification.\n"
+)
 HELP_ONLY = frozenset({
     "scripts/failover_watchdog.py", "scripts/rest_perf_harness.py",
 })
@@ -142,6 +159,14 @@ def classify_change(root: Path, qualified: Path, path: str, deleted: bool) -> st
         return "obsolete-distribution-removal"
     if deleted:
         raise evidence.EvidenceError(f"publication cannot delete a current input: {path}")
+    if path == "docs/BENCHMARKS.md":
+        before = (qualified / path).read_text()
+        after = (root / path).read_text()
+        if before.count(BENCHMARKS_OWNER_BEFORE) == 1 and after == before.replace(
+            BENCHMARKS_OWNER_BEFORE, BENCHMARKS_OWNER_AFTER
+        ):
+            return "adoption-owner-evaluator-text"
+        raise evidence.EvidenceError("qualified benchmark limits changed")
     if path in DOCUMENTS:
         return "release-documentation"
     if path == ".gitignore":
@@ -150,6 +175,10 @@ def classify_change(root: Path, qualified: Path, path: str, deleted: bool) -> st
         return "publication-tooling"
     if path in PHYSICAL_PROOF:
         return "physical-proof-collector"
+    if path in PRESSURE_PROOF:
+        return "pressure-proof-collector"
+    if path in ADOPTION_PROOF:
+        return "adoption-proof-collector"
     if path in HELP_ONLY and normalized_help((root / path).read_text()) == normalized_help(
         (qualified / path).read_text()
     ):

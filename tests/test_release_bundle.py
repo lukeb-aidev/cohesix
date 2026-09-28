@@ -126,6 +126,25 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
         assert publication.classify_change(
             tmp_path, tmp_path, path, False
         ) == "release-documentation"
+    qualified = tmp_path / "qualified"
+    current = tmp_path / "current"
+    for root in (qualified, current):
+        (root / "docs").mkdir(parents=True)
+    benchmark = "docs/BENCHMARKS.md"
+    (qualified / benchmark).write_text(
+        "Max setup: 45 minutes\n" + publication.BENCHMARKS_OWNER_BEFORE
+    )
+    (current / benchmark).write_text(
+        "Max setup: 45 minutes\n" + publication.BENCHMARKS_OWNER_AFTER
+    )
+    assert publication.classify_change(
+        current, qualified, benchmark, False
+    ) == "adoption-owner-evaluator-text"
+    (current / benchmark).write_text(
+        "Max setup: 60 minutes\n" + publication.BENCHMARKS_OWNER_AFTER
+    )
+    with pytest.raises(publication.evidence.EvidenceError, match="benchmark limits"):
+        publication.classify_change(current, qualified, benchmark, False)
     for path in (
         "scripts/pi4_gate_proof.sh",
         "scripts/pi4_serial_reboot.py",
@@ -137,6 +156,20 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
         assert publication.classify_change(
             tmp_path, tmp_path, path, False
         ) == "physical-proof-collector"
+    for path in (
+        "scripts/worker_task_evidence.py",
+        "tests/test_worker_task_evidence.py",
+    ):
+        assert publication.classify_change(
+            tmp_path, tmp_path, path, False
+        ) == "pressure-proof-collector"
+    for path in (
+        "scripts/ci/provider_m28g_adoption.py",
+        "tests/test_provider_m28g_adoption.py",
+    ):
+        assert publication.classify_change(
+            tmp_path, tmp_path, path, False
+        ) == "adoption-proof-collector"
     for path in (
         "releases/RELEASE_NOTES-1.0.0-beta.md",
         "releases/RELEASE_NOTES-1.1.0-beta.md",

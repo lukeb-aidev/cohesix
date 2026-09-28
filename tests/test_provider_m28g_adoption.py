@@ -62,12 +62,14 @@ def test_walkthrough_requires_all_evidence_and_fixed_budgets(tmp_path: Path) -> 
     accepted = adoption.validate_walkthrough(record, SOURCE, PACKAGES)
     assert accepted["journey_ids"] == ["client-composition", "cuda", "peft"]
     assert accepted["attachment_count"] == 8
+    assert accepted["evaluation_scope"] == "independent"
     for mutation in [
         lambda row: row["installations"]["macos"].update(steps=31),
         lambda row: row["installations"]["linux"].update(core_download_bytes=101 * 1024 * 1024),
         lambda row: row.update(first_cuda_seconds=1201),
         lambda row: row["installations"]["macos"].update(package_sha256=["d" * 64]),
         lambda row: row["evaluator"].update(independent=False),
+        lambda row: row["evaluator"].update(independent=0),
         lambda row: row["journeys"][0].update(original_job_id="../new"),
         lambda row: row["gui_launch"].update(macos=["Terminal"]),
         lambda row: row["lifecycle"].update(user_data_retained=False),
@@ -81,6 +83,23 @@ def test_walkthrough_requires_all_evidence_and_fixed_budgets(tmp_path: Path) -> 
     Path(changed["attachments"]["cuda"]["path"]).write_text("altered")
     with pytest.raises(ValueError, match="attachment changed"):
         adoption.validate_walkthrough(changed, SOURCE, PACKAGES)
+
+
+def test_owner_walkthrough_is_accepted_without_independence_claim(
+    tmp_path: Path,
+) -> None:
+    record = walkthrough(tmp_path)
+    record["evaluator"] = {"kind": "person", "id": "Lukas Bower",
+                           "independent": False, "assistance": []}
+    accepted = adoption.validate_walkthrough(record, SOURCE, PACKAGES)
+    assert accepted["evaluation_scope"] == "owner"
+    record["evaluator"]["independent"] = True
+    with pytest.raises(ValueError, match="independence"):
+        adoption.validate_walkthrough(record, SOURCE, PACKAGES)
+    record["evaluator"]["independent"] = False
+    record["evaluator"]["kind"] = "agent"
+    with pytest.raises(ValueError, match="independence"):
+        adoption.validate_walkthrough(record, SOURCE, PACKAGES)
 
 
 def test_aggregate_binds_release_and_both_installer_results(

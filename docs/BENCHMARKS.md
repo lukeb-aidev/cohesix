@@ -43,8 +43,11 @@ different target results.
 
 These are acceptance limits, not measurements. The three complete journeys in
 BUILD_PLAN still require their selected native outcomes, installed clients,
-GUI launch, rollback/uninstall and an independent walkthrough. Report any
-failure against these limits without changing them during qualification.
+GUI launch, rollback/uninstall and a named evaluator's walkthrough. For this
+sole-developer release, Lukas Bower may evaluate the installation, but must
+record `independent=false` and report the result as owner-evaluated. The raw
+attachments, separate native outcome checks and fixed budgets still apply.
+Report any failure against these limits without changing them during qualification.
 
 ## NeMo Agent Toolkit 1.9.0 comparison (M28f)
 

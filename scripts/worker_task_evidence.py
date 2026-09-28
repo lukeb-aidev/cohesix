@@ -4142,7 +4142,7 @@ def _validate_gdb_markers(
         (
             "pre-ready",
             "_start",
-            "redirect-standard-fault",
+            "redirect-unmapped-pc",
         ),
         (
             "during-ipc",
@@ -5055,6 +5055,10 @@ def _qemu_gdb(args: argparse.Namespace) -> None:
     # Stepping over a retained entry breakpoint and stopping each healthy
     # replacement distorts its 400-us bootstrap SC. Bind each later generation
     # at its validated passive Call, using that VSpace's actual init page.
+    # Before READY, an unmapped PC raises a native Standard fault under KVM.
+    # Redirecting to the BRK-based evidence symbol can instead be consumed by
+    # the attached debugger and leave the child to expire as ready-timeout.
+    # The collector still requires the role-matched target fault and teardown.
     command_text = f"""set pagination off
 set confirm off
 set architecture aarch64
@@ -5071,8 +5075,8 @@ commands 1
       if *(unsigned short *)($x0 + {WORKER_RUNTIME_INIT_IDENTITY_ROLE_OFFSET}) == {role_raw}
         set $m26e_worker_ttbr0 = $TTBR0_EL1
         printf "M26E_GDB_VSPACE_BIND role={args.inject_role} phase=pre-ready register=TTBR0_EL1 result=bound\\n"
-        printf "M26E_GDB_INJECTION role={args.inject_role} phase=pre-ready symbol=_start action=redirect-standard-fault result=continued\\n"
-        set $pc = 0x{standard:x}
+        printf "M26E_GDB_INJECTION role={args.inject_role} phase=pre-ready symbol=_start action=redirect-unmapped-pc result=continued\\n"
+        set $pc = 0x0
         disable 1
         enable 2
       end
@@ -5162,7 +5166,7 @@ continue
         (row["phase"], row["symbol"], row["action"], row["result"])
         for row in injection_rows
     } != {
-        ("pre-ready", "_start", "redirect-standard-fault", "continued"),
+        ("pre-ready", "_start", "redirect-unmapped-pc", "continued"),
         (
             "during-ipc",
             "cohesix_worker_qemu_evidence_call_dispatch",

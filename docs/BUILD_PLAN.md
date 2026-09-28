@@ -13485,9 +13485,10 @@ Run all three product journeys from clean supported environments and published
 instructions without source patches or developer-only setup. Qualify MCP-only,
 A2A-only, both and neither, without losing existing job state. Include Mac-originated
 remote CUDA/PEFT, local MLX and both NeMo flows; protocol services must work
-without macOS/Apple Intelligence. Require at least one independent clean-install
-walkthrough; identify whether the evaluator is a person or agent rather than
-claiming unobserved community adoption.
+without macOS/Apple Intelligence. Require a named clean-install walkthrough;
+Lukas Bower may perform it as the sole developer and tester, recorded as
+owner-evaluated. Identify whether another evaluator is a person or agent rather
+than claiming unobserved community adoption.
 
 The assembled Release B QEMU and Pi production profiles select the gateway
 master, MCP and A2A switches enabled. Verify those values in each resolved
@@ -13701,7 +13702,7 @@ Inputs: Accepted 28–28f artifacts/evidence; both 28g native installer reports;
 Changes:
   - scripts/install/{stage_host_package,stage_swarmui,build_python_package}.py + scripts/release_bundle.sh — bind the installed Mac/Linux packages, release-version-aligned Python/NeMo wheels, native Apple integration, client configs and recipes to one exact source/profile/hash inventory.
   - apps/coh/src/doctor.rs + apps/swarmui/src/workbench.rs + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md — actionable capability/credential/storage/protocol/Apple diagnostics and one coherent job/evidence view.
-  - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and independent evaluator walkthrough; explicit downloads and private-data/licence choices.
+  - tests/test_host_package_stage.py + tests/test_python_package.py + tests/test_release_bundle.py + matrix/catalog — m28g-adoption-live for clean-install journeys, rollback/uninstall and a named evaluator walkthrough; explicit downloads and private-data/licence choices. For this sole-developer release, Lukas Bower may be the evaluator when recorded as owner-evaluated, without an independence claim.
 Commands:
   - python3 -m pytest -q tests/test_host_package_stage.py tests/test_python_package.py tests/test_release_bundle.py
   - cargo test --locked -p coh --lib doctor::
@@ -13709,7 +13710,7 @@ Commands:
   - scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --case m28g-adoption-live --reference-config "${M28G_ADOPTION_REFERENCE}" --host-profile mac-apple-m4-macos27 --state-dir "${M28G_EVIDENCE}/m28g-adoption-live"
 Checks:
   - All acceptance-matrix journeys run from the native installed candidate artifacts with no source patches, hidden credentials, terminal-only SwarmUI launch or developer-only setup; same job/outcome is inspectable across applicable clients.
-  - At least one independent person or agent completes clean installation and useful work; record identity, assistance, steps/time/downloads and blockers against frozen adoption budgets.
+  - A named person or agent completes clean installation and useful work; record identity, independence or owner-evaluated scope, assistance, steps/time/downloads and blockers against frozen adoption budgets. Lukas Bower may evaluate this sole-developer release without an independence claim.
   - Install rollback/uninstall preserves declared user data, disables/removes only installer-owned service registration and retains external credentials unless the operator explicitly selects documented removal; no hidden model downloads or automatic loss of active job evidence.
 Deliverables: Installable candidate, newcomer/client guides, exact distribution identities and m28g-adoption-live evidence for the integrated matrix.
 
@@ -13766,7 +13767,10 @@ Deliverables: Selected-manifest native host-tool provenance, passing or explicit
 
 Title/ID: m28g-kvm-pressure-runner-portability
 Milestone: 28g / m28g-kvm-pressure-runner-portability; downstream discovery in m28g-release-b-qualification, restoring the selected M26e Conditional B2 runner without reopening M26e runtime scope.
-Status: In Progress — Jetson KVM acceptance is pending.
+Status: Complete — the corrected collector passed exact-source Jetson KVM
+medium and high pressure with 256 READY executable Workers, zero request
+errors, strict control errors and no transient retries. The immutable host
+replay validator reports PASS for both loads and the native fault evidence.
 Goal: Let the canonical pressure runner select pinned Linux QEMU and AArch64 debugger tools, then verify the Linux KVM host-integration rows without treating its own invocation as a competing writer.
 Inputs: scripts/m26e_qemu_pressure.sh; configs/host_integration_acceptance.toml; Conditional B2; exact-source Mac guest and Jetson KVM profile; retained failed preflight, toolchain and host-profile attempts.
 Changes:
@@ -13803,7 +13807,7 @@ all eight master/MCP/A2A combinations; live checks cover the four effective mode
 | Mac installer / `m28g-macos-native-installer` | Clean supported Apple Silicon Macs; signed `.pkg` and installed SwarmUI.app | Publisher/notary and installed-file verification; Finder, Spotlight and Dock launch without Terminal; supported 1.1.0-beta migration, failed install, upgrade/rollback and uninstall with state/evidence retained. |
 | Linux installer / `m28g-ubuntu-arm64-native-installer` | Clean JetPack 7.2.1 / L4T 39.2.1 ARM64 host; headless and GNOME `.deb` packages | Publisher and installed-file verification; GNOME application grid/search launch without Terminal and headless controller use; dependencies, migration, upgrade/rollback, remove/purge and state/evidence behavior. |
 | Python index / `m28g-pypi-1.2.0-publication` | Approved Release B tag and reviewer-gated trusted publisher | Public wheel and sdist version, source, metadata and SHA-256 match the approved exact distributions; isolated install and CLI smoke pass. |
-| Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and independent evaluator walkthrough within frozen step/time/size/intervention budgets. |
+| Installation / `m28g-adoption-live` | Native installed Mac and Linux host candidates; packaged Python/NeMo/native app | All three published journeys, GUI launch, explicit downloads, doctor remedies, rollback/uninstall and a named evaluator walkthrough within frozen step/time/size/intervention budgets. Lukas Bower may record an owner-evaluated walkthrough; the separate native verifier and raw attachments remain mandatory. |
 | Release/target / `m28g-release-b-qualification` | Exact assembled QEMU and physical Pi profiles plus supported host packages | Complete applicable TEST_PLAN, conditional pressure/repeatability/hardware and release gates, Queen-loss refusal/reconciliation, compatibility review and approval-bound evidence index. |
 
 **Checks / definition of done:** The signed/notarized Mac `.pkg`, independently
@@ -13827,8 +13831,9 @@ The approved `1.2.0` SDK wheel and source distribution are published on PyPI
 with independently verified public hashes and tagged-source provenance.
 
 Every required journey and matrix row passes from those installed artifacts with
-fixed budgets and accessible evidence, including an independent clean-install
-walkthrough. Component, host installation, GUI launch, QEMU, physical Pi,
+fixed budgets and accessible evidence, including a named, raw-backed clean-install
+walkthrough. Lukas Bower may record the walkthrough as owner-evaluated.
+Component, host installation, GUI launch, QEMU, physical Pi,
 model-quality and release proof remain separate. Missing required evidence
 blocks closure; optional/deferred capabilities cannot substitute. The qualified
 candidate is ready for named human release-owner approval; milestone completion

@@ -264,11 +264,11 @@ control-latency and recovery budgets before those runs. Preserve all four
 effective protocol modes and the disabled master override. Then apply the
 complete selected QEMU, physical Pi and conditional release gates at the
 assembled source/image identities. A missing installer, host profile, live
-result or independent clean-install walkthrough blocks M28g completion.
+result or a named, raw-backed clean-install walkthrough blocks M28g completion.
 `release_qualify.py installer` checks independently selected publisher trust,
 package-manager receipt and installed byte readback on the current host; its
 PASS is one input to the Mac or Linux installer row, not the graphical launch,
-lifecycle, independent walkthrough or assembled release verdict.
+lifecycle, named evaluator walkthrough or assembled release verdict.
 
 | Contract at risk | Required kind of evidence | Closure owner |
 | --- | --- | --- |
@@ -824,6 +824,10 @@ stays attached for three generations: the operator spawns the role for the
 pre-READY fault, recreates it and submits an approved `kill` for the
 during-IPC standard fault, then repeats that lifecycle call for MCS budget
 exhaustion before creating a final READY instance. The instrumented
+pre-READY injection redirects the selected Worker's PC to unmapped address
+zero. The target must report a role-matched Standard fault and terminal
+teardown; a GDB injection marker or READY timeout cannot pass. The later
+during-IPC injection retains its target evidence fault symbol. The instrumented
 `cohesix_worker_qemu_evidence_call_dispatch` hook runs after validating the
 received call and before its dispatch or reply. All three passive roles can
 therefore exercise the real shutdown IPC path; Heartbeat needs no autonomous
@@ -1430,13 +1434,16 @@ attachment alone qualifies a provider or release.
 `m28g-adoption-live` uses one private JSON reference with schema
 `cohesix-m28g-adoption-reference/v1`. It names absolute paths for the clean
 qualified source root, its commit, the assembled `release_qualify.py verify`
-result, both native `installer` results and an independent evaluator's
+result, both native `installer` results and a named evaluator's
 walkthrough. Keep the reference and walkthrough in ignored private evidence,
 with credentials omitted. The walkthrough schema is
-`cohesix-m28g-adoption-walkthrough/v1`: record the evaluator's kind, identity,
-independence and assistance; separate Mac and JetPack Linux installation
-steps/time/downloads/interventions and package hashes; time to the first
-verified CUDA result; the three selected journey IDs and original job IDs;
+`cohesix-m28g-adoption-walkthrough/v2`: record the evaluator's kind, identity,
+independence and assistance. Lukas Bower may evaluate this sole-developer
+release with `kind=person` and `independent=false`; label that result
+owner-evaluated, while other evaluators must be independent. Record separate
+Mac and JetPack Linux installation steps, time, downloads, interventions and
+package hashes; time to the first verified CUDA result; the three selected
+journey IDs and original job IDs;
 Finder/Spotlight/Dock and GNOME grid/search launch; doctor and data-preserving
 rollback/uninstall results. Bind raw Mac/Linux GUI, doctor, lifecycle and
 journey reports by absolute path, byte size and SHA-256. The runner rechecks

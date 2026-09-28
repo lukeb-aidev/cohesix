@@ -235,17 +235,20 @@ contracts and original identities; only gateway route availability narrows.
 
 Under `m28g-installation-and-integrated-adoption`, the conformance matrix and
 Test Plan now select a bounded `m28g-adoption-live` verifier. It binds the
-assembled release qualification, both native installer results and an
-independent evaluator's raw, hashed walkthrough at one source commit. The
-walkthrough records the three journeys, native desktop launch, doctor,
+assembled release qualification, both native installer results and a named
+evaluator's raw, hashed walkthrough at one source commit. Lukas Bower may
+evaluate the sole-developer release as owner-evaluated, without an
+independence claim. The walkthrough records the three journeys, native desktop
+launch, doctor,
 data-preserving rollback/uninstall and per-host steps, time, core downloads
-and interventions. The numerical limits were frozen in BENCHMARKS before this
-integrated case ran: the comparable 1.1.0-beta archive baselines are
+and interventions. The numerical limits were frozen in BENCHMARKS before any
+integrated case: the comparable 1.1.0-beta archive baselines are
 26,501,100 Mac and 28,513,510 Linux bytes. The new adoption verifier reports
 `live_host` only and explicitly leaves native target outcome reverification to
-the owning provider cases. Focused matrix, parser and catalog checks passed;
-no evaluator walkthrough or native Release B installer result exists yet, so
-the adoption case has not passed.
+the owning provider cases. Focused matrix, parser and catalog checks passed.
+At this checkpoint, no evaluator walkthrough or native Release B installer
+result existed; later receipts are recorded below, while adoption remains
+open.
 
 The `m28g-integration-live` matrix case now starts the exact installed host
 gateway against one private-address Queen in all four effective modes. It
@@ -260,10 +263,10 @@ latency tests use controlled host fixtures. This is an executable acceptance
 contract, not a passing live case: installed 1.2.0 bundles, a final-source
 Queen, native result and external observations remain to be supplied and run.
 
-M28g also still requires frozen adoption and quality budgets, independently
-evaluated clean installation, the four effective protocol modes, native CUDA,
-PEFT, Apple and NeMo journeys from installed bytes, packaged QEMU and physical
-Pi installation evidence, and assembled release due diligence. These gates must
+M28g also still requires frozen adoption and quality budgets, a named,
+raw-backed clean installation evaluation, the four effective protocol modes,
+native CUDA, PEFT, Apple and NeMo journeys from installed bytes, packaged QEMU,
+physical Pi installation evidence, and assembled release due diligence. These gates must
 bind one final source and package identity before the milestone can be marked
 Complete. Material AI assistance produced this implementation checkpoint;
 every claim above is limited to the executed source and host checks.
@@ -1249,3 +1252,106 @@ readback and GUI launch, final SD readback/boot, Jetson pressure, full
 integrated adoption, owner approval, tag and PyPI publication remain open.
 AI assistance traced and corrected the path and nested-signing defects;
 host/package evidence retains its original proof class.
+
+## Owner-evaluated installation walkthrough and installed receipts
+
+Title/ID: `m28g-installation-and-integrated-adoption`; continuation of
+`m28g-release-b-qualification`.
+
+Milestone: 28g / m28g-installation-and-integrated-adoption.
+
+Goal: Let the sole developer and tester evaluate the 1.2.0 installation
+without claiming that his own walkthrough is independent.
+
+Inputs: The named-evaluator adoption schema, frozen budgets in BENCHMARKS,
+the `b68a2c2a1a38` qualified source, and native Mac and Jetson installer
+receipts for the `869737b03982` publication candidate.
+
+Changes: `scripts/ci/provider_m28g_adoption.py` accepts `Lukas Bower` as a
+person with `independent=false` and reports `evaluation_scope=owner`. Other
+evaluators retain the independence requirement. BUILD_PLAN, TEST_PLAN and
+BENCHMARKS name the owner exception and continue to require raw walkthrough
+attachments, three native journeys, GUI launch, budgets and lifecycle checks.
+The schema advances to `cohesix-m28g-adoption-walkthrough/v2` so an older
+walkthrough cannot silently inherit the changed evaluator rule. The publication
+bridge classifies only this verifier and its tests as adoption proof tooling,
+and admits only the exact BENCHMARKS evaluator wording while refusing any
+changed numeric limit. Host CLI, Python SDK, SwarmUI and benchmark measurement
+paths are unaffected.
+
+Commands: `.venv/bin/python -m pytest -q
+tests/test_provider_m28g_adoption.py tests/test_worker_task_evidence.py
+tests/test_release_bundle.py`; `scripts/check-generated.sh`; `git diff --check`;
+native `scripts/release_qualify.py installer` on Mac and Jetson, followed by
+`scripts/release_qualify.py verify` with their absolute result paths.
+
+Checks: The 158 focused tests and generated consistency passed. Both native
+installer receipt verifiers and the strict five-part release verifier passed
+for the prior `869737b03982` candidate, with exact evidence retained under
+ignored `out/m28g/`. Lukas Bower reported that he evaluated the installations
+and marked them PASS. That report and the installed-byte checks do not supply
+the still-required raw GUI, three-journey, budget, rollback and uninstall
+walkthrough. A new publication commit and rebuilt archives will require their
+own Conditional G comparison before promotion.
+
+Deliverables: Owner-evaluation verifier, regression tests, aligned acceptance
+text and native installer receipts with explicit proof limits. Material AI
+assistance traced the stale independence rule and implemented the narrow
+identity exception; adoption-live and release promotion remain open.
+
+## Jetson KVM pressure collector correction and accepted replay
+
+Title/ID: `m28g-kvm-pressure-runner-portability`; defect discovered under
+`m28g-release-b-qualification` and restored in the same pressure gate.
+
+Milestone: 28g / m28g-kvm-pressure-runner-portability.
+
+Goal: Make pre-READY Standard fault injection observable under the selected
+Jetson KVM debugger without weakening the native fault requirement.
+
+Inputs: Clean target source `b68a2c2a1a38d6f6b1dfe430845dfc4f0f024298`,
+selected Linux KVM profile, pinned QEMU 10.1.0 SHA-256
+`c30027b9805176ad0d85d732c356eac4d7485fab3c1748a797fc193b6bc3a46e`,
+and the failed r2/r3 pre-READY diagnostic attempts under ignored Jetson
+`out/m28g-pressure-b68-*` roots.
+
+Changes: The pre-READY collector now redirects the selected Worker PC to
+unmapped address zero. The previous breakpoint symbol could be consumed by
+attached GDB under KVM and leave the target at READY timeout. The validator
+still requires the role-matched target Standard fault and terminal teardown;
+an injection marker or timeout cannot pass. During-IPC fault and budget
+injections retain their separate target evidence paths. The release publication
+bridge classifies only the pressure collector and focused test as a proof-tool
+delta from the immutable qualified guest source. Host CLI, Python SDK,
+SwarmUI, provider and benchmark workload code are unaffected.
+
+Commands: `bash -n scripts/m26e_qemu_pressure.sh`;
+`.venv/bin/python -m pytest -q tests/test_worker_task_evidence.py
+tests/test_provider_m28g_adoption.py tests/test_release_bundle.py`;
+`.venv/bin/python -m pytest -q tests/test_m26e_qemu_pressure_cli.py
+tests/test_host_integration_run.py -k 'm26e_qemu_pressure or linux_aarch64 or
+quiescent_probe'`; canonical `scripts/m26e_qemu_pressure.sh --reuse-artifacts`
+on Jetson with the exact selected artifacts, `/usr/bin/gdb`, AArch64 `nm` and
+the pinned stripped QEMU; `scripts/check-generated.sh`; local and remote
+SHA-256 comparison of the final result and both pressure summaries.
+
+Checks: 158 collector/release/adoption tests and 54 targeted pressure/host
+integration tests passed. The remote pressure collector SHA-256
+`dd4b415066fd03996235bcd326d1782d07a6543a4c2441adddd88e3f67ca3f27`
+matched the local repair. The r4 canonical runner exited zero and its
+`final/host-replay-result.json` reports `PASS` with KVM. Medium and high each
+recorded 256 requested, discovered and READY executable Workers, two minutes
+of load, strict control errors, no transient retries, a passing 1% error
+budget and actual error rate zero. The final result SHA-256 is
+`1513bd3b8f28091fb3067f812cb6f67ed327e969cca929a44e3d2819d56ba6a3`;
+the medium and high summary hashes are
+`4ced7d7aca597e34e0033fec2f297b4f22ef8bf9b30b312e2f145a8f345a0e2b`
+and `4d774271402e8a479f281ee54d5e3152e27b77d1e476abdb90a6d115a2fc985e`.
+Copies under ignored `out/m28g/pressure/r4-evidence/` match the Jetson originals.
+The test runner stopped its QEMU and gateway processes after validation.
+
+Deliverables: Accepted Jetson KVM pressure record and narrowly corrected
+collector. This closes the KVM pressure subtask at its original target source,
+without promoting the still-open integrated adoption or overall Release B.
+Material AI assistance traced the GDB-consumed breakpoint behavior and
+verified the real target fault path.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Verify exact Release B native packages and an independent clean-install walkthrough.
+# Purpose: Verify exact Release B native packages and a named clean-install walkthrough.
 # Copyright 2026 Lukas Bower
 """Retain installed-host adoption evidence without promoting it to native target proof."""
 
@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from release_qualify import read_result  # noqa: E402
 
 SCHEMA = "cohesix-m28g-adoption-reference/v1"
-WALKTHROUGH_SCHEMA = "cohesix-m28g-adoption-walkthrough/v1"
+WALKTHROUGH_SCHEMA = "cohesix-m28g-adoption-walkthrough/v2"
 JOURNEYS = {"cuda", "peft", "client-composition"}
 ATTACHMENTS = {"macos-gui", "linux-gui", "doctor", "rollback", "uninstall",
                "cuda", "peft", "client-composition"}
@@ -72,13 +72,16 @@ def validate_walkthrough(record: dict[str, Any], source: str,
             and isinstance(evaluator["id"], str)
             and 1 <= len(evaluator["id"]) <= 128
             and evaluator["id"].strip() == evaluator["id"]
-            and evaluator["id"].casefold() != "lukas bower"
-            and evaluator["independent"] is True
+            and type(evaluator["independent"]) is bool
             and isinstance(evaluator["assistance"], list)
             and len(evaluator["assistance"]) <= 32
             and all(isinstance(item, str) and 1 <= len(item) <= 256
                     for item in evaluator["assistance"]),
-            "M28g independent evaluator record")
+            "M28g evaluator record")
+    owner_evaluated = evaluator["id"].casefold() == "lukas bower"
+    require((evaluator["kind"] == "person" and evaluator["independent"] is False)
+            if owner_evaluated else evaluator["independent"] is True,
+            "M28g evaluator independence must match recorded identity")
     installations = record["installations"]
     require(isinstance(installations, dict)
             and set(installations) == {"macos", "linux"}
@@ -151,12 +154,13 @@ def validate_walkthrough(record: dict[str, Any], source: str,
                 for row in journeys),
             "M28g native reports omitted from named raw attachments")
     return {"evaluator_kind": evaluator["kind"], "evaluator_id": evaluator["id"],
+            "evaluation_scope": "owner" if owner_evaluated else "independent",
             "installations": installations,
             "journey_ids": sorted(JOURNEYS), "attachment_count": len(attachments)}
 
 
 def run_live(case: str, reference: Path, host_profile: str, state_dir: Path) -> int:
-    """Revalidate both native installer receipts and the independent walkthrough."""
+    """Revalidate both native installer receipts and the named walkthrough."""
     require(case == "m28g-adoption-live" and host_profile == "mac-apple-m4-macos27",
             "M28g adoption aggregate host")
     config = document(reference)

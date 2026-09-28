@@ -1290,7 +1290,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
                         f"image_sha256={image_hashes[role]}"
                         for role in evidence.REQUIRED_ROLES
                     ),
-                    f"M26E_GDB_INJECTION role={inject_role} phase=pre-ready symbol=_start action=redirect-standard-fault result=continued",
+                    f"M26E_GDB_INJECTION role={inject_role} phase=pre-ready symbol=_start action=redirect-unmapped-pc result=continued",
                     f"M26E_GDB_INJECTION role={inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued",
                     f"M26E_GDB_INJECTION role={inject_role} phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued",
                 ]
@@ -2593,12 +2593,13 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
     fake_gdb = tmp_path / "fake-gdb"
     fake_gdb.write_text(
         "#!/bin/sh\n"
+        "grep -F 'set $pc = 0x0' \"$5\" >/dev/null || exit 1\n"
         "grep -F 'set $pc = 0x210200' \"$5\" >/dev/null || exit 1\n"
         "printf '%s\\n' "
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=pre-ready register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=during-ipc register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=budget-exhaustion register=TTBR0_EL1 result=bound' "
-        "'M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready symbol=_start action=redirect-standard-fault result=continued' "
+        "'M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready symbol=_start action=redirect-unmapped-pc result=continued' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-standard-fault result=continued' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_call_dispatch action=redirect-timeout-spin result=continued'\n",
         encoding="utf-8",
