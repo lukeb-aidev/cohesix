@@ -17,6 +17,9 @@ Cohesix is a research operating system for edge AI, built around a simple idea:
 an AI fleet should have air-traffic control, not a pile of tools holding
 unrestricted credentials.
 
+OpenAI Codex, an AI coding agent, wrote the Cohesix-specific code; Lukas Bower
+directed the design and gave final approval.
+
 Each Cohesix hive has a Queen—the central orchestration authority—and a small
 set of narrowly focused Worker roles for heartbeat telemetry, GPU lease and
 status records, and LoRA adapter/model lifecycle receipts. These Workers are
