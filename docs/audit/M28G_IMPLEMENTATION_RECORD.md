@@ -1067,6 +1067,11 @@ that manifest as an explicit input, verifies its transfer digest, and records
 the manifest and generated policy hashes. The release factory forwards its
 selected manifest and checks native-tool provenance against it. No policy
 validation or production authority was relaxed.
+The first selected-manifest rebuild refused before host compilation because
+the compiler resolved a public CAS key relative to the temporary manifest in
+the remote build root. The builder now verifies the tracked source index first,
+then stages a mode-`0600` copy at the source root and rechecks its digest so
+manifest-relative resources resolve from the verified source tree.
 
 Commands: `bash -n scripts/linux_host_tools_sync.sh scripts/release_bundle.sh`;
 `.venv/bin/python -m pytest -q tests/test_linux_host_tools_sync.py

@@ -382,6 +382,15 @@ git -c core.autocrlf=false -c core.filemode=true add --force --all
   echo "native source index differs from the selected Git tree" >&2
   exit 1
 }
+# The compiler resolves manifest-relative public resources from the manifest's
+# directory. Place the verified external profile at the source root only after
+# checking the tracked tree, so that resolution matches the native source.
+install -m 0600 "$selected_manifest" "$source_dir/selected-manifest.toml"
+selected_manifest="$source_dir/selected-manifest.toml"
+[[ "$(sha256sum "$selected_manifest" | awk '{print $1}')" == "$expected_manifest_sha" ]] || {
+  echo "staged selected manifest digest mismatch" >&2
+  exit 1
+}
 qemu_timer="$(python3 - <<'PY_TIMER'
 from pathlib import Path
 import tomllib
