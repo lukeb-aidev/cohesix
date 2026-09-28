@@ -61,7 +61,28 @@ def app_records(app: Path) -> list[dict[str, object]]:
     return records
 
 
-def stage(reference: dict[str, Any], root: Path) -> list[dict[str, object]]:
+def sign_host_tool(source: Path, staged: Path, team: str, identity: str) -> None:
+    """Sign the copied Mach-O while retaining its release build UUID."""
+    source_uuids = uuids(source)
+    if uuids(staged) != source_uuids:
+        raise ValueError("staged host tool differs from the selected release binary")
+    checked([
+        "/usr/bin/codesign", "--force", "--sign", identity,
+        "--options", "runtime", "--timestamp", str(staged),
+    ])
+    checked(["/usr/bin/codesign", "--verify", "--strict", str(staged)])
+    details = checked(["/usr/bin/codesign", "-dvv", str(staged)])
+    if (
+        f"TeamIdentifier={team}" not in details
+        or "Authority=Developer ID Application:" not in details
+        or re.search(r"^CodeDirectory .*\(.*runtime.*\)", details, re.MULTILINE) is None
+        or re.search(r"^Timestamp=.+", details, re.MULTILINE) is None
+        or uuids(staged) != source_uuids
+    ):
+        raise ValueError("signed host tool lacks selected identity or runtime")
+
+
+def stage(reference: dict[str, Any], root: Path, app_identity: str) -> list[dict[str, object]]:
     """Stage code in OS-owned locations while leaving user state outside pkg."""
     app = select_app(Path(reference["signed_app"]))
     binary = app / "Contents/MacOS/swarmui"
@@ -98,6 +119,16 @@ def stage(reference: dict[str, Any], root: Path) -> list[dict[str, object]]:
     records = stage_subset(Path(reference["bundle"]), destination, "controller")
     records = [{**row, "path": "/" + str(INSTALL_ROOT / row["path"])}
                for row in records]
+    tool_root = Path("/") / INSTALL_ROOT / "bin"
+    for row in records:
+        installed = Path(str(row["path"]))
+        if installed.parent != tool_root:
+            continue
+        source = Path(reference["bundle"]) / "bin" / installed.name
+        staged = root / installed.relative_to("/")
+        sign_host_tool(source, staged, reference["team_id"], app_identity)
+        row["size"] = staged.stat().st_size
+        row["sha256"] = hashlib.sha256(staged.read_bytes()).hexdigest()
     installed_app = root / APP_ROOT
     shutil.copytree(app, installed_app, symlinks=False)
     signature(installed_app, reference["team_id"], "Developer ID Application")
@@ -124,16 +155,17 @@ def stage(reference: dict[str, Any], root: Path) -> list[dict[str, object]]:
 
 
 def build(reference_path: Path, output: Path, identity: str | None,
-          notary_profile: str | None) -> dict[str, object]:
+          notary_profile: str | None, app_identity: str | None) -> dict[str, object]:
     """Create the signed, notarized pkg and retain its exact publisher proof."""
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("Mac package requires an Apple Silicon build host")
     if (
         not identity or not re.fullmatch(r"[0-9A-Fa-f]{40}", identity)
+        or not app_identity or not re.fullmatch(r"[0-9A-Fa-f]{40}", app_identity)
         or not notary_profile
         or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", notary_profile)
     ):
-        raise ValueError("select Developer ID Installer and stored notary profile")
+        raise ValueError("select Developer ID Application and Installer plus stored notary profile")
     reference = load_reference(reference_path, "macos")
     if output.exists() or output.is_symlink():
         raise ValueError("installer output already exists")
@@ -142,7 +174,7 @@ def build(reference_path: Path, output: Path, identity: str | None,
         work = Path(temporary)
         published = work / "published"
         published.mkdir()
-        stage(reference, work / "payload")
+        stage(reference, work / "payload", app_identity)
         component = work / "Cohesix-component.pkg"
         checked([
             "/usr/bin/pkgbuild", "--root", str(work / "payload"),
@@ -194,6 +226,7 @@ def main() -> None:
             args.reference_config, args.out,
             os.environ.get("COHESIX_INSTALLER_IDENTITY"),
             os.environ.get("COHESIX_NOTARY_PROFILE"),
+            os.environ.get("COHESIX_APP_IDENTITY"),
         )
     except (ValueError, OSError, subprocess.TimeoutExpired,
             subprocess.CalledProcessError, json.JSONDecodeError) as exc:

@@ -626,6 +626,7 @@ def main() -> int:
     installer.add_argument("--installer-manifest", type=Path, required=True)
     installer.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    args.output = args.output.absolute()
     try:
         if getattr(args, "port", 31337) not in range(1, 65534):
             raise ValueError("port must be between 1 and 65533")

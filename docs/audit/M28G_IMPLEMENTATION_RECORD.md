@@ -1181,3 +1181,71 @@ passing KVM TCP result, so the release gate remains open.
 Deliverables: Source and focused regression repair with preserved native
 failure evidence. AI assistance traced the provenance mismatch and corrected
 the selected external policy paths; live qualification still controls closure.
+
+## Exact 1.2.0 candidate and native installer correction
+
+Title/ID: `m28g-release-b-qualification` and `m28g-macos-native-installer`;
+downstream discoveries in their canonical archive and installer checks.
+
+Milestone: 28g / m28g-release-b-qualification.
+
+Goal: Bind the first exact `b68a2c2a1a38` release candidate to selected Mac,
+Jetson and Pi bytes, and repair defects revealed by qualifying those bytes.
+
+Inputs: Clean source `b68a2c2a1a38d6f6b1dfe430845dfc4f0f024298`
+with source digest
+`sha256:a01c2742283505b0287fffbf6b95dd666fe6088c883e7d55d382b8e3f626c5ba`;
+selected production manifests; independently built Mac and Jetson QEMU guests,
+native host tools, Python/NeMo wheels and the Pi 4 stage.
+
+Changes: The canonical bundle preflight found serial smoke logs alongside
+the Pi stage. A separate clean staging copy preserved those logs while
+packaging the same Pi payload bytes. The Mac and Jetson host qualifiers found
+that a relative output path failed after the packaged Python smoke changed
+working directory; `release_qualify.py` now makes that path absolute. The
+first Apple installer submission was rejected because seven copied command
+line Mach-O tools lacked Developer ID signatures. The package builder now
+requires a separate Developer ID Application identity, signs each copied tool
+with hardened runtime and secure timestamp before freezing its installed-file
+manifest, and checks its UUID against the selected archive binary. Installed
+readback independently requires matching UUID, Developer ID team, runtime,
+timestamp and exact signed bytes. The rejected Apple submission remains a
+failed attempt; the corrected package was accepted and stapled. The
+publication bridge names only the changed release tooling and focused tests
+as eligible non-runtime changes.
+
+Commands: Exact Mac/Jetson strict-production TCP replays; physical Pi wired
+and private Wi-Fi TFTP/RAM smokes; canonical `release_bundle.sh
+--check-manifest` and Mac/Linux/Pi assembly; `release_qualify.py host` on both
+native hosts with pinned QEMU 10.1.0; `gpgv` against only the tracked Debian
+publisher key; Developer ID signing, Apple notarization and stapler; focused
+`tests/test_release_bundle.py`, `tests/test_release_qualify.py` and
+`tests/test_macos_installer.py`; `scripts/check-generated.sh` with unfinished
+release outputs preserved outside `releases/`.
+
+Checks: The exact Mac and Jetson production TCP results passed. The Pi image
+SHA-256 `5e23f461695a064fea1a0fc9147f54e39dca15c351a0123a7006f65616af962d`
+passed same-image TFTP/RAM boot and quick Wi-Fi checks; the release `.img`
+metadata names the same payload hash and its compact MBR/FAT32 layout passed.
+Both extracted host archives passed manifest, archive, native tools, replay,
+isolated Python wheel, authenticated TCP and SwarmUI browser checks. The Mac
+archive SHA-256 is `b8fe858b6b3846750397bbd7ceb1e6b8861674b3e5365746ad609bbfcd1dc4ca`;
+Linux is `67a98f0aebc40fde7965420e7a9bfa0ec19a5e5fe1013b6f2db1ce663bba8d3d`;
+Pi is `a1cac6542b61521f7be336e83206a3486d78a14aeb4376ea5f496ddf3abcc988`. The corrected
+Mac `.pkg` SHA-256 is `e81886fddec649e1a584695d47744c8d3442719a2e488dd06c399daf71212d0c`
+with accepted Apple submission `a4d0164f-8a76-4674-b4f4-ab72e44ad869`.
+The two JetPack `.deb` hashes are
+`6f9ed66565100ccc8733495c5217e758897daa758dc043d9867df3e62afc6af3`
+and `ee57cd9372ac8b1579a0d9c6ad92c694d6478f6fdc30ba127da88911bad6f260`;
+their detached manifest signature passed independent `gpgv`. The focused
+release tests passed 43/43 and the Mac installer/release qualifier tests
+passed 30/30. Generated consistency passed after the incomplete release
+directories were moved to ignored candidate storage.
+
+Deliverables: Exact source-bound 1.2.0 archives, portable Pi `.img`,
+signed/notarized Mac and manifest-signed Linux installer candidates, focused
+repair tests and retained failures. Native privileged installs, installed
+readback and GUI launch, final SD readback/boot, Jetson pressure, full
+integrated adoption, owner approval, tag and PyPI publication remain open.
+AI assistance traced and corrected the path and nested-signing defects;
+host/package evidence retains its original proof class.

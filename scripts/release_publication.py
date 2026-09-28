@@ -31,7 +31,9 @@ DOCUMENTS = frozenset({
 FACTORY = frozenset({
     "scripts/release_bundle.sh", "scripts/release_inputs.py",
     "scripts/release_publication.py", "scripts/release_qualify.py",
-    "tests/test_release_bundle.py",
+    "scripts/install/build_macos_pkg.py", "scripts/install/qualify_native_install.py",
+    "tests/test_release_bundle.py", "tests/test_release_qualify.py",
+    "tests/test_macos_installer.py",
 })
 PHYSICAL_PROOF = frozenset({
     "scripts/pi4_gate_proof.sh", "scripts/pi4_serial_reboot.py",

@@ -31,46 +31,39 @@ native provider outcomes. See [Host API](HOST_API.md) and the
 ## Release B qualification
 
 [Milestone 28g](BUILD_PLAN.md#28g) is **In Progress** for the 1.2.0
-candidate. The selected source now records version-aligned Python packaging,
-native Mac and Ubuntu ARM64 installer builders, and installed SwarmUI resource
-lookup. At clean source `522463fa1ade`, the canonical QEMU and physical Pi
-Test Plans passed Stages 01–05, including exact-source authenticated TCP, REST
-and fresh due diligence under the owner's renewed `EX-2026-0024` exception.
-Earlier failed Stage 05 attempts retain their results. Medium and high QEMU
-pressure passed on Mac HVF with correlated Worker receipts. The selected Jetson
-KVM pressure replay reached authenticated target and fault checks, then failed
-when host integration selected a Mac profile on Linux; a corrected replay is
-pending. Signed native installers,
-clean platform installs, graphical launch, installed cross-client parity and
-integrated Release B qualification remain outstanding. The
-[M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md)
-retains the exact identities, diagnostic failures and blocked gates. Release A
-remains the published release.
+candidate. At clean source `522463fa1ade`, the canonical QEMU and physical Pi
+Test Plans passed Stages 01–05 under the owner's renewed `EX-2026-0024`
+exception. Those results retain that source identity. Medium and high QEMU
+pressure passed on Mac HVF. The corrected Jetson KVM pressure replay remains
+open; earlier attempts stopped before medium-load acceptance.
 
-At later source `4a46989432ae`, the exact production Pi image booted by
-TFTP/RAM with verified image hash, post-reset CRCs and build marker. QEMU and
-Pi Stages 01–02 passed. The production Pi Stage 03 attempt then failed because
-its development-authority fixture tried legacy `/queen/ctl`, which production
-correctly denied. The release factory now has a separate strict-production
-QEMU TCP proof path, but its native target runs and the complete development
-and physical Pi gates remain pending. No SD rebuild is requested before the
-production Pi release lane passes.
+At clean source `b68a2c2a1a38`, the strict-production Mac and Jetson QEMU TCP
+replays passed against their selected native host tools and policy. The
+canonical factory assembled the 1.2.0 Mac, Linux ARM64 and Pi 4 archives.
+Both extracted host archives passed native-tool, packaged Python, authenticated
+TCP and SwarmUI UI qualification. The physical Pi booted the exact production
+image through TFTP/RAM with verified post-reset transfers, completed wired
+production TCP checks and passed a separate private Wi-Fi quick smoke. The Pi
+archive contains the same image bytes in its compact `.img`; physical SD
+readback and boot are still pending.
 
-The Release B Python SDK source and manual now use `1.2.0`. Its PyPI
-workflow is prepared to build from the reviewed `v1.2.0` tag and compare
-the exact public distributions after reviewer-gated publishing. The tag and
-public files do not yet exist. Optional QEMU setup now probes a real four-core
-startup; Mac can build the verified pinned 10.1.0 HVF fix when its installed
-QEMU fails, while the selected JetPack 7.2.1 / L4T 39.2.1 ARM64 reference
-uses `qemu-system-arm` from apt.
-The pinned Mac source build passed its entitlement, startup and setup checks.
-A dedicated Debian publisher key also passed Mac and Jetson detached-signature
-probes. These checks do not supply a signed installer, packaged guest or
-release acceptance. The owner's change from the earlier beta plan to stable
-`1.2.0` requires fresh exact-source release qualification.
+The Mac `.pkg` is Developer ID signed, notarized and stapled. The JetPack
+7.2.1 / L4T 39.2.1 ARM64 controller and SwarmUI `.deb` files are bound by a
+detached manifest signature verified with the tracked Debian publisher key.
+These are built candidates: privileged installation, receipt and installed-file
+readback, graphical launch, lifecycle and cross-client parity have not passed.
+The [M28g implementation record](audit/M28G_IMPLEMENTATION_RECORD.md) keeps
+the hashes, corrected package-signing and qualification defects, earlier
+failures and open gates separate. Release A remains the published release.
 
-The selected QEMU and Pi production manifests now enable host-side MCP and A2A
-under the compiler-controlled master switch. The latest 60-minute Pi 4 GENET
+The Python SDK and NeMo kit wheels are version `1.2.0`. The SDK's PyPI
+workflow awaits the accepted `v1.2.0` tag, reviewer-gated publication and
+public file hash comparison. Optional QEMU setup probes a real four-core
+startup and offers a pinned 10.1.0 build when the installed binary is
+incompatible. The selected QEMU and Pi production manifests enable host-side
+MCP and A2A under the compiler-controlled master switch.
+
+The latest 60-minute Pi 4 GENET
 RAM-image diagnostic completed four MCP and six A2A original jobs with
 target-confirmed, independently checked Jetson CUDA outputs and 122 healthy
 samples. Its collector was amended during the run, and it did not exercise

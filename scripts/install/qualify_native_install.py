@@ -164,6 +164,31 @@ def selected_subset(bundle: Path, destination: str,
     return records
 
 
+def signed_host_tool_record(source: Path, installed: Path,
+                            team: str) -> dict[str, Any]:
+    """Bind a signed installed Mach-O to the release UUID and Developer ID."""
+    uuids = []
+    for path in (source, installed):
+        output = command(["/usr/bin/dwarfdump", "--uuid", str(path)])
+        found = set(re.findall(r"UUID: ([0-9A-F-]{36})", output))
+        if not found:
+            raise ValueError("release host tool has no Mach-O UUID")
+        uuids.append(found)
+    if uuids[0] != uuids[1]:
+        raise ValueError("signed host tool differs from the release build")
+    command(["/usr/bin/codesign", "--verify", "--strict", str(installed)])
+    details = command(["/usr/bin/codesign", "-dvv", str(installed)])
+    if (
+        f"TeamIdentifier={team}" not in details
+        or "Authority=Developer ID Application:" not in details
+        or re.search(r"^CodeDirectory .*\(.*runtime.*\)", details, re.MULTILINE) is None
+        or re.search(r"^Timestamp=.+", details, re.MULTILINE) is None
+    ):
+        raise ValueError("installed host tool lacks Developer ID runtime signature")
+    return {"path": str(installed), "size": installed.stat().st_size,
+            "sha256": digest(installed)}
+
+
 def qualify_macos(reference: dict[str, Any], manifest_path: Path,
                   manifest: dict[str, Any]) -> dict[str, Any]:
     """Verify notarized package, exact receipt, signed app and installed bytes."""
@@ -201,6 +226,13 @@ def qualify_macos(reference: dict[str, Any], manifest_path: Path,
     rows = payload.get("files")
     expected = selected_subset(Path(reference["bundle"]), MAC_ROOT.as_posix(),
                                "controller")
+    for index, row in enumerate(expected):
+        installed = Path(row["path"])
+        if installed.parent == MAC_ROOT / "bin":
+            source = Path(reference["bundle"]) / "bin" / installed.name
+            expected[index] = signed_host_tool_record(
+                source, installed, reference["team_id"]
+            )
     from build_macos_pkg import APP_ROOT, UNINSTALL, app_records
     expected.extend(app_records(Path(reference["signed_app"])))
     expected.append({"path": str(MAC_ROOT / "bin/cohesix-uninstall"),

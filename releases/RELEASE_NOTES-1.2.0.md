@@ -35,14 +35,19 @@ and recovery rules; it does not load GPU libraries into the VM or Pi.
   The pinned NeMo Agent Toolkit kit provides MCP and A2A client examples while
   keeping client dependencies separate from the CUDA provider environment.
 
-## Install and start
+## Pick a download
 
-The release includes portable Mac, Linux ARM64 and Pi 4 archives, a signed and
-notarized macOS installer, and signed Linux ARM64 packages. The Cohesix Python
-SDK is also available as version `1.2.0` on PyPI. The host installers include
-the Cohesix tools and SwarmUI. QEMU is an optional host dependency: the setup
-guide checks your installed version and offers a compatible pinned build when
-the system package is unsuitable.
+| Where you run it | Release files |
+| --- | --- |
+| Apple Silicon Mac | `Cohesix-1.2.0-MacOS.tar.gz` for a portable setup, or the signed and notarized `Cohesix-1.2.0-MacOS.pkg` for a normal Mac installation with SwarmUI in Applications. |
+| JetPack Linux ARM64 | `Cohesix-1.2.0-linux.tar.gz` for a portable setup, or `cohesix-controller_1.2.0_arm64.deb` plus the optional `cohesix-swarmui_1.2.0_arm64.deb` for a system installation. The Debian publisher signs the package manifest, which binds both package hashes. |
+| Raspberry Pi 4 | `Cohesix-1.2.0-Pi4.tar.gz` contains `image/cohesix-pi4-sd.img` and its checksum for flashing an SD card. |
+| Python clients | The Cohesix SDK and NeMo client kit are included in the host archives at version `1.2.0`. The SDK is also published on PyPI as `cohesix==1.2.0`. |
+
+The Mac and Linux host installers include the Cohesix command line tools and
+SwarmUI. QEMU is optional: setup checks the installed binary and offers a
+compatible pinned build when the system package is unsuitable. No installer
+downloads a model or copies your credentials.
 
 Start with the [quickstart](../docs/QUICKSTART.md), then use the
 [use cases](../docs/USE_CASES.md) to choose a client and provider. Verify a

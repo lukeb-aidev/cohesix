@@ -20,6 +20,68 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import release_qualify as qualify  # noqa: E402
 
 
+def test_installed_host_tool_requires_matching_uuid_and_developer_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The installer readback accepts signing changes only for the same build."""
+    sys.path.insert(0, str(ROOT / "scripts/install"))
+    import qualify_native_install as native  # noqa: E402
+
+    source = tmp_path / "source"
+    installed = tmp_path / "installed"
+    source.write_bytes(b"release")
+    installed.write_bytes(b"signed release")
+
+    def checked(arguments: list[str], **_kwargs: object) -> str:
+        if "dwarfdump" in arguments[0]:
+            return "UUID: 11111111-1111-1111-1111-111111111111\n"
+        if "-dvv" in arguments:
+            return ("TeamIdentifier=ABCDEFGHIJ\n"
+                    "Authority=Developer ID Application: Publisher\n"
+                    "CodeDirectory v=20500 flags=0x10000(runtime)\n"
+                    "Timestamp=28 Sep 2026\n")
+        return ""
+
+    monkeypatch.setattr(native, "command", checked)
+    record = native.signed_host_tool_record(source, installed, "ABCDEFGHIJ")
+    assert record["sha256"] == hashlib.sha256(b"signed release").hexdigest()
+
+    def wrong_uuid(arguments: list[str], **kwargs: object) -> str:
+        if "dwarfdump" in arguments[0] and arguments[-1] == str(installed):
+            return "UUID: 22222222-2222-2222-2222-222222222222\n"
+        return checked(arguments, **kwargs)
+
+    monkeypatch.setattr(native, "command", wrong_uuid)
+    with pytest.raises(ValueError, match="differs from the release build"):
+        native.signed_host_tool_record(source, installed, "ABCDEFGHIJ")
+
+
+def test_host_qualification_makes_relative_output_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Packaged subprocesses can write evidence while running outside the repo."""
+    bundle = tmp_path / "Cohesix-1.2.0-MacOS"
+    bundle.mkdir()
+    archive = tmp_path / "Cohesix-1.2.0-MacOS.tar.gz"
+    archive.write_bytes(b"fixture")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(qualify, "inspect_bundle", lambda *_: {"kind": "macos"})
+
+    def check_output(args: argparse.Namespace, record: dict) -> None:
+        assert args.output.is_absolute()
+        (args.output.parent / "packaged-smoke.log").write_text("PASS\n")
+        record["checks"] = qualify.HOST_CHECKS
+
+    monkeypatch.setattr(qualify, "qualify_host", check_output)
+    monkeypatch.setattr(sys, "argv", [
+        "release_qualify.py", "host", "--bundle", str(bundle),
+        "--archive", str(archive), "--output", "evidence/result.json",
+    ])
+    assert qualify.main() == 0
+    result = json.loads((tmp_path / "evidence/result.json").read_text())
+    assert result["logs"][0]["path"] == "packaged-smoke.log"
+
+
 def test_installer_result_can_share_signed_package_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

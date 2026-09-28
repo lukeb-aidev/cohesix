@@ -91,9 +91,12 @@ def test_stage_installs_code_and_app_without_user_state(
     monkeypatch.setattr(macos, "signature", lambda *_: {})
     monkeypatch.setattr(macos, "checked", lambda *_: "")
     monkeypatch.setattr(macos, "uuids", lambda *_: {"same-build-uuid"})
+    monkeypatch.setattr(macos, "sign_host_tool", lambda _source, staged, *_: (
+        staged.write_bytes(staged.read_bytes() + b"-signed")
+    ))
     root = tmp_path / "root"
-    macos.stage(reference, root)
-    assert (root / "Library/Application Support/Cohesix/bin/coh").read_bytes() == b"controller"
+    macos.stage(reference, root, "c" * 40)
+    assert (root / "Library/Application Support/Cohesix/bin/coh").read_bytes() == b"controller-signed"
     assert (root / "Applications/SwarmUI.app/Contents/MacOS/swarmui").read_bytes() == b"desktop"
     assert (root / "Applications/SwarmUI.app/Contents").stat().st_mode & 0o777 == 0o755
     assert (root / "Applications/SwarmUI.app/Contents/MacOS/swarmui").stat().st_mode & 0o777 == 0o755
@@ -105,14 +108,33 @@ def test_stage_installs_code_and_app_without_user_state(
         "/Library/Application Support/Cohesix/bin/cohesix-uninstall",
         "/Applications/SwarmUI.app/Contents/MacOS/swarmui",
     }
+    tool = next(row for row in manifest["files"] if row["path"].endswith("/bin/coh"))
+    assert tool["sha256"] == hashlib.sha256(b"controller-signed").hexdigest()
     assert (root / "Library/Application Support/Cohesix/INSTALLED.sha256").is_file()
+
+
+def test_host_tool_signing_requires_runtime_and_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    staged = tmp_path / "staged"
+    source.write_bytes(b"release")
+    staged.write_bytes(b"release")
+    monkeypatch.setattr(macos, "uuids", lambda *_: {"same-build-uuid"})
+    monkeypatch.setattr(macos, "checked", lambda args, **_kw: (
+        "TeamIdentifier=ABCDEFGHIJ\nAuthority=Developer ID Application: Publisher\n"
+        "CodeDirectory v=20500 flags=0x10000(runtime)\n"
+        if "-dvv" in args else ""
+    ))
+    with pytest.raises(ValueError, match="runtime"):
+        macos.sign_host_tool(source, staged, "ABCDEFGHIJ", "c" * 40)
 
 
 def test_stage_refuses_changed_app_binary(tmp_path: Path) -> None:
     reference = make_inputs(tmp_path)
     (Path(reference["signed_app"]) / "Contents/MacOS/swarmui").write_bytes(b"changed")
     with pytest.raises(ValueError, match="signed app executable changed"):
-        macos.stage(reference, tmp_path / "root")
+        macos.stage(reference, tmp_path / "root", "c" * 40)
 
 
 def test_stage_refuses_extension_version_drift(tmp_path: Path) -> None:
@@ -124,7 +146,7 @@ def test_stage_refuses_extension_version_drift(tmp_path: Path) -> None:
     info["CFBundleShortVersionString"] = "0.1.0"
     extension.write_bytes(plistlib.dumps(info))
     with pytest.raises(ValueError, match="selected signed app version changed"):
-        macos.stage(reference, tmp_path / "root")
+        macos.stage(reference, tmp_path / "root", "c" * 40)
 
 
 def test_release_b_app_and_extension_versions_match_selected_candidate() -> None:
@@ -164,5 +186,5 @@ def test_notary_failure_leaves_no_publishable_output(
     monkeypatch.setattr(macos, "checked", fake_checked)
     output = tmp_path / "installers"
     with pytest.raises(ValueError, match="notary submission failed"):
-        macos.build(tmp_path / "reference.json", output, "a" * 40, "profile")
+        macos.build(tmp_path / "reference.json", output, "a" * 40, "profile", "c" * 40)
     assert not output.exists()

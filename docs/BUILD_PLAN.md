@@ -13598,7 +13598,7 @@ Milestone: 28g / m28g-macos-native-installer
 Goal: Install the exact Release B host candidate as a signed, notarized macOS package with a normal SwarmUI app launch.
 Inputs: Accepted 27e signed host/desktop profiles and 28c Apple app/entitlements; exact 28–28f candidate; scripts/install/; scripts/release_bundle.sh; packaging/swarmui/Info.plist; supported Apple Silicon/macOS versions and external signing identities.
 Changes:
-  - scripts/install/build_macos_pkg.sh + packaging/macos/** + scripts/release_bundle.sh + scripts/setup_environment.sh — stage the compiler-registered host payload, offline Python/NeMo kit and selected Mac assets at stable locations without mandatory QEMU setup; sign nested code before freezing its Cohesix file manifest, then sign/notarize/staple the outer `.pkg`. Supply a receipt-bound removal helper; signing credentials remain outside the payload.
+  - scripts/install/build_macos_pkg.sh + packaging/macos/** + scripts/release_bundle.sh + scripts/setup_environment.sh — stage the compiler-registered host payload, offline Python/NeMo kit and selected Mac assets at stable locations without mandatory QEMU setup; select `COHESIX_APP_IDENTITY` and `COHESIX_INSTALLER_IDENTITY` separately, sign nested code before freezing its Cohesix file manifest, then sign/notarize/staple the outer `.pkg`. Supply a receipt-bound removal helper; signing credentials remain outside the payload.
   - scripts/install/{qemu_compat,setup_qemu_macos}.py + skills/cohesix-ai-host-setup/** — make guest QEMU optional, select a system binary only after a real four-core HVF startup, and build the pinned upstream 10.1.0 HVF fix in a separate user prefix when necessary. Do not replace Homebrew's binary or imply startup is guest acceptance.
   - apps/swarmui/tauri.conf.json + packaging/swarmui/Info.plist + native app resource lookup — ship the accepted 28c App Intents integration, icon, version and required resources in `/Applications/SwarmUI.app`; resolve installed `coh` and gateway without a terminal environment.
   - apps/swarmui/icons/swarmui-macos-appicon.png + scripts/install/stage_swarmui.py + tests/test_macos_installer.py + docs/SWARMUI.md — stage a distinct 1024-pixel Mac AppIcon based on the Cohesix circuit silhouette. The raster artwork was drafted with image generation, then checked at Dock sizes; the native icon converter binds the validated PNG bytes to the signed app.
@@ -13696,13 +13696,13 @@ Deliverables: Installable candidate, newcomer/client guides, exact distribution 
 
 Title/ID: m28g-a2a-catalogue-release-selection
 Milestone: 28g / m28g-a2a-catalogue-release-selection; downstream discovery in m28g-release-b-qualification.
-Status: In Progress — compiler selection repaired; exact candidate requalification pending.
+Status: Complete — the exact `b68a2c2a1a38` release preflight passed and both host archives include the generated A2A catalogue.
 Goal: Ship the generated A2A catalogue with every Release B host archive so installed agent clients can inspect the same selected skills as the gateway.
 Inputs: The exact 1.2.0 release inventory, compiler-generated MCP and A2A catalogues, and the canonical bundle preflight refusal for the omitted A2A file.
 Changes: AI-assisted investigation traced the factory refusal to the missing inventory row. Select configs/generated/a2a_catalogue.json in configs/implementation_surfaces.toml; regenerate its inventory, host graph and dependent generated projections; add a focused release inventory assertion. Record the failed preflight and rebind affected release evidence to the repaired source.
 Commands: .venv/bin/python -m pytest -q tests/test_release_bundle.py; scripts/check-generated.sh; scripts/release_bundle.sh --check-manifest with exact Mac, Linux and Pi production inputs; git diff --check.
 Checks: The bundle factory accepts the exact generated file set and copies the A2A catalogue to both host archives with byte-bound manifests. MCP and A2A remain selected on QEMU and Pi. Regenerated graph/source bindings require renewed affected artifact checks; earlier target results retain their original identities.
-Validation: 49 focused release/Python generated-contract tests, 16 cohesix-authority unit tests, generated consistency and git diff --check passed on the repair working tree. Final exact-source bundle preflight and archive checks remain pending.
+Validation: 49 focused release/Python generated-contract tests, 16 cohesix-authority unit tests, generated consistency and git diff --check passed on the repair working tree. At `b68a2c2a1a38`, the exact-source bundle preflight and the Mac, Linux and Pi archive inventory checks passed; both host archives include the generated A2A catalogue.
 Deliverables: Corrected release selection, regenerated contracts, focused test result and renewed exact-source candidate evidence.
 
 Title/ID: m28g-release-b-qualification
@@ -13727,7 +13727,7 @@ Deliverables: Qualified 1.2.0 candidate, complete hash-bound acceptance matrix/e
 
 Title/ID: m28g-production-tcp-release-proof
 Milestone: 28g / m28g-production-tcp-release-proof; discovery in m28g-release-b-qualification.
-Status: In Progress — native Mac and Jetson target replay remains required.
+Status: Complete — native Mac HVF and Jetson KVM strict-production TCP replays passed at `b68a2c2a1a38` with matching selected artifacts.
 Goal: Bind each release archive to authenticated TCP from its own strict-production QEMU artifact while retaining the complete development-authority transport plan.
 Inputs: The retained 4a469 Pi production Stage 03 refusal of legacy `/queen/ctl`; selected production manifests with `legacy_queen_ctl=false`; canonical native artifact and release factory contracts.
 Changes: Give the production-safe base scripts a distinct catalog action and exact script-set check in the release factory. Refuse a development policy, missing default MCP/A2A or standing control, wrong target/group/action, partial script result, and a different artifact. Preserve the full Stage 03 matrix and production authority.
@@ -13737,7 +13737,7 @@ Deliverables: Production TCP records usable by the canonical release factory, fo
 
 Title/ID: m28g-linux-host-policy-selection
 Milestone: 28g / m28g-linux-host-policy-selection; downstream discovery in m28g-production-tcp-release-proof.
-Status: In Progress — exact-source native rebuild and TCP replay pending.
+Status: Complete — the `b68a2c2a1a38` Jetson native tool build recorded selected policy SHA-256 `f77a645d43347d50eaef1e832b1b729918d1818d1b7f603b4988928036cd321c`; the rebuilt `cohsh` and exact KVM TCP replay passed.
 Goal: Build Linux host clients against the same selected production policy as their accepted KVM guest.
 Inputs: The retained Jetson KVM production TCP attempt whose response matrix passed but `cohsh` refused the generated policy hash; selected production manifest; native builder and release factory provenance.
 Changes: `scripts/linux_host_tools_sync.sh build-tools` accepts a selected manifest, transfers it and its referenced public CAS verification key with independent hashes outside the clean source archive, generates host policies and Python defaults from that profile, places the selected external policy files at their native default paths, checks the compiled `cohsh` against its selected policy, and records manifest/key/policy digests. The release factory forwards its selected manifest and refuses Linux provenance for another manifest. Focused tests and the host guide cover this binding.
