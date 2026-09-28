@@ -49,7 +49,7 @@ manifest alone cannot establish publisher identity. Do not install an
 unqualified candidate as a production upgrade.
 
 The Debian publisher key fingerprint is
-`7E27 A4AB 355D 2EA5 6571 8CA4 1059 A516 E53B 0B70`. Its public copy is
+`6840 71A2 AF49 8008 930C F6AE EBB8 ECC4 9397 F8C2`. Its public copy is
 [`cohesix-debian-publisher-2026.asc`](../releases/cohesix-debian-publisher-2026.asc).
 Confirm this fingerprint through a trusted release announcement before
 using the key to verify a package signature.

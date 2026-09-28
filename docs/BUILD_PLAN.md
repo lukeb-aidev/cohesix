@@ -13644,6 +13644,16 @@ Checks:
   - Upgrade, failed/repeated install, rollback, remove and purge preserve or remove state/evidence/configuration only as explicitly documented; service enrollment and activation remain opt-in, and no maintainer script downloads models or copies credentials.
 Deliverables: Reproducible Ubuntu ARM64 `.deb` set, installer manifest/publisher proof, GNOME and headless lifecycle reports, and public Linux install/upgrade/removal guidance.
 
+Title/ID: m28g-debian-publisher-key-alignment
+Milestone: 28g / m28g-debian-publisher-key-alignment; discovery in m28g-ubuntu-arm64-native-installer.
+Status: In Progress — signed package and independent Jetson verification pending.
+Goal: Give release readers the public key matching the private key used for the 1.2.0 Debian installer manifest.
+Inputs: The tracked 2026 Debian publisher key, the dedicated passphrase-protected signing key, installer signing command and public install guidance.
+Changes: Replace the tracked public key with the export of the selected publisher key; update its independently checkable fingerprint in the quickstart and release notes; retain the prior key probe as historical evidence. Keep the signing secret outside the checkout.
+Commands: `gpg --show-keys --with-colons releases/cohesix-debian-publisher-2026.asc`; independently verify a detached signature with `gpgv` using only the tracked key; `.venv/bin/python -m pytest -q tests/test_ubuntu_arm64_installer.py tests/test_release_bundle.py`; `scripts/check-generated.sh`; build and qualify the exact JetPack 7.2.1 `.deb` set.
+Checks: The public fingerprint equals the selected signer's fingerprint, independent verification accepts its detached signature and rejects the earlier key, and the exact signed installer manifest and package bytes pass the native installer gate. A key probe alone does not qualify a `.deb`.
+Deliverables: One public verification key, aligned reader guidance and independently verified signed installer evidence at the accepted source.
+
 Title/ID: m28g-host-clients-as-built-alignment
 Milestone: 28g / m28g-host-clients-as-built-alignment
 Goal: Align every shipped host tool, Python library and SwarmUI operation with the selected code and generated contracts as built.

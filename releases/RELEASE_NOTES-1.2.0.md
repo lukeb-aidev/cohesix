@@ -48,7 +48,7 @@ Start with the [quickstart](../docs/QUICKSTART.md), then use the
 [use cases](../docs/USE_CASES.md) to choose a client and provider. Verify a
 download against the release checksums and the package signature before
 installing it. The Debian publisher key fingerprint is
-`7E27 A4AB 355D 2EA5 6571 8CA4 1059 A516 E53B 0B70`.
+`6840 71A2 AF49 8008 930C F6AE EBB8 ECC4 9397 F8C2`.
 
 ## Supported release profiles
 

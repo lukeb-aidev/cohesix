@@ -1105,3 +1105,42 @@ the private Wi-Fi values and Queen credential. This is a quick same-image
 Wi-Fi smoke, not the full physical Pi, pressure, repeatability or final SD
 release gate. The subsequent source change for Linux host-tool selection
 requires its own exact-source qualification.
+
+## Debian publisher key alignment
+
+Title/ID: `m28g-debian-publisher-key-alignment`; discovery in
+`m28g-ubuntu-arm64-native-installer`.
+
+Milestone: 28g / m28g-debian-publisher-key-alignment.
+
+Goal: Ship the public verification key that corresponds to the selected
+private 1.2.0 Debian signing key.
+
+Inputs: The earlier Ed25519 key probe recorded above, the selected dedicated
+passphrase-protected RSA publisher key, the tracked public export and install
+guidance.
+
+Changes: The earlier public key did not correspond to the private key selected
+for the final native signing flow. Its probe remains a valid historical result
+for that identity, but it cannot establish trust in a signature made by
+another key.
+The tracked public export and reader-facing fingerprint now identify
+`684071A2AF498008930CF6AEEBB8ECC49397F8C2`. The private key and
+passphrase remain outside the repository. No package or release acceptance is
+inferred from changing the public trust file.
+
+Commands: `gpg --show-keys --with-colons
+releases/cohesix-debian-publisher-2026.asc`; independent `gpgv` signature
+verification; focused installer and bundle tests; generated consistency.
+
+Checks: The tracked key parses with the selected fingerprint. A fresh
+public-only `gpgv` probe accepted a detached signature from the selected
+private key and rejected it with the earlier tracked key; its receipt is at
+`out/m28g/debian-publisher-key-alignment/result.json`. All 26 focused
+installer/bundle tests, generated consistency, Test Plan catalog validation
+and `git diff --check` passed. Signed-package verification on JetPack 7.2.1 /
+L4T 39.2.1 and the complete installer lifecycle remain pending at the final
+source.
+
+Deliverables: Aligned public key, quickstart and release notes. AI assistance
+identified the trust mismatch; the native package gate remains open.
