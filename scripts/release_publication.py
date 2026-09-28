@@ -21,6 +21,14 @@ import qemu_artifact as evidence  # noqa: E402
 
 INVENTORY = "configs/generated/implementation_surface_inventory.json"
 GRAPH = "configs/generated/host_integration_dependency.json"
+GRAPH_CONSUMERS = frozenset({
+    "configs/generated/use_case_evidence.json",
+    "configs/generated/provider_registry.json",
+    "configs/generated/mcp_catalogue.json",
+    "configs/generated/a2a_catalogue.json",
+    "tools/cohesix-py/cohesix/provider_generated.py",
+    "crates/cohesix-authority/src/provider_generated.rs",
+})
 DOCUMENTS = frozenset({
     "README.md", "docs/BUILD_PLAN.md", "docs/TEST_PLAN.md", "docs/FAILOVER.md",
     "docs/HOST_TOOLS.md", "docs/HARDWARE_BRINGUP.md", "docs/QUICKSTART.md", "docs/REPO_LAYOUT.md",
@@ -107,6 +115,25 @@ def normalized_inventory(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def retired_inventory_binding_only(root: Path, qualified: Path) -> bool:
+    """Validate the inventory deletion and the graph's resulting digest binding."""
+
+    current_inventory = evidence.read_json(root / INVENTORY)
+    previous_inventory = evidence.read_json(qualified / INVENTORY)
+    if normalized_inventory(current_inventory) != normalized_inventory(previous_inventory):
+        return False
+    graphs = []
+    for tree in (root, qualified):
+        document = evidence.read_json(tree / GRAPH)
+        expected = hashlib.sha256((tree / INVENTORY).read_bytes()).hexdigest()
+        field = "implementation_surface_inventory_sha256"
+        if document["meta"][field] != expected:
+            raise evidence.EvidenceError("host graph has an invalid inventory binding")
+        document["meta"][field] = ""
+        graphs.append(document)
+    return graphs[0] == graphs[1]
+
+
 def classify_change(root: Path, qualified: Path, path: str, deleted: bool) -> str:
     """Admit the owner-approved publication delta; all runtime changes fail."""
 
@@ -132,16 +159,18 @@ def classify_change(root: Path, qualified: Path, path: str, deleted: bool) -> st
         if normalized_inventory(current) == normalized_inventory(previous):
             return "retired-document-inventory"
     if path == GRAPH:
-        current = evidence.read_json(root / path)
-        previous = evidence.read_json(qualified / path)
-        field = "implementation_surface_inventory_sha256"
-        for document, tree in ((current, root), (previous, qualified)):
-            expected = hashlib.sha256((tree / INVENTORY).read_bytes()).hexdigest()
-            if document["meta"][field] != expected:
-                raise evidence.EvidenceError("host graph has an invalid inventory binding")
-            document["meta"][field] = ""
-        if current == previous:
+        if retired_inventory_binding_only(root, qualified):
             return "retired-document-inventory-binding"
+    if path in GRAPH_CONSUMERS and retired_inventory_binding_only(root, qualified):
+        old_digest = hashlib.sha256((qualified / GRAPH).read_bytes()).hexdigest()
+        new_digest = hashlib.sha256((root / GRAPH).read_bytes()).hexdigest()
+        previous = (qualified / path).read_text()
+        current = (root / path).read_text()
+        if (
+            old_digest != new_digest and old_digest in previous
+            and current == previous.replace(old_digest, new_digest)
+        ):
+            return "retired-document-graph-binding"
     raise evidence.EvidenceError(f"qualified runtime or contract changed: {path}")
 
 

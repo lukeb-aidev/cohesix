@@ -149,6 +149,58 @@ def test_publication_accepts_current_release_docs_and_refuses_historical_edits(
             publication.classify_change(tmp_path, tmp_path, path, False)
 
 
+def test_publication_accepts_only_retired_inventory_graph_digest_rebinding(
+    tmp_path: Path,
+) -> None:
+    """Retiring old release rows must not admit a changed provider contract."""
+    spec = importlib.util.spec_from_file_location(
+        "release_publication_graph_test", ROOT / "scripts/release_publication.py"
+    )
+    assert spec is not None and spec.loader is not None
+    publication = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publication)
+    qualified, current = tmp_path / "qualified", tmp_path / "current"
+    old_inventory = {"tracked_surfaces": [{
+        "path": "releases/Cohesix-0.9.0-beta-MacOS/README.md",
+        "package_disposition": "historical_release_only",
+        "production_reachable": False,
+    }]}
+    new_inventory = {"tracked_surfaces": []}
+    digests = []
+    for tree, inventory in ((qualified, old_inventory), (current, new_inventory)):
+        inventory_path = tree / publication.INVENTORY
+        inventory_path.parent.mkdir(parents=True)
+        inventory_path.write_text(json.dumps(inventory, sort_keys=True) + "\n")
+        inventory_sha = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
+        graph_path = tree / publication.GRAPH
+        graph_path.write_text(json.dumps({
+            "meta": {"implementation_surface_inventory_sha256": inventory_sha},
+            "providers": ["unchanged"],
+        }, sort_keys=True) + "\n")
+        digests.append(hashlib.sha256(graph_path.read_bytes()).hexdigest())
+    assert publication.classify_change(
+        current, qualified, publication.GRAPH, False
+    ) == "retired-document-inventory-binding"
+    for path in publication.GRAPH_CONSUMERS:
+        for tree, graph_sha in ((qualified, digests[0]), (current, digests[1])):
+            target = tree / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"graph_sha256={graph_sha}\n")
+        assert publication.classify_change(
+            current, qualified, path, False
+        ) == "retired-document-graph-binding"
+    changed = current / "configs/generated/a2a_catalogue.json"
+    changed.write_text(changed.read_text() + "new authority\n")
+    with pytest.raises(publication.evidence.EvidenceError, match="contract changed"):
+        publication.classify_change(
+            current, qualified, "configs/generated/a2a_catalogue.json", False
+        )
+    graph = current / publication.GRAPH
+    graph.write_text(graph.read_text().replace("unchanged", "changed"))
+    with pytest.raises(publication.evidence.EvidenceError, match="contract changed"):
+        publication.classify_change(current, qualified, publication.GRAPH, False)
+
+
 @pytest.mark.parametrize("profile", [
     "qemu_smp_production", "qemu_smp_kvm_production", "qemu_smp_diagnostic",
 ])
