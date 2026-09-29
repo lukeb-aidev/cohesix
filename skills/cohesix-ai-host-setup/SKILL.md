@@ -1,28 +1,55 @@
 ---
 name: cohesix-ai-host-setup
-description: Configure and verify Cohesix host AI tools and optional QEMU on Apple Silicon macOS or Ubuntu ARM64. Use for MLX, MAX, vMLX, Hugging Face, PEFT, CUDA, NeMo, or VM runtime setup and repair; do not claim target acceptance from installation.
+description: Set up and verify Cohesix host tools from native .pkg or .deb installers or release archives, with optional AI runtimes and QEMU, on Apple Silicon macOS or Ubuntu ARM64. Use for host installation, MLX, MAX, vMLX, Hugging Face, PEFT, CUDA, NeMo, or VM setup and repair.
 license: Apache-2.0
 ---
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Prepare reproducible external AI host environments without conflating package presence with live Cohesix workflows. -->
+<!-- Purpose: Route verified Cohesix host installation and AI runtime setup without conflating setup with live target acceptance. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Prepare an AI host
 
-Use this skill when the user asks to set up, repair, or inventory host AI tools
-or optional QEMU alongside Cohesix. Read [Mac setup](references/mac.md) for
-Apple Silicon and [Linux setup](references/linux.md) for Ubuntu ARM64. `MAX` means
+Use this skill when the user asks to install Cohesix host tools or set up,
+repair, or inventory host AI tools or optional QEMU alongside them. Read
+[Mac setup](references/mac.md) for Apple Silicon and
+[Linux setup](references/linux.md) for Ubuntu ARM64. `MAX` means
 Modular MAX; `MLX` means Apple's array/model stack; `vMLX` is a separate desktop
-app. Select only the requested tools and an actual supported host profile.
+app. Choose the components and installation method for the actual host,
+workload and operator preference. The platform references give decisions and
+proof examples, not a required stack or fixed sequence.
 The repository's pinned NeMo Agent Toolkit kit is for Linux AArch64; a Mac
 agent client needs its own qualified MCP/A2A path.
-For a host-only or Pi journey, do not require QEMU. For a QEMU journey, use the
-selected release archive's `scripts/setup_environment.sh --with-qemu` and
-`--check --with-qemu`; it checks real HVF/KVM startup and keeps the Mac pinned
-fallback separate from the Cohesix host installer. A version print or
-accelerator list alone cannot establish guest compatibility.
-On headless Ubuntu, add `--headless` to omit SwarmUI graphical packages.
+
+## Choose the Cohesix installation
+
+Inspect the existing installation and read the selected release's
+[Quickstart](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/QUICKSTART.md)
+at its tag or source commit. For supported native host installation, choose the
+verified macOS `.pkg` or Ubuntu ARM64 `.deb` set. A headless Linux host needs
+only the controller package; add the SwarmUI package for a GNOME desktop.
+The portable host archive remains useful for a self-contained installation
+and supplies the matching guest files for a QEMU journey. Keep binaries,
+policies and Python from one host installation. If the host tools came from a
+native package, use guest assets from the same release archive without adding
+its `bin` directory to the active tool path.
+
+Before installing a downloaded package, check its bytes against the release
+installer manifest and establish publisher trust independently: accepted
+Developer ID Installer signature and stapled notarization on Mac, or the
+signed Debian installer manifest with a key authenticated outside the download
+on Linux. Check the selected release's advertised OS and architecture envelope;
+record when a different environment has only local smoke evidence. Inspect
+running services, existing state and the documented upgrade/removal behavior
+before replacing an installation. The native packages preserve external
+operator state and do not provision a seL4 guest, CUDA driver or model.
+
+For a host-only or Pi journey, QEMU is optional. For a QEMU journey, retain the
+matching release archive and use its `scripts/setup_environment.sh --with-qemu`
+and `--check --with-qemu` for the guest's HVF/KVM startup profile. On a headless
+Ubuntu archive setup, add `--headless` to omit graphical dependencies. Guest
+boot and an authenticated request remain separate checks; a version print or
+accelerator list does not establish guest compatibility.
 
 The external model runtime, agent, caches and credentials live on the host,
 not in seL4. The Mac may be a controller without local MLX work; a Linux
@@ -38,9 +65,9 @@ the repository's hash-locked `.venv` unless its owner explicitly changes them.
 
 ## Decide from the live host
 
-1. Record OS release, architecture, Python interpreters, accelerator and driver
-   or JetPack identity, free disk, model/cache locations, package managers,
-   installed app/CLI/package/container versions, and actual command paths.
+1. Record the OS, architecture, accelerator and driver or JetPack identity,
+   relevant Python and package managers, free disk, model/cache locations,
+   installed versions and actual command paths.
    Compare this with the operator's inventory; treat older entries as leads.
 2. Select the workload and its compatible runtime *before* installation:
    local Mac MLX, optional MAX, vMLX model/client, Linux CUDA + HF PEFT, or
@@ -52,14 +79,13 @@ the repository's hash-locked `.venv` unless its owner explicitly changes them.
    unsupported, name the exact incompatibility and offer a compatible host,
    runtime or version before making changes. Do not transplant Mac setup
    commands onto Linux or Linux service and driver instructions onto macOS.
-3. Reuse a working, compatible environment. Put a user-wide `hf` CLI on PATH;
-   install Python model packages in the selected runtime, not in system Python.
-   Use a separate NeMo client environment only when dependency compatibility
-   requires it. Record the absolute `hf` and `nat` executables and verify them
-   in the actual launch context: a login shell's PATH may differ from SSH,
-   systemd or another agent's non-login process. Use those verified paths in
-   automation. A GPU container is a distinct native execution runtime, not
-   an incidental Python venv.
+3. Reuse a working, compatible environment. Choose a native app, package,
+   isolated Python runtime or container according to the workload and host;
+   keep model packages out of system Python. Isolate NeMo when its dependencies
+   conflict with the selected runtime. Record the absolute `hf` and `nat`
+   executables when used and verify them in the actual launch context: a login
+   shell's PATH may differ from SSH, systemd or another agent's process. Use
+   verified paths in automation.
 4. Before changing drivers, containers, Python packages, apps, services or
    caches, inspect dependents, running jobs and retained artifacts. Upgrade or
    remove only the selected surface; preserve a working runtime until its
@@ -79,8 +105,8 @@ and the
 correlate the original operation with signed evidence. Report setup, native smoke,
 protocol-client compatibility and live Cohesix acceptance separately.
 
-Return a concise environment record: host/profile and source revision;
-component, version and absolute path or immutable image digest; model and
-cache location; command/check and observed result; blocker; and the exact
-scope of any claim. Include install/repair commands that another operator can
-repeat without local credentials or private paths.
+Return a concise environment record: host/profile, Cohesix installation method
+and release identity; component, version and absolute path or immutable image
+digest; model and cache location; command/check and observed result; blocker;
+and the exact scope of any claim. Include install/repair commands that another
+operator can repeat without local credentials or private paths.
