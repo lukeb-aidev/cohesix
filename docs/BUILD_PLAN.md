@@ -13599,6 +13599,16 @@ Checks: Current user paths say 1.2.0 without a beta suffix; historical 1.1.0-bet
 Validation: Generated outputs matched; metadata and 261 local Markdown paths across the changed files passed; current-release beta references were removed; bundle names were checked against release_bundle.sh; git diff --check passed. Exact 1.2.0 bundle bytes were unavailable for extraction checks. No runtime, native provider, QEMU, Pi or assembled-release gate was run for this documentation task.
 Deliverables: Community-facing 1.2.0 documentation corrections and this task record.
 
+Title/ID: m28g-readme-release-status
+Milestone: 28g / m28g-readme-release-status
+Status: Complete — documentation-only owner request, 30 September 2026.
+Goal: Identify 1.2.0 as the latest published release and present the videos without release-specific framing.
+Inputs: README.md; published 1.2.0 release notes; owner correction; CONTRIBUTING.md and TEST_PLAN.md.
+Changes: AI-assisted README edits replace obsolete candidate and publication wording, update the video introduction, and keep earlier release links with the release overview. Host tools, Python, benchmarks, generated contracts and release artifacts are unaffected.
+Commands: scripts/check-generated.sh; scripts/ci/check_mermaid_github.sh --markdown-list <(printf '%s\n' README.md docs/BUILD_PLAN.md); focused Markdown metadata, fence, local-link and copy review; git diff --check.
+Checks: README consistently identifies 1.2.0 as the latest published release, installation instructions use published archives, and videos describe Cohesix without a release label. Generated consistency and Test Plan contracts passed; metadata and fences passed for both changed files; 72 local README links resolved; Mermaid compatibility and git diff --check passed. Video links and workflow descriptions are unchanged. No runtime, QEMU, physical Pi or release-acceptance gate was run.
+Deliverables: Corrected README and this scoped documentation task record.
+
 Title/ID: m28g-architecture-boundary-diagram-simplification
 Milestone: 28g / m28g-architecture-boundary-diagram-simplification
 Status: Complete — documentation-only owner request, 27 September 2026.

@@ -186,10 +186,9 @@ live execution. See the [SwarmUI guide](docs/SWARMUI.md),
 [native gallery](docs/SWARMUI_GALLERY.md), and
 [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md).
 
-## Preview Cohesix 1.2.0
+## Latest release: Cohesix 1.2.0
 
-Release B is a 1.2.0 candidate undergoing qualification. The published
-release remains 1.1.0-beta. Start with the matching
+Cohesix 1.2.0 is the latest published release. Start with the
 [1.2.0 Quickstart](docs/QUICKSTART.md) for a Mac or Linux
 host and a QEMU or Raspberry Pi 4 target. The [use-case guide](docs/USE_CASES.md)
 shows where native CUDA, private adapter release, Mac MLX and agent clients fit;
@@ -197,10 +196,13 @@ the [status page](docs/STATUS.md) explains the selected profiles and evidence
 boundaries. Check the installed bundle's `VERSION.txt` and `RELEASE_NOTES.md`
 for its exact contents and limitations.
 
-### See the earlier system in action
+Earlier bundles and notes remain available under [releases/](releases/) and their
+original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
 
-These 1.1.0-beta recordings illustrate the control model; they are historical
-demos, not verification of an installed 1.2.0 bundle.
+## See Cohesix in action
+
+These videos demonstrate Cohesix's boot process, control model and operator
+workflows.
 
 - [Raspberry Pi 4 boot tour](https://youtu.be/63kroQa_sys) — see the SD image,
   U-Boot, HDMI and serial boot, then explore the root shell with `caps`, `bi`,
@@ -219,9 +221,6 @@ demos, not verification of an installed 1.2.0 bundle.
   Pi 4 Queen. Inspect one Worker's state and health, then see the Jetson GPU
   bridge report unavailable.
 
-Earlier bundles and notes remain available under [releases/](releases/) and their
-original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
-
 See [Current status](docs/STATUS.md) for the capability and evidence snapshot,
 and the [Build Plan](docs/BUILD_PLAN.md) for the complete record of planned and
 implemented scope. Building, flashing, booting, device readiness, raw TCP,
@@ -234,10 +233,9 @@ running them.
 
 ### Run a release bundle
 
-Once 1.2.0 is approved and published, choose the matching Mac or Linux ARM64
-archive from [published releases](https://github.com/lukeb-aidev/cohesix/releases)
-and follow its bundled `QUICKSTART.md` and release notes. For a qualification
-candidate, use only the matching archives supplied with its exact evidence.
+Choose the matching Cohesix 1.2.0 Mac or Linux ARM64 archive from
+[published releases](https://github.com/lukeb-aidev/cohesix/releases)
+and follow its bundled `QUICKSTART.md` and release notes.
 After extraction, verify its
 `MANIFEST.sha256` before running tools: use `shasum -a 256 --check MANIFEST.sha256`
 on Mac or `sha256sum --check MANIFEST.sha256` on Linux. The common host-bundle
