@@ -10,9 +10,9 @@ license: Apache-2.0
 
 # Operate across hives
 
-Start with the same-version [fleet recipe](../../docs/OPERATOR_RECIPES.md#read-a-small-fleet),
-[host tools](../../docs/HOST_TOOLS.md) and
-[authority contract](../../docs/M27A_AUTHORITY.md). Select the actual named
+Start with the same-version [fleet recipe](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/OPERATOR_RECIPES.md#read-a-small-fleet),
+[host tools](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_TOOLS.md) and
+[authority contract](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/M27A_AUTHORITY.md). Select the actual named
 hives and a matching macOS or Linux client installation. Either host can read
 the selected hives; their QEMU, Pi and native provider profiles still determine
 which actions are available. Use `coh fleet --help` and read-only

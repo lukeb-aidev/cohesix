@@ -13,15 +13,18 @@ license: Apache-2.0
 Use a matching installed release and the deployment's selected host profile:
 Apple Silicon macOS with admitted MLX, Linux AArch64 NVIDIA with admitted CUDA,
 or both. A Mac or Linux controller can coordinate a remote selected host.
-Read the same-version [host operation guide](../../docs/HOST_TOOLS.md#swarmui),
-[private release guide](../../docs/PRIVATE_LORA_RELEASE.md) and
-[Release B host/client contract](../../docs/BUILD_PLAN.md#release-b).
+Read the same-version [host operation guide](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_TOOLS.md#swarmui),
+[private release guide](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/PRIVATE_LORA_RELEASE.md) and
+[Release B host/client contract](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md#release-b).
 If copied outside the repository, use the matching installed guides or pin
 these links to the selected source revision; load companion skills separately.
 The Mac's local MLX workbench is useful for exploration; its local observation
 does not itself admit a Cohesix job. A Linux CUDA result must come from its
 selected native executor. Use only the stages and transfer path advertised by
-the installed profile.
+the installed profile. Published 1.2.0 supports local Mac MLX exploration;
+its admitted Mac lifecycle remains planned under 28c1. For a local comparison,
+load [MLX workbench](../cohesix-mlx-workbench/SKILL.md). A mixed-host bake-off
+does not establish an admitted Mac deployment or qualify model distribution.
 Inspect each candidate host's OS, accelerator, model format, runtime and
 capacity before comparing or activating. If a combination is unsupported,
 explain the exact incompatibility and offer a compatible selected host or a

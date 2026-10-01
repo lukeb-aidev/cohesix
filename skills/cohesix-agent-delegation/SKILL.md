@@ -11,15 +11,15 @@ license: Apache-2.0
 # Delegate one bounded action
 
 Use a matching installed Cohesix release and its generated catalogue. Read the
-same-version [host-tool protocol guide](../../docs/HOST_TOOLS.md#selected-mcp-clients),
-[Host API](../../docs/HOST_API.md), and [authority contract](../../docs/M27A_AUTHORITY.md)
-before configuring a client. Those relative links resolve in the repository;
-if this skill is copied to an agent's own directory, use the matching installed
-guides or the same files at a pinned source commit. Loading `SKILL.md` gives an
+same-version [host-tool protocol guide](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_TOOLS.md#selected-mcp-clients),
+[Host API](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/HOST_API.md), and [authority contract](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/M27A_AUTHORITY.md)
+before configuring a client. Use the matching installed guides or replace
+`main` in those URLs with the selected source commit/tag; web links also work
+when this skill is copied into an agent's own directory. Loading `SKILL.md` gives an
 agent instructions, not MCP or A2A transport support. The matching gateway
 and supported MCP/A2A clients can be on macOS or Linux when the selected
 profile qualifies them. The repository's pinned
-[NeMo Agent Toolkit kit](../../integrations/nemo-agent-toolkit/README.md)
+[NeMo Agent Toolkit kit](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/integrations/nemo-agent-toolkit/README.md)
 is selected for Linux AArch64; it is not a Mac installation recipe. Mac
 Shortcuts require macOS. Check `coh doctor` for the effective master, MCP,
 and A2A switches. A disabled protocol is unavailable; a client cannot enable it.
@@ -41,6 +41,13 @@ authenticated discovery call under the intended subject. Empty MCP job tools
 or Agent Card skills mean that no standing job is available to that caller;
 reachability alone cannot authorize a submission.
 
+For the pinned kit's complete client, planner or evaluation journey, load
+[NeMo workflows](../cohesix-nemo-workflows/SKILL.md). For a person using Mac
+Shortcuts, follow the same-version host guide's SwarmUI Apple actions section:
+enroll the delegated connection in Keychain and use a user-created Shortcut.
+Apple Intelligence explains a job when available; manual operation remains
+usable. Spoken Siri and a generated explanation do not establish execution.
+
 ## Choose the interaction
 
 - Use **MCP** for a selected tool request whose caller will inspect or recover
@@ -61,7 +68,7 @@ provider credentials or a new ticket issuer to finish the job. Keep gateway
 authentication and the delegated ticket in private client configuration;
 never include values in a prompt, log or tracked example. For NeMo, use its
 ordinary native clients and the selected, pinned workflow in the
-[Release B plan](../../docs/BUILD_PLAN.md#28f).
+[Release B plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md#28f).
 
 ## Make the request reviewable
 

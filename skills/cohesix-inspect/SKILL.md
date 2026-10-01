@@ -24,8 +24,8 @@ mismatch and point to the correct host bundle or matching Python environment;
 keep target inspection read-only while setup is unresolved.
 Set `COH_BIN` to the **absolute executable directory** of the verified
 installation: the extracted bundle's `bin/`, the installed native package's
-`bin/`, or a matching source build. For the Release B package candidate, the
-staged paths are `/Library/Application Support/Cohesix/bin` on macOS and
+`bin/`, or a matching source build. For the published 1.2.0 native packages, the
+installed paths are `/Library/Application Support/Cohesix/bin` on macOS and
 `/usr/lib/cohesix/bin` on Ubuntu ARM64; verify the actual receipt before using
 either. The commands use absolute paths and need no bundle-root working
 directory. Examples use Bash; Python needs 3.11+ and the matching installed

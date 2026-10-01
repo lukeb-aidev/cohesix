@@ -12,7 +12,7 @@ license: Apache-2.0
 
 Use the selected installation and the operator's target identity. Start with
 the read-only [inspection skill](../cohesix-inspect/SKILL.md) and the
-[degradation recipe](../../docs/OPERATOR_RECIPES.md#inspect-sel4-and-mcs-state).
+[degradation recipe](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/OPERATOR_RECIPES.md#inspect-sel4-and-mcs-state).
 If copied outside the repository, load the companion skill separately and
 replace relative document links with the matching installed guide or a pinned
 source revision.
@@ -43,10 +43,10 @@ Choose the provider for the service's **actual host**. On macOS, an enrolled
 `launchd` service can use selected `launchd.start`, `launchd.stop`,
 `launchd.restart` or `launchd.status-check` actions with native account
 permission; follow the
-[macOS provider contract](../../docs/MACOS_PROVIDERS.md#launchd-service-lifecycle).
+[macOS provider contract](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/MACOS_PROVIDERS.md#launchd-service-lifecycle).
 On Linux, use the selected `systemd` unit action, or a Docker/Kubernetes action
 only where that provider is configured; follow the
-[host-ticket recipe](../../docs/OPERATOR_RECIPES.md#host-tickets-and-federation).
+[host-ticket recipe](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/OPERATOR_RECIPES.md#host-tickets-and-federation).
 The controller may be a different supported Mac or Linux host. Do not infer a
 service action from the controller OS or substitute one provider for another.
 Check the live provider catalogue, service enrollment and native permission

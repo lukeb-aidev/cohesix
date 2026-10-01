@@ -23,7 +23,29 @@ agent client needs its own qualified MCP/A2A path.
 
 ## Choose the Cohesix installation
 
-Inspect the existing installation and read the selected release's
+Discover and reuse the user's selected installation before downloading or
+installing anything. On Mac, handle both the extracted `.tar.gz` host bundle
+and the native `.pkg`; neither requires a source checkout. Resolve `COH_BIN`
+to an absolute directory and retain how its release identity was verified:
+
+| Host installation | Tool directory | Identity and resources |
+| --- | --- | --- |
+| Mac `.pkg` | `/Library/Application Support/Cohesix/bin` | Check the actual installer receipt, selected installed-file manifest and publisher validation. SwarmUI is `/Applications/SwarmUI.app`. |
+| Mac `.tar.gz` | `<absolute-extracted-bundle>/bin` | Check that bundle's `VERSION.txt`, manifest, packaged guide and hashes. Use its own policies, Python and resources. |
+| Ubuntu ARM64 `.deb` | `/usr/lib/cohesix/bin` | Check the controller package receipt and installed-file manifest; desktop SwarmUI is optional. |
+| Linux `.tar.gz` | `<absolute-extracted-bundle>/bin` | Check its version, manifest and matching Linux resources. |
+
+For an existing tarball installation, obtain its selected extraction directory
+or resolve an existing executable path to its bundle. Do not guess a path from
+this repository's `releases/` directory or assume the shell's first `coh` is
+the selected one. For a `.pkg`, check the Application Support location even
+when `coh` is absent from PATH. If both exist, use the user's selection or
+determine which owns the current services/configuration before changing
+anything. Record the absolute `coh` and `cohsh` paths and check their launch/help
+in the actual user/service context. A package launch failure remains a failure
+of that installation; choosing a tarball is an explicit installation choice.
+
+Read the selected release's
 [Quickstart](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/QUICKSTART.md)
 at its tag or source commit. For supported native host installation, choose the
 verified macOS `.pkg` or Ubuntu ARM64 `.deb` set. A headless Linux host needs
@@ -104,6 +126,12 @@ and the
 [GPU operations skill](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-gpu-operations/SKILL.md);
 correlate the original operation with signed evidence. Report setup, native smoke,
 protocol-client compatibility and live Cohesix acceptance separately.
+
+For the user's first useful task, load `cohesix-get-started`. Local Mac model
+experiments use `cohesix-mlx-workbench`; preparing a new CUDA batch uses
+`cohesix-workload-authoring`; the pinned Linux client/evaluation journey uses
+`cohesix-nemo-workflows`. Load those complete companion folders from the same
+collection. Host installation alone does not enroll or submit a job.
 
 Return a concise environment record: host/profile, Cohesix installation method
 and release identity; component, version and absolute path or immutable image

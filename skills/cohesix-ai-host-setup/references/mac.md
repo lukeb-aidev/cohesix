@@ -9,8 +9,18 @@ First check `uname -m`, `sw_vers -productVersion` and any existing Cohesix
 installation. Inspect Python, `hf`, `max`, app versions and developer tools only
 when the selected workload uses them. Select a native ARM64 Python interpreter
 for local AI workloads.
-For the Cohesix host tools, use a verified release `.pkg` when a normal Mac
-installation and `/Applications/SwarmUI.app` are wanted. Verify its Developer
+For Cohesix host tools, first discover the installation the user selected:
+an extracted Mac `.tar.gz` with its own `bin/`, or `.pkg` tools in Application
+Support. Reuse a compatible one. Set `COH_BIN` to that absolute directory;
+the same operating commands work from either installation without changing
+the current directory or relying on PATH. For a tarball, check `VERSION.txt`,
+manifest and guide inside the extraction and retain its policies/Python.
+For a `.pkg`, check its actual receipt and installed-file manifest even when
+it is not on PATH. If both exist, retain the chosen installation throughout
+the task and identify the current service owner before replacement.
+
+Use a verified release `.pkg` when a normal Mac installation and
+`/Applications/SwarmUI.app` are wanted. Verify its Developer
 ID Installer signature, notarization and release manifest as the selected
 [Quickstart](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/QUICKSTART.md)
 specifies. Check the installed version and host tools under
@@ -19,6 +29,33 @@ without a Terminal environment. Use the package's receipt-bound
 `cohesix-uninstall` helper for removal. An archive is a valid alternative for
 portable use and is still needed for a matching QEMU guest; do not assume the
 `.pkg` contains guest files or installs QEMU.
+
+Check that the selected executable launches before invoking `coh doctor`.
+If macOS reports a missing FUSE library or a library-validation Team ID
+mismatch, retain the exact loader error and inspect the installed receipt,
+executable signature and selected FUSE runtime. This can block `coh` before
+its optional mounting feature is used. Compare the installed tool's digest
+with a verified package payload before proposing reinstallation. If those
+bytes already match, reinstalling the same package is not a repair; retain
+the runtime/signature incompatibility for the publisher. Restore a supported matching
+installation/runtime through the documented setup path; do not ad-hoc re-sign
+release files or disable platform security to make a smoke pass. If choosing
+a verified portable archive, select that entire matching tool installation
+and record its separate identity. A CLI version string alone is not the
+bundle's 1.2.0 identity; use its manifest and `VERSION.txt` or native receipt.
+
+For the corrected 1.2.0 Mac installer, use the current
+[release download and correction notice](https://github.com/lukeb-aidev/cohesix/releases/tag/v1.2.0).
+Its `macos-installers.json` and `.pkg.sha256` identify the Mac package;
+the release's `installers.json` and detached signature describe Linux packages.
+The Mac receipt remains `1.2.0`, so compare the package and installed payload
+hashes to distinguish the corrected installer from the original. The publisher
+signs `coh` with Apple's
+[library-validation exception](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.cs.disable-library-validation)
+to load the separately signed macFUSE library while retaining hardened runtime.
+This correction does not install macFUSE; verify that the selected native
+FUSE3 runtime exists when checking this FUSE-linked CLI, and use the maintained
+host setup if it is absent.
 
 When Cohesix build tools are required, use
 [`toolchain/setup_macos_arm64.sh`](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/toolchain/setup_macos_arm64.sh)

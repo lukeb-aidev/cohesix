@@ -10,7 +10,7 @@ license: Apache-2.0
 
 # Release one private adapter
 
-Use the exact [Private LoRA release](../../docs/PRIVATE_LORA_RELEASE.md) guide
+Use the exact [Private LoRA release](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/PRIVATE_LORA_RELEASE.md) guide
 and matching installed `coh peft release --help`. Confirm the selected host
 runtime and WorkerLora receipt path. Training and serving stay on the native
 Mac or NVIDIA host; Cohesix owns admission, phase identity and verification.
@@ -18,6 +18,12 @@ If copied outside the repository, use the matching installed guide or a pinned
 source revision and load referenced companion skills separately.
 If the task is to install CUDA, MLX, PEFT or NeMo, use
 [AI host setup](../cohesix-ai-host-setup/SKILL.md) first.
+
+For published 1.2.0 Mac-only experimentation, load
+[MLX workbench](../cohesix-mlx-workbench/SKILL.md) for local training and
+comparison. The admitted Mac lifecycle described below belongs to planned
+28c1; use it only when the installed profile actually advertises and qualifies
+that path. The selected Linux native release has its own admitted contract.
 
 Select the native path from the **executor host**, not the controller. On
 Apple Silicon macOS, use the explicitly configured `cohesix-mlx-native/v1`

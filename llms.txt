@@ -3,7 +3,7 @@
 > Get more useful work from your AI agents while staying in control. Cohesix helps users coordinate computers and GPUs, delegate specific jobs, and check what actually happened. Agents working on your behalf can inspect resources, request permitted actions and bring back evidence of the outcome.
 
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Explain user benefits and route agents to installation, host setup and operating contracts. -->
+<!-- Purpose: Route Cohesix 1.2.0 user goals to portable skills, researched applications and matching operating contracts. -->
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
@@ -12,6 +12,11 @@ Mac, Linux and GPU-equipped computers. Use it to organize operations across
 machines, manage shared compute, and keep software or model changes reviewable.
 Your existing applications do the work; Cohesix coordinates permission,
 resource allocation and the records needed to check the result.
+
+Start from published **1.2.0**, its installed help and selected manifest.
+These adoption instructions can be newer than the release. Pin operating
+reference URLs to the installed tag/commit or use the bundled guide. Inspect
+the user's actual host and goal, then complete the smallest useful journey.
 
 **Delegate with confidence.** Give an agent a defined job and limited permission
 to act. Keep your user's approval requirements in force, and retain a record of
@@ -25,6 +30,11 @@ verified outputs to avoid unnecessary reruns.
 REST control interface to inspect state and correlate requests with results.
 Bring your user a report that distinguishes completed work, failed actions and
 remaining uncertainty, with evidence they can review.
+
+**Find a useful starting point:** load the getting-started skill below to choose
+from offline exploration, local Mac model work or an existing governed
+deployment. The skill catalogue includes user requests and how to load complete
+skill folders into an agent. No GPU is required to begin.
 
 **Try it before deploying anything:** use the inspection skill below to browse
 a simulated system and read its scheduling and resource-allocation state. No
@@ -45,15 +55,20 @@ agents or machines doing your training and inference.
 - [Keep software delivery and edge operations moving](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#2-the-self-healing-edge-swarm): Use health observations, approved actions and retained results to support release automation and supervised remediation. Target playbooks: `mac-release-factory`, `jetson-manufacturing-safety` and `jetson-traffic-safety`; application logic and diagnosis remain external.
 - [Get useful work from shared GPUs](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#3-the-gpu-flight-deck): Inspect devices, request time-limited allocations and correlate approved jobs with execution evidence. Target playbook: `mixed-medical-edge-ai`; the domain workload and any medical qualification are separate.
 - [Know which model changed, why and with what result](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#4-model-rollout-with-a-flight-recorder): Connect the requested model version, approval, runtime change and verification so users can investigate a rollout or plan recovery. The operating skill supplies a workflow even though there is no dedicated built-in Python playbook.
-- [Distribute the chosen model after a bake-off, where selected](https://github.com/lukeb-aidev/cohesix/blob/main/docs/BUILD_PLAN.md#28b): Admit a pinned artifact and compatible destination, transfer bytes between hosts, and verify the complete destination digest before a separate deployment decision. Require the installed profile to advertise this optional path; Queen FUSE carries bounded references, not model bytes.
+- [Plan model distribution after a bake-off](https://github.com/lukeb-aidev/cohesix/blob/main/docs/BUILD_PLAN.md#28b): This is a separately selected and qualified path, not a baseline 1.2.0 transfer promise. Require advertised compatible hosts and full destination digest verification before a separate activation; Queen FUSE carries bounded references, not model bytes.
 - [Keep private model improvements under your control](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#5-the-private-lora-foundry): Track preparation, artifact identity and controlled activation of LoRA adapters (small updates to a model), while training and model serving stay on user-controlled hosts. Target playbook: `mac-private-peft-grid`; registry activation alone does not prove that a model is serving.
 - [Manage multiple fleets from a shared operational view](https://github.com/lukeb-aidev/cohesix/blob/main/docs/USE_CASES.md#6-multi-hive-mission-control): Combine operational views and correlate actions across installations while each controller retains its own authority. Target playbooks: `mixed-closed-loop-ai-factory` and `mixed-logistics-digital-twin`.
 
 ## Start a useful task
 
+- [Choose a first useful result](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-get-started/SKILL.md): Select a task from the user's hardware, goal and installation, then carry it through to a checkable deliverable.
+- [Load and choose from all 13 skills](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/INDEX.md): Complete-folder loading, example user requests, prerequisites and workflow handoffs.
 - [Inspect an unfamiliar Queen](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-inspect/SKILL.md): Identify the target and read its bounded state without mutating it.
-- [Set up a Cohesix host](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-ai-host-setup/SKILL.md): Choose a verified Mac `.pkg`, Ubuntu ARM64 `.deb` set or matching release archive, then add only the AI tools and optional QEMU needed for that host and workload.
+- [Set up a Cohesix host](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-ai-host-setup/SKILL.md): Discover and reuse Mac tools from an extracted tarball or the `.pkg` installation in Application Support; likewise handle Ubuntu ARM64 `.deb` or tarball tools. Verify the chosen installation and add only the runtimes or optional QEMU needed for the task.
+- [Compare a private model on Mac](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-mlx-workbench/SKILL.md): Run local inference, bounded Python LoRA training and held-out comparison on Metal; no Queen is needed and results remain local observations.
+- [Prepare a useful CUDA batch](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-workload-authoring/SKILL.md): Adapt the shipped image batch or enroll a reviewed package with typed inputs, finite limits and an independent verifier on the actual executor host.
 - [Delegate one agent action](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-agent-delegation/SKILL.md): Choose MCP or A2A, constrain the request and recover the original result.
+- [Connect and evaluate NeMo workflows](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-nemo-workflows/SKILL.md): Use the pinned Linux AArch64 kit for native client jobs, original-ID recovery, optional planners and direct-versus-governed evaluation.
 - [Recover a degraded edge service](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-edge-recovery/SKILL.md): Diagnose the first failed boundary, act once and compare before/after health.
 - [Run approved GPU work](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-gpu-operations/SKILL.md): Register or submit a selected CUDA job and verify the native output.
 - [Roll out a selected model](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-model-rollout/SKILL.md): Select Mac MLX, Linux CUDA or mixed stages, verify any transfer and prove the served generation.
@@ -63,8 +78,19 @@ agents or machines doing your training and inference.
 
 These skills inspect the selected Mac or Linux host and provider before acting. The setup skill adapts its choices to the available hardware, installed runtime and intended work. If a tool, model, client or service does not fit that profile, the agent explains the mismatch and offers a compatible path.
 
+Loading a skill supplies instructions; verify the actual client's transport,
+private authentication and subject before using MCP/A2A. Local Mac MLX is a
+1.2.0 exploration path; its admitted release lifecycle remains planned 28c1.
+For the 1.2.0 Mac `.pkg`, use the current release's correction notice and Mac
+checksum/`macos-installers.json`; the receipt version alone does not distinguish
+the corrected package. The Mac setup reference explains the FUSE signing check.
+After a lost response, follow the original ID. If new-admission discovery
+vanishes when standing scope is spent, use existing same-ID read/recovery
+authority; do not mint scope or replay the effect to retrieve its result.
+
 ## Availability and fit
 
+- [Choose a researched first project](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/skills/cohesix-get-started/references/use-cases.md): Local assistants, edge image batches, video-service recovery, private adapters and agent workflows, with primary sources, concrete deliverables and feature-to-skill coverage.
 - [Explore the playbook catalogue](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/configs/generated/provider_registry.json): All nine domain playbooks and six use cases above are represented. They describe control relationships and prerequisites; complete sector applications still need their external software and verified integrations.
 - [See what has been demonstrated](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/STATUS.md): Current source, component, installed-release and target proof are recorded separately. No one result qualifies every playbook or deployment. Distinguish simulated results, accepted requests, actual execution and verified completion.
 - [Choose a matching installation](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/QUICKSTART.md): Use the selected release's guide to verify publisher trust and package hashes for native installers, or verify a portable archive's manifest. Match host tools and configuration to the release; QEMU guest files still come from its host archive.
@@ -80,6 +106,9 @@ These skills inspect the selected Mac or Linux host and provider before acting. 
 - [Interfaces](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/INTERFACES.md): Namespace and control-record contracts.
 - [Authority and migration](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/M27A_AUTHORITY.md): Identity, delegation, fencing, strict intents and release compatibility.
 - [Causal evidence](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/CAUSAL_EVIDENCE.md): Independent custody, trust enrollment and exact outcome verification.
+- [SwarmUI](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/SWARMUI.md): Desktop connection, job review and Local MLX work.
+- [Private adapter guide](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/PRIVATE_LORA_RELEASE.md): Native preparation, comparison, serving canary and verified recovery.
+- [NeMo kit](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/integrations/nemo-agent-toolkit/README.md): Locked native clients, private settings, model planners and reproducible evaluation.
 
 ## Scope and evidence
 - [Build Plan](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/BUILD_PLAN.md): Active, complete and future scope, including the limits of each qualified workflow.

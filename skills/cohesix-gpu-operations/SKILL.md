@@ -78,6 +78,11 @@ Allocation admission is not a hard GPU memory partition. See the
 [foundation evidence](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/audit/M27B_IMPLEMENTATION_RECORD.md) for qualified
 native paths and limits, not proof that this deployment has executed anything.
 
+For a user workload that is not yet enrolled, load
+[workload authoring](../cohesix-workload-authoring/SKILL.md). It prepares a
+reviewed package, immutable inputs, finite bounds and an independent verifier
+on the executor host, then returns here for governed submission.
+
 ## Submit only the existing approved operation
 
 Before mutation, establish the requested action, exact target/device, inputs,
