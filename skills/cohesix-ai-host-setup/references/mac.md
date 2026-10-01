@@ -57,6 +57,29 @@ This correction does not install macFUSE; verify that the selected native
 FUSE3 runtime exists when checking this FUSE-linked CLI, and use the maintained
 host setup if it is absent.
 
+After publisher and payload checks, validate the selected tools themselves.
+Use that installation's policy explicitly, especially when the current directory
+is a development checkout with different generated files. With `COH_BIN` already
+set to the selected absolute native-package or tarball `bin/` directory:
+
+```bash
+: "${COH_BIN:?Select the absolute Cohesix bin directory first}"
+COH_INSTALL_ROOT="$(dirname "$COH_BIN")"
+COH_POLICY="$COH_INSTALL_ROOT/configs/generated/coh_policy.toml"
+if [ -f "$COH_INSTALL_ROOT/config/coh_policy.toml" ]; then
+  COH_POLICY="$COH_INSTALL_ROOT/config/coh_policy.toml"
+fi
+"$COH_BIN/coh" --policy "$COH_POLICY" --version
+"$COH_BIN/cohsh" --help
+"$COH_BIN/coh" --policy "$COH_POLICY" doctor --mock
+```
+
+For a `.pkg`, also check `pkgutil --pkg-info com.cohesix.host` and compare every
+installed file with the verified package's payload records. A receipt or a
+self-reported checksum alone does not establish the installed bytes. The commands
+above check native startup, matching policy and a mock diagnostic; they do not
+exercise a real FUSE mount, Queen connection or GPU workload.
+
 When Cohesix build tools are required, use
 [`toolchain/setup_macos_arm64.sh`](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/toolchain/setup_macos_arm64.sh)
 and its [toolchain guide](https://raw.githubusercontent.com/lukeb-aidev/cohesix/main/docs/TOOLCHAIN_MAC_ARM64.md); do not add AI
