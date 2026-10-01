@@ -13,6 +13,11 @@ machines, manage shared compute, and keep software or model changes reviewable.
 Your existing applications do the work; Cohesix coordinates permission,
 resource allocation and the records needed to check the result.
 
+**Host ecosystems:** On compatible Linux ARM64 NVIDIA hosts, Cohesix coordinates
+CUDA jobs and PEFT model adapters and connects NeMo Agent Toolkit clients. On
+Apple Silicon Macs, it supports local MLX work and configured vMLX model/MCP
+clients. Compute and model serving stay on those hosts.
+
 Start from published **1.2.0**, its installed help and selected manifest.
 These adoption instructions can be newer than the release. Pin operating
 reference URLs to the installed tag/commit or use the bundled guide. Inspect
