@@ -25,6 +25,7 @@ from sign_swarmui_macos import select_app, signature
 INSTALL_ROOT = Path("Library/Application Support/Cohesix")
 APP_ROOT = Path("Applications/SwarmUI.app")
 UNINSTALL = Path(__file__).resolve().parents[2] / "packaging/macos/cohesix-uninstall.sh"
+COH_ENTITLEMENTS = Path(__file__).resolve().parents[2] / "packaging/macos/coh.entitlements"
 
 
 def checked(command: list[str], timeout: int = 600) -> str:
@@ -66,10 +67,15 @@ def sign_host_tool(source: Path, staged: Path, team: str, identity: str) -> None
     source_uuids = uuids(source)
     if uuids(staged) != source_uuids:
         raise ValueError("staged host tool differs from the selected release binary")
-    checked([
+    signing = [
         "/usr/bin/codesign", "--force", "--sign", identity,
-        "--options", "runtime", "--timestamp", str(staged),
-    ])
+        "--options", "runtime", "--timestamp",
+    ]
+    # coh loads the separately signed macFUSE library. Confine the exception
+    # to that executable and retain hardened runtime.
+    if source.name == "coh":
+        signing.extend(["--entitlements", str(COH_ENTITLEMENTS)])
+    checked([*signing, str(staged)])
     checked(["/usr/bin/codesign", "--verify", "--strict", str(staged)])
     details = checked(["/usr/bin/codesign", "-dvv", str(staged)])
     if (
@@ -80,6 +86,12 @@ def sign_host_tool(source: Path, staged: Path, team: str, identity: str) -> None
         or uuids(staged) != source_uuids
     ):
         raise ValueError("signed host tool lacks selected identity or runtime")
+    if source.name == "coh":
+        output = checked(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(staged)])
+        payload = re.search(r"<plist\b.*?</plist>", output, re.DOTALL)
+        expected = {"com.apple.security.cs.disable-library-validation": True}
+        if payload is None or plistlib.loads(payload[0].encode()) != expected:
+            raise ValueError("signed coh lacks the bounded macFUSE library exception")
 
 
 def stage(reference: dict[str, Any], root: Path, app_identity: str) -> list[dict[str, object]]:
