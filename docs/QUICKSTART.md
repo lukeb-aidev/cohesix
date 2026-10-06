@@ -5,12 +5,6 @@
 
 # Cohesix 1.2.0 candidate quickstart
 
-The 1.2.0 candidate is still undergoing M28g qualification. Use the
-1.1.0-beta release record for the currently published release. The steps below
-apply to an exact, independently
-verified 1.2.0 candidate supplied for qualification; they do not claim
-that Release B has been published.
-
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
 shell, gateway, Python client and desktop UI run on your Mac or Linux host.
 This guide gets you from a release archive to an authenticated console, then
