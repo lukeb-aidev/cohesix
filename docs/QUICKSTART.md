@@ -3,7 +3,12 @@
 <!-- Purpose: Guide Mac, Linux and Pi 4 users from a verified release to an authenticated console. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix 1.2.0 candidate quickstart
+# Cohesix 1.2.0 quickstart
+
+Cohesix 1.2.0 is a published release. Download its archives and native host
+packages from the [1.2.0 release page](https://github.com/lukeb-aidev/cohesix/releases/tag/v1.2.0).
+Check the release notes for the supported hosts, targets and qualification
+limits before choosing a download.
 
 Cohesix is a control-plane OS that runs in QEMU or on a Raspberry Pi 4. Its
 shell, gateway, Python client and desktop UI run on your Mac or Linux host.
@@ -32,15 +37,15 @@ own package versions; `VERSION.txt` identifies the overall release.
 | Run QEMU or operate a Pi from Linux ARM64, including Jetson | `Cohesix-1.2.0-linux.tar.gz` | Linux binaries, a Linux QEMU guest, Python wheel and runtime setup |
 | Boot a physical Raspberry Pi 4 | `Cohesix-1.2.0-Pi4.tar.gz` **plus your host's archive above** | A complete SD-card image, image metadata and documentation |
 
-### Native host packages in the candidate
+### Native host packages
 
 The Mac `.pkg` and Linux `.deb` set are separate host installation choices.
 Check their `installers.json` package hashes against the downloaded bytes and
 verify publisher trust independently: macOS must accept the Developer ID
 Installer signature and stapled notarization; Linux must verify
 `installers.json.asc` with an already trusted publisher key. The package
-manifest alone cannot establish publisher identity. Do not install an
-unqualified candidate as a production upgrade.
+manifest alone cannot establish publisher identity. Use the package hashes
+and signing records from the published release page.
 
 The Debian publisher key fingerprint is
 `6840 71A2 AF49 8008 930C F6AE EBB8 ECC4 9397 F8C2`. Its public copy is
