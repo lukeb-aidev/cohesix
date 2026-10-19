@@ -35,6 +35,7 @@ scopes and disclosed missing evidence. DD30 retirement grants no target PASS
 or broader release carry-forward.
 
 ## Register
+
 | Exception ID | Related Finding | Severity | Scope | Rationale | Compensating Controls | Risk Owner | Approved By | Decision Date | Expiration Date | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `EX-2026-0016` | `DD-2026-0016` | `P2` | Pi 4 driver-task isolation substrate Rust risk-ratchet delta | seL4 object allocation and isolated driver-task setup required additional explicit unsafe syscall and pointer-boundary wrappers while strongest hardware-state migration remained in progress. | Verified remediation at `68dd774d6ceb0706e162877f74766dd324572425`: lifecycle validation passed 19 tests and the exception-register gate passed. This is offline engineering and audit closure only, not live Pi or every-boot WiFi proof. | `driver-task-owner` | `Lukas Bower` | `2026-05-22` | `2026-06-19` | `CLOSED` |

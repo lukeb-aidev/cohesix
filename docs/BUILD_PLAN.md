@@ -58,6 +58,7 @@ owned by their specific contracts.
 
 ## Milestones ##
 <a id="Milestones"></a>
+
 | Milestone | Description | Status |
 |----------|-------------|------|
 | [0](#0) | Repository Skeleton & Toolchain | Complete |
@@ -623,11 +624,13 @@ while preserving:
 
 Extend the mirrored GPU namespace with a **model lifecycle view**:
 
+```text
 /gpu/models/
 available/
 <model_id>/
 manifest.toml
 active -> <model_id>
+```
 
 Properties:
 - `available/` is read-only to VM roles
@@ -3558,6 +3561,7 @@ retain terminal evidence and all lifecycle, policy, and admission contracts.
 - `OFFLINE`
 
 ### State definitions
+
 | State | Meaning |
 | --- | --- |
 | `BOOTING` | Root-task started, manifest loaded, identity pending. |
@@ -5058,6 +5062,7 @@ console/network, provider, policy, and Worker model/session paths.
 ## Task-Level Parallelism Model
 
 ### Core Roles (Illustrative)
+
 | Task | Responsibility | Parallelism Strategy |
 |----|---------------|----------------------|
 | `root-task` | Authority, lifecycle, policy | Single instance, serialized |
@@ -13630,6 +13635,17 @@ Commands: Local GitHub Pages-compatible Jekyll build; focused document/link and 
 Checks: README and nested documentation inherit the same layout without per-file front matter; relative links and anchors survive the project base path; Mermaid renders from ordinary fenced source with readable fallback on failure; code, tables, images and navigation remain usable; existing automatic Pages trigger persists. Local and deployed presentation checks supply no runtime, target or release-acceptance evidence.
 Validation: GitHub Pages 232/Jekyll 3.10.0 local build and static checks passed for 47 current pages and 10 exact retained Mermaid blocks. Fourteen Python publication checks and nine label-normalization tests passed. Browser checks rendered all ten current diagrams, preserved source for a deliberately malformed block while rendering the next block, retained readable fallbacks with the renderer blocked and JavaScript disabled, and checked 320/768/1440 widths, native dialog Escape/focus restoration and keyboard navigation. Existing anchors on the homepage, Quickstart, Architecture, Host Tools and Private LoRA Release were preserved. Independent review corrected generic page titles and retained Mermaid's protected parser bounds. Generated consistency passed after the documentation inventory update; the generated Rust and Python bindings differ only in the dependent graph identity. Sixteen authority tests, nine host-integration tests and nineteen Python provider-registry tests passed with the isolated source selected explicitly. Metadata, fences, changed Mermaid compatibility and whitespace checks passed. The existing root/main Pages deployment owns public promotion; its completed result and deployed-file readback are retained with the task's publication receipt. No target, provider-live, benchmark or release-acceptance gate was run.
 Deliverables: Published documentation theme, maintained publishing contract and this scoped task record.
+
+Title/ID: m28g-pages-table-layout
+Milestone: 28g / m28g-pages-table-layout
+Status: Complete — scoped documentation-site correction authorized by Lukas Bower, 19 October 2026.
+Goal: Keep Markdown table columns readable on the homepage and reference guides through every automatic Pages republish.
+Inputs: Published SwarmUI Pages theme; current Markdown table inventory; owner request; CONTRIBUTING.md and TEST_PLAN.md.
+Changes: AI-assisted shared CSS correction for table intrinsic sizing; repair Markdown boundaries and command spans that hid existing tables; generate valid table boundaries from the Test Plan catalog; enable Markdown inside HTML disclosure blocks while retaining the current heading IDs; add table-preservation regression checks. Document the repeatable rules and independently review representative browser checks. Host tools, Python SDK, benchmarks, generated contracts and immutable release artifacts are unaffected.
+Commands: Local Pages-compatible Jekyll build; python3 scripts/ci/check_pages.py --site out/pages-preview/cohesix; python3 -m unittest discover -s tests -p test_pages.py; browser column, wrapping, overflow and keyboard-scroll checks; scripts/check-generated.sh; Markdown metadata/link checks; git diff --check; scoped publication and deployed-file readback.
+Checks: Short labels retain natural word widths; prose columns use available space; wide reference tables scroll within their own region; desktop and narrow layouts retain all table content without page overflow. Presentation checks make no runtime or release-acceptance claim.
+Validation: The local Pages-compatible build retains every current source pipe table, including the restored Test Plan and audit registers; 47 current layout checks and 10 exact Mermaid source blocks pass. Twenty-six publication tests, twelve catalog tests, nine Mermaid adapter tests, generated consistency, Markdown metadata/fences, changed Mermaid compatibility and whitespace checks pass. Browser checks cover two through eleven columns on seven guides at 1223 and 390 pixels, homepage layouts at 320 and 1440 pixels, keyboard horizontal scrolling, and three script-free page variants. All 1301 previously rendered heading IDs remain present, with no new broken local fragment links; sixteen previously missing link targets are restored. Independent review corrected print wrapping. Host-tool, Python SDK and benchmark compatibility inventories were reviewed as unchanged; generated Test Plan rows differ only in blank block boundaries. Public promotion uses the existing Pages deployment, with completed deployment and public readback retained in the publication receipt. No runtime, target, provider-live, benchmark or assembled-release gate was run.
+Deliverables: Shared table styling, maintainer guidance, browser evidence and this scoped task record.
 
 Title/ID: m28g-architecture-boundary-diagram-simplification
 Milestone: 28g / m28g-architecture-boundary-diagram-simplification

@@ -562,6 +562,7 @@ def markdown_catalog(data: dict[str, Any]) -> str:
 
     rows = [
         DOC_START,
+        "",
         "| Action | Stage | Claim tier | Scope / target | Command or proof |",
         "| --- | ---: | --- | --- | --- |",
     ]
@@ -581,7 +582,7 @@ def markdown_catalog(data: dict[str, Any]) -> str:
             f"| `{action['id']}` | {stage} | `{action['tier']}` | "
             f"{scope_target} | {proof} |"
         )
-    rows.append(DOC_END)
+    rows.extend(("", DOC_END))
     return "\n".join(rows)
 
 
@@ -590,6 +591,7 @@ def markdown_convergence(data: dict[str, Any]) -> str:
 
     rows = [
         CONVERGENCE_DOC_START,
+        "",
         "| Focus | Target | First authoritative evidence | Exact profile |",
         "| --- | --- | --- | --- |",
     ]
@@ -598,7 +600,7 @@ def markdown_convergence(data: dict[str, Any]) -> str:
             f"| `{focus['id']}` | {', '.join(focus['targets'])} | "
             f"{focus['authoritative_evidence']} | `{focus['profile']}` |"
         )
-    rows.append(CONVERGENCE_DOC_END)
+    rows.extend(("", CONVERGENCE_DOC_END))
     return "\n".join(rows)
 
 

@@ -36,6 +36,7 @@ The historical registers below retain their original dates and claims.
 - A `CLOSED_VERIFIED` finding requires an independent reviewer reference in this register or in linked evidence.
 
 ## Register
+
 | Domain | Control ID | Requirement | Evidence Source | Evidence Path | Commit SHA | Status | Notes |
 |---|---|---|---|---|---|---|---|
 | Security | AC-3 / IA-2 | AuthN/AuthZ enforced on control-plane entry points | Due-diligence gate + findings | `out/audit/gate/20260214T044955Z/hardcoded-secret-scan.log`, `out/audit/gate/20260214T044955Z/workspace-tests.log`, `docs/audit/findings.csv` | `22cd5017d060c3439b6f7fc4f70717f329134803` | `PASS` | Findings `DD-2026-0001`, `0002`, `0010`, `0013`, `0014`, `0015` closed in this run. |

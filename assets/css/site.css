@@ -289,8 +289,10 @@ a:hover { color: var(--color-accent-hover); }
 .highlight .err { color: #efa7a3; }
 
 .table-scroll { max-width: 100%; margin: 24px 0; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--color-border); border-radius: var(--radius-sm); scrollbar-width: thin; }
-.markdown-body table { width: 100%; margin: 24px 0; border-collapse: collapse; background: var(--color-surface); font-size: 14px; line-height: 1.65; }
-.table-scroll table { margin: 0; }
+/* Preserve word-based intrinsic column widths instead of the prose emergency wrap. */
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; overflow-wrap: break-word; width: 100%; margin: 24px 0; border-collapse: collapse; background: var(--color-surface); font-size: 14px; line-height: 1.65; }
+.table-scroll table { display: table; margin: 0; overflow: visible; }
+.markdown-body table :not(pre) > code { overflow-wrap: break-word; }
 .markdown-body th, .markdown-body td { padding: 12px 14px; border: 1px solid var(--color-border); text-align: left; vertical-align: top; }
 .markdown-body th { color: var(--color-ink); background: var(--color-surface-2); font-size: 13px; font-weight: 600; }
 .table-scroll th:first-child, .table-scroll td:first-child { border-left: 0; }
@@ -395,7 +397,8 @@ a:hover { color: var(--color-accent-hover); }
   .markdown-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 8pt; }
   .highlight span { color: inherit !important; background: none !important; }
   .table-scroll { overflow: visible; }
-  .markdown-body table { font-size: 9pt; }
+  .markdown-body table { display: table; overflow: visible; overflow-wrap: anywhere; font-size: 9pt; }
+  .markdown-body table :not(pre) > code { overflow-wrap: anywhere; }
   .markdown-body thead { display: table-header-group; }
   .markdown-body tr, .markdown-body img { break-inside: avoid; }
   .diagram { print-color-adjust: exact; -webkit-print-color-adjust: exact; }

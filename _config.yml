@@ -11,6 +11,7 @@ markdown: kramdown
 kramdown:
   input: GFM
   hard_wrap: false
+  parse_block_html: true
 
 # GitHub's special contributor files also belong in the documentation site.
 include:

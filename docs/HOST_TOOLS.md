@@ -1517,11 +1517,10 @@ scope names exactly one delegated subject, action, target, policy graph hash,
 expiry and narrower bounds. The scope file must be readable only by its owner;
 the ledger directory is mode 0700 and the ledger file mode 0600.
 
-Provision the empty ledger once with `host-ticket-agent --manifest
-<selected-resolved-manifest> --standing-scopes <private-file>
---standing-ledger <private-ledger> --standing-init`. Then start the agent and
-gateway with those same paths. Keep the agent's cursor, execution journal,
-evidence root, GPU request CAS and native bridge configuration across restarts.
+Provision the empty ledger once with `host-ticket-agent --manifest <selected-resolved-manifest> --standing-scopes <private-file> --standing-ledger <private-ledger> --standing-init`.
+Then start the agent and gateway with those same paths. Keep the agent's cursor,
+execution journal, evidence root, GPU request CAS and native bridge configuration
+across restarts.
 The ledger rejects a missing, corrupt, full or changed-policy state. Never
 initialize a replacement for lost state while an earlier native outcome may
 still exist; restore or reconcile the original custody first.
@@ -1546,19 +1545,17 @@ journal is missing remains ambiguous. The current native phase executor uses
 Linux systemd and CUDA. This path does not qualify a Mac MLX release until a
 Mac native executor and its live evidence are selected.
 
-`coh --rest-url "$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job submit
---input <private-job.json>` submits the exact versioned `binding` and raw
-host ticket once. `coh job status <admission-id>` and `coh job reconcile
-<admission-id>` inspect the original execution and target result after a lost
+`coh --rest-url "$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job submit --input <private-job.json>` submits the exact versioned `binding` and raw
+host ticket once. `coh job status <admission-id>` and `coh job reconcile <admission-id>`
+inspect the original execution and target result after a lost
 reply; they never issue another native effect. `coh job cancel <admission-id>`
 records a request and requires a later native terminal to establish stopped
-work. `coh job inspect-scope <scope-id>` and `coh job revoke-scope
-<scope-id>` require a separate delegated `/host/standing/admin` write ticket.
+work. `coh job inspect-scope <scope-id>` and `coh job revoke-scope <scope-id>`
+require a separate delegated `/host/standing/admin` write ticket.
 Ordinary read/write delegation cannot approve its own scope escalation.
 
-For a selected `systemd.restart` standing scope, `coh --rest-url
-"$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job start-approved
---scope-id <scope-id> --request-id <stable-id>` asks the gateway to derive
+For a selected `systemd.restart` standing scope, `coh --rest-url "$COH_REST_URL" --ticket-ref env:COH_REST_TICKET job start-approved --scope-id <scope-id> --request-id <stable-id>`
+asks the gateway to derive
 the service ticket and fresh facts. The response's admission ID is
 `mac-<stable-id>`. Keep the same request ID after a lost reply and inspect
 that ID before attempting any new effect; the gateway returns its existing
@@ -1773,8 +1770,7 @@ standing job, and signed comparison, canary, promotion or rollback evidence.
 `cohesix.PeftReleaseClient` returns that same CLI result to Python; it does
 not accept a local model observation as deployment proof.
 
-For a local transport check, `python -m cohesix.mlx_service --selection
-<absolute-private-selection.json> --port <loopback-port>` serves one fixed
+For a local transport check, `python -m cohesix.mlx_service --selection <absolute-private-selection.json> --port <loopback-port>` serves one fixed
 MLX model or adapter at `127.0.0.1` after checking the pinned Metal device.
 The selection JSON names `generation`,
 `model_directory`, `model_sha256`, `data_directory`, `data_sha256`,
@@ -2163,8 +2159,7 @@ assert live execution. The Jetson reference is Ubuntu 24.04, L4T 39.2.1,
 JetPack 7.2.1 and CUDA toolkit 13.2.2. Unsupported accelerators remain explicit.
 
 For read-only host discovery, run
-`scripts/ci/provider_conformance_run.sh --native-providers --live-reference
---host-profile jetson-orin-nano-jp7 --state-dir <fresh-directory>` on the
+`scripts/ci/provider_conformance_run.sh --native-providers --live-reference --host-profile jetson-orin-nano-jp7 --state-dir <fresh-directory>` on the
 selected Linux host. Jetson identity/package/thermal/power observations,
 network address/link/route counters and a version-negotiated Docker Engine
 inventory have finite byte, row and time bounds. Docker requires an authorized
@@ -2173,9 +2168,8 @@ local socket. Discovery mode returns
 mark a provider or use case production-proven.
 
 `configs/provider_conformance.toml` selects focused host contract checks from
-the same generated registry. Run `scripts/ci/provider_conformance_run.sh
---matrix configs/provider_conformance.toml --evidence-only --state-dir
-<fresh-directory>` for one group, or select `--executors-only`,
+the same generated registry. Run `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --evidence-only --state-dir <fresh-directory>`
+for one group, or select `--executors-only`,
 `--observability-only`, `--packaging-only`, `--identity-only` or
 `--registry-only`. `--provider federation` selects relay recovery contracts.
 `--validate-only` records the exact selection without executing it. The runner

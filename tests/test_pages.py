@@ -2,7 +2,7 @@
 # Purpose: Test static Pages publication failures with small site fixtures.
 # Copyright 2026 Lukas Bower
 
-"""Preserve layout and diagram-source contracts in generated documentation."""
+"""Preserve layout, tables and diagram source in generated documentation."""
 
 from __future__ import annotations
 
@@ -22,6 +22,68 @@ PAGES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PAGES)
 
 DIAGRAM = 'flowchart LR\n  A["<ready> & safe"] --> B\n'
+TABLE = "| Name | Meaning |\n| --- | --- |\n| Queen | Authority |\n"
+RENDERED_TABLE = (
+    "<table><thead><tr><th>Name</th><th>Meaning</th></tr></thead>"
+    "<tbody><tr><td>Queen</td><td>Authority</td></tr></tbody></table>"
+)
+
+
+class MarkdownTableTests(unittest.TestCase):
+    """Identify source tables even when missing boundaries break rendering."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "guide.md"
+
+    def find(self, text: str) -> list[int]:
+        """Return one-based header lines from a small source document."""
+        self.path.write_text(text, encoding="utf-8")
+        return PAGES.pipe_table_lines(self.path)
+
+    def test_missing_blank_before_a_table_does_not_hide_it(self) -> None:
+        self.assertEqual(self.find("## Register\n" + TABLE), [2])
+
+    def test_optional_outer_pipes_alignment_and_header_only_tables(self) -> None:
+        self.assertEqual(self.find(
+            "| Only column |\n| :--: |\n\n"
+            "Left | Right\n:--- | ---:\n\n"
+            "  | First | Second\n  | - | -\n"
+        ), [1, 4, 7])
+
+    def test_escaped_pipes_and_backslash_parity_preserve_columns(self) -> None:
+        self.assertEqual(self.find(
+            "| `a\\|b` | Meaning |\n| --- | --- |\n\n"
+            "a\\|b\n---\\|---\n\n"
+            "Left\\\\| Right\n--- | ---\n"
+        ), [1, 7])
+
+    def test_fenced_and_indented_examples_do_not_declare_tables(self) -> None:
+        examples = (
+            "````markdown\n" + TABLE + "```\n" + TABLE + "````\n"
+            "~~~text\n" + TABLE + "~~~\n"
+            "    | Name | Meaning |\n    | --- | --- |\n"
+            "\t| Name | Meaning |\n\t| --- | --- |\n\n"
+        )
+        self.assertEqual(self.find(examples), [])
+        self.assertEqual(self.find(examples + TABLE), [20])
+
+    def test_malformed_separators_and_setext_headings_are_not_tables(self) -> None:
+        for text in (
+            "Name\n---\n",
+            "| Name | Meaning |\n| --- | words |\n",
+            "| Name | Meaning |\n| --- | --- | --- |\n",
+            "| Name | Meaning |\n| --- | |\n",
+            "| Name | Meaning |\n\n| --- | --- |\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.find(text), [])
+
+    def test_table_body_dashes_do_not_create_another_header(self) -> None:
+        self.assertEqual(self.find(
+            TABLE + "| Unavailable | Unknown |\n| --- | --- |\n"
+        ), [1])
 
 
 class PagesPublicationTests(unittest.TestCase):
@@ -189,6 +251,82 @@ class PagesPublicationTests(unittest.TestCase):
         self.assertIn("shared layout is missing", failures)
         self.assertIn("documentation navigation is empty", failures)
         self.assertIn("generated page is missing", failures)
+
+    def test_swallowed_homepage_table_cannot_pass(self) -> None:
+        path = self.source / "README.md"
+        path.write_text(path.read_text(encoding="utf-8") + TABLE,
+                        encoding="utf-8")
+        failures = "\n".join(self.audit().errors)
+        self.assertIn("index.html: table count differs from README.md", failures)
+        self.assertIn("1 pipe tables expected", failures)
+        self.assertIn("0 retained with thead under article#document-content",
+                      failures)
+
+    def test_headerless_tables_do_not_change_pipe_table_count(self) -> None:
+        path = self.source / "README.md"
+        path.write_text(path.read_text(encoding="utf-8") + TABLE,
+                        encoding="utf-8")
+        (self.site / "index.html").write_text(
+            self.home.replace(
+                "</article>", RENDERED_TABLE
+                + "<table><tbody><tr><td>Headerless</td></tr></tbody></table>"
+                + "</article>",
+            ), encoding="utf-8",
+        )
+        self.assertEqual(self.audit().errors, [])
+
+    def test_headerless_table_cannot_replace_a_lost_pipe_table(self) -> None:
+        path = self.source / "README.md"
+        path.write_text(path.read_text(encoding="utf-8") + TABLE,
+                        encoding="utf-8")
+        (self.site / "index.html").write_text(
+            self.home.replace(
+                "</article>",
+                "<table><tbody><tr><td>Headerless</td></tr></tbody></table>"
+                + "</article>",
+            ), encoding="utf-8",
+        )
+        failures = "\n".join(self.audit().errors)
+        self.assertIn("1 pipe tables expected", failures)
+        self.assertIn("0 retained with thead", failures)
+
+    def test_tables_outside_the_article_cannot_replace_lost_content(self) -> None:
+        path = self.source / "README.md"
+        path.write_text(path.read_text(encoding="utf-8") + TABLE,
+                        encoding="utf-8")
+        (self.site / "index.html").write_text(
+            self.home.replace("</body>", RENDERED_TABLE + "</body>"),
+            encoding="utf-8",
+        )
+        self.assertTrue(any("table count differs" in error
+                            for error in self.audit().errors))
+
+    def test_published_nested_and_contributing_tables_are_checked(self) -> None:
+        for name in ("docs/audit/EXCEPTIONS.md", "CONTRIBUTING.md"):
+            with self.subTest(document=name):
+                markdown = self.source / name
+                markdown.parent.mkdir(parents=True, exist_ok=True)
+                markdown.write_text("## Register\n" + TABLE, encoding="utf-8")
+                generated = self.site / Path(name).with_suffix(".html")
+                generated.parent.mkdir(parents=True, exist_ok=True)
+                generated.write_text(
+                    '<article id="document-content"><p>Swallowed table</p>'
+                    '</article>', encoding="utf-8",
+                )
+                failures = "\n".join(self.audit().errors)
+                self.assertIn("table count differs from " + name, failures)
+                self.assertIn("source lines [2]", failures)
+                generated.write_text(
+                    '<article id="document-content">' + RENDERED_TABLE
+                    + "</article>", encoding="utf-8",
+                )
+                self.assertEqual(self.audit().errors, [])
+
+    def test_unpublished_nested_tables_do_not_require_historical_pages(self) -> None:
+        markdown = self.source / "docs/archive/OLD.md"
+        markdown.parent.mkdir(parents=True)
+        markdown.write_text("# Old\n\n" + TABLE, encoding="utf-8")
+        self.assertEqual(self.audit().errors, [])
 
     def test_navigation_requires_base_and_local_destination(self) -> None:
         for url in (

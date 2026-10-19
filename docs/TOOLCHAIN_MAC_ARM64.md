@@ -47,10 +47,7 @@ are unavailable on Mac. A user creates a Shortcut for the approved action;
 spoken Siri is optional and outside the M28c developer gate.
 
 The selected direct-distribution path is Developer ID Application signing
-with hardened runtime. `scripts/install/sign_swarmui_macos.py sign --app
-<absolute-staged-app> --team-id <team> --identity-sha1 <Developer-ID-SHA1>
---app-profile <absolute-app-profile> --extension-profile
-<absolute-extension-profile> --state-dir <new-evidence-dir>` validates and
+with hardened runtime. `scripts/install/sign_swarmui_macos.py sign --app <absolute-staged-app> --team-id <team> --identity-sha1 <Developer-ID-SHA1> --app-profile <absolute-app-profile> --extension-profile <absolute-extension-profile> --state-dir <new-evidence-dir>` validates and
 embeds exact Apple provisioning for both bundle IDs, then signs the extension
 and app with the same Keychain group. `sign-development` uses the same profiles
 and an Apple Development identity for installed feasibility checks. The

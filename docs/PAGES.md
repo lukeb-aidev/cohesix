@@ -37,6 +37,19 @@ run the focused site checks. Fonts, their licence notices and the Cohesix mark
 remain in the existing SwarmUI asset directory; the layout references them
 directly rather than keeping duplicate copies.
 
+Tables use automatic column sizing with word-based wrapping, including inline
+code. Short names keep their natural width while longer descriptions share the
+remaining space. Wide tables scroll horizontally in a keyboard-focusable region;
+without JavaScript, the table itself remains scrollable. Keep these rules in the
+shared stylesheet rather than adding widths to individual Markdown documents. The
+static checker compares source pipe tables with their rendered counterparts,
+including nested published guides. Keep blank lines around tables and use fenced
+blocks for namespace trees. Keep each inline code span on one physical line when
+it contains angle-bracket placeholders; otherwise Kramdown can interpret a
+placeholder as an HTML block and hide later Markdown. Generated table owners
+must emit their own blank lines. The shared configuration enables Markdown
+inside HTML disclosure blocks and retains the existing heading-anchor format.
+
 `assets/js/site.js` adds the page outline, scrollable table regions and Mermaid
 rendering. Normal fenced blocks labelled `mermaid` remain the source for both
 GitHub and Pages. The renderer loads only on pages containing diagrams. It uses
@@ -77,7 +90,11 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory out/pages-preview
 ```
 
 Open `http://127.0.0.1:4173/cohesix/`. Check the homepage and nested guides,
-ordinary code, tables, images, source links and heading anchors. Inspect the
+ordinary code, tables, images, source links and heading anchors. For tables,
+check the homepage terminology and document lists, Host API endpoints, Test Plan
+commands and the wide audit registers at desktop and phone widths. Short labels
+must not split inside words; wide tables must scroll without widening the page.
+Inspect the
 architecture diagram and a sequence diagram after fonts load. Check a narrow
 phone-sized viewport, keyboard access and the mobile documentation disclosure.
 Also check a JavaScript-disabled page and a page with the Mermaid request

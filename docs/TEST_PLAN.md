@@ -459,6 +459,7 @@ the most specific matching focus; broad host closure is not added before a
 target canary merely because it is part of final acceptance.
 
 <!-- test-plan-convergence:start -->
+
 | Focus | Target | First authoritative evidence | Exact profile |
 | --- | --- | --- | --- |
 | `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_production / configs/root_task_pi4_uboot_aarch64.toml` |
@@ -471,6 +472,7 @@ target canary merely because it is part of final acceptance.
 | `swarmui` | qemu, pi4 | focused SwarmUI package tests | `host-only SwarmUI` |
 | `test-plan-tooling` | qemu, pi4 | focused test-plan tooling tests and catalog/document consistency | `test-plan tooling` |
 | `docs` | qemu, pi4 | documentation metadata and generated-contract consistency | `generated documentation contracts` |
+
 <!-- test-plan-convergence:end -->
 
 Representative results are normative:
@@ -1338,6 +1340,7 @@ zero-match-prone filtered library-test actions. The table below is generated
 from that catalog.
 
 <!-- test-plan-catalog:start -->
+
 | Action | Stage | Claim tier | Scope / target | Command or proof |
 | --- | ---: | --- | --- | --- |
 | `integrity.cargo-metadata` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo metadata --locked --no-deps` |
@@ -1400,6 +1403,7 @@ from that catalog.
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
 | `release.bundle-validation-b` | conditional | `release` | conditional / qemu, pi4 | `python3 scripts/release_qualify.py verify --macos-result "${TP_RELEASE_MACOS_RESULT:?}" --linux-result "${TP_RELEASE_LINUX_RESULT:?}" --pi4-result "${TP_RELEASE_PI4_RESULT:?}" --macos-installer-result "${TP_RELEASE_MACOS_INSTALLER_RESULT:?}" --linux-installer-result "${TP_RELEASE_LINUX_INSTALLER_RESULT:?}" --releases-dir "${TP_RELEASE_DIR:?}" --output "${TP_RELEASE_RESULT:?}"` |
+
 <!-- test-plan-catalog:end -->
 
 `performance.gateway-telemetry` may be selected alongside either target, but

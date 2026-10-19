@@ -30,6 +30,7 @@ Inherited controls explicitly rely on:
 - Smoke evidence: tests/security/nist_evidence_smoke.sh asserts non-negotiable invariants are documented.
 
 ## Control summary (tailored)
+
 | ID | Status | Summary | Evidence pointers |
 |---|---|---|---|
 | AC-1 | Implemented | Access control policy defined in Secure9P and role docs. | docs/SECURE9P.md; docs/ROLES_AND_SCHEDULING.md; tests/security/nist_evidence_smoke.sh |

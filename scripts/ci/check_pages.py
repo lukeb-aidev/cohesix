@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Check generated Pages navigation, assets and Mermaid source.
+# Purpose: Check generated Pages navigation, assets, tables and Mermaid source.
 # Copyright 2026 Lukas Bower
 
 """Check local Jekyll output without claiming browser or Mermaid execution."""
@@ -34,6 +34,7 @@ VOID_TAGS = {
     "meta", "param", "source", "track", "wbr",
 }
 FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})(.*)$")
+TABLE_SEPARATOR = re.compile(r":?-+:?")
 CSS_URL = re.compile(r"url\(\s*['\"]?([^)'\"\s]+)['\"]?\s*\)")
 JS_IMPORT = re.compile(
     r"^[ \t]*(?:import\s+(?:[^;'\"]*?\s+from\s+)?"
@@ -64,6 +65,8 @@ class Page(HTMLParser):
         self.navigation: list[str] = []
         self.source_links: list[str] = []
         self.diagrams: list[str] = []
+        self.tables = 0
+        self.headed_tables = 0
         self.title = ""
         self.title_count = 0
         self.first_heading = ""
@@ -86,6 +89,13 @@ class Page(HTMLParser):
         in_article = any(
             v.get("id") == "document-content" for _, v in self.stack
         )
+        if tag == "table" and in_article:
+            self.tables += 1
+        if (
+            tag == "thead" and in_article
+            and any(t == "table" for t, _ in self.stack)
+        ):
+            self.headed_tables += 1
         if tag == "title" and any(t == "head" for t, _ in self.stack):
             self.title_count += 1
             self._title_depth = len(self.stack)
@@ -178,6 +188,115 @@ def mermaid_sources(path: Path) -> list[str]:
     return diagrams
 
 
+def pipe_cells(line: str) -> list[str]:
+    """Split unescaped pipes, preserving backslash parity and optional edges."""
+    cells: list[str] = []
+    start = 0
+    escaped = False
+    for index, character in enumerate(line):
+        if character == "|" and not escaped:
+            cells.append(line[start:index].strip())
+            start = index + 1
+        escaped = not escaped if character == "\\" else False
+    if not cells:
+        return []
+    cells.append(line[start:].strip())
+    if not cells[0]:
+        cells.pop(0)
+    if cells and not cells[-1]:
+        cells.pop()
+    return cells
+
+
+def pipe_table_lines(path: Path) -> list[int]:
+    """Find ordinary pipe-table headers independently of block boundaries.
+
+    A missing blank line must not hide a source table from this check just
+    because a renderer swallowed it into another block. Fenced and indented
+    code examples do not declare tables. Backslash-escaped pipes are content,
+    rather than column boundaries, including within inline code.
+    """
+    marker = ""
+    previous: list[str] = []
+    in_table = False
+    tables: list[int] = []
+    for number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        fence = FENCE.match(line)
+        if marker:
+            if (
+                fence and fence[2][0] == marker[0]
+                and len(fence[2]) >= len(marker) and not fence[3].strip()
+            ):
+                marker = ""
+            previous = []
+            in_table = False
+            continue
+        if fence:
+            marker = fence[2]
+            previous = []
+            in_table = False
+            continue
+        if line.startswith("\t") or len(line) - len(line.lstrip(" ")) > 3:
+            previous = []
+            in_table = False
+            continue
+        cells = pipe_cells(line.strip())
+        if not cells:
+            previous = []
+            in_table = False
+            continue
+        if in_table:
+            continue
+        if (
+            previous and len(previous) == len(cells)
+            and all(TABLE_SEPARATOR.fullmatch(cell) for cell in cells)
+        ):
+            tables.append(number - 1)
+            previous = []
+            in_table = True
+        else:
+            previous = cells
+    return tables
+
+
+def check_table_preservation(
+    site: Path, source: Path, parsed_pages: dict[Path, Page]
+) -> list[str]:
+    """Check table retention in published root guides and nested documents.
+
+    Nested historical documents need not be published or adopt current chrome.
+    When their HTML exists, however, it must retain their headed Markdown
+    tables. Headerless Kramdown tables are outside the pipe-table contract.
+    """
+    errors: list[str] = []
+    sources = [source / "README.md", source / "CONTRIBUTING.md"]
+    sources.extend(sorted((source / "docs").rglob("*.md")))
+    for markdown in sources:
+        relative = markdown.relative_to(source)
+        generated = (
+            Path("index.html") if relative == Path("README.md")
+            else relative.with_suffix(".html")
+        )
+        if not markdown.is_file() or not (site / generated).is_file():
+            continue
+        expected = pipe_table_lines(markdown)
+        page = parsed_pages.get(generated)
+        if page is None:
+            page = Page()
+            page.feed((site / generated).read_text(encoding="utf-8"))
+            page.close()
+        if page.headed_tables != len(expected):
+            errors.append(
+                f"{generated.as_posix()}: table count differs from "
+                f"{relative.as_posix()} ({len(expected)} pipe tables expected "
+                f"at source lines {expected}, {page.headed_tables} retained "
+                "with thead under article#document-content)"
+            )
+    return errors
+
+
 def local_target(url: str, site: Path, baseurl: str) -> Path:
     """Resolve a project URL within the site, refusing path escapes."""
     parsed = urlsplit(url)
@@ -257,6 +376,7 @@ def check_site(
     page_count = 0
     diagram_count = 0
     checked_assets: set[Path] = set()
+    parsed_pages: dict[Path, Page] = {}
     for markdown, relative in sources:
         label = relative.as_posix()
         generated = site / relative
@@ -267,6 +387,7 @@ def check_site(
         page = Page()
         page.feed(generated.read_text(encoding="utf-8"))
         page.close()
+        parsed_pages[relative] = page
         missing = sorted(markers - page.markers)
         if missing:
             errors.append(f"{label}: shared layout is missing {missing}")
@@ -348,6 +469,7 @@ def check_site(
                 f"{len(page.diagrams)} retained "
                 "under pre > code.language-mermaid)"
             )
+    errors.extend(check_table_preservation(site, source, parsed_pages))
     for asset in sorted(checked_assets):
         if asset.suffix != ".css":
             continue

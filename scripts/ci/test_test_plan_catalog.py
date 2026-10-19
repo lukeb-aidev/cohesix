@@ -200,6 +200,20 @@ class TestPlanCatalogTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires changed paths", result.stderr)
 
+    def test_generated_tables_have_markdown_block_boundaries(self) -> None:
+        data = catalog.load_catalog(CATALOG_PATH)
+        for render, start, end in (
+            (catalog.markdown_catalog, catalog.DOC_START, catalog.DOC_END),
+            (catalog.markdown_convergence, catalog.CONVERGENCE_DOC_START,
+             catalog.CONVERGENCE_DOC_END),
+        ):
+            with self.subTest(marker=start):
+                lines = render(data).splitlines()
+                self.assertEqual(lines[:2], [start, ""])
+                self.assertEqual(lines[-2:], ["", end])
+                self.assertTrue(lines[2].startswith("|"))
+                self.assertTrue(lines[-3].startswith("|"))
+
     def test_document_check_rejects_a_stale_generated_block(self) -> None:
         data = catalog.load_catalog(CATALOG_PATH)
         rendered = catalog.markdown_catalog(data)
