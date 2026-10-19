@@ -652,7 +652,7 @@ Cohesix into an unrestricted POSIX filesystem.
 
 The binary must include FUSE support. macOS needs the macFUSE/FUSE3 runtime
 selected by the native host setup; Linux requires FUSE 3 and usable `/dev/fuse`. Source developers enable this with `cargo build -p coh --features
-fuse`. See [the pinned mount integration](../third_party/fuser).
+fuse`. See [the pinned mount integration](https://github.com/lukeb-aidev/cohesix/tree/main/third_party/fuser).
 
 In the mount terminal:
 
