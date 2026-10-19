@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Check Pages scope, content retention and canonical sitemap coverage.
+# Purpose: Check Pages content and exact XML/text sitemap publication coverage.
 # Copyright 2026 Lukas Bower
 
 """Check local Jekyll output without claiming browser or Mermaid execution."""
@@ -650,8 +650,64 @@ def sitemap_content_urls(site: Path, origin: str, baseurl: str) -> set[str]:
     return urls
 
 
+def check_sitemap_urls(
+    locations: list[str], expected: set[str], origin: str, prefix: str, label: str
+) -> list[str]:
+    """Validate one sitemap's uniqueness and exact canonical content inventory."""
+    errors: list[str] = []
+    for location, count in Counter(locations).items():
+        if count > 1:
+            errors.append(f"{label}: duplicate URL {location!r}")
+    expected_origin = urlsplit(origin)
+    for location in sorted(set(locations)):
+        try:
+            parsed = urlsplit(location)
+        except ValueError:
+            errors.append(f"{label}: URL is malformed: {location!r}")
+            continue
+        if (
+            parsed.scheme != expected_origin.scheme
+            or parsed.netloc != expected_origin.netloc
+            or not parsed.path.startswith(prefix + "/")
+        ):
+            errors.append(
+                f"{label}: URL has a wrong origin or baseurl: {location!r}"
+            )
+        elif parsed.query or parsed.fragment or unquote(parsed.path).endswith(".md"):
+            errors.append(f"{label}: URL is not canonical content: {location!r}")
+        elif location not in expected:
+            errors.append(
+                f"{label}: URL is not current canonical content: {location!r}"
+            )
+    for location in sorted(expected - set(locations)):
+        errors.append(f"{label}: missing current content URL {location!r}")
+    return errors
+
+
+def text_sitemap_urls(site: Path) -> tuple[list[str], list[str]]:
+    """Read UTF-8 sitemap text containing exactly one absolute URL per line."""
+    text = (site / "sitemap.txt").read_text(encoding="utf-8")
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    errors: list[str] = []
+    locations: list[str] = []
+    if not lines:
+        errors.append("sitemap.txt: text sitemap must contain URL lines")
+    for number, line in enumerate(lines, start=1):
+        line = line.removesuffix("\r")
+        if not re.fullmatch(r"https?://[^\s<>]+", line):
+            errors.append(
+                f"sitemap.txt:{number}: expected one absolute URL with no "
+                "comments, markup or surrounding whitespace"
+            )
+        else:
+            locations.append(line)
+    return locations, errors
+
+
 def check_sitemap(site: Path, source: Path, baseurl: str) -> list[str]:
-    """Require one canonical sitemap URL per current published HTML document."""
+    """Require XML, text and current publication to share one canonical URL set."""
     errors: list[str] = []
     try:
         origin, prefix = sitemap_location(source, baseurl)
@@ -674,29 +730,21 @@ def check_sitemap(site: Path, source: Path, baseurl: str) -> list[str]:
             errors.append("sitemap.xml: each url must contain exactly one text loc")
             continue
         locations.append((nodes[0].text or "").strip())
-    for location, count in Counter(locations).items():
-        if count > 1:
-            errors.append(f"sitemap.xml: duplicate URL {location!r}")
     expected = sitemap_content_urls(site, origin, prefix)
-    expected_origin = urlsplit(origin)
-    for location in sorted(set(locations)):
-        parsed = urlsplit(location)
-        if (
-            parsed.scheme != expected_origin.scheme
-            or parsed.netloc != expected_origin.netloc
-            or not parsed.path.startswith(prefix + "/")
-        ):
-            errors.append(
-                f"sitemap.xml: URL has a wrong origin or baseurl: {location!r}"
-            )
-        elif parsed.query or parsed.fragment or unquote(parsed.path).endswith(".md"):
-            errors.append(f"sitemap.xml: URL is not canonical content: {location!r}")
-        elif location not in expected:
-            errors.append(
-                f"sitemap.xml: URL is not current canonical content: {location!r}"
-            )
-    for location in sorted(expected - set(locations)):
-        errors.append(f"sitemap.xml: missing current content URL {location!r}")
+    errors.extend(check_sitemap_urls(
+        locations, expected, origin, prefix, "sitemap.xml"
+    ))
+    try:
+        text_locations, text_errors = text_sitemap_urls(site)
+    except (OSError, UnicodeError) as error:
+        errors.append(f"sitemap.txt: cannot read the UTF-8 text sitemap: {error}")
+        return errors
+    errors.extend(text_errors)
+    errors.extend(check_sitemap_urls(
+        text_locations, expected, origin, prefix, "sitemap.txt"
+    ))
+    if set(text_locations) != set(locations):
+        errors.append("sitemap.txt: URL set differs from sitemap.xml")
     return errors
 
 

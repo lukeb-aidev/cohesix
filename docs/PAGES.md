@@ -46,6 +46,13 @@ The existing publication exclusions also apply, so omitted historical copies do
 not return through the sitemap. Keep the sitemap generated from the documentation
 rather than maintaining a second list of URLs.
 
+The plain-text `sitemap.txt` is a supported alternative for search engines that
+cannot process the XML submission. It regenerates in the same Pages build from
+the producer's page, collection and static-file inputs. The publication checker
+requires both formats to contain exactly the current canonical content URLs;
+neither file has a separately maintained URL inventory. Keep the text output
+UTF-8 with one absolute URL per line and no headings or comments.
+
 Submit `https://lukeb-aidev.github.io/cohesix/sitemap.xml` in the matching Google
 Search Console property. Check the sitemap's processing status and use Page
 indexing and URL inspection to distinguish discovery, crawling and indexing.
@@ -56,6 +63,15 @@ See [Google's sitemap guidance](https://developers.google.com/search/docs/crawli
 for submission and coverage details.
 Google reads `robots.txt` only at the origin root; a project-level file does not
 control crawling. A missing origin-root robots file does not block this site.
+
+For a persistent `Couldn't fetch` status, check the exact submitted URL, the
+origin-root crawl rules and manual actions before changing the sitemap. Use a
+live URL test to distinguish current fetch availability from sitemap processing.
+When XML validates and the live fetch succeeds, the generated
+`https://lukeb-aidev.github.io/cohesix/sitemap.txt` provides an alternate format
+to submit once. An accepted submission receipt still requires a later successful
+processing result; do not treat it as completed indexing or repeatedly change
+URLs to force a retry.
 
 ## Theme and diagrams
 
@@ -126,7 +142,7 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory out/pages-preview
 
 The static checks compare published code fences, images, tables and diagram
 sources with their Markdown owners, verify the configured publication scope and
-require exact sitemap coverage of the retained content pages.
+require exact XML and plain-text sitemap coverage of the retained content pages.
 They complement the browser checks below.
 
 Open `http://127.0.0.1:4173/cohesix/`. Check the homepage and nested guides,

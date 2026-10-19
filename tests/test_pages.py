@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Test Pages scope, content retention and canonical sitemap coverage.
+# Purpose: Test Pages content and exact XML/text sitemap publication coverage.
 # Copyright 2026 Lukas Bower
 
 """Preserve layout, tables and diagram source in generated documentation."""
@@ -189,6 +189,7 @@ class PagesPublicationTests(unittest.TestCase):
             ) else relative
             urls.append(CANONICAL_ROOT + "/" + route)
         (self.site / "sitemap.xml").write_text(sitemap_xml(urls), encoding="utf-8")
+        (self.site / "sitemap.txt").write_text("\n".join(urls) + "\n", encoding="utf-8")
         return PAGES.check_site(self.site, self.source)
 
     def test_valid_nested_site_retains_decoded_source(self) -> None:
@@ -726,6 +727,7 @@ class SitemapTests(unittest.TestCase):
     def write(self, urls: list[str]) -> None:
         """Write the exact URLs selected by the test rather than deriving them."""
         (self.site / "sitemap.xml").write_text(sitemap_xml(urls), encoding="utf-8")
+        (self.site / "sitemap.txt").write_text("\n".join(urls) + "\n", encoding="utf-8")
 
     def audit(self) -> list[str]:
         """Check XML and URL coverage independently of themed-page fixtures."""
@@ -738,6 +740,80 @@ class SitemapTests(unittest.TestCase):
                 self.site, "https://lukeb-aidev.github.io", "/cohesix"
             ), set(self.urls),
         )
+
+    def test_missing_text_sitemap_cannot_pass(self) -> None:
+        (self.site / "sitemap.txt").unlink()
+        self.assertTrue(any("sitemap.txt" in error for error in self.audit()))
+
+    def test_text_sitemap_requires_plain_utf8_url_lines(self) -> None:
+        for text in (
+            "", "# Sitemap\n" + "\n".join(self.urls),
+            "\ufeff" + "\n".join(self.urls),
+            "\n".join(self.urls) + "\n\n",
+            " " + "\n".join(self.urls),
+            "\t" + "\n".join(self.urls),
+            "\n".join(self.urls) + " \n",
+            "<urlset>" + self.urls[0] + "</urlset>\n",
+        ):
+            with self.subTest(text=text):
+                (self.site / "sitemap.txt").write_text(text, encoding="utf-8")
+                self.assertTrue(any(error.startswith("sitemap.txt:")
+                                    for error in self.audit()))
+        (self.site / "sitemap.txt").write_bytes(b"\xff\xfeinvalid")
+        self.assertTrue(any("cannot read the UTF-8 text sitemap" in error
+                            for error in self.audit()))
+
+    def test_text_sitemap_duplicates_fail_even_when_xml_matches_its_set(self) -> None:
+        (self.site / "sitemap.txt").write_text(
+            "\n".join(self.urls + [self.urls[0]]) + "\n", encoding="utf-8"
+        )
+        failures = self.audit()
+        self.assertTrue(any("sitemap.txt: duplicate URL" in error
+                            for error in failures))
+        self.assertFalse(any("sitemap.xml:" in error for error in failures))
+
+    def test_xml_text_and_current_content_must_all_agree(self) -> None:
+        (self.site / "sitemap.txt").write_text(
+            "\n".join(self.urls[:-1]) + "\n", encoding="utf-8"
+        )
+        failures = self.audit()
+        self.assertIn("sitemap.txt: URL set differs from sitemap.xml", failures)
+        self.assertTrue(any("sitemap.txt: missing current content URL" in error
+                            for error in failures))
+        # Agreement between two incomplete lists cannot stand in for the site.
+        self.write(self.urls[:-1])
+        failures = self.audit()
+        for label in ("sitemap.xml", "sitemap.txt"):
+            self.assertTrue(any(label + ": missing current content URL" in error
+                                for error in failures))
+
+    def test_bad_text_urls_cannot_hide_behind_valid_xml(self) -> None:
+        for location in (
+            "https://example.com/cohesix/docs/GUIDE.html",
+            "https://lukeb-aidev.github.io/docs/GUIDE.html",
+            CANONICAL_ROOT + "/docs/GUIDE.md",
+            CANONICAL_ROOT + "/docs/REMOVED.html",
+            CANONICAL_ROOT + "/index.html",
+            CANONICAL_ROOT + "/404.html",
+            CANONICAL_ROOT + "/docs/GUIDE.html#heading",
+            "https://[invalid",
+        ):
+            with self.subTest(location=location):
+                (self.site / "sitemap.txt").write_text(
+                    "\n".join(self.urls + [location]) + "\n", encoding="utf-8"
+                )
+                failures = self.audit()
+                self.assertTrue(any(error.startswith("sitemap.txt: URL")
+                                    for error in failures))
+                self.assertFalse(any("sitemap.xml:" in error for error in failures))
+
+    def test_text_sitemap_accepts_crlf_and_an_unterminated_last_url(self) -> None:
+        for ending in ("\n", "\r\n"):
+            for final_newline in (False, True):
+                with self.subTest(ending=ending, final_newline=final_newline):
+                    text = ending.join(self.urls) + (ending if final_newline else "")
+                    (self.site / "sitemap.txt").write_bytes(text.encode("utf-8"))
+                    self.assertEqual(self.audit(), [])
 
     def test_missing_content_and_duplicate_urls_fail(self) -> None:
         self.write(self.urls[:-1])
