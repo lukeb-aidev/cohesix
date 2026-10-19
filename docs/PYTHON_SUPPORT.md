@@ -226,7 +226,7 @@ original job's execution and delivery states, retained uncertainty and lack of
 checkpoint resume; it cannot cancel, settle or authorize a restart. A successful
 pixel check remains host evidence until correlated with the root admission,
 native observation and signed terminal. See [registered CUDA
-workloads](HOST_TOOLS.md#registered-cuda-workloads) for installation and recovery.
+workloads](https://lukeb-aidev.github.io/cohesix/docs/HOST_TOOLS.html#registered-cuda-workloads) for installation and recovery.
 
 ```python
 import os
@@ -591,7 +591,7 @@ state. They run on the host, validate and bound collected data, and do not grant
 control authority. Evidence and receipt helpers write deterministic local
 artifacts without creating a new target evidence channel.
 
-Examples live in [`tools/cohesix-py/examples/`](../tools/cohesix-py/examples/).
+Examples live in [`tools/cohesix-py/examples/`](https://github.com/lukeb-aidev/cohesix/tree/main/tools/cohesix-py/examples).
 Treat mock examples as functional demonstrations, not live acceptance proof.
 
 ## Canonical evidence consumers

@@ -665,8 +665,10 @@ Optional fields:
 
 Telemetry continues to flow through existing paths:
 
+```text
 /gpu/telemetry/*
 /worker/<id>/telemetry
+```
 
 Constraints:
 - Size-bounded records
@@ -912,7 +914,9 @@ Deliverables: Hardened console loop with comprehensive parser tests integrated i
   - Provide QEMU integration instructions (`docs/USERLAND_AND_CLI.md`) showing serial console usage, remote `cohsh` attachment, and recommended port-forwarding commands for macOS host tooling.
   - Add unit tests for the command parser (invalid verbs, overlong lines), virtio queue wrappers, and integration tests that boot QEMU, connect via TCP, run scripted sessions, and verify audit log outputs.
   - Record the TCP console toggle in `configs/root_task.toml` once the manifest compiler lands (Milestone 8b) so docs and fixtures remain in sync.
+
 ### Task Breakdown
+
 ```
 Title/ID: m7c-cohsh-tcp
 Goal: Extend cohsh CLI with TCP transport parity while retaining existing flows.
@@ -13647,6 +13651,17 @@ Checks: Short labels retain natural word widths; prose columns use available spa
 Validation: The local Pages-compatible build retains every current source pipe table, including the restored Test Plan and audit registers; 47 current layout checks and 10 exact Mermaid source blocks pass. Twenty-six publication tests, twelve catalog tests, nine Mermaid adapter tests, generated consistency, Markdown metadata/fences, changed Mermaid compatibility and whitespace checks pass. Browser checks cover two through eleven columns on seven guides at 1223 and 390 pixels, homepage layouts at 320 and 1440 pixels, keyboard horizontal scrolling, and three script-free page variants. All 1301 previously rendered heading IDs remain present, with no new broken local fragment links; sixteen previously missing link targets are restored. Independent review corrected print wrapping. Host-tool, Python SDK and benchmark compatibility inventories were reviewed as unchanged; generated Test Plan rows differ only in blank block boundaries. Public promotion uses the existing Pages deployment, with completed deployment and public readback retained in the publication receipt. No runtime, target, provider-live, benchmark or assembled-release gate was run.
 Deliverables: Shared table styling, maintainer guidance, browser evidence and this scoped task record.
 
+Title/ID: m28g-pages-full-audit
+Milestone: 28g / m28g-pages-full-audit
+Status: Complete — full documentation-site audit and material presentation repairs authorized by Lukas Bower, 19 October 2026; public deployment requires the separate readback receipt below.
+Goal: Audit the complete public site, repair confirmed maintained-site defects and retain an explicit record of historical or external limitations.
+Inputs: Public site at 0b7383d4d; complete generated route manifest; committed Markdown sources; existing Pages, Mermaid and SwarmUI contracts; owner request.
+Changes: AI-assisted link, source/render, browser and independent theme audits; repair repository-directory and heading links, disclosure parsing, fenced examples, page titles, the homepage logo and expanded-diagram printing. Exclude 301 unused standalone HTML outputs while retaining their repository sources, release archives, verification endpoints and linked gallery; add a shared 404 page. Extend publication checks for excluded routes, every published source owner, exact code-fence retention, images and escaped disclosure markup. Repair the CAS template's blank fence boundary in its generator and regenerate the owned snippet and INTERFACES block. Host tools, Python SDK, benchmark contracts, runtime interfaces, immutable release source and unrelated worktree edits remain unaffected; the compatibility inventory was reviewed with no generated contract changes.
+Commands: Full public route/resource/fragment crawl; source-to-render comparison; desktop/mobile, keyboard, diagram and print browser checks; local Pages build and publication checks; focused Python/Node and coh-rtc CAS tests; cargo fmt --all -- --check; cargo clippy --workspace --all-targets -- -D warnings; cargo check --workspace; cargo test --workspace; cargo audit; cargo deny check advisories; scripts/check-generated.sh including Test Plan consistency; scripts/ci/test_plan_run.sh --list; Markdown metadata/fence/link and whitespace checks; scoped publication and anonymous public readback.
+Checks: Findings identify observed failures and exact affected routes; maintained-site repairs preserve documentation meaning, heading links and native source fallbacks; historical and external failures are reported without inventing target or release acceptance. Repeatable shared fixes and regression checks survive normal Pages publication.
+Validation: The rebuilt site contains 111 HTML routes, down from 411. All 201 checked internal destinations and 358 HTML fragment targets pass; 108 shared-layout pages retain their source images, tables, fenced examples and nine Mermaid blocks. All 44 Python, 13 Node and three CAS tests pass. Responsive checks cover every retained non-verification HTML surface at 390 and 1440 pixels without page overflow, broken images or escaped disclosure closures; two renderer fallback events in the concurrent cache-disabled sweep rendered successfully in focused sequential checks. The logo preserves its proportions at 320, 390, 768 and 1200 pixels. Actual PDF printing returns an expanded canvas to its figure and restores its dialog afterwards. Rust formatting, Clippy, check and workspace tests pass (2851 passed, five ignored); generated consistency, Test Plan integrity/catalog, changed Mermaid syntax, headers and whitespace checks pass. Dependency audit/advisory checks fail separately for nine pre-existing vulnerabilities in the unchanged lockfile (five quinn-proto and four rustls). Three external TCG URLs remain rate-limited and one Linux Foundation URL times out; neither establishes a broken destination. Independent technical review found no remaining material website issue. Publication acceptance requires a successful Pages deployment and fresh public readback in out/pages-full-audit/FINAL_REPORT.md; local checks alone do not establish deployment. No QEMU, Pi, provider-live, benchmark or assembled-release gate was run.
+Deliverables: Full audit report and evidence under out/pages-full-audit, maintained-site repairs, regression checks, deployment receipt and this scoped task record.
+
 Title/ID: m28g-architecture-boundary-diagram-simplification
 Milestone: 28g / m28g-architecture-boundary-diagram-simplification
 Status: Complete — documentation-only owner request, 27 September 2026.
@@ -13911,7 +13926,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 28; current owner 29</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28; current owner 29</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -14300,7 +14315,7 @@ single-dispatch, identity checks and parser/native evidence obligations.
 This renumbering adds no requirement to 27g and does not defer that repair.
 
 <details>
-<summary>Retained design inventory — former Milestone 28a; current owner 30</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28a; current owner 30</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -15217,7 +15232,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 28b; current owner 31</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28b; current owner 31</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -15670,7 +15685,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 28c; current owner 32</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28c; current owner 32</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -16252,7 +16267,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 28d; current owner 33</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28d; current owner 33</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -16586,7 +16601,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 28e; current owner 34</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28e; current owner 34</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -17477,7 +17492,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 28f; current owner 35</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28f; current owner 35</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -18075,7 +18090,7 @@ input; at activation reuse those accepted controls and scope only remaining
 extended-protocol gaps. It cannot defer or duplicate Release B safety controls.
 
 <details>
-<summary>Retained design inventory — former Milestone 28g; current owner 36</summary>
+<summary markdown="span">Retained design inventory — former Milestone 28g; current owner 36</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -18567,7 +18582,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 29; current owner 37</summary>
+<summary markdown="span">Retained design inventory — former Milestone 29; current owner 37</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -18989,7 +19004,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 29a; current owner 38</summary>
+<summary markdown="span">Retained design inventory — former Milestone 29a; current owner 38</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -19231,7 +19246,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 29b; current owner 39</summary>
+<summary markdown="span">Retained design inventory — former Milestone 29b; current owner 39</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -19503,7 +19518,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 30; current owner 40</summary>
+<summary markdown="span">Retained design inventory — former Milestone 30; current owner 40</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -19644,7 +19659,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 30a; current owner 41</summary>
+<summary markdown="span">Retained design inventory — former Milestone 30a; current owner 41</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -19785,7 +19800,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 30b; current owner 42</summary>
+<summary markdown="span">Retained design inventory — former Milestone 30b; current owner 42</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their
@@ -20067,7 +20082,7 @@ former-number references and superseded breadth before implementation. No
 whole-catalogue or later prerequisite is inherited by 28x.
 
 <details>
-<summary>Retained design inventory — former Milestone 31; current owner 43</summary>
+<summary markdown="span">Retained design inventory — former Milestone 31; current owner 43</summary>
 
 The following records preserve the previous detailed proposal. Their numeric
 cross-references use the former-number [mapping](#roadmap-id-mapping), and their

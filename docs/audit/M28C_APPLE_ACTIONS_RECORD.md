@@ -7,7 +7,7 @@
 
 **Scope update (25 September 2026):** This record preserves the earlier
 component-status and spoken-Siri proof limits. The revised [M28c developer
-gate](../BUILD_PLAN.md#28c) accepts installed Shortcuts service actions
+gate](https://lukeb-aidev.github.io/cohesix/docs/BUILD_PLAN.html#28c) accepts installed Shortcuts service actions
 without spoken Siri; the [completion record](M28C_COMPLETION_RECORD.md)
 binds the final notarised app and retained live observations. The earlier
 `m28c-actions-live` runner is no longer an M28c closure gate.

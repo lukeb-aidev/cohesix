@@ -5,6 +5,7 @@
 "use strict";
 
 import { normalizeFlowchartLabels } from "./mermaid-labels.mjs";
+import { installDiagramPrintLifecycle } from "./diagram-print.mjs";
 
 (() => {
   const article = document.querySelector("#document-content");
@@ -102,8 +103,9 @@ import { normalizeFlowchartLabels } from "./mermaid-labels.mjs";
       details.before(canvas);
       expand.focus();
     });
-    return { source, figure, canvas, details, expand, id: `cohesix-diagram-${index}` };
+    return { source, figure, canvas, details, dialog, expand, id: `cohesix-diagram-${index}` };
   });
+  installDiagramPrintLifecycle(window, document, entries);
 
   const showError = (entry, message) => {
     const status = document.createElement("p");

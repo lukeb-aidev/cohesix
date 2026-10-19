@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Test static Pages publication failures with small site fixtures.
+# Purpose: Test Pages scope exclusions, shared layout and exact content retention.
 # Copyright 2026 Lukas Bower
 
 """Preserve layout, tables and diagram source in generated documentation."""
@@ -175,6 +175,146 @@ class PagesPublicationTests(unittest.TestCase):
         result = self.audit()
         self.assertEqual(result.errors, [])
         self.assertEqual((result.pages, result.diagrams), (2, 1))
+
+    def test_only_explicitly_excluded_root_guides_may_be_unpublished(self) -> None:
+        (self.source / "docs/UNUSED.md").write_text(
+            "# Unused\n", encoding="utf-8"
+        )
+        config = self.source / "_config.yml"
+        config.write_text(
+            "title: Cohesix\nexclude:\n  - docs/UNUSED.md\n", encoding="utf-8"
+        )
+        self.assertEqual(self.audit().errors, [])
+        config.unlink()
+        self.assertTrue(any("docs/UNUSED.html: generated page is missing" in error
+                            for error in self.audit().errors))
+
+    def test_excluded_markdown_route_cannot_leak_into_the_site(self) -> None:
+        (self.source / "docs/UNUSED.md").write_text(
+            "# Unused\n", encoding="utf-8"
+        )
+        (self.source / "_config.yml").write_text(
+            "exclude:\n  - docs/UNUSED.md\n", encoding="utf-8"
+        )
+        (self.site / "docs/UNUSED.html").write_text(
+            self.page("docs/UNUSED.md", "<h1>Unused</h1>", "Unused"),
+            encoding="utf-8",
+        )
+        failures = "\n".join(self.audit().errors)
+        self.assertIn("docs/UNUSED.html: excluded output is still published", failures)
+        self.assertIn("excluded source docs/UNUSED.md is still published", failures)
+
+    def test_directory_exclusion_does_not_match_an_archive_sibling(self) -> None:
+        (self.source / "_config.yml").write_text(
+            "exclude:\n  - releases/bundle/ # omit the expanded copy\n"
+            "plugins:\n  - jekyll-relative-links\n", encoding="utf-8",
+        )
+        release = self.site / "releases"
+        release.mkdir()
+        (release / "bundle.tar.gz").write_text("archive", encoding="utf-8")
+        self.assertEqual(self.audit().errors, [])
+        excluded = release / "bundle"
+        excluded.mkdir()
+        self.assertTrue(any("releases/bundle: excluded output" in error
+                            for error in self.audit().errors))
+
+    def test_exclusion_prefixes_retain_jekyll_trailing_slash_semantics(self) -> None:
+        archive = Path("releases/Bundle.tar.gz")
+        descendant = Path("releases/Bundle/README.md")
+        for literal, excludes_archive in (
+            ("releases/Bundle", True), ("releases/Bundle/", False)
+        ):
+            with self.subTest(literal=literal):
+                (self.source / "_config.yml").write_text(
+                    "exclude:\n  - " + literal + "\n", encoding="utf-8"
+                )
+                exclusions = PAGES.publication_exclusions(self.source)
+                self.assertEqual(exclusions, (literal,))
+                self.assertEqual(PAGES.is_excluded(archive, exclusions),
+                                 excludes_archive)
+                self.assertTrue(PAGES.is_excluded(descendant, exclusions))
+
+    def test_source_link_detects_an_excluded_readme_index_alias(self) -> None:
+        (self.source / "demo").mkdir()
+        (self.source / "demo/README.md").write_text(
+            "# Demo\n", encoding="utf-8"
+        )
+        (self.source / "_config.yml").write_text(
+            "exclude:\n  - demo/README.md\n", encoding="utf-8"
+        )
+        (self.site / "demo").mkdir()
+        (self.site / "demo/index.html").write_text(
+            self.page("demo/README.md", "<h1>Demo</h1>", "Demo"),
+            encoding="utf-8",
+        )
+        self.assertTrue(any("excluded source demo/README.md is still published"
+                            in error for error in self.audit().errors))
+
+    def test_unsupported_exclusion_yaml_fails_explicitly(self) -> None:
+        for config in (
+            "exclude: [docs/UNUSED.md]\n",
+            "exclude:\n  - 'docs/UNUSED.md'\n",
+            "exclude:\n  - !!str docs/UNUSED.md\n",
+            "exclude:\n  - docs/*.md\n",
+            "exclude:\n  - ../private\n",
+            "exclude:\n- docs/UNUSED.md\n",
+            "exclude:\n  - out\nexclude:\n  - target\n",
+            "exclude:\n  - out\n    - target\n",
+            "exclude:\n",
+        ):
+            with self.subTest(config=config):
+                (self.source / "_config.yml").write_text(config, encoding="utf-8")
+                failures = self.audit().errors
+                self.assertEqual(len(failures), 1)
+                self.assertIn("_config.yml: line", failures[0])
+                self.assertIn("exclude", failures[0])
+
+    def test_all_source_linked_markdown_pages_require_the_shared_layout(self) -> None:
+        markdown = self.source / "demo/README.md"
+        markdown.parent.mkdir()
+        markdown.write_text("# Demo\n\n" + TABLE, encoding="utf-8")
+        generated = self.site / "demo/index.html"
+        generated.parent.mkdir()
+        page = self.page(
+            "demo/README.md", "<h1>Demo</h1>" + RENDERED_TABLE, "Demo"
+        )
+        generated.write_text(page, encoding="utf-8")
+        result = self.audit()
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.pages, 3)
+        generated.write_text(
+            page.replace('class="site-header"', 'class="unrelated"'),
+            encoding="utf-8",
+        )
+        self.assertTrue(any("demo/index.html: shared layout is missing" in error
+                            for error in self.audit().errors))
+
+    def test_source_linked_html_page_is_checked_without_markdown_parsing(self) -> None:
+        (self.source / "404.html").write_text(
+            "---\nlayout: default\n---\n<h1>Page not found</h1>\n```\n",
+            encoding="utf-8",
+        )
+        page = self.page("404.html", "<h1>Page not found</h1>", "Page not found")
+        (self.site / "404.html").write_text(page, encoding="utf-8")
+        result = self.audit()
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.pages, 3)
+        (self.site / "404.html").write_text(
+            page.replace('id="main-content"', 'id="missing-main"'),
+            encoding="utf-8",
+        )
+        self.assertTrue(any("404.html: shared layout is missing" in error
+                            for error in self.audit().errors))
+        (self.site / "404.html").unlink()
+        self.assertTrue(any("404.html: generated page is missing" in error
+                            for error in self.audit().errors))
+
+    def test_standalone_verification_and_gallery_html_are_exempt(self) -> None:
+        for relative in ("google-verification.html", "docs/gallery/index.html"):
+            target = self.site / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("<html><body>Standalone</body></html>", encoding="utf-8")
+        self.assertEqual(self.audit().errors, [])
 
     def test_missing_theme_and_native_font_assets_fail(self) -> None:
         (self.site / "assets/js/site.js").unlink()
@@ -385,6 +525,141 @@ class PagesPublicationTests(unittest.TestCase):
             "# Overview\n```mermaid\n" + DIAGRAM, encoding="utf-8"
         )
         self.assertTrue(any("unterminated Markdown code fence" in error
+                            for error in self.audit().errors))
+
+    def test_escaped_disclosure_closing_tags_outside_code_fail(self) -> None:
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", "<h1>Guide</h1><details><summary>More"
+                      "&lt;/summary&gt;</summary>&lt;/details&gt;</details>", "Guide"),
+            encoding="utf-8",
+        )
+        failures = "\n".join(self.audit().errors)
+        self.assertIn("escaped disclosure closing tags outside pre/code", failures)
+        self.assertIn("</summary>", failures)
+        self.assertIn("</details>", failures)
+
+    def test_real_disclosures_and_closing_tags_in_code_are_allowed(self) -> None:
+        code = "</summary>\n</details>\n"
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n```html\n" + code + "```\n", encoding="utf-8"
+        )
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", "<h1>Guide</h1><details><summary>More"
+                      "</summary><p>Content</p></details>"
+                      "<code>&lt;/summary&gt;</code><pre><code>"
+                      + html.escape(code) + "</code></pre>", "Guide"),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.audit().errors, [])
+
+    def test_lost_or_changed_ordinary_fenced_code_cannot_pass(self) -> None:
+        code = "printf '<input> & value'\n"
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n```bash\n" + code + "```\n", encoding="utf-8"
+        )
+        for article in (
+            "<h1>Guide</h1><p>Swallowed fence</p>",
+            "<h1>Guide</h1><pre><code>changed\n</code></pre>",
+            "<h1>Guide</h1><code>" + html.escape(code) + "</code>",
+        ):
+            with self.subTest(article=article):
+                (self.site / "docs/GUIDE.html").write_text(
+                    self.page("docs/GUIDE.md", article, "Guide"), encoding="utf-8"
+                )
+                self.assertTrue(any("fenced code at docs/GUIDE.md:3" in error
+                                    for error in self.audit().errors))
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", "<h1>Guide</h1><pre><code><span>printf</span>"
+                      + html.escape(code[len("printf"):]) + "</code></pre>", "Guide"),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.audit().errors, [])
+
+    def test_repeated_fenced_code_requires_two_retained_blocks(self) -> None:
+        code = "same content\n"
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n```text\n" + code + "```\n\n```text\n" + code + "```\n",
+            encoding="utf-8",
+        )
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", "<h1>Guide</h1><pre><code>"
+                      + code + "</code></pre>", "Guide"), encoding="utf-8",
+        )
+        self.assertTrue(any("fenced code at docs/GUIDE.md:7" in error
+                            for error in self.audit().errors))
+
+    def test_raw_html_and_markdown_images_preserve_resolved_sources(self) -> None:
+        for relative in ("assets/raw.svg", "docs/images/my logo.svg"):
+            target = self.site / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("<svg/>", encoding="utf-8")
+        external = "https://example.com/image.svg?x=1&y=2"
+        (self.source / "docs/GUIDE.md").write_text(
+            '# Guide\n\n<img src="../assets/raw.svg" alt="Raw">\n\n'
+            '![Logo](/docs/images/my%20logo.svg)\n\n'
+            '![External](' + external + ')\n', encoding="utf-8",
+        )
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", '<h1>Guide</h1>'
+                      '<img src="/cohesix/assets/raw.svg" alt="Raw">'
+                      '<img src="images/my logo.svg" alt="Logo">'
+                      '<img src="' + html.escape(external) + '" alt="External">',
+                      "Guide"), encoding="utf-8",
+        )
+        self.assertEqual(self.audit().errors, [])
+
+    def test_escaped_or_replaced_article_image_cannot_pass(self) -> None:
+        raw_image = '<img src="image.svg" alt="Logo">'
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n" + raw_image + "\n", encoding="utf-8"
+        )
+        for relative in ("docs/image.svg", "docs/different.svg"):
+            (self.site / relative).write_text("<svg/>", encoding="utf-8")
+        for article in (
+            '<h1>Guide</h1><pre><code>' + html.escape(raw_image) + '</code></pre>',
+            '<h1>Guide</h1><img src="different.svg" alt="Wrong logo">',
+        ):
+            with self.subTest(article=article):
+                (self.site / "docs/GUIDE.html").write_text(
+                    self.page("docs/GUIDE.md", article, "Guide"), encoding="utf-8"
+                )
+                self.assertTrue(any("article images differ from docs/GUIDE.md"
+                                    in error for error in self.audit().errors))
+
+    def test_image_examples_inside_fences_and_inline_code_are_ignored(self) -> None:
+        example = '<img src="missing.svg">\n![Example](missing.png)\n'
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n```html\n" + example + "```\n\n"
+            '`<img src="missing.svg">` and `![Example](missing.png)`\n',
+            encoding="utf-8",
+        )
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", "<h1>Guide</h1><pre><code>"
+                      + html.escape(example) + "</code></pre>"
+                      '<code>&lt;img src="missing.svg"&gt;</code>'
+                      '<code>![Example](missing.png)</code>', "Guide"),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.audit().errors, [])
+
+    def test_matching_image_urls_still_require_the_local_file(self) -> None:
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n![Logo](missing.svg)\n", encoding="utf-8"
+        )
+        (self.site / "docs/GUIDE.html").write_text(
+            self.page("docs/GUIDE.md", '<h1>Guide</h1>'
+                      '<img src="/cohesix/docs/missing.svg" alt="Logo">', "Guide"),
+            encoding="utf-8",
+        )
+        self.assertTrue(any("article image '/cohesix/docs/missing.svg': "
+                            "destination is missing" in error
+                            for error in self.audit().errors))
+
+    def test_unsupported_reference_images_fail_explicitly(self) -> None:
+        (self.source / "docs/GUIDE.md").write_text(
+            "# Guide\n\n![Logo][logo]\n\n[logo]: image.svg\n", encoding="utf-8"
+        )
+        self.assertTrue(any("unsupported image syntax" in error
                             for error in self.audit().errors))
 
 

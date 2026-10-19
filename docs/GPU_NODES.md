@@ -408,7 +408,7 @@ controller failure. The protected host journal never supplies admission or
 execution proof. Signed native termination releases its reservation; verified
 output bytes in CAS permit bounded dependency-aware reuse. Current authority is
 required for every new submit/cancel action. See [Recoverable CUDA
-recipes](HOST_TOOLS.md#recoverable-cuda-recipes) for deployment fields, recovery,
+recipes](https://lukeb-aidev.github.io/cohesix/docs/HOST_TOOLS.html#recoverable-cuda-recipes) for deployment fields, recovery,
 finite retention and the checked Python example. Device buffers are released by
 native child termination; retained output artifacts are not native training
 checkpoints. Queen reboot persistence and production Worker bundle binding keep

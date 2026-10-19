@@ -42,7 +42,7 @@ candidate chronology, and qualified result history belong in
 ## Coverage without duplicate execution
 
 For the [27b–27g release
-sequence](BUILD_PLAN.md#post-26e-investment-constrained-delivery-sequence), each
+sequence](https://lukeb-aidev.github.io/cohesix/docs/BUILD_PLAN.html#post-26e-investment-constrained-delivery-sequence), each
 component milestone owns focused acceptance; 27g owns exact assembled
 CLI/Python/CI/native-app journeys and the complete applicable staged release gates.
 Foundation conformance does not require downstream recipes or UI. Historical milestone

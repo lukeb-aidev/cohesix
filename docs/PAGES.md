@@ -19,12 +19,23 @@ and `assets/` files participate in every build, so documentation updates retain
 the same theme. There is no separate generated-site branch or manual HTML edit
 to repeat after publication.
 
+The literal paths in `_config.yml` also exclude unused standalone HTML pages
+and unpacked historical bundle trees from publication. Repository sources and
+release archives remain intact. Preserve externally used verification endpoints,
+linked gallery HTML and the shared font/icon dependencies when reviewing unused
+pages. A page without a navigation link can still serve one of these purposes.
+The shared `404.html` is a required error endpoint, not an unused content page.
+
 The supported Jekyll plugins render Markdown without front matter, use the
 README as the homepage and translate local Markdown links to their generated
 HTML destinations. The shared layout derives page titles from rendered headings,
 including documents with leading copyright comments. Layout asset and navigation
 links use Jekyll's `relative_url` filter to preserve the `/cohesix` project path.
 Keep these plugins when changing the layout.
+
+Use ordinary Markdown images for page artwork. The shared stylesheet sizes the
+homepage logo responsively and preserves its proportions; deeply indented HTML
+inside a Markdown-enabled container can become a code example instead of an image.
 
 ## Theme and diagrams
 
@@ -49,6 +60,8 @@ it contains angle-bracket placeholders; otherwise Kramdown can interpret a
 placeholder as an HTML block and hide later Markdown. Generated table owners
 must emit their own blank lines. The shared configuration enables Markdown
 inside HTML disclosure blocks and retains the existing heading-anchor format.
+Use `<summary markdown="span">Title</summary>` for disclosure titles so Kramdown
+keeps the closing tag instead of nesting later sections inside the title.
 
 `assets/js/site.js` adds the page outline, scrollable table regions and Mermaid
 rendering. Normal fenced blocks labelled `mermaid` remain the source for both
@@ -65,6 +78,8 @@ Large diagrams fit the reading column and offer an expanded view with native
 dialog keyboard controls. Without JavaScript, Markdown, links, navigation and
 the original diagram source remain usable. Downloading the renderer requires a
 network connection.
+Printing an expanded diagram temporarily returns its canvas to the document and
+restores the expanded view afterwards, so the diagram also appears in print.
 
 To upgrade Mermaid, verify the exact release against the upstream package,
 update both the versioned URL and its integrity digest, and exercise rendering
@@ -85,9 +100,13 @@ BUNDLE_PATH="$PWD/out/pages-gems" bundle exec jekyll build \
   --destination out/pages-preview/cohesix
 python3 scripts/ci/check_pages.py --site out/pages-preview/cohesix
 python3 -m unittest discover -s tests -p test_pages.py
-node --test tests/pages/mermaid-labels.test.mjs
+node --test tests/pages/*.test.mjs
 python3 -m http.server 4173 --bind 127.0.0.1 --directory out/pages-preview
 ```
+
+The static checks compare published code fences, images, tables and diagram
+sources with their Markdown owners and verify the configured publication scope.
+They complement the browser checks below.
 
 Open `http://127.0.0.1:4173/cohesix/`. Check the homepage and nested guides,
 ordinary code, tables, images, source links and heading anchors. For tables,

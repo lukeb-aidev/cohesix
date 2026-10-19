@@ -2377,7 +2377,7 @@ impl DocFragments {
                 "- CAS host packaging template (`limits` is tooling-only; CBOR manifest-v1 remains eight fields):"
             )
             .ok();
-            writeln!(cas_interfaces_md, "```json").ok();
+            writeln!(cas_interfaces_md, "\n```json").ok();
             writeln!(cas_interfaces_md, "{}", cas_template.json).ok();
             writeln!(cas_interfaces_md, "```").ok();
         }

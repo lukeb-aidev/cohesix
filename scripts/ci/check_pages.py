@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Check generated Pages navigation, assets, tables and Mermaid source.
+# Purpose: Check publication scope, shared layout and Pages content retention.
 # Copyright 2026 Lukas Bower
 
 """Check local Jekyll output without claiming browser or Mermaid execution."""
@@ -13,10 +13,11 @@ from pathlib import Path
 import re
 import sys
 from typing import NamedTuple
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SOURCE_PREFIX = "https://github.com/lukeb-aidev/cohesix/blob/main/"
 REQUIRED_ASSETS = {
     ("stylesheet", "apps/swarmui/frontend/styles/fonts.css"),
     ("stylesheet", "assets/css/site.css"),
@@ -41,6 +42,13 @@ JS_IMPORT = re.compile(
     r"|export\s+[^;'\"]*?\s+from\s+)['\"]([^'\"]*)['\"]",
     re.MULTILINE,
 )
+EXCLUDED_PATH = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/?")
+ESCAPED_DISCLOSURE = re.compile(r"</\s*(?:summary|details)\s*>", re.IGNORECASE)
+INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)")
+MARKDOWN_IMAGE = re.compile(
+    r"(?<!\\)!\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^()\s]+))"
+    r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+)
 
 
 class CheckResult(NamedTuple):
@@ -49,6 +57,14 @@ class CheckResult(NamedTuple):
     errors: list[str]
     pages: int
     diagrams: int
+
+
+class CodeFence(NamedTuple):
+    """Retain the source location, language and exact fenced content."""
+
+    line: int
+    language: str
+    text: str
 
 
 class Page(HTMLParser):
@@ -60,11 +76,14 @@ class Page(HTMLParser):
         self.ids: set[str] = set()
         self.markers: set[tuple[str, str]] = set()
         self.assets: list[tuple[str, str]] = []
+        self.article_images: list[str] = []
         self.module_scripts: set[str] = set()
         self.chrome_links: list[str] = []
         self.navigation: list[str] = []
         self.source_links: list[str] = []
         self.diagrams: list[str] = []
+        self.code_blocks: list[str] = []
+        self.escaped_disclosures: list[str] = []
         self.tables = 0
         self.headed_tables = 0
         self.title = ""
@@ -74,6 +93,7 @@ class Page(HTMLParser):
         self._title_depth: int | None = None
         self._heading_depth: int | None = None
         self._diagram_depth: int | None = None
+        self._code_depth: int | None = None
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -119,14 +139,18 @@ class Page(HTMLParser):
             self.assets.append(("script", src))
             if values.get("type") == "module":
                 self.module_scripts.add(src)
-        elif tag == "img" and not in_article:
-            self.assets.append(("image", values.get("src") or ""))
-        if (
-            tag == "code" and "language-mermaid" in classes
-            and in_article and self.stack and self.stack[-1][0] == "pre"
-        ):
-            self.diagrams.append("")
-            self._diagram_depth = len(self.stack)
+        elif tag == "img":
+            if in_article:
+                self.article_images.append(values.get("src") or "")
+            else:
+                self.assets.append(("image", values.get("src") or ""))
+        if tag == "code" and in_article and self.stack:
+            if self.stack[-1][0] == "pre":
+                self.code_blocks.append("")
+                self._code_depth = len(self.stack)
+                if "language-mermaid" in classes:
+                    self.diagrams.append("")
+                    self._diagram_depth = len(self.stack)
         if tag not in VOID_TAGS:
             self.stack.append((tag, values))
 
@@ -138,6 +162,8 @@ class Page(HTMLParser):
                     and index <= self._diagram_depth
                 ):
                     self._diagram_depth = None
+                if self._code_depth is not None and index <= self._code_depth:
+                    self._code_depth = None
                 if (
                     self._title_depth is not None
                     and index <= self._title_depth
@@ -152,40 +178,231 @@ class Page(HTMLParser):
                 break
 
     def handle_data(self, data: str) -> None:
+        if self._code_depth is not None:
+            self.code_blocks[-1] += data
         if self._diagram_depth is not None:
             self.diagrams[-1] += data
         if self._title_depth is not None:
             self.title += data
         if self._heading_depth is not None:
             self.first_heading += data
+        if (
+            any(v.get("id") == "document-content" for _, v in self.stack)
+            and not any(t in {"pre", "code"} for t, _ in self.stack)
+        ):
+            self.escaped_disclosures.extend(ESCAPED_DISCLOSURE.findall(data))
 
 
-def mermaid_sources(path: Path) -> list[str]:
-    """Extract Mermaid fences outside other fenced code examples."""
+def fenced_code_sources(path: Path) -> list[CodeFence]:
+    """Extract fenced content without treating nested examples as fences."""
     marker = ""
     language = ""
+    indentation = ""
+    start = 0
     body: list[str] = []
-    diagrams: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    blocks: list[CodeFence] = []
+    for number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         fence = FENCE.match(line)
         if not marker:
             if fence:
                 marker = fence[2]
                 language = fence[3].strip()
+                indentation = fence[1]
+                start = number
                 body = []
             continue
         if (
             fence and fence[2][0] == marker[0] and len(fence[2]) >= len(marker)
             and not fence[3].strip()
         ):
-            if language == "mermaid":
-                diagrams.append("\n".join(body) + "\n")
+            blocks.append(CodeFence(
+                start, language, "\n".join(body) + ("\n" if body else "")
+            ))
             marker = ""
         else:
+            if "\t" not in indentation:
+                remove = min(
+                    len(indentation), len(line) - len(line.lstrip(" "))
+                )
+                line = line[remove:]
+            elif line.startswith(indentation):
+                line = line[len(indentation):]
             body.append(line)
     if marker:
         raise ValueError("unterminated Markdown code fence")
-    return diagrams
+    return blocks
+
+
+def mermaid_sources(path: Path) -> list[str]:
+    """Extract Mermaid source using the same fenced-code boundary rules."""
+    return [block.text for block in fenced_code_sources(path)
+            if block.language == "mermaid"]
+
+
+class SourceImages(HTMLParser):
+    """Read raw HTML images and ordinary inline Markdown image references."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.images: list[str] = []
+        self.code_depth = 0
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag in {"pre", "code"}:
+            self.code_depth += 1
+        elif tag == "img" and not self.code_depth:
+            self.images.append(dict(attrs).get("src") or "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"pre", "code"} and self.code_depth:
+            self.code_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.code_depth:
+            return
+        for image in MARKDOWN_IMAGE.finditer(data):
+            self.images.append(image[1] or image[2])
+        if re.search(r"(?<!\\)!\[", MARKDOWN_IMAGE.sub("", data)):
+            raise ValueError(
+                "unsupported image syntax; use ordinary inline Markdown "
+                "images or an HTML img element"
+            )
+
+
+def source_images(path: Path) -> list[str]:
+    """Retain source images while excluding fenced and inline code examples."""
+    marker = ""
+    prose: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        fence = FENCE.match(line)
+        if not marker:
+            if fence:
+                marker = fence[2]
+            else:
+                prose.append(line)
+        elif (
+            fence and fence[2][0] == marker[0] and len(fence[2]) >= len(marker)
+            and not fence[3].strip()
+        ):
+            marker = ""
+    if marker:
+        raise ValueError("unterminated Markdown code fence")
+    parser = SourceImages()
+    parser.feed(INLINE_CODE.sub("", "\n".join(prose)))
+    parser.close()
+    return parser.images
+
+
+def canonical_image_url(
+    image: str, reference: Path, baseurl: str, *, source_relative: bool
+) -> str:
+    """Resolve local images against their source or output directory."""
+    parsed = urlsplit(image)
+    if parsed.scheme or parsed.netloc:
+        return image
+    if not parsed.path:
+        raise ValueError("image src must name a file or external URL")
+    if (
+        source_relative and parsed.path.startswith("/")
+        and not parsed.path.startswith(baseurl + "/")
+    ):
+        image = urlunsplit((
+            "", "", baseurl + parsed.path, parsed.query, parsed.fragment
+        ))
+    base = baseurl + "/" + reference.parent.as_posix() + "/"
+    resolved = urlsplit(urljoin(base, image))
+    return urlunsplit((
+        "", "", quote(unquote(resolved.path), safe="/"),
+        resolved.query, resolved.fragment,
+    ))
+
+
+def publication_exclusions(source: Path) -> tuple[str, ...]:
+    """Read the maintained literal exclude list without adding a YAML parser.
+
+    Other configuration values are outside this check. Exclusions must use an
+    indented list of unquoted repository paths; tags, aliases, globs and inline
+    YAML collections fail explicitly rather than receiving guessed semantics.
+    """
+    config = source / "_config.yml"
+    if not config.is_file():
+        return ()
+    exclusions: list[str] = []
+    in_list = False
+    seen = False
+    header_line = 0
+    indentation: int | None = None
+    for number, line in enumerate(
+        config.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if re.match(r"^exclude\s*:", line):
+            if seen or not re.fullmatch(r"exclude:[ \t]*(?:#.*)?", line):
+                raise ValueError(
+                    f"line {number}: exclude must be one indented literal path list"
+                )
+            seen = in_list = True
+            header_line = number
+            continue
+        if not in_list or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace() and not line.startswith("-"):
+            in_list = False
+            continue
+        item = re.fullmatch(r"( +)-[ ]+([^#]*?)[ ]*(?:[ ]+#.*)?", line)
+        value = item[2].strip() if item else ""
+        if item and indentation is None:
+            indentation = len(item[1])
+        if (
+            not EXCLUDED_PATH.fullmatch(value)
+            or (item is not None and len(item[1]) != indentation)
+            or any(part in {".", ".."} for part in value.split("/"))
+            or value.lower() in {"true", "false", "null"}
+        ):
+            raise ValueError(
+                f"line {number}: exclude entries must be indented, unquoted "
+                "literal repository paths without YAML tags or globs"
+            )
+        # Jekyll treats these as literal prefixes. A directory's trailing slash
+        # protects archive siblings, so retain it until filesystem resolution.
+        exclusions.append(value)
+    if seen and not exclusions:
+        raise ValueError(
+            f"line {header_line}: exclude must contain an indented literal path list"
+        )
+    return tuple(exclusions)
+
+
+def is_excluded(relative: Path, exclusions: tuple[str, ...]) -> bool:
+    """Match Jekyll's literal prefixes, including meaningful trailing slashes."""
+    return any(relative.as_posix().startswith(prefix) for prefix in exclusions)
+
+
+def markdown_destination(relative: Path) -> Path:
+    """Map the required Markdown routes used by the root Pages build."""
+    return (Path("index.html") if relative == Path("README.md")
+            else relative.with_suffix(".html"))
+
+
+def excluded_outputs(site: Path, exclusions: tuple[str, ...]) -> list[str]:
+    """Require excluded trees and directly mapped Markdown routes to be absent."""
+    errors: list[str] = []
+    for literal in exclusions:
+        relative = Path(literal)
+        outputs = {relative}
+        if relative.suffix.lower() == ".md":
+            outputs.add(markdown_destination(relative))
+        for output in sorted(outputs):
+            target = site / output
+            if target.exists() or target.is_symlink():
+                errors.append(
+                    f"{output.as_posix()}: excluded output is still published "
+                    f"(exclude: {literal})"
+                )
+    return errors
 
 
 def pipe_cells(line: str) -> list[str]:
@@ -262,7 +479,8 @@ def pipe_table_lines(path: Path) -> list[int]:
 
 
 def check_table_preservation(
-    site: Path, source: Path, parsed_pages: dict[Path, Page]
+    site: Path, source: Path, parsed_pages: dict[Path, Page],
+    published_sources: dict[Path, Path], exclusions: tuple[str, ...],
 ) -> list[str]:
     """Check table retention in published root guides and nested documents.
 
@@ -273,13 +491,17 @@ def check_table_preservation(
     errors: list[str] = []
     sources = [source / "README.md", source / "CONTRIBUTING.md"]
     sources.extend(sorted((source / "docs").rglob("*.md")))
-    for markdown in sources:
+    documents = {
+        markdown_destination(path.relative_to(source)): path for path in sources
+    }
+    documents.update({generated: path for generated, path in published_sources.items()
+                      if path.suffix.lower() == ".md"})
+    for generated, markdown in sorted(documents.items()):
         relative = markdown.relative_to(source)
-        generated = (
-            Path("index.html") if relative == Path("README.md")
-            else relative.with_suffix(".html")
-        )
-        if not markdown.is_file() or not (site / generated).is_file():
+        if (
+            is_excluded(relative, exclusions) or not markdown.is_file()
+            or not (site / generated).is_file()
+        ):
             continue
         expected = pipe_table_lines(markdown)
         page = parsed_pages.get(generated)
@@ -362,11 +584,21 @@ def check_module_imports(
 def check_site(
     site: Path, source: Path, baseurl: str = "/cohesix"
 ) -> CheckResult:
-    """Validate public guides and the shared layout's local dependencies."""
+    """Validate required guides and every source-linked published document."""
     errors: list[str] = []
-    sources = [(source / "README.md", Path("index.html"))]
-    sources.extend((path, Path("docs") / path.with_suffix(".html").name)
-                   for path in sorted((source / "docs").glob("*.md")))
+    try:
+        exclusions = publication_exclusions(source)
+    except (OSError, ValueError) as error:
+        return CheckResult([f"_config.yml: {error}"], 0, 0)
+    errors.extend(excluded_outputs(site, exclusions))
+    required = [source / "README.md"]
+    required.extend(sorted((source / "docs").glob("*.md")))
+    if (source / "404.html").is_file():
+        required.append(source / "404.html")
+    sources = {
+        markdown_destination(path.relative_to(source)): path for path in required
+        if not is_excluded(path.relative_to(source), exclusions)
+    }
     markers = {
         ("header", "site-header"), ("footer", "site-footer"),
         ("main", "main-content"), ("article", "document-content"),
@@ -377,17 +609,48 @@ def check_site(
     diagram_count = 0
     checked_assets: set[Path] = set()
     parsed_pages: dict[Path, Page] = {}
-    for markdown, relative in sources:
+    for generated in sorted(site.rglob("*.html")):
+        relative = generated.relative_to(site)
+        page = Page()
+        page.feed(generated.read_text(encoding="utf-8"))
+        page.close()
+        parsed_pages[relative] = page
+        for href in page.source_links:
+            if not href.startswith(SOURCE_PREFIX):
+                continue
+            source_path = unquote(href[len(SOURCE_PREFIX):])
+            path = Path(source_path)
+            if path.suffix.lower() not in {".md", ".html"}:
+                continue
+            if (
+                path.is_absolute() or "\\" in source_path
+                or any(part in {".", ".."} for part in source_path.split("/"))
+            ):
+                errors.append(f"{relative}: View source has an unsafe repository path")
+                continue
+            if is_excluded(path, exclusions):
+                errors.append(
+                    f"{relative}: excluded source {source_path} is still published"
+                )
+                continue
+            if not (source / path).is_file():
+                errors.append(
+                    f"{relative}: View source document {source_path} is missing"
+                )
+                continue
+            # Required routes retain their expected source even if the link is wrong.
+            sources.setdefault(relative, source / path)
+    homepage = parsed_pages.get(Path("index.html"))
+    if homepage and homepage.navigation:
+        reference_navigation = homepage.navigation
+    for relative, markdown in sorted(sources.items()):
         label = relative.as_posix()
         generated = site / relative
         if not generated.is_file():
             errors.append(f"{label}: generated page is missing")
             continue
         page_count += 1
-        page = Page()
-        page.feed(generated.read_text(encoding="utf-8"))
-        page.close()
-        parsed_pages[relative] = page
+        page = parsed_pages[relative]
         missing = sorted(markers - page.markers)
         if missing:
             errors.append(f"{label}: shared layout is missing {missing}")
@@ -427,9 +690,7 @@ def check_site(
             except ValueError as error:
                 errors.append(f"{label}: navigation {href!r}: {error}")
         source_path = markdown.relative_to(source).as_posix()
-        expected_source = (
-            "https://github.com/lukeb-aidev/cohesix/blob/main/" + source_path
-        )
+        expected_source = SOURCE_PREFIX + source_path
         if page.source_links != [expected_source]:
             errors.append(
                 f"{label}: View source must link to {expected_source}"
@@ -456,11 +717,42 @@ def check_site(
                 f"{label}: missing theme assets "
                 f"{sorted(REQUIRED_ASSETS - found_assets)}"
             )
+        if page.escaped_disclosures:
+            errors.append(
+                f"{label}: escaped disclosure closing tags outside pre/code: "
+                f"{page.escaped_disclosures}"
+            )
+        if markdown.suffix.lower() != ".md":
+            continue
         try:
-            expected_diagrams = mermaid_sources(markdown)
+            fences = fenced_code_sources(markdown)
+            expected_images = [
+                canonical_image_url(image, Path(source_path), baseurl,
+                                    source_relative=True)
+                for image in source_images(markdown)
+            ]
+            retained_images = [
+                canonical_image_url(image, relative, baseurl,
+                                    source_relative=False)
+                for image in page.article_images
+            ]
         except (OSError, ValueError) as error:
             errors.append(f"{source_path}: {error}")
             continue
+        if expected_images != retained_images:
+            errors.append(
+                f"{label}: article images differ from {source_path} "
+                f"(expected {expected_images}, retained {retained_images})"
+            )
+        for image in dict.fromkeys(expected_images + retained_images):
+            if urlsplit(image).scheme or urlsplit(image).netloc:
+                continue
+            try:
+                local_target(image, site, baseurl)
+            except ValueError as error:
+                errors.append(f"{label}: article image {image!r}: {error}")
+        expected_diagrams = [block.text for block in fences
+                             if block.language == "mermaid"]
         diagram_count += len(expected_diagrams)
         if page.diagrams != expected_diagrams:
             errors.append(
@@ -469,7 +761,18 @@ def check_site(
                 f"{len(page.diagrams)} retained "
                 "under pre > code.language-mermaid)"
             )
-    errors.extend(check_table_preservation(site, source, parsed_pages))
+        cursor = 0
+        for block in fences:
+            try:
+                cursor = page.code_blocks.index(block.text, cursor) + 1
+            except ValueError:
+                errors.append(
+                    f"{label}: fenced code at {source_path}:{block.line} "
+                    "is not retained exactly under article pre > code"
+                )
+    errors.extend(check_table_preservation(
+        site, source, parsed_pages, sources, exclusions
+    ))
     for asset in sorted(checked_assets):
         if asset.suffix != ".css":
             continue

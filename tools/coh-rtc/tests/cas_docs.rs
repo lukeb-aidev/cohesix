@@ -50,6 +50,19 @@ fn interfaces_cas_snippet_matches_codegen() {
 }
 
 #[test]
+fn cas_template_fence_starts_a_separate_markdown_block() {
+    let docs = generated_docs();
+    let (before, _) = docs
+        .cas_interfaces_md
+        .split_once("```json\n")
+        .expect("CAS packaging template fence");
+    assert!(
+        before.ends_with("\n\n"),
+        "a blank line must separate the CAS template fence from the preceding list"
+    );
+}
+
+#[test]
 fn security_cas_snippet_matches_codegen() {
     let docs = generated_docs();
     let security_path = repo_path("docs/SECURITY.md");

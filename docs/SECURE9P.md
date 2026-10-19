@@ -24,9 +24,9 @@ The implementation is split deliberately:
 | Layer | As-built responsibility |
 | --- | --- |
 | [`secure9p-codec`](../crates/secure9p-codec) | `no_std + alloc` wire types, four-byte 9P length framing, request/response encoding, decoding, batch iteration, and codec fuzz entry points. |
-| [`secure9p-core`](../crates/secure9p-core) | `no_std + alloc` tag windows, queue limits, active/retired fid tables, append-only offset helpers, short-write policy, and an access-policy trait. It is not a complete server dispatcher. |
-| [`secure9p-transport`](../crates/secure9p-transport) | A `no_std` crate boundary only. It does not currently implement in-process, seL4-endpoint, or TCP adapters. |
-| [Host NineDoor](../apps/nine-door/src/host) | The complete host-side session state machine, ticket verification, role policy, provider dispatch, batching, metrics, and error mapping. |
+| [`secure9p-core`](https://github.com/lukeb-aidev/cohesix/tree/main/crates/secure9p-core) | `no_std + alloc` tag windows, queue limits, active/retired fid tables, append-only offset helpers, short-write policy, and an access-policy trait. It is not a complete server dispatcher. |
+| [`secure9p-transport`](https://github.com/lukeb-aidev/cohesix/tree/main/crates/secure9p-transport) | A `no_std` crate boundary only. It does not currently implement in-process, seL4-endpoint, or TCP adapters. |
+| [Host NineDoor](https://github.com/lukeb-aidev/cohesix/tree/main/apps/nine-door/src/host) | The complete host-side session state machine, ticket verification, role policy, provider dispatch, batching, metrics, and error mapping. |
 | [Target `NineDoorBridge`](../apps/root-task/src/ninedoor.rs) | A separate `no_std` namespace/control adapter reached through the console event pump. It does not decode Secure9P frames. |
 
 Host NineDoor and target `NineDoorBridge` are required to preserve overlapping
@@ -197,8 +197,8 @@ maintenance are physical-driver concerns governed by [DRIVERS.md](DRIVERS.md).
 Relevant implementation and regression surfaces include:
 
 - [`secure9p-codec` tests](../crates/secure9p-codec)
-- [`secure9p-core` tests](../crates/secure9p-core)
-- [NineDoor integration tests](../apps/nine-door/tests)
+- [`secure9p-core` tests](https://github.com/lukeb-aidev/cohesix/tree/main/crates/secure9p-core)
+- [NineDoor integration tests](https://github.com/lukeb-aidev/cohesix/tree/main/apps/nine-door/tests)
 - [root-task namespace bridge tests](../apps/root-task/src/ninedoor.rs)
 - [the staged Test Plan](TEST_PLAN.md)
 

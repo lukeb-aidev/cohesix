@@ -287,7 +287,7 @@ and the [Test Plan](TEST_PLAN.md) defines the proof needed for a claim.
 A useful contribution is one narrow journey another engineer can reproduce:
 an approved workload, fixed inputs and quality measure, a native provider
 observation, a refusal or interruption, and an honest result. The repo-managed
-skills under [`skills/`](../skills/) give starting procedures; they do not
+skills under [`skills/`](https://github.com/lukeb-aidev/cohesix/tree/main/skills) give starting procedures; they do not
 activate capabilities or replace the installed guide and operator policy.
 For a new Mac or NVIDIA environment, start with
 [AI host setup](../skills/cohesix-ai-host-setup/SKILL.md). For an unfamiliar

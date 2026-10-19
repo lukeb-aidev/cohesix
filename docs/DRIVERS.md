@@ -250,7 +250,7 @@ for an intentional regeneration.
 
 ### Step 2: Define or extend the pointer-free ABI
 
-Use [`pi4-driver-abi`](../crates/pi4-driver-abi) for data shared between root
+Use [`pi4-driver-abi`](https://github.com/lukeb-aidev/cohesix/tree/main/crates/pi4-driver-abi) for data shared between root
 and the runtime. ABI records must be `no_std`, fixed-size, pointer-free, and
 validatable without trusting the sender.
 
@@ -2679,18 +2679,18 @@ Use these sources rather than copying their changing details into this guide:
 - System and scheduling boundaries:
   [ARCHITECTURE.md](ARCHITECTURE.md) and
   [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md)
-- Profile manifests: [`configs`](../configs)
+- Profile manifests: [`configs`](https://github.com/lukeb-aidev/cohesix/tree/main/configs)
 - Generated default-profile summary:
   [`docs/snippets/root_task_manifest.md`](snippets/root_task_manifest.md)
-- Manifest IR and code generation: [`tools/coh-rtc`](../tools/coh-rtc)
-- Shared pointer-free ABI: [`crates/pi4-driver-abi`](../crates/pi4-driver-abi)
+- Manifest IR and code generation: [`tools/coh-rtc`](https://github.com/lukeb-aidev/cohesix/tree/main/tools/coh-rtc)
+- Shared pointer-free ABI: [`crates/pi4-driver-abi`](https://github.com/lukeb-aidev/cohesix/tree/main/crates/pi4-driver-abi)
 - Isolated runtime implementation:
-  [`apps/pi4-driver-runtime`](../apps/pi4-driver-runtime)
+  [`apps/pi4-driver-runtime`](https://github.com/lukeb-aidev/cohesix/tree/main/apps/pi4-driver-runtime)
 - HAL and root driver client:
-  [`apps/root-task/src/hal`](../apps/root-task/src/hal)
+  [`apps/root-task/src/hal`](https://github.com/lukeb-aidev/cohesix/tree/main/apps/root-task/src/hal)
 - Root network adapter:
   [`apps/root-task/src/drivers/driver_task_net.rs`](../apps/root-task/src/drivers/driver_task_net.rs)
-- Event-pump scheduling: [`apps/root-task/src/event`](../apps/root-task/src/event)
+- Event-pump scheduling: [`apps/root-task/src/event`](https://github.com/lukeb-aidev/cohesix/tree/main/apps/root-task/src/event)
 - Local-seat adapter:
   [`apps/root-task/src/local_seat.rs`](../apps/root-task/src/local_seat.rs)
 - Pi image packaging:

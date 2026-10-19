@@ -41,3 +41,53 @@ exclude:
   - Gemfile
   - Gemfile.lock
   - tools/swarmui-ui-tests/node_modules
+
+  # Publication-only exclusions for unused pages; source and release archives stay in Git.
+  - releases/Cohesix-1.0.0-beta-MacOS/
+  - releases/Cohesix-1.0.0-beta-Pi4/
+  - releases/Cohesix-1.0.0-beta-linux/
+  - releases/Cohesix-1.1.0-beta-MacOS/
+  - releases/Cohesix-1.1.0-beta-Pi4/
+  - releases/Cohesix-1.1.0-beta-linux/
+  - releases/Cohesix-1.2.0-MacOS/
+  - releases/Cohesix-1.2.0-Pi4/
+  - releases/Cohesix-1.2.0-linux/
+  - apps/cohsh/src/manual.md
+  - apps/gpu-bridge-host/README.md
+  - apps/swarmui/frontend/index.html
+  - apps/swarmui/reference/README.md
+  - crates/boot/uefi-elfloader-shim/README.md
+  - crates/sel4-sys/upstream/libsel4/README.md
+  - demo/README.md
+  - demo/peft_adapter/README.md
+  - docs/NETWORK_CONFIG.md
+  - docs/audit/AUDIT_REPORT_2026-02-14.md
+  - docs/audit/BLOCKERS.md
+  - docs/audit/CONTROL_TRACEABILITY.md
+  - docs/audit/DUE_DILIGENCE_PLAN.md
+  - docs/audit/M26D_MCS_DECISION.md
+  - docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md
+  - docs/audit/M26D_SEL4_16_CAPABILITY_AUDIT.md
+  - docs/audit/M26D_SEL4_16_PROVENANCE.md
+  - docs/audit/M27G_DEMO_WORKFLOWS.md
+  - docs/audit/M28C_FEASIBILITY_RECORD.md
+  - docs/audit/OPERATOR_MANUALS_RECORD.md
+  - docs/audit/checklists/ARCHITECTURE_CHECKLIST.md
+  - docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md
+  - docs/audit/checklists/SECURITY_CHECKLIST.md
+  - docs/nist/REPORT.md
+  - docs/snippets/cas_security.md
+  - docs/snippets/coh_doctor_checks.md
+  - docs/snippets/coh_policy.md
+  - docs/snippets/cohsh_client.md
+  - docs/snippets/cohsh_policy.md
+  - docs/snippets/latency_metrics.md
+  - docs/snippets/observability_security.md
+  - docs/snippets/trace_policy.md
+  - releases/RELEASE_NOTES-1.2.0.md
+  - skills/INDEX.md
+  - skills/cohesix-get-started/SKILL.md
+  - skills/cohesix-get-started/references/use-cases.md
+  - tests/fixtures/operator/case/case.md
+  - tests/fixtures/operator/case/timeline.md
+  - tools/host-bootpd/README.md

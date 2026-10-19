@@ -1288,14 +1288,14 @@ Documentation must label evidence by layer and profile:
 - Profile inputs: [`configs/root_task.toml`](../configs/root_task.toml) and
   [`configs/root_task_pi4_uboot_aarch64.toml`](../configs/root_task_pi4_uboot_aarch64.toml)
 - Generated worker tables:
-  [`apps/root-task/src/generated`](../apps/root-task/src/generated)
+  [`apps/root-task/src/generated`](https://github.com/lukeb-aidev/cohesix/tree/main/apps/root-task/src/generated)
 - Ticket format: [`crates/cohesix-ticket`](../crates/cohesix-ticket)
 - Shared role/ticket parsing:
   [`crates/cohsh-core/src/ticket.rs`](../crates/cohsh-core/src/ticket.rs)
 - Target worker authority:
   [`apps/root-task/src/worker_authority.rs`](../apps/root-task/src/worker_authority.rs)
 - Host role enforcement:
-  [`apps/nine-door/src/host`](../apps/nine-door/src/host)
+  [`apps/nine-door/src/host`](https://github.com/lukeb-aidev/cohesix/tree/main/apps/nine-door/src/host)
 - Target namespace adapter:
   [`apps/root-task/src/ninedoor.rs`](../apps/root-task/src/ninedoor.rs)
 - Validation workflow: [TEST_PLAN.md](TEST_PLAN.md)

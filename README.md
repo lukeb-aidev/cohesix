@@ -3,16 +3,8 @@
 <!-- Purpose: Introduce Cohesix, explain its AI-hive design, and direct readers to verified usage and documentation. -->
 <!-- Author: Lukas Bower -->
 
-<div align="center">
-  <div style="width: 720px; max-width: 100%;">
-    <img
-      src="docs/COHESIX_LOGO.png"
-      alt="Cohesix"
-      width="720"
-    />
-  </div>
-</div>
-<br />
+![Cohesix](docs/COHESIX_LOGO.png)
+
 Cohesix is a research operating system for edge AI, built around a simple idea:
 an AI fleet should have air-traffic control, not a pile of tools holding
 unrestricted credentials.
@@ -196,7 +188,7 @@ the [status page](docs/STATUS.md) explains the selected profiles and evidence
 boundaries. Check the installed bundle's `VERSION.txt` and `RELEASE_NOTES.md`
 for its exact contents and limitations.
 
-Earlier bundles and notes remain available under [releases/](releases/) and their
+Earlier bundles and notes remain available under [releases/](https://github.com/lukeb-aidev/cohesix/tree/main/releases) and their
 original [Git tags](https://github.com/lukeb-aidev/cohesix/tags).
 
 ## See Cohesix in action

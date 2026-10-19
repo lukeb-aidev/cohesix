@@ -571,11 +571,11 @@ remain model/session-only. See [FIELD_BUS.md](FIELD_BUS.md).
 - Root task: [`apps/root-task`](../apps/root-task)
 - Host NineDoor: [`apps/nine-door`](../apps/nine-door)
 - Physical-driver runtime:
-  [`apps/pi4-driver-runtime`](../apps/pi4-driver-runtime)
-- Driver ABI: [`crates/pi4-driver-abi`](../crates/pi4-driver-abi)
+  [`apps/pi4-driver-runtime`](https://github.com/lukeb-aidev/cohesix/tree/main/apps/pi4-driver-runtime)
+- Driver ABI: [`crates/pi4-driver-abi`](https://github.com/lukeb-aidev/cohesix/tree/main/crates/pi4-driver-abi)
 - Host-tool boundary: [HOST_TOOLS.md](HOST_TOOLS.md)
 - GPU boundary: [GPU_NODES.md](GPU_NODES.md)
 - Role and scheduling contract:
   [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md)
-- Manifest compiler: [`tools/coh-rtc`](../tools/coh-rtc)
+- Manifest compiler: [`tools/coh-rtc`](https://github.com/lukeb-aidev/cohesix/tree/main/tools/coh-rtc)
 - Validation and acceptance: [TEST_PLAN.md](TEST_PLAN.md)

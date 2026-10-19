@@ -133,7 +133,7 @@ contract/interoperability evidence. Software reference outstations are named
 explicitly. Such records cannot promote a physical field device, WorkerBus,
 QEMU/Pi target or production use case.
 
-Protocol sources: [MODBUS application specification](https://modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf),
+Protocol sources: [MODBUS application specification](https://www.modbus.org/file/secure/modbusprotocolspecification.pdf),
 [MODBUS specifications](https://www.modbus.org/modbus-specifications), and
 [OpenDNP3 3.1.2](https://github.com/dnp3/opendnp3/tree/c1dc7165a79cc08edbf4b55d2ff4162efb176f92).
 The independent reference stack is built into ignored test output, not vendored

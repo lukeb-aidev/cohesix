@@ -2271,7 +2271,7 @@ version, notes and exact file selection; never relabel immutable historical
 release evidence.
 
 <details>
-<summary>Native inputs, production preflight, assembly and qualification</summary>
+<summary markdown="span">Native inputs, production preflight, assembly and qualification</summary>
 
 Signed host deployment profiles come from the same compiler registry.
 `coh package build`, `verify`, and `install` bind the exact file set, source

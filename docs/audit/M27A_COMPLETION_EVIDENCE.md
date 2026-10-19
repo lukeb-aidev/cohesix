@@ -13,7 +13,7 @@ completion documentation does not rebind its qualification artifacts.
 
 Title/ID: `m27a-authority-hardening`
 Milestone: [Milestone 27a — Authority Hardening: Delegated REST Identity, Fenced
-Failover, Idempotent Queen Intents](../BUILD_PLAN.md#27a).
+Failover, Idempotent Queen Intents](https://lukeb-aidev.github.io/cohesix/docs/BUILD_PLAN.html#27a).
 Goal: Close the single-host Release A authority floor while preserving existing
 transport and accepted Worker/driver boundaries.
 Inputs: canonical target manifests, manifest schema 1.21, upstream selected seL4

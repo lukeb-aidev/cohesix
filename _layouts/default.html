@@ -7,6 +7,9 @@
   {% assign document_title = page.title | default: site.title %}
   {% if headings.size > 1 %}
     {% assign document_title = headings[1] | split: '</h1>' | first | split: '>' | shift | join: '>' | strip_html | strip %}
+  {% elsif page.path != 'README.md' and content contains '<h2' %}
+    {% assign secondary_headings = content | split: '<h2' %}
+    {% assign document_title = secondary_headings[1] | split: '</h2>' | first | split: '>' | shift | join: '>' | strip_html | strip %}
   {% endif %}
   <head>
     <meta charset="utf-8">
