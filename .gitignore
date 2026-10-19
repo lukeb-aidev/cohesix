@@ -12,6 +12,7 @@
 __pycache__/
 *.pyc
 .venv/
+/Gemfile.lock
 tools/cohesix-py/build/
 tools/cohesix-py/dist/
 tools/cohesix-py/*.egg-info/

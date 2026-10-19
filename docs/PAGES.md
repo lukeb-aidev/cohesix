@@ -62,6 +62,10 @@ The diagram source remains documentation, not evidence of a live Cohesix run.
 
 Use Ruby 3.3 and Bundler with the supported GitHub Pages dependencies:
 
+The Gemfile selects GitHub Pages 232. Bundler's local lockfile is ignored:
+the existing hosted Pages builder uses its own supported dependency set and
+does not install a developer machine's transitive dependency lock.
+
 ```bash
 BUNDLE_PATH="$PWD/out/pages-gems" bundle install
 BUNDLE_PATH="$PWD/out/pages-gems" bundle exec jekyll build \
