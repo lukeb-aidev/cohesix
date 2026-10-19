@@ -9,8 +9,8 @@ the Raspberry Pi 4 U-Boot path. It keeps image construction, media state, boot
 identity, device readiness, remote control, and performance as independent
 proof layers.
 
-An explicitly enabled non-release `debug-input` shell may use `hexdump <addr>
-<len>` only for 1–256 bytes within HAL's root executable code span. The ELF
+An explicitly enabled non-release `debug-input` shell may use `hexdump <addr> <len>`
+only for 1–256 bytes within HAL's root executable code span. The ELF
 symbols `__text_start` and `__driver_task_text_start` identify its inclusive
 start and exclusive end. Other memory, overflowing ranges and oversized lengths
 are refused before reading; requests are never silently truncated. Each admitted

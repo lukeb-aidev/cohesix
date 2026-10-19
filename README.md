@@ -396,6 +396,7 @@ the selected resolved manifest.
 | [Interfaces](docs/INTERFACES.md) | Look up namespaces, payloads, console behavior, and compatibility |
 | [Secure9P](docs/SECURE9P.md) | Look up 9P layering, bounds, session invariants, and policy hooks |
 | [Build plan](docs/BUILD_PLAN.md) | Read the normative record of planned and implemented project scope |
+
 - Contributions must follow [`AGENTS.md`](AGENTS.md),
   [Contributing](CONTRIBUTING.md), and align to the active task in the
   [build plan](docs/BUILD_PLAN.md).

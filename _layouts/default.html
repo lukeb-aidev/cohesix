@@ -1,0 +1,79 @@
+<!doctype html>
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Frame generated GitHub documentation with shared SwarmUI navigation and presentation. -->
+<!-- Copyright 2026 Lukas Bower -->
+<html lang="en">
+  {% assign headings = content | split: '<h1' %}
+  {% assign document_title = page.title | default: site.title %}
+  {% if headings.size > 1 %}
+    {% assign document_title = headings[1] | split: '</h1>' | first | split: '>' | shift | join: '>' | strip_html | strip %}
+  {% endif %}
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101312">
+    <title>{{ document_title | escape_once }}{% unless document_title == site.title %} · {{ site.title | escape_once }}{% endunless %}</title>
+    <meta name="description" content="{{ site.description | escape }}">
+    <link rel="canonical" href="{{ page.url | absolute_url }}">
+    <meta property="og:title" content="{{ document_title | escape_once }}">
+    <meta property="og:description" content="{{ site.description | escape }}">
+    <meta property="og:url" content="{{ page.url | absolute_url }}">
+    <meta property="og:type" content="website">
+    <link rel="icon" type="image/svg+xml" href="{{ '/apps/swarmui/frontend/assets/icons/cohesix-icon.svg' | relative_url }}">
+    <link rel="stylesheet" href="{{ '/apps/swarmui/frontend/styles/fonts.css' | relative_url }}">
+    <link rel="stylesheet" href="{{ '/assets/css/site.css' | relative_url }}">
+    <script type="module" src="{{ '/assets/js/site.js' | relative_url }}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="{{ '/' | relative_url }}" aria-label="Cohesix documentation home">
+        <img src="{{ '/apps/swarmui/frontend/assets/icons/cohesix-icon.svg' | relative_url }}" width="34" height="34" alt="">
+        <span>Cohesix <span class="brand-caption">Documentation</span></span>
+      </a>
+      <nav class="header-links" aria-label="Project">
+        <a href="https://github.com/{{ site.repository }}/releases">Releases <span aria-hidden="true">↗</span></a>
+        <a href="https://huggingface.co/spaces/lukeb-aidev/cohesix">Tour &amp; replay <span aria-hidden="true">↗</span></a>
+        <a href="https://github.com/{{ site.repository }}">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+    <div class="site-shell">
+      <aside class="site-navigation" aria-label="Documentation navigation">
+        <details class="nav-disclosure" open>
+          <summary>Documentation</summary>
+          <nav id="site-nav" aria-label="Documentation">
+            {% for group in site.data.navigation %}
+            <div class="nav-group">
+              <p class="nav-label">{{ group.title }}</p>
+              {% for item in group.links %}
+              <a href="{{ item.url | relative_url }}"{% if page.url == item.url %} aria-current="page"{% endif %}>{{ item.title }}</a>
+              {% endfor %}
+            </div>
+            {% endfor %}
+          </nav>
+        </details>
+      </aside>
+      <main id="main-content" class="document" tabindex="-1">
+        <div class="document-context">
+          <a href="{{ '/' | relative_url }}">Documentation</a>
+          <a class="source-link" href="https://github.com/{{ site.repository }}/blob/main/{{ page.path | uri_escape }}">View source <span aria-hidden="true">↗</span></a>
+        </div>
+        <article class="markdown-body" id="document-content">
+          {% if headings.size == 1 %}<h1 class="visually-hidden">{{ document_title | escape_once }}</h1>{% endif %}
+          {{ content }}
+        </article>
+        <footer class="document-footer">
+          <span>Published from the <a href="https://github.com/{{ site.repository }}/blob/main/{{ page.path | uri_escape }}">GitHub documentation</a>.</span>
+          <a href="#main-content">Back to top ↑</a>
+        </footer>
+      </main>
+      <aside class="page-outline" aria-label="On this page" hidden>
+        <nav id="page-outline" aria-label="On this page"></nav>
+      </aside>
+    </div>
+    <footer class="site-footer">
+      <span>Cohesix · Lukas Bower</span>
+      <span><a href="{{ '/docs/PAGES.html' | relative_url }}">Site maintenance</a> · <a href="{{ '/LICENSE.txt' | relative_url }}">Apache-2.0</a> · Styled with SwarmUI</span>
+    </footer>
+  </body>
+</html>

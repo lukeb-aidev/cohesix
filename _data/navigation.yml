@@ -1,0 +1,48 @@
+# Author: Lukas Bower
+# Purpose: Group canonical documentation links in the shared Pages navigation.
+# Copyright 2026 Lukas Bower
+
+- title: Start here
+  links:
+    - title: Overview
+      url: /
+    - title: Quickstart
+      url: /docs/QUICKSTART.html
+    - title: Use cases
+      url: /docs/USE_CASES.html
+    - title: Operator walkthrough
+      url: /docs/OPERATOR_WALKTHROUGH.html
+    - title: Current status
+      url: /docs/STATUS.html
+- title: Understand
+  links:
+    - title: Architecture
+      url: /docs/ARCHITECTURE.html
+    - title: Roles and scheduling
+      url: /docs/ROLES_AND_SCHEDULING.html
+    - title: Production profiles
+      url: /docs/PRODUCTION_PROFILES.html
+    - title: Security
+      url: /docs/SECURITY.html
+- title: Operate
+  links:
+    - title: Host tools
+      url: /docs/HOST_TOOLS.html
+    - title: SwarmUI
+      url: /docs/SWARMUI.html
+    - title: Private LoRA release
+      url: /docs/PRIVATE_LORA_RELEASE.html
+    - title: Python support
+      url: /docs/PYTHON_SUPPORT.html
+    - title: Operator recipes
+      url: /docs/OPERATOR_RECIPES.html
+- title: Develop
+  links:
+    - title: Build plan
+      url: /docs/BUILD_PLAN.html
+    - title: Hardware bring-up
+      url: /docs/HARDWARE_BRINGUP.html
+    - title: Contributing
+      url: /CONTRIBUTING.html
+    - title: Coding guidelines
+      url: /docs/CODING_GUIDELINES.html

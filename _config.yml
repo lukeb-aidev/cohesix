@@ -1,3 +1,42 @@
-remote_theme: pages-themes/minimal@v0.2.0
+# Author: Lukas Bower
+# Purpose: Build the documentation with a repository-owned SwarmUI theme on every Pages publish.
+# Copyright 2026 Lukas Bower
+
+title: Cohesix
+description: Documentation for the Cohesix edge AI control plane.
+url: https://lukeb-aidev.github.io
+baseurl: /cohesix
+repository: lukeb-aidev/cohesix
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# GitHub's special contributor files also belong in the documentation site.
+include:
+  - CONTRIBUTING.md
+
 plugins:
-- jekyll-remote-theme
+  - jekyll-optional-front-matter
+  - jekyll-readme-index
+  - jekyll-relative-links
+  - jekyll-titles-from-headings
+  - jekyll-seo-tag
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+# Keep generated local state and build dependencies out of the site.
+exclude:
+  - out
+  - target
+  - seL4
+  - third_party
+  - node_modules
+  - vendor
+  - Gemfile
+  - Gemfile.lock
+  - tools/swarmui-ui-tests/node_modules
