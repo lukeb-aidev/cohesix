@@ -37,6 +37,26 @@ Use ordinary Markdown images for page artwork. The shared stylesheet sizes the
 homepage logo responsively and preserves its proportions; deeply indented HTML
 inside a Markdown-enabled container can become a code example instead of an image.
 
+## Search discovery
+
+The supported `jekyll-sitemap` plugin regenerates `sitemap.xml` on every Pages
+build from the current published HTML pages. It uses absolute canonical URLs,
+including the project path, and omits the 404 page and Google verification files.
+The existing publication exclusions also apply, so omitted historical copies do
+not return through the sitemap. Keep the sitemap generated from the documentation
+rather than maintaining a second list of URLs.
+
+Submit `https://lukeb-aidev.github.io/cohesix/sitemap.xml` in the matching Google
+Search Console property. Check the sitemap's processing status and use Page
+indexing and URL inspection to distinguish discovery, crawling and indexing.
+An accepted sitemap or successful live URL test does not guarantee indexing;
+Google decides which pages to include and when. Use URL inspection requests for
+specific important updated pages rather than repeatedly submitting every URL.
+See [Google's sitemap guidance](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap)
+for submission and coverage details.
+Google reads `robots.txt` only at the origin root; a project-level file does not
+control crawling. A missing origin-root robots file does not block this site.
+
 ## Theme and diagrams
 
 The theme uses SwarmUI's final olive, ivory and gold workbench palette and its
@@ -105,7 +125,8 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory out/pages-preview
 ```
 
 The static checks compare published code fences, images, tables and diagram
-sources with their Markdown owners and verify the configured publication scope.
+sources with their Markdown owners, verify the configured publication scope and
+require exact sitemap coverage of the retained content pages.
 They complement the browser checks below.
 
 Open `http://127.0.0.1:4173/cohesix/`. Check the homepage and nested guides,

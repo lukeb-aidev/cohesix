@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Check publication scope, shared layout and Pages content retention.
+# Purpose: Check Pages scope, content retention and canonical sitemap coverage.
 # Copyright 2026 Lukas Bower
 
 """Check local Jekyll output without claiming browser or Mermaid execution."""
@@ -8,16 +8,20 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
 import re
 import sys
 from typing import NamedTuple
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PREFIX = "https://github.com/lukeb-aidev/cohesix/blob/main/"
+SITE_ORIGIN = "https://lukeb-aidev.github.io"
+SITEMAP_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9"
 REQUIRED_ASSETS = {
     ("stylesheet", "apps/swarmui/frontend/styles/fonts.css"),
     ("stylesheet", "assets/css/site.css"),
@@ -581,6 +585,121 @@ def check_module_imports(
     return errors
 
 
+def sitemap_location(source: Path, baseurl: str) -> tuple[str, str]:
+    """Read the maintained literal URL scalars used by Jekyll absolute_url."""
+    values = {"url": SITE_ORIGIN, "baseurl": baseurl}
+    config = source / "_config.yml"
+    seen: set[str] = set()
+    if config.is_file():
+        for number, line in enumerate(
+            config.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            key = re.match(r"^(url|baseurl):", line)
+            if not key:
+                continue
+            scalar = re.fullmatch(
+                r"(url|baseurl):[ \t]*(\S+)(?:[ \t]+#.*)?", line
+            )
+            if not scalar or key[1] in seen:
+                raise ValueError(
+                    f"line {number}: {key[1]} must be one literal URL scalar"
+                )
+            value = scalar[2]
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            values[key[1]] = value
+            seen.add(key[1])
+    origin = urlsplit(values["url"])
+    if (
+        origin.scheme not in {"http", "https"} or not origin.hostname
+        or origin.username is not None or origin.password is not None
+        or origin.path not in {"", "/"} or origin.query or origin.fragment
+    ):
+        raise ValueError("url must be an absolute HTTP(S) origin")
+    prefix = values["baseurl"]
+    parsed = urlsplit(prefix)
+    if (
+        (prefix and not prefix.startswith("/")) or parsed.scheme or parsed.netloc
+        or parsed.query or parsed.fragment or "//" in prefix or "\\" in prefix
+        or any(part in {".", ".."} for part in unquote(prefix).split("/"))
+    ):
+        raise ValueError("baseurl must be an unambiguous project-root URL path")
+    return values["url"].rstrip("/"), prefix.rstrip("/")
+
+
+def sitemap_content_urls(site: Path, origin: str, baseurl: str) -> set[str]:
+    """Derive canonical current content URLs from the actual HTML publication."""
+    urls: set[str] = set()
+    for generated in site.rglob("*.html"):
+        relative = generated.relative_to(site)
+        if relative == Path("404.html"):
+            continue
+        if (
+            relative.parent == Path(".")
+            and re.fullmatch(r"google[0-9a-f]+\.html", relative.name)
+            and generated.read_text(encoding="utf-8").strip()
+            == "google-site-verification: " + relative.name
+        ):
+            continue
+        route = relative.as_posix()
+        if relative.name == "index.html":
+            route = "" if relative.parent == Path(".") else (
+                relative.parent.as_posix() + "/"
+            )
+        urls.add(origin + baseurl + "/" + quote(route, safe="/"))
+    return urls
+
+
+def check_sitemap(site: Path, source: Path, baseurl: str) -> list[str]:
+    """Require one canonical sitemap URL per current published HTML document."""
+    errors: list[str] = []
+    try:
+        origin, prefix = sitemap_location(source, baseurl)
+    except (OSError, ValueError) as error:
+        return [f"_config.yml: {error}"]
+    try:
+        root = ElementTree.parse(site / "sitemap.xml").getroot()
+    except (OSError, ElementTree.ParseError) as error:
+        return [f"sitemap.xml: cannot read the generated sitemap: {error}"]
+    namespace = "{" + SITEMAP_NAMESPACE + "}"
+    if root.tag != namespace + "urlset":
+        return ["sitemap.xml: root must be urlset in the standard sitemap namespace"]
+    locations: list[str] = []
+    for entry in root:
+        if entry.tag != namespace + "url":
+            errors.append("sitemap.xml: urlset may contain only sitemap url elements")
+            continue
+        nodes = entry.findall(namespace + "loc")
+        if len(nodes) != 1 or len(nodes[0]) or not (nodes[0].text or "").strip():
+            errors.append("sitemap.xml: each url must contain exactly one text loc")
+            continue
+        locations.append((nodes[0].text or "").strip())
+    for location, count in Counter(locations).items():
+        if count > 1:
+            errors.append(f"sitemap.xml: duplicate URL {location!r}")
+    expected = sitemap_content_urls(site, origin, prefix)
+    expected_origin = urlsplit(origin)
+    for location in sorted(set(locations)):
+        parsed = urlsplit(location)
+        if (
+            parsed.scheme != expected_origin.scheme
+            or parsed.netloc != expected_origin.netloc
+            or not parsed.path.startswith(prefix + "/")
+        ):
+            errors.append(
+                f"sitemap.xml: URL has a wrong origin or baseurl: {location!r}"
+            )
+        elif parsed.query or parsed.fragment or unquote(parsed.path).endswith(".md"):
+            errors.append(f"sitemap.xml: URL is not canonical content: {location!r}")
+        elif location not in expected:
+            errors.append(
+                f"sitemap.xml: URL is not current canonical content: {location!r}"
+            )
+    for location in sorted(expected - set(locations)):
+        errors.append(f"sitemap.xml: missing current content URL {location!r}")
+    return errors
+
+
 def check_site(
     site: Path, source: Path, baseurl: str = "/cohesix"
 ) -> CheckResult:
@@ -797,6 +916,7 @@ def check_site(
                 "native font asset or licence is missing: "
                 f"{font.relative_to(site)}"
             )
+    errors.extend(check_sitemap(site, source, baseurl))
     return CheckResult(errors, page_count, diagram_count)
 
 

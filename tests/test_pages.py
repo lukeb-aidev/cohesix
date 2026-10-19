@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Test Pages scope exclusions, shared layout and exact content retention.
+# Purpose: Test Pages scope, content retention and canonical sitemap coverage.
 # Copyright 2026 Lukas Bower
 
 """Preserve layout, tables and diagram source in generated documentation."""
@@ -27,6 +27,16 @@ RENDERED_TABLE = (
     "<table><thead><tr><th>Name</th><th>Meaning</th></tr></thead>"
     "<tbody><tr><td>Queen</td><td>Authority</td></tr></tbody></table>"
 )
+CANONICAL_ROOT = "https://lukeb-aidev.github.io/cohesix"
+
+
+def sitemap_xml(urls: list[str]) -> str:
+    """Create small, independently specified standard sitemap fixtures."""
+    return (
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + "".join("<url><loc>" + html.escape(url) + "</loc></url>" for url in urls)
+        + "</urlset>"
+    )
 
 
 class MarkdownTableTests(unittest.TestCase):
@@ -168,13 +178,30 @@ class PagesPublicationTests(unittest.TestCase):
         )
 
     def audit(self) -> PAGES.CheckResult:
-        """Use the publication CLI's validation entry point."""
+        """Supply a valid sitemap fixture for the other publication contracts."""
+        urls = []
+        for generated in sorted(self.site.rglob("*.html")):
+            relative = generated.relative_to(self.site).as_posix()
+            if relative == "404.html":
+                continue
+            route = relative.removesuffix("index.html") if (
+                generated.name == "index.html"
+            ) else relative
+            urls.append(CANONICAL_ROOT + "/" + route)
+        (self.site / "sitemap.xml").write_text(sitemap_xml(urls), encoding="utf-8")
         return PAGES.check_site(self.site, self.source)
 
     def test_valid_nested_site_retains_decoded_source(self) -> None:
         result = self.audit()
         self.assertEqual(result.errors, [])
         self.assertEqual((result.pages, result.diagrams), (2, 1))
+
+    def test_full_publication_check_requires_the_sitemap(self) -> None:
+        self.assertEqual(self.audit().errors, [])
+        (self.site / "sitemap.xml").unlink()
+        failures = PAGES.check_site(self.site, self.source).errors
+        self.assertTrue(any("cannot read the generated sitemap" in error
+                            for error in failures))
 
     def test_only_explicitly_excluded_root_guides_may_be_unpublished(self) -> None:
         (self.source / "docs/UNUSED.md").write_text(
@@ -661,6 +688,153 @@ class PagesPublicationTests(unittest.TestCase):
         )
         self.assertTrue(any("unsupported image syntax" in error
                             for error in self.audit().errors))
+
+
+class SitemapTests(unittest.TestCase):
+    """Keep exact canonical coverage tied to current output rather than a count."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = self.root / "source"
+        self.site = self.root / "site"
+        self.source.mkdir()
+        (self.source / "_config.yml").write_text(
+            "url: https://lukeb-aidev.github.io\nbaseurl: /cohesix\n",
+            encoding="utf-8",
+        )
+        for relative in (
+            "index.html", "docs/GUIDE.html", "examples/index.html",
+            "docs/images/walkthrough.html", "404.html", "google1234abcd.html",
+        ):
+            target = self.site / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            text = (
+                "google-site-verification: " + relative
+                if relative.startswith("google")
+                else "<html><body>Current content</body></html>"
+            )
+            target.write_text(text, encoding="utf-8")
+        self.urls = [
+            CANONICAL_ROOT + "/", CANONICAL_ROOT + "/docs/GUIDE.html",
+            CANONICAL_ROOT + "/examples/",
+            CANONICAL_ROOT + "/docs/images/walkthrough.html",
+        ]
+        self.write(self.urls)
+
+    def write(self, urls: list[str]) -> None:
+        """Write the exact URLs selected by the test rather than deriving them."""
+        (self.site / "sitemap.xml").write_text(sitemap_xml(urls), encoding="utf-8")
+
+    def audit(self) -> list[str]:
+        """Check XML and URL coverage independently of themed-page fixtures."""
+        return PAGES.check_sitemap(self.site, self.source, "/cohesix")
+
+    def test_canonical_content_includes_gallery_and_directory_indexes(self) -> None:
+        self.assertEqual(self.audit(), [])
+        self.assertEqual(
+            PAGES.sitemap_content_urls(
+                self.site, "https://lukeb-aidev.github.io", "/cohesix"
+            ), set(self.urls),
+        )
+
+    def test_missing_content_and_duplicate_urls_fail(self) -> None:
+        self.write(self.urls[:-1])
+        self.assertTrue(any("missing current content URL" in error
+                            for error in self.audit()))
+        self.write(self.urls + [self.urls[0]])
+        self.assertTrue(any("duplicate URL" in error for error in self.audit()))
+
+    def test_coverage_changes_with_the_actual_publication(self) -> None:
+        added = self.site / "docs/NEW.html"
+        added.write_text("<html>New content</html>", encoding="utf-8")
+        self.assertTrue(any("missing current content URL" in error
+                            and "NEW.html" in error for error in self.audit()))
+        self.write(self.urls + [CANONICAL_ROOT + "/docs/NEW.html"])
+        self.assertEqual(self.audit(), [])
+        added.unlink()
+        self.assertTrue(any("not current canonical content" in error
+                            and "NEW.html" in error for error in self.audit()))
+
+    def test_noncanonical_removed_and_foreign_urls_fail(self) -> None:
+        for location in (
+            "https://example.com/cohesix/docs/GUIDE.html",
+            "https://lukeb-aidev.github.io/docs/GUIDE.html",
+            "/cohesix/docs/GUIDE.html",
+            CANONICAL_ROOT + "/docs/GUIDE.md",
+            CANONICAL_ROOT + "/docs/REMOVED.html",
+            CANONICAL_ROOT + "/404.html",
+            CANONICAL_ROOT + "/google1234abcd.html",
+            CANONICAL_ROOT + "/index.html",
+            CANONICAL_ROOT + "/examples/index.html",
+            CANONICAL_ROOT + "/docs/GUIDE.html?raw=1",
+            CANONICAL_ROOT + "/docs/GUIDE.html#heading",
+        ):
+            with self.subTest(location=location):
+                self.write(self.urls + [location])
+                self.assertTrue(any("sitemap.xml: URL" in error
+                                    for error in self.audit()))
+
+    def test_missing_or_malformed_xml_and_bad_namespace_fail(self) -> None:
+        target = self.site / "sitemap.xml"
+        target.unlink()
+        self.assertTrue(any("cannot read the generated sitemap" in error
+                            for error in self.audit()))
+        for document in (
+            "<urlset>",
+            "<urlset/>",
+            '<urlset xmlns="https://wrong.example/sitemap"/>',
+        ):
+            with self.subTest(document=document):
+                target.write_text(document, encoding="utf-8")
+                self.assertTrue(self.audit())
+
+    def test_each_namespaced_url_requires_exactly_one_text_location(self) -> None:
+        for entry in (
+            "<url/>", "<url><loc/></url>",
+            "<url><loc>one</loc><loc>two</loc></url>",
+            '<url><loc xmlns="">one</loc></url>',
+            "<url><loc><nested>one</nested></loc></url>",
+            "<unexpected/>",
+        ):
+            with self.subTest(entry=entry):
+                document = sitemap_xml(self.urls).replace(
+                    "</urlset>", entry + "</urlset>"
+                )
+                (self.site / "sitemap.xml").write_text(document, encoding="utf-8")
+                self.assertTrue(any("exactly one text loc" in error
+                                    or "only sitemap url elements" in error
+                                    for error in self.audit()))
+
+    def test_origin_and_baseurl_come_from_the_jekyll_configuration(self) -> None:
+        (self.source / "_config.yml").write_text(
+            "url: https://docs.example.org/\nbaseurl: /edge/\n", encoding="utf-8"
+        )
+        self.write([url.replace(CANONICAL_ROOT, "https://docs.example.org/edge")
+                    for url in self.urls])
+        self.assertEqual(self.audit(), [])
+        (self.source / "_config.yml").write_text(
+            'url: "https://docs.example.org"\nbaseurl: ""\n', encoding="utf-8"
+        )
+        self.write([url.replace(CANONICAL_ROOT, "https://docs.example.org")
+                    for url in self.urls])
+        self.assertEqual(self.audit(), [])
+
+    def test_invalid_url_configuration_fails_explicitly(self) -> None:
+        for config in (
+            "url: https://example.com/path\n",
+            "url: https://user:password@example.com\n",
+            "url: https://example.com\nurl: https://example.org\n",
+            "baseurl: ../outside\n",
+            "baseurl: /edge/%2e%2e/outside\n",
+            "baseurl: /edge?query=true\n",
+            "baseurl: /edge//double\n",
+        ):
+            with self.subTest(config=config):
+                (self.source / "_config.yml").write_text(config, encoding="utf-8")
+                self.assertTrue(any(error.startswith("_config.yml:")
+                                    for error in self.audit()))
 
 
 if __name__ == "__main__":
