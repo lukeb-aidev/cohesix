@@ -21,6 +21,60 @@ remove or purge according to the selected release's state-retention guidance.
 An archive is a valid portable alternative and still supplies matching QEMU
 guest files; the `.deb` packages do not install the guest or QEMU.
 
+## Jetson SwarmUI graphics recovery
+
+For a `WebKitWebProcess` crash, record the installed SwarmUI and WebKitGTK
+versions, first journal error and crash-report timestamp before changing the
+launch configuration. On 25 October 2026, unchanged SwarmUI 1.2.0 on Jetson
+Ubuntu 24.04.5/X11 with WebKitGTK 2.52.6 crashed with signal 11. Launching with
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` restored rendering, resize, connection controls
+and an authenticated namespace read. This is a graphics workaround for that
+observed stack; it does not diagnose every WebKit crash or missing library.
+
+Try the selected binary from its graphical session, retaining its existing
+arguments, resources and authentication configuration:
+
+```bash
+env WEBKIT_DISABLE_DMABUF_RENDERER=1 "${COH_BIN}/swarmui"
+```
+
+[Tauri's Linux graphics guidance](https://v2.tauri.app/develop/debug/linux-graphics/)
+describes the WebKitGTK/NVIDIA DMA-BUF rendering incompatibility and this
+workaround. It disables a faster rendering path, so check responsiveness as well
+as launch success. Keep the WebKit sandbox enabled; this repair needs no
+application patch, rebuilt release or driver replacement.
+
+If the trial succeeds, persist the variable only in the app's actual launch
+context. Preserve the existing launch owner and command arguments:
+
+- **Direct GNOME launch:** use a user-local copy of the selected desktop entry
+  under `~/.local/share/applications/`, and prefix its `Exec` command with
+  `/usr/bin/env WEBKIT_DISABLE_DMABUF_RENDERER=1`. Use the verified literal
+  absolute executable path; desktop entries do not expand shell variables.
+  Leave the package-owned entry and release binary unchanged.
+- **Existing systemd user service:** add this setting to that unit's drop-in,
+  leaving its `ExecStart`, working directory and credential references intact:
+
+  ```ini
+  [Service]
+  Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1
+  ```
+
+  Run `systemctl --user daemon-reload`, then test at the next authorized launch
+  or restart. Prefixing a desktop command that invokes `systemctl` with the
+  variable affects `systemctl`, not the app managed by the service.
+
+Verify the effective renderer setting in the actual SwarmUI process without
+dumping its credential-bearing environment. Launch through the normal GNOME or
+service route, resize the window and exercise the connection controls; inspect
+new journal entries and crash-report timestamps. When an authorized target is
+available, verify one authenticated read through the existing transport and
+console owner. Record target unavailability separately. These checks establish
+the exercised graphics and connection behavior, not multi-day stability,
+rendering performance or CUDA/LoRA acceptance.
+
+## NVIDIA workloads
+
 For an NVIDIA workload, read the selected host's live inventory and the
 [NVIDIA Jetson PyTorch compatibility table](https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform-release-notes/pytorch-jetson-rel.html)
 before choosing a PyTorch image or wheel. For a different NVIDIA AArch64 host,

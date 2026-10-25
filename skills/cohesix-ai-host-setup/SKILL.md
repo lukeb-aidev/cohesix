@@ -13,7 +13,10 @@ license: Apache-2.0
 Use this skill when the user asks to install Cohesix host tools or set up,
 repair, or inventory host AI tools or optional QEMU alongside them. Read
 [Mac setup](references/mac.md) for Apple Silicon and
-[Linux setup](references/linux.md) for Ubuntu ARM64. `MAX` means
+[Linux setup](references/linux.md) for Ubuntu ARM64. For Jetson SwarmUI
+`WebKitWebProcess` crashes, follow
+[Jetson graphics recovery](references/linux.md#jetson-swarmui-graphics-recovery).
+`MAX` means
 Modular MAX; `MLX` means Apple's array/model stack; `vMLX` is a separate desktop
 app. Choose the components and installation method for the actual host,
 workload and operator preference. The platform references give decisions and
