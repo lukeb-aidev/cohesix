@@ -9,9 +9,6 @@ Cohesix is a research operating system for edge AI, built around a simple idea:
 an AI fleet should have air-traffic control, not a pile of tools holding
 unrestricted credentials.
 
-OpenAI Codex, an AI coding agent, wrote the Cohesix-specific code; Lukas Bower
-directed the design and gave final approval.
-
 Each Cohesix hive has a Queen—the central orchestration authority—and a small
 set of narrowly focused Worker roles for heartbeat telemetry, GPU lease and
 status records, and LoRA adapter/model lifecycle receipts. These Workers are
@@ -34,29 +31,6 @@ toolkit: command-line tools, a gateway, desktop UI, GPU and service bridges, an
 automation agent, a Python SDK, and evidence tooling. These tools are part of
 Cohesix, but run beside the AI stack on the host—not inside the Cohesix OS—so
 the trusted core stays small.
-
-## For AI agents
-
-Start with [llms.txt](llms.txt) for task selection and authoritative references.
-The [use-case guide](docs/USE_CASES.md) routes each workflow to a repo-managed
-skill: [agent delegation](skills/cohesix-agent-delegation/SKILL.md),
-[edge recovery](skills/cohesix-edge-recovery/SKILL.md),
-[GPU operations](skills/cohesix-gpu-operations/SKILL.md),
-[model rollout](skills/cohesix-model-rollout/SKILL.md),
-[private adapter release](skills/cohesix-private-adapter-release/SKILL.md),
-[fleet operations](skills/cohesix-fleet-operations/SKILL.md) and
-[evidence review](skills/cohesix-evidence/SKILL.md). Start with
-[Queen inspection](skills/cohesix-inspect/SKILL.md) or
-[AI host setup](skills/cohesix-ai-host-setup/SKILL.md) when the deployment is
-new to you.
-Load the relevant `SKILL.md` from this repository. If you copy a skill to an
-agent's skill location, bring any companion skills it links to and use the
-matching installed guides in place of repository-relative documentation links.
-An agent without automatic `SKILL.md` discovery can read the file as task
-instructions. Loading instructions does not configure an MCP or A2A client;
-verify that client's actual transport, private authentication and per-user
-identity before claiming a useful Cohesix operation.
-[AGENTS.md](AGENTS.md) remains the separate contributor charter.
 
 ## What makes Cohesix different?
 
@@ -177,6 +151,32 @@ This is the native desktop displaying a signed historical reference, not a new
 live execution. See the [SwarmUI guide](docs/SWARMUI.md),
 [native gallery](docs/SWARMUI_GALLERY.md), and
 [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md).
+
+OpenAI Codex, an AI coding agent, wrote the Cohesix-specific code; Lukas Bower
+directed the design and gave final approval.
+
+## For AI agents
+
+Start with [llms.txt](llms.txt) for task selection and authoritative references.
+The [use-case guide](docs/USE_CASES.md) routes each workflow to a repo-managed
+skill: [agent delegation](skills/cohesix-agent-delegation/SKILL.md),
+[edge recovery](skills/cohesix-edge-recovery/SKILL.md),
+[GPU operations](skills/cohesix-gpu-operations/SKILL.md),
+[model rollout](skills/cohesix-model-rollout/SKILL.md),
+[private adapter release](skills/cohesix-private-adapter-release/SKILL.md),
+[fleet operations](skills/cohesix-fleet-operations/SKILL.md) and
+[evidence review](skills/cohesix-evidence/SKILL.md). Start with
+[Queen inspection](skills/cohesix-inspect/SKILL.md) or
+[AI host setup](skills/cohesix-ai-host-setup/SKILL.md) when the deployment is
+new to you.
+Load the relevant `SKILL.md` from this repository. If you copy a skill to an
+agent's skill location, bring any companion skills it links to and use the
+matching installed guides in place of repository-relative documentation links.
+An agent without automatic `SKILL.md` discovery can read the file as task
+instructions. Loading instructions does not configure an MCP or A2A client;
+verify that client's actual transport, private authentication and per-user
+identity before claiming a useful Cohesix operation.
+[AGENTS.md](AGENTS.md) remains the separate contributor charter.
 
 ## Latest release: Cohesix 1.2.0
 
