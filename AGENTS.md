@@ -12,8 +12,9 @@ the affected work. A prose requirement is not evidence that CI enforces it.
 ## Start here
 
 1. Confirm the requested branch, worktree changes, affected component and exact
-   host/target profile. Preserve unrelated edits, logs and immutable evidence;
-   do not reset, clean, switch branches or overwrite artifacts to simplify a task.
+   host/target profile. Preserve unrelated edits and evidence needed for active
+   claims; apply the retention rules below to older run data. Do not reset,
+   clean, switch branches or overwrite artifacts to simplify a task.
 2. Read the relevant [BUILD_PLAN](docs/BUILD_PLAN.md) task and selected manifest.
    Implementation must cite its exact active milestone/submilestone and task ID.
    Read applicable local instructions and the contracts below, not every document.
@@ -184,6 +185,30 @@ repair governance may change those documents atomically, not unrelated product c
   not separate approval of every change. AI and automated checks cannot provide it.
 - Preserve historical approvals at their original scope; never fabricate approvals
   or verification. Make evidence accessible and disclose unexecuted or blocked checks.
+
+## Artifact retention and disk cleanup
+
+- While a test, review or release candidate is active, retain its exact inputs,
+  failed attempts and accepted evidence at the original source, artifact and
+  target identity. Never delete or rewrite data that a current claim needs.
+- After publication, retain an accessible authoritative release copy,
+  documentation, approvals and a compact record of the final result,
+  limitations and identity hashes. Keep raw captures only when that compact
+  record or a cited claim cannot be checked without them. Historical attempts,
+  duplicate staging trees and copied target artifacts do not need indefinite
+  retention merely because they were generated under `out/` or named
+  `evidence/`. A discarded run cannot be reused for a later claim.
+- Generated builds, caches, downloaded test models and temporary environments
+  may be removed when idle and reproducible from retained source and manifests.
+  Inspect contents before deleting a broad directory: `out/` can also contain
+  unique records, and a model directory can contain a unique trained adapter.
+- Use a worktree-specific sparse checkout to omit obsolete tracked build or
+  release copies from an old local checkout. Do not stage their deletion on a
+  historical branch or rewrite Git history merely to reclaim local disk space.
+- If the sole proof for a published claim is being removed, first replace it
+  with a verifiable compact record or narrow the claim in the owning document.
+  Confirm release files have another retained copy, check for active processes
+  and unrelated changes, and report what was removed and what remains.
 
 ## Task record
 

@@ -651,6 +651,8 @@ is being produced. It is unchanged by the development convergence lane.
 2. Use `--force` to replace an active stage result after a failure or input
    change. The old immutable attempt remains under `evidence/`; a failed,
    interrupted, or INCOMPLETE rerun cannot leave a reusable PASS marker.
+   This is the active candidate's execution rule. Long-term retention after
+   publication follows the charter's artifact retention rules.
 3. Use `--stage <n> --iteration` only for focused debugging. Iterations have a
    separate evidence namespace and never write, remove, or refresh full-pass
    attestations.

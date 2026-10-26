@@ -198,7 +198,9 @@ a physical-Pi claim. All targets required for an overall release remain mandator
 Examples of additional evidence include QEMU transcripts, fresh Pi serial/packet
 captures, `.coh` fixtures, negative Secure9P tests and bundle checks. Repository-only
 tests are not Pi proof. Preserve exact source/image/target provenance and original
-failed attempts.
+failed attempts while the candidate is active. After publication, apply the
+charter's artifact retention rules; do not silently discard the sole proof for
+a claim.
 
 If a baseline fails for a pre-existing reason, record its exact command and failure
 separately. A new failure in the changed surface blocks review. Missing hardware,
