@@ -33,10 +33,7 @@ use console_network_runtime::{
     ServicePollOutcome,
 };
 #[cfg(feature = "direct-genet")]
-use console_network_runtime::{
-    direct_genet_command_control_releases_quiesce, direct_genet_command_publication_quiesces,
-    direct_genet_command_timer_service_due,
-};
+use console_network_runtime::{direct_genet_command_timer_service_due, DirectGenetCommandWait};
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
 
@@ -246,7 +243,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
     let mut direct_tx_waiting_for_peer = false;
     #[cfg(feature = "direct-genet")]
-    let mut awaiting_root_command_control = false;
+    let mut command_wait = DirectGenetCommandWait::default();
 
     loop {
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
@@ -269,7 +266,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         #[cfg(all(not(feature = "direct-genet"), feature = "direct-virtio"))]
         let exact_direct_genet = false;
         #[cfg(feature = "direct-genet")]
-        let direct_genet_command_quiesced = awaiting_root_command_control;
+        let direct_genet_command_quiesced = {
+            command_wait.reconcile_connection(service.active_connection_id());
+            command_wait.is_waiting()
+        };
         #[cfg(not(feature = "direct-genet"))]
         let direct_genet_command_quiesced = false;
         #[cfg(feature = "direct-genet")]
@@ -686,18 +686,21 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     descriptor.supervisor_wake_notification_slot,
                 );
                 #[cfg(feature = "direct-genet")]
-                if direct_genet_command_publication_quiesces(
+                if command_wait.command_published(
                     direct_genet_link.is_some(),
                     runtime_event_kind,
+                    runtime_event.connection_id(),
+                    service.active_connection_id(),
                 ) {
                     // Root cannot publish this command's response while an
                     // earlier output control awaits its TCP ACK. Preserve
                     // already-retained transport work for that drain; future
                     // peer wakes may also enter the bounded cycle above.
-                    // Only a newly sequenced applied control clears the latch.
+                    // Only a matching newly applied control or retirement of
+                    // this connection clears its wait. A retained command from
+                    // an ended session cannot re-arm it.
                     // QEMU direct VirtIO never enters this latch.
                     direct_service_pending &= pending_output_control.is_some();
-                    awaiting_root_command_control = true;
                 }
             }
             ChildTurnUnit::PublishEgress => {
@@ -785,11 +788,11 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                                 Err(_) => enter_standard_fault(),
                             };
                         #[cfg(feature = "direct-genet")]
-                        let release_command_quiesce = direct_genet_command_control_releases_quiesce(
+                        let _ = command_wait.control_applied(
                             direct_genet_link.is_some(),
-                            awaiting_root_command_control,
+                            connection_id,
                             sequence > last_control_sequence,
-                            Some(outcome),
+                            outcome,
                         );
                         last_control_sequence = sequence;
                         if outcome == ControlApplyOutcome::Applied {
@@ -812,10 +815,6 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                             descriptor.supervisor_wake_notification_slot,
                         );
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
-                        #[cfg(feature = "direct-genet")]
-                        if release_command_quiesce {
-                            awaiting_root_command_control = false;
-                        }
                         if !direct_transport {
                             turn_scheduler.request_service();
                         } else {

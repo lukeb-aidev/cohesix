@@ -1098,6 +1098,12 @@ fn compact_control_hook_is_genet_only_and_virtio_fails_closed() {
 
 #[test]
 fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
+    let reconcile = CONSOLE_KERNEL_SOURCE
+        .find("command_wait.reconcile_connection(service.active_connection_id())")
+        .expect("child-owned connection retirement precedes direct-service admission");
+    let service_permission = CONSOLE_KERNEL_SOURCE
+        .find("let direct_service_allowed = direct_genet_command_service_allowed(")
+        .expect("connection-owned command wait controls direct-service permission");
     let pre_wait = CONSOLE_KERNEL_SOURCE
         .find("ChildTurnUnit::Idle => direct_service_pending && direct_service_allowed")
         .expect("command quiesce fences the pre-wait direct-service admission");
@@ -1105,14 +1111,32 @@ fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
         .find("&& direct_service_allowed\n            && unit == ChildTurnUnit::Idle")
         .expect("command quiesce fences the post-wait direct-service admission");
     let command_publication = CONSOLE_KERNEL_SOURCE
-        .find("awaiting_root_command_control = true")
-        .expect("command publication closes the causal fence");
+        .find("if command_wait.command_published(")
+        .expect("only an exact live command publication closes the causal fence");
+    let publication_end = CONSOLE_KERNEL_SOURCE[command_publication..]
+        .find("ChildTurnUnit::PublishEgress => {")
+        .map(|offset| command_publication + offset)
+        .expect("command publication has a finite branch");
+    let publication = &CONSOLE_KERNEL_SOURCE[command_publication..publication_end];
+    let control_application = CONSOLE_KERNEL_SOURCE
+        .find("match service.apply_control(connection_id, kind, payload.as_slice())")
+        .expect("the child classifies control application against its own connection");
     let exact_control = CONSOLE_KERNEL_SOURCE
-        .find("if release_command_quiesce")
-        .expect("only the exact applied control reopens the causal fence");
+        .find("let _ = command_wait.control_applied(")
+        .expect("only a matching newly applied control releases the live command wait");
+    let control_sequence_commit = CONSOLE_KERNEL_SOURCE[exact_control..]
+        .find("last_control_sequence = sequence;")
+        .map(|offset| exact_control + offset)
+        .expect("control release compares the sequence before committing its watermark");
+    assert!(reconcile < service_permission && service_permission < pre_wait);
+    assert!(service_permission < post_wait);
     assert!(pre_wait < command_publication);
     assert!(post_wait < command_publication);
-    assert!(command_publication < exact_control);
+    assert!(command_publication < control_application);
+    assert!(control_application < exact_control && exact_control < control_sequence_commit);
+    assert!(CONSOLE_KERNEL_SOURCE.contains(
+        "let direct_genet_command_quiesced = {\n            command_wait.reconcile_connection(service.active_connection_id());\n            command_wait.is_waiting()\n        }"
+    ));
     assert!(CONSOLE_KERNEL_SOURCE.contains(
         "let direct_service_allowed = direct_genet_command_service_allowed(\n            direct_genet_command_quiesced,\n            command_timer_service_due,\n            pending_output_control.is_some(),\n        )"
     ));
@@ -1123,9 +1147,16 @@ fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
         "let quantum_unit_limit = if direct_genet_command_quiesced {\n                3\n            } else {\n                DIRECT_SERVICE_QUANTUM_UNITS\n            }"
     ));
     assert!(CONSOLE_KERNEL_SOURCE.contains("while quantum_units < quantum_unit_limit"));
-    assert!(CONSOLE_KERNEL_SOURCE.contains(
-        "direct_service_pending &= pending_output_control.is_some();\n                    awaiting_root_command_control = true;"
+    assert!(publication.starts_with(
+        "if command_wait.command_published(\n                    direct_genet_link.is_some(),\n                    runtime_event_kind,\n                    runtime_event.connection_id(),\n                    service.active_connection_id(),\n                ) {"
     ));
+    assert!(publication.ends_with(
+        "direct_service_pending &= pending_output_control.is_some();\n                }\n            }\n            "
+    ));
+    assert!(CONSOLE_KERNEL_SOURCE[exact_control..].starts_with(
+        "let _ = command_wait.control_applied(\n                            direct_genet_link.is_some(),\n                            connection_id,\n                            sequence > last_control_sequence,\n                            outcome,\n                        );"
+    ));
+    assert!(!CONSOLE_KERNEL_SOURCE.contains("awaiting_root_command_control = true"));
     assert!(!CONSOLE_KERNEL_SOURCE.contains("direct_service_pending |= pending_output_control"));
     assert!(CONSOLE_KERNEL_SOURCE.contains(
         "quiescent_command_cycle = direct_genet_command_quiesced;\n                        break;"

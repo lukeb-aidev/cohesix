@@ -807,17 +807,27 @@ without a separate packet/publication round trip; a missing response still
 leaves a due ACK obligation. Response data waits for neither that timer nor an
 earlier unacknowledged segment. This changes no listener, queue, transport owner,
 or scheduling authority. QEMU retains its already-qualified TCP policy.
-While direct GENET awaits the root command control, its command latch still
-suppresses background service. A due child-owned protocol timer, or its queued
+While direct GENET awaits the root command control for the same live TCP
+connection, its command wait suppresses background service. The wait owns that
+nonzero connection identity. Before admission and again when publishing a
+command, the child reconciles the wait with its current active connection;
+connection end or replacement retires the old wait. Commands already queued
+when the session ends remain deliverable for root's canonical cleanup, but
+publishing them cannot re-arm the dead connection's wait or overwrite a
+replacement connection's wait. Retirement removes that obsolete permission
+barrier; it creates no service work, poll, timer, notification or recovery path.
+A due child-owned protocol timer, or its queued
 egress once the peer can accept it, admits at most three existing service
 units. Both pre-wait and post-wait gates use that same decision; the command
-latch remains closed until a newly sequenced applied root control arrives.
+wait for a live connection remains closed until a newly sequenced Applied root
+control for that same connection arrives. Stale controls, publication ACKs,
+link wakes and empty control hints cannot release a live wait.
 An earlier root output control awaiting TCP drain also permits that bounded
 cycle when retained transport work or a peer wake makes it runnable. Publishing
 a later command preserves that existing work while the earlier response is
 pending; pending output alone never requests a poll. Root cannot stage the
 next response before the earlier response's ACK is consumed. Retiring the
-earlier drain removes this permission without clearing the command latch.
+earlier drain removes this permission without clearing a live command wait.
 This preserves response ACK/retransmit/close obligations without reopening the
 ordinary 64-unit quantum. A blocked TX frame remains retained for a peer wake.
 

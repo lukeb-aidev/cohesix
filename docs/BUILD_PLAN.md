@@ -125,7 +125,7 @@ owned by their specific contracts.
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
-| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Reopened (bounded lease-history view) |
+| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Reopened (bounded lease-history view and direct-GENET command-wait teardown) |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
 | [27b](#27b) | Executable Host Foundation | Complete — selected foundation |
@@ -8984,8 +8984,13 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 ## Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation <a id="26e"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — only the bounded lease-history view restoration in
-`m26e-qemu-shared-control-path-performance`, discovered during M27g preflight.
+**Status:** Reopened — limited to the bounded lease-history view restoration in
+`m26e-qemu-shared-control-path-performance`, discovered during M27g preflight,
+and the **In Progress** bug2235 restoration
+`m26e-direct-genet-command-wait-teardown`, discovered during post-release
+operation of `m28g-release-b-qualification`. The latter retires only a dead
+connection's direct-GENET command wait and restores its independent receive
+progress; it creates no broader runtime, scheduling or release scope.
 The release-owner-approved 1.0.0-beta closure on 2026-09-14 remains historical.
 Its Stage 05 decision remains `PASS_WITH_RESIDUAL_RISK` under the
 approved [evidence carry-forward](audit/RELEASE_1_0_0_BETA_CARRY_FORWARD.toml)
@@ -10234,6 +10239,44 @@ Commands:
   - python3 -m pytest -q tests/test_release_bundle.py tests/test_worker_task_evidence.py
 Checks: every active TCB has an admitted MCS budget/period/core, every passive service TCB has a bounded allowlisted donor/Reply/timeout chain to an admitted active context, every passive Worker has zero bound SC, exactly one allowlisted active executor donor, and a generation-scoped Reply path that returns donated time once, every linked driver uses its admitted MCS path, and all paths preserve correct ownership; aggregate demand preserves all seven critical reserves: root-control, root-fault, root-emergency, root-worker-supervisor, root-driver-supervisor, root-worker-executor-gpu, and root-worker-executor-lora; four-core QEMU and fresh Pi pass cold/warm boot, the aggregate 256-Worker READY seal with three detailed role exemplars, mixed load, budget exhaustion, timeout, fault, faulted-driver-call recovery, complete Worker task-instance teardown, fresh supervisor-generation recreation, SC/Reply/cap/mapping/record leak, operator-liveness, protocol-regression, GPU/PEFT receipt, and positive CYW43 behavioral-coexistence; QEMU additionally passes Conditional B2 full-population executable pressure driven through the three role exemplars, fresh Pi independently passes its exact-evidence-bound same-harness performance gate, and the target-neutral comparator rejects stale or mismatched provenance and decides QEMU/Pi parity from successful throughput and error budgets only; Conditional D separately qualifies only the host-model gateway comparator. Worker-runtime release promotion binds exactly the six target/root/system records and complete artifact graph, rejecting every missing, one-sided, stale, or mismatched input; independently, a profile cannot ship or advertise Python without both exact `python-sdk-projection` records, the shared wheel/package manifest, and the corresponding QEMU/Pi profile-contract hashes, and Python compatibility cannot raise or lower target, component, full-system, or Worker-runtime acceptance; no implementation or artifact changes occur after component evidence, and no operational classic scheduler path or profile remains. Any failure blocks closure and requires whole-change source/configuration reversion rather than a shipped fallback.
 Deliverables: One target-qualified SMP+MCS scheduling architecture for QEMU and Pi 4, final `cohesix-worker-release-acceptance/v1` evidence, and no runtime scheduler rollback path.
+
+Title/ID: m26e-direct-genet-command-wait-teardown
+Milestone: Reopened Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / bug2235 connection-bound command-wait restoration; downstream discovery during post-release operation of Milestone 28g / m28g-release-b-qualification.
+Goal: Retire a direct-GENET command wait when its exact TCP connection ends so obsolete command ownership cannot indefinitely block unrelated Ethernet receive progress.
+Inputs: Released source b68a2c2a1a38d6f6b1dfe430845dfc4f0f024298; retained 2026-11-02 Pi GENET serial, complete TCP streams and matching NETSTATS counters; apps/console-network-runtime/src/{lib.rs,kernel.rs}; docs/ROLES_AND_SCHEDULING.md; generated implementation-surface inventory; existing console-network regression suites and TEST_PLAN changed-path selection.
+Changes:
+  - apps/console-network-runtime/src/{lib.rs,kernel.rs} — replace the process-wide command-wait Boolean with DirectGenetCommandWait holding Option<NonZeroU64>; reconcile it against the child-owned active connection before admission and again on command publication. A queued historical Command or CommandBatch cannot re-arm an ended connection or overwrite a replacement connection's wait. Only matching newly sequenced Applied control releases a live wait; stale controls, publication ACKs, link wakes and empty control hints grant no such authority. Keep retired commands deliverable for canonical root cleanup.
+  - Existing runtime and root-task regression tests — preserve active waits, matching control release, prior-response drain, due protocol timers and bounded TX backpressure; add deterministic retirement, replacement-identity and queued-command-after-session-end counterexamples using production state transitions rather than simulated seL4, IRQ or DMA behavior.
+  - docs/ROLES_AND_SCHEDULING.md + this task record — describe the connection-lifetime exception, actual implementation, compatibility review and evidence limits. Preserve direct VirtIO, mediated Wi-Fi, sole GENET hardware ownership, notification/publication credit, all queue and MCS bounds, protocol/schema/manifest contracts and historical release decisions; add no poller, timer, retry, wake, recovery lane or root packet fallback.
+  - Material AI assistance — exact-source and retained wire/counter analysis, scoped design and implementation, deterministic regression construction, and independent technical review. The private failed-state wait was reconstructed rather than directly dumped; this implementation does not turn that historical reconstruction into a new target observation.
+Commands:
+  - cargo test --locked --offline -p console-network-runtime
+  - cargo test --locked --offline -p console-network-runtime --features direct-genet
+  - cargo test --locked --offline -p console-network-runtime --features direct-virtio
+  - cargo test --locked --offline -p console-network-runtime --all-features
+  - cargo clippy --locked --offline -p console-network-runtime --all-targets --all-features -- -D warnings
+  - cargo test --locked --offline -p console-network-abi
+  - cargo test --locked --offline -p root-task --test console_network_service -- --test-threads=1
+  - cargo test --locked --offline -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1
+  - cargo test --locked --offline -p root-task --test direct_genet_network_phasing -- --test-threads=1
+  - cargo test --locked --offline -p root-task --no-default-features --test driver_task_mcs -- --test-threads=1
+  - cargo test --locked --offline -p coh-rtc --test pi4_profile
+  - python3 -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py
+  - python3 scripts/sel4_profile.py validate --repo-managed --profile pi4_production --build-dir /mnt/nvme/cohesix-dev/fixes/pi4-command-teardown-2235/cohesix/seL4/build_UBOOT --require-artifacts --for-runtime
+  - SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" CARGO_TARGET_DIR="$PWD/out/2235-cargo-target" cargo build --locked --offline --target aarch64-unknown-none --release -p console-network-runtime --features direct-genet --config profile.release.package.console-network-runtime.opt-level=3 --config profile.release.package.smoltcp.opt-level=3
+  - cargo fmt --all -- --check
+  - scripts/check-generated.sh
+  - scripts/ci/test_plan_run.sh --list
+  - git diff --check
+Checks:
+  - In Progress for acceptance. Independent production review confirms connection reconciliation before admission and publication, preservation of a live replacement wait, and release only by its matching Applied control or authoritative retirement. The eight-byte private wait adds no allocation, unsafe code, syscall, capability, shared field, queue capacity or MCS allowance; retirement creates no work.
+  - Focused host PASS: runtime default 50 tests; direct GENET 53 unit plus nine integration tests; direct VirtIO 50; all features 53 plus nine; runtime Clippy with warnings denied; ABI 30; root console 13; isolated VirtIO 43; direct-GENET source wiring/phasing 20; driver-task MCS two; Pi profile compiler contracts three. All three new regressions pass after correcting the real closed-peer RST fixture; the initial failed attempt is retained.
+  - Formatting, generated consistency including Test Plan consistency, action listing and diff whitespace pass. The validated Pi MCS/54-MHz bare-metal release build passes again after final formatting. Against byte-bound base 8f9fc, ELF size increases 768 bytes while distinct load pages remain 40 and the static _start entry frame remains 82,704 bytes. This is compilation/layout evidence, not full call-chain stack depth, runtime high-water or target execution.
+  - Python: 44 pass, one fails in the unchanged Linux fake-QEMU launch fixture's CPU-context comparison. The same failure reproduces on selected source trees exported from base 8f9fc; unchanged script hashes, exact command and failure analysis are retained in out/2235-validation/baseline-python/analysis.json. No assertion or fixture was weakened.
+  - Generated inventory compatibility review covers coh, cohsh, hive-gateway, gpu-bridge-host, host-sidecar-bridge, host-ticket-agent, sidecar-bus, cas-tool, SwarmUI, coh-rtc build tooling, deferred coh-status, tools/cohesix-py and raw-TCP/REST benchmark consumers. Their commands, authentication, wire schemas, framing, bounds, package selection, workload/report formats and thresholds are unchanged; no host implementation or fixture change is required.
+  - Workspace-wide Clippy/check/test merge gates remain unexecuted; cargo-audit and cargo-deny are unavailable. QEMU convergence remains unexecuted because no valid production MCS/24-MHz profile is available. The failed physical Pi and original evidence are preserved, so canary, recovery, same-harness benchmark and target acceptance remain unexecuted. No merge or release is claimed. Exact commands, source/artifact hashes, failures and results are retained under out/2235-validation on Jetson with a compact Mac mirror, including patched/final-source-binding.json and patched/elf-layout-comparison.json.
+  - Subsequent operator authorization permits a fresh exact-source Pi candidate, canonical TFTP/U-Boot RAM deployment and repeated fault-pattern tests. Preserve the original failed interval before reboot; verify all image/DTB/runtime CRCs before and after the required U-Boot reset, then bind fresh serial and packet evidence to the sealed BUILD marker. Repeated tests must witness the delayed response, queued commands and peer-close ordering and prove renewed ARP/TCP progress, without admitting Workers/jobs. These physical results remain pending at this source checkpoint; SD delivery, release promotion and broad acceptance are outside this RAM test.
+Deliverables: One scoped connection-lifecycle repair, focused regression evidence, independent technical review and an updated scheduling contract. Retain the original failure and explicitly report incomplete merge, target and benchmark gates; historical 1.0.0-beta and 1.2.0 acceptance remains bound to its original artifacts and evidence.
 ```
 
 ---

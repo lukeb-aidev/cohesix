@@ -240,6 +240,82 @@ pub const fn direct_genet_command_control_releases_quiesce(
         && matches!(control_outcome, Some(ControlApplyOutcome::Applied))
 }
 
+/// Own the direct-GENET command wait for one live TCP connection.
+///
+/// Ending or replacing that connection retires its wait. A queued command
+/// from the retired connection remains available for root's normal cleanup,
+/// but cannot suspend ingress for the listener or a replacement connection.
+#[derive(Default)]
+pub struct DirectGenetCommandWait {
+    connection_id: Option<core::num::NonZeroU64>,
+}
+
+impl DirectGenetCommandWait {
+    /// Whether the current connection still owes a root command control.
+    #[must_use]
+    pub const fn is_waiting(&self) -> bool {
+        self.connection_id.is_some()
+    }
+
+    /// Retire a wait whose child-owned connection has ended or been replaced.
+    ///
+    /// This changes service permission only; it creates no runnable work,
+    /// notification, timer or polling obligation.
+    pub fn reconcile_connection(&mut self, active_connection_id: Option<u64>) {
+        if self.connection_id != active_connection_id.and_then(core::num::NonZeroU64::new) {
+            self.connection_id = None;
+        }
+    }
+
+    /// Arm only a command publication belonging to the exact live connection.
+    ///
+    /// Reconcile here as well as before admission: session termination can
+    /// precede publication of commands already retained in the event queue.
+    #[must_use]
+    pub fn command_published(
+        &mut self,
+        exact_direct_genet: bool,
+        kind: ExchangeKind,
+        connection_id: u64,
+        active_connection_id: Option<u64>,
+    ) -> bool {
+        self.reconcile_connection(active_connection_id);
+        if !direct_genet_command_publication_quiesces(exact_direct_genet, kind)
+            || active_connection_id != Some(connection_id)
+        {
+            return false;
+        }
+        let Some(connection_id) = core::num::NonZeroU64::new(connection_id) else {
+            return false;
+        };
+        self.connection_id = Some(connection_id);
+        true
+    }
+
+    /// Release a live wait only for its matching newly applied root control.
+    #[must_use]
+    pub fn control_applied(
+        &mut self,
+        exact_direct_genet: bool,
+        connection_id: u64,
+        newly_sequenced_control: bool,
+        outcome: ControlApplyOutcome,
+    ) -> bool {
+        if self.connection_id != core::num::NonZeroU64::new(connection_id)
+            || !direct_genet_command_control_releases_quiesce(
+                exact_direct_genet,
+                self.is_waiting(),
+                newly_sequenced_control,
+                Some(outcome),
+            )
+        {
+            return false;
+        }
+        self.connection_id = None;
+        true
+    }
+}
+
 /// Runtime construction or bounded service error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeError {
@@ -4764,5 +4840,489 @@ mod tests {
             blocked_host_ticks > 0,
             "idle Wait must remain genuinely blocking"
         );
+    }
+
+    fn authenticate_command_wait_session(session: &mut TransportSession, connection_id: u64) {
+        session.begin(connection_id, 1).unwrap();
+        let connected = session.pop_event().unwrap();
+        assert_eq!(connected.kind(), ExchangeKind::Connected);
+        assert_eq!(connected.connection_id(), connection_id);
+        session.ingest(&framed(b"AUTH secret"), 2).unwrap();
+        let authenticated = session.pop_event().unwrap();
+        assert_eq!(authenticated.kind(), ExchangeKind::Authenticated);
+        assert_eq!(authenticated.connection_id(), connection_id);
+        let mut wire = [0u8; 64];
+        let length = session.pop_wire_output(&mut wire).unwrap().unwrap();
+        assert_eq!(&wire[..length], framed(b"OK AUTH"));
+        assert_eq!(session.pop_wire_output(&mut wire), Ok(None));
+    }
+
+    #[test]
+    fn direct_genet_ended_connection_cannot_rearm_retained_command_publications() {
+        // One-command publication and a coalesced batch must preserve the same
+        // lifecycle contract, including commands retained before Session::end.
+        for commands_per_wake in [1, 8] {
+            let mut session = TransportSession::new(descriptor()).unwrap();
+            authenticate_command_wait_session(&mut session, 1);
+            let mut wait = DirectGenetCommandWait::default();
+            session
+                .ingest(&framed(b"cat /host/tickets/spec.snapshot"), 3)
+                .unwrap();
+            let cat = session.pop_publication_event(1).unwrap().unwrap();
+            assert!(!wait.command_published(
+                false,
+                cat.kind(),
+                cat.connection_id(),
+                session.connection_id(),
+            ));
+            assert!(!wait.is_waiting());
+            assert!(wait.command_published(
+                true,
+                cat.kind(),
+                cat.connection_id(),
+                session.connection_id(),
+            ));
+            assert!(!direct_genet_command_service_allowed(
+                wait.is_waiting(),
+                false,
+                false,
+            ));
+
+            session
+                .ingest(&framed(b"echo /gpu/bridge/ctl queued"), 4)
+                .unwrap();
+            session.ingest(&framed(b"ping"), 5).unwrap();
+            session.end(6).unwrap();
+            wait.reconcile_connection(session.connection_id());
+            assert!(direct_genet_command_service_allowed(
+                wait.is_waiting(),
+                false,
+                false,
+            ));
+
+            let mut commands = std::vec::Vec::new();
+            let mut disconnected = false;
+            while let Some(event) = session.pop_publication_event(commands_per_wake).unwrap() {
+                assert_eq!(event.connection_id(), 1);
+                assert!(!wait.command_published(
+                    true,
+                    event.kind(),
+                    event.connection_id(),
+                    session.connection_id(),
+                ));
+                match event.kind() {
+                    ExchangeKind::Command => {
+                        assert_eq!(commands_per_wake, 1);
+                        commands.push(std::string::String::from(event.payload().unwrap()));
+                    }
+                    ExchangeKind::CommandBatch => {
+                        assert_eq!(commands_per_wake, 8);
+                        let payload = event.payload_bytes();
+                        let mut cursor = abi::CommandBatchCursor::validate(payload).unwrap();
+                        while let Some((_, command)) = cursor.next_command(payload).unwrap() {
+                            commands.push(std::string::String::from(command));
+                        }
+                    }
+                    ExchangeKind::Disconnected => disconnected = true,
+                    kind => panic!("unexpected retained publication {kind:?}"),
+                }
+                assert!(direct_genet_command_service_allowed(
+                    wait.is_waiting(),
+                    false,
+                    false,
+                ));
+            }
+            assert_eq!(commands, ["echo /gpu/bridge/ctl queued", "ping"]);
+            assert!(disconnected, "commands must retain the real terminal event");
+        }
+    }
+
+    #[test]
+    fn direct_genet_old_control_cannot_release_replacement_command_wait() {
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 4096];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        authenticate_command_wait_session(&mut service.session, 1);
+        let mut wait = DirectGenetCommandWait::default();
+        service.session.ingest(&framed(b"ping"), 3).unwrap();
+        let first = service.pop_publication_event(1).unwrap().unwrap();
+        assert!(wait.command_published(
+            true,
+            first.kind(),
+            first.connection_id(),
+            service.active_connection_id(),
+        ));
+        let old_applied = service
+            .apply_control(1, ExchangeKind::SendLine, b"old-response")
+            .unwrap();
+        assert_eq!(old_applied, ControlApplyOutcome::Applied);
+        assert!(wait.control_applied(true, 1, true, old_applied));
+
+        service.session.ingest(&framed(b"ping"), 4).unwrap();
+        let retiring = service.pop_publication_event(1).unwrap().unwrap();
+        assert!(wait.command_published(
+            true,
+            retiring.kind(),
+            retiring.connection_id(),
+            service.active_connection_id(),
+        ));
+        service.session.end(4).unwrap();
+        let disconnected = service.pop_event().unwrap();
+        assert_eq!(disconnected.kind(), ExchangeKind::Disconnected);
+        authenticate_command_wait_session(&mut service.session, 2);
+        // A connection can end and be replaced within one bounded cycle, so
+        // admission must also retire the old wait without observing None.
+        wait.reconcile_connection(service.active_connection_id());
+        assert!(!wait.is_waiting());
+        service.session.ingest(&framed(b"ping"), 5).unwrap();
+        let replacement = service.pop_publication_event(1).unwrap().unwrap();
+        assert_eq!(replacement.connection_id(), 2);
+        assert!(wait.command_published(
+            true,
+            replacement.kind(),
+            replacement.connection_id(),
+            service.active_connection_id(),
+        ));
+        assert!(!wait.command_published(
+            true,
+            retiring.kind(),
+            retiring.connection_id(),
+            service.active_connection_id(),
+        ));
+        assert!(wait.is_waiting());
+
+        // A real earlier successful outcome is not authority over the new owner.
+        assert!(!wait.control_applied(true, 1, true, old_applied));
+        assert!(wait.is_waiting());
+        let stale = service
+            .apply_control(1, ExchangeKind::SendLine, b"stale-response")
+            .unwrap();
+        assert_eq!(stale, ControlApplyOutcome::StaleConnection);
+        assert!(!wait.control_applied(true, 1, true, stale));
+        assert!(wait.is_waiting());
+
+        let applied = service
+            .apply_control(2, ExchangeKind::SendLine, b"PONG")
+            .unwrap();
+        assert_eq!(applied, ControlApplyOutcome::Applied);
+        assert!(!wait.control_applied(true, 2, false, applied));
+        assert!(
+            wait.is_waiting(),
+            "an old shared-page sequence is not a release"
+        );
+        let applied = service
+            .apply_control(2, ExchangeKind::SendLine, b"OK PING reply=pong")
+            .unwrap();
+        assert!(wait.control_applied(true, 2, true, applied));
+        assert!(direct_genet_command_service_allowed(
+            wait.is_waiting(),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn direct_genet_delayed_cat_peer_close_retires_wait_and_restores_arp() {
+        use smoltcp::wire::TcpPacket;
+
+        let mut server_rx = [0u8; 4096];
+        let mut server_tx = [0u8; 4096];
+        let mut server_storage = [SocketStorage::EMPTY];
+        let mut service = ConsoleNetworkService::new(
+            descriptor(),
+            &mut server_rx,
+            &mut server_tx,
+            &mut server_storage,
+        )
+        .unwrap();
+        service
+            .sockets
+            .get_mut::<TcpSocket>(service.tcp_handle)
+            .set_nagle_enabled(false);
+        let mut client_device = SharedFrameDevice::new();
+        let remote_mac = EthernetAddress([2, 0, 0, 0, 0, 2]);
+        let remote_ip = Ipv4Address::new(10, 0, 2, 16);
+        let mut client_config = InterfaceConfig::new(HardwareAddress::Ethernet(remote_mac));
+        client_config.random_seed = 9;
+        let mut client_interface =
+            Interface::new(client_config, &mut client_device, Instant::from_millis(0));
+        client_interface.update_ip_addrs(|addresses| {
+            addresses.clear();
+            addresses.push(IpCidr::new(remote_ip.into(), 24)).unwrap();
+        });
+        let mut client_rx = [0u8; 4096];
+        let mut client_tx = [0u8; 4096];
+        let mut client_storage = [SocketStorage::EMPTY];
+        let mut client_sockets = SocketSet::new(&mut client_storage[..]);
+        let mut client_socket = TcpSocket::new(
+            TcpSocketBuffer::new(&mut client_rx[..]),
+            TcpSocketBuffer::new(&mut client_tx[..]),
+        );
+        client_socket.set_ack_delay(None);
+        client_socket.set_nagle_enabled(false);
+        let client_handle = client_sockets.add(client_socket);
+        client_sockets
+            .get_mut::<TcpSocket>(client_handle)
+            .connect(
+                client_interface.context(),
+                (
+                    Ipv4Address::from(descriptor().ipv4),
+                    descriptor().listener_port,
+                ),
+                49_152,
+            )
+            .unwrap();
+
+        let mut now_ms = 1;
+        let mut auth_sent = false;
+        let mut auth_response = std::vec::Vec::new();
+        for _ in 0..512 {
+            drive_network_turn(
+                &mut service,
+                &mut client_interface,
+                &mut client_device,
+                &mut client_sockets,
+                now_ms,
+            )
+            .unwrap();
+            while let Some(event) = service.pop_event() {
+                assert!(matches!(
+                    event.kind(),
+                    ExchangeKind::Connected | ExchangeKind::Authenticated
+                ));
+            }
+            let client = client_sockets.get_mut::<TcpSocket>(client_handle);
+            if !auth_sent && client.state() == TcpState::Established {
+                client.send_slice(&framed(b"AUTH secret")).unwrap();
+                auth_sent = true;
+            }
+            while client.can_recv() {
+                let mut chunk = [0u8; 64];
+                let length = client.recv_slice(&mut chunk).unwrap();
+                assert_ne!(length, 0);
+                auth_response.extend_from_slice(&chunk[..length]);
+            }
+            if auth_response == framed(b"OK AUTH")
+                && service.session.authenticated()
+                && service.session.output_queue_empty()
+                && service
+                    .sockets
+                    .get::<TcpSocket>(service.tcp_handle)
+                    .send_queue()
+                    == 0
+            {
+                break;
+            }
+            now_ms += 1;
+        }
+        assert_eq!(auth_response, framed(b"OK AUTH"));
+        assert_eq!(service.active_connection_id(), Some(1));
+
+        now_ms += 100;
+        let cat = framed(b"cat /host/tickets/spec.snapshot");
+        client_sockets
+            .get_mut::<TcpSocket>(client_handle)
+            .send_slice(&cat)
+            .unwrap();
+        drive_network_turn(
+            &mut service,
+            &mut client_interface,
+            &mut client_device,
+            &mut client_sockets,
+            now_ms,
+        )
+        .unwrap();
+        let command = service.pop_publication_event(1).unwrap().unwrap();
+        assert_eq!(
+            command.payload().unwrap(),
+            "cat /host/tickets/spec.snapshot"
+        );
+        let mut wait = DirectGenetCommandWait::default();
+        assert!(wait.command_published(
+            true,
+            command.kind(),
+            command.connection_id(),
+            service.active_connection_id(),
+        ));
+
+        // Service the real bounded TCP ACK, without authorizing a CAT response.
+        // This exercises protocol leaves; no target scheduler is reproduced here.
+        now_ms += 10;
+        drive_network_turn(
+            &mut service,
+            &mut client_interface,
+            &mut client_device,
+            &mut client_sockets,
+            now_ms,
+        )
+        .unwrap();
+        let echo = framed(b"echo /gpu/bridge/ctl queued");
+        client_sockets
+            .get_mut::<TcpSocket>(client_handle)
+            .send_slice(&echo)
+            .unwrap();
+        now_ms += 1;
+        let timestamp = Instant::from_millis(now_ms as i64);
+        let _ = client_interface.poll(timestamp, &mut client_device, &mut client_sockets);
+        let mut packet = [0u8; ETHERNET_FRAME_BYTES];
+        let length = client_device.pop_egress(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert_eq!(tcp.payload(), echo);
+        assert!(!tcp.fin());
+        let echo_end = tcp.seq_number() + echo.len();
+        service.ingest_packet(&packet[..length]).unwrap();
+        service.poll_stack_ingress_unit(timestamp);
+
+        let ping = framed(b"ping");
+        let client = client_sockets.get_mut::<TcpSocket>(client_handle);
+        client.send_slice(&ping).unwrap();
+        client.close();
+        now_ms += 1;
+        let timestamp = Instant::from_millis(now_ms as i64);
+        let _ = client_interface.poll(timestamp, &mut client_device, &mut client_sockets);
+        let length = client_device.pop_egress(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert_eq!(tcp.payload(), ping);
+        assert_eq!(tcp.seq_number(), echo_end);
+        assert!(
+            tcp.fin(),
+            "the final command and FIN must share one segment"
+        );
+        service.ingest_packet(&packet[..length]).unwrap();
+        service.poll_stack_ingress_unit(timestamp);
+        assert_eq!(
+            service.sockets.get::<TcpSocket>(service.tcp_handle).state(),
+            TcpState::CloseWait,
+        );
+        assert_eq!(
+            service
+                .sockets
+                .get::<TcpSocket>(service.tcp_handle)
+                .recv_queue(),
+            echo.len() + ping.len(),
+        );
+        if let Some(length) = service.take_packet(&mut packet).unwrap() {
+            client_device.push_ingress(&packet[..length]).unwrap();
+            let _ = client_interface.poll(timestamp, &mut client_device, &mut client_sockets);
+        }
+
+        now_ms += 30_000;
+        let cat_response = "ERR CAT reason=policy path=/host/tickets/spec.snapshot";
+        let (batch, length) = send_batch_payload(&[cat_response]);
+        let applied = service
+            .apply_control(1, ExchangeKind::SendBatch, &batch[..length])
+            .unwrap();
+        assert_eq!(applied, ControlApplyOutcome::Applied);
+        assert!(wait.control_applied(true, 1, true, applied));
+        assert_eq!(service.session.ingress_capacity(), 0);
+        assert!(service.poll_session_unit(now_ms).unwrap());
+        assert_eq!(
+            service
+                .sockets
+                .get::<TcpSocket>(service.tcp_handle)
+                .recv_queue(),
+            echo.len() + ping.len(),
+            "CAT batch admission must precede the later command read",
+        );
+        assert_eq!(
+            service.sockets.get::<TcpSocket>(service.tcp_handle).state(),
+            TcpState::LastAck,
+        );
+        service.poll_stack_egress_unit(Instant::from_millis(now_ms as i64));
+        let length = service.take_packet(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert_eq!(decode_wire_train(tcp.payload()), [cat_response.as_bytes()]);
+        assert!(tcp.fin(), "late CAT data must share the server FIN");
+        let reset_sequence = tcp.ack_number();
+        let late_cat_packet = packet[..length].to_vec();
+        assert_eq!(service.output_drained_connection(), None);
+
+        assert!(service.poll_session_unit(now_ms + 1).unwrap());
+        let later = service.pop_publication_event(8).unwrap().unwrap();
+        assert_eq!(later.kind(), ExchangeKind::CommandBatch);
+        let payload = later.payload_bytes();
+        let mut cursor = abi::CommandBatchCursor::validate(payload).unwrap();
+        assert_eq!(
+            cursor.next_command(payload).unwrap().unwrap().1,
+            "echo /gpu/bridge/ctl queued"
+        );
+        assert_eq!(cursor.next_command(payload).unwrap().unwrap().1, "ping");
+        assert_eq!(cursor.next_command(payload), Ok(None));
+        assert!(wait.command_published(
+            true,
+            later.kind(),
+            later.connection_id(),
+            service.active_connection_id(),
+        ));
+        assert!(direct_genet_command_service_allowed(
+            wait.is_waiting(),
+            false,
+            true,
+        ));
+
+        // The peer has abandoned its connection when the late response arrives.
+        // Release its TCP control block, then let the real interface generate
+        // the closed-port RST from the late CAT packet's sequence and ACK.
+        client_sockets.get_mut::<TcpSocket>(client_handle).abort();
+        let _ = client_sockets.remove(client_handle);
+        client_device.push_ingress(&late_cat_packet).unwrap();
+        let timestamp = Instant::from_millis((now_ms + 2) as i64);
+        let _ = client_interface.poll(timestamp, &mut client_device, &mut client_sockets);
+        let length = client_device.pop_egress(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        let ip = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        let reset = TcpPacket::new_checked(ip.payload()).unwrap();
+        assert!(reset.rst());
+        assert_eq!(reset.seq_number(), reset_sequence);
+        assert_eq!(
+            client_device.pop_egress(&mut [0u8; ETHERNET_FRAME_BYTES]),
+            Ok(None),
+        );
+        service.ingest_packet(&packet[..length]).unwrap();
+        service.poll_stack_ingress_unit(timestamp);
+        let _ = service.poll_session_unit(now_ms + 2).unwrap();
+        assert_eq!(service.active_connection_id(), None);
+        assert!(service.listener_ready());
+        wait.reconcile_connection(service.active_connection_id());
+        assert!(direct_genet_command_service_allowed(
+            wait.is_waiting(),
+            false,
+            false,
+        ));
+        let disconnected = service.pop_event().unwrap();
+        assert_eq!(disconnected.kind(), ExchangeKind::Disconnected);
+
+        let arp = ArpRepr::EthernetIpv4 {
+            operation: ArpOperation::Request,
+            source_hardware_addr: remote_mac,
+            source_protocol_addr: remote_ip,
+            target_hardware_addr: EthernetAddress::BROADCAST,
+            target_protocol_addr: Ipv4Address::from(descriptor().ipv4),
+        };
+        let ethernet = EthernetRepr {
+            src_addr: remote_mac,
+            dst_addr: EthernetAddress::BROADCAST,
+            ethertype: EthernetProtocol::Arp,
+        };
+        let length = ethernet.buffer_len() + arp.buffer_len();
+        ethernet.emit(&mut EthernetFrame::new_unchecked(&mut packet[..length]));
+        arp.emit(&mut ArpPacket::new_unchecked(
+            &mut packet[ethernet.buffer_len()..length],
+        ));
+        service.ingest_packet(&packet[..length]).unwrap();
+        service.poll_stack_ingress_unit(Instant::from_millis((now_ms + 3) as i64));
+        let length = service.take_packet(&mut packet).unwrap().unwrap();
+        let ethernet = EthernetFrame::new_checked(&packet[..length]).unwrap();
+        assert_eq!(ethernet.ethertype(), EthernetProtocol::Arp);
+        let arp = ArpPacket::new_checked(ethernet.payload()).unwrap();
+        assert_eq!(arp.operation(), ArpOperation::Reply);
     }
 }
