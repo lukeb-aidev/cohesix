@@ -61,7 +61,7 @@ owned by their specific contracts.
 
 | Milestone | Description | Status |
 |----------|-------------|------|
-| [0](#0) | Repository Skeleton & Toolchain | Complete |
+| [0](#0) | Repository Skeleton & Toolchain | Reopened (bounded advisory and Linux host validation repairs) |
 | [1](#1) | Boot Banner, Timer, & First IPC | Complete |
 | [2](#2) | NineDoor Minimal 9P | Complete |
 | [3](#3) | Queen/Worker MVP with Roles | Complete |
@@ -299,11 +299,14 @@ where available; add missing owner gates with their implementation and docs.
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — the repository/workspace scaffolding, build scripts, size
-guard, bounded `m0-rust-1-97-1-security-refresh` task, bounded
-`m0-rust-current-stable-dependency-refresh` task, and bounded
-`m0-toml-1-1-4-maintenance` closure are complete. The exact Rust 1.97.1 host
-gate remains green; target-qualified later stages remain separately gated.
+**Status:** Reopened — only `m0-advisory-minimum-patched-refresh` and
+`m0-linux-host-validation-parity` are In Progress, following discovery during
+`m26e-direct-genet-command-wait-teardown` pre-merge validation. Earlier repository,
+toolchain, dependency and host-setup closures retain their historical scope and
+evidence. The green Rust 1.97.1 host results below describe those dated runs;
+current advisory and Linux validation failures are recorded in the new tasks,
+whose final-source checks remain pending. Target-qualified later stages remain
+separately gated.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -417,6 +420,51 @@ Commands:
   - scripts/ci/check_test_plan.sh
 Checks: both installers reject hosts outside their exact support envelope before mutation, expose help without platform preflight, install the shared locked `.venv` by default, and preserve separate full-construction, diagnostic-QEMU, and acceptance claims; focused tests and repository consistency gates pass.
 Deliverables: corrected canonical host installers, a shared repository Python bootstrap, simplified macOS/Linux quickstart documentation, and deterministic regression coverage with Milestone 0 returned to Complete.
+```
+
+```
+Title/ID: m0-advisory-minimum-patched-refresh
+Milestone: Reopened Milestone 0 — Repository Skeleton & Toolchain / minimum patched dependency refresh; discovered during m26e-direct-genet-command-wait-teardown pre-merge validation.
+Goal: Resolve the reproduced dependency vulnerabilities with the six minimum compatible lockfile updates explicitly authorized on 2026-11-03, preserving existing product and target contracts.
+Inputs: Cargo.lock; exact candidate 8825343ff732b6f3851a2542f5aeb2c14d2fc836 and clean base 8f9fc0ae0b851c9e68a1c1b62f19795f2124f35b; retained cargo-audit/cargo-deny reports; CONTRIBUTING merge baseline; Rust risk and staged acceptance controls.
+Changes:
+  - Cargo.lock only — advance quinn-proto 0.11.15 to 0.11.18, rustls 0.23.45 to 0.23.46, rustls-webpki 0.103.15 to 0.103.16, tokio 1.53.1 to 1.53.3, webpki-roots 1.0.9 to 1.0.10 and webpki-root-certs 1.0.6 to 1.0.10. No unrelated dependency migration, manifest broadening, advisory suppression or policy relaxation is authorized.
+  - Review the complete host-tool, tools/cohesix-py and benchmark inventory for compatibility; preserve authentication, protocol, schemas, bounds and workloads. Record exact final-source evidence and material AI-assisted implementation/review without changing historical approvals.
+Commands:
+  - Original baseline: cargo audit
+  - Original baseline: cargo deny check advisories
+  - Planned final-source checks: cargo fmt --all -- --check; cargo clippy --workspace --all-targets -- -D warnings; cargo check --workspace; cargo test --workspace
+  - Planned final-source checks: cargo audit; cargo deny check advisories
+  - Planned consistency checks: scripts/check-generated.sh; scripts/ci/test_plan_run.sh --list; git diff --check
+Checks:
+  - In Progress. Original cargo audit reports 12 vulnerabilities and nine existing warnings; cargo deny check advisories reports eight errors. The same advisory failures occur at byte-bound candidate 8825343 and clean base 8f9fc; these are retained baseline failures, not a GENET regression or a current green host result.
+  - Updated graph, complete merge baseline, exact affected compilations, compatibility review and independent review remain PENDING until bound to the final source. Preserve each failed attempt; no passing result or exception renewal is implied by this scope entry.
+  - Five physical GENET lifecycle trials passed on the earlier exact production source 1d356fb7c23f3789f8b29aba3dac237536c29f13, image f7ada8764420377269df8b3961a08cab0d2abfed102716c91e878018ff7b9729 and manifest 5b0bb9a7fc44cc1a0565ef9bed65238aa53e1b562b43add53d1b075e670a4261; they do not qualify this updated dependency graph. Source maintenance does not deploy to the active Pi RAM image or installed release 1.2.0 hosts.
+  - Valid-profile QEMU MCS/24-MHz integration remains blocked, and expired EX-2026-0020 through EX-2026-0025 remain open for the full exception-register/Stage 05 acceptance gate. No approval, expiry, risk ceiling or release acceptance is changed. Broader component and seven-day acceptance remain open.
+Deliverables: One bounded minimum-patch lockfile update with exact advisory comparisons, compatibility review and final-source merge evidence; preserve separate component, target and release limitations.
+```
+
+```
+Title/ID: m0-linux-host-validation-parity
+Milestone: Reopened Milestone 0 — Repository Skeleton & Toolchain / Linux host validation parity and risk-bootstrap source binding; discovered during m26e-direct-genet-command-wait-teardown pre-merge validation.
+Goal: Restore strict Linux workspace validation by selecting macOS-only Keychain constants only on macOS and preserving Cargo's complete compiler environment through the maintained wrapper.
+Inputs: apps/swarmui/src/workbench.rs; scripts/rustc-wrapper.sh; its maintained current-source SHA bindings and focused tests; byte-bound candidate 8825343ff732b6f3851a2542f5aeb2c14d2fc836 and clean base 8f9fc0ae0b851c9e68a1c1b62f19795f2124f35b; ~/cohesix/assets/pi4-fault-recheck-20261103-104013/merge-validation/{RUST_BASELINE_SUMMARY,CLIPPY_BASELINE_COMPARISON,TEST_BASELINE_COMPARISON,HOST_WRAPPER_ENV_PROBE}.json.
+Changes:
+  - apps/swarmui/src/workbench.rs — cfg-select the two Apple Keychain constants for macOS while retaining their existing macOS values and uses. Do not suppress strict Clippy or alter credential behavior.
+  - scripts/rustc-wrapper.sh + focused tests — preserve opaque Cargo environment names, including CARGO_BIN_EXE_hive-gateway, argument boundaries, output-directory preparation and compiler exit status. Exercise the real wrapper boundary; do not replace the integration-test env! contract or weaken required commands.
+  - Maintained risk-bootstrap owners + tests — refresh only the three current-source SHA entries required by the wrapper change. Preserve historical contract hashes, risk ceilings, exclusions, approval records and exception dates; this source binding does not approve or renew any risk exception.
+  - Review host tools, tools/cohesix-py and benchmark compatibility; retain target no_std, QEMU/direct-VirtIO/Wi-Fi/GENET ownership, generated interfaces, authority and bounds. Record material AI assistance in implementation and independent review.
+Commands:
+  - Original and planned final-source baseline: cargo fmt --all -- --check; cargo clippy --workspace --all-targets -- -D warnings; cargo check --workspace; cargo test --workspace
+  - Planned focused checks: wrapper environment/argument/output/exit regression coverage and platform-specific SwarmUI coverage; record exact maintained test invocations with results.
+  - Planned risk checks: python3 scripts/ci/test_rust_risk_gate.py; scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml
+  - Planned complete baseline remainder: cargo audit; cargo deny check advisories; scripts/check-generated.sh; scripts/ci/test_plan_run.sh --list; git diff --check
+Checks:
+  - In Progress. Original cargo fmt --all -- --check and cargo check --workspace pass at candidate 8825343. Strict workspace Clippy exits 101 on both candidate and clean base with the identical two unused APPLE_KEYCHAIN_SERVICE/APPLE_KEYCHAIN_ACCOUNT errors in unchanged workbench.rs. No lint allowance or compiler flag was weakened.
+  - Original cargo test --workspace exits 101 on both candidate and clean base during hive-gateway mcp_workflows compilation because CARGO_BIN_EXE_hive-gateway is absent; no workspace runtime suites execute. The unchanged inputs and marker-only probe bind the mechanism: direct execution preserves the hyphenated environment name, while the maintained /bin/sh wrapper under Linux dash drops it. Original failures and comparison hashes remain retained.
+  - Focused regressions, complete final-source merge baseline, exact affected host/target compilations, current-source wrapper hash agreement and independent compatibility/safety review remain PENDING. Preserve the original failures; do not substitute prior scoped runtime tests or the five earlier same-boot Pi lifecycle trials for these host checks.
+  - This bounded source repair does not redeploy the active Pi or installed release 1.2.0 hosts and creates no new protocol, schema, authority, queue, scheduler or runtime work allowance. Valid-profile QEMU integration, full exception-register/Stage 05 acceptance with six expired exceptions, broader component proof and seven-day acceptance remain open; no historical approval is changed.
+Deliverables: One separate host-validation repair with real wrapper and platform regression coverage, synchronized current-source risk bindings and exact final-source results, without changing historical acceptance or adding a release claim.
 ```
 
 **M0 dependency-refresh evidence (2026-07-28)**
@@ -10271,7 +10319,10 @@ Commands:
   - /Users/lukasbower/GitHub/cohesix/.venv/bin/python /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/pi4_command_wait_serial_cycle_v3.py --run --config /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/cycle-03-production.json
   - /Users/lukasbower/GitHub/cohesix/.venv/bin/python /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/pi4_command_wait_serial_cycle_v3.py --run --config /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/cycle-04-production.json
   - /Users/lukasbower/GitHub/cohesix/.venv/bin/python /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/pi4_command_wait_serial_cycle_v3.py --run --config /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/cycle-05-production.json
-  - Recorded TCP peer: pi4_command_wait_peer_v2.py on Jetson, selected by the retained cycle configs and PI4_COMMAND_WAIT_REGRESSION_PROTOCOL_V2.md; protected credential references, never command-line plaintext.
+  - /Users/lukasbower/GitHub/cohesix/.venv/bin/python /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/pi4_command_wait_serial_cycle_v3.py --run --config /Users/lukasbower/cohesix/assets/pi4-fault-recheck-20261103-104013/regression/cycle-01.json
+  - /Users/lukasbower/GitHub/cohesix/.venv/bin/python /Users/lukasbower/cohesix/assets/pi4-command-wait-2235-20261102/regression/pi4_command_wait_serial_cycle_v3.py --run --config /Users/lukasbower/cohesix/assets/pi4-fault-recheck-20261103-104013/regression/cycle-02.json
+  - Recorded TCP peer: pi4_command_wait_peer_v2.py on Jetson, selected by the retained cycle configs and PI4_COMMAND_WAIT_REGRESSION_PROTOCOL_V2.md; protected credential references, never command-line plaintext. The recheck's exact script hashes, target and native socket flags are bound in ~/cohesix/assets/pi4-fault-recheck-20261103-104013/regression/PEER-LAUNCH-MANIFEST.json.
+  - Original full workspace pre-merge baseline ran on Jetson at candidate 8825343ff732b6f3851a2542f5aeb2c14d2fc836, with two Cargo jobs and nice 15. Exact commands, results and clean-base comparisons are retained under ~/cohesix/assets/pi4-fault-recheck-20261103-104013/merge-validation; the separately authorized M0 repairs and final-source checks remain pending.
   - git diff --check
 Checks:
   - In Progress for acceptance. Independent production review confirms connection reconciliation before admission and publication, preservation of a live replacement wait, and release only by its matching Applied control or authoritative retirement. The eight-byte private wait adds no allocation, unsafe code, syscall, capability, shared field, queue capacity or MCS allowance; retirement creates no work.
@@ -10282,7 +10333,12 @@ Checks:
   - At the implementation source checkpoint, physical testing was pending and the failed Pi remained live; cargo-audit/cargo-deny and a valid QEMU MCS/24-MHz profile were unavailable. Subsequent operator authorization intentionally replaced that volatile state by reboot; the initiating serial/packet evidence remains preserved. Development commands, hashes, failures and results remain under out/2235-validation on Jetson with a compact Mac mirror, including patched/final-source-binding.json and patched/elf-layout-comparison.json.
   - Completed production GENET RAM deployment: committed source 1d356fb7c23f3789f8b29aba3dac237536c29f13, sealed image f7ada8764420377269df8b3961a08cab0d2abfed102716c91e878018ff7b9729 and the original production resolved manifest 5b0bb9a7fc44cc1a0565ef9bed65238aa53e1b562b43add53d1b075e670a4261. The canonical loader verified all image, DTB and runtime archive CRCs before and after its required U-Boot reset, then observed the exact BUILD marker and 130-second settle. No SD write occurred. Preliminary generic-profile boots and unexercised setup attempts 01/02 are not regression passes.
   - Three independently audited fault-pattern cycles, 03/04/05, qualify on that same boot: each witnessed physical serial CAT completion, queued CAT/ECHO/PING with PING+FIN, delayed ERR CAT plus server FIN and the real closed-peer reset. Each then completed a fresh authenticated TCP PING before any post-trial NETSTATS/DGHO wake. Root counters admitted exactly six commands/92 payload bytes per cycle, excluding AUTH; RX consumer/useful driver progress advanced 22/21/22, TX consumer advanced 13/11/14, and all post-trial shared RX/TX rings drained without declared fault or pending commits. The bound verdicts, raw evidence hashes, corrected cycle04 audit and limits are retained in ~/cohesix/assets/pi4-command-wait-2235-20261102/analysis/three-cycle-independent-summary.json. These are three same-boot lifecycle regressions, not continuous-load or independent-boot repeatability results.
-  - In Progress acceptance limits remain: full workspace merge gates, valid-profile QEMU convergence, same-harness performance, independent boots, USB keyboard/local-seat responsiveness, HDMI responsiveness and ARP recovery are unqualified. ARP probing was unavailable; fresh TCP is not substituted as ARP proof. Static compilation/layout does not prove full call-chain stack depth or runtime high-water. SD delivery and release promotion are unexecuted. Subsequent operational restoration returned 20 Workers and one verified bounded CUDA receipt. Corrected initial idle conditions and capture readiness were verified at the 2026-11-02T14:14:12.478935Z baseline, with observation scheduled to the exact seven-day endpoint 2026-11-09T14:14:12.478935Z; the seven-day result remains pending and this is not week acceptance. No merge or release is claimed.
+  - A later authorized recheck adds two independently qualified trials on the same unchanged production boot, bringing the focused total to five. New-run cycles 01/02 used no warmup reads and each conserved six admitted commands/92 payload bytes, excluding AUTH. RX consumer advanced 22/26, TX consumer 13/18 and useful progress 22/23; both fresh authenticated recoveries preceded post-trial diagnostics, with drained queues and no declared device fault. Their ordering, counters, retransmission distinction and limits are bound in ~/cohesix/assets/pi4-fault-recheck-20261103-104013/analysis/two-cycle-independent-summary.json. This adds same-boot regression evidence without claiming independent boots or continuous load.
+  - After that recheck, bounded read-only restoration verified Root reachable, ONLINE and cut_reason=none, with the existing 20 Workers READY (six GPU and fourteen LoRA), zero new Worker admissions and zero jobs started; see the same run's analysis/RESTORED-ROOT-FLEET.json. Trial success alone was not used to infer restoration.
+  - Corrected initial idle conditions, capture readiness, 20 Workers and the earlier verified bounded CUDA receipt remain bound to the original 2026-11-02T14:14:12.478935Z baseline and unchanged endpoint 2026-11-09T14:14:12.478935Z. The newly authorized gateway/UART handoffs, active fault challenges and log investigation are excluded from untouched-idle claims; the interval is not silently reset or relabelled. The seven-day result remains pending.
+  - A separate release-host log-read investigation found that compiled cohsh's five-second deadline covers the whole batched response and can expire while bytes continue to arrive; a read-only replay completed. This is not an observed recurrence of the GENET receive deadlock. The cause of transfer slowdown remains unproven, and this task makes no additional host timeout or throughput fix.
+  - Original complete baseline: formatting and workspace check pass; strict workspace Clippy and workspace-test compilation fail identically at candidate 8825343 and clean base 8f9fc on unrelated unchanged Linux host inputs. Cargo audit reports 12 vulnerabilities and nine existing warnings; cargo deny reports eight errors at both identities. The bounded repairs are separately scoped by m0-advisory-minimum-patched-refresh and m0-linux-host-validation-parity; final-source results remain PENDING.
+  - In Progress acceptance limits remain: valid-profile QEMU convergence, same-harness performance, independent boots, formal USB/HDMI multi-surface acceptance and ARP recovery remain unqualified. The operator reported USB and HDMI tested and working on 2026-11-03 local time; ~/cohesix/assets/pi-week-watch-20261102-1108/analysis-corrected/OPERATOR-USB-HDMI-20261103.json preserves that functional report and its method/image limits without claiming agent observation. ARP probing was unavailable; fresh TCP is not substituted as ARP proof. Static compilation/layout does not prove full call-chain stack depth or runtime high-water. Expired EX-2026-0020 through EX-2026-0025 leave the full exception-register/Stage 05 acceptance gate open without renewed approvals. SD delivery, release promotion and seven-day acceptance are unexecuted. No merge or release is claimed.
 Deliverables: One scoped connection-lifecycle repair, focused regression evidence, independent technical review and an updated scheduling contract. Retain the original failure and explicitly report incomplete merge, target and benchmark gates; historical 1.0.0-beta and 1.2.0 acceptance remains bound to its original artifacts and evidence.
 ```
 
