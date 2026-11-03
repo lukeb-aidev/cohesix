@@ -1,7 +1,10 @@
-#!/bin/sh
+#!/bin/bash -p
 # Author: Lukas Bower
-# Ensures rustc output directories exist before invocation to avoid
-# APFS/iCloud reaping races when generating dep-info files.
+# Purpose: Preserve Cargo compiler environment and arguments while preparing output directories.
+# Copyright 2026 Lukas Bower
+# Bash preserves Cargo environment names containing hyphens; privileged mode
+# refuses environment startup hooks and imported shell functions.
+# Prepare output directories against APFS/iCloud reaping of dep-info paths.
 set -eu
 
 next_dep=0

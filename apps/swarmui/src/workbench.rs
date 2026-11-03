@@ -142,7 +142,9 @@ pub fn run_local_mlx(request: &LocalMlxRequest) -> Result<Value, String> {
     }
     Ok(report)
 }
+#[cfg(target_os = "macos")]
 const APPLE_KEYCHAIN_SERVICE: &str = "com.cohesix.swarmui.gateway";
+#[cfg(target_os = "macos")]
 const APPLE_KEYCHAIN_ACCOUNT: &str = "selected-delegation";
 
 #[derive(Clone, Deserialize)]

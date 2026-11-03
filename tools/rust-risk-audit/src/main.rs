@@ -150,7 +150,7 @@ const CURRENT_ONLY_BUILD_TOOL_CONTRACTS: [(&str, &str); 2] = [
 ];
 const RUSTC_WRAPPER_CONTRACTS: [(&str, &str, &str); 1] = [(
     "scripts/rustc-wrapper.sh",
-    "7e0b859852b0bab86736fd0a14f1706fa0681dd912469cc82d18f3dff5243de4",
+    "4683c14d50b3c32deb68eff9c867cfe846b17793b62bc0270f0d6b82ef488efe",
     "7e0b859852b0bab86736fd0a14f1706fa0681dd912469cc82d18f3dff5243de4",
 )];
 

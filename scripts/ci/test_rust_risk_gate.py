@@ -1,14 +1,17 @@
 # Author: Lukas Bower
-# Purpose: Verify the Rust risk bootstrap binds its toolchain, Cargo sources, environment, and private scanner output.
+# Purpose: Verify the Rust risk bootstrap binds its toolchain, Cargo sources, environment, private scanner output, and compiler-wrapper execution.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
+import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -18,6 +21,7 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GATE = REPO_ROOT / "scripts" / "ci" / "rust_risk_gate.sh"
+WRAPPER = REPO_ROOT / "scripts" / "rustc-wrapper.sh"
 CANONICAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
@@ -272,6 +276,98 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
             self.assertIsNotNone(private_sha2, "private sha2 extraction was not observed")
             self.assertFalse(private_is_symlink)
             self.assertNotEqual(default_sha2.stat().st_ino, private_inode)
+
+
+class RustcWrapperTests(unittest.TestCase):
+    """Preserve Cargo's compiler invocation while preparing output directories."""
+
+    def test_hyphenated_and_ordinary_cargo_environment_is_preserved(self) -> None:
+        environment = {
+            "PATH": os.defpath,
+            "CARGO_BIN_EXE_hive-gateway": "/binary path/hive-gateway",
+            "CARGO_BIN_EXE_cohsh": "/binary path/cohsh",
+        }
+        code = (
+            "import json, os; "
+            "print(json.dumps({name: os.environ.get(name) for name in "
+            "('CARGO_BIN_EXE_hive-gateway', 'CARGO_BIN_EXE_cohsh')}))"
+        )
+        result = subprocess.run(
+            [str(WRAPPER), sys.executable, "-c", code],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            {name: value for name, value in environment.items() if name != "PATH"},
+        )
+
+    def test_environment_cannot_run_shell_startup_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "startup executed"
+            startup = root / "shell startup"
+            startup.write_text(
+                "# Author: Lukas Bower\n"
+                "# Purpose: Detect unintended wrapper startup-file execution.\n"
+                "# Copyright 2026 Lukas Bower\n"
+                ": > " + shlex.quote(str(marker)) + "\n"
+            )
+            result = subprocess.run(
+                [str(WRAPPER), sys.executable, "-c", "print('compiler started')"],
+                env={"PATH": os.defpath, "BASH_ENV": str(startup)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual(result.stdout, "compiler started\n")
+            self.assertFalse(marker.exists(), "wrapper executed a shell startup hook")
+
+    def test_compiler_flags_arguments_and_output_directories_are_preserved(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            directories = [root / name for name in (
+                "dep info", "binary out", "out split", "out equals",
+                "incremental split", "incremental equals",
+            )]
+            flags = [
+                "--dep-info", str(directories[0] / "module.d"),
+                "-o", str(directories[1] / "program"),
+                "--out-dir", str(directories[2]),
+                "--out-dir=" + str(directories[3]),
+                "--incremental", str(directories[4]),
+                "--incremental=" + str(directories[5]),
+                "--cfg", 'feature="tcp"', "-D", "warnings",
+                "--deny=unsafe_code", "argument with spaces", "", "$literal;value",
+            ]
+            result = subprocess.run(
+                [str(WRAPPER), sys.executable, "-c",
+                 "import json, sys; print(json.dumps(sys.argv[1:]))", *flags],
+                env={"PATH": os.defpath},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual(json.loads(result.stdout), flags)
+            self.assertTrue(all(directory.is_dir() for directory in directories))
+
+    def test_compiler_failure_status_and_diagnostics_are_preserved(self) -> None:
+        result = subprocess.run(
+            [str(WRAPPER), sys.executable, "-c",
+             "import sys; print('compiler stdout'); "
+             "print('compiler stderr', file=sys.stderr); sys.exit(37)"],
+            env={"PATH": os.defpath},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 37)
+        self.assertEqual(result.stdout, "compiler stdout\n")
+        self.assertEqual(result.stderr, "compiler stderr\n")
 
 
 if __name__ == "__main__":

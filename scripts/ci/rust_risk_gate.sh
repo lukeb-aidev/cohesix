@@ -90,7 +90,7 @@ verify_bootstrap_file \
   "96bd8e5f562e7bc9232b54fb918853a340c9a65fffc1b1d71a98e9e39d0aeb4d"
 verify_bootstrap_file \
   "scripts/rustc-wrapper.sh" \
-  "7e0b859852b0bab86736fd0a14f1706fa0681dd912469cc82d18f3dff5243de4"
+  "4683c14d50b3c32deb68eff9c867cfe846b17793b62bc0270f0d6b82ef488efe"
 verify_bootstrap_file \
   "rust-toolchain.toml" \
   "cb58ee367f2c5ad6da555b32d157da0543864a0464ca3e3299de3b050fd43163"
