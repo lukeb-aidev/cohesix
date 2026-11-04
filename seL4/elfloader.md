@@ -1,3 +1,7 @@
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Mirror the pinned seL4Test 17.0.0 elfloader documentation; upstream authorship and license follow below. -->
+<!-- Copyright 2026 Lukas Bower -->
+
 <!--
      Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
 

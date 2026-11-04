@@ -1,10 +1,10 @@
 /*
- * DTS of QEMU v10.1.0 for:
+ * DTS of QEMU v11.1.1 for:
  *    qemu-system-aarch64
  *    -machine
- *    virt,secure=off,virtualization=on,gic-version=3,dumpdtb=/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb
+ *    virt,secure=off,virtualization=off,gic-version=3,dumpdtb=/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb
  *    -cpu
- *    cortex-a53
+ *    cortex-a57
  *    -smp
  *    4
  *    -m
@@ -27,7 +27,7 @@
 		cpu_on = <0xc4000003>;
 		cpu_off = <0x84000002>;
 		cpu_suspend = <0xc4000001>;
-		method = "smc";
+		method = "hvc";
 		compatible = "arm,psci-1.0", "arm,psci-0.2", "arm,psci";
 	};
 
@@ -334,7 +334,6 @@
 
 	intc@8000000 {
 		phandle = <0x8005>;
-		interrupts = <0x01 0x09 0x04>;
 		reg = <0x00 0x8000000 0x00 0x10000 0x00 0x80a0000 0x00 0xf60000>;
 		#redistributor-regions = <0x01>;
 		compatible = "arm,gic-v3";
@@ -389,34 +388,62 @@
 		};
 
 		cpu@0 {
+			next-level-cache = <0x00>;
+			i-cache-sets = <0x100>;
+			i-cache-size = <0xc000>;
+			i-cache-block-size = <0x40>;
+			d-cache-sets = <0x80>;
+			d-cache-size = <0x8000>;
+			d-cache-block-size = <0x40>;
 			phandle = <0x8004>;
 			reg = <0x00>;
 			enable-method = "psci";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a57";
 			device_type = "cpu";
 		};
 
 		cpu@1 {
+			next-level-cache = <0x00>;
+			i-cache-sets = <0x100>;
+			i-cache-size = <0xc000>;
+			i-cache-block-size = <0x40>;
+			d-cache-sets = <0x80>;
+			d-cache-size = <0x8000>;
+			d-cache-block-size = <0x40>;
 			phandle = <0x8003>;
 			reg = <0x01>;
 			enable-method = "psci";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a57";
 			device_type = "cpu";
 		};
 
 		cpu@2 {
+			next-level-cache = <0x00>;
+			i-cache-sets = <0x100>;
+			i-cache-size = <0xc000>;
+			i-cache-block-size = <0x40>;
+			d-cache-sets = <0x80>;
+			d-cache-size = <0x8000>;
+			d-cache-block-size = <0x40>;
 			phandle = <0x8002>;
 			reg = <0x02>;
 			enable-method = "psci";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a57";
 			device_type = "cpu";
 		};
 
 		cpu@3 {
+			next-level-cache = <0x00>;
+			i-cache-sets = <0x100>;
+			i-cache-size = <0xc000>;
+			i-cache-block-size = <0x40>;
+			d-cache-sets = <0x80>;
+			d-cache-size = <0x8000>;
+			d-cache-block-size = <0x40>;
 			phandle = <0x8001>;
 			reg = <0x03>;
 			enable-method = "psci";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a57";
 			device_type = "cpu";
 		};
 	};
@@ -441,7 +468,7 @@
 
 	chosen {
 		stdout-path = "/pl011@9000000";
-		rng-seed = <0xe217a69 0x6917688e 0x6b1fa2ac 0x9af2a046 0x643ca2b4 0xf29597a9 0xef4017f1 0x9f270d16>;
-		kaslr-seed = <0x9e99d057 0xadb40d60>;
+		rng-seed = <0xb7c4536c 0x78d36b7c 0xba8fb2b4 0x875f4bee 0x296d0d1a 0xba1180e8 0xc178e202 0xf3b3961>;
+		kaslr-seed = <0x62080384 0xbe306bbe>;
 	};
 };

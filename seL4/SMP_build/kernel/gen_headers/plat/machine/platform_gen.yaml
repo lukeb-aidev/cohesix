@@ -4,8 +4,8 @@ devices:
 - end: 0x80a0000
   start: 0x8010000
 - end: 0x40000000
-  start: 0x81a0000
-- end: 0x10000000000
+  start: 0x9000000
+- end: 0x100000000000
   start: 0x80000000
 memory:
 - end: 0x80000000

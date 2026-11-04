@@ -8,7 +8,7 @@
 
 #include <config.h>
 
-#define TIMER_CLOCK_HZ ULL_CONST(62500000)
+#define TIMER_CLOCK_HZ ULL_CONST(24000000)
 #define CLK_MAGIC 4611686019llu
 #define CLK_SHIFT 58u
 #define TIMER_PRECISION 0

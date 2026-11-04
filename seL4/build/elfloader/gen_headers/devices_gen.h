@@ -58,31 +58,31 @@ struct elfloader_device elfloader_devices[] = {
 struct elfloader_cpu elfloader_cpus[] = {
     {
         /* /cpus/cpu@0 */
-        .compat = "arm,cortex-a53",
+        .compat = "arm,cortex-a57",
         .enable_method = "psci",
         .cpu_id = 0x0,
-        .extra_data = PSCI_METHOD_SMC
+        .extra_data = PSCI_METHOD_HVC
     },
     {
         /* /cpus/cpu@1 */
-        .compat = "arm,cortex-a53",
+        .compat = "arm,cortex-a57",
         .enable_method = "psci",
         .cpu_id = 0x1,
-        .extra_data = PSCI_METHOD_SMC
+        .extra_data = PSCI_METHOD_HVC
     },
     {
         /* /cpus/cpu@2 */
-        .compat = "arm,cortex-a53",
+        .compat = "arm,cortex-a57",
         .enable_method = "psci",
         .cpu_id = 0x2,
-        .extra_data = PSCI_METHOD_SMC
+        .extra_data = PSCI_METHOD_HVC
     },
     {
         /* /cpus/cpu@3 */
-        .compat = "arm,cortex-a53",
+        .compat = "arm,cortex-a57",
         .enable_method = "psci",
         .cpu_id = 0x3,
-        .extra_data = PSCI_METHOD_SMC
+        .extra_data = PSCI_METHOD_HVC
     },
     { .compat = NULL /* sentinel */ },
 };

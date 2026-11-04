@@ -5,8 +5,9 @@
 # seL4 17 build and Pi network evaluation
 
 This is the candidate record for `m26d1-sel4-17-pi-network`. The accepted v16
-checkout, source installation, installed release tools and existing Pi image
-remain protected while the candidate is built. Building the candidate does not
+source installation, environment, historical evidence and installed release tools
+remain protected while the candidate is built. The old Pi observation was
+deliberately interrupted for the requested RAM test. Building the candidate does not
 establish Pi boot, network, seven-day, performance or release acceptance.
 
 ## Source and environment
@@ -81,6 +82,52 @@ profile validations passed. Canonical QEMU image staging and generated-contract
 checks passed, and all 133 compiler library tests passed. Live-target and
 sustained-observation results remain open at this checkpoint. The private run
 record owns later observations and their exact source/image identities.
+
+## Repository reference replacement
+
+The user's subsequent instruction replaces the older current entries under
+`seL4/`. All three build mirrors now use v17: `build` is
+`qemu_smp_production`, `SMP_build` is `qemu_smp_diagnostic`, and `build_UBOOT`
+is `pi4_production`. The QEMU mirrors now match the current four-core MCS
+profiles rather than their former classic configurations. Their complete
+copied files are checked against successful maintained profile builds. The
+older bytes are retained in the private run's reference archives and in Git
+history. Historical classic-comparator identities remain unchanged.
+
+The official Reference Manual 17.0.0 PDF is retained unchanged from
+`https://sel4.systems/Info/Docs/seL4-manual-17.0.0.pdf`; the Markdown version
+is its `pdftotext -layout` extraction with a provenance header. Elfloader
+documentation comes from the pinned v17 `tools/seL4` source. Upstream authorship
+and licenses are preserved. `seL4/README.md` records the current mapping.
+
+## Executed target evaluation
+
+The canonical QEMU build and authenticated root/MCS convergence passed,
+including all 37 focused guards. The canonical Pi image build passed from clean
+source `4daf5e903aac114f8a8a54b3727ee9d09a0df49e`. Its exact RAM image identity is
+`3cfde3126677ebb759facdfb29acf8eef0c5e8778a5c6f284571e024b3257b82`.
+All three payload CRCs passed before and after the mandatory peripheral reset,
+the sealed BUILD matched, and 130 seconds of passive GENET settling completed
+without a declared fault. SD was unchanged.
+
+Cycles 1, 3 and 4 each passed all 13 independently recomputed packet, serial,
+counter and fresh-TCP-recovery checks on that same boot. Attempt 2 is retained
+as unqualified: the host controller timed out after the complete post-trial
+NETSTATS reply and prompt were captured. Its missing continuation prefix can
+miss a prompt split across reads; this defect was reproduced offline. The
+private v4 controller carries at most eight prior bytes into the next prompt
+read without duplicating them. All ten host tests passed. Commands, pacing,
+deadlines, target behavior and qualification checks are unchanged. No failed
+attempt was converted into a qualified result.
+
+The physical proof names the exact image/source above. The subsequent QEMU
+reference and manual replacement does not change the tested Pi composition
+tree or runtime sources and does not retroactively change that image's source
+identity. The private `analysis/REGRESSION_VALIDATION_COMPLETE.json` binds all
+three verdicts, the unqualified attempt and exclusive-control handoff.
+This is focused same-boot RAM regression evidence. Independent-boot, SD,
+performance, pressure, completed-week and overall-release acceptance remain
+unproven. The new observation baseline requires completed runtime restoration.
 
 Material AI assistance was used for source comparison, scoped implementation,
 build orchestration and evidence analysis. This record claims no independent

@@ -138,7 +138,9 @@ typedef struct seL4_SchedContext_YieldTo seL4_SchedContext_YieldTo_t;
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range.
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
@@ -196,7 +198,9 @@ seL4_ARM_VSpace_Clean_Data(seL4_ARM_VSpace _service, seL4_Word start, seL4_Word 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range.
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
@@ -254,7 +258,9 @@ seL4_ARM_VSpace_Invalidate_Data(seL4_ARM_VSpace _service, seL4_Word start, seL4_
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range.
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
@@ -312,7 +318,9 @@ seL4_ARM_VSpace_CleanInvalidate_Data(seL4_ARM_VSpace _service, seL4_Word start, 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range.
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
@@ -613,6 +621,7 @@ seL4_ARM_IOPageTable_Map(seL4_ARM_IOPageTable _service, seL4_ARM_IOSpace iospace
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_RevokeFirst A copy of the  @xmlonly <texttt text="_service"/> @endxmlonly  capability exists. 
  */
 LIBSEL4_INLINE seL4_Error
 seL4_ARM_IOPageTable_Unmap(seL4_ARM_IOPageTable _service)
@@ -855,7 +864,8 @@ seL4_ARM_Page_MapIO(seL4_ARM_Page _service, seL4_ARM_IOSpace iospace, seL4_CapRi
  * @retval seL4_FailedLookup The VSpace of  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not mapped in a VSpace.
- * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
@@ -917,7 +927,8 @@ seL4_ARM_Page_Clean_Data(seL4_ARM_Page _service, seL4_Word start_offset, seL4_Wo
  * @retval seL4_FailedLookup The VSpace of  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not mapped in a VSpace.
- * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
@@ -977,7 +988,8 @@ seL4_ARM_Page_Invalidate_Data(seL4_ARM_Page _service, seL4_Word start_offset, se
  * @retval seL4_FailedLookup The VSpace of  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not mapped in a VSpace.
- * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
@@ -1039,7 +1051,8 @@ seL4_ARM_Page_CleanInvalidate_Data(seL4_ARM_Page _service, seL4_Word start_offse
  * @retval seL4_FailedLookup The VSpace of  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not mapped in a VSpace.
- * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
+ * Or, if hypervisor support is configured, the requested range is not entirely
+ * within the kernel physical memory window. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
@@ -3938,7 +3951,7 @@ seL4_TCB_ConfigureSingleStepping(seL4_TCB _service, seL4_Uint16 bp_num, seL4_Wor
  * @brief @xmlonly Set the TLS base of the target TCB. @endxmlonly
  * 
  * @xmlonly
- * An invocation for setting the Thread Local Storage (TLS) base address. This ensures that across all platforms, the TLSBase register is viewed as being completely mutable, just like all of the general purpose registers, even on platforms where modification is a privileged operation.
+ * An invocation for setting the Thread Local Storage (TLS) base address. This ensures that across all platforms, the TLSBase register is viewed as being completely mutable, just like all of the general purpose registers, even on platforms where modification is a privileged operation. The value is subject to the same architecture-specific sanitisation as <texttt text="seL4_TCB_WriteRegisters"/>. In particular, on x86_64 non-canonical addresses are replaced by 0.
  * @endxmlonly
  * 
  * @param[in] _service Capability to the TCB which is being operated on.
@@ -4860,7 +4873,7 @@ seL4_IRQHandler_Clear(seL4_IRQHandler _service)
  * @param[in] thread Capability to the TCB which is being operated on. 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
- * @retval seL4_InvalidArgument The  @xmlonly <texttt text="domain"/> @endxmlonly  is greater than  @xmlonly <texttt text="KernelNumDomains"/> @endxmlonly .
+ * @retval seL4_InvalidArgument The  @xmlonly <texttt text="domain"/> @endxmlonly  is not less than  @xmlonly <texttt text="KernelNumDomains"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="thread"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
  */

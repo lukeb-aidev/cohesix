@@ -17,70 +17,76 @@
 /* System Calls */
 #define SYSCALL_CALL (-1)
 #define SYSCALL_REPLY_RECV (-2)
-#define SYSCALL_SEND (-3)
-#define SYSCALL_NB_SEND (-4)
-#define SYSCALL_RECV (-5)
-#define SYSCALL_REPLY (-6)
-#define SYSCALL_YIELD (-7)
+#define SYSCALL_NB_SEND_RECV (-3)
+#define SYSCALL_NB_SEND_WAIT (-4)
+#define SYSCALL_SEND (-5)
+#define SYSCALL_NB_SEND (-6)
+#define SYSCALL_RECV (-7)
 #define SYSCALL_NB_RECV (-8)
+#define SYSCALL_WAIT (-9)
+#define SYSCALL_NB_WAIT (-10)
+#define SYSCALL_YIELD (-11)
 
 #endif /* __ASSEMBLER__ */
 
 #define SYSCALL_MAX (-1)
-#define SYSCALL_MIN (-8)
+#define SYSCALL_MIN (-11)
 
 #ifndef __ASSEMBLER__
 
 enum syscall {
     SysCall = -1,
     SysReplyRecv = -2,
-    SysSend = -3,
-    SysNBSend = -4,
-    SysRecv = -5,
-    SysReply = -6,
-    SysYield = -7,
+    SysNBSendRecv = -3,
+    SysNBSendWait = -4,
+    SysSend = -5,
+    SysNBSend = -6,
+    SysRecv = -7,
     SysNBRecv = -8,
+    SysWait = -9,
+    SysNBWait = -10,
+    SysYield = -11,
 #if defined(CONFIG_PRINTING)
-    SysDebugPutChar = -9,
-    SysDebugDumpScheduler = -10,
+    SysDebugPutChar = -12,
+    SysDebugDumpScheduler = -13,
 #endif /* defined(CONFIG_PRINTING) */
 #if defined(CONFIG_DEBUG_BUILD)
-    SysDebugHalt = -11,
-    SysDebugCapIdentify = -12,
-    SysDebugSnapshot = -13,
-    SysDebugNameThread = -14,
+    SysDebugHalt = -14,
+    SysDebugCapIdentify = -15,
+    SysDebugSnapshot = -16,
+    SysDebugNameThread = -17,
 #endif /* defined(CONFIG_DEBUG_BUILD) */
 #if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT))
-    SysDebugSendIPI = -15,
-    SysDebugGetThreadAffinity = -16,
+    SysDebugSendIPI = -18,
+    SysDebugGetThreadAffinity = -19,
 #endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT)) */
 #if defined(CONFIG_DANGEROUS_CODE_INJECTION)
-    SysDebugRun = -17,
+    SysDebugRun = -20,
 #endif /* defined(CONFIG_DANGEROUS_CODE_INJECTION) */
 #if defined(CONFIG_ENABLE_BENCHMARKS)
-    SysBenchmarkFlushCaches = -18,
-    SysBenchmarkResetLog = -19,
-    SysBenchmarkFinalizeLog = -20,
-    SysBenchmarkSetLogBuffer = -21,
-    SysBenchmarkNullSyscall = -22,
+    SysBenchmarkFlushCaches = -21,
+    SysBenchmarkResetLog = -22,
+    SysBenchmarkFinalizeLog = -23,
+    SysBenchmarkSetLogBuffer = -24,
+    SysBenchmarkNullSyscall = -25,
 #endif /* defined(CONFIG_ENABLE_BENCHMARKS) */
 #if defined(CONFIG_BENCHMARK_TRACK_UTILISATION)
-    SysBenchmarkGetThreadUtilisation = -23,
-    SysBenchmarkResetThreadUtilisation = -24,
+    SysBenchmarkGetThreadUtilisation = -26,
+    SysBenchmarkResetThreadUtilisation = -27,
 #endif /* defined(CONFIG_BENCHMARK_TRACK_UTILISATION) */
 #if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION))
-    SysBenchmarkDumpAllThreadsUtilisation = -25,
-    SysBenchmarkResetAllThreadsUtilisation = -26,
+    SysBenchmarkDumpAllThreadsUtilisation = -28,
+    SysBenchmarkResetAllThreadsUtilisation = -29,
 #endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION)) */
 #if defined(CONFIG_KERNEL_X86_DANGEROUS_MSR)
-    SysX86DangerousWRMSR = -27,
-    SysX86DangerousRDMSR = -28,
+    SysX86DangerousWRMSR = -30,
+    SysX86DangerousRDMSR = -31,
 #endif /* defined(CONFIG_KERNEL_X86_DANGEROUS_MSR) */
 #if defined(CONFIG_VTX)
-    SysVMEnter = -29,
+    SysVMEnter = -32,
 #endif /* defined(CONFIG_VTX) */
 #if defined(CONFIG_SET_TLS_BASE_SELF)
-    SysSetTLSBase = -30,
+    SysSetTLSBase = -33,
 #endif /* defined(CONFIG_SET_TLS_BASE_SELF) */
 };
 typedef word_t syscall_t;
@@ -90,12 +96,15 @@ typedef word_t syscall_t;
 static char *syscall_names[] UNUSED = {
          [1] = "Call",
          [2] = "ReplyRecv",
-         [3] = "Send",
-         [4] = "NBSend",
-         [5] = "Recv",
-         [6] = "Reply",
-         [7] = "Yield",
+         [3] = "NBSendRecv",
+         [4] = "NBSendWait",
+         [5] = "Send",
+         [6] = "NBSend",
+         [7] = "Recv",
          [8] = "NBRecv",
+         [9] = "Wait",
+         [10] = "NBWait",
+         [11] = "Yield",
 };
 #endif /* CONFIG_DEBUG_BUILD */
 #endif /* !__ASSEMBLER__ */

@@ -2,74 +2,74 @@
   "artifacts": {
     "elfloader": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader",
-      "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
-      "size": 3302872
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader",
+      "sha256": "d55fdfbad4440899db6b775e954f06301f6b854ee3d05875241003e531188864",
+      "size": 9717816
     },
     "elfloader_archive": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/archive.archive.o.cpio",
-      "sha256": "29aea631c8c97b718d93b580a80c9f39fe632122464582dd9234bff49d4e4a5b",
-      "size": 3192320
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/elfloader/archive.archive.o.cpio",
+      "sha256": "7bb9b8329213d8f05f1846dedeefac0451899e7d35b8dfbd43e3ccaa90f89971",
+      "size": 9591296
     },
     "kernel": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
-      "sha256": "32a227adc375cc3b6a8ff5411dd7b7089ee66260beac0f4ec69739ae53faf8f9",
-      "size": 157560
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
+      "sha256": "b623cf413bc94672bdd5e6a17ead89db96c100ca1c0dbabd8b7b2c075a555dbe",
+      "size": 173328
     },
     "kernel_dtb": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.dtb",
-      "sha256": "2a747db460777f58f6a93a6a875471915d2e27558c193467a574e87c6257b8b3",
-      "size": 8241
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.dtb",
+      "sha256": "26010d043386504e18ff1384bcb77e15526460cfefe44737b0f6dd37f3006d3f",
+      "size": 8772
     },
     "qemu_dtb": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb",
-      "sha256": "cb86ba154ccfdacc93e4a31c535ced36928834fe30e721749280ae9c2d8ff810",
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb",
+      "sha256": "d8361876bff8b4d1c97ced76a2aea1193cc00d7ba61fda6da09f5f0c3ee44833",
       "size": 1048576
     },
     "rootserver": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver",
-      "sha256": "382a129e242f7c39a908b9940f7467be5d0c16446c9767e2331a615dcea38e86",
-      "size": 3438648
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver",
+      "sha256": "2ed2f42e4a64457acfa25768e4d21180eda90350ed90b42919d10d8eb9644e0b",
+      "size": 9838120
     },
     "system_image": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt",
-      "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
-      "size": 3302872
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt",
+      "sha256": "d55fdfbad4440899db6b775e954f06301f6b854ee3d05875241003e531188864",
+      "size": 9717816
     }
   },
-  "build_dir": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production",
+  "build_dir": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production",
   "build_mode": "wrapper",
   "causal_freshness": {
     "build_start": {
       "outputs": {
         "elfloader": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader"
+            "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader"
           ],
           "existing": []
         },
         "kernel": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel.elf"
+            "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
+            "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel.elf"
           ],
           "existing": []
         },
         "rootserver": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver"
+            "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver"
           ],
           "existing": []
         },
         "system_image": {
           "candidates": [
-            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt"
+            "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt"
           ],
           "existing": []
         }
@@ -77,33 +77,33 @@
       "schema": "cohesix-sel4-build-start/v1",
       "stamp": {
         "exists": false,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/cohesix-profile-build-inputs.json"
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/cohesix-profile-build-inputs.json"
       }
     },
     "post_build_outputs": {
       "elfloader": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader",
-        "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
-        "size": 3302872
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader",
+        "sha256": "d55fdfbad4440899db6b775e954f06301f6b854ee3d05875241003e531188864",
+        "size": 9717816
       },
       "kernel": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
-        "sha256": "32a227adc375cc3b6a8ff5411dd7b7089ee66260beac0f4ec69739ae53faf8f9",
-        "size": 157560
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
+        "sha256": "b623cf413bc94672bdd5e6a17ead89db96c100ca1c0dbabd8b7b2c075a555dbe",
+        "size": 173328
       },
       "rootserver": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver",
-        "sha256": "382a129e242f7c39a908b9940f7467be5d0c16446c9767e2331a615dcea38e86",
-        "size": 3438648
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver",
+        "sha256": "2ed2f42e4a64457acfa25768e4d21180eda90350ed90b42919d10d8eb9644e0b",
+        "size": 9838120
       },
       "system_image": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt",
-        "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
-        "size": 3302872
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt",
+        "sha256": "d55fdfbad4440899db6b775e954f06301f6b854ee3d05875241003e531188864",
+        "size": 9717816
       }
     },
     "schema": "cohesix-sel4-causal-freshness/v1"
@@ -112,28 +112,29 @@
     "build": [
       "cmake",
       "--build",
-      "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production",
+      "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production",
       "--target",
       "rootserver_image",
       "--parallel",
-      "8"
+      "2"
     ],
     "configure": [
       "cmake",
       "-G",
       "Ninja",
       "-S",
-      "/Users/lukasbower/GitHub/cohesix/tools/sel4-profile-project",
+      "/Users/lukasbower/GitHub/cohesix-sel4-17/tools/sel4-profile-project",
       "-B",
-      "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production",
-      "-DCMAKE_TOOLCHAIN_FILE=/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/gcc.cmake",
-      "-DCOHESIX_SEL4_PROJECT_ROOT=/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project",
+      "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production",
+      "-DCMAKE_TOOLCHAIN_FILE=/Users/lukasbower/seL4_17_qemu/kernel/gcc.cmake",
+      "-DCOHESIX_SEL4_PROJECT_ROOT=/Users/lukasbower/seL4_17_qemu",
       "-DSEL4_CACHE_DIR=",
-      "-DPYTHON3=/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv/bin/python",
+      "-DPYTHON3=/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/sel4-profile-venv/bin/python",
       "-DAARCH64=ON",
+      "-DARM_CPU=cortex-a57",
       "-DARM_HYP=OFF",
       "-DCMAKE_BUILD_TYPE=Release",
-      "-DCOHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES=2097152",
+      "-DCOHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES=8388608",
       "-DCROSS_COMPILER_PREFIX=aarch64-none-elf-",
       "-DDOMAINS=OFF",
       "-DElfloaderImage=elf",
@@ -143,7 +144,7 @@
       "-DKernelAllowSMCCalls=OFF",
       "-DKernelArmExportPCNTUser=OFF",
       "-DKernelArmExportPTMRUser=OFF",
-      "-DKernelArmExportVCNTUser=OFF",
+      "-DKernelArmExportVCNTUser=ON",
       "-DKernelArmExportVTMRUser=OFF",
       "-DKernelArmHypervisorSupport=OFF",
       "-DKernelArmSMMU=OFF",
@@ -152,14 +153,15 @@
       "-DKernelDangerousCodeInjection=OFF",
       "-DKernelDebugBuild=OFF",
       "-DKernelFastpath=ON",
-      "-DKernelIsMCS=OFF",
+      "-DKernelIsMCS=ON",
       "-DKernelMaxNumNodes=4",
       "-DKernelNumDomains=1",
       "-DKernelPlatform=qemu-arm-virt",
       "-DKernelPrinting=OFF",
+      "-DKernelRootCNodeSizeBits=14",
       "-DKernelSel4Arch=aarch64",
       "-DKernelVerificationBuild=OFF",
-      "-DMCS=OFF",
+      "-DMCS=ON",
       "-DNUM_NODES=4",
       "-DPLATFORM=qemu-arm-virt",
       "-DRELEASE=ON",
@@ -168,59 +170,68 @@
       "-DSel4testAllowSettingsOverride=ON",
       "-DVERIFICATION=OFF",
       "-DQEMU_GIC_VERSION=3",
-      "-DQEMU_MACHINE=virt,secure=off,virtualization=on,gic-version=3,dumpdtb=/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb"
+      "-DQEMU_MACHINE=virt,secure=off,virtualization=off,gic-version=3,dumpdtb=/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb",
+      "-DCOHESIX_TIMER_CLOCK_HZ=24000000",
+      "-DCMAKE_PROJECT_seL4_INCLUDE=/Users/lukasbower/GitHub/cohesix-sel4-17/tools/sel4-profile-project/sel4-kernel-profile-hook.cmake"
     ],
-    "jobs": 8
+    "jobs": 2
   },
   "configuration": {
     "build_graph": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/build.ninja",
-      "sha256": "12b4082c36788ff087358822ebebaae2eaffacc50e1922e193a072d7e3f50a92",
-      "size": 1971378
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/build.ninja",
+      "sha256": "6795b19fd887890ac27014c67291109614c0cb1fb5ac788ce920c1379915546a",
+      "size": 1721660
     },
     "cmake_cache": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/CMakeCache.txt",
-      "sha256": "c611520a5e2aa539f32d151b5706c0c12428f707c8453e74ff11bf82ef55f367",
-      "size": 91801
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/CMakeCache.txt",
+      "sha256": "046dc1f5cc0f72017fff40b6e0036a0c0b0b2316e8a3a4dd4ed374b969aa061a",
+      "size": 89096
     },
     "dts_0": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.dts",
-      "sha256": "ab548459fa5f83ffa601f956e8655ee5df91a60c55a1415f7f4700f9c4efaedc",
-      "size": 10345
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.dts",
+      "sha256": "c0bebc7dbd0131153e5f6fd91329f20f84a4ec96c033d550ce9b094102f91419",
+      "size": 11133
     },
     "dts_1": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dts",
-      "sha256": "56703b41be6590ca56e70ea0e9fb38fcc9f4109d6822e5a5b7f04dc4b501c116",
-      "size": 10015
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dts",
+      "sha256": "6e6c2bc709424bed7a47dc8d5532bb2e48ddcf163c4d452dfa6aeaeec54086d9",
+      "size": 10803
     },
     "elfloader_platform_info": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/gen_headers/platform_info.h",
-      "sha256": "f538c107d9ea1a900c377d0f3d5ff6e90d94ec6bc95f1a4c82e2dd7f12cb3113",
-      "size": 461
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/elfloader/gen_headers/platform_info.h",
+      "sha256": "48817ed3ce2debe8142eb0c58e30adf69af77e85796ac1ef551e1915d8eafc18",
+      "size": 397
     },
     "generated_config": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.json",
-      "sha256": "d82f91116bb9a41e3c3682b8593421273a68fb8b952466603947273a8cd00df0",
-      "size": 5085
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.json",
+      "sha256": "d45a40a08a088de084d35e5318be00c7d03a0e46b1f9ecb8a4067181d3bb0784",
+      "size": 4788
     },
     "launcher_gic_header": {
       "exists": true,
-      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.h",
-      "sha256": "1584d747061923f57768ecb7bfdc985b3df01ce73cf795fc52bdc5d2f5d21a8e",
-      "size": 6442
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.h",
+      "sha256": "081d54aa3f79e031435488f4ff27d961b7f566f9f72be3920fd900c2f6fe33dc",
+      "size": 6079
+    },
+    "timer_header": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/platform_gen.h",
+      "sha256": "c02e6e610fc3dd6611c63a897eb1717cb68ebf20d1e035493d1b0373ecbc1aa3",
+      "size": 848
     }
   },
-  "contract_values_sha256": "62b2f3f34fc1531c556d85f0bd3ae6459f2b02a3f9ac371f770d174e3d0afa92",
+  "contract_values_sha256": "44b53bdde5cb2e80fd4ddd16b0a1d0827da184c78b69912bb740590cba0d7753",
   "environment": {
     "PATH_prepend": [
-      "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
-      "/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv/bin"
+      "/opt/homebrew/Cellar/cpio/2.15/bin",
+      "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
+      "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/sel4-profile-venv/bin"
     ],
     "SEL4_CACHE_DIR": ""
   },
@@ -263,64 +274,64 @@
         "version": "15.2.1"
       },
       "path_prefixes": [
-        "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin"
+        "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin"
       ],
       "programs": {
         "aarch64-none-elf-ar": {
           "expected_sha256": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar",
           "sha256": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb"
         },
         "aarch64-none-elf-as": {
           "expected_sha256": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-as",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-as",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-as",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-as",
           "sha256": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48"
         },
         "aarch64-none-elf-cpp": {
           "expected_sha256": "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-cpp",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-cpp",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-cpp",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-cpp",
           "sha256": "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a"
         },
         "aarch64-none-elf-g++": {
           "expected_sha256": "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-g++",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-g++",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-g++",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-g++",
           "sha256": "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55"
         },
         "aarch64-none-elf-gcc": {
           "expected_sha256": "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc",
           "sha256": "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066"
         },
         "aarch64-none-elf-ld": {
           "expected_sha256": "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld",
           "sha256": "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10"
         },
         "aarch64-none-elf-objcopy": {
           "expected_sha256": "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy",
           "sha256": "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf"
         },
         "aarch64-none-elf-ranlib": {
           "expected_sha256": "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99",
-          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib",
-          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib",
           "sha256": "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99"
         }
       },
       "provenance": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/cohesix-compiler-provenance.json",
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/cohesix-compiler-provenance.json",
         "record": {
           "compiler": {
-            "bin_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
+            "bin_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
             "program_sha256": {
               "ar": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb",
               "as": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48",
@@ -334,11 +345,11 @@
             "target": "aarch64-none-elf",
             "version": "15.2.1"
           },
-          "profile_contract_sha256": "ddd5544d2bda57d5c208b4aaea565bb242973677bae4f703a349af857c20faa7",
+          "profile_contract_sha256": "f73cb969989a0fbb945a554176b9285496da35ec89047eb92861fc9c2f20c5bc",
           "schema": "cohesix-compiler-provenance/v1",
-          "setup_script_sha256": "81407220000c85a77fbc750e0eec2ded4917cee5b416739db5af995984bf9d08",
+          "setup_script_sha256": "c350659f99473417578b1ed459cfa23f89ad757b614e6dc929a03789ba133ac9",
           "source": {
-            "archive_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
+            "archive_path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
             "archive_sha256": "37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd",
             "archive_size": 80863820,
             "provider": "arm-gnu-toolchain-release-tarball",
@@ -346,16 +357,70 @@
             "url": "https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
           }
         },
-        "sha256": "586d007bcc6c36683b29f1313710efd5187345dd615e9a22a08bcd48243423b3",
-        "size": 1656
+        "sha256": "bc1be97f872fa1f1cc4865e9919d97698606270348130e77b97ac6e6bef4f169",
+        "size": 1672
       },
       "schema": "cohesix-compiler-supply-chain/v1",
       "source_archive": {
         "exists": true,
-        "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
         "sha256": "37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd",
         "size": 80863820
       }
+    },
+    "cpio_tool": {
+      "declared": {
+        "formula": "cpio",
+        "path": "/opt/homebrew/Cellar/cpio/2.15/bin/cpio",
+        "provider": "homebrew",
+        "required_options": [
+          "--append",
+          "--owner",
+          "--quiet",
+          "--format",
+          "--file",
+          "--reproducible"
+        ],
+        "sha256": "b09b46a77c735ab2d0687e87c7fadd2b4060a8c9492f1d896ee507b1d5262304",
+        "version": "2.15"
+      },
+      "executable": {
+        "path": "/opt/homebrew/Cellar/cpio/2.15/bin/cpio",
+        "resolved_path": "/opt/homebrew/Cellar/cpio/2.15/bin/cpio",
+        "sha256": "b09b46a77c735ab2d0687e87c7fadd2b4060a8c9492f1d896ee507b1d5262304"
+      },
+      "formula": "cpio",
+      "provider": "homebrew",
+      "required_options": [
+        "--append",
+        "--owner",
+        "--quiet",
+        "--format",
+        "--file",
+        "--reproducible"
+      ],
+      "schema": "cohesix-gnu-cpio-host-input/v1",
+      "version": "cpio (GNU cpio) 2.15"
+    },
+    "elfloader_psci_hvc": {
+      "conduit": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/tools/sel4-profile-project/elfloader-psci-hvc.S",
+        "sha256": "87934be86917093d05027199303284cc8c1430875e6cbc894f059a2518385ba5",
+        "size": 297
+      },
+      "dispatch": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/tools/sel4-profile-project/elfloader-psci-hvc.c",
+        "sha256": "1f0c36c65fa13808e2c852726a501d2e04db4cf8c539363e81b9b70f1d73e0fb",
+        "size": 2464
+      }
+    },
+    "kernel_profile_hook": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/tools/sel4-profile-project/sel4-kernel-profile-hook.cmake",
+      "sha256": "50be28bcdcd029266b39e07a290bf9714e9dd557b6e2049928c137dcfd24e763",
+      "size": 1798
     },
     "mkimage_tool": null,
     "objcopy_stdout_wrapper": null,
@@ -429,7 +494,7 @@
             },
             "autopep8": {
               "file_count": 11,
-              "sha256": "9aa330e4375c4c9f257c03a2eb4edf68c1c4d71cd0d7b701d635e497ed033241",
+              "sha256": "8abb5d8ec27cd70bb2d0acacebe3568b049a68d31fe04949aa926d57760be7ac",
               "version": "2.3.2"
             },
             "beautifulsoup4": {
@@ -449,17 +514,17 @@
             },
             "cmakelang": {
               "file_count": 71,
-              "sha256": "d5e3de12e6cb4bc1eb5e8381fb6431da22bf4be09b8471735c014f10c963e9da",
+              "sha256": "cb1947b5ce00cfb5ae3238c9132ea5df189c0dee439c496f1107a13e19593cf2",
               "version": "0.6.13"
             },
             "future": {
               "file_count": 221,
-              "sha256": "dba197f8595bc379cac2e17b0522a722add5c48b68bf59d0a0d849d1b7b8589d",
+              "sha256": "8f46520cadf6e5b8df7fb45142637fc3853e02e005345997dea1199b12452ac7",
               "version": "1.0.0"
             },
             "guardonce": {
               "file_count": 18,
-              "sha256": "4f170bb3a3f30668fc0ee6ffcecb5d4bd4c49b91bff2502a674f9f516a17745c",
+              "sha256": "7458055bb99d15002ae2987b496737e22446b49b40be925b2fee76b8cb376fa3",
               "version": "2.4.0"
             },
             "iniconfig": {
@@ -474,7 +539,7 @@
             },
             "jsonschema": {
               "file_count": 46,
-              "sha256": "68aaf9c42972997681f65a8614b7ceb81537cb59c50ceba7e80178a6b2ed8f0e",
+              "sha256": "a97d924619891f347a97ec086d88aa9af0cb650d2b71b2f71dcf85d60c8798fe",
               "version": "4.26.0"
             },
             "jsonschema-specifications": {
@@ -509,7 +574,7 @@
             },
             "pip": {
               "file_count": 470,
-              "sha256": "45e113ae324b9935a13b32f378efb311d73c44200c1137339bbbbdfb1dbd4f7e",
+              "sha256": "e62821099a30b219f3c0dbed555c9699e90d564a88db8389d819e8f5970d6319",
               "version": "26.1.2"
             },
             "pluggy": {
@@ -539,27 +604,27 @@
             },
             "pycodestyle": {
               "file_count": 10,
-              "sha256": "b33234f1ddadf96bed7ab28ac58918425fd8c9f24c9e92d8afdde38ac78bd43c",
+              "sha256": "6b42c531e93302163b6f7b6199c756f9c1fe0dd66ffc5314ba256a051532f4c7",
               "version": "2.14.0"
             },
             "pyelftools": {
               "file_count": 61,
-              "sha256": "fabd565001c0aa70da26ba27b1421ae9151b0f8cc1c0854891bc097925a513ed",
+              "sha256": "b5101b6e2b22674e7752918bd5f966181a30202fbbc4465628605209ced1064b",
               "version": "0.33"
             },
             "pyfdt": {
               "file_count": 11,
-              "sha256": "f554c3f70d3d6ec0370aabf3d66be919e9299650a87c93e18157d6dbee421558",
+              "sha256": "5efc45f5ce68446f17b1cda3e218ac7f4201a420d3fff88923839b31881b33b6",
               "version": "0.3"
             },
             "pygments": {
               "file_count": 348,
-              "sha256": "00e9cf1e51e8b54a49132f076caf3894089f22d236f3e5b5317a9402965ff9a3",
+              "sha256": "963a1a1a36f35abc70d2b06ff076671821821bfdd971a57b62b17abe844b70cf",
               "version": "2.20.0"
             },
             "pytest": {
               "file_count": 93,
-              "sha256": "8834b31c6e6edaa015a80c9126dc5655763ccaa531431d63f9e980cabf70e072",
+              "sha256": "7c47a200b65bd65fdc41e0063df19b6b5e4068f5b34cbf4c6f63b253de9a790d",
               "version": "9.1.1"
             },
             "pyyaml": {
@@ -609,14 +674,14 @@
             },
             "wheel": {
               "file_count": 23,
-              "sha256": "c0ac08e40f63dd2b3a8d54c49fecc34b403e545bea1f7adc29c6573d6bb9766f",
+              "sha256": "f79e698c600abfe0531d382b4b0dd1fba3614f12a62f3bc6be4037191930e993",
               "version": "0.47.0"
             }
           },
-          "sha256": "7961b223d47ec2008b4db3368471c85e212860e631ea52ea90e7786aecefd147"
+          "sha256": "7209e5db870647015e29167ecf341dc4aa26921b104df45debf2439393805c0f"
         },
         "major_minor_version": "3.13",
-        "prefix": "/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv",
+        "prefix": "/Users/lukasbower/seL4_17/.venv_aarch64",
         "schema": "cohesix-python-environment/v1",
         "version": "3.13.7"
       },
@@ -624,7 +689,7 @@
         "bootstrap_lock": {
           "exists": true,
           "expected_sha256": "a582a400e97b0b830952482a8923c4097024c9960fe2197315c341ca00a9548a",
-          "path": "/Users/lukasbower/GitHub/cohesix/configs/sel4/python-bootstrap.lock",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/configs/sel4/python-bootstrap.lock",
           "requirements": {
             "pip": {
               "hashes": [
@@ -651,7 +716,7 @@
         "requirements_lock": {
           "exists": true,
           "expected_sha256": "5ef6b3b1e5edc912a0041417b7386ad17a57fab6ecd3b64c797ecbb3e37ea929",
-          "path": "/Users/lukasbower/GitHub/cohesix/configs/sel4/python-build-requirements.lock",
+          "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/configs/sel4/python-build-requirements.lock",
           "requirements": {
             "attrs": {
               "hashes": [
@@ -868,13 +933,13 @@
           "size": 3710
         }
       },
-      "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv/bin/python",
+      "path": "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/sel4-profile-venv/bin/python",
       "resolved_path": "/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/bin/python3.13",
       "sha256": "56587d29d1588abbd51f0ffa357e670d79893f6781f1c7b9269be275f561a2ba"
     },
-    "schema": "cohesix-sel4-wrapper-host-inputs/v3",
+    "schema": "cohesix-sel4-wrapper-host-inputs/v6",
     "target": "rootserver_image",
-    "wrapper_sha256": "b0ddda9c7bbbe944323d31cce779a3cbebddac7cf3d6eed604d22215ae6d17a3"
+    "wrapper_sha256": "74a079aa128d2b51cb3eddbf87b742fcbd9d75e2ac9f8c18d9add2ec19f228cf"
   },
   "memoization_cache": "disabled",
   "profile": "qemu_smp_production",
@@ -884,74 +949,74 @@
     "policy": "clean",
     "repositories": {
       ".repo/manifests": {
-        "actual_commit": "b81fd440977a8ad89ed8478a9a5a027f062551f6",
+        "actual_commit": "655b1f2a67de058571b5f653688aa55440745192",
         "dirty": false,
-        "expected_commit": "b81fd440977a8ad89ed8478a9a5a027f062551f6",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/.repo/manifests"
+        "expected_commit": "655b1f2a67de058571b5f653688aa55440745192",
+        "path": "/Users/lukasbower/seL4_17_qemu/.repo/manifests"
       },
       "kernel": {
-        "actual_commit": "6e7c3b733d296cfd88d5fbf635c96e447a882374",
+        "actual_commit": "62e345c240a15671484530b4e6e069ce266c28d7",
         "dirty": false,
-        "expected_commit": "6e7c3b733d296cfd88d5fbf635c96e447a882374",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel"
+        "expected_commit": "62e345c240a15671484530b4e6e069ce266c28d7",
+        "path": "/Users/lukasbower/seL4_17_qemu/kernel"
       },
       "projects/musllibc": {
         "actual_commit": "b0005f86fecbd6d0257b15363a5b013446914265",
         "dirty": false,
         "expected_commit": "b0005f86fecbd6d0257b15363a5b013446914265",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/musllibc"
+        "path": "/Users/lukasbower/seL4_17_qemu/projects/musllibc"
       },
       "projects/seL4_libs": {
-        "actual_commit": "d8abd95e7114c852f6636e3084eb1f66091a75ee",
+        "actual_commit": "262a34dcb2f3285be01df9e5404d911132d567a6",
         "dirty": false,
-        "expected_commit": "d8abd95e7114c852f6636e3084eb1f66091a75ee",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/seL4_libs"
+        "expected_commit": "262a34dcb2f3285be01df9e5404d911132d567a6",
+        "path": "/Users/lukasbower/seL4_17_qemu/projects/seL4_libs"
       },
       "projects/sel4_projects_libs": {
-        "actual_commit": "5b3c81127b191232489df09a59b22edead1c9db7",
+        "actual_commit": "b9137c0d905ce966a02b1c9a0c6c0e4beb48223b",
         "dirty": false,
-        "expected_commit": "5b3c81127b191232489df09a59b22edead1c9db7",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4_projects_libs"
+        "expected_commit": "b9137c0d905ce966a02b1c9a0c6c0e4beb48223b",
+        "path": "/Users/lukasbower/seL4_17_qemu/projects/sel4_projects_libs"
       },
       "projects/sel4runtime": {
         "actual_commit": "86489cf6efab9f314964e79468c036e9035394c7",
         "dirty": false,
         "expected_commit": "86489cf6efab9f314964e79468c036e9035394c7",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4runtime"
+        "path": "/Users/lukasbower/seL4_17_qemu/projects/sel4runtime"
       },
       "projects/sel4test": {
-        "actual_commit": "60b7b47ee0a67f56e15951735a6aa9d270d47f55",
+        "actual_commit": "f27e4f4cdd020ef9b37f15ded76a3b38477761f0",
         "dirty": false,
-        "expected_commit": "60b7b47ee0a67f56e15951735a6aa9d270d47f55",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4test"
+        "expected_commit": "f27e4f4cdd020ef9b37f15ded76a3b38477761f0",
+        "path": "/Users/lukasbower/seL4_17_qemu/projects/sel4test"
       },
       "projects/util_libs": {
-        "actual_commit": "6e55b3c62687779692150e1de411ce61b9d2919a",
+        "actual_commit": "ef49a397b7044fc38b609a99a8c6265a97913b8e",
         "dirty": false,
-        "expected_commit": "6e55b3c62687779692150e1de411ce61b9d2919a",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/util_libs"
+        "expected_commit": "ef49a397b7044fc38b609a99a8c6265a97913b8e",
+        "path": "/Users/lukasbower/seL4_17_qemu/projects/util_libs"
       },
       "tools/nanopb": {
         "actual_commit": "cad3c18ef15a663e30e3e43e3a752b66378adec1",
         "dirty": false,
         "expected_commit": "cad3c18ef15a663e30e3e43e3a752b66378adec1",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/tools/nanopb"
+        "path": "/Users/lukasbower/seL4_17_qemu/tools/nanopb"
       },
       "tools/opensbi": {
         "actual_commit": "234ed8e427f4d92903123199f6590d144e0d9351",
         "dirty": false,
         "expected_commit": "234ed8e427f4d92903123199f6590d144e0d9351",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/tools/opensbi"
+        "path": "/Users/lukasbower/seL4_17_qemu/tools/opensbi"
       },
       "tools/seL4": {
-        "actual_commit": "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7",
+        "actual_commit": "6493e0c6fab360eb81a8115a49c9ca7bc280c48a",
         "dirty": false,
-        "expected_commit": "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7",
-        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/tools/seL4"
+        "expected_commit": "6493e0c6fab360eb81a8115a49c9ca7bc280c48a",
+        "path": "/Users/lukasbower/seL4_17_qemu/tools/seL4"
       }
     },
-    "root": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project"
+    "root": "/Users/lukasbower/seL4_17_qemu"
   },
   "status": "complete",
-  "validator_sha256": "3b95da8aaf06aaecfd693df0aa54477eaaacc78e1604c78d282e58f44e40d76f"
+  "validator_sha256": "5550c29159338df4aa566e5dc1bdb0b2ab139507a2166179404edbef95b4ae0b"
 }

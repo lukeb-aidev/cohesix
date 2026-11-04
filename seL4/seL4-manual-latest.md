@@ -1,3 +1,8 @@
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Retain the layout-preserving text extraction of the official seL4 17.0.0 manual; upstream authorship and license follow below. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!-- Source: https://sel4.systems/Info/Docs/seL4-manual-17.0.0.pdf; extraction: pdftotext -layout. -->
+
                                           The seL4® Foundation
 
 
@@ -8,13 +13,13 @@
 
                                     seL4
                        Reference Manual
-                          Version 16.0.0
+                          Version 17.0.0
 
 
 
 seL4 Foundation
 https://sel4.systems
-22 July 2026
+30 October 2026
 © the seL4 authors and contributors.
 ALL RIGHTS RESERVED.
 
@@ -109,7 +114,7 @@ List of Figures                                                                 
       6.2.5 Debug Exception: Single-stepping . . . . . . . . . . . . . . . . . . . . . . .           32
       6.2.6 Timeout Fault (MCS only) . . . . . . . . . . . . . . . . . . . . . . . . . . . .         33
       6.2.7 VM Fault . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .       33
-      6.2.8 Arm Virtualisation Faults . . . . . . . . . . . . . . . . . . . . . . . . . . . .        34
+      6.2.8 Arm Virtualisation Faults . . . . . . . . . . . . . . . . . . . . . . . . . . . .        33
   6.3 Domains . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      34
   6.4 Virtualisation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   34
       6.4.1 Arm . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      35
@@ -401,38 +406,38 @@ List of Figures                                                                 
        10.8.1 seL4_ARM_PageDirectory . . . . . . . . . . . . . . . . . . . . . . . . . . . 160
                10.8.1.1 Clean Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 160
                10.8.1.2 Clean and Invalidate Data . . . . . . . . . . . . . . . . . . . . . . 161
-               10.8.1.3 Invalidate Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . 161
-               10.8.1.4 Unify Instruction . . . . . . . . . . . . . . . . . . . . . . . . . . . 162
+               10.8.1.3 Invalidate Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . 162
+               10.8.1.4 Unify Instruction . . . . . . . . . . . . . . . . . . . . . . . . . . . 163
 8                                                                                         CONTENTS
 
 
-    10.9 Aarch64-Speciﬁc Object Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . 163
-         10.9.1 seL4_ARM_SMC . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 163
-                 10.9.1.1 SMC Call . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 163
-         10.9.2 seL4_ARM_VSpace . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 163
-                 10.9.2.1 Clean Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 163
-                 10.9.2.2 Clean and Invalidate Data . . . . . . . . . . . . . . . . . . . . . . 164
-                 10.9.2.3 Invalidate Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . 164
-                 10.9.2.4 Unify Instruction . . . . . . . . . . . . . . . . . . . . . . . . . . . 165
-    10.10RISCV-Speciﬁc Object Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . . 166
-         10.10.1 General RISCV Object Methods . . . . . . . . . . . . . . . . . . . . . . . . 166
-         10.10.2seL4_IRQControl . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 166
-                 10.10.2.1 Get IRQ Handler with Trigger Type . . . . . . . . . . . . . . . . . 166
-         10.10.3seL4_RISCV_ASIDControl . . . . . . . . . . . . . . . . . . . . . . . . . . . . 167
-                 10.10.3.1 Make Pool . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 167
-         10.10.4seL4_RISCV_ASIDPool . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 168
-                 10.10.4.1 Assign . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 168
-         10.10.5seL4_RISCV_Page . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 168
-                 10.10.5.1 Get Address . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 168
-                 10.10.5.2 Map . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 169
-                 10.10.5.3 Unmap . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 170
-         10.10.6seL4_RISCV_PageTable . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 170
-                 10.10.6.1 Map . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 170
-                 10.10.6.2 Unmap . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 171
+    10.9 Aarch64-Speciﬁc Object Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . 164
+         10.9.1 seL4_ARM_SMC . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 164
+                 10.9.1.1 SMC Call . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 164
+         10.9.2 seL4_ARM_VSpace . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 165
+                 10.9.2.1 Clean Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 165
+                 10.9.2.2 Clean and Invalidate Data . . . . . . . . . . . . . . . . . . . . . . 166
+                 10.9.2.3 Invalidate Data . . . . . . . . . . . . . . . . . . . . . . . . . . . . 167
+                 10.9.2.4 Unify Instruction . . . . . . . . . . . . . . . . . . . . . . . . . . . 168
+    10.10RISCV-Speciﬁc Object Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . . 169
+         10.10.1 General RISCV Object Methods . . . . . . . . . . . . . . . . . . . . . . . . 169
+         10.10.2seL4_IRQControl . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 169
+                 10.10.2.1 Get IRQ Handler with Trigger Type . . . . . . . . . . . . . . . . . 169
+         10.10.3seL4_RISCV_ASIDControl . . . . . . . . . . . . . . . . . . . . . . . . . . . . 170
+                 10.10.3.1 Make Pool . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 170
+         10.10.4seL4_RISCV_ASIDPool . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 171
+                 10.10.4.1 Assign . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 171
+         10.10.5seL4_RISCV_Page . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 171
+                 10.10.5.1 Get Address . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 171
+                 10.10.5.2 Map . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 172
+                 10.10.5.3 Unmap . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 173
+         10.10.6seL4_RISCV_PageTable . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 173
+                 10.10.6.1 Map . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 173
+                 10.10.6.2 Unmap . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 174
 
-Glossary                                                                                           172
+Glossary                                                                                           175
 
-Bibliography                                                                                       175
+Bibliography                                                                                       177
 List of Tables
 
  2.1   Meaning of size_bits for object types of variable size . . . . . . . . . . . . . . .          8
@@ -1927,9 +1932,7 @@ on the following subset of the platforms that the kernel has been ported to:
     • PC99: IA-32 and x86_64
     • Sabrelite (i.MX6)
     • Jetson TegraK1
-    • HiSilicon Hikey
     • Raspberry Pi 3
-    • Odroid-X (Exynos4)
     • Xilinx zynq7000
 Information on the available hardware debugging resources is presented in the form of the fol-
 lowing constants:
@@ -1944,17 +1947,18 @@ seL4_NumHWBreakpoints : Deﬁnes the total number of hardware break registers av
       available hardware breakpoints/watchpoints of a certain type.
 seL4_NumExclusiveBreakpoints : Deﬁnes the number of hardware registers capable of gener-
      ating a fault only on instruction execution. Currently this will be set only on Arm platforms.
+     The API-ID of the ﬁrst exclusive breakpoint is given in seL4_FirstBreakpoint. If there are
+     no instruction-break exclusive registers, seL4_NumExclusiveBreakpoints will be set to 0
+     and seL4_FirstBreakpoint will be set to -1.
 32                                                      CHAPTER 6. THREADS AND EXECUTION
 
 
-      The API-ID of the ﬁrst exclusive breakpoint is given in seL4_FirstBreakpoint. If there are
-      no instruction-break exclusive registers, seL4_NumExclusiveBreakpoints will be set to 0
-      and seL4_FirstBreakpoint will be set to -1.
 seL4_NumExclusiveWatchpoints : Deﬁnes the number of hardware registers capable of gen-
      erating a fault only on data access. Currently this will be set only on Arm platforms. The
      API-ID of the ﬁrst exclusive watchpoint is given in seL4_FirstWatchpoint. If there are
      no data-break exclusive registers, seL4_NumExclusiveWatchpoints will be set to 0 and
      seL4_FirstWatchpoint will be set to -1.
+
 seL4_NumDualFunctionMonitors : Deﬁnes the number of hardware registers capable of gener-
      ating a fault on either type of access – i.e, the register supports both instruction and data
      breaks. Currently this will be set only on x86 platforms. The API-ID of the ﬁrst dual-function
@@ -1973,10 +1977,13 @@ seL4_NumDualFunctionMonitors : Deﬁnes the number of hardware registers capable
 
 
 
+
 6.2.5   Debug Exception: Single-stepping
+
 The kernel provides support for the use of hardware single-stepping of userspace threads when
 conﬁgured to do so (when CONFIG_HARDWARE_DEBUG_API is set). To this end it exposes the
 invocation, seL4_TCB_ConfigureSingleStepping.
+
 The caller is expected to select an API-ID that corresponds to an instruction breakpoint, to use
 when setting up the single-stepping functionality (i.e, API-ID from 0 to seL4_NumExclusive-
 Breakpoints - 1). However, not all hardware platforms require an actual hardware breakpoint
@@ -1985,21 +1992,23 @@ use of a hardware breakpoint register, it will use the breakpoint register given
 return true in bp_was_consumed. If the underlying platform does not need a hardware break-
 point to provide single-stepping, seL4 will return false in bp_was_consumed and leave bp_num
 unchanged.
+
 If bp_was_consumed is true, the caller should not attempt to re-conﬁgure bp_num for Breakpoint
 or Watchpoint usage until the caller has disabled single-stepping and released that register, via
 a subsequent call to seL4_TCB_ConfigureSingleStepping, or a fault-reply with n_instr being
 0. Setting num_instructions to 0 disables single stepping.
+
 On architectures that require an actual hardware registers to be conﬁgured for single-stepping
 functionality, seL4 will restrict the number of registers that can be conﬁgured as single-steppers,
 to one at any given time. The register that is currently conﬁgured (if any) for single-stepping will
 be the implicit bp_num argument in a single-step debug fault reply.
+
 The kernel’s single-stepping, also supports executing a certain number of instructions before
 delivering the single-step fault message. Num_instructions should be set to 1 when single-
-6.2. FAULTS                                                                                   33
-
-
 stepping, or any non-zero integer value to execute that many instructions before resuming single-
 stepping. This execution-count can also be set in the fault-reply to a single-step debug fault.
+6.2. FAULTS                                                                                   33
+
 
  Value sent                       Register set by reply             IPC buffer location
  Breakpoint instruction           num_instructions to exe-          IPCBuffer[0]
@@ -2007,7 +2016,6 @@ stepping. This execution-count can also be set in the fault-reply to a single-st
  Exception reason                 —                                 IPCBuffer[1]
 
                             Table 6.3: Single-step fault message layout.
-
 
 
 6.2.6   Timeout Fault (MCS only)
@@ -2048,12 +2056,15 @@ of the IPC message are given below.
  dependent.
 
                          Table 6.5: VM Fault outcome on all architectures.
-34                                                     CHAPTER 6. THREADS AND EXECUTION
+
 
 
 6.2.8   Arm Virtualisation Faults
 Arm with hypervisor support enabled can generate additional exceptions, see Section 6.4.1.
 Replying to the fault IPC will restart the VCPU thread. The contents of the IPC messages are
+34                                                     CHAPTER 6. THREADS AND EXECUTION
+
+
 given below.
 
  Meaning                                          IPC buffer location
@@ -2076,7 +2087,7 @@ given below.
 
 
 
-6.3     Domains
+6.3    Domains
 Domains are used to isolate independent subsystems, so as to limit information ﬂow between
 them. The kernel switches between domains according to a dynamically conﬁgurable, time-
 triggered schedule.
@@ -2090,7 +2101,7 @@ The domain schedule is conﬁgured with seL4_DomainSet_ScheduleConfigure() and s
 DomainSet_ScheduleSetStart().
 
 
-6.4     Virtualisation
+6.4    Virtualisation
 Hardware execution virtualisation is supported on speciﬁc arm and x86 platforms. The interface
 is exposed through a series of kernel objects, invocations and syscalls that allow the user to take
 advantage of hardware virtualisation features.
@@ -2100,12 +2111,12 @@ machine registers and other pieces of state a VCPU object is introduced to act a
 state. For simplicity we refer to this virtualised higher privileged level as ’guest mode’. VCPUs
 are bound in a one-to-one relationship with a TCB in order to provide a thread with this ability to
 run in higher privilege mode. See the section on Arm or x86 for more precise details.
-6.4. VIRTUALISATION                                                                              35
-
-
 VCPU objects also have additional, architecture speciﬁc, invocations for manipulating the addi-
 tional state or other virtualisation controls provided by the hardware. Binding of a VCPU to a TCB
 is done by an invocation on the VCPU only, and not the TCB.
+6.4. VIRTUALISATION                                                                              35
+
+
 The provided objects and invocations are, generally speaking, the thinnest possible shim over
 the underlying hardware primitives and operations. As a result an in depth familiarity with the
 underlying architecture speciﬁc hardware mechanisms is required to use these objects, and
@@ -2150,13 +2161,13 @@ VCPU state and execution is controlled through the seL4_VCPU_ReadVMCS() and seL4
 WriteVMCS() invocations. These are very thin wrappers around the hardware vmread and vmwrite
 instructions and the kernel merely does enough validation on the parameters to ensure the VCPU
 is not conﬁgured to run in such a way as to violate any kernel properties. For example, it is not
-36                                                   CHAPTER 6. THREADS AND EXECUTION
-
-
 possible to disable the use of External Interrupt Exiting, as this would prevent the kernel from
 receiving timer interrupts and allow the thread to monopolise CPU time.
 Memory access of the guest execution mode is controlled by requiring the use of Extended
 Page Tables (EPT). A series of EPT related paging structure objects (EPTPML4, EPTPDPT, EPTPD,
+36                                                   CHAPTER 6. THREADS AND EXECUTION
+
+
 EPTPT) exist and are manipulated in exactly the same manner as the objects for the regular
 virtual address space. Once constructed a TCB can be given an EPTPML4 as an EPT root with
 seL4_TCB_SetEPTRoot(), which serves as the VSpace root when executing in guest mode, with
@@ -2403,6 +2414,13 @@ one VSpace. The ASID Pool capability has a single invocation, Assign, for each a
  IA32, X64                                                                        Section 10.4.4
  AArch32, AArch64                                                                 Section 10.7.2
  RISC-V                                                                           Section 10.10.4
+
+An seL4 ASID is unmapped automatically when the corresponding VSpace object is deleted and
+can then be reused. The VSpace object will be deleted when the last capability to it has been
+deleted. This happens, for instance, when the Untyped capability it was created from is revoked,
+or when the original VSpace capability is ﬁrst revoked and then deleted.
+Note that seL4 ASIDs are not necessarily hardware ASIDs or VMIDs. How seL4 ASIDs map to
+hardware ASIDs or VMIDs is architecture-speciﬁc and controlled by the kernel.
 
 
 7.2       Mapping Attributes
@@ -4339,8 +4357,8 @@ Description: See Section 6.3.
 
    Error Code                    Possible Cause
    seL4_IllegalOperation         The _service is a CPtr to a capability of the wrong type.
-   seL4_InvalidArgument          The domain is greater than KernelNumDomains. Or, thread is
-                                 a CPtr to a capability of the wrong type.
+   seL4_InvalidArgument          The domain is not less than KernelNumDomains. Or, thread
+                                 is a CPtr to a capability of the wrong type.
    seL4_InvalidCapability        The _service is a CPtr to a capability of the wrong type.
 86                                                         CHAPTER 10. SEL4 API REFERENCE
 
@@ -5098,7 +5116,8 @@ error.
 Description: An invocation for setting the Thread Local Storage (TLS) base address. This en-
 sures that across all platforms, the TLSBase register is viewed as being completely mutable,
 just like all of the general purpose registers, even on platforms where modiﬁcation is a privi-
-leged operation.
+leged operation. The value is subject to the same architecture-speciﬁc sanitisation as seL4_-
+TCB_WriteRegisters. In particular, on x86_64 non-canonical addresses are replaced by 0.
 
       Error Code                  Possible Cause
       seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
@@ -5786,6 +5805,7 @@ Description: See Section 8.2.3
       Error Code                 Possible Cause
       seL4_IllegalOperation      The _service is a CPtr to a capability of the wrong type.
       seL4_InvalidCapability     The _service is a CPtr to a capability of the wrong type.
+      seL4_RevokeFirst           A copy of the _service capability exists.
 10.4. X86-SPECIFIC OBJECT METHODS                                                                121
 
 
@@ -5995,8 +6015,11 @@ Map a page into a VCPU Extended Page Table (EPT).
                                               the mapping.
       seL4_Word                   gpa         Guest physical address to map the page
                                               into.
-      seL4_CapRights_t            rights      Rights for the mapping. Possible values for
-                                              this type are given in Section 3.1.4.
+      seL4_CapRights_t            rights      Rights for the mapping. If these rights,
+                                              masked with the rights of _service, do not
+                                              include read access, the mapping grants the
+                                              guest no access to the page. Possible val-
+                                              ues for this type are given in Section 3.1.4.
       seL4_X86_EPT_VMAttributes   attr        VM attributes for the mapping. Possible val-
                                               ues for this type are given in Chapter 7.
 
@@ -6767,8 +6790,9 @@ error.
 Description: See Chapter 7
 
       Error Code                  Possible Cause
-      seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
-      seL4_InvalidCapability       The _service is a CPtr to a capability of the wrong type.
+      seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
+      seL4_InvalidCapability      The _service is a CPtr to a capability of the wrong type.
+      seL4_RevokeFirst            A copy of the _service capability exists.
 
 
 
@@ -6794,8 +6818,8 @@ Description: See Chapter 7.
       seL4_FailedLookup           The VSpace of _service is not assigned to an ASID pool.
       seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type. Or,
                                   _service is not mapped in a VSpace. Or, if hypervisor sup-
-                                  port is conﬁgured, the requested range overlaps the kernel
-                                  physical address range.
+                                  port is conﬁgured, the requested range is not entirely within
+                                  the kernel physical memory window.
       seL4_InvalidArgument        The start_offset is greater than or equal to end_offset.
                                   Or, start_offset or end_offset exceeds the page size of
                                   _service.
@@ -6825,8 +6849,8 @@ Description: See Chapter 7.
    seL4_FailedLookup            The VSpace of _service is not assigned to an ASID pool.
    seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type. Or,
                                 _service is not mapped in a VSpace. Or, if hypervisor sup-
-                                port is conﬁgured, the requested range overlaps the kernel
-                                physical address range.
+                                port is conﬁgured, the requested range is not entirely within
+                                the kernel physical memory window.
    seL4_InvalidArgument         The start_offset is greater than or equal to end_offset.
                                 Or, start_offset or end_offset exceeds the page size of
                                 _service.
@@ -6879,8 +6903,8 @@ Description: See Chapter 7.
       seL4_FailedLookup         The VSpace of _service is not assigned to an ASID pool.
       seL4_IllegalOperation     The _service is a CPtr to a capability of the wrong type. Or,
                                 _service is not mapped in a VSpace. Or, if hypervisor sup-
-                                port is conﬁgured, the requested range overlaps the kernel
-                                physical address range.
+                                port is conﬁgured, the requested range is not entirely within
+                                the kernel physical memory window.
       seL4_InvalidArgument      The start_offset is greater than or equal to end_offset.
                                 Or, start_offset or end_offset exceeds the page size of
                                 _service.
@@ -6982,8 +7006,8 @@ Description: See Chapter 7.
    seL4_FailedLookup            The VSpace of _service is not assigned to an ASID pool.
    seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type. Or,
                                 _service is not mapped in a VSpace. Or, if hypervisor sup-
-                                port is conﬁgured, the requested range overlaps the kernel
-                                physical address range.
+                                port is conﬁgured, the requested range is not entirely within
+                                the kernel physical memory window.
    seL4_InvalidArgument         The start_offset is greater than or equal to end_offset.
                                 Or, start_offset or end_offset exceeds the page size of
                                 _service.
@@ -7466,13 +7490,15 @@ Description: See Chapter 7.
 
       Error Code               Possible Cause
       seL4_FailedLookup        The _service is not assigned to an ASID pool.
-      seL4_IllegalOperation    The _service is a CPtr to a capability of the wrong type. Or,
-                               start or end is in the kernel virtual address range.
+      seL4_IllegalOperation    The _service is a CPtr to a capability of the wrong type.
+                               Or, start or end is in the kernel virtual address range. Or, if
+                               hypervisor support is conﬁgured, the requested range is not
+                               entirely within the kernel physical memory window.
       seL4_InvalidArgument     The start is greater than or equal to end.
       seL4_InvalidCapability   The _service is a CPtr to a capability of the wrong type. Or,
                                _service is not assigned to an ASID pool.
       seL4_RangeError          The speciﬁed range crosses a page boundary.
-10.8. AARCH32-SPECIFIC OBJECT METHODS                                                          161
+10.8. AARCH32-SPECIFIC OBJECT METHODS                                                            161
 
 
 10.8.1.2   Clean and Invalidate Data
@@ -7494,19 +7520,52 @@ Description: See Chapter 7.
 
    Error Code                  Possible Cause
    seL4_FailedLookup           The _service is not assigned to an ASID pool.
-   seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type. Or,
-                               start or end is in the kernel virtual address range.
+   seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
+                               Or, start or end is in the kernel virtual address range. Or, if
+                               hypervisor support is conﬁgured, the requested range is not
+                               entirely within the kernel physical memory window.
    seL4_InvalidArgument        The start is greater than or equal to end.
    seL4_InvalidCapability      The _service is a CPtr to a capability of the wrong type. Or,
                                _service is not assigned to an ASID pool.
    seL4_RangeError             The speciﬁed range crosses a page boundary.
+162                                                       CHAPTER 10. SEL4 API REFERENCE
 
 
-10.8.1.3   Invalidate Data
+10.8.1.3     Invalidate Data
 
 static inline int seL4_ARM_PageDirectory_Invalidate_Data
 
 Invalidate cached pages within a page directory
+
+      Type                     Name        Description
+      seL4_ARM_PageDirectory   _service    Capability to the page directory being operated
+                                           on.
+      seL4_Word                start       Start address
+      seL4_Word                end         End address
+
+Return value: A return value of 0 indicates success. A non-zero value indicates that an error
+occurred. See Section 10.1 for a description of the message register and tag contents upon
+error.
+Description: See Chapter 7.
+
+      Error Code               Possible Cause
+      seL4_FailedLookup        The _service is not assigned to an ASID pool.
+      seL4_IllegalOperation    The _service is a CPtr to a capability of the wrong type.
+                               Or, start or end is in the kernel virtual address range. Or, if
+                               hypervisor support is conﬁgured, the requested range is not
+                               entirely within the kernel physical memory window.
+      seL4_InvalidArgument     The start is greater than or equal to end.
+      seL4_InvalidCapability   The _service is a CPtr to a capability of the wrong type. Or,
+                               _service is not assigned to an ASID pool.
+      seL4_RangeError          The speciﬁed range crosses a page boundary.
+10.8. AARCH32-SPECIFIC OBJECT METHODS                                                            163
+
+
+10.8.1.4   Unify Instruction
+
+static inline int seL4_ARM_PageDirectory_Unify_Instruction
+
+Clean and invalidate cached instruction pages to point of uniﬁcation
 
    Type                        Name        Description
    seL4_ARM_PageDirectory      _service    Capability to the page directory being operated
@@ -7521,56 +7580,30 @@ Description: See Chapter 7.
 
    Error Code                  Possible Cause
    seL4_FailedLookup           The _service is not assigned to an ASID pool.
-   seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type. Or,
-                               start or end is in the kernel virtual address range.
+   seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
+                               Or, start or end is in the kernel virtual address range. Or, if
+                               hypervisor support is conﬁgured, the requested range is not
+                               entirely within the kernel physical memory window.
    seL4_InvalidArgument        The start is greater than or equal to end.
    seL4_InvalidCapability      The _service is a CPtr to a capability of the wrong type. Or,
                                _service is not assigned to an ASID pool.
    seL4_RangeError             The speciﬁed range crosses a page boundary.
-162                                                        CHAPTER 10. SEL4 API REFERENCE
+164                                                     CHAPTER 10. SEL4 API REFERENCE
 
 
-10.8.1.4     Unify Instruction
-
-static inline int seL4_ARM_PageDirectory_Unify_Instruction
-
-Clean and invalidate cached instruction pages to point of uniﬁcation
-
-      Type                       Name        Description
-      seL4_ARM_PageDirectory     _service    Capability to the page directory being operated
-                                             on.
-      seL4_Word                  start       Start address
-      seL4_Word                  end         End address
-
-Return value: A return value of 0 indicates success. A non-zero value indicates that an error
-occurred. See Section 10.1 for a description of the message register and tag contents upon
-error.
-Description: See Chapter 7.
-
-      Error Code                 Possible Cause
-      seL4_FailedLookup          The _service is not assigned to an ASID pool.
-      seL4_IllegalOperation      The _service is a CPtr to a capability of the wrong type. Or,
-                                 start or end is in the kernel virtual address range.
-      seL4_InvalidArgument       The start is greater than or equal to end.
-      seL4_InvalidCapability     The _service is a CPtr to a capability of the wrong type. Or,
-                                 _service is not assigned to an ASID pool.
-      seL4_RangeError            The speciﬁed range crosses a page boundary.
-10.9. AARCH64-SPECIFIC OBJECT METHODS                                                            163
-
-
-10.9       Aarch64-Speciﬁc Object Methods
-10.9.1     seL4_ARM_SMC
-10.9.1.1   SMC Call
+10.9         Aarch64-Speciﬁc Object Methods
+10.9.1       seL4_ARM_SMC
+10.9.1.1     SMC Call
 
 static inline int seL4_ARM_SMC_Call
 
 Tell the kernel to make the real SMC call.
-   Type                          Name              Description
-   seL4_ARM_SMC                  _service          Capability to allow threads to make Secure
-                                                   Monitor Calls.
-   seL4_ARM_SMCContext *         smc_args          The structure that has the provided argu-
-                                                   ments.
-   seL4_ARM_SMCContext *         smc_response      The structure to capture the responses.
+      Type                     Name           Description
+      seL4_ARM_SMC             _service       Capability to allow threads to make Secure
+                                              Monitor Calls.
+      seL4_ARM_SMCContext *    smc_args       The structure that has the provided argu-
+                                              ments.
+      seL4_ARM_SMCContext *    smc_response   The structure to capture the responses.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
 occurred. See Section 10.1 for a description of the message register and tag contents upon
@@ -7578,35 +7611,38 @@ error.
 Description: Takes x0-x7 as arguments to an SMC call which are deﬁned as a seL4_ARM_SM-
 CContext struct. The kernel makes the SMC call and then returns the results as a new seL4_-
 ARM_SMCContext.
+10.9. AARCH64-SPECIFIC OBJECT METHODS                                                             165
 
 
 10.9.2     seL4_ARM_VSpace
-10.9.2.1    Clean Data
+10.9.2.1   Clean Data
 
 static inline int seL4_ARM_VSpace_Clean_Data
 
 Clean cached pages within a top level translation table
 
-   Type                  Name        Description
-   seL4_ARM_VSpace       _service    Capability to the top level translation table being oper-
-                                     ated on.
-   seL4_Word             start       Start address
-   seL4_Word             end         End address
+   Type                 Name       Description
+   seL4_ARM_VSpace      _service   Capability to the top level translation table being oper-
+                                   ated on.
+   seL4_Word            start      Start address
+   seL4_Word            end        End address
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
 occurred. See Section 10.1 for a description of the message register and tag contents upon
 error.
 Description: See Chapter 7.
 
-   Error Code                    Possible Cause
-   seL4_FailedLookup             The _service is not assigned to an ASID pool.
-   seL4_IllegalOperation         The _service is a CPtr to a capability of the wrong type. Or,
-                                 end is in the kernel virtual address range.
-   seL4_InvalidArgument          The start is greater than or equal to end.
-   seL4_InvalidCapability        The _service is a CPtr to a capability of the wrong type. Or,
-                                 _service is not assigned to an ASID pool.
-   seL4_RangeError               The speciﬁed range crosses a page boundary.
-164                                                        CHAPTER 10. SEL4 API REFERENCE
+   Error Code                   Possible Cause
+   seL4_FailedLookup            The _service is not assigned to an ASID pool.
+   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
+                                Or, end is in the kernel virtual address range. Or, if hypervi-
+                                sor support is conﬁgured, the requested range is not entirely
+                                within the kernel physical memory window.
+   seL4_InvalidArgument         The start is greater than or equal to end.
+   seL4_InvalidCapability       The _service is a CPtr to a capability of the wrong type. Or,
+                                _service is not assigned to an ASID pool.
+   seL4_RangeError              The speciﬁed range crosses a page boundary.
+166                                                         CHAPTER 10. SEL4 API REFERENCE
 
 
 10.9.2.2     Clean and Invalidate Data
@@ -7628,53 +7664,28 @@ Description: See Chapter 7.
 
       Error Code                 Possible Cause
       seL4_FailedLookup          The _service is not assigned to an ASID pool.
-      seL4_IllegalOperation      The _service is a CPtr to a capability of the wrong type. Or,
-                                 end is in the kernel virtual address range.
+      seL4_IllegalOperation      The _service is a CPtr to a capability of the wrong type.
+                                 Or, end is in the kernel virtual address range. Or, if hypervi-
+                                 sor support is conﬁgured, the requested range is not entirely
+                                 within the kernel physical memory window.
       seL4_InvalidArgument       The start is greater than or equal to end.
       seL4_InvalidCapability     The _service is a CPtr to a capability of the wrong type. Or,
                                  _service is not assigned to an ASID pool.
       seL4_RangeError            The speciﬁed range crosses a page boundary.
+10.9. AARCH64-SPECIFIC OBJECT METHODS                                                             167
 
 
-10.9.2.3     Invalidate Data
+10.9.2.3   Invalidate Data
 
 static inline int seL4_ARM_VSpace_Invalidate_Data
 
 Invalidate cached pages within a top level translation table
 
-      Type               Name        Description
-      seL4_ARM_VSpace    _service    Capability to the top level translation table being oper-
-                                     ated on.
-      seL4_Word          start       Start address
-      seL4_Word          end         End address
-
-Return value: A return value of 0 indicates success. A non-zero value indicates that an error
-occurred. See Section 10.1 for a description of the message register and tag contents upon
-error.
-Description: See Chapter 7.
-
-      Error Code                 Possible Cause
-      seL4_FailedLookup          The _service is not assigned to an ASID pool.
-      seL4_IllegalOperation      The _service is a CPtr to a capability of the wrong type. Or,
-                                 end is in the kernel virtual address range.
-      seL4_InvalidArgument       The start is greater than or equal to end.
-      seL4_InvalidCapability     The _service is a CPtr to a capability of the wrong type. Or,
-                                 _service is not assigned to an ASID pool.
-      seL4_RangeError            The speciﬁed range crosses a page boundary.
-10.9. AARCH64-SPECIFIC OBJECT METHODS                                                           165
-
-
-10.9.2.4   Unify Instruction
-
-static inline int seL4_ARM_VSpace_Unify_Instruction
-
-Clean and invalidate cached instruction pages to point of uniﬁcation
-
-   Type                 Name       Description
-   seL4_ARM_VSpace      _service   Capability to the top level translation table being oper-
-                                   ated on.
-   seL4_Word            start      Start address
-   seL4_Word            end        End address
+   Type                 Name        Description
+   seL4_ARM_VSpace      _service    Capability to the top level translation table being oper-
+                                    ated on.
+   seL4_Word            start       Start address
+   seL4_Word            end         End address
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
 occurred. See Section 10.1 for a description of the message register and tag contents upon
@@ -7683,70 +7694,102 @@ Description: See Chapter 7.
 
    Error Code                   Possible Cause
    seL4_FailedLookup            The _service is not assigned to an ASID pool.
-   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type. Or,
-                                end is in the kernel virtual address range.
+   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
+                                Or, end is in the kernel virtual address range. Or, if hypervi-
+                                sor support is conﬁgured, the requested range is not entirely
+                                within the kernel physical memory window.
    seL4_InvalidArgument         The start is greater than or equal to end.
    seL4_InvalidCapability       The _service is a CPtr to a capability of the wrong type. Or,
                                 _service is not assigned to an ASID pool.
    seL4_RangeError              The speciﬁed range crosses a page boundary.
-166                                                          CHAPTER 10. SEL4 API REFERENCE
+168                                                          CHAPTER 10. SEL4 API REFERENCE
 
 
-10.10        RISCV-Speciﬁc Object Methods
-10.10.1      General RISCV Object Methods
-10.10.2      seL4_IRQControl
-10.10.2.1    Get IRQ Handler with Trigger Type
+10.9.2.4     Unify Instruction
+
+static inline int seL4_ARM_VSpace_Unify_Instruction
+
+Clean and invalidate cached instruction pages to point of uniﬁcation
+
+      Type                Name       Description
+      seL4_ARM_VSpace     _service   Capability to the top level translation table being oper-
+                                     ated on.
+      seL4_Word           start      Start address
+      seL4_Word           end        End address
+
+Return value: A return value of 0 indicates success. A non-zero value indicates that an error
+occurred. See Section 10.1 for a description of the message register and tag contents upon
+error.
+Description: See Chapter 7.
+
+      Error Code                  Possible Cause
+      seL4_FailedLookup           The _service is not assigned to an ASID pool.
+      seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
+                                  Or, end is in the kernel virtual address range. Or, if hypervi-
+                                  sor support is conﬁgured, the requested range is not entirely
+                                  within the kernel physical memory window.
+      seL4_InvalidArgument        The start is greater than or equal to end.
+      seL4_InvalidCapability      The _service is a CPtr to a capability of the wrong type. Or,
+                                  _service is not assigned to an ASID pool.
+      seL4_RangeError             The speciﬁed range crosses a page boundary.
+10.10. RISCV-SPECIFIC OBJECT METHODS                                                             169
+
+
+10.10       RISCV-Speciﬁc Object Methods
+10.10.1     General RISCV Object Methods
+10.10.2     seL4_IRQControl
+10.10.2.1   Get IRQ Handler with Trigger Type
 
 static inline int seL4_IRQControl_GetTrigger
 
 Create an IRQ handler capability and specify the trigger method (edge or level).
 
-      Type                Name       Description
-      seL4_IRQControl     _service   An IRQControl capability. This gives you the authority to
-                                     make this call.
-      seL4_Word           irq        The IRQ that you want this capability to handle.
-      seL4_Word           trigger    Indicates whether this IRQ is edge (1) or level (0) trig-
-                                     gered.
-      seL4_CNode          root       CPtr to the CNode that forms the root of the destination
-                                     CSpace. Must be at a depth equivalent to the wordsize.
-      seL4_Word           index      CPtr to the destination slot. Resolved from the root of
-                                     the destination CSpace.
-      seL4_Uint8          depth      Number of bits of index to resolve to ﬁnd the destination
-                                     slot.
+   Type                 Name        Description
+   seL4_IRQControl      _service    An IRQControl capability. This gives you the authority to
+                                    make this call.
+   seL4_Word            irq         The IRQ that you want this capability to handle.
+   seL4_Word            trigger     Indicates whether this IRQ is edge (1) or level (0) trig-
+                                    gered.
+   seL4_CNode           root        CPtr to the CNode that forms the root of the destination
+                                    CSpace. Must be at a depth equivalent to the wordsize.
+   seL4_Word            index       CPtr to the destination slot. Resolved from the root of
+                                    the destination CSpace.
+   seL4_Uint8           depth       Number of bits of index to resolve to ﬁnd the destination
+                                    slot.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
 occurred. See Section 10.1 for a description of the message register and tag contents upon
 error.
 Description: See Section 8.1.
 
-      Error Code                  Possible Cause
-      seL4_DeleteFirst            The destination slot contains a capability.
-      seL4_FailedLookup           The index or depth is invalid (see Section 3.3). Or, root is a
-                                  CPtr to a capability of the wrong type.
-      seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type. Or,
-                                  the platform does not support setting the IRQ trigger.
-      seL4_InvalidCapability      The _service is a CPtr to a capability of the wrong type.
-      seL4_RangeError             The irq is invalid. Or, depth is invalid (see Section 3.3).
-      seL4_RevokeFirst            An IRQ handler capability for irq has already been created.
-10.10. RISCV-SPECIFIC OBJECT METHODS                                                            167
+   Error Code                   Possible Cause
+   seL4_DeleteFirst             The destination slot contains a capability.
+   seL4_FailedLookup            The index or depth is invalid (see Section 3.3). Or, root is a
+                                CPtr to a capability of the wrong type.
+   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type. Or,
+                                the platform does not support setting the IRQ trigger.
+   seL4_InvalidCapability       The _service is a CPtr to a capability of the wrong type.
+   seL4_RangeError              The irq is invalid. Or, depth is invalid (see Section 3.3).
+   seL4_RevokeFirst             An IRQ handler capability for irq has already been created.
+170                                                       CHAPTER 10. SEL4 API REFERENCE
 
 
-10.10.3     seL4_RISCV_ASIDControl
-10.10.3.1   Make Pool
+10.10.3      seL4_RISCV_ASIDControl
+10.10.3.1    Make Pool
 
 static inline int seL4_RISCV_ASIDControl_MakePool
 
 Create an ASID Pool.
-   Type                        Name        Description
-   seL4_RISCV_ASIDControl      _service    The master ASIDControl capability to invoke.
-   seL4_Untyped                untyped     Capability to an untyped memory object that
+      Type                     Name        Description
+      seL4_RISCV_ASIDControl   _service    The master ASIDControl capability to invoke.
+      seL4_Untyped             untyped     Capability to an untyped memory object that
                                            will become the pool. Must be 4K bytes.
-   seL4_CNode                  root        CPtr to the CNode that forms the root of the
+      seL4_CNode               root        CPtr to the CNode that forms the root of the
                                            destination CSpace. Must be at a depth equiva-
                                            lent to the wordsize.
-   seL4_Word                   index       CPtr to the destination slot. Resolved from the
+      seL4_Word                index       CPtr to the destination slot. Resolved from the
                                            root of the destination CSpace.
-   seL4_Uint8                  depth       Number of bits of index to resolve to ﬁnd the
+      seL4_Uint8               depth       Number of bits of index to resolve to ﬁnd the
                                            destination slot.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
@@ -7756,32 +7799,32 @@ Description: Together with a capability to Untyped Memory, which is passed as an
 create an ASID Pool. The untyped capability must represent a 4K memory object. This will
 create an ASID pool with enough space for 1024 VSpaces.
 
-   Error Code                  Possible Cause
-   seL4_DeleteFirst            The destination slot contains a capability. Or, there are no
+      Error Code               Possible Cause
+      seL4_DeleteFirst         The destination slot contains a capability. Or, there are no
                                more ASID pools available.
-   seL4_FailedLookup           The index or depth is invalid (see Section 3.3). Or, root is a
+      seL4_FailedLookup        The index or depth is invalid (see Section 3.3). Or, root is a
                                CPtr to a capability of the wrong type.
-   seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
-   seL4_InvalidCapability      The _service or untyped is a CPtr to a capability of the
+      seL4_IllegalOperation    The _service is a CPtr to a capability of the wrong type.
+      seL4_InvalidCapability   The _service or untyped is a CPtr to a capability of the
                                wrong type. Or, untyped is not the exact size of an ASID pool
                                object. Or, untyped is a device untyped (see Section 2.4).
-   seL4_RangeError             The depth is invalid (see Section 3.3).
-   seL4_RevokeFirst            The untyped has been used to retype an object. Or, a copy
+      seL4_RangeError          The depth is invalid (see Section 3.3).
+      seL4_RevokeFirst         The untyped has been used to retype an object. Or, a copy
                                of the untyped capability exists.
-168                                                          CHAPTER 10. SEL4 API REFERENCE
+10.10. RISCV-SPECIFIC OBJECT METHODS                                                            171
 
 
-10.10.4      seL4_RISCV_ASIDPool
-10.10.4.1    Assign
+10.10.4     seL4_RISCV_ASIDPool
+10.10.4.1   Assign
 
 static inline int seL4_RISCV_ASIDPool_Assign
 
 Assign an ASID Pool.
 
-      Type                    Name         Description
-      seL4_RISCV_ASIDPool     _service     The ASID Pool capability to invoke, which must be
+   Type                       Name         Description
+   seL4_RISCV_ASIDPool        _service     The ASID Pool capability to invoke, which must be
                                            to an ASID pool that is not full.
-      seL4_CPtr               vspace       The top-level PageTable that is being assigned to
+   seL4_CPtr                  vspace       The top-level PageTable that is being assigned to
                                            an ASID pool. Must not already be assigned to an
                                            ASID pool.
 
@@ -7790,50 +7833,50 @@ occurred. See Section 10.1 for a description of the message register and tag con
 error.
 Description: Assigns an ASID to the VSpace passed in as an argument.
 
-      Error Code                Possible Cause
-      seL4_DeleteFirst          There are no more ASIDs available in _service.
-      seL4_IllegalOperation     The _service is a CPtr to a capability of the wrong type.
-      seL4_InvalidCapability    The _service or vspace is a CPtr to a capability of the wrong
+   Error Code                   Possible Cause
+   seL4_DeleteFirst             There are no more ASIDs available in _service.
+   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
+   seL4_InvalidCapability       The _service or vspace is a CPtr to a capability of the wrong
                                 type. Or, vspace is already assigned to an ASID pool. Or,
                                 vspace is mapped in a VSpace.
 
 
 
 
-10.10.5      seL4_RISCV_Page
-10.10.5.1    Get Address
+10.10.5     seL4_RISCV_Page
+10.10.5.1   Get Address
 
 static inline seL4_RISCV_Page_GetAddress_t seL4_RISCV_Page_GetAddress
 
 Get the physical address of a page.
 
-      Type              Name           Description
-      seL4_RISCV_Page   _service       Capability to the page to invoke.
+   Type                 Name           Description
+   seL4_RISCV_Page      _service       Capability to the page to invoke.
 
 Return value: A seL4_RISCV_Page_GetAddress_t struct that contains a seL4_Word paddr, which
 holds the physical address of the page, and int error. See Section 10.1 for a description of the
 message register and tag contents upon error.
 Description: See Chapter 7.
 
-      Error Code                Possible Cause
-      seL4_IllegalOperation      The _service is a CPtr to a capability of the wrong type.
-      seL4_InvalidCapability     The _service is a CPtr to a capability of the wrong type.
-10.10. RISCV-SPECIFIC OBJECT METHODS                                                              169
+   Error Code                   Possible Cause
+   seL4_IllegalOperation         The _service is a CPtr to a capability of the wrong type.
+   seL4_InvalidCapability        The _service is a CPtr to a capability of the wrong type.
+172                                                        CHAPTER 10. SEL4 API REFERENCE
 
 
-10.10.5.2   Map
+10.10.5.2    Map
 
 static inline int seL4_RISCV_Page_Map
 
 Map a page into a page table.
 
-   Type                          Name        Description
-   seL4_RISCV_Page               _service    Capability to the page to invoke.
-   seL4_RISCV_PageTable          vspace      VSpace to map the page into.
-   seL4_Word                     vaddr       Virtual address at which to map the page.
-   seL4_CapRights_t              rights      Rights for the mapping. Possible values for
+      Type                       Name        Description
+      seL4_RISCV_Page            _service    Capability to the page to invoke.
+      seL4_RISCV_PageTable       vspace      VSpace to map the page into.
+      seL4_Word                  vaddr       Virtual address at which to map the page.
+      seL4_CapRights_t           rights      Rights for the mapping. Possible values for
                                              this type are given in Section 3.1.4.
-   seL4_RISCV_VMAttributes       attr        VM Attributes for the mapping. Possible val-
+      seL4_RISCV_VMAttributes    attr        VM Attributes for the mapping. Possible val-
                                              ues for this type are given in Chapter 7.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
@@ -7844,55 +7887,55 @@ reference to the given Page in the page table slot corresponding to the given ad
 is already mapped at the same virtual address, update the mapping attributes. If the required
 paging structures are not present this operation will fail, returning a seL4_FailedLookup error.
 
-   Error Code                   Possible Cause
-   seL4_AlignmentError          The vaddr is not aligned to the page size of _service.
-   seL4_DeleteFirst             A mapping already exists in vspace at vaddr.
-   seL4_FailedLookup            The vspace does not have a paging structure at the required
+      Error Code                Possible Cause
+      seL4_AlignmentError       The vaddr is not aligned to the page size of _service.
+      seL4_DeleteFirst          A mapping already exists in vspace at vaddr.
+      seL4_FailedLookup         The vspace does not have a paging structure at the required
                                 level mapped at vaddr. Or, vspace is not assigned to an ASID
                                 pool.
-   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
-   seL4_InvalidArgument         The _service is already mapped in vspace at a different vir-
+      seL4_IllegalOperation     The _service is a CPtr to a capability of the wrong type.
+      seL4_InvalidArgument      The _service is already mapped in vspace at a different vir-
                                 tual address. Or, vaddr is in the kernel virtual address range.
-   seL4_InvalidCapability       The _service or vspace is a CPtr to a capability of the wrong
+      seL4_InvalidCapability    The _service or vspace is a CPtr to a capability of the wrong
                                 type. Or, vspace is not the root of a VSpace. Or, vspace is not
                                 assigned to an ASID pool. Or, _service is already mapped
                                 in a different VSpace.
-170                                                        CHAPTER 10. SEL4 API REFERENCE
+10.10. RISCV-SPECIFIC OBJECT METHODS                                                            173
 
 
-10.10.5.3    Unmap
+10.10.5.3   Unmap
 
 static inline int seL4_RISCV_Page_Unmap
 
 Unmap a page.
 
-      Type               Name       Description
-      seL4_RISCV_Page    _service   Capability to the page to invoke.
+   Type                 Name        Description
+   seL4_RISCV_Page      _service    Capability to the page to invoke.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
 occurred. See Section 10.1 for a description of the message register and tag contents upon
 error.
 Description: Removes an existing mapping.
 
-      Error Code                Possible Cause
-      seL4_IllegalOperation     The _service is a CPtr to a capability of the wrong type.
-      seL4_InvalidCapability    The _service is a CPtr to a capability of the wrong type.
+   Error Code                   Possible Cause
+   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
+   seL4_InvalidCapability       The _service is a CPtr to a capability of the wrong type.
 
 
 
-10.10.6      seL4_RISCV_PageTable
-10.10.6.1    Map
+10.10.6     seL4_RISCV_PageTable
+10.10.6.1   Map
 
 static inline int seL4_RISCV_PageTable_Map
 
 Map a page table at a speciﬁc virtual address.
 
-      Type                       Name        Description
-      seL4_RISCV_PageTable       _service    Capability to the page table to invoke.
-      seL4_RISCV_PageTable       vspace      VSpace to map the lower-level page table into.
-      seL4_Word                  vaddr       Virtual address at which to map the page ta-
+   Type                          Name        Description
+   seL4_RISCV_PageTable          _service    Capability to the page table to invoke.
+   seL4_RISCV_PageTable          vspace      VSpace to map the lower-level page table into.
+   seL4_Word                     vaddr       Virtual address at which to map the page ta-
                                              ble.
-      seL4_RISCV_VMAttributes    attr        VM Attributes for the mapping. Possible val-
+   seL4_RISCV_VMAttributes       attr        VM Attributes for the mapping. Possible val-
                                              ues for this type are given in Chapter 7.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
@@ -7902,37 +7945,37 @@ Description: Starting from the VSpace, map the page table object at any unpopula
 the provided virtual address. If all paging structures and mappings are present for this virtual
 address, return an seL4_DeleteFirst error.
 
-      Error Code                Possible Cause
-      seL4_DeleteFirst          A page is mapped in vspace at vaddr. Or, all required page
+   Error Code                   Possible Cause
+   seL4_DeleteFirst             A page is mapped in vspace at vaddr. Or, all required page
                                 tables are already mapped in vspace at vaddr.
-      seL4_FailedLookup         The vspace is not assigned to an ASID pool.
-      seL4_IllegalOperation     The _service is a CPtr to a capability of the wrong type.
-      seL4_InvalidArgument      The vaddr is in the kernel virtual address range.
-      seL4_InvalidCapability    The _service or vspace is a CPtr to a capability of the wrong
+   seL4_FailedLookup            The vspace is not assigned to an ASID pool.
+   seL4_IllegalOperation        The _service is a CPtr to a capability of the wrong type.
+   seL4_InvalidArgument         The vaddr is in the kernel virtual address range.
+   seL4_InvalidCapability       The _service or vspace is a CPtr to a capability of the wrong
                                 type. Or, vspace is not assigned to an ASID pool. Or, _ser-
                                 vice is already mapped in a VSpace.
-10.10. RISCV-SPECIFIC OBJECT METHODS                                                        171
+174                                                       CHAPTER 10. SEL4 API REFERENCE
 
 
-10.10.6.2   Unmap
+10.10.6.2    Unmap
 
 static inline int seL4_RISCV_PageTable_Unmap
 
 Unmap a page table.
 
-   Type                      Name       Description
-   seL4_RISCV_PageTable      _service   Capability to the page table to invoke.
+      Type                     Name       Description
+      seL4_RISCV_PageTable     _service   Capability to the page table to invoke.
 
 Return value: A return value of 0 indicates success. A non-zero value indicates that an error
 occurred. See Section 10.1 for a description of the message register and tag contents upon
 error.
 Description: See Chapter 7
 
-   Error Code                  Possible Cause
-   seL4_IllegalOperation       The _service is a CPtr to a capability of the wrong type.
-   seL4_InvalidCapability      The _service is a CPtr to a capability of the wrong type.
-   seL4_RevokeFirst            The _service is the root of a VSpace. Or, a copy of the _-
-                               service capability exists.
+      Error Code                Possible Cause
+      seL4_IllegalOperation     The _service is a CPtr to a capability of the wrong type.
+      seL4_InvalidCapability    The _service is a CPtr to a capability of the wrong type.
+      seL4_RevokeFirst          The _service is the root of a VSpace. Or, a copy of the _-
+                                service capability exists.
 Glossary
 
 ASID Address Space Identiﬁer. Depending on architecture, the kernel provides software ASIDs,
@@ -7974,8 +8017,8 @@ Guard Guard of a CNode capability. From the user’s perspetive the CSpace of a 
      quence of bits that will be stripped from the user-level capability pointer before resolving
      resumes at the next CNode.
 
-172
-Glossary                                                                                     173
+                                                                                              175
+176                                                                                    Glossary
 
 
 IOMMU Input–Output Memory Management Unit. Applies virtual address translation and mem-
@@ -8013,7 +8056,6 @@ VM Virtual Memory. The concept of translating virtual memory addresses to physic
     See Chapter 7.
 VSpace Virtual Address Space. In analogy to CSpace, the virtual memory space of a thread.
     See Chapter 7.
-174   Glossary
 Bibliography
 
 Bernard Blackham, Yao Shi, Sudipta Chattopadhyay, Abhik Roychoudhury, and Gernot Heiser.
@@ -8053,8 +8095,8 @@ Gerwin Klein, June Andronick, Kevin Elphinstone, Toby Murray, Thomas Sewell, Raf
 Toby Murray, Daniel Matichuk, Matthew Brassil, Peter Gammie, Timothy Bourke, Sean Seefried,
   Corey Lewis, Xin Gao, and Gerwin Klein. seL4: from general purpose to a proof of information
 
-                                                                                            175
-176                                                                           BIBLIOGRAPHY
+                                                                                            177
+178                                                                           BIBLIOGRAPHY
 
 
   ﬂow enforcement. In IEEE Symposium on Security & Privacy, pages 415–429, San Francisco,

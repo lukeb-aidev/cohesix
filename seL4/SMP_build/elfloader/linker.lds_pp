@@ -5,7 +5,7 @@
 ENTRY( _start )
 SECTIONS
 {
-    . = 0x40681000;
+    . = 0x406bd000;
     _text = .;
     .start :
     {

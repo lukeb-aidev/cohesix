@@ -1,4 +1,4 @@
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -260,7 +260,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
                                  seL4_Fault_get_seL4_FaultType(sender->tcbFault));
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/api/syscall.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -928,7 +928,7 @@ exception_t handleSyscall(syscall_t syscall)
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/c_traps.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -950,8 +950,9 @@ exception_t handleSyscall(syscall_t syscall)
 void VISIBLE NORETURN restore_user_context(void)
 {
     c_exit_hook();
+    arm_load_thread_id(NODE_STATE(ksCurThread));
 
-#ifdef ARM_CP14_SAVE_AND_RESTORE_NATIVE_THREADS
+#ifdef CONFIG_HARDWARE_DEBUG_API
     restore_user_debug_context(NODE_STATE(ksCurThread));
 #endif
 
@@ -999,7 +1000,7 @@ void VISIBLE NORETURN restore_user_context(void)
 
 #if defined(CONFIG_DEBUG_BUILD)
 /* See 'arm_vector_table' for details on 'vect_offset' */
-static const char *vect_offset_to_name(word_t vect_offset)
+UNUSED static const char *vect_offset_to_name(word_t vect_offset)
 {
     switch (vect_offset) {
     case 0x000:
@@ -1047,7 +1048,7 @@ void VISIBLE c_handle_invalid_vector_entry(word_t vect_offset, word_t pc)
     printf("ESR: 0x%"SEL4_PRIx_word" FAR: 0x%"SEL4_PRIx_word"\n", getESR(), getFAR());
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/idle.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/idle.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1073,7 +1074,7 @@ void NORETURN NO_INLINE VISIBLE halt(void)
     idle_thread();
     UNREACHABLE();
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1106,14 +1107,14 @@ void Arch_switchToIdleThread(void)
     if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
         vcpu_switch(NULL);
     }
-    setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+    setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
 }
 
 void Arch_activateIdleThread(tcb_t *tcb)
 {
     /* Don't need to do anything */
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/kernel/vspace.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1349,28 +1350,115 @@ BOOT_CODE void map_kernel_frame(paddr_t paddr, pptr_t vaddr, vm_rights_t vm_righ
                                                                                             attr_index);
 }
 
-BOOT_CODE void map_kernel_window(void)
-{
+/* Essentially, assert that the ELF, kernel devices, and log buffer are all in the same PUD.
+   In the current code this is the top index. This is arbitrary, the important part
+   is that they are all the same.
+ */
+compile_assert(elf_in_kernel_mappings, GET_KPT_INDEX(KERNEL_ELF_BASE,
+                                                     KLVL_FRM_ARM_PT_LVL(1)) == BIT(PT_INDEX_BITS) - 1);
+compile_assert(kdev_in_kernel_mappings, GET_KPT_INDEX(KDEV_BASE,
+                                                      KLVL_FRM_ARM_PT_LVL(1)) == BIT(PT_INDEX_BITS) - 1);
+compile_assert(log_buf_in_kernel_mappings, GET_KPT_INDEX(KS_LOG_BASE,
+                                                         KLVL_FRM_ARM_PT_LVL(1)) == BIT(PT_INDEX_BITS) - 1);
 
+/**
+ *  Per ARM ARM DDI 0487 (version L.b), in B2.11 "Mismatched memory attributes",
+ *  when physical memory locations are accessed with mismatched attributes
+ *  (caching, memory type (device/normal), shareability), the coherency of these
+ *  memory locations may be lost, as well as various violations of read and
+ *  write orderings or atomic operations. Other ARM documents refer to the
+ *  situation in which two virtual addresses map to the same physical address as
+ *  "Memory aliasing" (e.g. Document ID 102376 0200_01_en).
+ *
+ *  Currently, the memory attributes used in the physical memory window does
+ *  match that of the kernel ELF mapping, so this is OK. At the same time,
+ *  the current physical window mapping does use NORMAL memory covering memory
+ *  that is not DRAM, which is questionable for newer processors with more
+ *  speculative execution. (FIXME)
+ *
+ *  Hence, the kernel should never access kernel ELF memory through the physical
+ *  memory window, i.e., never modify the result of `ptrFromPAddr()` when the
+ *  physical address lies within the kernel ELF. (Reads are fine if they
+ *  have been flushed appropriately per B2.11; this should be the case for
+ *  any paging structures).
+ *
+ *  As an addendum, LWN Article "ARM's multiply-mapped memory mess" specifies
+ *  that in ARMv6 specifications this kind of aliasing would be UNPREDICTABLE;
+ *  the current ARMv8 A-Profile specifications no longer contain this wording,
+ *  and instead specify the loss of coherency and other behaviours in B2.11.
+ */
+BOOT_CODE void map_kernel_elf_image(pte_t kernel_mapping_pds[])
+{
+    /** This is not strictly necessary, but to handle a non-aligned KERNEL_ELF_PADDR_BASE
+     *  we'd need to do a bit more logic and probably do what riscv64 does
+     *  where the *actual* KERNEL_ELF_BASE is rounded up to the alignment.
+     *  This is simpler and memory is cheap.
+     **/
+    compile_assert(elf_paddr_aligned, IS_ALIGNED(KERNEL_ELF_PADDR_BASE_RAW, seL4_LargePageBits));
+    compile_assert(elf_base_aligned, IS_ALIGNED(KERNEL_ELF_BASE, seL4_LargePageBits));
+
+    /* Please don't overlap with KDEV_BASE */
+    assert(KERNEL_ELF_TOP <= KDEV_BASE);
+    /* Please don't overlap with KS_LOG_PPTR */
+    assert(KERNEL_ELF_TOP <= KS_LOG_PPTR);
+
+    const word_t pd_start = GET_KPT_INDEX(KERNEL_ELF_BASE, KLVL_FRM_ARM_PT_LVL(2));
+    /* pd_end and ELF_TOP are both exclusive, so handle that correctly */
+    const word_t pd_end   = GET_KPT_INDEX(KERNEL_ELF_TOP - 1, KLVL_FRM_ARM_PT_LVL(2)) + 1;
+
+    paddr_t paddr = KERNEL_ELF_PADDR_BASE;
+    UNUSED pptr_t vaddr = KERNEL_ELF_BASE;
+
+    for (word_t pd = pd_start; pd < pd_end; pd++) {
+        assert(pd == GET_KPT_INDEX(vaddr, KLVL_FRM_ARM_PT_LVL(2)));
+
+        kernel_mapping_pds[pd] = pte_pte_page_new(
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+                                     /* XN */ 0,
+#else
+                                     /* UXN */ 1,
+#endif
+                                     /* page_base_address */ paddr,
+                                     /* global (nG) */ 0,
+                                     /* access flag (AF) */ 1,
+                                     /* shareability (SH) */ SMP_TERNARY(SMP_SHARE, 0),
+                                     /* AP */ APFromVMRights(VMKernelOnly),
+                                     /* AttrIndx */ NORMAL
+                                 );
+
+        paddr += BIT(seL4_LargePageBits);
+        vaddr += BIT(seL4_LargePageBits);
+    }
+}
+
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+/* verify that the physical memory window as at the second entry of the PGD */
+compile_assert(physical_window_pgd_location,
+               GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0)) == 1);
+#else
+/* verify that the physical memory window as at the last entry of the PGD */
+compile_assert(physical_window_pgd_location,
+               GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0)) == BIT(PT_INDEX_BITS) - 1);
+#endif
+/* make sure that the PPTR_BASE and PPTR_TOP are huge paged aligned */
+compile_assert(physical_window_base_aligned, IS_ALIGNED(PPTR_BASE, seL4_HugePageBits));
+compile_assert(physical_window_top_aligned, IS_ALIGNED(PPTR_TOP, seL4_HugePageBits));
+
+/* the PPTR_BASE starts from the bottom of the kernel PUD */
+compile_assert(physical_window_bottom_kernel_region,
+               GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(1)) == 0);
+/* the PPTR_TOP then ends at the second-to-last entry of the PUD
+    note: because this is the exclusive value the assert is one higher than
+          you would expect.
+*/
+compile_assert(physical_window_top_kernel_region,
+               GET_KPT_INDEX(PPTR_TOP, KLVL_FRM_ARM_PT_LVL(1)) == BIT(PT_INDEX_BITS) - 1);
+
+BOOT_CODE void map_kernel_physical_window(void)
+{
     paddr_t paddr;
     pptr_t vaddr;
     word_t idx;
-
-#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-    /* verify that the kernel window as at the second entry of the PGD */
-    assert(GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0)) == 1);
-#else
-    /* verify that the kernel window as at the last entry of the PGD */
-    assert(GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0)) == BIT(PT_INDEX_BITS) - 1);
-#endif
-    assert(IS_ALIGNED(PPTR_BASE, seL4_LargePageBits));
-    /* verify that the kernel device window is 1gb aligned and 1gb in size */
-    assert(GET_KPT_INDEX(PPTR_TOP, KLVL_FRM_ARM_PT_LVL(1)) == BIT(PT_INDEX_BITS) - 1);
-    assert(IS_ALIGNED(PPTR_TOP, seL4_HugePageBits));
-
-    /* place the PUD into the PGD */
-    armKSGlobalKernelPGD[GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0))] = pte_pte_table_new(
-                                                                                 addrFromKPPtr(armKSGlobalKernelPUD));
 
     /* place all PDs except the last one in PUD */
     for (idx = GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(1)); idx < GET_KPT_INDEX(PPTR_TOP, KLVL_FRM_ARM_PT_LVL(1));
@@ -1386,7 +1474,7 @@ BOOT_CODE void map_kernel_window(void)
         armKSGlobalKernelPDs[GET_KPT_INDEX(vaddr, KLVL_FRM_ARM_PT_LVL(1))][GET_KPT_INDEX(vaddr,
                                                                                          KLVL_FRM_ARM_PT_LVL(2))] = pte_pte_page_new(
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-                                                                                                                        0, // XN
+                                                                                                                        1, // XN
 #else
                                                                                                                         1, // UXN
 #endif
@@ -1399,16 +1487,30 @@ BOOT_CODE void map_kernel_window(void)
                                                                                                                     );
         vaddr += BIT(seL4_LargePageBits);
     }
+}
 
-    /* put the PD into the PUD for device window */
-    armKSGlobalKernelPUD[GET_KPT_INDEX(PPTR_TOP, KLVL_FRM_ARM_PT_LVL(1))] = pte_pte_table_new(
-                                                                                addrFromKPPtr(&armKSGlobalKernelPDs[BIT(PT_INDEX_BITS) - 1][0])
-                                                                            );
+BOOT_CODE void map_kernel_window(void)
+{
+    /* place the PUD into the PGD */
+    armKSGlobalKernelPGD[GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0))] =
+        pte_pte_table_new(addrFromKPPtr(armKSGlobalKernelPUD));
 
-    /* put the PT into the PD for device window */
-    armKSGlobalKernelPDs[BIT(PT_INDEX_BITS) - 1][BIT(PT_INDEX_BITS) - 1] = pte_pte_table_new(
-                                                                               addrFromKPPtr(armKSGlobalKernelPT)
-                                                                           );
+    map_kernel_physical_window();
+
+    const word_t elf_pud_idx = GET_KPT_INDEX(KERNEL_ELF_BASE, KLVL_FRM_ARM_PT_LVL(1));
+    pte_t *kernel_mapping_pds = armKSGlobalKernelPDs[elf_pud_idx];
+
+    /* place the kernel mapping PDs in the kernel mapping PUD */
+    armKSGlobalKernelPUD[elf_pud_idx] = pte_pte_table_new(addrFromKPPtr(kernel_mapping_pds));
+
+    /* map the kernel ELF */
+    map_kernel_elf_image(kernel_mapping_pds);
+
+    /* put the PT into the PD for device window. It would be nice if
+       we could pass kernel_mapping_pds[511] to map_kernel_devices(), but it is
+       shared between AArch64 and AArch32, so... */
+    kernel_mapping_pds[BIT(PT_INDEX_BITS) - 1]
+        = pte_pte_table_new(addrFromKPPtr(armKSGlobalKernelPT));
 
     map_kernel_devices();
 }
@@ -1659,10 +1761,10 @@ BOOT_CODE cap_t create_mapped_it_frame_cap(cap_t pd_cap, pptr_t pptr, vptr_t vpt
 BOOT_CODE void activate_kernel_vspace(void)
 {
     cleanInvalidateL1Caches();
-    setCurrentKernelVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalKernelPGD)));
+    setCurrentKernelVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalKernelPGD)));
 
     /* Prevent elf-loader address translation to fill up TLB */
-    setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+    setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
 
     invalidateLocalTLB();
     lockTLBEntry(KERNEL_ELF_BASE);
@@ -1801,9 +1903,10 @@ static lookupPTSlot_ret_t lookupPTSlot(vspace_root_t *vspace, vptr_t vptr)
 /* Note that if the hypervisor support is enabled, the user page tables use
  * stage-2 translation format. Otherwise, they follow the stage-1 translation format.
  */
-static pte_t makeUserPagePTE(paddr_t paddr, vm_rights_t vm_rights, vm_attributes_t attributes, vm_page_size_t page_size)
+static pte_t makeUserPagePTE(paddr_t paddr, vm_rights_t vm_rights, bool_t cap_read, vm_attributes_t attributes,
+                             vm_page_size_t page_size)
 {
-    bool_t nonexecutable = vm_attributes_get_armExecuteNever(attributes);
+    bool_t nonexecutable = vm_attributes_get_armExecuteNever(attributes) || !cap_read;
     word_t cacheable = vm_attributes_get_armPageCacheable(attributes);
 
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
@@ -1890,8 +1993,11 @@ void setVMRoot(tcb_t *tcb)
 
     threadRoot = TCB_PTR_CTE_PTR(tcb, tcbVTable)->cap;
 
+    /* ASID/VMID 0 is never allocated to a real VSpace (see findFreeHWASID()
+     * for the hypervisor case), so the empty global VSpace can be installed
+     * under it without flushing the TLB. */
     if (!isValidNativeRoot(threadRoot)) {
-        setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+        setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
         return;
     }
 
@@ -1899,7 +2005,7 @@ void setVMRoot(tcb_t *tcb)
     asid = cap_vspace_cap_get_capVSMappedASID(threadRoot);
     find_ret = findVSpaceForASID(asid);
     if (unlikely(find_ret.status != EXCEPTION_NONE || find_ret.vspace_root != vspaceRoot)) {
-        setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+        setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
         return;
     }
 
@@ -1983,23 +2089,23 @@ static hw_asid_t findFreeHWASID(void)
          hw_asid_offset <= (word_t)((hw_asid_t) - 1);
          hw_asid_offset++) {
         hw_asid = armKSNextASID + ((hw_asid_t)hw_asid_offset);
-        if (armKSHWASIDTable[hw_asid] == asidInvalid) {
+        if (hw_asid != hwASIDReserved && armKSHWASIDTable[hw_asid] == asidInvalid) {
             return hw_asid;
         }
     }
-
-    hw_asid = armKSNextASID;
-
     /* If we've scanned the table without finding a free ASID */
+    hw_asid = armKSNextASID;
     invalidateASID(armKSHWASIDTable[hw_asid]);
 
     /* Flush TLB */
     invalidateTranslationASID(hw_asid);
     armKSHWASIDTable[hw_asid] = asidInvalid;
 
-    /* Increment the NextASID index */
+    /* Increment the NextASID index, skipping the reserved VMID 0 on wrap */
     armKSNextASID++;
-
+    if (armKSNextASID == hwASIDReserved) {
+        armKSNextASID = hwASIDMin;
+    }
     return hw_asid;
 }
 
@@ -2521,6 +2627,15 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
 
         pstart = frame_base + (start & MASK(resolve_ret.ptBitsLeft));
 
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+        /* Don't let applications flush outside of the kernel window */
+        if (pstart < PADDR_BASE || ((end - start) + pstart) > PADDR_TOP) {
+            userError("VSpaceRoot Flush: Outside of kernel physical memory window");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+#endif
+
         setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
         return performVSpaceFlush(invLabel, vspaceRoot, asid, start, end - 1, pstart);
 
@@ -2631,7 +2746,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         cap_t vspaceRootCap;
         vspace_root_t *vspaceRoot;
         asid_t asid, frame_asid;
-        vm_rights_t vmRights;
+        vm_rights_t vmRights, capRights;
         vm_page_size_t frameSize;
         vm_attributes_t attributes;
         findVSpaceForASID_ret_t find_ret;
@@ -2646,8 +2761,8 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         vspaceRootCap = current_extra_caps.excaprefs[0]->cap;
 
         frameSize = cap_frame_cap_get_capFSize(cap);
-        vmRights = maskVMRights(cap_frame_cap_get_capFVMRights(cap),
-                                rightsFromWord(getSyscallArg(1, buffer)));
+        capRights = cap_frame_cap_get_capFVMRights(cap);
+        vmRights = maskVMRights(capRights, rightsFromWord(getSyscallArg(1, buffer)));
 
         if (unlikely(!isValidNativeRoot(vspaceRootCap))) {
             current_syscall_error.type = seL4_InvalidCapability;
@@ -2713,9 +2828,11 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
             return EXCEPTION_SYSCALL_ERROR;
         }
 
+        bool_t cap_read = (capRights == VMReadOnly || capRights == VMReadWrite);
+        pte_t pte = makeUserPagePTE(base, vmRights, cap_read, attributes, frameSize);
+
         setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-        return performPageInvocationMap(asid, cap, cte,
-                                        makeUserPagePTE(base, vmRights, attributes, frameSize), lu_ret.ptSlot);
+        return performPageInvocationMap(asid, cap, cte, pte, lu_ret.ptSlot);
     }
 
     case ARMPageUnmap:
@@ -2779,7 +2896,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
         /* Don't let applications flush outside of the kernel window */
         if (pstart < PADDR_BASE || ((end - start) + pstart) > PADDR_TOP) {
-            userError("Page Flush: Overlaps kernel region.");
+            userError("Page Flush: Outside of kernel physical memory window");
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -3119,7 +3236,7 @@ exception_t benchmark_arch_map_logBuffer(word_t frame_cptr)
     return EXCEPTION_NONE;
 }
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/capdl.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3630,7 +3747,7 @@ void debug_capDL(void)
 }
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/debug.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3643,7 +3760,6 @@ void debug_capDL(void)
 #include <machine/debug.h>
 #include <arch/kernel/vspace.h>
 #include <arch/machine/debug.h>
-#include <arch/machine/debug_conf.h>
 #include <arch/machine/registerset.h>
 #include <arch/model/statedata.h>
 #include <armv/debug.h>
@@ -3855,10 +3971,6 @@ seL4_Fault_t handleUserLevelDebugException(word_t esr, word_t fault_vaddr)
     return seL4_Fault_DebugException_new(bp_vaddr, active_bp, bp_reason);
 }
 
-#endif /* CONFIG_HARDWARE_DEBUG_API */
-
-#ifdef ARM_BASE_CP14_SAVE_AND_RESTORE
-
 /** Pops debug register context for a thread into the CPU.
  *
  * Mirrors the idea of restore_user_context.
@@ -3884,8 +3996,8 @@ void aarch64_restore_user_debug_context(tcb_t *target_thread)
     setRegister(target_thread, SPSR_EL1, spsr);
 }
 
-#endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/fpu.c"
+#endif /* CONFIG_HARDWARE_DEBUG_API */
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3924,7 +4036,7 @@ BOOT_CODE bool_t fpsimd_HWCapTest(void)
 
     return true;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/registerset.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3967,7 +4079,7 @@ word_t getNBSendRecvDest(void)
     return getRegister(NODE_STATE(ksCurThread), nbsendRecvDest);
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/model/statedata.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/model/statedata.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4076,7 +4188,7 @@ UP_STATE_DEFINE(bool_t, armHSVCPUActive);
  * when the kernel runs in EL2.
  */
 asid_t armKSHWASIDTable[BIT(hwASIDBits)];
-hw_asid_t armKSNextASID;
+hw_asid_t armKSNextASID = hwASIDMin;
 #endif
 
 #ifdef CONFIG_ARM_SMMU
@@ -4095,11 +4207,11 @@ compile_assert(smmuStateCBCNodeSize, sizeof(smmuStateCBNode) >= ((SMMU_MAX_CB) *
 asid_t smmuStateCBAsidTable[SMMU_MAX_CB];
 #endif
 
-#ifdef ARM_BASE_CP14_SAVE_AND_RESTORE
+#ifdef CONFIG_HARDWARE_DEBUG_API
 /* Null state for the Debug coprocessor's break/watchpoint registers */
 user_breakpoint_state_t armKSNullBreakpointState;
-#endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
+#endif /* CONFIG_HARDWARE_DEBUG_API */
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/64/object/objecttype.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4647,7 +4759,7 @@ Arch_prepareThreadDelete(tcb_t * thread) {
     fpuRelease(thread);
 #endif
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/api/faults.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4711,7 +4823,7 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
         fail("Invalid fault");
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4820,7 +4932,7 @@ void cleanInvalidate_L1D(void)
 {
     cleanInvalidate_D_by_level(0);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4842,12 +4954,18 @@ void cleanInvalidate_L1D(void)
 
 #define PMUSERENR_EL0_EN BIT(0)
 
+#define ID_AA64DFR0_PMUVER_MASK   (0xful << 8)
+#define ID_AA64DFR0_PMUVER_NONE   (0x0ul << 8)
+#define ID_AA64DFR0_PMUVER_IMPDEF (0xful << 8)
+
 static void check_export_pmu(void)
 {
-#if defined CONFIG_EXPORT_PMU_USER || defined CONFIG_ENABLE_BENCHMARKS
+#ifdef CONFIG_EXPORT_PMU_USER
     /* allow PL0 to access the PMU */
     uint32_t val = PMUSERENR_EL0_EN;
     MSR("PMUSERENR_EL0", val);
+#else
+    MSR("PMUSERENR_EL0", 0);
 #endif
 }
 
@@ -4880,12 +4998,24 @@ static void check_export_arch_timer(void)
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
 }
 
+static inline bool_t pmu_present(void)
+{
+    word_t v;
+
+    MRS("id_aa64dfr0_el1", v);
+    v &= ID_AA64DFR0_PMUVER_MASK;
+    /* Count PMU as present if it is not None and not Implementation Defined (same as Linux) */
+    return v != ID_AA64DFR0_PMUVER_NONE && v != ID_AA64DFR0_PMUVER_IMPDEF;
+}
+
 void armv_init_user_access(void)
 {
-    check_export_pmu();
+    if (pmu_present()) {
+        check_export_pmu();
+    }
     check_export_arch_timer();
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/benchmark/benchmark.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4924,7 +5054,7 @@ void arm_init_ccnt(void)
 #endif /* CONFIG_ARM_ENABLE_PMU_OVERFLOW_INTERRUPT */
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5137,7 +5267,7 @@ VISIBLE NORETURN void c_handle_vcpu_fault(word_t hsr)
     UNREACHABLE();
 }
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2021, HENSOLDT Cyber
@@ -5330,9 +5460,14 @@ BOOT_CODE static bool_t init_cpu(void)
 #endif
 
     activate_kernel_vspace();
-    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
-        vcpu_boot_init();
+
+#ifdef CONFIG_ARCH_AARCH64
+    /* After activate_kernel_vspace(), so printf() is available. */
+    if (!config_set(CONFIG_ARM_HYPERVISOR_SUPPORT) && !check16BitASID()) {
+        printf("ERROR: kernel requires 16-bit ASIDs\n");
+        return false;
     }
+#endif
 
 #ifdef CONFIG_HARDWARE_DEBUG_API
     if (!Arch_initHardwareBreakpoints()) {
@@ -5362,6 +5497,14 @@ BOOT_CODE static bool_t init_cpu(void)
     setVtable((pptr_t)arm_vector_table);
 #endif /* CONFIG_ARCH_AARCH64 */
 
+    cpu_initLocalIRQController();
+
+    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
+        vcpu_boot_init();
+    }
+
+    /* FPU init must come after vcpu_boot_init(), which sets the default HYP
+     * FPU traps that the FPU init then adjusts. */
     haveHWFPU = fpsimd_HWCapTest();
 
     /* Disable FPU to avoid channels where a platform has an FPU but doesn't make use of it */
@@ -5379,8 +5522,6 @@ BOOT_CODE static bool_t init_cpu(void)
         return false;
     }
 #endif /* CONFIG_HAVE_FPU */
-
-    cpu_initLocalIRQController();
 
 #ifdef CONFIG_ENABLE_BENCHMARKS
     arm_init_ccnt();
@@ -5810,7 +5951,7 @@ BOOT_CODE VISIBLE void init_kernel(
     schedule();
     activateThread();
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5837,7 +5978,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
         vcpu_flush_if_current(tptr);
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/cache.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/cache.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6014,6 +6155,7 @@ void cleanCaches_PoU(void)
     dsb();
     invalidate_I_PoU();
     dsb();
+    isb();
 }
 
 void cleanInvalidateL1Caches(void)
@@ -6023,6 +6165,7 @@ void cleanInvalidateL1Caches(void)
     dsb();
     invalidate_I_PoU();
     dsb();
+    isb();
 }
 
 void arch_clean_invalidate_caches(void)
@@ -6046,7 +6189,7 @@ void arch_clean_invalidate_L1_caches(word_t type)
         isb();
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/debug.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6060,7 +6203,6 @@ void arch_clean_invalidate_L1_caches(word_t type)
 #include <util.h>
 #include <arch/model/statedata.h>
 #include <arch/machine/debug.h>
-#include <arch/machine/debug_conf.h>
 #include <arch/kernel/vspace.h>
 #include <arch/machine/registerset.h>
 #include <armv/debug.h>
@@ -6092,10 +6234,6 @@ enum watchpoint_access /* WCR[4:3] */ {
     DBGWCR_ACCESS_STORE = 2u,
     DBGWCR_ACCESS_EITHER = 3u
 };
-
-#endif /* CONFIG_HARDWARE_DEBUG_API */
-
-#ifdef ARM_BASE_CP14_SAVE_AND_RESTORE
 
 /* These next few functions (read*Context()/write*Context()) read from TCB
  * context and not from the hardware registers.
@@ -6147,10 +6285,6 @@ static void writeWvrContext(tcb_t *t, uint16_t index, word_t val)
     assert(index < seL4_NumExclusiveWatchpoints);
     t->tcbArch.tcbContext.breakpointState.watchpoint[index].vr = val;
 }
-
-#endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-
-#ifdef CONFIG_HARDWARE_DEBUG_API
 
 /** For debugging: prints out the debug register pair values as returned by the
  * coprocessor.
@@ -6513,10 +6647,6 @@ int getAndResetActiveBreakpoint(word_t vaddr, word_t reason)
     return ret;
 }
 
-#endif /* CONFIG_HARDWARE_DEBUG_API */
-
-#ifdef ARM_BASE_CP14_SAVE_AND_RESTORE
-
 /** Mirrors Arch_initFpuContext.
  *
  * Zeroes out the BVR thread context and preloads reserved bit values from the
@@ -6529,7 +6659,7 @@ void Arch_initBreakpointContext(user_context_t *uc)
     uc->breakpointState = armKSNullBreakpointState;
 }
 
-void loadAllDisabledBreakpointState(void)
+static void loadAllDisabledBreakpointState(void)
 {
     int i;
 
@@ -6550,59 +6680,6 @@ void loadAllDisabledBreakpointState(void)
         writeWcrCp(i, readWcrCp(i) & ~DBGWCR_ENABLE);
     }
 }
-
-/* We only need to save the breakpoint state in the hypervisor
- * build, and only for threads that have an associated VCPU.
- *
- * When the normal kernel is running with the debug API, all
- * changes to the debug regs are done through the debug API.
- * In the hypervisor build, the guest VM has full access to the
- * debug regs in PL1, so we need to save its values on vmexit.
- *
- * When saving the debug regs we will always save all of them.
- * When restoring, we will restore only those that have been used
- * for native threads; and we will restore all of them
- * unconditionally for VCPUs (because we don't know which of
- * them have been changed by the guest).
- *
- * To ensure that all the debug regs are restored unconditionally,
- * we just set the "used_breakpoints_bf" bitfield to all 1s in
- * associateVcpu.
- */
-void saveAllBreakpointState(tcb_t *t)
-{
-    int i;
-
-    assert(t != NULL);
-
-    for (i = 0; i < seL4_NumExclusiveBreakpoints; i++) {
-        writeBvrContext(t, i, readBvrCp(i));
-        writeBcrContext(t, i, readBcrCp(i));
-    }
-
-    for (i = 0; i < seL4_NumExclusiveWatchpoints; i++) {
-        writeWvrContext(t, i, readWvrCp(i));
-        writeWcrContext(t, i, readWcrCp(i));
-    }
-}
-
-#ifdef ARM_HYP_CP14_SAVE_AND_RESTORE_VCPU_THREADS
-void Arch_debugAssociateVCPUTCB(tcb_t *t)
-{
-    /* Don't attempt to shift beyond end of word. */
-    assert(seL4_NumHWBreakpoints < sizeof(word_t) * 8);
-
-    /* Set all the bits to 1, so loadBreakpointState() will
-     * restore all the debug regs unconditionally.
-     */
-    t->tcbArch.tcbContext.breakpointState.used_breakpoints_bf = MASK(seL4_NumHWBreakpoints);
-}
-
-void Arch_debugDissociateVCPUTCB(tcb_t *t)
-{
-    t->tcbArch.tcbContext.breakpointState.used_breakpoints_bf = 0;
-}
-#endif
 
 static void loadBreakpointState(tcb_t *t)
 {
@@ -6661,8 +6738,8 @@ void restore_user_debug_context(tcb_t *target_thread)
 #endif /* CONFIG_ARCH_ARCH64 */
 }
 
-#endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/errata.c"
+#endif /* CONFIG_HARDWARE_DEBUG_API */
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/errata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6708,7 +6785,7 @@ BOOT_CODE void VISIBLE arm_errata(void)
 #endif
 }
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/gic_v3.c"
 /*
  * Copyright 2019, DornerWorks
  * Copyright 2019, Data61, CSIRO (ABN 41 687 119 230)
@@ -6796,7 +6873,7 @@ static inline uint64_t sgir_word_from_args(word_t irq, word_t target)
            | ((t >> 4)  & 0x0f) << ICC_SGI1R_RS_SHIFT // AFF0 Range select
            | ((t >> 8)  & 0xff) << ICC_SGI1R_AFF1_SHIFT // AFF1
            | ((t >> 16) & 0xff) << ICC_SGI1R_AFF2_SHIFT // AFF2
-           | ((t >> 24) & 0xff) << ICC_SGI1R_AFF2_SHIFT; // AFF3
+           | ((t >> 24) & 0xff) << ICC_SGI1R_AFF3_SHIFT; // AFF3
 }
 
 /* Wait for completion of a distributor change */
@@ -6908,7 +6985,7 @@ BOOT_CODE static void dist_init(void)
         }
     }
 
-    gic_dist->ctlr = GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1NS | GICD_CTLR_ENABLE_G0;
+    gic_dist->ctlr = GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1NS;
     gicv3_dist_wait_for_rwp();
 
     /* Route all global IRQs to this CPU */
@@ -7187,7 +7264,7 @@ void setIRQTarget(irq_t irq, seL4_Word target)
 word_t gic_vcpu_num_list_regs;
 
 #endif /* End of CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/hardware.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/hardware.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7209,6 +7286,9 @@ void setNextPC(tcb_t *thread, word_t v)
     setRegister(thread, NEXT_PC_REG, v);
 }
 
+/* Map and reserve device regions. The kernel may map only part of a device
+ * region, so mapped and reserved regions do not have to be equal.
+ */
 BOOT_CODE void map_kernel_devices(void)
 {
     /* If there are no kernel device frames at all, then kernel_device_frames is
@@ -7224,16 +7304,16 @@ BOOT_CODE void map_kernel_devices(void)
         map_kernel_frame(frame->paddr, frame->pptr, VMKernelOnly,
                          vm_attributes_new(frame->armExecuteNever, false,
                                            false));
-        if (!frame->userAvailable) {
-            reserve_region((p_region_t) {
-                .start = frame->paddr,
-                .end   = frame->paddr + BIT(PAGE_BITS)
-            });
+    }
+
+    for (int i = 0; i < NUM_KERNEL_DEVICE_RESERVED_REGIONS; i++) {
+        if (!reserve_region(kernel_device_reserved_regions[i])) {
+            fail("Failed to reserve kernel device region");
         }
     }
 }
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/io.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/io.c"
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -7257,7 +7337,7 @@ unsigned char kernel_getDebugChar(void)
     return uart_drv_getchar();
 }
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/l2c_nop.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/machine/l2c_nop.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7274,7 +7354,7 @@ void plat_cleanL2Range(paddr_t start, paddr_t end) {}
 void plat_invalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Cache(void) {}
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/interrupt.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7502,7 +7582,7 @@ exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
     return invokeSGISignalGenerate(irq, target);
 }
 #endif /* !CONFIG_ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/iospace.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/object/iospace.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7661,6 +7741,11 @@ exception_t decodeARMIOPTInvocation(
     lookupIOPDSlot_ret_t    lu_ret;
 
     if (invLabel == ARMIOPageTableUnmap) {
+        if (!isFinalCapability(slot)) {
+            userError("IOPTUnmap: Cannot unmap if more than one cap exists.");
+            current_syscall_error.type = seL4_RevokeFirst;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
         deleteIOPageTable(slot->cap);
         slot->cap = cap_io_page_table_cap_set_capIOPTIsMapped(slot->cap, 0);
 
@@ -7893,8 +7978,8 @@ void deleteIOPageTable(cap_t io_pt_cap)
             return;
         }
 
-        if (isIOPDEValid(lu_ret.iopdSlot) &&
-            iopde_ptr_get_page_size(lu_ret.iopdSlot) == iopde_iopde_pt &&
+        if (!isIOPDEValid(lu_ret.iopdSlot) ||
+            iopde_ptr_get_page_size(lu_ret.iopdSlot) != iopde_iopde_pt ||
             iopde_iopde_pt_ptr_get_address(lu_ret.iopdSlot) != (pptr_to_paddr((void *)cap_io_page_table_cap_get_capIOPTBasePtr(
                                                                                   io_pt_cap)))) {
             return;
@@ -7979,7 +8064,7 @@ exception_t decodeARMIOSpaceInvocation(word_t invLabel, cap_t cap)
     return EXCEPTION_SYSCALL_ERROR;
 }
 #endif /* end of CONFIG_TK1_SMMU */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/smc.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/object/smc.c"
 /*
  * Copyright 2021, DornerWorks Ltd.
  *
@@ -8079,7 +8164,7 @@ exception_t decodeARMSMCInvocation(word_t label, word_t length, cap_t cap, bool_
 }
 
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/smmu.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/object/smmu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8492,7 +8577,7 @@ void invalidateSMMUTLBByASIDVA(asid_t asid, vptr_t vaddr, word_t bind_cb)
 
 #endif
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/tcb.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8516,7 +8601,7 @@ exception_t CONST Arch_performTransfer(word_t arch, tcb_t *tcb_src, tcb_t *tcb_d
 {
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/vcpu.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/object/vcpu.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8529,8 +8614,6 @@ exception_t CONST Arch_performTransfer(word_t arch, tcb_t *tcb_src, tcb_t *tcb_d
 
 #include <arch/object/vcpu.h>
 #include <armv/vcpu.h>
-#include <arch/machine/debug.h> /* Arch_debug[A/Di]ssociateVCPUTCB() */
-#include <arch/machine/debug_conf.h>
 #include <drivers/timer/arm_generic.h>
 #include <plat/platform_gen.h> /* Ensure correct GIC header is included */
 
@@ -8560,7 +8643,7 @@ static void vcpu_save(vcpu_t *vcpu, bool_t active)
     if (active) {
         vcpu_save_reg(vcpu, seL4_VCPUReg_SCTLR);
         vcpu->vgic.hcr = get_gic_vcpu_ctrl_hcr();
-        save_virt_timer(vcpu);
+        disable_virt_timer(vcpu);
     }
 
     /* Store GIC VCPU control state */
@@ -8744,8 +8827,8 @@ void VGICMaintenance(void)
 void vcpu_init(vcpu_t *vcpu)
 {
     armv_vcpu_init(vcpu);
-    /* GICH VCPU interface control */
-    vcpu->vgic.hcr = VGIC_HCR_EN;
+    /* GICH VCPU interface control. Trap VCPU access to Group 0 registers on GICv3. */
+    vcpu->vgic.hcr = VGIC_HCR_EN | VGIC_HCR_TALL0;
 #ifdef CONFIG_VTIMER_UPDATE_VOFFSET
     /* Virtual Timer interface */
     vcpu->virtTimer.last_pcount = 0;
@@ -8764,9 +8847,6 @@ void vcpu_switch(vcpu_t *new)
             ARCH_NODE_STATE(armHSVCPUActive) = true;
         } else if (unlikely(ARCH_NODE_STATE(armHSVCPUActive))) {
             /* leave the current VCPU state loaded, but disable vgic and mmu */
-#ifdef ARM_HYP_CP14_SAVE_AND_RESTORE_VCPU_THREADS
-            saveAllBreakpointState(ARCH_NODE_STATE(armHSCurVCPU)->vcpuTCB);
-#endif
             vcpu_disable(ARCH_NODE_STATE(armHSCurVCPU));
             ARCH_NODE_STATE(armHSVCPUActive) = false;
         }
@@ -8834,9 +8914,6 @@ void dissociateVCPUTCB(vcpu_t *vcpu, tcb_t *tcb)
     }
     tcb->tcbArch.tcbVCPU = NULL;
     vcpu->vcpuTCB = NULL;
-#ifdef ARM_HYP_CP14_SAVE_AND_RESTORE_VCPU_THREADS
-    Arch_debugDissociateVCPUTCB(tcb);
-#endif
 
     /* sanitize the CPSR as without a VCPU a thread should only be in user mode */
 #ifdef CONFIG_ARCH_AARCH64
@@ -8999,12 +9076,6 @@ exception_t decodeVCPUInjectIRQ(cap_t cap, word_t length, word_t *buffer)
         current_syscall_error.type = seL4_RangeError;
         return EXCEPTION_SYSCALL_ERROR;
     }
-    /* LR index is in use */
-    if (virq_get_virqType(vcpu->vgic.lr[index]) == virq_virq_active) {
-        userError("VGIC List register in use.");
-        current_syscall_error.type = seL4_DeleteFirst;
-        return EXCEPTION_SYSCALL_ERROR;
-    }
     virq_t virq = virq_virq_pending_new(group, priority, 1, vid);
 
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
@@ -9127,7 +9198,7 @@ void handleVCPUInjectInterruptIPI(vcpu_t *vcpu, unsigned long index, virq_t virq
 #endif /* ENABLE_SMP_SUPPORT */
 
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/smp/ipi.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/arch/arm/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9203,7 +9274,7 @@ void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
     generic_ipi_send_mask(ipi, mask, isBlocking);
 }
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/assert.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/assert.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9247,7 +9318,7 @@ void _assert_fail(
 }
 
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/benchmark/benchmark.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9404,7 +9475,7 @@ exception_t handle_SysBenchmarkResetAllThreadsUtilisation(void)
 #endif /* CONFIG_DEBUG_BUILD */
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
 #endif /* CONFIG_ENABLE_BENCHMARKS */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark_track.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/benchmark/benchmark_track.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9439,7 +9510,7 @@ void benchmark_track_exit(void)
     }
 }
 #endif /* CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark_utilisation.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/benchmark/benchmark_utilisation.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9518,7 +9589,7 @@ void benchmark_track_reset_utilisation(tcb_t *tcb)
     tcb->benchmark.schedule_start_time = 0;
 }
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/drivers/serial/pl011.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/drivers/serial/pl011.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9556,7 +9627,7 @@ unsigned char uart_drv_getchar(void)
     return *UART_REG(UARTDR);
 }
 #endif  /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/drivers/timer/generic_timer.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/drivers/timer/generic_timer.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9620,30 +9691,34 @@ static inline uint64_t read_cntpct(void)
     return val;
 }
 
-static void save_virt_timer(vcpu_t *vcpu)
+static void disable_virt_timer(vcpu_t *vcpu)
 {
-    /* Save control register */
-    vcpu_save_reg(vcpu, seL4_VCPUReg_CNTV_CTL);
-    vcpu_hw_write_reg(seL4_VCPUReg_CNTV_CTL, 0);
-    /* Save Compare Value and Offset registers */
+    if (likely(vcpu)) {
+        /* Save control register */
+        vcpu_save_reg(vcpu, seL4_VCPUReg_CNTV_CTL);
+        /* Save Compare Value and Offset registers */
 #ifdef CONFIG_ARCH_AARCH64
-    vcpu_save_reg(vcpu, seL4_VCPUReg_CNTV_CVAL);
-    vcpu_save_reg(vcpu, seL4_VCPUReg_CNTVOFF);
-    vcpu_save_reg(vcpu, seL4_VCPUReg_CNTKCTL_EL1);
+        vcpu_save_reg(vcpu, seL4_VCPUReg_CNTV_CVAL);
+        vcpu_save_reg(vcpu, seL4_VCPUReg_CNTVOFF);
+        vcpu_save_reg(vcpu, seL4_VCPUReg_CNTKCTL_EL1);
 #else
-    uint64_t cval = get_cntv_cval_64();
-    uint64_t cntvoff = get_cntv_off_64();
-    vcpu_write_reg(vcpu, seL4_VCPUReg_CNTV_CVALhigh, (word_t)(cval >> 32));
-    vcpu_write_reg(vcpu, seL4_VCPUReg_CNTV_CVALlow, (word_t)cval);
-    vcpu_write_reg(vcpu, seL4_VCPUReg_CNTVOFFhigh, (word_t)(cntvoff >> 32));
-    vcpu_write_reg(vcpu, seL4_VCPUReg_CNTVOFFlow, (word_t)cntvoff);
-    vcpu_save_reg(vcpu, seL4_VCPUReg_CNTKCTL);
+        uint64_t cval = get_cntv_cval_64();
+        uint64_t cntvoff = get_cntv_off_64();
+        vcpu_write_reg(vcpu, seL4_VCPUReg_CNTV_CVALhigh, (word_t)(cval >> 32));
+        vcpu_write_reg(vcpu, seL4_VCPUReg_CNTV_CVALlow, (word_t)cval);
+        vcpu_write_reg(vcpu, seL4_VCPUReg_CNTVOFFhigh, (word_t)(cntvoff >> 32));
+        vcpu_write_reg(vcpu, seL4_VCPUReg_CNTVOFFlow, (word_t)cntvoff);
+        vcpu_save_reg(vcpu, seL4_VCPUReg_CNTKCTL);
 #endif
-    check_export_arch_timer();
 #ifdef CONFIG_VTIMER_UPDATE_VOFFSET
-    /* Save counter value at the time the vcpu is disabled */
-    vcpu->virtTimer.last_pcount = read_cntpct();
+        /* Save counter value at the time the vcpu is disabled */
+        vcpu->virtTimer.last_pcount = read_cntpct();
 #endif
+    }
+    /* With or without VCPU object, turn off the timer and return to
+     * user-mode timer config */
+    vcpu_hw_write_reg(seL4_VCPUReg_CNTV_CTL, 0);
+    check_export_arch_timer();
 }
 
 static void restore_virt_timer(vcpu_t *vcpu)
@@ -9697,7 +9772,7 @@ static void restore_virt_timer(vcpu_t *vcpu)
 }
 
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/fastpath/fastpath.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9786,15 +9861,19 @@ void NORETURN fastpath_call(word_t cptr, word_t msgInfo)
     stored_hw_asid = cap_pd[PD_ASID_SLOT];
 #endif
 
-#ifdef CONFIG_ARCH_X86_64
-    /* borrow the stored_hw_asid for PCID */
-    stored_hw_asid.words[0] = cap_pml4_cap_get_capPML4MappedASID_fp(newVTable);
+#if defined(CONFIG_ARCH_X86_64) || defined(CONFIG_ARCH_IA32)
+    /* Need to test that the ASID is still valid */
+    asid_t asid = vspace_root_getMappedASID_fp(newVTable);
+    asid_map_t asid_map = findMapForASID(asid);
+    if (unlikely(asid_map_get_type(asid_map) != asid_map_asid_map_vspace ||
+                 (vspace_root_t *)asid_map_asid_map_vspace_get_vspace_root(asid_map) != cap_pd)) {
+        slowpath(SysCall);
+    }
+    /* Borrow the stored_hw_asid for PCID on x86_64. On ia32 this value will be ignored, but
+     * it is passed to a function below, so at least some value needs to be written. */
+    stored_hw_asid.words[0] = asid;
 #endif
 
-#ifdef CONFIG_ARCH_IA32
-    /* stored_hw_asid is unused on ia32 fastpath, but gets passed into a function below. */
-    stored_hw_asid.words[0] = 0;
-#endif
 #ifdef CONFIG_ARCH_AARCH64
     /* Need to test that the ASID is still valid */
     asid_t asid = cap_vspace_cap_get_capVSMappedASID(newVTable);
@@ -9816,8 +9895,13 @@ void NORETURN fastpath_call(word_t cptr, word_t msgInfo)
 #endif
 
 #ifdef CONFIG_ARCH_RISCV
+    /* Need to test that the ASID is still valid */
+    asid_t asid = cap_page_table_cap_get_capPTMappedASID(newVTable);
+    if (unlikely(findVSpaceForASID_fp(asid) != cap_pd)) {
+        slowpath(SysCall);
+    }
     /* Get HW ASID */
-    stored_hw_asid.words[0] = cap_page_table_cap_get_capPTMappedASID(newVTable);
+    stored_hw_asid.words[0] = asid;
 #endif
 
     /* let gcc optimise this out for 1 domain */
@@ -9878,6 +9962,9 @@ void NORETURN fastpath_call(word_t cptr, word_t msgInfo)
     endpoint_ptr_set_epQueue_head_np(ep_ptr, TCB_REF(dest->tcbEPNext));
     if (unlikely(dest->tcbEPNext)) {
         dest->tcbEPNext->tcbEPPrev = NULL;
+#ifdef CONFIG_KERNEL_MCS
+        dest->tcbEPNext = NULL;
+#endif
     } else {
         endpoint_ptr_mset_epQueue_tail_state(ep_ptr, 0, EPState_Idle);
     }
@@ -10065,13 +10152,19 @@ void NORETURN fastpath_reply_recv(word_t cptr, word_t msgInfo)
     stored_hw_asid = cap_pd[PD_ASID_SLOT];
 #endif
 
-#ifdef CONFIG_ARCH_X86_64
-    stored_hw_asid.words[0] = cap_pml4_cap_get_capPML4MappedASID(newVTable);
+#if defined(CONFIG_ARCH_X86_64) || defined(CONFIG_ARCH_IA32)
+    /* Need to test that the ASID is still valid */
+    asid_t asid = vspace_root_getMappedASID_fp(newVTable);
+    asid_map_t asid_map = findMapForASID(asid);
+    if (unlikely(asid_map_get_type(asid_map) != asid_map_asid_map_vspace ||
+                 (vspace_root_t *)asid_map_asid_map_vspace_get_vspace_root(asid_map) != cap_pd)) {
+        slowpath(SysReplyRecv);
+    }
+    /* Borrow the stored_hw_asid for PCID on x86_64. On ia32 this value will be ignored, but
+     * it is passed to a function below, so at least some value needs to be written. */
+    stored_hw_asid.words[0] = asid;
 #endif
-#ifdef CONFIG_ARCH_IA32
-    /* stored_hw_asid is unused on ia32 fastpath, but gets passed into a function below. */
-    stored_hw_asid.words[0] = 0;
-#endif
+
 #ifdef CONFIG_ARCH_AARCH64
     /* Need to test that the ASID is still valid */
     asid_t asid = cap_vspace_cap_get_capVSMappedASID(newVTable);
@@ -10094,7 +10187,13 @@ void NORETURN fastpath_reply_recv(word_t cptr, word_t msgInfo)
 #endif
 
 #ifdef CONFIG_ARCH_RISCV
-    stored_hw_asid.words[0] = cap_page_table_cap_get_capPTMappedASID(newVTable);
+    /* Need to test that the ASID is still valid */
+    asid_t asid = cap_page_table_cap_get_capPTMappedASID(newVTable);
+    if (unlikely(findVSpaceForASID_fp(asid) != cap_pd)) {
+        slowpath(SysReplyRecv);
+    }
+    /* Get HW ASID */
+    stored_hw_asid.words[0] = asid;
 #endif
 
     /* Ensure the original caller can be scheduled directly. */
@@ -10544,6 +10643,9 @@ void NORETURN fastpath_vm_fault(vm_fault_type_t type)
     endpoint_ptr_set_epQueue_head_np(ep_ptr, TCB_REF(dest->tcbEPNext));
     if (unlikely(dest->tcbEPNext)) {
         dest->tcbEPNext->tcbEPPrev = NULL;
+#ifdef CONFIG_KERNEL_MCS
+        dest->tcbEPNext = NULL;
+#endif
     } else {
         endpoint_ptr_mset_epQueue_tail_state(ep_ptr, 0, EPState_Idle);
     }
@@ -10597,7 +10699,7 @@ void NORETURN fastpath_vm_fault(vm_fault_type_t type)
     fastpath_restore(badge, msgInfo, NODE_STATE(ksCurThread));
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/inlines.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/inlines.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10614,7 +10716,7 @@ syscall_error_t current_syscall_error;
 debug_syscall_error_t current_debug_error;
 #endif
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10664,21 +10766,18 @@ BOOT_CODE p_region_t get_p_reg_kernel_img(void)
 BOOT_CODE static void merge_regions(void)
 {
     /* Walk through reserved regions and see if any can be merged */
-    for (word_t i = 1; i < ndks_boot.resv_count;) {
-        if (ndks_boot.reserved[i - 1].end == ndks_boot.reserved[i].start) {
+    word_t top = 0;
+    for (word_t i = 1; i < ndks_boot.resv_count; i++) {
+        if (ndks_boot.reserved[top].end == ndks_boot.reserved[i].start) {
             /* extend earlier region */
-            ndks_boot.reserved[i - 1].end = ndks_boot.reserved[i].end;
-            /* move everything else down */
-            for (word_t j = i + 1; j < ndks_boot.resv_count; j++) {
-                ndks_boot.reserved[j - 1] = ndks_boot.reserved[j];
-            }
-
-            ndks_boot.resv_count--;
-            /* don't increment i in case there are multiple adjacent regions */
+            ndks_boot.reserved[top].end = ndks_boot.reserved[i].end;
         } else {
-            i++;
+            /* add region */
+            top++;
+            ndks_boot.reserved[top] = ndks_boot.reserved[i];
         }
     }
+    ndks_boot.resv_count = ndks_boot.resv_count > 0 ? top + 1 : 0;
 }
 
 BOOT_CODE bool_t reserve_region(p_region_t reg)
@@ -11101,7 +11200,7 @@ BOOT_CODE void create_idle_thread(void)
         SMP_COND_STATEMENT(NODE_STATE_ON_CORE(ksIdleThread, i)->tcbAffinity = i);
 #ifdef CONFIG_KERNEL_MCS
         configure_sched_context(NODE_STATE_ON_CORE(ksIdleThread, i), SC_PTR(&ksIdleThreadSC[SMP_TERNARY(i, 0)]),
-                                usToTicks(CONFIG_BOOT_THREAD_TIME_SLICE * US_IN_MS));
+                                MAX_PERIOD_TICKS);
         SMP_COND_STATEMENT(NODE_STATE_ON_CORE(ksIdleThread, i)->tcbSchedContext->scCore = i;)
         NODE_STATE_ON_CORE(ksIdleSC, i) = SC_PTR(&ksIdleThreadSC[SMP_TERNARY(i, 0)]);
 #endif
@@ -11748,7 +11847,7 @@ BOOT_CODE bool_t init_freemem(word_t n_available, const p_region_t *available,
            "objects, need size/alignment of 2^%"SEL4_PRIu_word"\n", max);
     return false;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/cspace.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/kernel/cspace.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11942,7 +12041,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         }
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/faulthandler.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/kernel/faulthandler.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -12116,7 +12215,387 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
     setThreadState(tptr, ThreadState_Inactive);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/stack.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/kernel/sporadic.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <types.h>
+#include <api/failures.h>
+#include <object/structures.h>
+
+/* functions to manage the circular buffer of
+ * sporadic budget replenishments (refills for short).
+ *
+ * The circular buffer always has at least one item in it.
+ *
+ * Items are appended at the tail (the back) and
+ * removed from the head (the front). Below is
+ * an example of a queue with 4 items (h = head, t = tail, x = item, [] = slot)
+ * and max size 8.
+ *
+ * [][h][x][x][t][][][]
+ *
+ * and another example of a queue with 5 items
+ *
+ * [x][t][][][][h][x][x]
+ *
+ * The queue has a minimum size of 1, so it is possible that h == t.
+ *
+ * The queue is implemented as head + tail rather than head + size as
+ * we cannot use the mod operator on all architectures without accessing
+ * the fpu or implementing divide.
+ */
+
+/* return the index of the next item in the refill queue */
+static inline word_t refill_next(sched_context_t *sc, word_t index)
+{
+    return (index == sc->scRefillMax - 1u) ? (0) : index + 1u;
+}
+
+#ifdef CONFIG_PRINTING
+/* for debugging */
+UNUSED static inline void print_index(sched_context_t *sc, word_t index)
+{
+
+    printf("index %lu, Amount: %llx, time %llx\n", index, refill_index(sc, index)->rAmount,
+           refill_index(sc, index)->rTime);
+}
+
+UNUSED static inline void refill_print(sched_context_t *sc)
+{
+    printf("Head %lu tail %lu\n", sc->scRefillHead, sc->scRefillTail);
+    word_t current = sc->scRefillHead;
+    /* always print the head */
+    print_index(sc, current);
+
+    while (current != sc->scRefillTail) {
+        current = refill_next(sc, current);
+        print_index(sc, current);
+    }
+
+}
+#endif /* CONFIG_PRINTING */
+#ifdef CONFIG_DEBUG_BUILD
+/* check a refill queue is ordered correctly */
+static UNUSED bool_t refill_ordered(sched_context_t *sc)
+{
+    if (isRoundRobin(sc)) {
+        return true;
+    }
+
+    word_t current = sc->scRefillHead;
+    word_t next = refill_next(sc, sc->scRefillHead);
+
+    while (current != sc->scRefillTail) {
+        if (!(refill_index(sc, current)->rTime + refill_index(sc, current)->rAmount <= refill_index(sc, next)->rTime)) {
+#ifdef CONFIG_PRINTING
+            refill_print(sc);
+#endif
+            return false;
+        }
+        current = next;
+        next = refill_next(sc, current);
+    }
+
+    return true;
+}
+
+#define REFILL_SANITY_START(sc) ticks_t _sum = refill_sum(sc); assert(isRoundRobin(sc) || refill_ordered(sc));
+#define REFILL_SANITY_CHECK(sc, budget) \
+    do { \
+        assert(refill_sum(sc) == budget); assert(isRoundRobin(sc) || refill_ordered(sc)); \
+    } while (0)
+
+#define REFILL_SANITY_END(sc) \
+    do {\
+        REFILL_SANITY_CHECK(sc, _sum);\
+    } while (0)
+#else
+#define REFILL_SANITY_START(sc)
+#define REFILL_SANITY_CHECK(sc, budget)
+#define REFILL_SANITY_END(sc)
+#endif /* CONFIG_DEBUG_BUILD */
+
+/* compute the sum of a refill queue */
+static UNUSED ticks_t refill_sum(sched_context_t *sc)
+{
+    ticks_t sum = refill_head(sc)->rAmount;
+    word_t current = sc->scRefillHead;
+
+    while (current != sc->scRefillTail) {
+        current = refill_next(sc, current);
+        sum += refill_index(sc, current)->rAmount;
+    }
+
+    return sum;
+}
+
+/* pop head of refill queue */
+static inline refill_t refill_pop_head(sched_context_t *sc)
+{
+    /* queues cannot be smaller than 1 */
+    assert(!refill_single(sc));
+
+    UNUSED word_t prev_size = refill_size(sc);
+    refill_t refill = *refill_head(sc);
+    sc->scRefillHead = refill_next(sc, sc->scRefillHead);
+
+    /* sanity */
+    assert(prev_size == (refill_size(sc) + 1));
+    assert(sc->scRefillHead < sc->scRefillMax);
+    return refill;
+}
+
+/* add item to tail of refill queue */
+static inline void refill_add_tail(sched_context_t *sc, refill_t refill)
+{
+    /* cannot add beyond queue size */
+    assert(refill_size(sc) < sc->scRefillMax);
+
+    word_t new_tail = refill_next(sc, sc->scRefillTail);
+    sc->scRefillTail = new_tail;
+    *refill_tail(sc) = refill;
+
+    /* sanity */
+    assert(new_tail < sc->scRefillMax);
+}
+
+static inline void maybe_add_empty_tail(sched_context_t *sc)
+{
+    if (isRoundRobin(sc)) {
+        /* add an empty refill - we track the used up time here */
+        refill_t empty_tail = { .rTime = refill_head(sc)->rTime };
+        refill_add_tail(sc, empty_tail);
+        assert(refill_size(sc) == MIN_REFILLS);
+    }
+}
+
+void refill_new(sched_context_t *sc, word_t max_refills, ticks_t budget, ticks_t period)
+{
+    sc->scPeriod = period;
+    sc->scRefillHead = 0;
+    sc->scRefillTail = 0;
+    sc->scRefillMax = max_refills;
+    assert(budget >= MIN_BUDGET);
+    /* full budget available */
+    refill_head(sc)->rAmount = budget;
+    /* budget can be used from now */
+    refill_head(sc)->rTime = NODE_STATE(ksCurTime);
+    maybe_add_empty_tail(sc);
+    REFILL_SANITY_CHECK(sc, budget);
+}
+
+void refill_update(sched_context_t *sc, ticks_t new_period, ticks_t new_budget, word_t new_max_refills)
+{
+
+    /* refill must be initialised in order to be updated - otherwise refill_new should be used */
+    assert(sc->scRefillMax > 0);
+
+    /* this is called on an active thread. We want to preserve the sliding window constraint -
+     * so over new_period, new_budget should not be exceeded even temporarily */
+
+    /* move the head refill to the start of the list - it's ok as we're going to truncate the
+     * list to size 1 - and this way we can't be in an invalid list position once new_max_refills
+     * is updated */
+    *refill_index(sc, 0) = *refill_head(sc);
+    sc->scRefillHead = 0;
+    /* truncate refill list to size 1 */
+    sc->scRefillTail = sc->scRefillHead;
+    /* update max refills */
+    sc->scRefillMax = new_max_refills;
+    /* update period */
+    sc->scPeriod = new_period;
+
+    if (refill_ready(sc)) {
+        refill_head(sc)->rTime = NODE_STATE(ksCurTime);
+    }
+
+    if (refill_head(sc)->rAmount >= new_budget) {
+        /* if the heads budget exceeds the new budget just trim it */
+        refill_head(sc)->rAmount = new_budget;
+        maybe_add_empty_tail(sc);
+    } else {
+        /* otherwise schedule the rest for the next period */
+        refill_t new = { .rAmount = (new_budget - refill_head(sc)->rAmount),
+                         .rTime = refill_head(sc)->rTime + new_period
+                       };
+        refill_add_tail(sc, new);
+    }
+
+    REFILL_SANITY_CHECK(sc, new_budget);
+}
+
+static inline void schedule_used(sched_context_t *sc, refill_t new)
+{
+    refill_t tail = *refill_tail(sc);
+    if (unlikely(tail.rTime + tail.rAmount >= new.rTime)) {
+        /* Merge overlapping or adjacent refill.
+         *
+         * refill_update can produce a tail refill that will overlap
+         * with new refills when time is charged to the head refill.
+         *
+         * Preemption will cause the head refill to be partially
+         * charged. When the head refill is again later charged the
+         * additionally charged amount will be added where the new
+         * refill ended such that they are merged here. This ensures
+         * that (beyond a refill being split as it is charged
+         * incrementally) a refill split is only caused by a thread
+         * blocking. */
+        refill_tail(sc)->rAmount = tail.rAmount + new.rAmount;
+    } else if (likely(!refill_full(sc))) {
+        /* Add tail normally */
+        refill_add_tail(sc, new);
+    } else {
+        /* Delay existing tail to merge */
+        refill_tail(sc)->rTime = new.rTime - tail.rAmount;
+        refill_tail(sc)->rAmount = tail.rAmount + new.rAmount;
+    }
+}
+
+static bool_t refill_head_overlapping(sched_context_t *sc)
+{
+    if (!refill_single(sc)) {
+        refill_t head = *refill_head(sc);
+        ticks_t tail = head.rTime + head.rAmount;
+        return refill_index(sc, refill_next(sc, sc->scRefillHead))->rTime <= tail;
+    } else {
+        return false;
+    }
+}
+
+static inline bool_t head_refill_overrun(sched_context_t *sc, ticks_t usage)
+{
+    refill_t head = *refill_head(sc);
+    return head.rAmount <= usage && head.rTime < MAX_RELEASE_TIME;
+}
+
+static inline ticks_t charge_entire_head_refill(sched_context_t *sc, ticks_t usage)
+{
+    refill_t head = *refill_head(sc);
+
+    if (refill_single(sc)) {
+        refill_head(sc)->rTime = head.rTime + sc->scPeriod;
+    } else {
+        refill_t old_head = refill_pop_head(sc);
+        old_head.rTime += sc->scPeriod;
+        schedule_used(sc, old_head);
+    }
+
+    return usage - head.rAmount;
+}
+
+static inline ticks_t handle_overrun(sched_context_t *sc, ticks_t usage)
+{
+    ticks_t current_usage = usage;
+
+    /*
+     * We repeatedly charge the head refill in its entirety until we end up
+     * with a partial refill, or at a point where we can't place refills
+     * into the future without integer overflow.
+     *
+     * Verification actually requires that the current time is at least
+     * 3 * MAX_PERIOD from the INT64_MAX value, so to ease relation to
+     * that assertion we ensure that we never delay a refill past this
+     * point in the future.
+     */
+    while (head_refill_overrun(sc, current_usage)) {
+        current_usage = charge_entire_head_refill(sc, current_usage);
+    }
+
+    return current_usage;
+}
+
+static inline bool_t head_refill_insufficient(sched_context_t *sc)
+{
+    return refill_head(sc)->rAmount < MIN_BUDGET;
+}
+
+static inline void merge_nonoverlapping_head_refill(sched_context_t *sc)
+{
+    refill_t head = refill_pop_head(sc);
+    refill_head(sc)->rAmount += head.rAmount;
+    /* Delay head to ensure the subsequent refill doesn't end any
+     * later (rather than simply combining refills). */
+    refill_head(sc)->rTime -= head.rAmount;
+}
+
+void refill_budget_check(ticks_t usage)
+{
+    sched_context_t *sc = NODE_STATE(ksCurSC);
+    assert(!isRoundRobin(sc));
+    REFILL_SANITY_START(sc);
+
+    usage = handle_overrun(sc, usage);
+
+    /*
+     * If the head time is still sufficiently far from the point of
+     * integer overflow then the usage must be smaller than the head.
+     */
+    refill_t head = *refill_head(sc);
+    if (usage > 0 && head.rTime < MAX_RELEASE_TIME) {
+        assert(head.rAmount > usage);
+        refill_t used = (refill_t) {
+            .rAmount = usage,
+            .rTime = head.rTime + sc->scPeriod,
+        };
+
+        refill_head(sc)->rAmount = head.rAmount - usage;
+        /* We need to keep the head refill no more than a period before
+         * the start of the tail refill. This ensures that new refills
+         * are never added before the tail refill (breaking the ordered
+         * invariant). This code actually keeps the head refill no more
+         * than a period before the end of the tail refill (which is
+         * stronger than necessary) but is what is used in the current
+         * proofs. In combination with the merging behaviour of
+         * schedule_used, the following will still ensure that
+         * incremental charging of a refill across preemptions only
+         * produces a single new refill one period in the future. */
+        refill_head(sc)->rTime = head.rTime + usage;
+        schedule_used(sc, used);
+    }
+
+    /* Ensure the head refill has the minimum budget */
+    while (head_refill_insufficient(sc)) {
+        merge_nonoverlapping_head_refill(sc);
+    }
+
+    REFILL_SANITY_END(sc);
+}
+
+static inline void merge_overlapping_head_refill(sched_context_t *sc)
+{
+    refill_t old_head = refill_pop_head(sc);
+    refill_head(sc)->rTime = old_head.rTime;
+    refill_head(sc)->rAmount += old_head.rAmount;
+}
+
+void refill_unblock_check(sched_context_t *sc)
+{
+
+    if (isRoundRobin(sc)) {
+        /* nothing to do */
+        return;
+    }
+
+    /* advance earliest activation time to now */
+    REFILL_SANITY_START(sc);
+    if (refill_ready(sc)) {
+        refill_head(sc)->rTime = NODE_STATE(ksCurTime);
+        NODE_STATE(ksReprogram) = true;
+
+        /* merge available replenishments */
+        while (refill_head_overlapping(sc)) {
+            merge_overlapping_head_refill(sc);
+        }
+
+        assert(refill_sufficient(sc, 0));
+    }
+    REFILL_SANITY_END(sc);
+}
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/kernel/stack.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12127,7 +12606,7 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
 VISIBLE ALIGN(KERNEL_STACK_ALIGNMENT)
 char kernel_stack_alloc[CONFIG_MAX_NUM_NODES][BIT(CONFIG_KERNEL_STACK_BITS)];
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/kernel/thread.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -12880,7 +13359,7 @@ void awaken(void)
     }
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/capdl.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13399,7 +13878,7 @@ void print_object(cap_t cap)
 #endif /* CONFIG_PRINTING */
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/fpu.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13450,7 +13929,7 @@ void fpuRelease(tcb_t *thread)
     }
 }
 #endif /* CONFIG_HAVE_FPU */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/io.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/machine/io.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14107,7 +14586,7 @@ int impl_ksnvprintf(char *str, word_t size, const char *format, va_list ap)
 }
 
 #endif /* CONFIG_PRINTING */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/registerset.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14123,7 +14602,7 @@ const register_t fault_messages[][MAX_MSG_SIZE] = {
     [MessageID_TimeoutReply] = TIMEOUT_REPLY_MESSAGE,
 #endif
 };
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/preemption.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/model/preemption.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14168,7 +14647,7 @@ exception_t preemptionPoint(void)
     return EXCEPTION_NONE;
 }
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/smp.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/model/smp.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14203,7 +14682,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/statedata.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/model/statedata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14221,7 +14700,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 #include <benchmark/benchmark_track.h>
 
 /* Collective cpu states, including both pre core architecture dependant and independent data */
-SMP_STATE_DEFINE(smpStatedata_t, ksSMP[CONFIG_MAX_NUM_NODES] ALIGN(L1_CACHE_LINE_SIZE));
+SMP_STATE_DEFINE(smpStatedata_t, ksSMP[CONFIG_MAX_NUM_NODES]);
 
 /* Global count of how many cpus there are */
 word_t ksNumCPUs;
@@ -14314,7 +14793,7 @@ kernel_entry_t ksKernelEntry;
 #ifdef CONFIG_KERNEL_LOG_BUFFER
 paddr_t ksUserLogBuffer;
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/cnode.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/cnode.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15249,7 +15728,7 @@ cap_transfer_t PURE loadCapTransfer(word_t *buffer)
     const int offset = seL4_MsgMaxLength + seL4_MsgMaxExtraCaps + 2;
     return capTransferFromWords(buffer + offset);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/domain.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/domain.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2025, Indan Zupancic
@@ -15422,7 +15901,7 @@ exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffe
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/endpoint.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16000,7 +16479,7 @@ void reorderEP(endpoint_t *epptr, tcb_t *thread)
     ep_ptr_set_queue(epptr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/interrupt.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16298,7 +16777,7 @@ void setIRQState(irq_state_t irqState, irq_t irq)
 #endif
     maskInterrupt(irqState == IRQInactive, irq);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/notification.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16718,7 +17197,7 @@ void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
     ntfn_ptr_set_queue(ntfnPtr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/objecttype.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17743,7 +18222,776 @@ bool_t CONST isCapRevocable(cap_t derivedCap, cap_t srcCap)
         return false;
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/reply.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <object/reply.h>
+
+void reply_push(tcb_t *tcb_caller, tcb_t *tcb_callee, reply_t *reply, bool_t canDonate)
+{
+    sched_context_t *sc_donated = tcb_caller->tcbSchedContext;
+
+    assert(tcb_caller != NULL);
+    assert(reply != NULL);
+    assert(reply->replyTCB == NULL);
+
+    assert(call_stack_get_callStackPtr(reply->replyPrev) == 0);
+    assert(call_stack_get_callStackPtr(reply->replyNext) == 0);
+
+    /* caller state must be blocked on send or active, so cannot be in a existing call stack */
+    assert(thread_state_get_tsType(tcb_caller->tcbState) == ThreadState_BlockedOnSend ||
+           thread_state_get_tsType(tcb_caller->tcbState) == ThreadState_Running ||
+           thread_state_get_tsType(tcb_caller->tcbState) == ThreadState_Restart);
+
+    /* callee state must be simple at this point (inactive, restart, or running),
+       so it also cannot have a reply reference associated with it. */
+    assert(thread_state_get_tsType(tcb_callee->tcbState) == ThreadState_Inactive ||
+           thread_state_get_tsType(tcb_callee->tcbState) == ThreadState_Running ||
+           thread_state_get_tsType(tcb_callee->tcbState) == ThreadState_Restart);
+
+    /* link caller and reply */
+    reply->replyTCB = tcb_caller;
+    setThreadStateBlockedOnReply(tcb_caller, reply);
+
+    if (sc_donated != NULL && tcb_callee->tcbSchedContext == NULL && canDonate) {
+        reply_t *old_caller = sc_donated->scReply;
+
+        /* check stack integrity */
+        assert(old_caller == NULL ||
+               SC_PTR(call_stack_get_callStackPtr(old_caller->replyNext)) == sc_donated);
+
+        /* push on to stack */
+        if (old_caller) {
+            old_caller->replyNext = call_stack_new(REPLY_REF(reply), false);
+        }
+        reply->replyPrev = call_stack_new(REPLY_REF(old_caller), false);
+        sc_donated->scReply = reply;
+        reply->replyNext = call_stack_new(SC_REF(sc_donated), true);
+
+        /* now do the actual donation */
+        schedContext_donate(sc_donated, tcb_callee);
+    }
+}
+
+/* Pop the head reply from the call stack */
+void reply_pop(reply_t *reply, tcb_t *tcb)
+{
+    assert(reply != NULL);
+    assert(reply->replyTCB == tcb);
+    assert(thread_state_get_tsType(tcb->tcbState) == ThreadState_BlockedOnReply);
+    assert(thread_state_get_replyObject(tcb->tcbState) == REPLY_REF(reply));
+
+    word_t next_ptr = call_stack_get_callStackPtr(reply->replyNext);
+    word_t prev_ptr = call_stack_get_callStackPtr(reply->replyPrev);
+
+    SC_PTR(next_ptr)->scReply = REPLY_PTR(prev_ptr);
+    if (prev_ptr != 0) {
+        REPLY_PTR(prev_ptr)->replyNext = reply->replyNext;
+        assert(call_stack_get_isHead(REPLY_PTR(prev_ptr)->replyNext));
+    }
+
+    reply->replyNext = call_stack_new(0, false);
+
+    /* give it back */
+    if (tcb->tcbSchedContext == NULL) {
+        /* only give the SC back if our SC is NULL. This prevents
+         * strange behaviour when a thread is bound to an sc while it is
+         * in the BlockedOnReply state. The semantics in this case are that the
+         * SC cannot go back to the caller if the caller has received another one */
+        schedContext_donate(SC_PTR(next_ptr), tcb);
+    }
+
+    reply->replyPrev = call_stack_new(0, false);
+    reply_unlink(reply, tcb);
+}
+
+/* Remove a reply from the middle of the call stack */
+void reply_remove(reply_t *reply, tcb_t *tcb)
+{
+    assert(reply->replyTCB == tcb);
+    assert(thread_state_get_tsType(tcb->tcbState) == ThreadState_BlockedOnReply);
+    assert(thread_state_get_replyObject(tcb->tcbState) == REPLY_REF(reply));
+
+    word_t next_ptr = call_stack_get_callStackPtr(reply->replyNext);
+    word_t prev_ptr = call_stack_get_callStackPtr(reply->replyPrev);
+
+    if (likely(next_ptr && call_stack_get_isHead(reply->replyNext))) {
+        /* head of the call stack -> just pop */
+        reply_pop(reply, tcb);
+    } else {
+        if (next_ptr) {
+            /* not the head, remove from middle - break the chain */
+            REPLY_PTR(next_ptr)->replyPrev = call_stack_new(0, false);
+        }
+        if (prev_ptr) {
+            REPLY_PTR(prev_ptr)->replyNext = call_stack_new(0, false);
+        }
+        reply->replyPrev = call_stack_new(0, false);
+        reply->replyNext = call_stack_new(0, false);
+        reply_unlink(reply, tcb);
+    }
+}
+
+void reply_remove_tcb(tcb_t *tcb)
+{
+    assert(thread_state_get_tsType(tcb->tcbState) == ThreadState_BlockedOnReply);
+    reply_t *reply = REPLY_PTR(thread_state_get_replyObject(tcb->tcbState));
+    word_t next_ptr = call_stack_get_callStackPtr(reply->replyNext);
+    word_t prev_ptr = call_stack_get_callStackPtr(reply->replyPrev);
+
+    if (next_ptr) {
+        if (call_stack_get_isHead(reply->replyNext)) {
+            SC_PTR(next_ptr)->scReply = NULL;
+        } else {
+            REPLY_PTR(next_ptr)->replyPrev = call_stack_new(0, false);
+        }
+    }
+
+    if (prev_ptr) {
+        REPLY_PTR(prev_ptr)->replyNext = call_stack_new(0, false);
+    }
+
+    reply->replyPrev = call_stack_new(0, false);
+    reply->replyNext = call_stack_new(0, false);
+    reply_unlink(reply, tcb);
+}
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/schedcontext.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <machine/timer.h>
+#include <kernel/sporadic.h>
+#include <kernel/thread.h>
+#include <object/structures.h>
+#include <object/schedcontext.h>
+
+static exception_t invokeSchedContext_UnbindObject(sched_context_t *sc, cap_t cap)
+{
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        schedContext_unbindTCB(sc);
+        break;
+    case cap_notification_cap:
+        schedContext_unbindNtfn(sc);
+        break;
+    default:
+        fail("invalid cap type");
+    }
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedContext_UnbindObject(sched_context_t *sc)
+{
+    if (current_extra_caps.excaprefs[0] == NULL) {
+        userError("SchedContext_Unbind: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    cap_t cap = current_extra_caps.excaprefs[0]->cap;
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        if (sc->scTcb != TCB_PTR(cap_thread_cap_get_capTCBPtr(cap))) {
+            userError("SchedContext UnbindObject: object not bound");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        if (sc->scTcb == NODE_STATE(ksCurThread)) {
+            userError("SchedContext UnbindObject: cannot unbind sc of current thread");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        break;
+    case cap_notification_cap:
+        if (sc->scNotification != NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap))) {
+            userError("SchedContext UnbindObject: object not bound");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        break;
+
+    default:
+        userError("SchedContext_Unbind: invalid cap");
+        current_syscall_error.type = seL4_InvalidCapability;
+        current_syscall_error.invalidCapNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+
+    }
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedContext_UnbindObject(sc, cap);
+}
+
+static exception_t invokeSchedContext_Bind(sched_context_t *sc, cap_t cap)
+{
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        schedContext_bindTCB(sc, TCB_PTR(cap_thread_cap_get_capTCBPtr(cap)));
+        break;
+    case cap_notification_cap:
+        schedContext_bindNtfn(sc, NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap)));
+        break;
+    default:
+        fail("invalid cap type");
+    }
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedContext_Bind(sched_context_t *sc)
+{
+    if (current_extra_caps.excaprefs[0] == NULL) {
+        userError("SchedContext_Bind: Truncated Message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    cap_t cap = current_extra_caps.excaprefs[0]->cap;
+
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        if (sc->scTcb != NULL) {
+            userError("SchedContext_Bind: sched context already bound.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        if (TCB_PTR(cap_thread_cap_get_capTCBPtr(cap))->tcbSchedContext != NULL) {
+            userError("SchedContext_Bind: tcb already bound.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        if (isBlocked(TCB_PTR(cap_thread_cap_get_capTCBPtr(cap))) && !sc_released(sc)) {
+            userError("SchedContext_Bind: tcb blocked and scheduling context not schedulable.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        break;
+    case cap_notification_cap:
+        if (sc->scNotification != NULL) {
+            userError("SchedContext_Bind: sched context already bound.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        if (notification_ptr_get_ntfnSchedContext(NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap)))) {
+            userError("SchedContext_Bind: notification already bound");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        break;
+    default:
+        userError("SchedContext_Bind: invalid cap.");
+        current_syscall_error.type = seL4_InvalidCapability;
+        current_syscall_error.invalidCapNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedContext_Bind(sc, cap);
+}
+
+static exception_t invokeSchedContext_Unbind(sched_context_t *sc)
+{
+    schedContext_unbindAllTCBs(sc);
+    schedContext_unbindNtfn(sc);
+    schedContext_unbindReply(sc);
+    return EXCEPTION_NONE;
+}
+
+#ifdef ENABLE_SMP_SUPPORT
+static inline void maybeStallSC(sched_context_t *sc)
+{
+    if (sc->scTcb) {
+        remoteTCBStall(sc->scTcb);
+    }
+}
+#endif
+
+static inline void replyFromKernel_consumed(tcb_t *thread, time_t consumed)
+{
+    word_t *buffer = lookupIPCBuffer(true, thread);
+    setRegister(thread, badgeRegister, 0);
+    word_t length = mode_setTimeArg(0, consumed, buffer, thread);
+    setRegister(thread, msgInfoRegister, wordFromMessageInfo(seL4_MessageInfo_new(0, 0, 0, length)));
+}
+
+static inline void setConsumed(sched_context_t *sc, tcb_t *thread, bool_t write_msg)
+{
+    time_t consumed = schedContext_updateConsumed(sc);
+
+    if (write_msg) {
+        replyFromKernel_consumed(thread, consumed);
+    }
+}
+
+static exception_t invokeSchedContext_Consumed(sched_context_t *sc, bool_t call)
+{
+    setConsumed(sc, NODE_STATE(ksCurThread), call);
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Running);
+    return EXCEPTION_NONE;
+}
+
+static exception_t invokeSchedContext_YieldTo(sched_context_t *sc, bool_t call)
+{
+    if (sc->scYieldFrom) {
+        schedContext_completeYieldTo(sc->scYieldFrom);
+        assert(sc->scYieldFrom == NULL);
+    }
+
+    /* if the tcb is in the scheduler, it's ready and sufficient.
+     * Otherwise, check that it is ready and sufficient and if not,
+     * place the thread in the release queue. This way, from this point,
+     * if the thread isSchedulable, it is ready and sufficient.*/
+    schedContext_resume(sc);
+
+    tcb_t *tcb = sc->scTcb;
+
+    bool_t return_now;
+    if (isSchedulable(tcb)) {
+        if (SMP_COND_STATEMENT(sc->scCore != getCurrentCPUIndex() ||)
+            tcb->tcbPriority < NODE_STATE(ksCurThread)->tcbPriority) {
+            tcbSchedDequeue(tcb);
+            SCHED_ENQUEUE(tcb);
+            return_now = true;
+        } else {
+            NODE_STATE(ksCurThread)->tcbYieldTo = sc;
+            sc->scYieldFrom = NODE_STATE(ksCurThread);
+            tcbSchedDequeue(tcb);
+            tcbSchedEnqueue(NODE_STATE(ksCurThread));
+            tcbSchedEnqueue(tcb);
+            rescheduleRequired();
+
+            /* we are scheduling the thread associated with sc,
+             * so we don't need to write to the ipc buffer
+             * until the caller is scheduled again */
+            return_now = false;
+        }
+    } else {
+        return_now = true;
+    }
+
+    if (return_now) {
+        setConsumed(sc, NODE_STATE(ksCurThread), call);
+        /* Only set to Running if there is a kernel reply message for the user.
+           Restart will create a default empty success message. */
+        setThreadState(NODE_STATE(ksCurThread), ThreadState_Running);
+    }
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedContext_YieldTo(sched_context_t *sc, bool_t call)
+{
+    if (sc->scTcb == NULL) {
+        userError("SchedContext_YieldTo: cannot yield to an inactive sched context");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    tcb_t *tcb = sc->scTcb;
+
+    if (tcb == NODE_STATE(ksCurThread)) {
+        userError("SchedContext_YieldTo: cannot seL4_SchedContext_YieldTo on self");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (tcb->tcbPriority > NODE_STATE(ksCurThread)->tcbMCP) {
+        userError("SchedContext_YieldTo: insufficient mcp (%lu) to yield to a thread with prio (%lu)",
+                  NODE_STATE(ksCurThread)->tcbMCP, tcb->tcbPriority);
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    // This should not be possible as the currently running thread
+    // should never have a non-null yieldTo, however verifying this
+    // invariant is being left to future work.
+    assert(NODE_STATE(ksCurThread)->tcbYieldTo == NULL);
+    if (NODE_STATE(ksCurThread)->tcbYieldTo != NULL) {
+        userError("SchedContext_YieldTo: cannot seL4_SchedContext_YieldTo to more than on SC at a time");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedContext_YieldTo(sc, call);
+}
+
+exception_t decodeSchedContextInvocation(word_t label, sched_context_t *sc, bool_t call)
+{
+    SMP_COND_STATEMENT((maybeStallSC(sc));)
+
+    switch (label) {
+    case SchedContextConsumed:
+        /* no decode */
+        setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+        return invokeSchedContext_Consumed(sc, call);
+    case SchedContextBind:
+        return decodeSchedContext_Bind(sc);
+    case SchedContextUnbindObject:
+        return decodeSchedContext_UnbindObject(sc);
+    case SchedContextUnbind:
+        /* no decode */
+        if (sc->scTcb == NODE_STATE(ksCurThread)) {
+            userError("SchedContext UnbindObject: cannot unbind sc of current thread");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+        return invokeSchedContext_Unbind(sc);
+    case SchedContextYieldTo:
+        return decodeSchedContext_YieldTo(sc, call);
+    default:
+        userError("SchedContext invocation: Illegal operation attempted.");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+}
+
+void schedContext_resume(sched_context_t *sc)
+{
+    assert(!sc || sc->scTcb != NULL);
+    if (likely(sc) && isSchedulable(sc->scTcb)) {
+        if (!(refill_ready(sc) && refill_sufficient(sc, 0))) {
+            assert(!thread_state_get_tcbQueued(sc->scTcb->tcbState));
+            postpone(sc);
+        }
+    }
+}
+
+void schedContext_bindTCB(sched_context_t *sc, tcb_t *tcb)
+{
+    assert(sc->scTcb == NULL);
+    assert(tcb->tcbSchedContext == NULL);
+
+    tcb->tcbSchedContext = sc;
+    sc->scTcb = tcb;
+
+    SMP_COND_STATEMENT(migrateTCB(tcb, sc->scCore));
+
+    if (sc_sporadic(sc) && sc_active(sc) && sc != NODE_STATE(ksCurSC)) {
+        refill_unblock_check(sc);
+    }
+    schedContext_resume(sc);
+    if (isSchedulable(tcb)) {
+        SCHED_ENQUEUE(tcb);
+        rescheduleRequired();
+        // TODO -- at some stage we should take this call out of any TCB invocations that
+        // alter capabilities, so that we can do a direct switch. The preference here is to
+        // remove seL4_SetSchedParams from using ThreadControl. It's currently out of scope for
+        // verification work, so the work around is to use rescheduleRequired()
+        //possibleSwitchTo(tcb);
+    }
+}
+
+void schedContext_unbindTCB(sched_context_t *sc)
+{
+    tcb_t *tcb = sc->scTcb;
+    assert(tcb != NULL);
+
+    /* tcb must already be stalled at this point */
+    if (tcb == NODE_STATE(ksCurThread)) {
+        rescheduleRequired();
+    }
+
+    tcbSchedDequeue(tcb);
+    tcbReleaseRemove(tcb);
+
+    tcb->tcbSchedContext = NULL;
+    sc->scTcb = NULL;
+}
+
+void schedContext_unbindAllTCBs(sched_context_t *sc)
+{
+    if (sc->scTcb) {
+        SMP_COND_STATEMENT(remoteTCBStall(sc->scTcb));
+        schedContext_unbindTCB(sc);
+    }
+}
+
+void schedContext_donate(sched_context_t *sc, tcb_t *to)
+{
+    assert(sc != NULL);
+    assert(to != NULL);
+    assert(to->tcbSchedContext == NULL);
+
+    tcb_t *from = sc->scTcb;
+    if (from) {
+        SMP_COND_STATEMENT(remoteTCBStall(from));
+        tcbSchedDequeue(from);
+        tcbReleaseRemove(from);
+        from->tcbSchedContext = NULL;
+        if (from == NODE_STATE(ksCurThread) || from == NODE_STATE(ksSchedulerAction)) {
+            rescheduleRequired();
+        }
+    }
+    sc->scTcb = to;
+    to->tcbSchedContext = sc;
+
+    SMP_COND_STATEMENT(migrateTCB(to, sc->scCore));
+}
+
+void schedContext_bindNtfn(sched_context_t *sc, notification_t *ntfn)
+{
+    notification_ptr_set_ntfnSchedContext(ntfn, SC_REF(sc));
+    sc->scNotification = ntfn;
+}
+
+void schedContext_unbindNtfn(sched_context_t *sc)
+{
+    if (sc && sc->scNotification) {
+        notification_ptr_set_ntfnSchedContext(sc->scNotification, SC_REF(0));
+        sc->scNotification = NULL;
+    }
+}
+
+void schedContextMaybeUnbindNtfn(notification_t *ntfnPtr)
+{
+    sched_context_t *sc = SC_PTR(notification_ptr_get_ntfnSchedContext(ntfnPtr));
+
+    if (sc) {
+        schedContext_unbindNtfn(sc);
+    }
+}
+
+void schedContext_unbindReply(sched_context_t *sc)
+{
+    if (sc && sc->scReply) {
+        assert(call_stack_get_isHead(sc->scReply->replyNext));
+        sc->scReply->replyNext = call_stack_new(0, false);
+        sc->scReply = NULL;
+    }
+}
+
+time_t schedContext_updateConsumed(sched_context_t *sc)
+{
+    ticks_t consumed = sc->scConsumed;
+    if (consumed >= getMaxTicksToUs()) {
+        sc->scConsumed -= getMaxTicksToUs();
+        return ticksToUs(getMaxTicksToUs());
+    } else {
+        sc->scConsumed = 0;
+        return ticksToUs(consumed);
+    }
+}
+
+void schedContext_cancelYieldTo(tcb_t *tcb)
+{
+    if (tcb && tcb->tcbYieldTo) {
+        tcb->tcbYieldTo->scYieldFrom = NULL;
+        tcb->tcbYieldTo = NULL;
+    }
+}
+
+void schedContext_completeYieldTo(tcb_t *yielder)
+{
+    if (yielder && yielder->tcbYieldTo) {
+        /* FIXME: this should only be true here if the original
+                  invocation we are completing was Call. */
+        setConsumed(yielder->tcbYieldTo, yielder, true);
+        schedContext_cancelYieldTo(yielder);
+    }
+}
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/schedcontrol.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <machine/timer.h>
+#include <mode/api/ipc_buffer.h>
+#include <object/schedcontext.h>
+#include <object/schedcontrol.h>
+#include <kernel/sporadic.h>
+
+static exception_t invokeSchedControl_ConfigureFlags(sched_context_t *target, word_t core, ticks_t budget,
+                                                     ticks_t period, word_t max_refills, word_t badge, word_t flags)
+{
+    tcb_t *thread = target->scTcb;
+
+    /* don't modify parameters of thread while it is in a sorted queue */
+    if (thread) {
+        /* possibly stall a remote core */
+        SMP_COND_STATEMENT(remoteTCBStall(thread));
+        /* remove from scheduler */
+        tcbReleaseRemove(thread);
+        tcbSchedDequeue(thread);
+        /* bill the current consumed amount before adjusting the params */
+        if (NODE_STATE(ksCurSC) == target) {
+            /* This could potentially mutate state but if it returns
+             * true no state was modified, thus removing it should
+             * be the same. */
+            assert(checkBudget());
+            commitTime();
+        }
+    }
+
+    if (budget == period) {
+        /* this is a cool hack: for round robin, we set the
+         * period to 0, which means that the budget will always be ready to be refilled
+         * and avoids some special casing.
+         */
+        refill_new(target, MIN_REFILLS, budget, 0);
+    } else if (SMP_COND_STATEMENT(core == target->scCore &&) sc_active(target) && thread
+               && isRunnable(thread)) {
+        /* the scheduling context is active - it can be used, so
+         * we need to preserve the bandwidth */
+        refill_update(target, period, budget, max_refills);
+    } else {
+        /* the scheduling context isn't active - it's budget is not being used, so
+         * we can just populate the parameters from now */
+        refill_new(target, max_refills, budget, period);
+    }
+
+#ifdef ENABLE_SMP_SUPPORT
+    target->scCore = core;
+    if (thread) {
+        migrateTCB(thread, target->scCore);
+    }
+#endif /* ENABLE_SMP_SUPPORT */
+
+    assert(sc_active(target));
+    if (thread) {
+        schedContext_resume(target);
+        if (SMP_TERNARY(core == CURRENT_CPU_INDEX(), true)) {
+            if (isRunnable(thread) && thread != NODE_STATE(ksCurThread)) {
+                possibleSwitchTo(thread);
+            }
+        } else if (isRunnable(thread)) {
+            SCHED_ENQUEUE(thread);
+        }
+        if (thread == NODE_STATE(ksCurThread)) {
+            rescheduleRequired();
+        }
+    }
+
+    target->scBadge = badge;
+    target->scSporadic = (flags & seL4_SchedContext_Sporadic) != 0;
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedControl_ConfigureFlags(word_t length, cap_t cap, word_t *buffer)
+{
+    if (current_extra_caps.excaprefs[0] == NULL) {
+        userError("SchedControl_ConfigureFlags: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (length < (TIME_ARG_SIZE * 2) + 3) {
+        userError("SchedControl_configureFlags: truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    time_t budget_us = mode_parseTimeArg(0, buffer);
+
+    if (budget_us > MAX_PERIOD_US) {
+        userError("SchedControl_ConfigureFlags: budget out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    ticks_t budget_ticks = usToTicks(budget_us);
+
+    time_t period_us = mode_parseTimeArg(TIME_ARG_SIZE, buffer);
+
+    if (period_us > MAX_PERIOD_US) {
+        userError("SchedControl_ConfigureFlags: period out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    ticks_t period_ticks = usToTicks(period_us);
+
+    if (budget_ticks < MIN_BUDGET) {
+        userError("SchedControl_ConfigureFlags: budget out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (period_ticks < MIN_BUDGET) {
+        userError("SchedControl_ConfigureFlags: period out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (budget_ticks > period_ticks) {
+        userError("SchedControl_ConfigureFlags: budget must be <= period");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = period_us;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    cap_t targetCap = current_extra_caps.excaprefs[0]->cap;
+    if (unlikely(cap_get_capType(targetCap) != cap_sched_context_cap)) {
+        userError("SchedControl_ConfigureFlags: target cap not a scheduling context cap");
+        current_syscall_error.type = seL4_InvalidCapability;
+        current_syscall_error.invalidCapNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    word_t extra_refills = getSyscallArg(TIME_ARG_SIZE * 2, buffer);
+    word_t max_refills = refill_absolute_max(targetCap);
+
+    if (extra_refills > max_refills - MIN_REFILLS) {
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = 0;
+        current_syscall_error.rangeErrorMax = max_refills - MIN_REFILLS;
+        userError("Max refills invalid, got %lu, max %lu",
+                  extra_refills,
+                  current_syscall_error.rangeErrorMax);
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    word_t badge = getSyscallArg(TIME_ARG_SIZE * 2 + 1, buffer);
+    word_t flags = getSyscallArg(TIME_ARG_SIZE * 2 + 2, buffer);
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedControl_ConfigureFlags(SC_PTR(cap_sched_context_cap_get_capSCPtr(targetCap)),
+                                             cap_sched_control_cap_get_core(cap),
+                                             budget_ticks,
+                                             period_ticks,
+                                             extra_refills + MIN_REFILLS,
+                                             badge,
+                                             flags);
+}
+
+exception_t decodeSchedControlInvocation(word_t label, cap_t cap, word_t length, word_t *buffer)
+{
+    switch (label) {
+    case SchedControlConfigureFlags:
+        return  decodeSchedControl_ConfigureFlags(length, cap, buffer);
+    default:
+        userError("SchedControl invocation: Illegal operation attempted.");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+}
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -18267,7 +19515,7 @@ static exception_t decodeSetAffinity(cap_t cap, word_t length, word_t *buffer)
 #endif /* ENABLE_SMP_SUPPORT */
 
 #ifdef CONFIG_HARDWARE_DEBUG_API
-static exception_t invokeConfigureSingleStepping(bool_t call, word_t *buffer, tcb_t *t,
+static exception_t invokeConfigureSingleStepping(bool_t call, tcb_t *t,
                                                  uint16_t bp_num, word_t n_instrs)
 {
     bool_t bp_was_consumed;
@@ -18289,8 +19537,9 @@ static exception_t invokeConfigureSingleStepping(bool_t call, word_t *buffer, tc
     }
 
     if (call) {
+        word_t *ipcBuffer = lookupIPCBuffer(true, thread);
         setRegister(thread, badgeRegister, 0);
-        unsigned int length = setMR(thread, buffer, 0, value);
+        unsigned int length = setMR(thread, ipcBuffer, 0, value);
         setRegister(thread, msgInfoRegister, wordFromMessageInfo(
                         seL4_MessageInfo_new(0, 0, 0, length)));
     }
@@ -18317,7 +19566,7 @@ static exception_t decodeConfigureSingleStepping(cap_t cap, bool_t call, word_t 
     }
 
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-    return invokeConfigureSingleStepping(call, buffer, tcb, bp_num, n_instrs);
+    return invokeConfigureSingleStepping(call, tcb, bp_num, n_instrs);
 }
 
 static exception_t invokeSetBreakpoint(tcb_t *tcb, uint16_t bp_num,
@@ -18446,21 +19695,22 @@ static exception_t decodeSetBreakpoint(cap_t cap, word_t *buffer)
                                vaddr, type, size, rw);
 }
 
-static exception_t invokeGetBreakpoint(bool_t call, word_t *buffer, tcb_t *tcb, uint16_t bp_num)
+static exception_t invokeGetBreakpoint(bool_t call, tcb_t *tcb, uint16_t bp_num)
 {
     tcb_t *thread;
     thread = NODE_STATE(ksCurThread);
     getBreakpoint_t res;
     res = getBreakpoint(tcb, bp_num);
     if (call) {
+        word_t *ipcBuffer = lookupIPCBuffer(true, thread);
         setRegister(thread, badgeRegister, 0);
-        setMR(NODE_STATE(ksCurThread), buffer, 0, res.vaddr);
-        setMR(NODE_STATE(ksCurThread), buffer, 1, res.type);
-        setMR(NODE_STATE(ksCurThread), buffer, 2, res.size);
-        setMR(NODE_STATE(ksCurThread), buffer, 3, res.rw);
-        setMR(NODE_STATE(ksCurThread), buffer, 4, res.is_enabled);
+        setMR(thread, ipcBuffer, 0, res.vaddr);
+        setMR(thread, ipcBuffer, 1, res.type);
+        setMR(thread, ipcBuffer, 2, res.size);
+        setMR(thread, ipcBuffer, 3, res.rw);
+        unsigned int length = setMR(thread, ipcBuffer, 4, res.is_enabled);
         setRegister(thread, msgInfoRegister, wordFromMessageInfo(
-                        seL4_MessageInfo_new(0, 0, 0, 5)));
+                        seL4_MessageInfo_new(0, 0, 0, length)));
     }
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Running);
     return EXCEPTION_NONE;
@@ -18482,7 +19732,7 @@ static exception_t decodeGetBreakpoint(cap_t cap, bool_t call, word_t *buffer)
     }
 
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-    return invokeGetBreakpoint(call, buffer, tcb, bp_num);
+    return invokeGetBreakpoint(call, tcb, bp_num);
 }
 
 static exception_t invokeUnsetBreakpoint(tcb_t *tcb, uint16_t bp_num)
@@ -18515,7 +19765,8 @@ static exception_t decodeUnsetBreakpoint(cap_t cap, word_t *buffer)
 
 static exception_t invokeSetTLSBase(tcb_t *thread, word_t tls_base)
 {
-    setRegister(thread, TLS_BASE, tls_base);
+    bool_t archInfo = Arch_getSanitiseRegisterInfo(thread);
+    setRegister(thread, TLS_BASE, sanitiseRegister(TLS_BASE, tls_base, archInfo));
     if (thread == NODE_STATE(ksCurThread)) {
         /* If this is the current thread force a reschedule to ensure that any changes
          * to the TLS_BASE are realized */
@@ -19644,6 +20895,8 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
                                     bool_t transferFrame, bool_t transferInteger,
                                     word_t transferArch)
 {
+    bool_t archInfo;
+
     if (suspendSource) {
         suspend(tcb_src);
     }
@@ -19652,14 +20905,20 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
         restart(dest);
     }
 
+    /* Sanitise copied values against the destination like in
+     * invokeTCB_WriteRegisters(). Whether a value is legal depends on the
+     * destination thread, e.g. whether it has a VCPU or not. */
+    archInfo = Arch_getSanitiseRegisterInfo(dest);
+
     if (transferFrame) {
         word_t i;
         word_t v;
         word_t pc;
 
         for (i = 0; i < n_frameRegisters; i++) {
-            v = getRegister(tcb_src, frameRegisters[i]);
-            setRegister(dest, frameRegisters[i], v);
+            register_t r = frameRegisters[i];
+            v = getRegister(tcb_src, r);
+            setRegister(dest, r, sanitiseRegister(r, v, archInfo));
         }
 
         pc = getRestartPC(dest);
@@ -19671,8 +20930,9 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
         word_t v;
 
         for (i = 0; i < n_gpRegisters; i++) {
-            v = getRegister(tcb_src, gpRegisters[i]);
-            setRegister(dest, gpRegisters[i], v);
+            register_t r = gpRegisters[i];
+            v = getRegister(tcb_src, r);
+            setRegister(dest, r, sanitiseRegister(r, v, archInfo));
         }
     }
 
@@ -19862,7 +21122,7 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
         fail("Invalid syscall error");
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/untyped.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/object/untyped.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -20131,6 +21391,7 @@ static exception_t resetUntypedCap(cte_t *srcSlot)
             }
         }
     }
+    Arch_postResetUntyped(deviceMemory, block_size);
     return EXCEPTION_NONE;
 }
 
@@ -20168,7 +21429,7 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot,
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/ipi.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -20216,9 +21477,6 @@ void ipiStallCoreCallback(bool_t irqPath)
 
         /* Let the cpu requesting this IPI continue while we wait on the lock */
         node->ipi = 0;
-#ifdef CONFIG_ARCH_RISCV
-        ipi_clear_irq(irq_remote_call_ipi);
-#endif
         ipi_wait();
 
         /* Continue waiting on lock */
@@ -20387,7 +21645,7 @@ exception_t handle_SysDebugSendIPI(void)
 #endif /* CONFIG_DEBUG_BUILD */
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/lock.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/smp/lock.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -20417,7 +21675,7 @@ BOOT_CODE void clh_lock_init(void)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/string.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/string.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -20460,7 +21718,7 @@ word_t strlcat(char *dest, const char *src, word_t size)
     }
     return len;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/util.c"
+#line 1 "/Users/lukasbower/seL4_17_qemu/kernel/src/util.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *

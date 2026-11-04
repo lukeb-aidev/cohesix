@@ -9043,12 +9043,14 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 The user requested a separate `~/seL4_17` source installation and
 Python environment, using `~/seL4_16` as a preserved reference, followed by a
 canonical QEMU and Pi builds, a fresh Pi RAM image, and the recent GENET
-network regression. This task evaluates
+network regression. The user subsequently requested replacement of the older
+snapshots and documentation under repository `seL4/`. This task evaluates
 the upstream 17.0.0 security fixes against the existing production topology.
 It does not promote a release, replace historical evidence, or authorize
 unrelated driver, scheduler, protocol, or host-feature changes.
 
-The candidate is isolated from accepted seL4 16 source and artifacts. Its
+The external seL4 16 source and environment, historical evidence, and archived
+reference bytes remain preserved. Current repository inputs advance to v17. The candidate's
 profile pins, generated interfaces, kernel-object admission and immutable Pi
 composition inputs must agree with the actual seL4 17 build. Preserve the
 Pi operational initial-SC and VL805 device-window overlay with its exact
@@ -9071,7 +9073,7 @@ Inputs: seL4Test manifest 17.0.0; preserved ~/seL4_16 and its Python closure; co
 Changes:
   - External source and Python environment — create ~/seL4_17 and its independent .venv_aarch64; retain source, environment, compiler, build and overlay provenance.
   - Candidate profiles, compiler admission and generated interfaces — select the exact v17 source/build ABI and preserve v16 compatibility where explicitly supported.
-  - Candidate seL4/build_UBOOT — retain only freshly built, identity-checked v17 inputs in the isolated candidate; preserve the accepted v16 tree in the original checkout.
+  - Repository seL4/{build,SMP_build,build_UBOOT} — replace older current snapshots with freshly built, identity-checked v17 production/diagnostic inputs; preserve the former bytes in reference archives and Git history. Refresh the official reference manual and pinned elfloader documentation.
   - Task evidence — record material AI assistance, complete host-tool/Python/benchmark compatibility review, actual checks, failures, proof limits and the old/new observation boundaries.
 Commands: maintained sel4_profile.py prepare-source/configure/build/validate; focused compiler/profile checks; scripts/cohesix-build-run.sh and scripts/pi4-image-build.sh; canonical CRC-checked Pi RAM loader; frozen serial/TCP regression and independent packet/counter analysis.
 Checks: separate source and venv; complete pinned manifest; exact overlay and ABI; fresh production kernel/profile and root/driver/Worker artifacts; unchanged SD; sealed BUILD and all RAM CRCs; three qualified network cycles or a retained first-failure blocker; no claim of a completed week or overall release.
