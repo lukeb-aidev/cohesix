@@ -9039,7 +9039,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 [Milestones](#Milestones)
 
 **Status:** In Progress — canonical v17 builds and the focused Pi regression
-passed; the fresh seven-day observation remains pending the native UI handoff.
+passed; a fresh seven-day observation is active from 4 to 11 November 2026.
 
 The user requested a separate `~/seL4_17` source installation and
 Python environment, using `~/seL4_16` as a preserved reference, followed by
@@ -9068,10 +9068,13 @@ regression and runtime restoration, following the existing operator procedure.
 The [execution record](audit/M26D1_SEL4_17_PI_NETWORK.md) binds the exact clean
 Pi source/image, qualified cycles 1, 3 and 4, matching native host build, twenty
 ready Workers, verified bounded CUDA result, complete contribution baseline and
-retained failures. Native SwarmUI is rendered but its live connection is not
-verified. Keep the new baseline unset and the observers inactive until that gate
-and the initial observer checks pass. Neither the interrupted v16 interval nor
-the active passive captures count as a completed week.
+retained failures. The subsequent native UI handoff and initial observer checks
+passed on the same Pi boot. The immutable observation window is
+`2026-11-04T11:29:23.302390Z` through `2026-11-11T11:29:23.302390Z`, with three
+bounded observer timers and the existing six-hour heartbeat active. Tested-client
+credential restoration finished before baseline; no renewal or job replay is
+planned during observation. Neither the interrupted v16 interval nor initial
+observer success counts as a completed week.
 
 ```text
 Title/ID: m26d1-sel4-17-pi-network

@@ -7,7 +7,8 @@
 Upgrade to seL4 17. The selected Cohesix configuration is affected by upstream
 fixes; a conclusion of no impact would be unsupported. Canonical QEMU and Pi
 builds, the focused physical network regression and bounded bench restoration
-passed. The fresh seven-day observation remains pending the native UI handoff.
+passed. The fresh seven-day observation is active from 4 to 11 November 2026;
+the exact interval and initial observer evidence are recorded below.
 
 This is the execution record for `m26d1-sel4-17-pi-network`. The accepted v16
 source installation, environment, historical evidence and installed release tools
@@ -200,13 +201,12 @@ and native-output evidence with retained operator key custody, not device
 attestation, LoRA execution, pressure testing or release acceptance.
 
 The old continuous-boot observation was deliberately interrupted after 23.396
-hours. It did not complete. A new baseline has not been created: native SwarmUI
-rendered but remained disconnected, and automated Screen Sharing inputs produced
-no application state change. That input failure's cause is unconfirmed. The
-private `SESSION.md` records the remaining live-UI, baseline and initial-observer
-gates. Thirty observer host tests pass; their configurations remain inactive,
-and the previous heartbeat remains paused. Passive packet captures and the sole
-receive-only UART recorder have a fixed hard stop at
+hours. It did not complete. At initial publication, native SwarmUI rendered but
+remained disconnected, and automated Screen Sharing inputs produced no
+application state change. No new baseline had been created; observers and the
+heartbeat remained inactive. That checkpoint and its unconfirmed input failure
+are retained. The later handoff below resolves that gate. Passive packet captures
+and the sole receive-only UART recorder have a fixed hard stop at
 `2026-11-12T08:26:05.343223Z`. Collection time cannot substitute for a verified
 seven-day baseline. No SD deployment or overall release is claimed.
 
@@ -216,6 +216,50 @@ Private evidence remains under the run directory above and its corresponding
 `fleet/FLEET-IDLE-AND-EXPIRY.json` and `fleet/gpu-check/independent-audit.json`
 own the current result and proof limits. Subsequent documentation and repository
 reference commits do not relabel the source of an already tested image.
+
+## Active seven-day observation
+
+After the operator restarted Screen Sharing, native SwarmUI connected through
+the existing sole gateway and showed LIVE, Queen reachable, ROOT OK, a populated
+animated topology, one session, zero backlog and zero dropped work. Protected
+process credential references were used; credentials and connection profiles
+were not saved. The exact Pi RAM boot and image remain unchanged.
+
+Fresh read-only reconciliation again proved twenty ready Workers, six GPU and
+fourteen LoRA, both delivery journals drained, and the original single CUDA job
+still succeeded. No job was replayed. The GUI received one new finite delegation
+after its application had exited. The publisher and agent reached their normal
+one-hour expiry during the UI handoff and were restored once before baseline.
+Their scopes, one-hour lifetime and 32,768-operation allowance are unchanged;
+local claim inspection confirmed the same scope, mount and quota bytes. Exact
+expiry times are retained in the baseline. No tested-client renewal or restart
+is planned during observation; expiry alone is configuration behavior, not a
+Pi crash.
+
+The immutable window is `2026-11-04T11:29:23.302390Z` through
+`2026-11-11T11:29:23.302390Z`, exactly 604,800 seconds. In Sydney, this is
+4 November 2026 at 22:29:23 AEDT through 11 November at the same time.
+Thirty mirrored serial-prefix digests were checked before selection. The first
+seal attempt stopped before creating a baseline because the Jetson mirror
+lacked the already retained regression summary; copying that exact evidence
+allowed the single fresh seal. No time was backdated or carried from v16.
+
+All thirty observer host tests, both configuration checks and systemd unit
+verification passed. The initial passive checkpoint found no issues. One bounded
+Queen-log CAT completed with full END, 2,076 lines and 110,938 source payload
+bytes. The three unique `cohesix-pi4-v17-20261104-071438-*` timers are enabled:
+passive analysis every five minutes, Queen snapshots about fifteen minutes after
+each completed sample, and the exact endpoint. The endpoint's realtime
+microsecond value matched the immutable baseline. The first scheduled passive
+checkpoint also found no issues. The existing six-hour heartbeat has resumed.
+
+`BASELINE.json`, `observer/OBSERVER-ACTIVE.json` and the private `SESSION.md`
+own the interval, actual schedules, evidence hashes, finite credentials and
+remaining limits. Queen exports have fixed deadlines, no retry and a durable
+first-failure fence; they are retained samples rather than a lossless history.
+The endpoint stops only this run's observer timers and takes a final passive
+checkpoint. Seven days have not elapsed, and no completed-week or overall-release
+acceptance is claimed.
 
 Material AI assistance was used for source comparison, scoped implementation,
 build orchestration and evidence analysis. This record claims no independent
