@@ -125,6 +125,7 @@ owned by their specific contracts.
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
+| [26d1](#26d1) | seL4 17 Pi Network Evaluation | In Progress |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Reopened (bounded lease-history view and direct-GENET command-wait teardown) |
 | [27](#27) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Complete — owner-approved evidence; 1.1.0-beta (Release A) |
 | [27a](#27a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Complete — 1.1.0-beta (Release A) authority floor |
@@ -9030,6 +9031,51 @@ Commands:
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4
 Checks: QEMU and Pi 4 staged Test Plan runs are PASS with no undocumented drift, and benchmark revalidation has either recovered the accepted 26b envelope or recorded a scoped blocker/defer decision that downstream milestones cannot count as satisfied evidence.
 Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety and performance continuity for Cohesix.
+```
+
+---
+
+## Milestone 26d1 — seL4 17 Pi Network Evaluation <a id="26d1"></a>
+[Milestones](#Milestones)
+
+**Status:** In Progress.
+
+The user requested a separate `~/seL4_17` source installation and
+Python environment, using `~/seL4_16` as a preserved reference, followed by a
+canonical QEMU and Pi builds, a fresh Pi RAM image, and the recent GENET
+network regression. This task evaluates
+the upstream 17.0.0 security fixes against the existing production topology.
+It does not promote a release, replace historical evidence, or authorize
+unrelated driver, scheduler, protocol, or host-feature changes.
+
+The candidate is isolated from accepted seL4 16 source and artifacts. Its
+profile pins, generated interfaces, kernel-object admission and immutable Pi
+composition inputs must agree with the actual seL4 17 build. Preserve the
+Pi operational initial-SC and VL805 device-window overlay with its exact
+rebased diff identity. Do not disable existing guards to admit the new kernel.
+
+Use the frozen `PI4_COMMAND_WAIT_REGRESSION_PROTOCOL_V2.md` from the recent
+`pi4-main-ram-8e22af-20261103-175500` run: three independently qualified cycles,
+at most five attempts, all 13 packet/serial/counter gates, and authenticated
+TCP recovery before post-trial NETSTATS/DGHO. Stop on the first persistent
+physical failure. Keep SD unchanged and retain every failed build and trial.
+Record the deliberate end of the v16 continuous-boot interval before RAM
+deployment; a fresh seven-day observation begins only after successful v17
+regression and runtime restoration, following the existing operator procedure.
+
+```text
+Title/ID: m26d1-sel4-17-pi-network
+Milestone: 26d1 / seL4 17 Pi Network Evaluation
+Goal: Build the separate seL4 17 candidate through canonical QEMU and Pi scripts and rerun the exact recent physical GENET regression without weakening production contracts.
+Inputs: seL4Test manifest 17.0.0; preserved ~/seL4_16 and its Python closure; configs/sel4/profiles.toml; selected Pi manifest; existing immutable Pi composition; frozen issue2235 regression protocol and recent run records.
+Changes:
+  - External source and Python environment — create ~/seL4_17 and its independent .venv_aarch64; retain source, environment, compiler, build and overlay provenance.
+  - Candidate profiles, compiler admission and generated interfaces — select the exact v17 source/build ABI and preserve v16 compatibility where explicitly supported.
+  - Candidate seL4/build_UBOOT — retain only freshly built, identity-checked v17 inputs in the isolated candidate; preserve the accepted v16 tree in the original checkout.
+  - Task evidence — record material AI assistance, complete host-tool/Python/benchmark compatibility review, actual checks, failures, proof limits and the old/new observation boundaries.
+Commands: maintained sel4_profile.py prepare-source/configure/build/validate; focused compiler/profile checks; scripts/cohesix-build-run.sh and scripts/pi4-image-build.sh; canonical CRC-checked Pi RAM loader; frozen serial/TCP regression and independent packet/counter analysis.
+Checks: separate source and venv; complete pinned manifest; exact overlay and ABI; fresh production kernel/profile and root/driver/Worker artifacts; unchanged SD; sealed BUILD and all RAM CRCs; three qualified network cycles or a retained first-failure blocker; no claim of a completed week or overall release.
+Deliverables: independent ~/seL4_17 installation, reviewable candidate source, exact Pi image and private build/regression/observation records.
 ```
 
 ---

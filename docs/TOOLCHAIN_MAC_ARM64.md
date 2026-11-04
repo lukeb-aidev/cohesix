@@ -126,12 +126,12 @@ See the [Glossary](GLOSSARY.md) for Cohesix-specific build and evidence terms.
 | seL4 Python environment | Dedicated `out/toolchain/sel4-profile-venv`; two hash locks; exact 38-distribution closure | `configs/sel4/python-bootstrap.lock`, `configs/sel4/python-build-requirements.lock` |
 | Repository Python environment | `.venv`; hash-locked host-test requirements plus editable `tools/cohesix-py` | `configs/test-plan-python-requirements.lock`, `toolchain/setup_repo_venv.sh` |
 | Pi packaging tool | `mkimage` built from the official DENX U-Boot 2026.01 release tarball | `configs/sel4/profiles.toml` |
-| Kernel baseline | Complete upstream seL4Test manifest 16.0.0 source set, including seL4 commit `6e7c3b733d296cfd88d5fbf635c96e447a882374` | `configs/sel4/profiles.toml`, `docs/audit/M26D_SEL4_16_PROVENANCE.md` |
-| CAmkES companion | Upstream CAmkES 3.13.0 is the release paired with seL4 16.0.0 | Reference/smoke-test surface only; CAmkES is not a Cohesix build or target dependency |
+| Kernel baseline | Complete upstream seL4Test manifest 17.0.0 candidate source set, including seL4 commit `62e345c240a15671484530b4e6e069ce266c28d7` | `configs/sel4/profiles.toml`, `docs/audit/M26D1_SEL4_17_PI_NETWORK.md` |
+| CAmkES companion | Upstream CAmkES 3.13.1 is the release paired with seL4 17.0.0 | Reference/smoke-test surface only; CAmkES is not a Cohesix build or target dependency |
 | Target artifacts | Profile-selected generated headers/configuration, kernel, elfloader, rootserver, system image, and DTB outputs | `SEL4_BUILD_DIR` / `--sel4-build` |
 
 The official kernel interface reference is the
-[seL4 Reference Manual 16.0.0](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf).
+[seL4 Reference Manual 17.0.0](https://sel4.systems/Info/Docs/seL4-manual-17.0.0.pdf).
 
 ## 1. Install host and Rust dependencies
 
@@ -243,18 +243,18 @@ libraries must come from the same pinned upstream manifest. Parameterize the
 complete project location rather than embedding a developer home directory:
 
 ```bash
-export COHESIX_SEL4_PROJECT="${COHESIX_SEL4_PROJECT:-$PWD/out/sel4/v16-worktree-project}"
+export COHESIX_SEL4_PROJECT="${COHESIX_SEL4_PROJECT:-$PWD/out/sel4/v17-worktree-project}"
 mkdir -p "$COHESIX_SEL4_PROJECT"
 (
   cd "$COHESIX_SEL4_PROJECT"
   repo init \
     -u https://github.com/seL4/sel4test-manifest.git \
-    -b refs/tags/16.0.0
+    -b refs/tags/17.0.0
   repo sync -c
 )
 ```
 
-An optional `$HOME/seL4_16` checkout may hold the complete seL4Test 16.0.0
+An optional `$HOME/seL4_17` checkout may hold the complete seL4Test 17.0.0
 manifest plus its recreated `.venv_aarch64`. When the authenticated Pi overlay
 is applied, it is eligible only for the Pi operational source policy; it cannot
 replace the pristine QEMU/proof checkout or establish a build claim without a
@@ -280,13 +280,13 @@ separate pristine manifest checkout explicitly; never add the operational
 overlay to the clean QEMU/proof source:
 
 ```bash
-export COHESIX_SEL4_PI4_PROJECT="${COHESIX_SEL4_PI4_PROJECT:-$PWD/out/sel4/v16-pi4-project}"
+export COHESIX_SEL4_PI4_PROJECT="${COHESIX_SEL4_PI4_PROJECT:-$PWD/out/sel4/v17-pi4-project}"
 mkdir -p "$COHESIX_SEL4_PI4_PROJECT"
 (
   cd "$COHESIX_SEL4_PI4_PROJECT"
   repo init \
     -u https://github.com/seL4/sel4test-manifest.git \
-    -b refs/tags/16.0.0
+    -b refs/tags/17.0.0
   repo sync -c
 )
 out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py prepare-source \
@@ -331,7 +331,7 @@ are part of the profile contract; an extra, missing, changed, or content-drifted
 distribution is rejected.
 
 The closure pins `setuptools==80.9.0` because the upstream nanopb generator
-used by this seL4 16 project imports `pkg_resources`. Setup smoke-tests that
+used by this project imports `pkg_resources`. Setup smoke-tests that
 import; selecting a newer environment that removes it is a hard provisioning
 failure rather than a profile-build workaround.
 
@@ -348,8 +348,8 @@ closure, both lock digests, and exact `PATH` prefixes. The isolated environment
 does not write package metadata into either seL4 source checkout.
 
 The upstream
-[CAmkES 3.13.0 release](https://docs.sel4.systems/releases/camkes/camkes-3.13.0.html)
-is the companion component-framework release for seL4 16.0.0. Cohesix does not
+[CAmkES 3.13.1 release](https://docs.sel4.systems/releases/camkes/camkes-3.13.1.html)
+is the companion component-framework release for seL4 17.0.0. Cohesix does not
 use CAmkES, capDL-generated components, or their Haskell build closure in its
 target architecture. A separate CAmkES smoke checkout may test upstream host
 compatibility, but it is not part of the pinned Cohesix toolchain, generated
@@ -413,7 +413,7 @@ slot layouts, or root-task artifacts from another.
 
 QEMU launchers inspect the selected seL4 configuration and choose matching
 machine details, including the GIC revision. An explicit override is valid only
-when it agrees with that generated configuration. In seL4 16,
+when it agrees with that generated configuration. In seL4 17,
 `QEMU_GIC_VERSION=3` is the platform source selector that chooses `gic_v3.c`;
 `KernelArmGicV3=ON` or `QEMU_MACHINE=...,gic-version=3` alone is insufficient.
 The profile contract validates the source selector, its derived kernel option,
@@ -696,7 +696,7 @@ Only publish generated reference outputs after validation and target-specific
 review. Do not hand-edit `CMakeCache.txt`, generated headers, generated JSON,
 DTS/DTB, kernel or elfloader artifacts. In particular:
 
-- keep `ElfloaderRootserversLast=ON` for the accepted seL4 16 profiles;
+- keep `ElfloaderRootserversLast=ON` for the selected seL4 17 candidate profiles;
 - keep Pi 4 `IMAGE_START_ADDR=0x10000000` for the U-Boot `bootm` XIP handoff;
 - when both settings are active, let the profile wrapper regenerate
   `elfloader/gen_headers/platform_info.h` from the kernel-generated

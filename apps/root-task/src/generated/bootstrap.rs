@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "c8b7231aa8ae2ceecddc59e17b7e57aa354c9eaf9af81b470f3ec53e350524cf";
+    "a7ac15f0e0e42165fbff63ebddd68baec9cb949f4da9283b83ad279342373e98";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -8744,7 +8744,7 @@ pub const RECOVERABLE_TIMEOUT_TASKS: [&str; 0] = [];
 pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
     WorkerResourceAdmissionConfig {
         enabled: true,
-        selected_kernel: "sel4-16.0.0-aarch64-smp-mcs",
+        selected_kernel: "sel4-17.0.0-aarch64-smp-mcs",
         object_bits: KernelObjectBits {
             tcb: 11,
             endpoint: 4,
@@ -9562,7 +9562,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 52] = [
     "manifest.schema=1.29",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
+    "manifest.sha256=1834c49a54411def35cf9fc9727cec479d996d4598d082790fa7ee22c90c6aa8",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

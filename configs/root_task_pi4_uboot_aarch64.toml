@@ -962,7 +962,7 @@ locality_bound = true
 
 [worker_resource_admission]
 enabled = true
-selected_kernel = "sel4-16.0.0-aarch64-smp-mcs"
+selected_kernel = "sel4-17.0.0-aarch64-smp-mcs"
 
 [worker_resource_admission.object_bits]
 tcb = 11

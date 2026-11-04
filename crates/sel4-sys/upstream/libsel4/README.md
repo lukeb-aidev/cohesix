@@ -4,8 +4,8 @@
 
 # Curated libsel4 fallback snapshot
 
-This directory mirrors the public header inputs from seL4 16.0.0 at kernel
-commit `6e7c3b733d296cfd88d5fbf635c96e447a882374`.
+This directory mirrors the public header inputs from seL4 17.0.0 at kernel
+commit `62e345c240a15671484530b4e6e069ce266c28d7`.
 
 The snapshot contains `arch_include`, `include`, `mode_include`,
 `sel4_arch_include`, and the `bcm2711` and `qemu-arm-virt` platform subsets

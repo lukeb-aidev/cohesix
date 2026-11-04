@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "0e37eda6eb0734c93a28d8222cc9d03e7d1825ec7faa83716cbb04bbf048be31";
+    "b32e13fc4ed19b87a9f1288a3cb42e16337a764e8c660145690eddceb29cdbbf";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -8961,7 +8961,7 @@ pub const RECOVERABLE_TIMEOUT_TASKS: [&str; 0] = [];
 pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
     WorkerResourceAdmissionConfig {
         enabled: true,
-        selected_kernel: "sel4-16.0.0-aarch64-smp-mcs",
+        selected_kernel: "sel4-17.0.0-aarch64-smp-mcs",
         object_bits: KernelObjectBits {
             tcb: 11,
             endpoint: 4,
@@ -9831,7 +9831,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "manifest.schema=1.29",
     "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=4b36754223dba6ee44f5f267d1e7f0a6cc5bf1f635575d09cf23a6f1cfedb847",
+    "manifest.sha256=e88f03042facb74b680a9daf855929d5d2217206792fc525ab8bf6131cf64c79",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -9883,7 +9883,7 @@ pub const INITIAL_AUDIT_LINES: [&str; 57] = [
     "attestation.mode=measurement_only",
     "attestation.signed_evidence=unavailable",
     "attestation.ticket_keys=development_static",
-    "measurement.bound_manifest_sha256=4b36754223dba6ee44f5f267d1e7f0a6cc5bf1f635575d09cf23a6f1cfedb847",
+    "measurement.bound_manifest_sha256=e88f03042facb74b680a9daf855929d5d2217206792fc525ab8bf6131cf64c79",
     "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

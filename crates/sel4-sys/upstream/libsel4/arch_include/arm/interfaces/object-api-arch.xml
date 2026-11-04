@@ -128,6 +128,11 @@
                     The <texttt text="_service"/> is a CPtr to a capability of the wrong type.
                 </description>
             </error>
+            <error name="seL4_RevokeFirst">
+                <description>
+                    A copy of the <texttt text="_service"/> capability exists.
+                </description>
+            </error>
         </method>
     </interface>
     <interface name="seL4_ARM_Page" manual_name="Page"
@@ -276,7 +281,8 @@
                 <description>
                     The <texttt text="_service"/> is a CPtr to a capability of the wrong type.
                     Or, <texttt text="_service"/> is not mapped in a VSpace.
-                    Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range.
+                    Or, if hypervisor support is configured, the requested range is not entirely
+                    within the kernel physical memory window.
                 </description>
             </error>
             <error name="seL4_InvalidArgument">
@@ -315,7 +321,8 @@
                 <description>
                     The <texttt text="_service"/> is a CPtr to a capability of the wrong type.
                     Or, <texttt text="_service"/> is not mapped in a VSpace.
-                    Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range.
+                    Or, if hypervisor support is configured, the requested range is not entirely
+                    within the kernel physical memory window.
                 </description>
             </error>
             <error name="seL4_InvalidArgument">
@@ -353,7 +360,8 @@
                 <description>
                     The <texttt text="_service"/> is a CPtr to a capability of the wrong type.
                     Or, <texttt text="_service"/> is not mapped in a VSpace.
-                    Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range.
+                    Or, if hypervisor support is configured, the requested range is not entirely
+                    within the kernel physical memory window.
                 </description>
             </error>
             <error name="seL4_InvalidArgument">
@@ -392,7 +400,8 @@
                 <description>
                     The <texttt text="_service"/> is a CPtr to a capability of the wrong type.
                     Or, <texttt text="_service"/> is not mapped in a VSpace.
-                    Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range.
+                    Or, if hypervisor support is configured, the requested range is not entirely
+                    within the kernel physical memory window.
                 </description>
             </error>
             <error name="seL4_InvalidArgument">

@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Define fail-closed seL4 16 source and generated-build profile contracts for Cohesix.
+# Purpose: Define fail-closed seL4 17 candidate source and generated-build profile contracts for Cohesix.
 # Copyright 2026 Lukas Bower
 
 schema_version = 3
@@ -71,26 +71,26 @@ version = "mkimage version 2026.01"
 
 [source]
 manifest_url = "https://github.com/seL4/sel4test-manifest.git"
-manifest_ref = "refs/tags/16.0.0"
-manifest_commit = "b81fd440977a8ad89ed8478a9a5a027f062551f6"
+manifest_ref = "refs/tags/17.0.0"
+manifest_commit = "655b1f2a67de058571b5f653688aa55440745192"
 
 [source.repositories]
-".repo/manifests" = "b81fd440977a8ad89ed8478a9a5a027f062551f6"
-"kernel" = "6e7c3b733d296cfd88d5fbf635c96e447a882374"
+".repo/manifests" = "655b1f2a67de058571b5f653688aa55440745192"
+"kernel" = "62e345c240a15671484530b4e6e069ce266c28d7"
 "projects/musllibc" = "b0005f86fecbd6d0257b15363a5b013446914265"
-"projects/seL4_libs" = "d8abd95e7114c852f6636e3084eb1f66091a75ee"
-"projects/sel4_projects_libs" = "5b3c81127b191232489df09a59b22edead1c9db7"
+"projects/seL4_libs" = "262a34dcb2f3285be01df9e5404d911132d567a6"
+"projects/sel4_projects_libs" = "b9137c0d905ce966a02b1c9a0c6c0e4beb48223b"
 "projects/sel4runtime" = "86489cf6efab9f314964e79468c036e9035394c7"
-"projects/sel4test" = "60b7b47ee0a67f56e15951735a6aa9d270d47f55"
-"projects/util_libs" = "6e55b3c62687779692150e1de411ce61b9d2919a"
+"projects/sel4test" = "f27e4f4cdd020ef9b37f15ded76a3b38477761f0"
+"projects/util_libs" = "ef49a397b7044fc38b609a99a8c6265a97913b8e"
 "tools/nanopb" = "cad3c18ef15a663e30e3e43e3a752b66378adec1"
 "tools/opensbi" = "234ed8e427f4d92903123199f6590d144e0d9351"
-"tools/seL4" = "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7"
+"tools/seL4" = "6493e0c6fab360eb81a8115a49c9ca7bc280c48a"
 
 [source.pi4_overlay]
 paths = ["kernel/src/kernel/boot.c", "kernel/src/plat/bcm2711/overlay-rpi4.dts"]
 diff_format = "git-diff-binary-full-index-v1"
-diff_sha256 = "288b657ad5e425843951fa8dc81fae81c94f9afd15b7ed4dd494f721c936a4a2"
+diff_sha256 = "7f7a8dd55414f68412a6ffb045cf746c8965dd402ab6a16741552afc70fc3829"
 patch_file = "configs/sel4/patches/bcm2711-operational.patch"
 
 [profiles.qemu_smp_production]

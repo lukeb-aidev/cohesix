@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/types.bf */
+/* generated from libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/types.bf */
 
 #pragma once
 

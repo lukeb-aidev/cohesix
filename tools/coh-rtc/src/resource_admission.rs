@@ -31,7 +31,8 @@ const MAX_ID_BYTES: usize = 64;
 const DRIVER_SUPERVISOR_FIXED_CAPS: usize = 8;
 const DRIVER_SUPERVISOR_RUNTIME_CAPS_PER_DRIVER: usize = 7;
 const SEL4_16_AARCH64_SMP_MCS: &str = "sel4-16.0.0-aarch64-smp-mcs";
-const SEL4_16_AARCH64_SMP_MCS_OBJECT_BITS: KernelObjectBits = KernelObjectBits {
+const SEL4_17_AARCH64_SMP_MCS: &str = "sel4-17.0.0-aarch64-smp-mcs";
+const SEL4_AARCH64_SMP_MCS_OBJECT_BITS: KernelObjectBits = KernelObjectBits {
     tcb: 11,
     endpoint: 4,
     notification: 6,
@@ -42,18 +43,18 @@ const SEL4_16_AARCH64_SMP_MCS_OBJECT_BITS: KernelObjectBits = KernelObjectBits {
     page_table: 12,
     vspace: 12,
 };
-// These sizes are the exact seL4 16 AArch64 MCS kernel ABI selected above:
+// These sizes are the seL4 16 and 17 AArch64 MCS kernel ABI selected above:
 // `sizeof(sched_context_t) == 96` and `sizeof(refill_t) == 16`. Keep the
 // calculation behind the selected-kernel/object-pack gate below; applying it
 // generically to another architecture or kernel revision would be unsound.
-const SEL4_16_AARCH64_MCS_SCHED_CONTEXT_HEADER_BYTES: u64 = 96;
-const SEL4_16_AARCH64_MCS_REFILL_BYTES: u64 = 16;
+const SEL4_AARCH64_MCS_SCHED_CONTEXT_HEADER_BYTES: u64 = 96;
+const SEL4_AARCH64_MCS_REFILL_BYTES: u64 = 16;
 
-fn sel4_16_aarch64_mcs_max_refills(scheduling_context_bits: u8) -> Option<u64> {
+fn sel4_aarch64_mcs_max_refills(scheduling_context_bits: u8) -> Option<u64> {
     let object_bytes = 1u64.checked_shl(u32::from(scheduling_context_bits))?;
     object_bytes
-        .checked_sub(SEL4_16_AARCH64_MCS_SCHED_CONTEXT_HEADER_BYTES)
-        .map(|bytes| bytes / SEL4_16_AARCH64_MCS_REFILL_BYTES)
+        .checked_sub(SEL4_AARCH64_MCS_SCHED_CONTEXT_HEADER_BYTES)
+        .map(|bytes| bytes / SEL4_AARCH64_MCS_REFILL_BYTES)
 }
 
 /// Exact selected-kernel object sizes used by offline admission.
@@ -442,7 +443,7 @@ impl WorkerResourceAdmissionConfig {
             .iter()
             .filter(|task| task.execution == TemporalExecution::Active)
         {
-            let capacity = sel4_16_aarch64_mcs_max_refills(task.scheduling_context_bits)
+            let capacity = sel4_aarch64_mcs_max_refills(task.scheduling_context_bits)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "active temporal task {} SC bits {} cannot represent selected kernel {} MCS refill layout",
@@ -553,11 +554,13 @@ impl WorkerResourceAdmissionConfig {
             &self.selected_kernel,
         )?;
         self.object_bits.validate()?;
-        if self.selected_kernel != SEL4_16_AARCH64_SMP_MCS
-            || self.object_bits != SEL4_16_AARCH64_SMP_MCS_OBJECT_BITS
+        if !matches!(
+            self.selected_kernel.as_str(),
+            SEL4_16_AARCH64_SMP_MCS | SEL4_17_AARCH64_SMP_MCS
+        ) || self.object_bits != SEL4_AARCH64_SMP_MCS_OBJECT_BITS
         {
             bail!(
-                "worker_resource_admission selected-kernel object sizes do not match seL4 16 AArch64 SMP+MCS"
+                "worker_resource_admission selected-kernel object sizes do not match supported seL4 16/17 AArch64 SMP+MCS"
             );
         }
         self.validate_selected_kernel_refill_capacity(temporal)?;
@@ -1652,10 +1655,10 @@ mod tests {
     }
 
     #[test]
-    fn selected_sel4_16_aarch64_mcs_refill_capacity_is_exact() {
-        assert_eq!(sel4_16_aarch64_mcs_max_refills(7), Some(2));
-        assert_eq!(sel4_16_aarch64_mcs_max_refills(8), Some(10));
-        assert_eq!(sel4_16_aarch64_mcs_max_refills(9), Some(26));
+    fn selected_sel4_aarch64_mcs_refill_capacity_is_exact() {
+        assert_eq!(sel4_aarch64_mcs_max_refills(7), Some(2));
+        assert_eq!(sel4_aarch64_mcs_max_refills(8), Some(10));
+        assert_eq!(sel4_aarch64_mcs_max_refills(9), Some(26));
 
         let config = admission();
         let mut temporal = temporal();
@@ -1664,9 +1667,9 @@ mod tests {
         let error = wrong_kernel
             .validate(&temporal)
             .expect_err("an unselected kernel cannot reuse the AArch64 refill layout");
-        assert!(error
-            .to_string()
-            .contains("selected-kernel object sizes do not match seL4 16 AArch64 SMP+MCS"));
+        assert!(error.to_string().contains(
+            "selected-kernel object sizes do not match supported seL4 16/17 AArch64 SMP+MCS"
+        ));
 
         let root_fault = temporal
             .tasks
@@ -1692,6 +1695,36 @@ mod tests {
             error.to_string(),
             "active temporal task root-fault max_refills 11 exceeds selected kernel sel4-16.0.0-aarch64-smp-mcs SC bits 8 capacity 10"
         );
+    }
+
+    #[test]
+    fn sel4_17_admission_preserves_object_and_refill_bounds() {
+        let mut config = admission();
+        config.selected_kernel = SEL4_17_AARCH64_SMP_MCS.to_owned();
+        let mut temporal = temporal();
+        config
+            .validate(&temporal)
+            .expect("seL4 17 admits the unchanged AArch64 MCS object pack");
+
+        temporal
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "root-fault")
+            .expect("root-fault task")
+            .max_refills = 11;
+        let error = config
+            .validate(&temporal)
+            .expect_err("an eight-bit seL4 17 SC cannot hold eleven refills");
+        assert_eq!(
+            error.to_string(),
+            "active temporal task root-fault max_refills 11 exceeds selected kernel sel4-17.0.0-aarch64-smp-mcs SC bits 8 capacity 10"
+        );
+
+        config.object_bits.notification = 5;
+        let error = config
+            .validate(&temporal)
+            .expect_err("seL4 17 still requires the MCS notification object size");
+        assert!(error.to_string().contains("selected-kernel object sizes"));
     }
 
     #[test]

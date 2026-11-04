@@ -1,4 +1,4 @@
-# Install script for directory: /Users/lukasbower/seL4_16/projects/util_libs/libsatadrivers
+# Install script for directory: /Users/lukasbower/seL4_17/projects/util_libs/libsatadrivers
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -34,12 +34,12 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
+  set(CMAKE_OBJDUMP "/Users/lukasbower/GitHub/cohesix-sel4-17/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/apps/sel4test-driver/util_libs/libsatadrivers/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/seL4_17/build_pi4_production_reference/apps/sel4test-driver/util_libs/libsatadrivers/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

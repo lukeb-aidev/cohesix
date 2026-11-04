@@ -34,7 +34,9 @@ Architecture state is explicit throughout this document:
 
 ## 1. Authority and evidence boundary
 
-Cohesix is built from the tag-pinned upstream seL4 16.0.0 project. The selected
+This evaluation branch selects the tag-pinned upstream seL4 17.0.0 project.
+Milestone 26d1 owns its build and Pi network evaluation; existing v16 acceptance
+remains bound to the original artifacts. The selected
 revision and complete source, toolchain, profile, and evidence provenance are
 recorded with each qualified build. Target userspace is pure Rust `no_std`.
 
@@ -63,7 +65,7 @@ build outputs, and generated tables rather than this overview.
 
 | Concern | Checked-in architecture | Evidence boundary |
 | --- | --- | --- |
-| Kernel | seL4 16.0.0 on AArch64 with SMP+MCS, per-core scheduling control, Reply objects, timeout-fault resources, and generated virtual-counter truth. | Configuration and compilation do not prove target execution or timing. |
+| Kernel | seL4 17.0.0 candidate on AArch64 with SMP+MCS, per-core scheduling control, Reply objects, timeout-fault resources, and generated virtual-counter truth. | Configuration and compilation do not prove target execution or timing. |
 | Root authority | The init TCB remains `root-control`; restricted root-fault, emergency, Worker-supervisor, driver-supervisor, GPU-executor, and LoRA/Heartbeat-executor duties have independent active scheduling contexts. | The exact image must prove progress, fault handling, and containment. |
 | Namespace service | `nine-door-runtime` is a restricted passive child reached through a bounded donated Call/Reply chain after one compiler-budgeted bootstrap exchange. | Host NineDoor is a separate implementation and is not a transport to this child. |
 | Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication. On QEMU the child directly owns the HAL-admitted VirtIO MMIO, IRQ, and fixed coherent DMA queues. On the Pi `bcmgenet-v5` profile, DHCP and old-path quiescence precede a fail-closed handoff to a 32-page CPU-only link with the isolated GENET owner. Root receives only copied authenticated commands and returns bounded responses; it owns no steady packet path after either direct backend is active. | The public console grammar is unchanged and remains the only in-target TCP service. QEMU device evidence does not qualify a Pi network driver, and static construction does not qualify Pi GENET. |
@@ -91,7 +93,7 @@ Implementation and proof remain separate:
   Rust userspace, boot-path, hardware, DMA, SMP, or timing proof.
 
 The selected AArch64 SMP+MCS configurations are not represented as tag-pinned
-verified seL4 configurations. The seL4 16 caveats describe
+verified seL4 configurations. The seL4 17 caveats describe
 AArch64 MCS verification as incomplete and SMP+MCS as less explored. Exact
 QEMU and Pi acceptance is therefore mandatory, but it does not create a
 formal-verification claim.

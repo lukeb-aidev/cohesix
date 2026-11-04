@@ -75,14 +75,13 @@ typedef enum {
     /* System control registers EL1 */
     seL4_VCPUReg_SCTLR = 0,
     seL4_VCPUReg_CPACR,
+    seL4_VCPUReg_TCR,
     seL4_VCPURegSaveRange_start, /* begin vcpu save/restore reg range */
     seL4_VCPUReg_TTBR0 = seL4_VCPURegSaveRange_start,
     seL4_VCPUReg_TTBR1,
-    seL4_VCPUReg_TCR,
     seL4_VCPUReg_MAIR,
     seL4_VCPUReg_AMAIR,
     seL4_VCPUReg_CIDR,
-    seL4_VCPUReg_ACTLR,
 
     /* exception handling registers EL1 */
     seL4_VCPUReg_AFSR0,
@@ -102,7 +101,13 @@ typedef enum {
     seL4_VCPUReg_SP_EL1,
     seL4_VCPUReg_ELR_EL1,
     seL4_VCPUReg_SPSR_EL1, // 32-bit
-    seL4_VCPURegSaveRange_end = seL4_VCPUReg_SPSR_EL1, /* end vcpu save/restore reg range */
+
+    /* cache size selection register EL1 */
+    seL4_VCPUReg_CSSELR_EL1,
+
+    /* virtual deferred interrupt status register EL2 */
+    seL4_VCPUReg_VDISR_EL2,
+    seL4_VCPURegSaveRange_end = seL4_VCPUReg_VDISR_EL2, /* end vcpu save/restore reg range */
 
     /* generic timer registers, to be completed */
     seL4_VCPUReg_CNTV_CTL,
@@ -170,7 +175,7 @@ typedef enum {
 #define seL4_LargePageBits 21
 #define seL4_HugePageBits 30
 #define seL4_SlotBits 5
-#if defined(CONFIG_HARDWARE_DEBUG_API) || defined(CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE) || \
+#if defined(CONFIG_HARDWARE_DEBUG_API) || \
     (defined(CONFIG_ARM_HYPERVISOR_SUPPORT) && defined(CONFIG_ENABLE_SMP_SUPPORT) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION) && !defined(CONFIG_KERNEL_MCS))
 #define seL4_TCBBits 12
 #else

@@ -10,7 +10,7 @@
 
 #pragma once
 
-#define PHYS_BASE_RAW 0x1000
+#define PHYS_BASE_RAW 0x200000
 
 #ifndef __ASSEMBLER__
 
@@ -54,7 +54,6 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
         /* contains UART_PPTR */
         .pptr = KDEV_BASE + 0x0,
         .armExecuteNever = true,
-        .userAvailable = true
     },
     #endif /* CONFIG_PRINTING */
     /* /soc/interrupt-controller@40041000 */
@@ -62,14 +61,12 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
         .paddr = 0xff841000,
         .pptr = GIC_V2_DISTRIBUTOR_PPTR,
         .armExecuteNever = true,
-        .userAvailable = false
     },
     /* /soc/interrupt-controller@40041000 */
     {
         .paddr = 0xff842000,
         .pptr = GIC_V2_CONTROLLER_PPTR,
         .armExecuteNever = true,
-        .userAvailable = false
     },
     #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
     /* /soc/interrupt-controller@40041000 */
@@ -77,7 +74,6 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
         .paddr = 0xff844000,
         .pptr = GIC_V2_VCPUCTRL_PPTR,
         .armExecuteNever = true,
-        .userAvailable = false
     },
     #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
     /* /soc/local_intc@40000000 */
@@ -85,7 +81,6 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
         .paddr = 0xff800000,
         .pptr = ARM_LOCAL_PPTR,
         .armExecuteNever = true,
-        .userAvailable = false
     },
 };
 
@@ -98,11 +93,46 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
  */
 #define NUM_KERNEL_DEVICE_FRAMES ARRAY_SIZE(kernel_device_frames)
 
+/* The physical address ranges of the kernel devices, as described by the device
+ * tree and rounded to page boundaries. The kernel maps only the first part of
+ * some devices, but it reserves the whole device, to not expose half of a device
+ * to user space. Devices that are shared with user level (user: true) are not
+ * listed. The ranges are sorted and do not overlap, but they may be adjacent.
+ */
+
+static const p_region_t BOOT_RODATA kernel_device_reserved_regions[] = {
+    /* /soc/local_intc@40000000 */
+    {
+        .start = 0xff800000,
+        .end   = 0xff801000
+    },
+    /* /soc/interrupt-controller@40041000 */
+    {
+        .start = 0xff841000,
+        .end   = 0xff842000
+    },
+    /* /soc/interrupt-controller@40041000 */
+    {
+        .start = 0xff842000,
+        .end   = 0xff844000
+    },
+    #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+    /* /soc/interrupt-controller@40041000 */
+    {
+        .start = 0xff844000,
+        .end   = 0xff846000
+    },
+    #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
+};
+
+/* See the comment on NUM_KERNEL_DEVICE_FRAMES about empty arrays. */
+#define NUM_KERNEL_DEVICE_RESERVED_REGIONS ARRAY_SIZE(kernel_device_reserved_regions)
+
 /* PHYSICAL MEMORY */
 static const p_region_t BOOT_RODATA avail_p_regs[] = {
     /* /memory@0 */
     {
-        .start = 0x1000,
+        .start = 0x200000,
         .end   = 0x3b400000
     },
     /* /memory@0 */

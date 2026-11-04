@@ -1,9 +1,9 @@
-set(CMAKE_HOST_SYSTEM "Darwin-25.6.0")
+set(CMAKE_HOST_SYSTEM "Darwin-27.2.0")
 set(CMAKE_HOST_SYSTEM_NAME "Darwin")
-set(CMAKE_HOST_SYSTEM_VERSION "25.6.0")
+set(CMAKE_HOST_SYSTEM_VERSION "27.2.0")
 set(CMAKE_HOST_SYSTEM_PROCESSOR "arm64")
 
-include("/Users/lukasbower/seL4_16/kernel/gcc.cmake")
+include("/Users/lukasbower/seL4_17/kernel/gcc.cmake")
 
 set(CMAKE_SYSTEM "Generic")
 set(CMAKE_SYSTEM_NAME "Generic")

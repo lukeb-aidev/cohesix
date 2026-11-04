@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "0fd40c602c76806c30de6963765e4d4b4057716da238c1d6fc14d8fb20858f11",
-  "topology_sha256": "f60968a7957d0e83f99b8326952feedde635b50474f73c5662c220330bce3684",
+  "manifest_sha256": "1834c49a54411def35cf9fc9727cec479d996d4598d082790fa7ee22c90c6aa8",
+  "topology_sha256": "fe4a5d07b6b63f19df735fd68500c9dd05ccb8f9a475a229b2f786cb1b48ef99",
   "topology": {
     "console_network_service": {
       "abi_version": 6,
@@ -9450,7 +9450,7 @@
         "untyped_bytes": 33554432,
         "vspaces": 8
       },
-      "selected_kernel": "sel4-16.0.0-aarch64-smp-mcs"
+      "selected_kernel": "sel4-17.0.0-aarch64-smp-mcs"
     },
     "worker_runtime": {
       "cap_backed_authority": true,

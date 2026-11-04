@@ -291,7 +291,7 @@ binaries or seL4 guest. For host-tool builds and native Linux QEMU, follow the
 `qemu_smp_production`, HVF, and 24 MHz; these guest artifacts are not interchangeable.
 
 For the **Mac source build below**, first
-[prepare the external seL4 16.0.0 project](docs/TOOLCHAIN_MAC_ARM64.md#2-prepare-the-external-sel4-project-source),
+[prepare the external seL4 17.0.0 candidate project](docs/TOOLCHAIN_MAC_ARM64.md#2-prepare-the-external-sel4-project-source),
 then [configure, build, and validate](docs/TOOLCHAIN_MAC_ARM64.md#6-rebuilding-sel4-profiles)
 `qemu_smp_production` into `out/sel4/profile-v2/qemu-smp-production`.
 The setup installer does not create that build directory. Once it is ready,

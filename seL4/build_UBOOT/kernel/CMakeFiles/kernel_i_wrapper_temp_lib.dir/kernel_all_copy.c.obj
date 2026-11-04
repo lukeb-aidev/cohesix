@@ -1,15 +1,15 @@
-# 0 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/kernel_all_copy.c"
+# 0 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/kernel_all_copy.c"
 # 0 "<built-in>"
 # 0 "<command-line>"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/kernel_all_copy.c"
-# 1 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/kernel_all_copy.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/config.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/config.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -18,7 +18,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/config.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/config.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -29,11 +29,11 @@
 
 /* Compile-time configuration parameters. Might be set by the build system. */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/autoconf/autoconf.h" 1
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/autoconf/autoconf.h" 1
 
        
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_config/kernel/gen_config.h" 1
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_config/kernel/gen_config.h" 1
        
 
 /* disabled: CONFIG_ARCH_AARCH32 */
@@ -50,26 +50,18 @@
 
 
 
-
-
-
-/* disabled: CONFIG_ARM_HIKEY_PREFETCHER_STBPFDIS */
-/* disabled: CONFIG_ARM_HIKEY_PREFETCHER_STBPFRS */
 /* disabled: CONFIG_PLAT_IMX7 */
 /* disabled: CONFIG_PLAT_ALLWINNERA20 */
 /* disabled: CONFIG_PLAT_AM335X */
-/* disabled: CONFIG_PLAT_APQ8064 */
 /* disabled: CONFIG_PLAT_ARIANE */
 
 /* disabled: CONFIG_PLAT_BCM2712 */
 /* disabled: CONFIG_PLAT_BCM2837 */
 /* disabled: CONFIG_PLAT_CHESHIRE */
 /* disabled: CONFIG_PLAT_HIFIVE_P550 */
-/* disabled: CONFIG_PLAT_EXYNOS4 */
 /* disabled: CONFIG_PLAT_EXYNOS5 */
 /* disabled: CONFIG_PLAT_FVP */
 /* disabled: CONFIG_PLAT_HIFIVE */
-/* disabled: CONFIG_PLAT_HIKEY */
 /* disabled: CONFIG_PLAT_IMX6 */
 /* disabled: CONFIG_PLAT_IMX7_SABRE */
 /* disabled: CONFIG_PLAT_IMX8MQ_EVK */
@@ -112,9 +104,17 @@
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
 
-/* disabled: CONFIG_AARCH64_SERROR_IGNORE */
 
 
+
+
+/* disabled: CONFIG_BENCHMARK_GENERIC */
+/* disabled: CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
+/* disabled: CONFIG_BENCHMARK_TRACEPOINTS */
+/* disabled: CONFIG_BENCHMARK_TRACK_UTILISATION */
+
+/* disabled: CONFIG_ENABLE_BENCHMARKS */
+/* disabled: CONFIG_KERNEL_LOG_BUFFER */
 
 /* disabled: CONFIG_ARM_PA_SIZE_BITS_40 */
 
@@ -126,7 +126,6 @@
 /* disabled: CONFIG_ARM_HYPERVISOR_SUPPORT */
 /* disabled: CONFIG_ARM_GIC_V3_SUPPORT */
 /* disabled: CONFIG_AARCH64_VSPACE_S2_START_L1 */
-/* disabled: CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE */
 /* disabled: CONFIG_ARM_ERRATA_430973 */
 /* disabled: CONFIG_ARM_ERRATA_773022 */
 /* disabled: CONFIG_ARM_SMMU */
@@ -137,13 +136,14 @@
 /* disabled: CONFIG_SMMU_INTERRUPT_ENABLE */
 /* disabled: CONFIG_AARCH32_FPU_ENABLE_CONTEXT_SWITCH */
 
+
 /* disabled: CONFIG_ALLOW_SMC_CALLS */
 
 /* disabled: CONFIG_ARM_TLS_REG_TPIDRURO */
 
 
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
-# 119 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_config/kernel/gen_config.h"
+# 119 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_config/kernel/gen_config.h"
 /* disabled: CONFIG_EXCEPTION_FASTPATH */
 
 
@@ -158,15 +158,6 @@
 /* disabled: CONFIG_HARDWARE_DEBUG_API */
 /* disabled: CONFIG_PRINTING */
 /* disabled: CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC */
-
-/* disabled: CONFIG_BENCHMARK_GENERIC */
-/* disabled: CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
-/* disabled: CONFIG_BENCHMARK_TRACEPOINTS */
-/* disabled: CONFIG_BENCHMARK_TRACK_UTILISATION */
-
-/* disabled: CONFIG_ENABLE_BENCHMARKS */
-/* disabled: CONFIG_KERNEL_LOG_BUFFER */
-
 /* disabled: CONFIG_IRQ_REPORTING */
 /* disabled: CONFIG_COLOUR_PRINTING */
 
@@ -194,13 +185,13 @@
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
 /* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */
-# 5 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/autoconf/autoconf.h" 2
-# 12 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/config.h" 2
-# 10 "/Users/lukasbower/seL4_16/kernel/include/config.h" 2
+# 5 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/autoconf/autoconf.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/config.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/config.h" 2
 
 /* Set ENABLE_SMP_SUPPORT for kernel source files */
-# 8 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/types.h" 1
+# 8 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -209,7 +200,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/basic_types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/basic_types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -218,7 +209,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/stdint.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/stdint.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -227,7 +218,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/64/mode/stdint.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/64/mode/stdint.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -235,7 +226,7 @@
  */
 
        
-# 10 "/Users/lukasbower/seL4_16/kernel/include/stdint.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/stdint.h" 2
 
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
@@ -254,8 +245,8 @@ typedef signed long long int64_t;
 
 typedef uint64_t uintmax_t;
 typedef int64_t intmax_t;
-# 10 "/Users/lukasbower/seL4_16/kernel/include/basic_types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/types.h" 1
+# 10 "/Users/lukasbower/seL4_17/kernel/include/basic_types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -265,7 +256,7 @@ typedef int64_t intmax_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -274,7 +265,7 @@ typedef int64_t intmax_t;
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/assert.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/assert.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -284,7 +275,7 @@ typedef int64_t intmax_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/util.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/util.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -292,13 +283,13 @@ typedef int64_t intmax_t;
  */
 
        
-# 28 "/Users/lukasbower/seL4_16/kernel/include/util.h"
+# 28 "/Users/lukasbower/seL4_17/kernel/include/util.h"
 /* There is no difference between using 'ul' or 'lu' as suffix for numbers to
  * enforce a specific type besides the default 'int'. Just when it comes to the
  * printf() format specifiers, '%lu' is the only form that is supported. Thus
  * 'ul' is the preferred suffix to avoid confusion.
  */
-# 48 "/Users/lukasbower/seL4_16/kernel/include/util.h"
+# 48 "/Users/lukasbower/seL4_17/kernel/include/util.h"
 /* Time constants are defined to use the 'unsigned long long'. Rationale is,
  * that the C rules define the calculation result is determined by largest type
  * involved. Enforcing the largest possible type C provides avoids pitfalls with
@@ -315,7 +306,7 @@ typedef int64_t intmax_t;
  * uint64_t type definitions nor including the header with the uint64_t
  * definitions here is currently a feasible option.
  */
-# 93 "/Users/lukasbower/seL4_16/kernel/include/util.h"
+# 93 "/Users/lukasbower/seL4_17/kernel/include/util.h"
 /** MODIFIES: */
 /** FNSPEC
       StrictC'__unreachable_spec: "\<Gamma> \<turnstile> {} Call StrictC'__unreachable_'proc UNIV"
@@ -471,7 +462,7 @@ __attribute__((__const__)) clzll(unsigned long long x)
 static inline long
 __attribute__((__const__)) ctzl(unsigned long x)
 {
-# 269 "/Users/lukasbower/seL4_16/kernel/include/util.h"
+# 269 "/Users/lukasbower/seL4_17/kernel/include/util.h"
     // Here, we have __builtin_ctzl.
     return __builtin_ctzl(x);
 
@@ -491,7 +482,7 @@ __attribute__((__const__)) ctzl(unsigned long x)
 static inline long long
 __attribute__((__const__)) ctzll(unsigned long long x)
 {
-# 300 "/Users/lukasbower/seL4_16/kernel/include/util.h"
+# 300 "/Users/lukasbower/seL4_17/kernel/include/util.h"
     return __builtin_ctzll(x);
 
 }
@@ -517,8 +508,8 @@ __attribute__((__const__)) popcountl(unsigned long mask)
 
 
 /* Can be used to insert padding to the next L1 cache line boundary */
-# 11 "/Users/lukasbower/seL4_16/kernel/include/assert.h" 2
-# 45 "/Users/lukasbower/seL4_16/kernel/include/assert.h"
+# 11 "/Users/lukasbower/seL4_17/kernel/include/assert.h" 2
+# 45 "/Users/lukasbower/seL4_17/kernel/include/assert.h"
 /* Create an assert that triggers a compile error if the condition fails. We do
  * not include sel4/macros.h that provides SEL4_COMPILE_ASSERT() for two
  * reasons:
@@ -536,7 +527,7 @@ __attribute__((__const__)) popcountl(unsigned long mask)
  * unverified_compile_assert() exists, because some compile asserts contain
  * expressions that the C parser cannot handle, too.
  */
-# 10 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/types.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/types.h" 2
 
 _Static_assert(sizeof(unsigned long) == 8, "long_is_64bits");
 
@@ -544,7 +535,12 @@ _Static_assert(sizeof(unsigned long) == 8, "long_is_64bits");
 
 
 typedef uint64_t timestamp_t;
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/types.h" 2
+
+
+
+
+typedef uint16_t hw_asid_t;
+# 11 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/types.h" 2
 
 
 typedef unsigned long word_t;
@@ -560,9 +556,15 @@ typedef word_t node_id_t;
 typedef word_t cpu_id_t;
 typedef word_t dom_t;
 
-typedef uint8_t hw_asid_t;
-
+/*
+ * Hardware ASID/VMID 0 is reserved: setVMRoot() installs the empty global
+ * VSpace under hardware ASID/VMID 0 for threads without a valid VSpace,
+ * without a TLB flush. That is only sound if no user-managed VSpace runs under
+ * ASID/VMID 0, otherwise such a thread hits that VSpace's TLB entries.
+ */
 enum hwASIDConstants {
+    hwASIDReserved = 0,
+    hwASIDMin = 1,
     hwASIDMax = 255,
     hwASIDBits = 8
 };
@@ -571,9 +573,8 @@ typedef struct kernel_frame {
     paddr_t paddr;
     pptr_t pptr;
     int armExecuteNever;
-    int userAvailable;
 } kernel_frame_t;
-# 11 "/Users/lukasbower/seL4_16/kernel/include/basic_types.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/basic_types.h" 2
 
 /* arch/types.h is supposed to define word_t and _seL4_word_fmt */
 
@@ -587,7 +588,7 @@ typedef struct kernel_frame {
  * always be from the strings behind all macros then - and not the macro names
  * that are passed as parameters.
  */
-# 35 "/Users/lukasbower/seL4_16/kernel/include/basic_types.h"
+# 35 "/Users/lukasbower/seL4_17/kernel/include/basic_types.h"
 /* The C parser from the verification toolchain requires declaring word_t
  * constants without casting integer values to word_t. Since the printf() format
  * specifiers are aligned with the C integer type suffixes, _seL4_word_fmt can
@@ -642,8 +643,8 @@ typedef cptr_t seL4_CPtr;
 typedef node_id_t seL4_NodeId;
 typedef paddr_t seL4_PAddr;
 typedef dom_t seL4_Domain;
-# 10 "/Users/lukasbower/seL4_16/kernel/include/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/compound_types.h" 1
+# 10 "/Users/lukasbower/seL4_17/kernel/include/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/compound_types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -653,7 +654,7 @@ typedef dom_t seL4_Domain;
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -665,8 +666,8 @@ typedef dom_t seL4_Domain;
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/generated/sel4/shared_types_gen.h" 1
-/* generated from /Users/lukasbower/seL4_16/kernel/libsel4/mode_include/64/sel4/shared_types.bf */
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/generated/sel4/shared_types_gen.h" 1
+/* generated from libsel4/mode_include/64/sel4/shared_types.bf */
 
        
 
@@ -844,8 +845,8 @@ seL4_MessageInfo_set_length(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     seL4_MessageInfo.words[0] |= (v64 << 0) & 0x7full;
     return seL4_MessageInfo;
 }
-# 13 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/api/types.h" 1
+# 13 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/api/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -854,7 +855,7 @@ seL4_MessageInfo_set_length(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/objecttype.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/objecttype.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -879,8 +880,8 @@ __attribute__((deprecated("use seL4_NotificationObject"))) static const seL4_Obj
     seL4_NotificationObject;
 
 typedef seL4_Word api_object_t;
-# 10 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/objecttype.h" 1
+# 10 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/api/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/objecttype.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -894,8 +895,8 @@ typedef enum _mode_object {
     seL4_ARM_VSpaceObject,
     seL4_ModeObjectTypeCount
 } seL4_ModeObjectType;
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/arch_include/arm/sel4/arch/objecttype.h" 1
+# 11 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/api/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/arch_include/arm/sel4/arch/objecttype.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -924,16 +925,16 @@ typedef enum _object {
 } seL4_ArchObjectType;
 
 typedef seL4_Word object_t;
-# 12 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/api/types.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/api/types.h" 2
 
 enum asidConstants {
     asidInvalid = 0
 };
 
 typedef word_t asid_t;
-# 14 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/macros.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/macros.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -941,17 +942,17 @@ typedef word_t asid_t;
  */
 
        
-# 51 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/macros.h"
+# 51 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/macros.h"
 /* _Static_assert() is a c11 feature. Since the kernel is currently compiled
  * with c99, we have to emulate it. */
-# 65 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/macros.h"
+# 65 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/macros.h"
 /*
  * Some compilers attempt to pack enums into the smallest possible type.
  * For ABI compatibility with the kernel, we need to ensure they remain
  * the same size as a 'long'.
  */
-# 16 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/constants.h" 1
+# 16 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -959,7 +960,7 @@ typedef word_t asid_t;
  */
 
        
-# 44 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/constants.h"
+# 44 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/constants.h"
 enum priorityConstants {
     seL4_InvalidPrio = -1,
     seL4_MinPrio = 0,
@@ -1035,8 +1036,8 @@ typedef enum {
     seL4_SchedContext_Sporadic = 0x1,
     _enum_pad_seL4_SchedContextFlag = ((1ULL << ((sizeof(long)*8) - 1)) - 1),
 } seL4_SchedContextFlag;
-# 17 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/shared_types.h" 1
+# 17 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/shared_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1068,8 +1069,8 @@ typedef enum {
     seL4_CapFault_GuardMismatch_BitsFound,
     _enum_pad_seL4_CapFault_Msg = ((1ULL << ((sizeof(long)*8) - 1)) - 1),
 } seL4_CapFault_Msg;
-# 18 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine/io.h" 1
+# 18 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine/io.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -1077,7 +1078,7 @@ typedef enum {
  */
 
        
-# 110 "/Users/lukasbower/seL4_16/kernel/include/machine/io.h"
+# 110 "/Users/lukasbower/seL4_17/kernel/include/machine/io.h"
 /* The verification runs on the output of the preprocessing stage of a release
  * build configuration, CONFIG_PRINTING is not enabled there. We remove all
  * calls to printf() completely from the code base, because neither printf() nor
@@ -1095,7 +1096,7 @@ typedef enum {
  *   #define puts(...)               ((void)(0))
  *   #define snprintf(...)           ((void)(0))
  */
-# 19 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
+# 19 "/Users/lukasbower/seL4_17/kernel/include/api/types.h" 2
 
 /* seL4_CapRights_t defined in mode/api/shared_types.bf */
 
@@ -1179,8 +1180,8 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 {
     return mi.words[0];
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/compound_types.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 1
+# 11 "/Users/lukasbower/seL4_17/kernel/include/compound_types.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -1192,8 +1193,8 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/generated/arch/object/structures_gen.h" 1
-/* generated from /Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/structures.bf */
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/generated/arch/object/structures_gen.h" 1
+/* generated from include/arch/arm/arch/object/structures.bf */
 
        
 
@@ -3674,10 +3675,10 @@ seL4_Fault_VMFault_get_instructionFault(seL4_Fault_t seL4_Fault) {
     }
     return ret;
 }
-# 13 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/arch_include/arm/sel4/arch/constants.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/arch_include/arm/sel4/arch/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3685,8 +3686,8 @@ seL4_Fault_VMFault_get_instructionFault(seL4_Fault_t seL4_Fault) {
  */
 
        
-# 16 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h" 1
+# 16 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3764,14 +3765,13 @@ typedef enum {
     /* System control registers EL1 */
     seL4_VCPUReg_SCTLR = 0,
     seL4_VCPUReg_CPACR,
+    seL4_VCPUReg_TCR,
     seL4_VCPURegSaveRange_start, /* begin vcpu save/restore reg range */
     seL4_VCPUReg_TTBR0 = seL4_VCPURegSaveRange_start,
     seL4_VCPUReg_TTBR1,
-    seL4_VCPUReg_TCR,
     seL4_VCPUReg_MAIR,
     seL4_VCPUReg_AMAIR,
     seL4_VCPUReg_CIDR,
-    seL4_VCPUReg_ACTLR,
 
     /* exception handling registers EL1 */
     seL4_VCPUReg_AFSR0,
@@ -3791,7 +3791,13 @@ typedef enum {
     seL4_VCPUReg_SP_EL1,
     seL4_VCPUReg_ELR_EL1,
     seL4_VCPUReg_SPSR_EL1, // 32-bit
-    seL4_VCPURegSaveRange_end = seL4_VCPUReg_SPSR_EL1, /* end vcpu save/restore reg range */
+
+    /* cache size selection register EL1 */
+    seL4_VCPUReg_CSSELR_EL1,
+
+    /* virtual deferred interrupt status register EL2 */
+    seL4_VCPUReg_VDISR_EL2,
+    seL4_VCPURegSaveRange_end = seL4_VCPUReg_VDISR_EL2, /* end vcpu save/restore reg range */
 
     /* generic timer registers, to be completed */
     seL4_VCPUReg_CNTV_CTL,
@@ -3855,7 +3861,7 @@ typedef enum {
 
 
 /* object sizes - 2^n */
-# 214 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+# 219 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
 /* word size */
 
 
@@ -3867,16 +3873,16 @@ typedef enum {
 typedef int __assert_failed_seL4_PageTableEntryBits_seL4_PageTableIndexBits_seL4_PageTableBits[((3) + (9) == 12) ? 1 : -1] __attribute__((unused));;
 typedef int __assert_failed_seL4_WordSizeBits_seL4_ASIDPoolIndexBits_seL4_ASIDPoolBits[((3) + (9) == 12) ? 1 : -1] __attribute__((unused));;
 typedef int __assert_failed_seL4_VSpaceEntryBits_seL4_VSpaceIndexBits_seL4_VSpaceBits[((3) + (9) == 12) ? 1 : -1] __attribute__((unused));;
-# 234 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+# 239 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
 /* IPC buffer is 1024 bytes, giving size bits of 10 */
-# 256 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+# 261 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
 /* (Deprecated) Last address in the virtual address space that is accessible to user level */
 
 
 
 /* Last address in the virtual address space that is accessible to user level */
-# 17 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark_utilisation_.h" 1
+# 17 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark_utilisation_.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3884,7 +3890,7 @@ typedef int __assert_failed_seL4_VSpaceEntryBits_seL4_VSpaceIndexBits_seL4_VSpac
  */
 
        
-# 18 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
+# 18 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h" 2
 
 enum irq_state {
     IRQInactive = 0,
@@ -3916,7 +3922,7 @@ enum notification_state {
     NtfnState_Active = 2
 };
 typedef word_t notification_state_t;
-# 63 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h"
+# 63 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h"
 // We would like the actual 'tcb' region (the portion that contains the tcb_t) of the tcb
 // to be as large as possible, but it still needs to be aligned. As the TCB object contains
 // two sub objects the largest we can make either sub object whilst preserving size alignment
@@ -3946,7 +3952,7 @@ typedef word_t notification_state_t;
 
 
 /* Generate a cte_t pointer from a tcb_t pointer */
-# 107 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h"
+# 107 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h"
 static inline cap_t __attribute__((__const__)) Zombie_new(word_t number, word_t type, word_t ptr)
 {
     word_t mask;
@@ -4031,12 +4037,12 @@ enum tcb_cnode_index {
 
     /* Timeout endpoint slot */
     tcbTimeoutHandler = 4,
-# 201 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h"
+# 201 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h"
     tcbCNodeEntries
 };
 typedef word_t tcb_cnode_index_t;
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/structures.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/structures.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4045,7 +4051,7 @@ typedef word_t tcb_cnode_index_t;
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4053,8 +4059,8 @@ typedef word_t tcb_cnode_index_t;
  */
 
        
-# 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/hardware.h" 1
+# 16 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/hardware.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4064,7 +4070,7 @@ typedef word_t tcb_cnode_index_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/hardware.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/hardware.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4090,9 +4096,9 @@ typedef word_t tcb_cnode_index_t;
  * PT_LEVEL_SHIFT(n) == PT_INDEX_BITS * (NUM_PT_LEVELS - n) + seL4_PageBits
  * GET_PT_INDEX(addr, n) == (addr >> PT_LEVEL_SHIFT(n)) & MASK(PT_INDEX_BITS)
  */
-# 47 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/hardware.h"
+# 47 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/hardware.h"
 /* Control register fields */
-# 64 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/hardware.h"
+# 64 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/hardware.h"
 enum vm_page_size {
     ARMSmallPage,
     ARMLargePage,
@@ -4122,7 +4128,7 @@ static inline word_t __attribute__((__const__)) pageBitsForSize(vm_page_size_t p
         halt();
     }
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/hardware.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/hardware.h" 2
 
 
 enum vm_fault_type {
@@ -4130,7 +4136,7 @@ enum vm_fault_type {
     ARMPrefetchAbort = 1
 };
 typedef word_t vm_fault_type_t;
-# 36 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/hardware.h"
+# 36 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/hardware.h"
 /*
  * Used to align the big kernel lock to the exclusive reservation granule size.
  * Without this nearby writes can delay atomic operations implemented with looping
@@ -4151,8 +4157,8 @@ typedef word_t vm_fault_type_t;
  * "The architecture sets an upper limit of 2048 bytes on the Exclusives
  *  reservation granule that can be marked as exclusive."
  */
-# 17 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/registerset.h" 1
+# 17 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/registerset.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4161,7 +4167,7 @@ typedef word_t vm_fault_type_t;
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4171,30 +4177,13 @@ typedef word_t vm_fault_type_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/debug_conf.h" 1
-/*
- * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-
-/* These are used to force specific outcomes for various combinations of
- * settings for the state of CONFIG_ARM_HYPERVISOR_SUPPORT,
- * CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE and
- * CONFIG_HARDWARE_DEBUG_API.
- */
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 2
 
 /* CurrentEL register */
 
 
 
 /* PSTATE register */
-# 26 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 25 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /* DAIF register */
 
 
@@ -4203,23 +4192,26 @@ typedef word_t vm_fault_type_t;
 
 
 /* ESR register */
-# 44 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 43 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /* ID_AA64PFR0_EL1 register */
+
 
 
 
 /* CPACR_EL1 register */
 
 
+/* CPTR_EL2 register, layout for HCR_EL2.E2H == 0 */
+# 60 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /*
  * We cannot allow async aborts in the verified kernel, but they are useful
  * in identifying invalid memory access bugs so we enable them in debug mode.
  */
-# 69 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 78 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /* Offsets within the user context, these need to match the order in
  * register_t below */
-# 85 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_plat_include/bcm2711/sel4/plat/api/constants.h" 1
+# 94 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_plat_include/bcm2711/sel4/plat/api/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  * Copyright (C) 2021, Hensoldt Cyber GmbH
@@ -4230,7 +4222,7 @@ typedef word_t vm_fault_type_t;
 
 
 /* RasPi4 uses a BCM2711 SoC with 4x Cortex-A72. */
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/arch_include/arm/sel4/arch/constants_cortex_a72.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/arch_include/arm/sel4/arch/constants_cortex_a72.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4246,10 +4238,10 @@ typedef word_t vm_fault_type_t;
 
 
 /* Cortex-A72 Manual, Section 10.3 */
-# 12 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_plat_include/bcm2711/sel4/plat/api/constants.h" 2
-# 20 "/Users/lukasbower/seL4_16/kernel/libsel4/sel4_plat_include/bcm2711/sel4/plat/api/constants.h"
+# 12 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_plat_include/bcm2711/sel4/plat/api/constants.h" 2
+# 20 "/Users/lukasbower/seL4_17/kernel/libsel4/sel4_plat_include/bcm2711/sel4/plat/api/constants.h"
 /* otherwise this is defined at the arch level */
-# 86 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 2
+# 95 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 2
 
 /* These are the indices of the registers in the saved thread context.
  * The values are determined by the order in which they're saved in the trap handler. */
@@ -4338,11 +4330,11 @@ enum messageSizes {
     n_timeoutMessage = 34,
 
 };
-# 236 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 245 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 extern const register_t msgRegisters[];
 extern const register_t frameRegisters[];
 extern const register_t gpRegisters[];
-# 256 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 265 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 typedef struct user_fpu_state {
     uint64_t vregs[64];
     uint32_t fpsr;
@@ -4387,8 +4379,8 @@ static inline void Arch_initContext(user_context_t *context)
 
 
 }
-# 10 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/registerset.h" 2
-# 18 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/registerset.h" 2
+# 18 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
 
 typedef struct arch_tcb {
     user_context_t tcbContext;
@@ -4403,10 +4395,10 @@ enum vm_rights {
     VMReadOnly = 3
 };
 typedef word_t vm_rights_t;
-# 44 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 44 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
 /* Otherwise we use a 4-level translation */
 typedef pte_t vspace_root_t;
-# 57 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 57 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
 /* Generate a vcpu_t pointer from a vcpu block reference */
 
 
@@ -4420,7 +4412,7 @@ typedef struct asid_pool asid_pool_t;
  * that's a workaround in the time being.
  */
 typedef pte_t pde_t;
-# 83 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 83 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
 static inline word_t __attribute__((__const__)) cap_get_archCapSizeBits(cap_t cap)
 {
     cap_tag_t ctag;
@@ -4442,7 +4434,7 @@ static inline word_t __attribute__((__const__)) cap_get_archCapSizeBits(cap_t ca
 
     case cap_asid_control_cap:
         return 0;
-# 114 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 114 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
     default:
         /* Unreachable, but GCC can't figure that out */
         return 0;
@@ -4471,7 +4463,7 @@ static inline bool_t __attribute__((__const__)) cap_get_archCapIsPhysical(cap_t 
 
     case cap_asid_control_cap:
         return false;
-# 156 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 156 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
     default:
         /* Unreachable, but GCC can't figure that out */
         return false;
@@ -4499,7 +4491,7 @@ static inline void *__attribute__((__const__)) cap_get_archCapPtr(cap_t cap)
 
     case cap_asid_pool_cap:
         return ((asid_pool_t*)cap_asid_pool_cap_get_capASIDPool(cap));
-# 197 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 197 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/object/structures.h"
     default:
         /* Unreachable, but GCC can't figure that out */
         return ((void *)0);
@@ -4544,19 +4536,19 @@ static inline uint64_t pte_page_ptr_get_page_base_address(pte_t *pt)
 {
     return pte_get_page_base_address(*pt);
 }
-# 10 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/structures.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/structures.h" 2
 
 
 
 static inline bool_t __attribute__((__const__)) Arch_isCapRevocable(cap_t derivedCap, cap_t srcCap)
 {
     switch (cap_get_capType(derivedCap)) {
-# 28 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/structures.h"
+# 28 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/structures.h"
     default:
         return false;
     }
 }
-# 206 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
+# 206 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h" 2
 
 struct user_data {
     word_t words[(1ul << (12)) / sizeof(word_t)];
@@ -4628,7 +4620,7 @@ struct tcb {
 
     /* scheduling context that this tcb yielded to */
     sched_context_t *tcbYieldTo;
-# 285 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h"
+# 285 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h"
     /* userland virtual address of thread IPC buffer, 1 word */
     word_t tcbIPCBuffer;
 
@@ -4641,12 +4633,12 @@ struct tcb {
      * also used for endpoint and notification queues in MCS */
     struct tcb *tcbSchedNext;
     struct tcb *tcbSchedPrev;
-# 309 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h"
+# 309 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h"
 };
 typedef struct tcb tcb_t;
 
 /* To enable more uniform code shape between MCS and non-MCS configurations: */
-# 337 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h"
+# 337 "/Users/lukasbower/seL4_17/kernel/include/object/structures.h"
 typedef struct refill {
     /* Absolute timestamp from when this refill can be used */
     ticks_t rTime;
@@ -4745,7 +4737,7 @@ isArchCap(cap_t cap)
 {
     return (cap_get_capType(cap) % 2);
 }
-# 12 "/Users/lukasbower/seL4_16/kernel/include/compound_types.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/compound_types.h" 2
 
 
 struct pde_range {
@@ -4766,9 +4758,9 @@ struct extra_caps {
     cte_ptr_t excaprefs[((1ul<<(seL4_MsgExtraCapBits))-1)];
 };
 typedef struct extra_caps extra_caps_t;
-# 11 "/Users/lukasbower/seL4_16/kernel/include/types.h" 2
-# 9 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/faults.h" 1
+# 11 "/Users/lukasbower/seL4_17/kernel/include/types.h" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/faults.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4785,8 +4777,8 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
 
 bool_t handleFaultReply(tcb_t *receiver, tcb_t *sender);
 bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
-# 10 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 1
+# 10 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/syscall.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4796,7 +4788,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4805,14 +4797,14 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/machine/devices_gen.h" 1
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/machine/devices_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4830,7 +4822,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/hardware.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/hardware.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4910,13 +4902,10 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  *            2^64 - 2^30 +-------------------+ PPTR_TOP
  *                        |                   |
  *                        |                   |
+ *                        |                   |
  *                        |  Physical Memory  |
  *                        |      Window       |
  *                        |                   |
- *                        |                   |
- *                        | ----------------- | KERNEL_ELF_TOP
- *                        |     Kernel ELF    |
- *                        | ----------------- | KERNEL_ELF_BASE (at `physBase()`)
  *                        |                   |
  *                        |                   |
  *            2^64 - 2^39 +-------------------+ PPTR_BASE
@@ -4946,7 +4935,11 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  *                      |     Unmapped     |
  *                      |                  |
  *                      |                  |
- *          2^64 - 2^30 +------------------+
+ *                      +------------------+ KERNEL_ELF_TOP (not fixed)
+ *                      |                  |
+ *                      |    Kernel ELF    |
+ *                      |                  |
+ *          2^64 - 2^30 +------------------+ KERNEL_ELF_BASE
  */
 
 /*
@@ -4970,7 +4963,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  *     -  The kernel expects to be able to create untypeds from 0 to
  *        KernelPaddrUserTop (CONFIG_PADDR_USER_TOP) which can be up to 2^44 in
  *        the current kernel. The kernel (proofs) expect addresses in these
- *        untypeds to be valid (i.e. canonical, not dereferencable) virtual
+ *        untypeds to be valid (i.e. canonical, not dereferenceable) virtual
  *        addresses, but allows device UT addresses to exceed ("overflow") the
  *        bounds of the physical memory window (PPTR_BASE...PPTR_TOP) as it will
  *        not dereference them itself. In the EL1 translation regime, as we use
@@ -5036,10 +5029,6 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  *                        |      Window       |
  *                        |                   |
  *                        |                   |
- *                        | ----------------- | KERNEL_ELF_TOP
- *                        |     Kernel ELF    |
- *                        | ----------------- | KERNEL_ELF_BASE (at `physBase()`)
- *                        |                   |
  *                        |                   |
  *            2^40 - 2^39 +-------------------+ PPTR_BASE
  *
@@ -5061,7 +5050,11 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  *                      |     Unmapped     |
  *                      |                  |
  *                      |                  |
- *          2^40 - 2^30 +------------------+
+ *                      +------------------+ KERNEL_ELF_TOP (not fixed)
+ *                      |                  |
+ *                      |    Kernel ELF    |
+ *                      |                  |
+ *          2^40 - 2^30 +------------------+ KERNEL_ELF_BASE
  *
  */
 
@@ -5092,24 +5085,19 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
 /* For use by the linker (only integer constants allowed) */
 
 
-/* The base address in virtual memory to use for the kernel ELF mapping */
-
-/* For use by the linker (only integer constants allowed) */
-
-
-/* This is a page table mapping at the end of the virtual address space
- * to map objects with 4KiB pages rather than 2MiB large pages. */
+/* The KERNEL_ELF_BASE virtual address is placed at an arbitrary high memory
+ * address above PPTR_TOP. It is mapped using 2MiB pages.
+ * Arbitrarily, it is placed directly at PPTR_TOP.
+ */
 
 
 
 
 
 
-/* The base address in virtual memory to use for the kernel device
- * mapping region. These are mapped in the kernel page table. */
-
-
-/* The log buffer is placed before the device region */
+/* For use by the linker (as it is shared with arm32) */
+# 291 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/hardware.h"
+/* For consistency with the rest of the code. Changing the code might be a good idea. */
 
 
 
@@ -5122,8 +5110,8 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
    asserts check that the kernel config won't lead to UTs being created that aren't
    representable. */
 _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
-# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/machine/devices_gen.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/linker.h" 1
+# 19 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/linker.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5133,7 +5121,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/linker.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/linker.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5142,7 +5130,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
        
 /* Place-holder for ARM-related linker definitions */
-# 11 "/Users/lukasbower/seL4_16/kernel/include/linker.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/linker.h" 2
 
 /* code that is only used during kernel bootstrapping */
 
@@ -5164,7 +5152,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
 
 /* bss data that is permitted to be used in the restricted SKIM address space */
-# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 20 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/machine/devices_gen.h" 2
 
 
 /* Wrap raw physBase location constant to give it a symbolic name in C that's
@@ -5173,7 +5161,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
  */
 static inline __attribute__((__const__)) word_t physBase(void)
 {
-    return 0x1000;
+    return 0x200000;
 }
 
 /* INTERRUPTS */
@@ -5195,28 +5183,25 @@ static inline __attribute__((__const__)) word_t physBase(void)
 
 
 static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_device_frames[] = {
-# 60 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/machine/devices_gen.h"
+# 59 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/machine/devices_gen.h"
     /* /soc/interrupt-controller@40041000 */
     {
         .paddr = 0xff841000,
         .pptr = (0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1000),
         .armExecuteNever = true,
-        .userAvailable = false
     },
     /* /soc/interrupt-controller@40041000 */
     {
         .paddr = 0xff842000,
         .pptr = (0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2000),
         .armExecuteNever = true,
-        .userAvailable = false
     },
-# 83 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/machine/devices_gen.h"
+# 79 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/machine/devices_gen.h"
     /* /soc/local_intc@40000000 */
     {
         .paddr = 0xff800000,
         .pptr = (0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4000),
         .armExecuteNever = true,
-        .userAvailable = false
     },
 };
 
@@ -5229,11 +5214,46 @@ static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_
  */
 
 
+/* The physical address ranges of the kernel devices, as described by the device
+ * tree and rounded to page boundaries. The kernel maps only the first part of
+ * some devices, but it reserves the whole device, to not expose half of a device
+ * to user space. Devices that are shared with user level (user: true) are not
+ * listed. The ranges are sorted and do not overlap, but they may be adjacent.
+ */
+
+static const p_region_t __attribute__((__section__(".boot.rodata"))) kernel_device_reserved_regions[] = {
+    /* /soc/local_intc@40000000 */
+    {
+        .start = 0xff800000,
+        .end = 0xff801000
+    },
+    /* /soc/interrupt-controller@40041000 */
+    {
+        .start = 0xff841000,
+        .end = 0xff842000
+    },
+    /* /soc/interrupt-controller@40041000 */
+    {
+        .start = 0xff842000,
+        .end = 0xff844000
+    },
+
+
+
+
+
+
+
+};
+
+/* See the comment on NUM_KERNEL_DEVICE_FRAMES about empty arrays. */
+
+
 /* PHYSICAL MEMORY */
 static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_regs[] = {
     /* /memory@0 */
     {
-        .start = 0x1000,
+        .start = 0x200000,
         .end = 0x3b400000
     },
     /* /memory@0 */
@@ -5242,8 +5262,8 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
         .end = 0x80000000
     },
 };
-# 8 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/platform_gen.h" 1
+# 8 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 2
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/platform_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5251,14 +5271,14 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
  */
 
        
-# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/platform_gen.h"
+# 17 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/platform_gen.h"
 enum IRQConstants {
     maxIRQ = 216
 };
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_v2.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_v2.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5276,7 +5296,7 @@ enum IRQConstants {
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/smp/smp.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/smp/smp.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5287,7 +5307,7 @@ enum IRQConstants {
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/stack.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/stack.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5298,7 +5318,7 @@ enum IRQConstants {
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/kernel/stack.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/kernel/stack.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5306,7 +5326,7 @@ enum IRQConstants {
  */
 
        
-# 12 "/Users/lukasbower/seL4_16/kernel/include/kernel/stack.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/kernel/stack.h" 2
 
 /* These are the stacks used in kernel, shared between architectures/modes.
  * CONFIG_KERNEL_STACK_BITS is defined in kernel/Kconfig. The physical/offset
@@ -5314,7 +5334,7 @@ enum IRQConstants {
  * defined for each arch/mode in <mode/kernel/stack.h>
  */
 extern char kernel_stack_alloc[4][(1ul << (12))];
-# 12 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/smp/smp.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/smp/smp.h" 2
 
 
 
@@ -5334,8 +5354,8 @@ getCurrentCPUIndex(void)
     }
     return (id & (4096 - 1));
 }
-# 19 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_v2.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/model/statedata.h" 1
+# 19 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_v2.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/model/statedata.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5347,7 +5367,7 @@ getCurrentCPUIndex(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5357,7 +5377,7 @@ getCurrentCPUIndex(void)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/failures.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/failures.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5367,7 +5387,7 @@ getCurrentCPUIndex(void)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/errors.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/errors.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5395,7 +5415,7 @@ typedef enum {
      */
     seL4_NumErrors
 } seL4_Error;
-# 11 "/Users/lukasbower/seL4_16/kernel/include/api/failures.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/api/failures.h" 2
 
 /* These datatypes differ markedly from haskell, due to the
  * different implementation of the various fault monads */
@@ -5423,14 +5443,14 @@ struct syscall_error {
     syscall_error_type_t type;
 };
 typedef struct syscall_error syscall_error_t;
-# 47 "/Users/lukasbower/seL4_16/kernel/include/api/failures.h"
+# 47 "/Users/lukasbower/seL4_17/kernel/include/api/failures.h"
 extern lookup_fault_t current_lookup_fault;
 extern seL4_Fault_t current_fault;
 extern syscall_error_t current_syscall_error;
-# 11 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine/registerset.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine/registerset.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5471,8 +5491,8 @@ static inline word_t __attribute__((__pure__)) getRegister(tcb_t *thread, regist
 
 
 word_t getNBSendRecvDest(void);
-# 14 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/cnode.h" 1
+# 14 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/cnode.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5509,7 +5529,7 @@ bool_t __attribute__((__pure__)) isFinalCapability(cte_t *cte);
 bool_t __attribute__((__pure__)) slotCapLongRunningDelete(cte_t *slot);
 cte_t *getReceiveSlots(tcb_t *thread, word_t *buffer);
 cap_transfer_t __attribute__((__pure__)) loadCapTransfer(word_t *buffer);
-# 15 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h" 2
+# 15 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h" 2
 
 
 
@@ -5606,7 +5626,7 @@ void tcbReleaseEnqueue(tcb_t *tcb);
 
 void remoteQueueUpdate(tcb_t *tcb);
 void remoteTCBStall(tcb_t *tcb);
-# 132 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h"
+# 132 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h"
 static inline bool_t __attribute__((__pure__)) higher_than_tcb_prio(tcb_t *tcb, prio_t priority)
 {
     return tcb != ((void *)0) && priority > tcb->tcbPriority;
@@ -5662,7 +5682,7 @@ static inline tcb_queue_t tcbAppend(tcb_t *tcb, tcb_queue_t queue)
 
 /* Check for NullCap or EndpointCap with sufficient access rights */
 bool_t validFaultHandler(cap_t cap);
-# 196 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h"
+# 196 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h"
 word_t copyMRs(tcb_t *sender, word_t *sendBuf, tcb_t *receiver,
                word_t *recvBuf, word_t n);
 exception_t decodeTCBInvocation(word_t invLabel, word_t length, cap_t cap,
@@ -5705,7 +5725,7 @@ enum thread_control_sched_flag {
     thread_control_sched_update_sc = 0x4,
     thread_control_sched_update_fault = 0x8,
 };
-# 247 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h"
+# 247 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h"
 typedef word_t thread_control_flag_t;
 
 exception_t invokeTCB_Suspend(tcb_t *thread);
@@ -5724,7 +5744,7 @@ exception_t invokeTCB_ThreadControlSched(tcb_t *target, cte_t *slot,
                                          prio_t mcp, prio_t priority,
                                          sched_context_t *sc,
                                          thread_control_flag_t updateFlags);
-# 273 "/Users/lukasbower/seL4_16/kernel/include/object/tcb.h"
+# 273 "/Users/lukasbower/seL4_17/kernel/include/object/tcb.h"
 exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *src,
                                     bool_t suspendSource, bool_t resumeTarget,
                                     bool_t transferFrame, bool_t transferInteger,
@@ -5743,8 +5763,8 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer);
 word_t __attribute__((__const__)) Arch_decodeTransfer(word_t flags);
 exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *tcb_src,
                                        tcb_t *tcb_dest);
-# 13 "/Users/lukasbower/seL4_16/kernel/include/model/statedata.h" 2
-# 58 "/Users/lukasbower/seL4_16/kernel/include/model/statedata.h"
+# 13 "/Users/lukasbower/seL4_17/kernel/include/model/statedata.h" 2
+# 58 "/Users/lukasbower/seL4_17/kernel/include/model/statedata.h"
 typedef struct nodeState {
 tcb_queue_t ksReadyQueues[(1 * 256)];
 word_t ksReadyQueuesL1Bitmap[1];
@@ -5765,7 +5785,7 @@ sched_context_t *ksIdleSC;
 
 /* The thread using the FPU, or NULL if FPU state is invalid */
 tcb_t * ksCurFPUOwner;
-# 92 "/Users/lukasbower/seL4_16/kernel/include/model/statedata.h"
+# 92 "/Users/lukasbower/seL4_17/kernel/include/model/statedata.h"
 } nodeState_t;
 
 extern word_t ksNumCPUs;
@@ -5788,9 +5808,9 @@ extern char ksIdleThreadTCB[4][(1ul << (11))];
 
 
 extern char ksIdleThreadSC[4][(1ul << (7))];
-# 20 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_v2.h" 2
+# 20 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_v2.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_common.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_common.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5801,7 +5821,7 @@ extern char ksIdleThreadSC[4][(1ul << (7))];
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine/interrupt.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine/interrupt.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5844,7 +5864,7 @@ typedef struct {
     word_t irq;
     word_t target_core;
 } irq_t;
-# 52 "/Users/lukasbower/seL4_16/kernel/include/machine/interrupt.h"
+# 52 "/Users/lukasbower/seL4_17/kernel/include/machine/interrupt.h"
 /**
  * Return a currently pending IRQ.
  *
@@ -5930,7 +5950,7 @@ void setIRQTrigger(irq_t irq, bool_t trigger);
 
 
 static inline void deactivateInterrupt(irq_t irq) {}
-# 12 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_common.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_common.h" 2
 
 /* Shift positions for GICD_SGIR register */
 
@@ -5963,7 +5983,7 @@ static inline void deactivateInterrupt(irq_t irq) {}
  *   core: 2, irq: 16 -> (2 * 32) + 16
  *   core: 1, irq: 33, (4 total cores) -> (4 * 32) + (33-32).
  */
-# 55 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_common.h"
+# 55 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_common.h"
 static const irq_t irqInvalid = ((irq_t){.irq = (-1), .target_core = (-1)});
 
 
@@ -5990,7 +6010,7 @@ static inline void handleSpuriousIRQ(void)
 }
 
 void initIRQController(void);
-# 22 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_v2.h" 2
+# 22 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_v2.h" 2
 
 
 
@@ -5998,7 +6018,9 @@ void initIRQController(void);
 
 
 /* Helpers for VGIC */
-# 50 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/gic_v2.h"
+
+/* GICv2 has no TALL0; GICH_APR covers both groups. */
+# 52 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/gic_v2.h"
 /* Memory map for GIC distributor */
 struct gic_dist_map {
     uint32_t enable; /* 0x000 */
@@ -6141,8 +6163,8 @@ static inline void ackInterrupt(irq_t irq)
     active_irq[getCurrentCPUIndex()] = 1023u;
 
 }
-# 24 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/platform_gen.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h" 1
+# 24 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/platform_gen.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/drivers/timer/arm_generic.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6152,7 +6174,7 @@ static inline void ackInterrupt(irq_t irq)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6166,7 +6188,7 @@ static inline void ackInterrupt(irq_t irq)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine/hardware.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine/hardware.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6174,8 +6196,8 @@ static inline void ackInterrupt(irq_t irq)
  */
 
        
-# 15 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/armv/armv8-a/64/armv/machine.h" 1
+# 15 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/armv/armv8-a/64/armv/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6203,8 +6225,8 @@ static inline void isb(void)
 {
     __asm__ volatile("isb sy" ::: "memory");
 }
-# 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/model/smp.h" 1
+# 16 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/model/smp.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6215,7 +6237,7 @@ static inline void isb(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/model/smp.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/model/smp.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6226,7 +6248,7 @@ static inline void isb(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/model/statedata.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/model/statedata.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6236,7 +6258,7 @@ static inline void isb(void)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/vcpu.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/vcpu.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6244,10 +6266,9 @@ static inline void isb(void)
  */
 
        
-# 213 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/vcpu.h"
+# 219 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/vcpu.h"
 static inline void VGICMaintenance(void) {}
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/model/statedata.h" 2
-
+# 11 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/model/statedata.h" 2
 
 
 
@@ -6255,9 +6276,9 @@ typedef struct archNodeState {
 /* TODO: add ARM-dependent fields here */
 /* Bitmask of all cores should receive the reschedule IPI */
 word_t ipiReschedulePending;
-# 29 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/model/statedata.h"
+# 28 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/model/statedata.h"
 } archNodeState_t;
-# 12 "/Users/lukasbower/seL4_16/kernel/include/model/smp.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/model/smp.h" 2
 
 
 
@@ -6271,17 +6292,17 @@ typedef struct smpStatedata {
 extern smpStatedata_t ksSMP[4];
 
 void migrateTCB(tcb_t *tcb, word_t new_core);
-# 12 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/model/smp.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/model/smp.h" 2
 
 
 static inline cpu_id_t cpuIndexToID(word_t index)
 {
     return (1ul << (index));
 }
-# 17 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+# 17 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine_pl2.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine_pl2.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6289,7 +6310,7 @@ static inline cpu_id_t cpuIndexToID(word_t index)
  */
 
        
-# 25 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine_pl2.h"
+# 25 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine_pl2.h"
 static inline void writeTPIDR_EL2(word_t reg) {}
 static inline word_t readTPIDR_EL2(void)
 {
@@ -6299,12 +6320,11 @@ static inline word_t readTPIDR_EL2(void)
 
 
 /* used in other files without guards */
-static inline void setCurrentPDPL2(paddr_t pa) {}
 static inline void invalidateHypTLB(void) {}
 static inline void writeContextIDPL2(word_t pd_val) {}
 static inline void writeContextIDAndPD(word_t id, word_t pd_val) {}
-# 20 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h" 2
-# 39 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h"
+# 20 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+# 39 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h"
 /* Use the first two SGI (Software Generated Interrupt) IDs
  * for seL4 IPI implementation. SGIs are per-core banked.
  */
@@ -6351,23 +6371,9 @@ static inline void writeTPIDR_EL0(word_t reg)
     do { word_t _v = reg; __asm__ volatile("msr " "tpidr_el0" ",%x0" :: "r" (_v)); }while(0);
 }
 
-static inline word_t readTPIDR_EL0(void)
-{
-    word_t reg;
-    __asm__ volatile("mrs %x0," "tpidr_el0" : "=r"(reg));
-    return reg;
-}
-
 static inline void writeTPIDRRO_EL0(word_t reg)
 {
     do { word_t _v = reg; __asm__ volatile("msr " "tpidrro_el0" ",%x0" :: "r" (_v)); }while(0);
-}
-
-static inline word_t readTPIDRRO_EL0(void)
-{
-    word_t reg;
-    __asm__ volatile("mrs %x0," "tpidrro_el0" : "=r"(reg));
-    return reg;
 }
 
 static inline void writeTPIDR_EL1(word_t reg)
@@ -6382,18 +6388,12 @@ static inline word_t readTPIDR_EL1(void)
     return reg;
 }
 
-static void arm_save_thread_id(tcb_t *thread)
-{
-    setRegister(thread, TPIDR_EL0, readTPIDR_EL0());
-    setRegister(thread, TPIDRRO_EL0, readTPIDRRO_EL0());
-}
-
 static void arm_load_thread_id(tcb_t *thread)
 {
     writeTPIDR_EL0(getRegister(thread, TPIDR_EL0));
     writeTPIDRRO_EL0(getRegister(thread, TPIDRRO_EL0));
 }
-# 155 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine.h"
+# 135 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine.h"
 /* Check if the elfloader set up the TCR_EL2 correctly. */
 static inline bool_t checkTCR_EL2(void)
 {
@@ -6401,6 +6401,26 @@ static inline bool_t checkTCR_EL2(void)
     __asm__ volatile("mrs %x0," "tcr_el2" : "=r"(tcr_el2));
 
     return (tcr_el2 == ((16) | (1ul << (8)) | (1ul << (10)) | (3 << 12) | (0 << 14) | (4 << 16) | ((1ul << (23)) | (1ul << (31)))));
+}
+
+/* Supported ASID size field of ID_AA64MMFR0_EL1 */
+
+
+/* Selected ASID size in TCR_EL1 */
+
+
+/* For non-hyp AArch64 configs, check that 16-bit ASIDs are supported
+ * and enabled. */
+static inline bool_t check16BitASID(void)
+{
+    word_t id_aa64mmfr0_el1 = 0;
+    word_t tcr_el1 = 0;
+
+    __asm__ volatile("mrs %x0," "id_aa64mmfr0_el1" : "=r"(id_aa64mmfr0_el1));
+    __asm__ volatile("mrs %x0," "tcr_el1" : "=r"(tcr_el1));
+
+    return (((id_aa64mmfr0_el1) >> 4) & 0xf) == 2 &&
+           (tcr_el1 & (1ul << (36)));
 }
 
 static inline void setCurrentKernelVSpaceRoot(ttbr_t ttbr)
@@ -6551,7 +6571,6 @@ static inline void invalidate_I_PoU(void)
 
 
 
-    isb();
 }
 
 static inline void cleanInvalByVA(vptr_t vaddr, paddr_t paddr)
@@ -6637,7 +6656,7 @@ static inline paddr_t addressTranslateS1(vptr_t vaddr)
 
     return result;
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/drivers/timer/arm_generic.h" 2
 
 /* ARM generic timer implementation */
 
@@ -6667,9 +6686,9 @@ static inline void ackDeadlineIRQ(void)
      * sensitive configuration. */
     isb();
 }
-# 53 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h"
+# 53 "/Users/lukasbower/seL4_17/kernel/include/drivers/timer/arm_generic.h"
 __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
-# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/platform_gen.h" 2
+# 25 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/platform_gen.h" 2
 
 /* #undef CONFIGURE_SMMU */
 
@@ -6677,15 +6696,15 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
 
 
 /* #undef CONFIGURE_SMMU */
-# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/plat/platform_gen.h"
+# 41 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/plat/platform_gen.h"
 static inline __attribute__((__const__)) time_t getKernelWcetUs(void)
 {
     return 10u;
 }
-# 9 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 2
-# 10 "/Users/lukasbower/seL4_16/kernel/include/machine.h" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/machine.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/hardware.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/hardware.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6735,12 +6754,16 @@ static inline __attribute__((__const__)) time_t getKernelWcetUs(void)
 /* This symbol is generated by the linker and marks the last valid
  * address in the kernel's virtual region */
 extern char ki_end[1];
-# 12 "/Users/lukasbower/seL4_16/kernel/include/machine.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/machine.h" 2
 
 /* When translating a physical address into an address accessible to the
  * kernel via virtual addressing we always use the mapping of the memory
  * into the physical memory window, even if the mapping originally
- * referred to a kernel virtual address. */
+ * referred to a kernel virtual address.
+ * As a result, this function should _not_ be used to modify memory if the
+ * addresses might lie within the kernel ELF mapping. See the comments attached
+ * to `map_kernel_elf_image()` on the AArch64 vspace code.
+ */
 static inline void *__attribute__((__const__)) ptrFromPAddr(paddr_t paddr)
 {
     return (void *)(paddr + (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul));
@@ -6759,7 +6782,7 @@ static inline paddr_t __attribute__((__const__)) addrFromKPPtr(const void *pptr)
 {
     ;
     ;
-    return (paddr_t)pptr - (((0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul) + physBase()) - physBase());
+    return (paddr_t)pptr - (0xffffffffc0000000ul /* 2^64 - 2^30 */ - physBase());
 }
 
 
@@ -6781,10 +6804,10 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
         .end = addrFromPPtr((const void *)reg.end),
     };
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/api/syscall.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/vspace.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/vspace.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6793,7 +6816,7 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/kernel/vspace.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/kernel/vspace.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6806,7 +6829,7 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/kernel/vspace.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/kernel/vspace.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6814,7 +6837,7 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
  */
 
        
-# 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/kernel/vspace.h"
+# 16 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/kernel/vspace.h"
 /* ==================== BOOT CODE FINISHES HERE ==================== */
 
 bool_t __attribute__((__const__)) isVTableRoot(cap_t cap);
@@ -6865,7 +6888,7 @@ static inline exception_t performASIDPoolInvocation(asid_t asid, asid_pool_t *po
 
 void increaseASIDBindCB(asid_t asid);
 void decreaseASIDBindCB(asid_t asid);
-# 14 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/kernel/vspace.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/kernel/vspace.h" 2
 
 
 
@@ -6875,6 +6898,8 @@ cap_t create_mapped_it_frame_cap(cap_t pd_cap, pptr_t pptr, vptr_t vptr, asid_t 
                                  bool_t executable);
 
 void map_kernel_window(void);
+void map_kernel_elf_image(pte_t kernel_mapping_pds[]);
+void map_kernel_physical_window(void);
 void map_kernel_frame(paddr_t paddr, pptr_t vaddr, vm_rights_t vm_rights, vm_attributes_t vm_attributes);
 void activate_kernel_vspace(void);
 void write_it_asid_pool(cap_t it_ap_cap, cap_t it_pd_cap);
@@ -6895,9 +6920,9 @@ vm_rights_t __attribute__((__const__)) maskVMRights(vm_rights_t vm_rights,
 
 exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
                                    cte_t *cte, cap_t cap, bool_t call, word_t *buffer);
-# 10 "/Users/lukasbower/seL4_16/kernel/include/kernel/vspace.h" 2
-# 14 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/syscall.h" 1
+# 10 "/Users/lukasbower/seL4_17/kernel/include/kernel/vspace.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/api/syscall.h" 2
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/syscall.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6911,7 +6936,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
  *
  */
        
-# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/syscall.h"
+# 37 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/syscall.h"
 enum syscall {
     SysCall = -1,
     SysReplyRecv = -2,
@@ -6924,20 +6949,20 @@ enum syscall {
     SysWait = -9,
     SysNBWait = -10,
     SysYield = -11,
-# 91 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/syscall.h"
+# 91 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/syscall.h"
 };
 typedef word_t syscall_t;
 
 /* System call names */
-# 15 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/debug.h" 1
+# 15 "/Users/lukasbower/seL4_17/kernel/include/api/syscall.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/debug.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 16 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
-# 32 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h"
+# 16 "/Users/lukasbower/seL4_17/kernel/include/api/syscall.h" 2
+# 32 "/Users/lukasbower/seL4_17/kernel/include/api/syscall.h"
 exception_t handleSyscall(syscall_t syscall);
 exception_t handleInterruptEntry(void);
 exception_t handleUnknownSyscall(word_t w);
@@ -6955,8 +6980,8 @@ static inline word_t __attribute__((__pure__)) getSyscallArg(word_t i, word_t *i
 }
 
 extern extra_caps_t current_extra_caps;
-# 11 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/thread.h" 1
+# 11 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/thread.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6968,7 +6993,7 @@ extern extra_caps_t current_extra_caps;
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6976,7 +7001,7 @@ extern extra_caps_t current_extra_caps;
  */
 
        
-# 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine.h"
+# 16 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine.h"
 void map_kernel_devices(void);
 
 void initL2Cache(void);
@@ -7036,9 +7061,9 @@ static inline exception_t Arch_setTLSRegister(word_t tls_base)
     setRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, TLS_BASE, tls_base);
     return EXCEPTION_NONE;
 }
-# 13 "/Users/lukasbower/seL4_16/kernel/include/kernel/thread.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/kernel/thread.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/sporadic.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/sporadic.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7067,7 +7092,7 @@ static inline exception_t Arch_setTLSRegister(word_t tls_base)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine/timer.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine/timer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7077,7 +7102,7 @@ static inline exception_t Arch_setTLSRegister(word_t tls_base)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/timer.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/timer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7095,7 +7120,7 @@ static inline exception_t Arch_setTLSRegister(word_t tls_base)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/64/mode/util.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/64/mode/util.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7112,14 +7137,14 @@ static inline __attribute__((__const__)) uint64_t div64(uint64_t numerator, uint
 {
     return numerator / denominator;
 }
-# 19 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/timer.h" 2
+# 19 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/timer.h" 2
 
 
 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/timer.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/timer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7155,7 +7180,7 @@ static inline __attribute__((__const__)) time_t ticksToUs(ticks_t ticks)
     return ticks / (54000000llu / 1000000llu);
 
 }
-# 26 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/timer.h" 2
+# 26 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/timer.h" 2
 
 void initTimer(void);
 
@@ -7187,7 +7212,7 @@ static inline __attribute__((__const__)) ticks_t getTimerPrecision(void)
 {
     return usToTicks(0) + 0;
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/machine/timer.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/machine/timer.h" 2
 
 
 
@@ -7210,7 +7235,7 @@ static __attribute__((__pure__)) inline ticks_t getKernelWcetTicks(void)
 {
     return usToTicks(getKernelWcetUs());
 }
-# 30 "/Users/lukasbower/seL4_16/kernel/include/kernel/sporadic.h" 2
+# 30 "/Users/lukasbower/seL4_17/kernel/include/kernel/sporadic.h" 2
 
 
 /* To do an operation in the kernel, the thread must have
@@ -7228,6 +7253,7 @@ static __attribute__((__pure__)) inline ticks_t getKernelWcetTicks(void)
  * Anything below getMaxUsToTicks() / 8 would ensure that time up to
  * 2^63 would still be be valid as 5 * (getMaxUsToTicks()) must be less
  * than 2^62. */
+
 
 
 
@@ -7381,7 +7407,7 @@ void refill_budget_check(ticks_t used);
  * refills that overlap.
  */
 void refill_unblock_check(sched_context_t *sc);
-# 15 "/Users/lukasbower/seL4_16/kernel/include/kernel/thread.h" 2
+# 15 "/Users/lukasbower/seL4_17/kernel/include/kernel/thread.h" 2
 
 
 
@@ -7687,8 +7713,8 @@ static inline void setThreadStateBlockedOnReply(tcb_t *tptr, reply_t *reply)
     thread_state_ptr_set_replyObject(&tptr->tcbState, ((word_t) (reply)));
     scheduleTCB(tptr);
 }
-# 12 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/kernel/thread.h" 1
+# 12 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/kernel/thread.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7697,7 +7723,7 @@ static inline void setThreadStateBlockedOnReply(tcb_t *tptr, reply_t *reply)
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/kernel/thread.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/kernel/thread.h" 1
 /*
  * Copyright 2017, General Dynamics C4 Systems
  *
@@ -7733,9 +7759,9 @@ static inline bool_t __attribute__((__const__)) Arch_getSanitiseRegisterInfo(tcb
     return 0;
 
 }
-# 10 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/kernel/thread.h" 2
-# 13 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine/debug.h" 1
+# 10 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/kernel/thread.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7743,9 +7769,9 @@ static inline bool_t __attribute__((__const__)) Arch_getSanitiseRegisterInfo(tcb
  */
 
        
-# 14 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/64/mode/api/ipc_buffer.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/64/mode/api/ipc_buffer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7766,8 +7792,8 @@ static inline word_t mode_setTimeArg(word_t i, time_t time, word_t *buffer, tcb_
 {
     return setMR(thread, buffer, i, time);
 }
-# 16 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/schedcontext.h" 1
+# 16 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/schedcontext.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7842,7 +7868,7 @@ void schedContext_unbindReply(sched_context_t *sc);
 time_t schedContext_updateConsumed(sched_context_t *sc);
 void schedContext_completeYieldTo(tcb_t *yielder);
 void schedContext_cancelYieldTo(tcb_t *yielder);
-# 17 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c" 2
+# 17 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c" 2
 
 
 /* consistency with libsel4 */
@@ -7964,7 +7990,7 @@ bool_t handleFaultReply(tcb_t *receiver, tcb_t *sender)
     case seL4_Fault_Timeout:
         copyMRsFaultReply(sender, receiver, MessageID_TimeoutReply, (((length)<(n_timeoutMessage))?(length):(n_timeoutMessage)));
         return (label == 0);
-# 186 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
+# 186 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c"
     default:
         return Arch_handleFaultReply(receiver, sender, seL4_Fault_get_seL4_FaultType(fault));
     }
@@ -8012,13 +8038,13 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
                          seL4_Fault_Timeout_get_badge(sender->tcbFault));
         }
     }
-# 257 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
+# 257 "/Users/lukasbower/seL4_17/kernel/src/api/faults.c"
     default:
         return Arch_setMRs_fault(sender, receiver, receiveIPCBuffer,
                                  seL4_Fault_get_seL4_FaultType(sender->tcbFault));
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8027,17 +8053,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/benchmark.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8045,11 +8061,21 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
  */
 
        
-# 11 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark.h" 2
+
+
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/benchmark.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+# 11 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark.h" 2
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/benchmark_tracepoints_types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/benchmark_tracepoints_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8057,10 +8083,10 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
  */
 
        
-# 15 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark.h" 2
-# 10 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c" 2
+# 15 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark_track.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark_track.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -8071,7 +8097,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/benchmark_track_types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/benchmark_track_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8079,10 +8105,10 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
  */
 
        
-# 12 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark_track.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark_track.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/cspace.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/cspace.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8143,9 +8169,9 @@ lookupSlot_ret_t lookupPivotSlot(cap_t root, cptr_t capptr,
 resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
                                             cptr_t capptr,
                                             word_t n_bits);
-# 15 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark_track.h" 2
-# 12 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark_utilisation.h" 1
+# 15 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark_track.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark_utilisation.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -8156,7 +8182,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/benchmark_utilisation_types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/benchmark_utilisation_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8164,13 +8190,13 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
  */
 
        
-# 12 "/Users/lukasbower/seL4_16/kernel/include/benchmark/benchmark_utilisation.h" 2
-# 13 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/benchmark/benchmark_utilisation.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c" 2
 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/faulthandler.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/faulthandler.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8179,17 +8205,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
 
        
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/objecttype.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8199,11 +8215,21 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
        
 
 
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/objecttype.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/cap.h" 1
+
+
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/cap.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8225,8 +8251,8 @@ struct finaliseCap_ret {
     cap_t cleanupInfo;
 };
 typedef struct finaliseCap_ret finaliseCap_ret_t;
-# 15 "/Users/lukasbower/seL4_16/kernel/include/object/objecttype.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/objecttype.h" 1
+# 15 "/Users/lukasbower/seL4_17/kernel/include/object/objecttype.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/objecttype.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8234,13 +8260,7 @@ typedef struct finaliseCap_ret finaliseCap_ret_t;
  */
 
        
-
-
-
-
-
-
-
+# 16 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/objecttype.h"
 deriveCap_ret_t Arch_deriveCap(cte_t *slot, cap_t cap);
 cap_t __attribute__((__const__)) Arch_updateCapData(bool_t preserve, word_t data, cap_t cap);
 cap_t __attribute__((__const__)) Arch_maskCapRights(seL4_CapRights_t cap_rights_mask, cap_t cap);
@@ -8257,6 +8277,19 @@ word_t Arch_getObjectSize(word_t t);
 
 static inline void Arch_postCapDeletion(cap_t cap)
 {
+}
+
+/* Flush the instruction cache for Untypeds that could be turned into non-device
+ * frames. There are no mappings present when this is called, so we can defer
+ * the data flush to retype. */
+static inline void Arch_postResetUntyped(bool_t deviceMemory, word_t sizeBits)
+{
+    if (!deviceMemory && sizeBits >= 12) {
+        dsb();
+        invalidate_I_PoU();
+        dsb();
+        isb();
+    }
 }
 
 /**
@@ -8283,13 +8316,13 @@ static inline __attribute__((__const__)) bool_t Arch_isIRQControlDescendant(cap_
 static inline __attribute__((__const__)) bool_t Arch_isMDBParentOf(cap_t cap_a, cap_t cap_b, bool_t firstBadged)
 {
     switch (cap_get_capType(cap_a)) {
-# 77 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/objecttype.h"
+# 91 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/objecttype.h"
     default:
         return true;
     }
 }
-# 16 "/Users/lukasbower/seL4_16/kernel/include/object/objecttype.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/interrupt.h" 1
+# 16 "/Users/lukasbower/seL4_17/kernel/include/object/objecttype.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/interrupt.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8301,7 +8334,7 @@ static inline __attribute__((__const__)) bool_t Arch_isMDBParentOf(cap_t cap_a, 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/interrupt.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/interrupt.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8314,13 +8347,13 @@ static inline __attribute__((__const__)) bool_t Arch_isMDBParentOf(cap_t cap_a, 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/interrupt.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/interrupt.h" 2
 
 exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
                                             cte_t *srcSlot, word_t *buffer);
@@ -8331,7 +8364,7 @@ exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
 /* Handle a platform-reserved IRQ. */
 static inline void handleReservedIRQ(irq_t irq)
 {
-# 54 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/interrupt.h"
+# 54 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/interrupt.h"
 }
 
 
@@ -8346,14 +8379,14 @@ static inline exception_t Arch_checkIRQ(word_t irq_w)
     }
     return EXCEPTION_NONE;
 }
-# 13 "/Users/lukasbower/seL4_16/kernel/include/object/interrupt.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 1
+# 13 "/Users/lukasbower/seL4_17/kernel/include/object/interrupt.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_16/kernel/include/object/interrupt.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/object/interrupt.h" 2
 
 exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
                                        cte_t *srcSlot, word_t *buffer);
@@ -8367,7 +8400,7 @@ void deletedIRQHandler(irq_t irq);
 void handleInterrupt(irq_t irq);
 bool_t isIRQActive(irq_t irq);
 void setIRQState(irq_state_t irqState, irq_t irq);
-# 17 "/Users/lukasbower/seL4_16/kernel/include/object/objecttype.h" 2
+# 17 "/Users/lukasbower/seL4_17/kernel/include/object/objecttype.h" 2
 
 deriveCap_ret_t deriveCap(cte_t *slot, cap_t cap);
 finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed);
@@ -8391,7 +8424,7 @@ exception_t performInvocation_Endpoint(endpoint_t *ep, word_t badge,
 exception_t performInvocation_Notification(notification_t *ntfn,
                                            word_t badge);
 exception_t performInvocation_Reply(tcb_t *thread, reply_t *reply, bool_t canGrant);
-# 51 "/Users/lukasbower/seL4_16/kernel/include/object/objecttype.h"
+# 51 "/Users/lukasbower/seL4_17/kernel/include/object/objecttype.h"
 word_t getObjectSize(word_t t, word_t userObjSize);
 
 static inline void postCapDeletion(cap_t cap)
@@ -8408,8 +8441,8 @@ word_t __attribute__((__const__)) cap_get_capSizeBits(cap_t cap);
 bool_t __attribute__((__const__)) cap_get_capIsPhysical(cap_t cap);
 void *__attribute__((__const__)) cap_get_capPtr(cap_t cap);
 bool_t __attribute__((__const__)) isCapRevocable(cap_t derivedCap, cap_t srcCap);
-# 11 "/Users/lukasbower/seL4_16/kernel/include/object.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/notification.h" 1
+# 11 "/Users/lukasbower/seL4_17/kernel/include/object.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/notification.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8455,9 +8488,9 @@ static inline void ntfn_set_active(notification_t *ntfnPtr, word_t badge)
     notification_ptr_set_state(ntfnPtr, NtfnState_Active);
     notification_ptr_set_ntfnMsgIdentifier(ntfnPtr, badge);
 }
-# 12 "/Users/lukasbower/seL4_16/kernel/include/object.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/object.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/endpoint.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/endpoint.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8504,11 +8537,11 @@ void cancelAllIPC(endpoint_t *epptr);
 void cancelBadgedSends(endpoint_t *epptr, word_t badge);
 void replyFromKernel_error(tcb_t *thread);
 void replyFromKernel_success_empty(tcb_t *thread);
-# 14 "/Users/lukasbower/seL4_16/kernel/include/object.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/object.h" 2
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/untyped.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/untyped.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8516,7 +8549,7 @@ void replyFromKernel_success_empty(tcb_t *thread);
  */
 
        
-# 16 "/Users/lukasbower/seL4_16/kernel/include/object/untyped.h"
+# 16 "/Users/lukasbower/seL4_17/kernel/include/object/untyped.h"
 /* It is assumed that every untyped is within seL4_MinUntypedBits and seL4_MaxUntypedBits
  * (inclusive). This means that every untyped stored as seL4_MinUntypedBits
  * subtracted from its size before it is stored in capBlockSize, and
@@ -8538,8 +8571,8 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot, bool_t reset,
                                  void *retypeBase, object_t newType, word_t userSize,
                                  cte_t *destCNode, word_t destOffset, word_t destLength,
                                  bool_t deviceMemory);
-# 18 "/Users/lukasbower/seL4_16/kernel/include/object.h" 2
-# 10 "/Users/lukasbower/seL4_16/kernel/include/kernel/faulthandler.h" 2
+# 18 "/Users/lukasbower/seL4_17/kernel/include/object.h" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/include/kernel/faulthandler.h" 2
 
 
 static inline bool_t validTimeoutHandler(tcb_t *tptr)
@@ -8556,14 +8589,14 @@ bool_t sendFaultIPC(tcb_t *tptr, cap_t handlerCap, bool_t can_donate);
 
 
 void handleFault(tcb_t *tptr);
-# 18 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c" 2
+# 18 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c" 2
 
 
 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/string.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/string.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8577,8 +8610,8 @@ void handleFault(tcb_t *tptr);
 word_t strnlen(const char *s, word_t maxlen);
 word_t strlcpy(char *dest, const char *src, word_t size);
 word_t strlcat(char *dest, const char *src, word_t size);
-# 25 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/traps.h" 1
+# 25 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/traps.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -8589,7 +8622,7 @@ word_t strlcat(char *dest, const char *src, word_t size);
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/kernel/traps.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/kernel/traps.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -8604,12 +8637,10 @@ word_t strlcat(char *dest, const char *src, word_t size);
 
 static inline void arch_c_entry_hook(void)
 {
-    arm_save_thread_id(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 }
 
 static inline void arch_c_exit_hook(void)
 {
-    arm_load_thread_id(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 }
 
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_user_context(void);
@@ -8643,8 +8674,8 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
 
 void c_handle_instruction_fault(void)
 __attribute__((externally_visible)) __attribute__((__section__(".vectors.text")));
-# 12 "/Users/lukasbower/seL4_16/kernel/include/kernel/traps.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/smp/lock.h" 1
+# 12 "/Users/lukasbower/seL4_17/kernel/include/kernel/traps.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/smp/lock.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8658,7 +8689,7 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/smp/ipi.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/smp/ipi.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8669,14 +8700,14 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 12 "/Users/lukasbower/seL4_16/kernel/include/smp/ipi.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/smp/ipi.h" 1
+# 12 "/Users/lukasbower/seL4_17/kernel/include/smp/ipi.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/smp/ipi.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8704,7 +8735,7 @@ typedef enum {
     /* Add relevant calls here upon required */
     IpiNumArchRemoteCall
 } IpiRemoteCall_t;
-# 13 "/Users/lukasbower/seL4_16/kernel/include/smp/ipi.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/smp/ipi.h" 2
 
 
 
@@ -8831,7 +8862,7 @@ static void inline doRemoteOp3Arg(IpiRemoteCall_t func, word_t data1, word_t dat
  * @param mask cores to request rescheduling
  */
 void doMaskReschedule(word_t mask);
-# 15 "/Users/lukasbower/seL4_16/kernel/include/smp/lock.h" 2
+# 15 "/Users/lukasbower/seL4_17/kernel/include/smp/lock.h" 2
 
 
 
@@ -8923,7 +8954,7 @@ static inline bool_t __attribute__((always_inline)) clh_is_self_in_queue(void)
 {
     return big_kernel_lock.node[getCurrentCPUIndex()].myreq->state == CLHState_Pending;
 }
-# 13 "/Users/lukasbower/seL4_16/kernel/include/kernel/traps.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/kernel/traps.h" 2
 
 /* This C function should be the first thing called from C after entry from
  * assembly. It provides a single place to do any entry work that is not
@@ -8942,11 +8973,11 @@ static inline void c_entry_hook(void)
  * in C before leaving the kernel */
 static inline void c_exit_hook(void)
 {
-# 48 "/Users/lukasbower/seL4_16/kernel/include/kernel/traps.h"
+# 48 "/Users/lukasbower/seL4_17/kernel/include/kernel/traps.h"
     arch_c_exit_hook();
 }
-# 26 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c" 2
-# 37 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 26 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c" 2
+# 37 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
 /**
  * FIXME: This is a temporary hack to prevent the printing of incorrect
  *        spurious interrupt warnings on MCS when checkInterrupt() is called
@@ -9009,9 +9040,9 @@ exception_t handleInterruptEntry(void)
 
 exception_t handleUnknownSyscall(word_t w)
 {
-# 247 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 247 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
     updateTimestamp(); if (__builtin_expect(!!(checkBudgetRestart()), 1)) { { current_fault = seL4_Fault_UnknownSyscall_new(w); handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread); } }
-# 264 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 264 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
     schedule();
     activateThread();
 
@@ -9033,7 +9064,7 @@ exception_t handleUserLevelFault(word_t w_a, word_t w_b)
 exception_t handleVMFaultEvent(vm_fault_type_t vm_faultType)
 {
     updateTimestamp(); if (__builtin_expect(!!(checkBudgetRestart()), 1)) { { exception_t status = handleVMFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, vm_faultType); if (status != EXCEPTION_NONE) { handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread); } } }
-# 293 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 293 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
     schedule();
     activateThread();
 
@@ -9151,7 +9182,7 @@ static inline lookupCap_ret_t lookupReply(void)
 
     return lu_ret;
 }
-# 448 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 448 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
 static void handleRecv(bool_t isBlocking, bool_t canReply)
 
 
@@ -9270,13 +9301,13 @@ exception_t handleSyscall(syscall_t syscall)
 {
     exception_t ret;
     updateTimestamp(); if (__builtin_expect(!!(checkBudgetRestart()), 1)) { { switch (syscall) { case SysSend: ret = handleInvocation(false, true, false, false, getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, capRegister)); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { mcsPreemptionPoint(); checkInterrupt(); } break; case SysNBSend: ret = handleInvocation(false, false, false, false, getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, capRegister)); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { mcsPreemptionPoint(); checkInterrupt(); } break; case SysCall: ret = handleInvocation(true, true, true, false, getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, capRegister)); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { mcsPreemptionPoint(); checkInterrupt(); } break; case SysRecv: handleRecv(true, true); break; case SysWait: handleRecv(true, false); break; case SysNBWait: handleRecv(false, false); break; case SysReplyRecv: { cptr_t reply = getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, replyRegister); ret = handleInvocation(false, false, true, true, reply); /* reply is not preemptible, but to ease verification we check explicitly */ if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { mcsPreemptionPoint(); checkInterrupt(); break; } handleRecv(true, true); break; } case SysNBSendRecv: { cptr_t dest = getNBSendRecvDest(); ret = handleInvocation(false, false, true, true, dest); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { mcsPreemptionPoint(); checkInterrupt(); break; } handleRecv(true, true); break; } case SysNBSendWait: ret = handleInvocation(false, false, true, true, getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, replyRegister)); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { mcsPreemptionPoint(); checkInterrupt(); break; } handleRecv(true, false); break; case SysNBRecv: handleRecv(false, true); break; case SysYield: handleYield(); break; default: halt(); } } }
-# 663 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
+# 663 "/Users/lukasbower/seL4_17/kernel/src/api/syscall.c"
     schedule();
     activateThread();
 
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/c_traps.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9285,7 +9316,7 @@ exception_t handleSyscall(syscall_t syscall)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/fastpath/fastpath.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/fastpath/fastpath.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9295,7 +9326,7 @@ exception_t handleSyscall(syscall_t syscall)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9309,7 +9340,7 @@ exception_t handleSyscall(syscall_t syscall)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/armv/armv8-a/64/armv/context_switch.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/armv/armv8-a/64/armv/context_switch.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9338,8 +9369,8 @@ static inline void armv_contextSwitch(vspace_root_t *vspace, asid_t asid)
 
     setCurrentUserVSpaceRoot(ttbr_new(asid, addrFromPPtr(vspace)));
 }
-# 15 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/model/statedata.h" 1
+# 15 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/model/statedata.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9347,7 +9378,7 @@ static inline void armv_contextSwitch(vspace_root_t *vspace, asid_t asid)
  */
 
        
-# 23 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/model/statedata.h"
+# 23 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/model/statedata.h"
 /* The top level asid mapping table */
 extern asid_pool_t *armKSASIDTable[(1ul << (asidHighBits))] __attribute__((externally_visible));
 
@@ -9359,9 +9390,9 @@ extern pte_t armKSGlobalKernelPGD[(1ul << (9))] __attribute__((externally_visibl
 extern pte_t armKSGlobalKernelPUD[(1ul << (9))] __attribute__((externally_visible));
 extern pte_t armKSGlobalKernelPDs[(1ul << (9))][(1ul << (9))] __attribute__((externally_visible));
 extern pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((externally_visible));
-# 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
+# 16 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/machine/fpu.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/machine/fpu.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9373,7 +9404,7 @@ extern pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((externally_visible
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/fpu.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/fpu.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9381,7 +9412,7 @@ extern pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((externally_visible
  */
 
        
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/fpu.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/fpu.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9474,8 +9505,7 @@ static inline void disableTrapFpu(void)
 {
     word_t cptr;
     __asm__ volatile("mrs %x0," "cptr_el2" : "=r"(cptr));
-    /* Clear the TFP bit */
-    cptr &= ~(1ul << (10));
+    cptr &= ~(1ul << (10 /* Trap FP and Advanced SIMD accesses*/));
     do { word_t _v = cptr; __asm__ volatile("msr " "cptr_el2" ",%x0" :: "r" (_v)); }while(0);
     isb();
 }
@@ -9513,8 +9543,7 @@ static inline void enableTrapFpu(void)
 {
     word_t cptr;
     __asm__ volatile("mrs %x0," "cptr_el2" : "=r"(cptr));
-    /* Set the TFP bit */
-    cptr |= (1ul << (10));
+    cptr |= (1ul << (10 /* Trap FP and Advanced SIMD accesses*/));
     do { word_t _v = cptr; __asm__ volatile("msr " "cptr_el2" ",%x0" :: "r" (_v)); }while(0);
     /* No ISB because we rely on context switch for synchronisation */
 }
@@ -9540,11 +9569,11 @@ static inline void disableFpu(void)
         disableFpuEL0();
     }
 }
-# 9 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/fpu.h" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/fpu.h" 2
 
 bool_t fpsimd_HWCapTest(void);
 bool_t fpsimd_init(void);
-# 13 "/Users/lukasbower/seL4_16/kernel/include/machine/fpu.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/machine/fpu.h" 2
 
 
 
@@ -9572,7 +9601,7 @@ static inline void __attribute__((always_inline)) lazyFPURestore(tcb_t *thread)
         switchLocalFpuOwner(thread);
     }
 }
-# 18 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
+# 18 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
 
 
 /* When building the fastpath the assembler in traps.S makes these
@@ -9606,7 +9635,7 @@ switchToThread_fp(tcb_t *thread, vspace_root_t *vroot, pde_t stored_hw_asid)
 
     ksSMP[(getCurrentCPUIndex())].system.ksCurThread = thread;
 }
-# 89 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h"
+# 89 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h"
 static inline void mdb_node_ptr_mset_mdbNext_mdbRevocable_mdbFirstBadged(
     mdb_node_t *node_ptr, word_t mdbNext,
     word_t mdbRevocable, word_t mdbFirstBadged)
@@ -9649,11 +9678,12 @@ static inline void fastpath_copy_mrs(word_t length, tcb_t *src, tcb_t *dest)
         setRegister(dest, reg, getRegister(src, reg));
     }
 }
-# 139 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h"
+# 139 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h"
 /** DONT_TRANSLATE */
 static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) fastpath_restore(word_t badge, word_t msgInfo, tcb_t *cur_thread)
 {
     c_exit_hook();
+    arm_load_thread_id(cur_thread);
 
 
 
@@ -9705,9 +9735,9 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
 
     __builtin_unreachable();
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/fastpath/fastpath.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/fastpath/fastpath.h" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/debug.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9719,8 +9749,7 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
 
 
 
-
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/machine/debug.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/machine/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9728,8 +9757,8 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
  */
 
        
-# 14 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/debug.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/armv/armv8-a/64/armv/debug.h" 1
+# 13 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/debug.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/armv/armv8-a/64/armv/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9737,8 +9766,8 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
  */
 
        
-# 15 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/debug.h" 2
-# 13 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/fastpath/fastpath.h" 2
+# 14 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/debug.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/fastpath/fastpath.h" 2
 
 void slowpath(syscall_t syscall)
 __attribute__((__noreturn__));
@@ -9752,7 +9781,7 @@ __attribute__((__noreturn__));
 static inline
 void fastpath_call(word_t cptr, word_t r_msgInfo)
 __attribute__((__noreturn__));
-# 37 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/fastpath/fastpath.h"
+# 37 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/fastpath/fastpath.h"
 static inline
 
 void fastpath_reply_recv(word_t cptr, word_t r_msgInfo, word_t reply)
@@ -9760,12 +9789,13 @@ void fastpath_reply_recv(word_t cptr, word_t r_msgInfo, word_t reply)
 
 
 __attribute__((__noreturn__));
-# 10 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/c_traps.c" 2
-# 18 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/c_traps.c"
+# 10 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/c_traps.c" 2
+# 18 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/c_traps.c"
 /** DONT_TRANSLATE */
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_user_context(void)
 {
     c_exit_hook();
+    arm_load_thread_id(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 
 
 
@@ -9812,7 +9842,7 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_u
     );
     __builtin_unreachable();
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/idle.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/idle.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9821,13 +9851,13 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_u
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/debug.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/debug.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 10 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/idle.c" 2
+# 10 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/idle.c" 2
 
 /** DONT_TRANSLATE */
 void __attribute__((__noreturn__)) __attribute__((noinline)) __attribute__((externally_visible)) halt(void)
@@ -9844,13 +9874,13 @@ void __attribute__((__noreturn__)) __attribute__((noinline)) __attribute__((exte
     idle_thread();
     __builtin_unreachable();
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/thread.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/thread.c"
+# 14 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/thread.c"
 void Arch_switchToThread(tcb_t *tcb)
 {
     if (wrap_config_set(0)) {
@@ -9870,14 +9900,14 @@ void Arch_switchToIdleThread(void)
     if (wrap_config_set(0)) {
         do {} while(0);
     }
-    setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+    setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
 }
 
 void Arch_activateIdleThread(tcb_t *tcb)
 {
     /* Don't need to do anything */
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9889,7 +9919,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/kernel/boot.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/kernel/boot.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9900,7 +9930,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/bootinfo.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/bootinfo.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9911,7 +9941,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/bootinfo_types.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/libsel4/include/sel4/bootinfo_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -10034,11 +10064,11 @@ typedef struct seL4_BootInfoHeader {
 typedef int __assert_failed_invalid_seL4_BootInfoHeader[(sizeof(seL4_BootInfoHeader) == 2 * sizeof(seL4_Word)) ? 1 : -1] __attribute__((unused));
 
                                                          ;
-# 12 "/Users/lukasbower/seL4_16/kernel/include/bootinfo.h" 2
+# 12 "/Users/lukasbower/seL4_17/kernel/include/bootinfo.h" 2
 
 /* declare object-specific macros to hide the casting */
-# 12 "/Users/lukasbower/seL4_16/kernel/include/kernel/boot.h" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/bootinfo.h" 1
+# 12 "/Users/lukasbower/seL4_17/kernel/include/kernel/boot.h" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/bootinfo.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -10070,10 +10100,11 @@ typedef int __assert_failed_invalid_seL4_BootInfoHeader[(sizeof(seL4_BootInfoHea
 
 /* The maximum number of reserved regions is:
  * +1 for each free memory region (MAX_NUM_FREEMEM_REG)
- * +1 for each kernel frame (NUM_KERNEL_DEVICE_FRAMES, there might be none)
+ * +1 for each kernel reserved device region (NUM_KERNEL_DEVICE_RESERVED_REGIONS,
+ *    there might be none)
  * +1 for each region reserved by the boot code (NUM_RESERVED_REGIONS)
  */
-# 13 "/Users/lukasbower/seL4_16/kernel/include/kernel/boot.h" 2
+# 13 "/Users/lukasbower/seL4_17/kernel/include/kernel/boot.h" 2
 
 /*
  * Resolve naming differences between the abstract specifications
@@ -10087,7 +10118,7 @@ typedef cte_t *slot_ptr_t;
 /* (node-local) state accessed only during bootstrapping */
 
 typedef struct ndks_boot {
-    p_region_t reserved[(((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0))];
+    p_region_t reserved[(((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_reserved_regions) / sizeof((kernel_device_reserved_regions)[0])) + (3 + 0))];
     word_t resv_count;
     region_t freemem[((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1)];
     seL4_BootInfo *bi_frame;
@@ -10201,9 +10232,9 @@ static inline __attribute__((__section__(".boot.text"))) pptr_t it_alloc_paging(
 
 /* return the amount of paging structures required to cover v_reg */
 word_t arch_get_n_paging(v_region_t it_veg);
-# 13 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
-# 21 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/invocation.h" 1
+# 13 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c" 2
+# 21 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -10216,7 +10247,7 @@ word_t arch_get_n_paging(v_region_t it_veg);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/sel4_invocation.h" 1
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/sel4_invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -10229,7 +10260,7 @@ word_t arch_get_n_paging(v_region_t it_veg);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/api/invocation.h" 1
+# 1 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -10277,7 +10308,7 @@ enum invocation_label {
     TCBResume,
     TCBBindNotification,
     TCBUnbindNotification,
-# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/api/invocation.h"
+# 63 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/api/invocation.h"
     TCBSetTLSBase,
     TCBSetFlags,
     CNodeRevoke,
@@ -10318,7 +10349,7 @@ enum invocation_label {
 
     nInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/sel4_invocation.h" 2
+# 14 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/sel4_invocation.h" 2
 
 enum sel4_arch_invocation_label {
     ARMVSpaceClean_Data = nInvocationLabels,
@@ -10328,7 +10359,7 @@ enum sel4_arch_invocation_label {
     ARMSMCCall,
     nSeL4ArchInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/invocation.h" 2
+# 14 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/invocation.h" 2
 
 enum arch_invocation_label {
     ARMPageTableMap = nSeL4ArchInvocationLabels,
@@ -10351,19 +10382,19 @@ enum arch_invocation_label {
     ARMPageGetAddress,
     ARMASIDControlMakePool,
     ARMASIDPoolAssign,
-# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/invocation.h"
+# 51 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/invocation.h"
     ARMIRQIssueIRQHandlerTrigger,
 
     ARMIRQIssueIRQHandlerTriggerCore,
-# 94 "/Users/lukasbower/GitHub/cohesix/out/sel4/pi4-release-prebuilt-20260908/kernel/gen_headers/arch/api/invocation.h"
+# 94 "/Users/lukasbower/seL4_17/build_pi4_production_reference/kernel/gen_headers/arch/api/invocation.h"
     nArchInvocationLabels
 };
-# 22 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
+# 22 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c" 2
 
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/iospace.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/iospace.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -10371,7 +10402,7 @@ enum arch_invocation_label {
  */
 
        
-# 26 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/iospace.h"
+# 26 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/object/iospace.h"
 /* define dummy functions */
 static inline seL4_SlotRegion create_iospace_caps(cap_t root_cnode_cap)
 {
@@ -10411,9 +10442,9 @@ static inline void deleteIOPageTable(cap_t cap)
 static inline void clearIOPageDirectory(cap_t cap)
 {
 }
-# 27 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
+# 27 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/tlb.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/tlb.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -10423,7 +10454,7 @@ static inline void clearIOPageDirectory(cap_t cap)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/smp/ipi_inline.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/smp/ipi_inline.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -10467,7 +10498,7 @@ static inline void doRemoteMaskPrivateInterrupt(word_t cpu, word_t disable, word
 {
     doRemoteOp2Arg(IpiRemoteCall_MaskPrivateInterrupt, disable, irq, cpu);
 }
-# 11 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/tlb.h" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/tlb.h" 2
 
 
 
@@ -10512,7 +10543,7 @@ static inline void invalidateTranslationAll(void)
     invalidateTranslationAllLocal();
     doRemoteInvalidateTranslationAll(((1ul << (4)) - 1ul));
 }
-# 29 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
+# 29 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c" 2
 
 /*
  * Memory types are defined in Memory Attribute Indirection Register.
@@ -10720,28 +10751,115 @@ __attribute__((__section__(".boot.text"))) void map_kernel_frame(paddr_t paddr, 
                                                                                             attr_index);
 }
 
-__attribute__((__section__(".boot.text"))) void map_kernel_window(void)
-{
+/* Essentially, assert that the ELF, kernel devices, and log buffer are all in the same PUD.
+   In the current code this is the top index. This is arbitrary, the important part
+   is that they are all the same.
+ */
+_Static_assert((((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1, "elf_in_kernel_mappings");
+                                                                                                       ;
+_Static_assert((((0xffffffffffe00000ul /* 2^64 - 2^21 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1, "kdev_in_kernel_mappings");
+                                                                                                        ;
+_Static_assert((((0xffffffffffc00000ul /* 2^64 - 2 * 2^21 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1, "log_buf_in_kernel_mappings");
+                                                                                                           ;
 
+/**
+ *  Per ARM ARM DDI 0487 (version L.b), in B2.11 "Mismatched memory attributes",
+ *  when physical memory locations are accessed with mismatched attributes
+ *  (caching, memory type (device/normal), shareability), the coherency of these
+ *  memory locations may be lost, as well as various violations of read and
+ *  write orderings or atomic operations. Other ARM documents refer to the
+ *  situation in which two virtual addresses map to the same physical address as
+ *  "Memory aliasing" (e.g. Document ID 102376 0200_01_en).
+ *
+ *  Currently, the memory attributes used in the physical memory window does
+ *  match that of the kernel ELF mapping, so this is OK. At the same time,
+ *  the current physical window mapping does use NORMAL memory covering memory
+ *  that is not DRAM, which is questionable for newer processors with more
+ *  speculative execution. (FIXME)
+ *
+ *  Hence, the kernel should never access kernel ELF memory through the physical
+ *  memory window, i.e., never modify the result of `ptrFromPAddr()` when the
+ *  physical address lies within the kernel ELF. (Reads are fine if they
+ *  have been flushed appropriately per B2.11; this should be the case for
+ *  any paging structures).
+ *
+ *  As an addendum, LWN Article "ARM's multiply-mapped memory mess" specifies
+ *  that in ARMv6 specifications this kind of aliasing would be UNPREDICTABLE;
+ *  the current ARMv8 A-Profile specifications no longer contain this wording,
+ *  and instead specify the loss of coherency and other behaviours in B2.11.
+ */
+__attribute__((__section__(".boot.text"))) void map_kernel_elf_image(pte_t kernel_mapping_pds[])
+{
+    /** This is not strictly necessary, but to handle a non-aligned KERNEL_ELF_PADDR_BASE
+     *  we'd need to do a bit more logic and probably do what riscv64 does
+     *  where the *actual* KERNEL_ELF_BASE is rounded up to the alignment.
+     *  This is simpler and memory is cheap.
+     **/
+    _Static_assert((!((0x200000) & ((1ul << (21)) - 1ul))), "elf_paddr_aligned");;
+    _Static_assert((!((0xffffffffc0000000ul /* 2^64 - 2^30 */) & ((1ul << (21)) - 1ul))), "elf_base_aligned");;
+
+    /* Please don't overlap with KDEV_BASE */
+    ;
+    /* Please don't overlap with KS_LOG_PPTR */
+    ;
+
+    const word_t pd_start = (((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((2)))) + 12)) & ((1ul << (9)) - 1ul));
+    /* pd_end and ELF_TOP are both exclusive, so handle that correctly */
+    const word_t pd_end = (((((paddr_t)ki_end) - 1) >> (((9) * (((4) - 1) - ((2)))) + 12)) & ((1ul << (9)) - 1ul)) + 1;
+
+    paddr_t paddr = physBase();
+    __attribute__((unused)) pptr_t vaddr = 0xffffffffc0000000ul /* 2^64 - 2^30 */;
+
+    for (word_t pd = pd_start; pd < pd_end; pd++) {
+        ;
+
+        kernel_mapping_pds[pd] = pte_pte_page_new(
+
+
+
+                                     /* UXN */ 1,
+
+                                     /* page_base_address */ paddr,
+                                     /* global (nG) */ 0,
+                                     /* access flag (AF) */ 1,
+                                     /* shareability (SH) */ 3,
+                                     /* AP */ APFromVMRights(VMKernelOnly),
+                                     /* AttrIndx */ NORMAL
+                                 );
+
+        paddr += (1ul << (21));
+        vaddr += (1ul << (21));
+    }
+}
+
+
+
+
+
+
+/* verify that the physical memory window as at the last entry of the PGD */
+_Static_assert((((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1, "physical_window_pgd_location");
+                                                                                          ;
+
+/* make sure that the PPTR_BASE and PPTR_TOP are huge paged aligned */
+_Static_assert((!((0xffffff8000000000ul /* 2^64 - 2^39 */) & ((1ul << (30)) - 1ul))), "physical_window_base_aligned");;
+_Static_assert((!((0xffffffffc0000000ul /* 2^64 - 2^30 */) & ((1ul << (30)) - 1ul))), "physical_window_top_aligned");;
+
+/* the PPTR_BASE starts from the bottom of the kernel PUD */
+_Static_assert((((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)) == 0, "physical_window_bottom_kernel_region");
+                                                                     ;
+/* the PPTR_TOP then ends at the second-to-last entry of the PUD
+    note: because this is the exclusive value the assert is one higher than
+          you would expect.
+*/
+_Static_assert((((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1, "physical_window_top_kernel_region");
+                                                                                         ;
+
+__attribute__((__section__(".boot.text"))) void map_kernel_physical_window(void)
+{
     paddr_t paddr;
     pptr_t vaddr;
     word_t idx;
-
-
-
-
-
-    /* verify that the kernel window as at the last entry of the PGD */
-    ;
-
-    ;
-    /* verify that the kernel device window is 1gb aligned and 1gb in size */
-    ;
-    ;
-
-    /* place the PUD into the PGD */
-    armKSGlobalKernelPGD[(((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (9)) - 1ul))] = pte_pte_table_new(
-                                                                                 addrFromKPPtr(armKSGlobalKernelPUD));
 
     /* place all PDs except the last one in PUD */
     for (idx = (((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)); idx < (((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul));
@@ -10770,16 +10888,30 @@ __attribute__((__section__(".boot.text"))) void map_kernel_window(void)
                                                                                                                     );
         vaddr += (1ul << (21));
     }
+}
 
-    /* put the PD into the PUD for device window */
-    armKSGlobalKernelPUD[(((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul))] = pte_pte_table_new(
-                                                                                addrFromKPPtr(&armKSGlobalKernelPDs[(1ul << (9)) - 1][0])
-                                                                            );
+__attribute__((__section__(".boot.text"))) void map_kernel_window(void)
+{
+    /* place the PUD into the PGD */
+    armKSGlobalKernelPGD[(((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (9)) - 1ul))] =
+        pte_pte_table_new(addrFromKPPtr(armKSGlobalKernelPUD));
 
-    /* put the PT into the PD for device window */
-    armKSGlobalKernelPDs[(1ul << (9)) - 1][(1ul << (9)) - 1] = pte_pte_table_new(
-                                                                               addrFromKPPtr(armKSGlobalKernelPT)
-                                                                           );
+    map_kernel_physical_window();
+
+    const word_t elf_pud_idx = (((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul));
+    pte_t *kernel_mapping_pds = armKSGlobalKernelPDs[elf_pud_idx];
+
+    /* place the kernel mapping PDs in the kernel mapping PUD */
+    armKSGlobalKernelPUD[elf_pud_idx] = pte_pte_table_new(addrFromKPPtr(kernel_mapping_pds));
+
+    /* map the kernel ELF */
+    map_kernel_elf_image(kernel_mapping_pds);
+
+    /* put the PT into the PD for device window. It would be nice if
+       we could pass kernel_mapping_pds[511] to map_kernel_devices(), but it is
+       shared between AArch64 and AArch32, so... */
+    kernel_mapping_pds[(1ul << (9)) - 1]
+        = pte_pte_table_new(addrFromKPPtr(armKSGlobalKernelPT));
 
     map_kernel_devices();
 }
@@ -11030,13 +11162,13 @@ __attribute__((__section__(".boot.text"))) cap_t create_mapped_it_frame_cap(cap_
 __attribute__((__section__(".boot.text"))) void activate_kernel_vspace(void)
 {
     cleanInvalidateL1Caches();
-    setCurrentKernelVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalKernelPGD)));
+    setCurrentKernelVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalKernelPGD)));
 
     /* Prevent elf-loader address translation to fill up TLB */
-    setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+    setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
 
     invalidateLocalTLB();
-    lockTLBEntry(((0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul) + physBase()));
+    lockTLBEntry(0xffffffffc0000000ul /* 2^64 - 2^30 */);
 }
 
 __attribute__((__section__(".boot.text"))) void write_it_asid_pool(cap_t it_ap_cap, cap_t it_vspace_cap)
@@ -11172,9 +11304,10 @@ static lookupPTSlot_ret_t lookupPTSlot(vspace_root_t *vspace, vptr_t vptr)
 /* Note that if the hypervisor support is enabled, the user page tables use
  * stage-2 translation format. Otherwise, they follow the stage-1 translation format.
  */
-static pte_t makeUserPagePTE(paddr_t paddr, vm_rights_t vm_rights, vm_attributes_t attributes, vm_page_size_t page_size)
+static pte_t makeUserPagePTE(paddr_t paddr, vm_rights_t vm_rights, bool_t cap_read, vm_attributes_t attributes,
+                             vm_page_size_t page_size)
 {
-    bool_t nonexecutable = vm_attributes_get_armExecuteNever(attributes);
+    bool_t nonexecutable = vm_attributes_get_armExecuteNever(attributes) || !cap_read;
     word_t cacheable = vm_attributes_get_armPageCacheable(attributes);
 
 
@@ -11261,8 +11394,11 @@ void setVMRoot(tcb_t *tcb)
 
     threadRoot = (((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap;
 
+    /* ASID/VMID 0 is never allocated to a real VSpace (see findFreeHWASID()
+     * for the hypervisor case), so the empty global VSpace can be installed
+     * under it without flushing the TLB. */
     if (!isValidNativeRoot(threadRoot)) {
-        setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+        setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
         return;
     }
 
@@ -11270,7 +11406,7 @@ void setVMRoot(tcb_t *tcb)
     asid = cap_vspace_cap_get_capVSMappedASID(threadRoot);
     find_ret = findVSpaceForASID(asid);
     if (__builtin_expect(!!(find_ret.status != EXCEPTION_NONE || find_ret.vspace_root != vspaceRoot), 0)) {
-        setCurrentUserVSpaceRoot(ttbr_new(0, addrFromKPPtr(armKSGlobalUserVSpace)));
+        setCurrentUserVSpaceRoot(ttbr_new(hwASIDReserved, addrFromKPPtr(armKSGlobalUserVSpace)));
         return;
     }
 
@@ -11292,17 +11428,17 @@ static bool_t setVMRootForFlush(vspace_root_t *vspace, asid_t asid)
     armv_contextSwitch(vspace, asid);
     return true;
 }
-# 961 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1066 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
 static inline void invalidateTLBByASID(asid_t asid)
 {
-# 978 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1083 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
     invalidateTranslationASID(asid);
 
 }
 
 static inline void invalidateTLBByASIDVA(asid_t asid, vptr_t vaddr)
 {
-# 1000 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1105 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
     invalidateTranslationSingle((asid << 48) | vaddr >> 12);
 
 }
@@ -11710,7 +11846,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
         paddr_t frame_base = pte_get_page_base_address(pte);
 
         pstart = frame_base + (start & ((1ul << (resolve_ret.ptBitsLeft)) - 1ul));
-
+# 1522 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
         setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performVSpaceFlush(invLabel, vspaceRoot, asid, start, end - 1, pstart);
 
@@ -11821,7 +11957,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         cap_t vspaceRootCap;
         vspace_root_t *vspaceRoot;
         asid_t asid, frame_asid;
-        vm_rights_t vmRights;
+        vm_rights_t vmRights, capRights;
         vm_page_size_t frameSize;
         vm_attributes_t attributes;
         findVSpaceForASID_ret_t find_ret;
@@ -11836,8 +11972,8 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         vspaceRootCap = current_extra_caps.excaprefs[0]->cap;
 
         frameSize = cap_frame_cap_get_capFSize(cap);
-        vmRights = maskVMRights(cap_frame_cap_get_capFVMRights(cap),
-                                rightsFromWord(getSyscallArg(1, buffer)));
+        capRights = cap_frame_cap_get_capFVMRights(cap);
+        vmRights = maskVMRights(capRights, rightsFromWord(getSyscallArg(1, buffer)));
 
         if (__builtin_expect(!!(!isValidNativeRoot(vspaceRootCap)), 0)) {
             current_syscall_error.type = seL4_InvalidCapability;
@@ -11903,9 +12039,11 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
             return EXCEPTION_SYSCALL_ERROR;
         }
 
+        bool_t cap_read = (capRights == VMReadOnly || capRights == VMReadWrite);
+        pte_t pte = makeUserPagePTE(base, vmRights, cap_read, attributes, frameSize);
+
         setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
-        return performPageInvocationMap(asid, cap, cte,
-                                        makeUserPagePTE(base, vmRights, attributes, frameSize), lu_ret.ptSlot);
+        return performPageInvocationMap(asid, cap, cte, pte, lu_ret.ptSlot);
     }
 
     case ARMPageUnmap:
@@ -11966,7 +12104,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         }
 
         word_t pstart = addrFromPPtr((void *)cap_frame_cap_get_capFBasePtr(cap)) + start;
-# 1671 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1787 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/kernel/vspace.c"
         /* When in EL1, we are using the user page table for flushing and need to make sure
            the mapping info in the cap is not stale. */
         lookupPTSlot_ret_t lu_ret = lookupPTSlot(find_ret.vspace_root, vaddr);
@@ -12155,19 +12293,19 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
         halt();
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/capdl.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/debug.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/fpu.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12206,7 +12344,7 @@ __attribute__((__section__(".boot.text"))) bool_t fpsimd_HWCapTest(void)
 
     return true;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/registerset.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12248,13 +12386,13 @@ word_t getNBSendRecvDest(void)
 {
     return getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, nbsendRecvDest);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/model/statedata.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/model/statedata.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 21 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/model/statedata.c"
+# 21 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/model/statedata.c"
 asid_pool_t *armKSASIDTable[(1ul << (asidHighBits))];
 
 /* AArch64 Memory map explanation:
@@ -12325,13 +12463,13 @@ pte_t armKSGlobalKernelPGD[(1ul << (9))] __attribute__((__aligned__((1ul << (12)
 pte_t armKSGlobalKernelPUD[(1ul << (9))] __attribute__((__aligned__((1ul << (12))))) __attribute__((__section__(".bss.aligned")));
 pte_t armKSGlobalKernelPDs[(1ul << (9))][(1ul << (9))] __attribute__((__aligned__((1ul << (12))))) __attribute__((__section__(".bss.aligned")));
 pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((__aligned__((1ul << (12))))) __attribute__((__section__(".bss.aligned")));
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 16 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 16 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
 bool_t Arch_isFrameType(word_t type)
 {
     switch (type) {
@@ -12385,7 +12523,7 @@ deriveCap_ret_t Arch_deriveCap(cte_t *slot, cap_t cap)
         ret.cap = cap;
         ret.status = EXCEPTION_NONE;
         return ret;
-# 101 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 101 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
     default:
         /* This assert has no equivalent in haskell,
          * as the options are restricted by type */
@@ -12395,7 +12533,7 @@ deriveCap_ret_t Arch_deriveCap(cte_t *slot, cap_t cap)
 
 cap_t __attribute__((__const__)) Arch_updateCapData(bool_t preserve, word_t data, cap_t cap)
 {
-# 119 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 119 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
         return cap;
 
 
@@ -12457,7 +12595,7 @@ finaliseCap_ret_t Arch_finaliseCap(cap_t cap, bool_t final)
                       cap_frame_cap_get_capFBasePtr(cap));
         }
         break;
-# 209 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 209 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
     }
 
     fc_ret.remainder = cap_null_cap_new();
@@ -12506,7 +12644,7 @@ bool_t __attribute__((__const__)) Arch_sameRegionAs(cap_t cap_a, cap_t cap_b)
                    cap_asid_pool_cap_get_capASIDPool(cap_b);
         }
         break;
-# 310 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 310 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
     }
     return false;
 }
@@ -12523,7 +12661,7 @@ bool_t __attribute__((__const__)) Arch_sameObjectAs(cap_t cap_a, cap_t cap_b)
                      (cap_frame_cap_get_capFIsDevice(cap_b) == 0)));
         }
     }
-# 342 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 342 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
     return Arch_sameRegionAs(cap_a, cap_b);
 }
 
@@ -12637,7 +12775,7 @@ cap_t Arch_createObject(object_t t, void *regionBase, word_t userSize, bool_t de
         cleanCacheRange_PoU((word_t)regionBase,
                             (word_t)regionBase + ((1ul << (12)) - 1ul),
                             addrFromPPtr(regionBase));
-# 463 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 463 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
         return cap_vspace_cap_new(
                    asidInvalid, /* capVSMappedASID */
                    (word_t)regionBase, /* capVSBasePtr    */
@@ -12657,7 +12795,7 @@ cap_t Arch_createObject(object_t t, void *regionBase, word_t userSize, bool_t de
                    0, /* capPTIsMapped      */
                    0 /* capPTMappedAddress */
                );
-# 491 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 491 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
     default:
         halt();
     }
@@ -12671,7 +12809,7 @@ exception_t Arch_decodeInvocation(word_t label, word_t length, cptr_t cptr,
     /* The C parser cannot handle a switch statement with only a default
      * case. So we need to do some gymnastics to remove the switch if
      * there are no other cases */
-# 530 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
+# 530 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/64/object/objecttype.c"
 {
 
     return decodeARMMMUInvocation(label, length, cptr, slot, cap, call, buffer);
@@ -12690,19 +12828,19 @@ Arch_prepareThreadDelete(tcb_t * thread) {
     fpuRelease(thread);
 
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/api/faults.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/api/faults.c"
+# 14 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/api/faults.c"
 bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType)
 {
     switch (faultType) {
     case seL4_Fault_VMFault:
         return true;
-# 28 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/api/faults.c"
+# 28 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/api/faults.c"
     default:
         halt();
     }
@@ -12720,12 +12858,12 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
         return setMR(receiver, receiveIPCBuffer, seL4_VMFault_FSR,
                      seL4_Fault_VMFault_get_FSR(sender->tcbFault));
     }
-# 60 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/api/faults.c"
+# 60 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/api/faults.c"
     default:
         halt();
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12834,7 +12972,7 @@ void cleanInvalidate_L1D(void)
 {
     cleanInvalidate_D_by_level(0);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12842,7 +12980,7 @@ void cleanInvalidate_L1D(void)
  */
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/user_access.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/user_access.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -12851,7 +12989,7 @@ void cleanInvalidate_L1D(void)
        
 
 void armv_init_user_access(void);
-# 9 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/armv/armv8-a/64/user_access.c" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/armv/armv8-a/64/user_access.c" 2
 
 /* bits in the CNTKCTL_EL1 */
 
@@ -12860,17 +12998,15 @@ void armv_init_user_access(void);
 
 
 /* bits in CNTHCTL_EL2 */
-
-
-
-
-
+# 26 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 static void check_export_pmu(void)
 {
 
 
 
 
+
+    do { word_t _v = 0; __asm__ volatile("msr " "PMUSERENR_EL0" ",%x0" :: "r" (_v)); }while(0);
 
 }
 
@@ -12890,27 +13026,39 @@ static void check_export_arch_timer(void)
 
 
     do { word_t _v = val; __asm__ volatile("msr " "CNTKCTL_EL1" ",%x0" :: "r" (_v)); }while(0);
-# 58 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+# 64 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+}
+
+static inline bool_t pmu_present(void)
+{
+    word_t v;
+
+    __asm__ volatile("mrs %x0," "id_aa64dfr0_el1" : "=r"(v));
+    v &= (0xful << 8);
+    /* Count PMU as present if it is not None and not Implementation Defined (same as Linux) */
+    return v != (0x0ul << 8) && v != (0xful << 8);
 }
 
 void armv_init_user_access(void)
 {
-    check_export_pmu();
+    if (pmu_present()) {
+        check_export_pmu();
+    }
     check_export_arch_timer();
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/benchmark/benchmark.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/benchmark/benchmark.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/c_traps.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 20 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/c_traps.c"
+# 20 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/c_traps.c"
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) c_handle_undefined_instruction(void)
 {
     do { clh_lock_acquire(false); } while(0);
@@ -12938,12 +13086,12 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) c_handle_
     restore_user_context();
     __builtin_unreachable();
 }
-# 57 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/c_traps.c"
+# 57 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/c_traps.c"
 static inline void __attribute__((__noreturn__)) c_handle_vm_fault(vm_fault_type_t type)
 {
     do { clh_lock_acquire(false); } while(0);
     c_entry_hook();
-# 71 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/c_traps.c"
+# 71 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/c_traps.c"
     handleVMFaultEvent(type);
     restore_user_context();
 
@@ -13026,7 +13174,7 @@ void __attribute__((externally_visible)) c_handle_fastpath_call(word_t cptr, wor
     fastpath_call(cptr, msgInfo);
     __builtin_unreachable();
 }
-# 172 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/c_traps.c"
+# 172 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/c_traps.c"
 __attribute__((__aligned__((1ul << (6)))))
 
 void __attribute__((externally_visible)) c_handle_fastpath_reply_recv(word_t cptr, word_t msgInfo, word_t reply)
@@ -13049,15 +13197,15 @@ void __attribute__((externally_visible)) c_handle_fastpath_reply_recv(word_t cpt
 
     __builtin_unreachable();
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2021, HENSOLDT Cyber
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/kernel/boot.h" 1
+# 15 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/kernel/boot.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13080,8 +13228,8 @@ void init_kernel(
     paddr_t dtb_addr_p,
     uint32_t dtb_size
 );
-# 16 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c" 2
-# 32 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 16 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c" 2
+# 32 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
 /* SMP boot synchronization works based on a global variable with the initial
  * value 0, as the loader must zero all BSS variables. Secondary cores keep
  * spinning until the primary core has initialized all kernel structures and
@@ -13177,7 +13325,7 @@ __attribute__((__section__(".boot.text"))) static void init_irqs(cap_t root_cnod
         setIRQState(IRQInactive, ((irq_t){.irq = (i), .target_core = (0)}));
     }
     setIRQState(IRQTimer, ((irq_t){.irq = (27), .target_core = (0)}));
-# 148 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 148 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
     setIRQState(IRQIPI, ((irq_t){.irq = (0), .target_core = (getCurrentCPUIndex())}));
     setIRQState(IRQIPI, ((irq_t){.irq = (1), .target_core = (getCurrentCPUIndex())}));
 
@@ -13185,7 +13333,7 @@ __attribute__((__section__(".boot.text"))) static void init_irqs(cap_t root_cnod
     /* provide the IRQ control cap */
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (seL4_CapIRQControl)), cap_irq_control_cap_new());
 }
-# 175 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 175 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
 /** This and only this function initialises the CPU.
  *
  * It does NOT initialise any kernel state.
@@ -13204,10 +13352,14 @@ __attribute__((__section__(".boot.text"))) static bool_t init_cpu(void)
 
 
     activate_kernel_vspace();
-    if (wrap_config_set(0)) {
-        do {} while(0);
+
+
+    /* After activate_kernel_vspace(), so printf() is available. */
+    if (!wrap_config_set(0) && !check16BitASID()) {
+        ((void)(0));
+        return false;
     }
-# 205 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 210 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
     /* Setup kernel stack pointer.
      * On ARM SMP, the array index here is the CPU ID
      */
@@ -13228,6 +13380,14 @@ __attribute__((__section__(".boot.text"))) static bool_t init_cpu(void)
     setVtable((pptr_t)arm_vector_table);
 
 
+    cpu_initLocalIRQController();
+
+    if (wrap_config_set(0)) {
+        do {} while(0);
+    }
+
+    /* FPU init must come after vcpu_boot_init(), which sets the default HYP
+     * FPU traps that the FPU init then adjusts. */
     haveHWFPU = fpsimd_HWCapTest();
 
     /* Disable FPU to avoid channels where a platform has an FPU but doesn't make use of it */
@@ -13245,8 +13405,6 @@ __attribute__((__section__(".boot.text"))) static bool_t init_cpu(void)
         return false;
     }
 
-
-    cpu_initLocalIRQController();
 
 
 
@@ -13452,7 +13610,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
 
     /* initialise the IRQ states and provide the IRQ control cap */
     init_irqs(root_cnode_cap);
-# 458 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 469 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
     populate_bi_frame(0, 4, ipcbuf_vptr, extra_bi_size);
 
     /* put DTB in the bootinfo block, if present. */
@@ -13646,7 +13804,7 @@ __attribute__((__section__(".boot.text"))) __attribute__((externally_visible)) v
     } else {
         result = try_init_kernel_secondary_core();
     }
-# 661 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
+# 672 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/boot.c"
     if (!result) {
         halt();
         __builtin_unreachable();
@@ -13659,7 +13817,7 @@ __attribute__((__section__(".boot.text"))) __attribute__((externally_visible)) v
     schedule();
     activateThread();
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/thread.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13686,7 +13844,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
         do {} while(0);
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/cache.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/cache.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13696,7 +13854,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/l2c_310.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/machine/l2c_310.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13719,7 +13877,7 @@ void plat_cleanCache(void);
 void plat_cleanL2Range(paddr_t start, paddr_t end);
 void plat_invalidateL2Range(paddr_t start, paddr_t end);
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end);
-# 11 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/cache.c" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/cache.c" 2
 
 
 
@@ -13846,7 +14004,7 @@ void invalidateCacheRange_RAM(vptr_t start, vptr_t end, paddr_t pstart)
 
 void invalidateCacheRange_I(vptr_t start, vptr_t end, paddr_t pstart)
 {
-# 149 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/cache.c"
+# 149 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/cache.c"
     vptr_t line;
     word_t index;
 
@@ -13875,6 +14033,7 @@ void cleanCaches_PoU(void)
     dsb();
     invalidate_I_PoU();
     dsb();
+    isb();
 }
 
 void cleanInvalidateL1Caches(void)
@@ -13884,6 +14043,7 @@ void cleanInvalidateL1Caches(void)
     dsb();
     invalidate_I_PoU();
     dsb();
+    isb();
 }
 
 void arch_clean_invalidate_caches(void)
@@ -13907,13 +14067,13 @@ void arch_clean_invalidate_L1_caches(word_t type)
         isb();
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/debug.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/errata.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/errata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13928,20 +14088,20 @@ void arch_clean_invalidate_L1_caches(word_t type)
 
 /* Prototyped here as this is referenced from assembly */
 void arm_errata(void);
-# 39 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/errata.c"
+# 39 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/errata.c"
 __attribute__((__section__(".boot.text"))) void __attribute__((externally_visible)) arm_errata(void)
 {
 
 
 
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/gic_v2.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/gic_v2.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 18 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/gic_v2.c"
+# 18 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/gic_v2.c"
 /* Use this to forward interrupts to all CPUs when debugging */
 
 
@@ -14038,7 +14198,7 @@ __attribute__((__section__(".boot.text"))) static void cpu_iface_init(void)
 {
     uint32_t i;
 
-    /* For non-Exynos4, the registers are banked per CPU, need to clear them */
+    /* The registers are banked per CPU, need to clear them */
     gic_dist->enable_clr[0] = 0xffffffff;
     gic_dist->pending_clr[0] = 0xffffffff;
 
@@ -14156,7 +14316,7 @@ void setIRQTarget(irq_t irq, seL4_Word target)
     }
     targets[hwIRQ] = targetList;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/hardware.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/hardware.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14178,6 +14338,9 @@ void setNextPC(tcb_t *thread, word_t v)
     setRegister(thread, ELR_EL1, v);
 }
 
+/* Map and reserve device regions. The kernel may map only part of a device
+ * region, so mapped and reserved regions do not have to be equal.
+ */
 __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
 {
     /* If there are no kernel device frames at all, then kernel_device_frames is
@@ -14193,15 +14356,15 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
         map_kernel_frame(frame->paddr, frame->pptr, VMKernelOnly,
                          vm_attributes_new(frame->armExecuteNever, false,
                                            false));
-        if (!frame->userAvailable) {
-            reserve_region((p_region_t) {
-                .start = frame->paddr,
-                .end = frame->paddr + (1ul << (12))
-            });
+    }
+
+    for (int i = 0; i < (sizeof(kernel_device_reserved_regions) / sizeof((kernel_device_reserved_regions)[0])); i++) {
+        if (!reserve_region(kernel_device_reserved_regions[i])) {
+            halt();
         }
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/io.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/io.c"
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -14210,7 +14373,7 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/drivers/uart.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/drivers/uart.h" 1
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -14218,8 +14381,8 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
  */
 
        
-# 10 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/io.c" 2
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/l2c_nop.c"
+# 10 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/io.c" 2
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/machine/l2c_nop.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14236,7 +14399,7 @@ void plat_cleanL2Range(paddr_t start, paddr_t end) {}
 void plat_invalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Cache(void) {}
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/interrupt.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14256,7 +14419,7 @@ static exception_t Arch_invokeIRQControl(irq_t irq, cte_t *handlerSlot, cte_t *c
     }
     return invokeIRQControl(irq, handlerSlot, controlSlot);
 }
-# 32 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/interrupt.c"
+# 32 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/interrupt.c"
 exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
                                             cte_t *srcSlot, word_t *buffer)
 {
@@ -14316,7 +14479,7 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
 
         setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return Arch_invokeIRQControl(irq, destSlot, srcSlot, trigger);
-# 150 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/interrupt.c"
+# 150 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/interrupt.c"
     } else if (invLabel == ARMIRQIssueIRQHandlerTriggerCore) {
         word_t irq_w = getSyscallArg(0, buffer);
         bool_t trigger = !!getSyscallArg(1, buffer);
@@ -14374,31 +14537,31 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/iospace.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/iospace.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/smc.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/smc.c"
 /*
  * Copyright 2021, DornerWorks Ltd.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/smmu.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/smmu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/tcb.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/tcb.c"
+# 15 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/tcb.c"
 word_t __attribute__((__const__)) Arch_decodeTransfer(word_t flags)
 {
     return 0;
@@ -14408,13 +14571,13 @@ exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *
 {
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/vcpu.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/object/vcpu.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/smp/ipi.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14422,7 +14585,7 @@ exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *
  */
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/smp/ipi.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/arch/arm/arch/64/mode/smp/ipi.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14441,7 +14604,7 @@ typedef enum {
     /* placeholder for 64-bit ARM IPI types */
     IpiNumModeRemoteCall
 } IpiModeRemoteCall_t;
-# 9 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/smp/ipi.c" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/smp/ipi.c" 2
 
 
 
@@ -14478,7 +14641,7 @@ void handleRemoteCall(IpiRemoteCall_t call, word_t arg0, word_t arg1, word_t arg
         case IpiRemoteCall_MaskPrivateInterrupt:
             maskInterrupt(arg0, (((arg1) < 32u*4) ? ((irq_t){.irq = ((arg1) - ((arg1)/32u)*32u), .target_core = ((arg1) / 32u)}): ((irq_t){.irq = ((arg1) - (4 -1)*32u), .target_core = (0)})));
             break;
-# 61 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/smp/ipi.c"
+# 61 "/Users/lukasbower/seL4_17/kernel/src/arch/arm/smp/ipi.c"
         default:
             halt();
             break;
@@ -14493,31 +14656,31 @@ void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
 {
     generic_ipi_send_mask(ipi, mask, isBlocking);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/assert.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/assert.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/benchmark/benchmark.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/benchmark/benchmark.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/benchmark/benchmark_track.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/benchmark/benchmark_track.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/benchmark/benchmark_utilisation.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/benchmark/benchmark_utilisation.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/drivers/serial/bcm2835-aux-uart.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/drivers/serial/bcm2835-aux-uart.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14534,12 +14697,12 @@ void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
 
 /* When DLAB=1, MU_IIR is a baud rate register.
  * Otherwise IRQ enable */
-# 26 "/Users/lukasbower/seL4_16/kernel/src/drivers/serial/bcm2835-aux-uart.c"
+# 26 "/Users/lukasbower/seL4_17/kernel/src/drivers/serial/bcm2835-aux-uart.c"
 /* This bit is set if the transmit FIFO can accept at least one byte.*/
 
 /* This bit is set if the transmit FIFO is empty and the
  * transmitter is idle. (Finished shifting out the last bit). */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/drivers/timer/generic_timer.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/drivers/timer/generic_timer.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14587,7 +14750,7 @@ __attribute__((__section__(".boot.text"))) void initTimer(void)
 {
     initGenericTimer();
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14595,7 +14758,7 @@ __attribute__((__section__(".boot.text"))) void initTimer(void)
  */
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/fastpath/fastpath.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/fastpath/fastpath.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14605,7 +14768,7 @@ __attribute__((__section__(".boot.text"))) void initTimer(void)
        
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/reply.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/reply.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14642,8 +14805,8 @@ void reply_pop(reply_t *reply, tcb_t *tcb);
 void reply_remove(reply_t *reply, tcb_t *tcb);
 /* Remove a specific tcb, and the reply it is blocking on, from the call stack */
 void reply_remove_tcb(tcb_t *tcb);
-# 11 "/Users/lukasbower/seL4_16/kernel/include/fastpath/fastpath.h" 2
-# 64 "/Users/lukasbower/seL4_16/kernel/include/fastpath/fastpath.h"
+# 11 "/Users/lukasbower/seL4_17/kernel/include/fastpath/fastpath.h" 2
+# 64 "/Users/lukasbower/seL4_17/kernel/include/fastpath/fastpath.h"
 /* Fastpath cap lookup.  Returns a null_cap on failure. */
 static inline cap_t __attribute__((always_inline)) lookup_fp(cap_t cap, cptr_t cptr)
 {
@@ -14701,7 +14864,7 @@ static inline void thread_state_ptr_mset_blockingObject_tsType(thread_state_t *t
 {
     ts_ptr->words[0] = ep_ref | tsType;
 }
-# 137 "/Users/lukasbower/seL4_16/kernel/include/fastpath/fastpath.h"
+# 137 "/Users/lukasbower/seL4_17/kernel/include/fastpath/fastpath.h"
 static inline void endpoint_ptr_mset_epQueue_tail_state(endpoint_t *ep_ptr, word_t epQueue_tail,
                                                         word_t state)
 {
@@ -14735,7 +14898,7 @@ static inline reply_t *thread_state_get_replyObject_np(thread_state_t ts)
 
 
 }
-# 9 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c" 2
 
 
 
@@ -14810,7 +14973,7 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     if (__builtin_expect(!!(! isValidVTableRoot_fp(newVTable)), 0)) {
         slowpath(SysCall);
     }
-# 99 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 103 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     /* Need to test that the ASID is still valid */
     asid_t asid = cap_vspace_cap_get_capVSMappedASID(newVTable);
     asid_map_t asid_map = findMapForASID(asid);
@@ -14818,9 +14981,9 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
                                                                                           ) {
         slowpath(SysCall);
     }
-# 114 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 118 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     stored_hw_asid.words[0] = asid;
-# 123 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 132 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     /* let gcc optimise this out for 1 domain */
     dom = maxDom ? ksCurDomain : 0;
     /* ensure only the idle thread or lower prio threads are present in the scheduler */
@@ -14879,6 +15042,9 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     endpoint_ptr_set_epQueue_head_np(ep_ptr, ((word_t)(dest->tcbSchedNext)));
     if (__builtin_expect(!!(dest->tcbSchedNext), 0)) {
         dest->tcbSchedNext->tcbSchedPrev = ((void *)0);
+
+        dest->tcbSchedNext = ((void *)0);
+
     } else {
         endpoint_ptr_mset_epQueue_tail_state(ep_ptr, 0, EPState_Idle);
     }
@@ -14905,7 +15071,7 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     }
     reply->replyNext = call_stack_new(((word_t) (sc)), true);
     sc->scReply = reply;
-# 223 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 235 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     fastpath_copy_mrs(length, ksSMP[(getCurrentCPUIndex())].system.ksCurThread, dest);
 
     /* Dest thread is set Running, but not queued. */
@@ -15001,7 +15167,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 
     /* Determine who the caller is. */
     caller = reply_ptr->replyTCB;
-# 330 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 342 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     /* ensure we are not single stepping the caller in ia32 */
 
 
@@ -15034,7 +15200,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     if (__builtin_expect(!!(! isValidVTableRoot_fp(newVTable)), 0)) {
         slowpath(SysReplyRecv);
     }
-# 376 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 394 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     /* Need to test that the ASID is still valid */
     asid_t asid = cap_vspace_cap_get_capVSMappedASID(newVTable);
     asid_map_t asid_map = findMapForASID(asid);
@@ -15042,21 +15208,15 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
                                                                                           ) {
         slowpath(SysReplyRecv);
     }
-# 392 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 410 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     stored_hw_asid.words[0] = asid;
-
-
-
-
-
-
-
+# 424 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     /* Ensure the original caller can be scheduled directly. */
     dom = maxDom ? ksCurDomain : 0;
     if (__builtin_expect(!!(!isHighestPrio(dom, caller->tcbPriority)), 0)) {
         slowpath(SysReplyRecv);
     }
-# 413 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 437 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     /* Ensure the original caller is in the current domain and can be scheduled directly. */
     if (__builtin_expect(!!(caller->tcbDomain != ksCurDomain && 0 < maxDom), 0)) {
         slowpath(SysReplyRecv);
@@ -15115,7 +15275,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
         tcb_queue_t queue = tcbAppend(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ep_ptr_get_queue(ep_ptr));
         endpoint_ptr_set_epQueue_head_np(ep_ptr, ((word_t)(queue.head)));
         endpoint_ptr_mset_epQueue_tail_state(ep_ptr, ((word_t)(queue.end)), EPState_Recv);
-# 481 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 505 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
     }
 
 
@@ -15134,7 +15294,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     /* TODO neccessary? */
     reply_ptr->replyPrev.words[0] = 0;
     reply_ptr->replyNext.words[0] = 0;
-# 533 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
+# 557 "/Users/lukasbower/seL4_17/kernel/src/fastpath/fastpath.c"
         /* There's no fault, so straight to the transfer. */
 
         /* Replies don't have a badge. */
@@ -15154,7 +15314,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 
 
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/inlines.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/inlines.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15167,7 +15327,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 lookup_fault_t current_lookup_fault;
 seL4_Fault_t current_fault;
 syscall_error_t current_syscall_error;
-# 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Author: Lukas Bower
@@ -15183,7 +15343,7 @@ syscall_error_t current_syscall_error;
 
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/domain.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/domain.h" 1
 /*
  * Copyright 2025, Indan Zupancic
  *
@@ -15207,17 +15367,17 @@ extern dschedule_t ksDomSchedule[2];
 
 static inline dschedule_t dschedule_make(dom_t domain, ticks_t duration)
 {
-    return ((uint64_t)domain << (64 - 8 /* Maximum of 255 domains supported*/)) | duration;
+    return ((uint64_t)domain << (64 - 8 /* Maximum of 256 domains supported*/)) | duration;
 }
 
 static inline dom_t dschedule_domain(dschedule_t sched)
 {
-    return sched >> (64 - 8 /* Maximum of 255 domains supported*/);
+    return sched >> (64 - 8 /* Maximum of 256 domains supported*/);
 }
 
 static inline ticks_t dschedule_duration(dschedule_t sched)
 {
-    return sched & ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 255 domains supported*/);
+    return sched & ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 256 domains supported*/);
 }
 
 static inline bool_t dschedule_is_end_marker(word_t index)
@@ -15226,8 +15386,8 @@ static inline bool_t dschedule_is_end_marker(word_t index)
 }
 
 exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffer);
-# 17 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c" 2
-# 25 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
+# 17 "/Users/lukasbower/seL4_17/kernel/src/kernel/boot.c" 2
+# 25 "/Users/lukasbower/seL4_17/kernel/src/kernel/boot.c"
 /* The Pi operational source profile admits eight root-control refills. Keep
  * reservation, allocation and capability size identical. This changes only
  * the initial SC storage; generic minimum objects and scheduler rules remain
@@ -15247,7 +15407,7 @@ extern char ki_boot_end[1];
 __attribute__((__section__(".boot.text"))) p_region_t get_p_reg_kernel_img_boot(void)
 {
     return (p_region_t) {
-        .start = addrFromKPPtr((const void *)((0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul) + physBase())),
+        .start = addrFromKPPtr((const void *)0xffffffffc0000000ul /* 2^64 - 2^30 */),
         .end = addrFromKPPtr(ki_boot_end)
     };
 }
@@ -15256,7 +15416,7 @@ __attribute__((__section__(".boot.text"))) p_region_t get_p_reg_kernel_img_boot(
 __attribute__((__section__(".boot.text"))) p_region_t get_p_reg_kernel_img(void)
 {
     return (p_region_t) {
-        .start = addrFromKPPtr((const void *)((0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul) + physBase())),
+        .start = addrFromKPPtr((const void *)0xffffffffc0000000ul /* 2^64 - 2^30 */),
         .end = addrFromKPPtr((const void *)((paddr_t)ki_end))
     };
 }
@@ -15264,21 +15424,18 @@ __attribute__((__section__(".boot.text"))) p_region_t get_p_reg_kernel_img(void)
 __attribute__((__section__(".boot.text"))) static void merge_regions(void)
 {
     /* Walk through reserved regions and see if any can be merged */
-    for (word_t i = 1; i < ndks_boot.resv_count;) {
-        if (ndks_boot.reserved[i - 1].end == ndks_boot.reserved[i].start) {
+    word_t top = 0;
+    for (word_t i = 1; i < ndks_boot.resv_count; i++) {
+        if (ndks_boot.reserved[top].end == ndks_boot.reserved[i].start) {
             /* extend earlier region */
-            ndks_boot.reserved[i - 1].end = ndks_boot.reserved[i].end;
-            /* move everything else down */
-            for (word_t j = i + 1; j < ndks_boot.resv_count; j++) {
-                ndks_boot.reserved[j - 1] = ndks_boot.reserved[j];
-            }
-
-            ndks_boot.resv_count--;
-            /* don't increment i in case there are multiple adjacent regions */
+            ndks_boot.reserved[top].end = ndks_boot.reserved[i].end;
         } else {
-            i++;
+            /* add region */
+            top++;
+            ndks_boot.reserved[top] = ndks_boot.reserved[i];
         }
     }
+    ndks_boot.resv_count = ndks_boot.resv_count > 0 ? top + 1 : 0;
 }
 
 __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
@@ -15305,7 +15462,7 @@ __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
         /* Otherwise figure out where it should go. */
         if (ndks_boot.reserved[i].start > reg.end) {
             /* move regions down, making sure there's enough room */
-            if (ndks_boot.resv_count + 1 >= (((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0))) {
+            if (ndks_boot.resv_count + 1 >= (((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_reserved_regions) / sizeof((kernel_device_reserved_regions)[0])) + (3 + 0))) {
                 ((void)(0))
 
                                                                  ;
@@ -15321,7 +15478,7 @@ __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
         }
     }
 
-    if (i + 1 == (((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0))) {
+    if (i + 1 == (((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_reserved_regions) / sizeof((kernel_device_reserved_regions)[0])) + (3 + 0))) {
         ((void)(0))
 
                                                          ;
@@ -15701,7 +15858,7 @@ __attribute__((__section__(".boot.text"))) void create_idle_thread(void)
         ksSMP[(i)].system.ksIdleThread->tcbAffinity = i;
 
         configure_sched_context(ksSMP[(i)].system.ksIdleThread, ((sched_context_t *) (&ksIdleThreadSC[i])),
-                                usToTicks(5 * 1000llu));
+                                (usToTicks((getMaxUsToTicks() / 8))));
         ksSMP[(i)].system.ksIdleThread->tcbSchedContext->scCore = i;
         ksSMP[(i)].system.ksIdleSC = ((sched_context_t *) (&ksIdleThreadSC[i]));
 
@@ -15779,12 +15936,12 @@ __attribute__((__section__(".boot.text"))) tcb_t *create_initial_thread(cap_t ro
 
     return tcb;
 }
-# 621 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
+# 618 "/Users/lukasbower/seL4_17/kernel/src/kernel/boot.c"
 __attribute__((__section__(".boot.text"))) void init_core_state(tcb_t *scheduler_action)
 {
 
     ksSMP[(getCurrentCPUIndex())].system.ksCurFPUOwner = ((void *)0);
-# 635 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
+# 632 "/Users/lukasbower/seL4_17/kernel/src/kernel/boot.c"
     ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = scheduler_action;
     ksSMP[(getCurrentCPUIndex())].system.ksCurThread = ksSMP[(getCurrentCPUIndex())].system.ksIdleThread;
 
@@ -15797,8 +15954,8 @@ __attribute__((__section__(".boot.text"))) void init_core_state(tcb_t *scheduler
 
     /* No need for NODE_STATE() as there is no SMP support for domains */
     ksCurDomain = 0;
-    ksDomainTime = ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 255 domains supported*/);
-    ksDomSchedule[0] = dschedule_make(0, ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 255 domains supported*/));
+    ksDomainTime = ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 256 domains supported*/);
+    ksDomSchedule[0] = dschedule_make(0, ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 256 domains supported*/));
 }
 
 /**
@@ -16295,13 +16452,13 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
                                                                         ;
     return false;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/cspace.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/kernel/cspace.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_16/kernel/src/kernel/cspace.c"
+# 15 "/Users/lukasbower/seL4_17/kernel/src/kernel/cspace.c"
 lookupCap_ret_t lookupCap(tcb_t *thread, cptr_t cPtr)
 {
     lookupSlot_raw_ret_t lu_ret;
@@ -16481,13 +16638,13 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         }
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/faulthandler.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/kernel/faulthandler.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_16/kernel/src/kernel/faulthandler.c"
+# 15 "/Users/lukasbower/seL4_17/kernel/src/kernel/faulthandler.c"
 void handleFault(tcb_t *tptr)
 {
     cap_t faultHandlerCap = (((cte_t *)((word_t)(tptr)&~((1ul << (11)) - 1ul)))+(tcbFaultHandler))->cap;
@@ -16526,17 +16683,17 @@ bool_t sendFaultIPC(tcb_t *tptr, cap_t handlerCap, bool_t can_donate)
         return false;
     }
 }
-# 146 "/Users/lukasbower/seL4_16/kernel/src/kernel/faulthandler.c"
+# 146 "/Users/lukasbower/seL4_17/kernel/src/kernel/faulthandler.c"
 void handleNoFaultHandler(tcb_t *tptr)
 
 
 
 
 {
-# 172 "/Users/lukasbower/seL4_16/kernel/src/kernel/faulthandler.c"
+# 172 "/Users/lukasbower/seL4_17/kernel/src/kernel/faulthandler.c"
     setThreadState(tptr, ThreadState_Inactive);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/sporadic.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/kernel/sporadic.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -16575,7 +16732,7 @@ static inline word_t refill_next(sched_context_t *sc, word_t index)
 {
     return (index == sc->scRefillMax - 1u) ? (0) : index + 1u;
 }
-# 104 "/Users/lukasbower/seL4_16/kernel/src/kernel/sporadic.c"
+# 104 "/Users/lukasbower/seL4_17/kernel/src/kernel/sporadic.c"
 /* compute the sum of a refill queue */
 static __attribute__((unused)) ticks_t refill_sum(sched_context_t *sc)
 {
@@ -16726,7 +16883,7 @@ static bool_t refill_head_overlapping(sched_context_t *sc)
 static inline bool_t head_refill_overrun(sched_context_t *sc, ticks_t usage)
 {
     refill_t head = *refill_head(sc);
-    return head.rAmount <= usage && head.rTime < ((0xFFFFFFFFFFFFFFFF) - 5 * usToTicks((getMaxUsToTicks() / 8)));
+    return head.rAmount <= usage && head.rTime < ((0xFFFFFFFFFFFFFFFF) - 5 * (usToTicks((getMaxUsToTicks() / 8))));
 }
 
 static inline ticks_t charge_entire_head_refill(sched_context_t *sc, ticks_t usage)
@@ -16792,7 +16949,7 @@ void refill_budget_check(ticks_t usage)
      * integer overflow then the usage must be smaller than the head.
      */
     refill_t head = *refill_head(sc);
-    if (usage > 0 && head.rTime < ((0xFFFFFFFFFFFFFFFF) - 5 * usToTicks((getMaxUsToTicks() / 8)))) {
+    if (usage > 0 && head.rTime < ((0xFFFFFFFFFFFFFFFF) - 5 * (usToTicks((getMaxUsToTicks() / 8))))) {
         ;
         refill_t used = (refill_t) {
             .rAmount = usage,
@@ -16852,7 +17009,7 @@ void refill_unblock_check(sched_context_t *sc)
     }
     ;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/stack.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/kernel/stack.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -16863,13 +17020,13 @@ void refill_unblock_check(sched_context_t *sc)
 
 __attribute__((externally_visible)) __attribute__((__aligned__(4096)))
 char kernel_stack_alloc[4][(1ul << (12))];
-# 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/thread.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/kernel/thread.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 26 "/Users/lukasbower/seL4_16/kernel/src/kernel/thread.c"
+# 26 "/Users/lukasbower/seL4_17/kernel/src/kernel/thread.c"
 static seL4_MessageInfo_t
 transferCaps(seL4_MessageInfo_t info,
              endpoint_t *endpoint, tcb_t *receiver,
@@ -17382,7 +17539,7 @@ void setPriority(tcb_t *tptr, prio_t prio)
         break;
     }
 }
-# 553 "/Users/lukasbower/seL4_16/kernel/src/kernel/thread.c"
+# 553 "/Users/lukasbower/seL4_17/kernel/src/kernel/thread.c"
 /* Note that this thread will possibly continue at the end of this kernel
  * entry. Do not queue it yet, since a queue+unqueue operation is wasteful
  * if it will be picked. Instead, it waits in the 'ksSchedulerAction' site
@@ -17504,7 +17661,7 @@ void endTimeslice(bool_t can_timeout_fault)
         postpone(ksSMP[(getCurrentCPUIndex())].system.ksCurSC);
     }
 }
-# 703 "/Users/lukasbower/seL4_16/kernel/src/kernel/thread.c"
+# 703 "/Users/lukasbower/seL4_17/kernel/src/kernel/thread.c"
 void rescheduleRequired(void)
 {
     if (ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction != ((tcb_t*)0)
@@ -17554,19 +17711,19 @@ void awaken(void)
         tcbReleaseDequeue();
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/machine/capdl.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/machine/fpu.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_16/kernel/src/machine/fpu.c"
+# 14 "/Users/lukasbower/seL4_17/kernel/src/machine/fpu.c"
 /* Switch the owner of the FPU to the given thread on local core. */
 void switchLocalFpuOwner(tcb_t *new_owner)
 {
@@ -17603,7 +17760,7 @@ void fpuRelease(tcb_t *thread)
         switchFpuOwner(((void *)0), thread->tcbAffinity);
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/machine/io.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/machine/io.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17615,7 +17772,7 @@ void fpuRelease(tcb_t *thread)
  *
  * SPDX-License-Identifier: MIT
  */
-# 1 "/Users/lukasbower/seL4_16/kernel/src/machine/registerset.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -17631,7 +17788,7 @@ const register_t fault_messages[][(((n_syscallMessage)>((((n_timeoutMessage)>(n_
     [MessageID_TimeoutReply] = { [seL4_TimeoutReply_FaultIP] = FaultIP, [seL4_TimeoutReply_SP] = SP_EL0, [seL4_TimeoutReply_SPSR_EL1] = SPSR_EL1, [seL4_TimeoutReply_X0] = X0, [seL4_TimeoutReply_X1] = X1, [seL4_TimeoutReply_X2] = X2, [seL4_TimeoutReply_X3] = X3, [seL4_TimeoutReply_X4] = X4, [seL4_TimeoutReply_X5] = X5, [seL4_TimeoutReply_X6] = X6, [seL4_TimeoutReply_X7] = X7, [seL4_TimeoutReply_X8] = X8, [seL4_TimeoutReply_X16] = X16, [seL4_TimeoutReply_X17] = X17, [seL4_TimeoutReply_X18] = X18, [seL4_TimeoutReply_X29] = X29, [seL4_TimeoutReply_X30] = X30, [seL4_TimeoutReply_X9] = X9, [seL4_TimeoutReply_X10] = X10, [seL4_TimeoutReply_X11] = X11, [seL4_TimeoutReply_X12] = X12, [seL4_TimeoutReply_X13] = X13, [seL4_TimeoutReply_X14] = X14, [seL4_TimeoutReply_X15] = X15, [seL4_TimeoutReply_X19] = X19, [seL4_TimeoutReply_X20] = X20, [seL4_TimeoutReply_X21] = X21, [seL4_TimeoutReply_X22] = X22, [seL4_TimeoutReply_X23] = X23, [seL4_TimeoutReply_X24] = X24, [seL4_TimeoutReply_X25] = X25, [seL4_TimeoutReply_X26] = X26, [seL4_TimeoutReply_X27] = X27, [seL4_TimeoutReply_X28] = X28,},
 
 };
-# 1 "/Users/lukasbower/seL4_16/kernel/src/model/preemption.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/model/preemption.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17639,7 +17796,7 @@ const register_t fault_messages[][(((n_syscallMessage)>((((n_timeoutMessage)>(n_
  */
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/model/preemption.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/model/preemption.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17651,7 +17808,7 @@ const register_t fault_messages[][(((n_syscallMessage)>((((n_timeoutMessage)>(n_
 
 
 exception_t preemptionPoint(void);
-# 9 "/Users/lukasbower/seL4_16/kernel/src/model/preemption.c" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/src/model/preemption.c" 2
 
 
 
@@ -17687,7 +17844,7 @@ exception_t preemptionPoint(void)
 
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/model/smp.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/model/smp.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -17720,7 +17877,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 
 
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/model/statedata.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/model/statedata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17728,21 +17885,21 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
  */
 
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/api/debug.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/api/debug.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 9 "/Users/lukasbower/seL4_16/kernel/src/model/statedata.c" 2
+# 9 "/Users/lukasbower/seL4_17/kernel/src/model/statedata.c" 2
 
-# 1 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/seL4_17/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 11 "/Users/lukasbower/seL4_16/kernel/src/model/statedata.c" 2
+# 11 "/Users/lukasbower/seL4_17/kernel/src/model/statedata.c" 2
 
 
 
@@ -17750,7 +17907,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 
 
 /* Collective cpu states, including both pre core architecture dependant and independent data */
-smpStatedata_t ksSMP[4] __attribute__((__aligned__((1ul << (6)))));
+smpStatedata_t ksSMP[4];
 
 /* Global count of how many cpus there are */
 word_t ksNumCPUs;
@@ -17791,7 +17948,7 @@ _Static_assert((((256 + (1 << 6) - 1) / (1 << 6)) - 1) <= (1 << 6), "ksReadyQueu
 /* current scheduling context pointer */
 ;
 ;
-# 73 "/Users/lukasbower/seL4_16/kernel/src/model/statedata.c"
+# 73 "/Users/lukasbower/seL4_17/kernel/src/model/statedata.c"
 /* Units of work we have completed since the last time we checked for
  * pending interrupts */
 word_t ksWorkUnitsCompleted;
@@ -17821,13 +17978,13 @@ __attribute__((__section__("._idle_thread"))) char ksIdleThreadTCB[4][(1ul << (1
 
 /* Idle thread Schedcontexts */
 char ksIdleThreadSC[4][(1ul << (7))] __attribute__((__aligned__((1ul << (7)))));
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/cnode.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/cnode.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 25 "/Users/lukasbower/seL4_16/kernel/src/object/cnode.c"
+# 25 "/Users/lukasbower/seL4_17/kernel/src/object/cnode.c"
 struct finaliseSlot_ret {
     exception_t status;
     bool_t success;
@@ -18007,7 +18164,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
         setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeCNodeDelete(destSlot);
     }
-# 218 "/Users/lukasbower/seL4_16/kernel/src/object/cnode.c"
+# 218 "/Users/lukasbower/seL4_17/kernel/src/object/cnode.c"
     if (invLabel == CNodeCancelBadgedSends) {
         cap_t destCap;
 
@@ -18152,7 +18309,7 @@ exception_t invokeCNodeRotate(cap_t cap1, cap_t cap2, cte_t *slot1,
 
     return EXCEPTION_NONE;
 }
-# 392 "/Users/lukasbower/seL4_16/kernel/src/object/cnode.c"
+# 392 "/Users/lukasbower/seL4_17/kernel/src/object/cnode.c"
 /*
  * If creating a child UntypedCap, don't allow new objects to be created in the
  * parent.
@@ -18518,7 +18675,7 @@ void insertNewCap(cte_t *parent, cte_t *slot, cap_t cap)
     }
     mdb_node_ptr_set_mdbNext(&parent->cteMDBNode, ((word_t)(slot)));
 }
-# 775 "/Users/lukasbower/seL4_16/kernel/src/object/cnode.c"
+# 775 "/Users/lukasbower/seL4_17/kernel/src/object/cnode.c"
 bool_t __attribute__((__pure__)) isMDBParentOf(cte_t *cte_a, cte_t *cte_b)
 {
     if (!mdb_node_get_mdbRevocable(cte_a->cteMDBNode)) {
@@ -18679,14 +18836,14 @@ cap_transfer_t __attribute__((__pure__)) loadCapTransfer(word_t *buffer)
     const int offset = seL4_MsgMaxLength + ((1ul<<(seL4_MsgExtraCapBits))-1) + 2;
     return capTransferFromWords(buffer + offset);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/domain.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/domain.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2025, Indan Zupancic
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_16/kernel/src/object/domain.c"
+# 15 "/Users/lukasbower/seL4_17/kernel/src/object/domain.c"
 /* Domain schedules. The duration is in kernel ticks for non-MCS and timer ticks for MCS. */
 dschedule_t ksDomSchedule[2];
 
@@ -18769,7 +18926,7 @@ static exception_t decodeDomainScheduleConfigure(word_t length, word_t *buffer)
         current_syscall_error.rangeErrorMax = numDomains - 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
-    if (duration > ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 255 domains supported*/)) {
+    if (duration > ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 256 domains supported*/)) {
         ;
         current_syscall_error.invalidArgumentNumber = 2;
         current_syscall_error.type = seL4_InvalidArgument;
@@ -18845,13 +19002,13 @@ exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffe
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 20 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 20 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
 void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
              bool_t canGrant, bool_t canGrantReply, bool_t canDonate, tcb_t *thread, endpoint_t *epptr)
 
@@ -18883,7 +19040,7 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
             /* Place calling thread in endpoint queue */
 
             tcbEPAppend(thread, epptr, EPState_Send);
-# 59 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 59 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         }
         break;
 
@@ -18901,7 +19058,7 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
         /* Dequeue the first TCB */
 
         tcbEPDequeue(dest, epptr);
-# 85 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 85 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         /* Do the transfer */
         doIPCTransfer(thread, epptr, badge, canGrant, dest);
 
@@ -18931,7 +19088,7 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
             refill_unblock_check(dest_sc);
         }
         possibleSwitchTo(dest);
-# 128 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 128 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         break;
     }
     }
@@ -19035,7 +19192,7 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking, cap_t replyCap)
             /* Dequeue the first TCB */
 
             tcbEPDequeue(sender, epptr);
-# 240 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 240 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
             /* Get sender IPC details */
             badge = thread_state_ptr_get_blockingIPCBadge(&sender->tcbState);
             canGrant =
@@ -19077,7 +19234,7 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking, cap_t replyCap)
                 possibleSwitchTo(sender);
                 ;
             }
-# 293 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 293 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
             break;
         }
         }
@@ -19092,7 +19249,7 @@ void replyFromKernel_error(tcb_t *thread)
     ipcBuffer = lookupIPCBuffer(true, thread);
     setRegister(thread, badgeRegister, 0);
     len = setMRs_syscall_error(thread, ipcBuffer);
-# 316 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 316 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
     setRegister(thread, msgInfoRegister, wordFromMessageInfo(
                     seL4_MessageInfo_new(current_syscall_error.type, 0, 0, len)));
 }
@@ -19127,7 +19284,7 @@ void cancelIPC(tcb_t *tptr)
         /* Dequeue TCB */
 
         tcbEPDequeue(tptr, epptr);
-# 362 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 362 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         if (thread_state_ptr_get_tsType(state) == ThreadState_BlockedOnReceive) {
             reply_t *reply = ((reply_t *) (thread_state_ptr_get_replyObject(state)));
             if (reply != ((void *)0)) {
@@ -19147,7 +19304,7 @@ void cancelIPC(tcb_t *tptr)
     case ThreadState_BlockedOnReply: {
 
         reply_remove_tcb(tptr);
-# 397 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 397 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         break;
     }
     }
@@ -19206,7 +19363,7 @@ void cancelAllIPC(endpoint_t *epptr)
             next = thread->tcbSchedNext;
             removeAndRestartEPQueuedThread(thread, epptr);
         }
-# 469 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 469 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         rescheduleRequired();
         break;
     }
@@ -19243,7 +19400,7 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
             next = thread->tcbSchedNext;
             removeAndRestartBadgedThread(thread, epptr, badge);
         }
-# 531 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
+# 531 "/Users/lukasbower/seL4_17/kernel/src/object/endpoint.c"
         rescheduleRequired();
 
         break;
@@ -19290,13 +19447,13 @@ void reorderEP(endpoint_t *epptr, tcb_t *thread)
     queue = tcbAppend(thread, queue);
     ep_ptr_set_queue(epptr, queue);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/interrupt.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 23 "/Users/lukasbower/seL4_16/kernel/src/object/interrupt.c"
+# 23 "/Users/lukasbower/seL4_17/kernel/src/object/interrupt.c"
 exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
                                        cte_t *srcSlot, word_t *buffer)
 {
@@ -19410,7 +19567,7 @@ exception_t decodeIRQHandlerInvocation(word_t invLabel, irq_t irq)
 
 void invokeIRQHandler_AckIRQ(irq_t irq)
 {
-# 147 "/Users/lukasbower/seL4_16/kernel/src/object/interrupt.c"
+# 147 "/Users/lukasbower/seL4_17/kernel/src/object/interrupt.c"
     if ((((irq.irq) < 32u)) && (irq.target_core) != getCurrentCPUIndex()) {
 
 
@@ -19562,13 +19719,13 @@ void setIRQState(irq_state_t irqState, irq_t irq)
 
     maskInterrupt(irqState == IRQInactive, irq);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 19 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 19 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
 static inline tcb_queue_t __attribute__((__pure__)) ntfn_ptr_get_queue(notification_t *ntfnPtr)
 {
     tcb_queue_t ntfn_queue;
@@ -19596,7 +19753,7 @@ static inline void maybeDonateSchedContext(tcb_t *tcb, notification_t *ntfnPtr)
         }
     }
 }
-# 62 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 62 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
 void sendSignal(notification_t *ntfnPtr, word_t badge)
 {
     switch (notification_ptr_get_state(ntfnPtr)) {
@@ -19624,7 +19781,7 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
                         refill_unblock_check(tcb->tcbSchedContext);
                     }
                 }
-# 122 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 122 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
             } else {
                 /* In particular, this path is taken when a thread
                  * is waiting on a reply cap since BlockedOnReply
@@ -19653,7 +19810,7 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
         /* Dequeue TCB */
 
         tcbNTFNDequeue(dest, ntfnPtr);
-# 160 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 160 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
         setThreadState(dest, ThreadState_Running);
         setRegister(dest, badgeRegister, badge);
         maybeDonateSchedContext(dest, ntfnPtr); if (isSchedulable(dest)) { { possibleSwitchTo(dest); } }
@@ -19709,7 +19866,7 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
             /* Enqueue TCB */
 
             tcbNTFNAppend(thread, ntfnPtr);
-# 225 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 225 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
             maybeReturnSchedContext(ntfnPtr, thread);
 
         } else {
@@ -19769,7 +19926,7 @@ void cancelAllSignals(notification_t *ntfnPtr)
             next = thread->tcbSchedNext;
             removeAndRestartNTFNQueuedThread(thread, ntfnPtr);
         }
-# 296 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 296 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
         rescheduleRequired();
     }
 }
@@ -19783,7 +19940,7 @@ void cancelSignal(tcb_t *threadPtr, notification_t *ntfnPtr)
     /* Dequeue TCB */
 
     tcbNTFNDequeue(threadPtr, ntfnPtr);
-# 321 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
+# 321 "/Users/lukasbower/seL4_17/kernel/src/object/notification.c"
     /* Make thread inactive */
     setThreadState(threadPtr, ThreadState_Inactive);
 }
@@ -19882,14 +20039,14 @@ void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
     queue = tcbAppend(thread, queue);
     ntfn_ptr_set_queue(ntfnPtr, queue);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 22 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
-# 1 "/Users/lukasbower/seL4_16/kernel/include/object/schedcontrol.h" 1
+# 22 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/include/object/schedcontrol.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -19903,8 +20060,8 @@ void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
 
 
 exception_t decodeSchedControlInvocation(word_t label, cap_t cap, word_t length, word_t *buffer);
-# 23 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c" 2
-# 33 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 23 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c" 2
+# 33 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
 word_t getObjectSize(word_t t, word_t userObjSize)
 {
     if (t >= seL4_NonArchObjectTypeCount) {
@@ -20403,7 +20560,7 @@ cap_t createObject(object_t t, void *regionBase, word_t userSize, bool_t deviceM
 
 
         tcb->tcbDomain = ksCurDomain;
-# 542 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 542 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
         return cap_thread_cap_new(((word_t)(tcb)));
     }
 
@@ -20532,7 +20689,7 @@ exception_t decodeInvocation(word_t invLabel, word_t length,
                    cap_endpoint_cap_get_capEPBadge(cap),
                    cap_endpoint_cap_get_capCanGrant(cap),
                    cap_endpoint_cap_get_capCanGrantReply(cap), block, call, canDonate);
-# 678 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 678 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
     case cap_notification_cap: {
         if (__builtin_expect(!!(!cap_notification_cap_get_capNtfnCanSend(cap)), 0)) {
            
@@ -20555,7 +20712,7 @@ exception_t decodeInvocation(word_t invLabel, word_t length,
                    ksSMP[(getCurrentCPUIndex())].system.ksCurThread,
                    ((reply_t *) (cap_reply_cap_get_capReplyPtr(cap))),
                    cap_reply_cap_get_capReplyCanGrant(cap));
-# 717 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 717 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
     case cap_thread_cap:
 
         if (__builtin_expect(!!(firstPhase), 0)) {
@@ -20633,7 +20790,7 @@ exception_t performInvocation_Endpoint(endpoint_t *ep, word_t badge,
 
     return EXCEPTION_NONE;
 }
-# 805 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 805 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
 exception_t performInvocation_Notification(notification_t *ntfn, word_t badge)
 {
     sendSignal(ntfn, badge);
@@ -20647,7 +20804,7 @@ exception_t performInvocation_Reply(tcb_t *thread, reply_t *reply, bool_t canGra
     doReplyTransfer(thread, reply, canGrant);
     return EXCEPTION_NONE;
 }
-# 826 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
+# 826 "/Users/lukasbower/seL4_17/kernel/src/object/objecttype.c"
 word_t __attribute__((__const__)) cap_get_capSizeBits(cap_t cap)
 {
 
@@ -20847,7 +21004,7 @@ bool_t __attribute__((__const__)) isCapRevocable(cap_t derivedCap, cap_t srcCap)
         return false;
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/reply.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/reply.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -20984,7 +21141,7 @@ void reply_remove_tcb(tcb_t *tcb)
     reply->replyNext = call_stack_new(0, false);
     reply_unlink(reply, tcb);
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/schedcontext.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/schedcontext.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -21429,7 +21586,7 @@ void schedContext_completeYieldTo(tcb_t *yielder)
         schedContext_cancelYieldTo(yielder);
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/schedcontrol.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/schedcontrol.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -21616,13 +21773,13 @@ exception_t decodeSchedControlInvocation(word_t label, cap_t cap, word_t length,
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 32 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 32 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 static exception_t checkPrio(prio_t prio, tcb_t *auth)
 {
     prio_t mcp;
@@ -21789,7 +21946,7 @@ void tcbSchedDequeue(tcb_t *tcb)
         }
     }
 }
-# 274 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 274 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 void tcbReleaseRemove(tcb_t *tcb)
 {
     if (__builtin_expect(!!(thread_state_get_tcbInReleaseQueue(tcb->tcbState)), 1)) {
@@ -21867,7 +22024,7 @@ void setExtraBadge(word_t *bufferPtr, word_t badge,
 {
     bufferPtr[seL4_MsgMaxLength + 2 + i] = badge;
 }
-# 384 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 384 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 extra_caps_t current_extra_caps;
 
 exception_t lookupExtraCaps(tcb_t *thread, word_t *bufferPtr, seL4_MessageInfo_t info)
@@ -21963,10 +22120,11 @@ void remoteTCBStall(tcb_t *tcb)
         ksSMP[(getCurrentCPUIndex())].cpu.ipiReschedulePending |= (1ul << (tcb->tcbAffinity));
     }
 }
-# 770 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 772 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 static exception_t invokeSetTLSBase(tcb_t *thread, word_t tls_base)
 {
-    setRegister(thread, TLS_BASE, tls_base);
+    bool_t archInfo = Arch_getSanitiseRegisterInfo(thread);
+    setRegister(thread, TLS_BASE, sanitiseRegister(TLS_BASE, tls_base, archInfo));
     if (thread == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
         /* If this is the current thread force a reschedule to ensure that any changes
          * to the TLS_BASE are realized */
@@ -22109,7 +22267,7 @@ exception_t decodeTCBInvocation(word_t invLabel, word_t length, cap_t cap,
 
 
         /* There is no notion of arch specific TCB invocations so this needs to go here */
-# 934 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 937 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
     case TCBSetTLSBase:
         return decodeSetTLSBase(cap, length, buffer);
 
@@ -22378,7 +22536,7 @@ exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *bu
                bufferAddr, bufferCap,
                bufferSlot, thread_control_caps_update_space |
                thread_control_caps_update_ipc_buffer);
-# 1212 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1215 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 }
 
 exception_t decodeSetPriority(cap_t cap, word_t length, word_t *buffer)
@@ -22414,7 +22572,7 @@ exception_t decodeSetPriority(cap_t cap, word_t length, word_t *buffer)
                cap_null_cap_new(), ((void *)0),
                0, newPrio,
                ((void *)0), thread_control_sched_update_priority);
-# 1256 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1259 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 }
 
 exception_t decodeSetMCPriority(cap_t cap, word_t length, word_t *buffer)
@@ -22450,7 +22608,7 @@ exception_t decodeSetMCPriority(cap_t cap, word_t length, word_t *buffer)
                cap_null_cap_new(), ((void *)0),
                newMcp, 0,
                ((void *)0), thread_control_sched_update_mcp);
-# 1300 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1303 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 }
 
 
@@ -22592,7 +22750,7 @@ exception_t decodeSetSchedParams(cap_t cap, word_t length, cte_t *slot, word_t *
                fhCap, fhSlot,
                newMcp, newPrio,
                sc, update_flags);
-# 1451 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1454 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 }
 
 
@@ -22639,7 +22797,7 @@ exception_t decodeSetIPCBuffer(cap_t cap, word_t length, cte_t *slot, word_t *bu
                cap_null_cap_new(), ((void *)0),
                cptr_bufferPtr, bufferCap,
                bufferSlot, thread_control_caps_update_ipc_buffer);
-# 1507 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1510 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 }
 
 
@@ -22675,7 +22833,7 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
     cRootCap = current_extra_caps.excaprefs[1]->cap;
     vRootSlot = current_extra_caps.excaprefs[2];
     vRootCap = current_extra_caps.excaprefs[2]->cap;
-# 1553 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1556 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
     if (slotCapLongRunningDelete(
             (((cte_t *)((word_t)(cap_thread_cap_get_capTCBPtr(cap))&~((1ul << (11)) - 1ul)))+(tcbCTable))) ||
         slotCapLongRunningDelete(
@@ -22736,7 +22894,7 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
                cRootCap, cRootSlot,
                vRootCap, vRootSlot,
                0, cap_null_cap_new(), ((void *)0), thread_control_caps_update_space | thread_control_caps_update_fault);
-# 1622 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1625 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 }
 
 exception_t decodeBindNotification(cap_t cap)
@@ -22900,7 +23058,7 @@ exception_t invokeTCB_ThreadControlCaps(tcb_t *target, cte_t *slot,
 
     return EXCEPTION_NONE;
 }
-# 1862 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 1865 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 exception_t invokeTCB_ThreadControlSched(tcb_t *target, cte_t *slot,
                                          cap_t fh_newCap, cte_t *fh_srcSlot,
                                          prio_t mcp, prio_t priority,
@@ -22940,6 +23098,8 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
                                     bool_t transferFrame, bool_t transferInteger,
                                     word_t transferArch)
 {
+    bool_t archInfo;
+
     if (suspendSource) {
         suspend(tcb_src);
     }
@@ -22948,14 +23108,20 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
         restart(dest);
     }
 
+    /* Sanitise copied values against the destination like in
+     * invokeTCB_WriteRegisters(). Whether a value is legal depends on the
+     * destination thread, e.g. whether it has a VCPU or not. */
+    archInfo = Arch_getSanitiseRegisterInfo(dest);
+
     if (transferFrame) {
         word_t i;
         word_t v;
         word_t pc;
 
         for (i = 0; i < n_frameRegisters; i++) {
-            v = getRegister(tcb_src, frameRegisters[i]);
-            setRegister(dest, frameRegisters[i], v);
+            register_t r = frameRegisters[i];
+            v = getRegister(tcb_src, r);
+            setRegister(dest, r, sanitiseRegister(r, v, archInfo));
         }
 
         pc = getRestartPC(dest);
@@ -22967,8 +23133,9 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
         word_t v;
 
         for (i = 0; i < n_gpRegisters; i++) {
-            v = getRegister(tcb_src, gpRegisters[i]);
-            setRegister(dest, gpRegisters[i], v);
+            register_t r = gpRegisters[i];
+            v = getRegister(tcb_src, r);
+            setRegister(dest, r, sanitiseRegister(r, v, archInfo));
         }
     }
 
@@ -23110,7 +23277,7 @@ exception_t invokeTCB_NotificationControl(tcb_t *tcb, notification_t *ntfnPtr)
 
     return EXCEPTION_NONE;
 }
-# 2079 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
+# 2091 "/Users/lukasbower/seL4_17/kernel/src/object/tcb.c"
 word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
 {
     switch (current_syscall_error.type) {
@@ -23151,13 +23318,13 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
         halt();
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/object/untyped.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/object/untyped.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 21 "/Users/lukasbower/seL4_16/kernel/src/object/untyped.c"
+# 21 "/Users/lukasbower/seL4_17/kernel/src/object/untyped.c"
 static word_t alignUp(word_t baseValue, word_t alignment)
 {
     return (baseValue + ((1ul << (alignment)) - 1)) & ~((1ul << (alignment)) - 1ul);
@@ -23406,6 +23573,7 @@ static exception_t resetUntypedCap(cte_t *srcSlot)
             }
         }
     }
+    Arch_postResetUntyped(deviceMemory, block_size);
     return EXCEPTION_NONE;
 }
 
@@ -23443,13 +23611,13 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot,
 
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/smp/ipi.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_16/kernel/src/smp/ipi.c"
+# 15 "/Users/lukasbower/seL4_17/kernel/src/smp/ipi.c"
 /* This function switches the core it is called on to the idle thread,
  * in order to avoid IPI storms. If the core is waiting on the lock, the actual
  * switch will not occur until the core attempts to obtain the lock, at which
@@ -23483,9 +23651,6 @@ void ipiStallCoreCallback(bool_t irqPath)
 
         /* Let the cpu requesting this IPI continue while we wait on the lock */
         node->ipi = 0;
-
-
-
         ipi_wait();
 
         /* Continue waiting on lock */
@@ -23629,7 +23794,7 @@ void generic_ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
         }
     }
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/smp/lock.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/smp/lock.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -23657,7 +23822,7 @@ __attribute__((__section__(".boot.text"))) void clh_lock_init(void)
     big_kernel_lock.request[4].state = CLHState_Granted;
     big_kernel_lock.tail = &big_kernel_lock.request[4];
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/string.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/string.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -23700,7 +23865,7 @@ word_t strlcat(char *dest, const char *src, word_t size)
     }
     return len;
 }
-# 1 "/Users/lukasbower/seL4_16/kernel/src/util.c"
+# 1 "/Users/lukasbower/seL4_17/kernel/src/util.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *

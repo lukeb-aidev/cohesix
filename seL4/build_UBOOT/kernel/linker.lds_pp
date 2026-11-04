@@ -26,22 +26,17 @@
 /* disabled: CONFIG_ARCH_IA32 */
 /* disabled: CONFIG_ARCH_RISCV */
 /* disabled: CONFIG_ARCH_X86 */
-/* disabled: CONFIG_ARM_HIKEY_PREFETCHER_STBPFDIS */
-/* disabled: CONFIG_ARM_HIKEY_PREFETCHER_STBPFRS */
 /* disabled: CONFIG_PLAT_IMX7 */
 /* disabled: CONFIG_PLAT_ALLWINNERA20 */
 /* disabled: CONFIG_PLAT_AM335X */
-/* disabled: CONFIG_PLAT_APQ8064 */
 /* disabled: CONFIG_PLAT_ARIANE */
 /* disabled: CONFIG_PLAT_BCM2712 */
 /* disabled: CONFIG_PLAT_BCM2837 */
 /* disabled: CONFIG_PLAT_CHESHIRE */
 /* disabled: CONFIG_PLAT_HIFIVE_P550 */
-/* disabled: CONFIG_PLAT_EXYNOS4 */
 /* disabled: CONFIG_PLAT_EXYNOS5 */
 /* disabled: CONFIG_PLAT_FVP */
 /* disabled: CONFIG_PLAT_HIFIVE */
-/* disabled: CONFIG_PLAT_HIKEY */
 /* disabled: CONFIG_PLAT_IMX6 */
 /* disabled: CONFIG_PLAT_IMX7_SABRE */
 /* disabled: CONFIG_PLAT_IMX8MQ_EVK */
@@ -81,7 +76,12 @@
 /* disabled: CONFIG_ARM_CORTEX_A76 */
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
-/* disabled: CONFIG_AARCH64_SERROR_IGNORE */
+/* disabled: CONFIG_BENCHMARK_GENERIC */
+/* disabled: CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
+/* disabled: CONFIG_BENCHMARK_TRACEPOINTS */
+/* disabled: CONFIG_BENCHMARK_TRACK_UTILISATION */
+/* disabled: CONFIG_ENABLE_BENCHMARKS */
+/* disabled: CONFIG_KERNEL_LOG_BUFFER */
 /* disabled: CONFIG_ARM_PA_SIZE_BITS_40 */
 /* disabled: CONFIG_DEBUG_DISABLE_L2_CACHE */
 /* disabled: CONFIG_DEBUG_DISABLE_L1_ICACHE */
@@ -90,7 +90,6 @@
 /* disabled: CONFIG_ARM_HYPERVISOR_SUPPORT */
 /* disabled: CONFIG_ARM_GIC_V3_SUPPORT */
 /* disabled: CONFIG_AARCH64_VSPACE_S2_START_L1 */
-/* disabled: CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE */
 /* disabled: CONFIG_ARM_ERRATA_430973 */
 /* disabled: CONFIG_ARM_ERRATA_773022 */
 /* disabled: CONFIG_ARM_SMMU */
@@ -111,12 +110,6 @@
 /* disabled: CONFIG_HARDWARE_DEBUG_API */
 /* disabled: CONFIG_PRINTING */
 /* disabled: CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC */
-/* disabled: CONFIG_BENCHMARK_GENERIC */
-/* disabled: CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
-/* disabled: CONFIG_BENCHMARK_TRACEPOINTS */
-/* disabled: CONFIG_BENCHMARK_TRACK_UTILISATION */
-/* disabled: CONFIG_ENABLE_BENCHMARKS */
-/* disabled: CONFIG_KERNEL_LOG_BUFFER */
 /* disabled: CONFIG_IRQ_REPORTING */
 /* disabled: CONFIG_COLOUR_PRINTING */
 /* disabled: CONFIG_KERNEL_OPT_LEVEL_OS */
@@ -361,13 +354,10 @@
  *            2^64 - 2^30 +-------------------+ PPTR_TOP
  *                        |                   |
  *                        |                   |
+ *                        |                   |
  *                        |  Physical Memory  |
  *                        |      Window       |
  *                        |                   |
- *                        |                   |
- *                        | ----------------- | KERNEL_ELF_TOP
- *                        |     Kernel ELF    |
- *                        | ----------------- | KERNEL_ELF_BASE (at `physBase()`)
  *                        |                   |
  *                        |                   |
  *            2^64 - 2^39 +-------------------+ PPTR_BASE
@@ -397,7 +387,11 @@
  *                      |     Unmapped     |
  *                      |                  |
  *                      |                  |
- *          2^64 - 2^30 +------------------+
+ *                      +------------------+ KERNEL_ELF_TOP (not fixed)
+ *                      |                  |
+ *                      |    Kernel ELF    |
+ *                      |                  |
+ *          2^64 - 2^30 +------------------+ KERNEL_ELF_BASE
  */
 /*
  * defined(CONFIG_ARM_HYPERVISOR_SUPPORT)
@@ -420,7 +414,7 @@
  *     -  The kernel expects to be able to create untypeds from 0 to
  *        KernelPaddrUserTop (CONFIG_PADDR_USER_TOP) which can be up to 2^44 in
  *        the current kernel. The kernel (proofs) expect addresses in these
- *        untypeds to be valid (i.e. canonical, not dereferencable) virtual
+ *        untypeds to be valid (i.e. canonical, not dereferenceable) virtual
  *        addresses, but allows device UT addresses to exceed ("overflow") the
  *        bounds of the physical memory window (PPTR_BASE...PPTR_TOP) as it will
  *        not dereference them itself. In the EL1 translation regime, as we use
@@ -486,10 +480,6 @@
  *                        |      Window       |
  *                        |                   |
  *                        |                   |
- *                        | ----------------- | KERNEL_ELF_TOP
- *                        |     Kernel ELF    |
- *                        | ----------------- | KERNEL_ELF_BASE (at `physBase()`)
- *                        |                   |
  *                        |                   |
  *            2^40 - 2^39 +-------------------+ PPTR_BASE
  *
@@ -511,7 +501,11 @@
  *                      |     Unmapped     |
  *                      |                  |
  *                      |                  |
- *          2^40 - 2^30 +------------------+
+ *                      +------------------+ KERNEL_ELF_TOP (not fixed)
+ *                      |                  |
+ *                      |    Kernel ELF    |
+ *                      |                  |
+ *          2^40 - 2^30 +------------------+ KERNEL_ELF_BASE
  *
  */
 /* last accessible virtual address in user space */
@@ -522,13 +516,12 @@
 /* Top of the physical memory window, exclusive */
 /* The physical memory address to use for mapping the kernel ELF */
 /* For use by the linker (only integer constants allowed) */
-/* The base address in virtual memory to use for the kernel ELF mapping */
-/* For use by the linker (only integer constants allowed) */
-/* This is a page table mapping at the end of the virtual address space
- * to map objects with 4KiB pages rather than 2MiB large pages. */
-/* The base address in virtual memory to use for the kernel device
- * mapping region. These are mapped in the kernel page table. */
-/* The log buffer is placed before the device region */
+/* The KERNEL_ELF_BASE virtual address is placed at an arbitrary high memory
+ * address above PPTR_TOP. It is mapped using 2MiB pages.
+ * Arbitrarily, it is placed directly at PPTR_TOP.
+ */
+/* For use by the linker (as it is shared with arm32) */
+/* For consistency with the rest of the code. Changing the code might be a good idea. */
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -539,10 +532,10 @@
  */
        
 ENTRY(_start)
-KERNEL_OFFSET = ((0xffffff8000000000 /* 2^64 - 2^39 */ - 0x0) + 0x1000) - 0x1000;
+KERNEL_OFFSET = 0xffffffffc0000000 /* 2^64 - 2^30 */ - 0x200000;
 SECTIONS
 {
-    . = ((0xffffff8000000000 /* 2^64 - 2^39 */ - 0x0) + 0x1000);
+    . = 0xffffffffc0000000 /* 2^64 - 2^30 */;
     .boot . : AT(ADDR(.boot) - KERNEL_OFFSET)
     {
         *(.boot.text)

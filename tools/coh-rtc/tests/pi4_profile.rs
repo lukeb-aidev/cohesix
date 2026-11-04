@@ -54,9 +54,9 @@ fn compile_options(manifest_path: PathBuf, temp_dir: &TempDir) -> CompileOptions
 }
 
 #[test]
-fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_16_build_identity() {
-    const KERNEL_ID: &str = "sel4-16.0.0-aarch64-smp-mcs";
-    const KERNEL_COMMIT: &str = "6e7c3b733d296cfd88d5fbf635c96e447a882374";
+fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_17_build_identity() {
+    const KERNEL_ID: &str = "sel4-17.0.0-aarch64-smp-mcs";
+    const KERNEL_COMMIT: &str = "62e345c240a15671484530b4e6e069ce266c28d7";
 
     let manifest_path = repo_path("configs/root_task_pi4_uboot_aarch64.toml");
     let mut manifest = coh_rtc::ir::load_manifest(&manifest_path).expect("load Pi manifest");
@@ -72,7 +72,7 @@ fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_16_build_identity() {
     .expect("parse seL4 profile contract");
     assert_eq!(
         profiles["source"]["manifest_ref"].as_str(),
-        Some("refs/tags/16.0.0")
+        Some("refs/tags/17.0.0")
     );
     assert_eq!(
         profiles["source"]["repositories"]["kernel"].as_str(),
@@ -124,7 +124,7 @@ fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_16_build_identity() {
         .expect_err("selected eight-bit Pi SC cannot hold eleven refills");
     assert_eq!(
         error.to_string(),
-        "active temporal task driver-cyw43 max_refills 11 exceeds selected kernel sel4-16.0.0-aarch64-smp-mcs SC bits 8 capacity 10"
+        "active temporal task driver-cyw43 max_refills 11 exceeds selected kernel sel4-17.0.0-aarch64-smp-mcs SC bits 8 capacity 10"
     );
 }
 

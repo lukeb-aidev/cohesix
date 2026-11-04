@@ -1,5 +1,5 @@
 diff --git a/src/kernel/boot.c b/src/kernel/boot.c
-index 079edbed937f7c3aeba980fb7e2e2de378214af1..9221e99d4621c2f72db5304c1a17114999c04044 100644
+index 412e1b1dbfcb53716f571935cb6753bcc69c9642..7207755bf4be3d5f589aa6a5de173860b03b55cd 100644
 --- a/src/kernel/boot.c
 +++ b/src/kernel/boot.c
 @@ -1,5 +1,8 @@
@@ -26,7 +26,7 @@ index 079edbed937f7c3aeba980fb7e2e2de378214af1..9221e99d4621c2f72db5304c1a171149
  /* (node-local) state accessed only during bootstrapping */
  BOOT_BSS ndks_boot_t ndks_boot;
  
-@@ -183,7 +194,7 @@ BOOT_CODE static word_t calculate_rootserver_size(v_region_t it_v_reg, word_t ex
+@@ -180,7 +191,7 @@ BOOT_CODE static word_t calculate_rootserver_size(v_region_t it_v_reg, word_t ex
      size += extra_bi_size_bits > 0 ? BIT(extra_bi_size_bits) : 0;
      size += BIT(seL4_VSpaceBits); // root vspace
  #ifdef CONFIG_KERNEL_MCS
@@ -35,7 +35,7 @@ index 079edbed937f7c3aeba980fb7e2e2de378214af1..9221e99d4621c2f72db5304c1a171149
  #endif
      /* for all archs, seL4_PageTable Bits is the size of all non top-level paging structures */
      return size + arch_get_n_paging(it_v_reg) * BIT(seL4_PageTableBits);
-@@ -252,7 +263,7 @@ BOOT_CODE static void create_rootserver_objects(pptr_t start, v_region_t it_v_re
+@@ -249,7 +260,7 @@ BOOT_CODE static void create_rootserver_objects(pptr_t start, v_region_t it_v_re
  #endif
  
  #ifdef CONFIG_KERNEL_MCS
@@ -44,7 +44,7 @@ index 079edbed937f7c3aeba980fb7e2e2de378214af1..9221e99d4621c2f72db5304c1a171149
  #endif
      /* we should have allocated all our memory */
      assert(rootserver_mem.start == rootserver_mem.end);
-@@ -553,7 +564,7 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
+@@ -550,7 +561,7 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
      write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadTCB), cap);
  
  #ifdef CONFIG_KERNEL_MCS
