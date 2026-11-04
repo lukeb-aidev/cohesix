@@ -4,11 +4,35 @@
 
 # seL4 17 build and Pi network evaluation
 
-This is the candidate record for `m26d1-sel4-17-pi-network`. The accepted v16
+Upgrade to seL4 17. The selected Cohesix configuration is affected by upstream
+fixes; a conclusion of no impact would be unsupported. Canonical QEMU and Pi
+builds, the focused physical network regression and bounded bench restoration
+passed. The fresh seven-day observation remains pending the native UI handoff.
+
+This is the execution record for `m26d1-sel4-17-pi-network`. The accepted v16
 source installation, environment, historical evidence and installed release tools
 remain protected while the candidate is built. The old Pi observation was
 deliberately interrupted for the requested RAM test. Building the candidate does not
 establish Pi boot, network, seven-day, performance or release acceptance.
+
+## Recommendation and applicability
+
+The [30 October announcement](https://sel4.systems/news/) recommends upgrading.
+The [17.0.0 release notes](https://docs.sel4.systems/releases/sel4/17.0.0)
+include these relevant fixes. Applicability below is inferred from those notes
+and the actual selected kernel configuration, rather than an exploit test.
+
+| Upstream issue | Cohesix assessment |
+| --- | --- |
+| AArch64 non-hypervisor ASIDs above 255 were truncated during TLB maintenance, potentially retaining access to reused frames. | Both production profiles disable hypervisor support. The 256-Worker design plus service address spaces makes this material. The twenty-Worker trial does not exercise or disprove exploitation at that boundary. |
+| MCS fastpath endpoint deletion could write through NULL. | MCS and fastpath are enabled. Root owns endpoint lifecycle and teardown; restricted Worker capabilities reduce exposure but do not justify excluding the affected kernel path. |
+| Arm instruction cache invalidation was missing on untyped reset. | Relevant to the selected architecture and memory reuse. No exploitation is claimed. |
+
+The x86, RISC-V and Arm-hypervisor-specific issues do not match these selected
+profiles. Their absence does not remove the applicable issues above. Cohesix's
+SMP/MCS profile must not inherit a claim of formal verification from a different
+seL4 configuration. Fresh generated headers, loader and image checks are required;
+the version label alone supplies no compatibility evidence.
 
 ## Source and environment
 
@@ -129,6 +153,69 @@ three verdicts, the unqualified attempt and exclusive-control handoff.
 This is focused same-boot RAM regression evidence. Independent-boot, SD,
 performance, pressure, completed-week and overall-release acceptance remain
 unproven. The new observation baseline requires completed runtime restoration.
+
+## Final host checks and bench handoff
+
+The complete contribution baseline passed: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo check --workspace`, `cargo test --workspace`, `cargo audit`,
+`cargo deny check advisories`, `scripts/check-generated.sh` (including Test
+Plan consistency), `scripts/ci/test_plan_run.sh --list`, the unchanged Rust risk
+gate and `git diff --check`. The first workspace test run detected stale
+generated hashes embedded in `USERLAND_AND_CLI.md`. Regenerating its canonical
+snippet bodies fixed that drift; the unchanged full test command then passed
+2,855 tests, with five ignored. The first failure is retained.
+
+Additional checks passed: 119 seL4 profile tests, 133 compiler library tests,
+three Pi compiler profile tests, 41 Linux builder/release checks, and the
+canonical Python SDK gate with 264 passed and one skipped. The QEMU convergence
+record explicitly says `NON-CLAIMING TARGET DIAGNOSTIC`; it proves readiness and
+one authenticated operation with the 37 focused guards, not staged acceptance.
+Both its clean source and the physically tested Pi source are the exact
+`4daf5e903aac114f8a8a54b3727ee9d09a0df49e` checkpoint above.
+
+The canonical native Linux build used clean source
+`9d3867810d5e4a21b155c547c0a0bec9be8fd450` and explicit
+`--target-profile pi4_production`. All eight binaries passed artifact, compiled
+policy and GLIBC checks. Their resolved manifest matches the tested Pi exactly:
+`544f0f93b95d6882580742ebdac7c122246440114b3898f9263da21c8ad48b57`.
+They are staged separately; the installed release binaries are preserved.
+
+The restored target reports twenty ready Workers: six GPU and fourteen LoRA.
+The first GPU admission preceded the publisher's first inventory commit and was
+refused. Read-only reconciliation bound the original identity to a terminal
+error, empty census and empty GPU lease log. After inventory readback, a fresh
+replacement identity admitted that Worker; the refused identity was not replayed.
+One local CUDA preparation also failed before submission because its preparation
+file was missing. The acknowledged lease and original job identity were retained;
+supplying the parameterized preparation file allowed exactly one submission.
+All failed attempts remain preserved.
+
+The single bounded native CUDA job succeeded. The canonical verifier accepted
+all nine signed phases, and independent arithmetic matched all 65,536 output
+floats, with SHA-256
+`21d9732782924047cddc655ebae9099eacd30e7fa49f6d1c5ccd624d159a9d0f`.
+Both agent journals have zero pending entries. This is authenticated Root/Worker
+and native-output evidence with retained operator key custody, not device
+attestation, LoRA execution, pressure testing or release acceptance.
+
+The old continuous-boot observation was deliberately interrupted after 23.396
+hours. It did not complete. A new baseline has not been created: native SwarmUI
+rendered but remained disconnected, and automated Screen Sharing inputs produced
+no application state change. That input failure's cause is unconfirmed. The
+private `SESSION.md` records the remaining live-UI, baseline and initial-observer
+gates. Thirty observer host tests pass; their configurations remain inactive,
+and the previous heartbeat remains paused. Passive packet captures and the sole
+receive-only UART recorder have a fixed hard stop at
+`2026-11-12T08:26:05.343223Z`. Collection time cannot substitute for a verified
+seven-day baseline. No SD deployment or overall release is claimed.
+
+Private evidence remains under the run directory above and its corresponding
+`/mnt/nvme/cohesix-dev/sel4-17-pi-network-20261104-071438` Jetson directory.
+`RUN.json`, `SESSION.md`, `analysis/REGRESSION_VALIDATION_COMPLETE.json`,
+`fleet/FLEET-IDLE-AND-EXPIRY.json` and `fleet/gpu-check/independent-audit.json`
+own the current result and proof limits. Subsequent documentation and repository
+reference commits do not relabel the source of an already tested image.
 
 Material AI assistance was used for source comparison, scoped implementation,
 build orchestration and evidence analysis. This record claims no independent

@@ -31,6 +31,10 @@ kernel printing.
 These are immutable input/reference trees. Their CMake paths identify the
 original successful builds; never run CMake or Ninja in the tracked mirrors.
 Configure fresh builds below `out/` through `scripts/sel4_profile.py`.
+QEMU's runtime validator checks those original fresh build paths, including its
+profile-owned DTB path; these relocated QEMU mirrors are references, not direct
+runtime build selections. Use the validated fresh `out/` build with the canonical
+QEMU script. Their copied bytes were compared against that validated build.
 The canonical Pi image script consumes `seL4/build_UBOOT` directly and verifies
 the relocated artifacts by digest. Rootserver replacement, elfloader
 relinking and image wrapping happen in disposable output directories.

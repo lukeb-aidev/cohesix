@@ -9038,10 +9038,11 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 ## Milestone 26d1 — seL4 17 Pi Network Evaluation <a id="26d1"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress.
+**Status:** In Progress — canonical v17 builds and the focused Pi regression
+passed; the fresh seven-day observation remains pending the native UI handoff.
 
 The user requested a separate `~/seL4_17` source installation and
-Python environment, using `~/seL4_16` as a preserved reference, followed by a
+Python environment, using `~/seL4_16` as a preserved reference, followed by
 canonical QEMU and Pi builds, a fresh Pi RAM image, and the recent GENET
 network regression. The user subsequently requested replacement of the older
 snapshots and documentation under repository `seL4/`. This task evaluates
@@ -9064,6 +9065,13 @@ physical failure. Keep SD unchanged and retain every failed build and trial.
 Record the deliberate end of the v16 continuous-boot interval before RAM
 deployment; a fresh seven-day observation begins only after successful v17
 regression and runtime restoration, following the existing operator procedure.
+The [execution record](audit/M26D1_SEL4_17_PI_NETWORK.md) binds the exact clean
+Pi source/image, qualified cycles 1, 3 and 4, matching native host build, twenty
+ready Workers, verified bounded CUDA result, complete contribution baseline and
+retained failures. Native SwarmUI is rendered but its live connection is not
+verified. Keep the new baseline unset and the observers inactive until that gate
+and the initial observer checks pass. Neither the interrupted v16 interval nor
+the active passive captures count as a completed week.
 
 ```text
 Title/ID: m26d1-sel4-17-pi-network
