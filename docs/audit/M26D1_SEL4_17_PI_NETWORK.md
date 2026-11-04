@@ -72,8 +72,11 @@ runtime restoration; elapsed time from v16 cannot count toward it.
 At record creation, compiler admission checks passed 18 tests. The first
 profile test run passed 118 checks and failed the current immutable-Pi-tree
 check because that candidate tree still contained v16 artifacts. That check
-must pass after the fresh v17 inputs are retained and committed; its assertion
-is unchanged. The subsequent reference-environment kernel builds and both production
+must pass after the fresh v17 inputs are retained and committed. The next run
+validated that tree and found its test still pinned the v16 contract hash;
+the exact expected hash is updated to the pinned v17 contract without changing
+the required configuration or cleanliness assertions.
+The subsequent reference-environment kernel builds and both production
 profile validations passed. Canonical QEMU image staging and generated-contract
 checks passed, and all 133 compiler library tests passed. Live-target and
 sustained-observation results remain open at this checkpoint. The private run

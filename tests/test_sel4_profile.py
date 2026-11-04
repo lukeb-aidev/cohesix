@@ -1353,7 +1353,7 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree(
     )
     assert stamp["profile"] == "pi4_production"
     assert stamp["contract_values_sha256"] == (
-        "cc9139cd6b8bc331167aff5f0784f8c2261301553fa1739facc4e569cff28026"
+        "44b53bdde5cb2e80fd4ddd16b0a1d0827da184c78b69912bb740590cba0d7753"
     )
     configure = set(stamp["commands"]["configure"])
     assert {
