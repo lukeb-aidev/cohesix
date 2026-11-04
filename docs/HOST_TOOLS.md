@@ -2387,12 +2387,18 @@ require new qualification.
 
 The independent `scripts/linux_host_tools_sync.sh build-tools` workflow ships
 the complete clean tree, including `third_party/fuser`, verifies archive/tree
-hashes and regenerates KVM-owned policies and Python defaults. Pass the same
-production manifest used to build the accepted KVM guest with `--manifest PATH`;
+hashes and regenerates policies and Python defaults for the selected target.
+The default target profile is `qemu_smp_kvm_production`. For Pi host tools,
+pass `--target-profile pi4_production`; this selects Pi's 54 MHz timer and Pi
+Python projection instead of the KVM profile. Pass the same production
+manifest used to build that target with `--manifest PATH`;
 the builder transfers that file separately, checks its SHA-256 on the Linux
 host, transfers only its referenced public CAS verification key with a separate
 digest check, and records the selected manifest, CAS key and generated cohsh
-policy hashes in its provenance. Omitting the option selects the development
+policy hashes, resolved manifest hash, target profile, timer and Python
+projection hash in its provenance. KVM builds retain their existing
+`qemu_profile` and `qemu_contract_sha256` fields; Pi builds use the target fields
+and are not KVM bundle inputs. Omitting `--manifest` selects the development
 manifest and does not qualify production host tools. The release factory
 forwards its `--release-manifest` when it rebuilds Linux tools and rejects
 provenance for a different manifest. `--no-clean` retains Cargo cache, never

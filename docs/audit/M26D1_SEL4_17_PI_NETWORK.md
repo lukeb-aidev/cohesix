@@ -49,6 +49,7 @@ surface is the kernel source/header/ABI selection and its build inputs.
 | Surface | Required compatibility treatment |
 | --- | --- |
 | Compiler and target runtime | Admit the exact v17 AArch64 SMP+MCS object pack while retaining v16 admission; reject unsupported packs and excess refills. Bind actual v17 headers and immutable composition inputs before a target build. |
+| Native Linux host build | Add explicit `--target-profile pi4_production` to bind generated policies, provenance and Python projection to the Pi timer and manifest. Preserve the KVM default and its existing provenance fields. The previous installed host manifest differs from v17 only in the selected kernel field, but its signed producer bindings cannot be relabeled as the new manifest. Build a separate matching host-tool set for restoration. |
 | `cohsh`, gateway, policy, CAS and host bridges | Console grammar, authority, framing, error classes, namespaces, job lifecycle and host operations are unchanged. Preserve the existing host tools during the physical comparison. |
 | `tools/cohesix-py`, MCP, A2A and SwarmUI | Python wire/API contracts and provider behavior are unchanged. Regenerate the selected target/profile identities through `coh-rtc`; old target identities cannot represent the v17 image. |
 | Benchmarks | Preserve the workload, bounds, deadlines and report schema. The requested GENET fault regression is functional recovery evidence, not throughput or latency acceptance. |

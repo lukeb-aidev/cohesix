@@ -7,6 +7,8 @@ import os
 import subprocess
 import tarfile
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "linux_host_tools_sync.sh"
 
@@ -17,6 +19,7 @@ def test_remote_builder_has_no_embedded_environment_locations() -> None:
     for required in (
         "--remote-build-dir",
         "--manifest",
+        "--target-profile",
         "--remote-release-dir",
         "--remote-cargo",
         "--remote-cargo-home",
@@ -168,7 +171,7 @@ def test_remote_builder_rejects_missing_selected_manifest_before_ssh(
 
 def test_native_builder_generates_and_records_selected_manifest_policy() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
-    assert '"$selected_manifest" --timer-clock-hz "$qemu_timer"' in source
+    assert '"$selected_manifest" --timer-clock-hz "$target_timer"' in source
     assert '--cohsh-policy configs/generated/cohsh_policy.toml' in source
     assert '--coh-policy configs/generated/coh_policy.toml' in source
     assert '--swarmui-defaults configs/generated/swarmui_defaults.toml' in source
@@ -180,6 +183,74 @@ def test_native_builder_generates_and_records_selected_manifest_policy() -> None
     assert 'printf \'selected_manifest_sha256=%s\\n\' "$actual_manifest_sha"' in source
     assert '"${target_dir}/release/cohsh" --policy configs/generated/cohsh_policy.toml' in source
     assert 'printf \'cohsh_policy_sha256=%s\\n\' "$(sha256sum configs/generated/cohsh_policy.toml' in source
+
+
+@pytest.mark.parametrize(
+    ("profile", "frequency", "projection"),
+    [
+        ("qemu_smp_kvm_production", 100_000_000,
+         "configs/generated/cohesix_python_qemu_smp_production.json"),
+        ("pi4_production", 54_000_000,
+         "configs/generated/cohesix_python_pi4_production.json"),
+    ],
+)
+def test_native_generation_uses_the_selected_profile_timer_and_projection(
+    tmp_path: Path, profile: str, frequency: int, projection: str,
+) -> None:
+    """Execute the remote profile-selection code, without SSH or a target model."""
+    contracts = tmp_path / "configs/sel4/profiles.toml"
+    contracts.parent.mkdir(parents=True)
+    contracts.write_text(
+        "[profiles.qemu_smp_kvm_production]\ntimer_clock_hz = 100000000\n"
+        "[profiles.pi4_production]\ntimer_clock_hz = 54000000\n"
+    )
+    source = SCRIPT.read_text()
+    start = source.index('target_profile="${12}"')
+    end = source.index('\ntarget_timer=', start)
+    selected = subprocess.run(
+        ["bash", "-euc", source[start:end] + '\nprintf "%s" "$target_contract"',
+         "fixture", *(["unused"] * 11), profile],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
+    assert selected.stdout == projection
+    timer = source.split("<<'PY_TARGET_TIMER'\n", 1)[1].split(
+        "\nPY_TARGET_TIMER", 1
+    )[0]
+    actual = subprocess.run(
+        ["python3", "-c", timer, profile], cwd=tmp_path,
+        capture_output=True, text=True, check=True,
+    )
+    assert int(actual.stdout) == frequency
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", '"54000000"'])
+def test_native_generation_refuses_invalid_profile_timer(
+    tmp_path: Path, value: str,
+) -> None:
+    contracts = tmp_path / "configs/sel4/profiles.toml"
+    contracts.parent.mkdir(parents=True)
+    contracts.write_text("[profiles.pi4_production]\ntimer_clock_hz = " + value)
+    source = SCRIPT.read_text()
+    timer = source.split("<<'PY_TARGET_TIMER'\n", 1)[1].split(
+        "\nPY_TARGET_TIMER", 1
+    )[0]
+    result = subprocess.run(
+        ["python3", "-c", timer, "pi4_production"], cwd=tmp_path,
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0
+    assert "positive integer" in result.stderr
+
+
+@pytest.mark.parametrize("profile", ["qemu_smp_diagnostic", "../pi4_production", ""])
+def test_remote_builder_refuses_unsupported_profile_before_ssh(profile: str) -> None:
+    result = subprocess.run(
+        [str(SCRIPT), "build-tools", "--host", "builder.example",
+         "--user", "builder", "--target-profile", profile],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0
+    assert "--target-profile" in result.stderr
 
 
 def test_remote_builder_rejects_mode_mismatched_options() -> None:
@@ -210,3 +281,11 @@ def test_remote_builder_rejects_mode_mismatched_options() -> None:
     )
     assert selected.returncode != 0
     assert "build-tools options are not valid" in selected.stderr
+
+    profile = subprocess.run(
+        [str(SCRIPT), "archive-bundle", "--host", "builder.example",
+         "--user", "builder", "--target-profile", "pi4_production"],
+        cwd=ROOT, check=False, capture_output=True, text=True,
+    )
+    assert profile.returncode != 0
+    assert "build-tools options are not valid" in profile.stderr

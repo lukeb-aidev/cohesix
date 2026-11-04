@@ -21,6 +21,7 @@ Common options:
 
 build-tools options:
   --manifest <path>             Selected target manifest for native host policy generation
+  --target-profile <profile>    qemu_smp_kvm_production (default) or pi4_production
   --remote-build-dir <path>     Absolute remote source/target/staging root
   --remote-cargo <path>         Absolute remote cargo executable
   --remote-cargo-home <path>    Absolute remote Cargo registry/cache directory
@@ -66,6 +67,7 @@ REMOTE_BUILD_DIR=""
 REMOTE_CARGO=""
 REMOTE_CARGO_HOME=""
 SELECTED_MANIFEST=""
+TARGET_PROFILE=""
 LOCAL_OUT=""
 MANIFEST_OUT=""
 MAX_GLIBC_VERSION=""
@@ -110,6 +112,11 @@ while [[ $# -gt 0 ]]; do
     --manifest)
       [[ $# -ge 2 ]] || fail "--manifest requires a path"
       SELECTED_MANIFEST="$2"
+      shift 2
+      ;;
+    --target-profile)
+      [[ $# -ge 2 && -n "$2" ]] || fail "--target-profile requires a profile"
+      TARGET_PROFILE="$2"
       shift 2
       ;;
     --local-out)
@@ -237,6 +244,11 @@ build_tools() {
   if [[ -n "$REMOTE_RELEASE_DIR" || -n "$BUNDLE_DIR" || -n "$LOCAL_TARBALL" || "$FORCE" -ne 0 ]]; then
     fail "archive-bundle options are not valid with build-tools"
   fi
+  TARGET_PROFILE="${TARGET_PROFILE:-qemu_smp_kvm_production}"
+  case "$TARGET_PROFILE" in
+    qemu_smp_kvm_production|pi4_production) ;;
+    *) fail "--target-profile must be qemu_smp_kvm_production or pi4_production" ;;
+  esac
   [[ -n "$REMOTE_BUILD_DIR" ]] || fail "--remote-build-dir is required"
   [[ -n "$REMOTE_CARGO" ]] || fail "--remote-cargo is required"
   [[ -n "$REMOTE_CARGO_HOME" ]] || fail "--remote-cargo-home is required"
@@ -340,7 +352,7 @@ PY
   ssh "${SSH_OPTS[@]}" "$SSH_DESTINATION" bash -s -- \
     "$REMOTE_BUILD_DIR" "$REMOTE_CARGO" "$REMOTE_CARGO_HOME" \
     "$MAX_GLIBC_VERSION" "$source_sha256" "$source_commit" "$CLEAN" "$source_tree" \
-    "$selected_manifest_sha256" "$cas_key_reference" "$cas_key_sha256" <<'REMOTE_BUILD'
+    "$selected_manifest_sha256" "$cas_key_reference" "$cas_key_sha256" "$TARGET_PROFILE" <<'REMOTE_BUILD'
 set -euo pipefail
 
 build_root="$1"
@@ -436,15 +448,29 @@ git -c core.autocrlf=false -c core.filemode=true add --force --all
 # The selected manifest and its separately verified public CAS key remain in
 # the build root. This prevents the tracked source's fixture key from replacing
 # the release key or contaminating the source tree identity.
-qemu_timer="$(python3 - <<'PY_TIMER'
+target_profile="${12}"
+case "$target_profile" in
+  qemu_smp_kvm_production)
+    target_contract=configs/generated/cohesix_python_qemu_smp_production.json
+    ;;
+  pi4_production)
+    target_contract=configs/generated/cohesix_python_pi4_production.json
+    ;;
+  *) echo 'unsupported native host-tool target profile' >&2; exit 1 ;;
+esac
+target_timer="$(python3 - "$target_profile" <<'PY_TARGET_TIMER'
 from pathlib import Path
+import sys
 import tomllib
 profile = tomllib.loads(Path('configs/sel4/profiles.toml').read_text())
-print(profile['profiles']['qemu_smp_kvm_production']['timer_clock_hz'])
-PY_TIMER
+timer = profile['profiles'][sys.argv[1]]['timer_clock_hz']
+if type(timer) is not int or timer <= 0:
+    raise SystemExit('selected native target timer must be a positive integer')
+print(timer)
+PY_TARGET_TIMER
 )"
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc -- \
-  "$selected_manifest" --timer-clock-hz "$qemu_timer" \
+  "$selected_manifest" --timer-clock-hz "$target_timer" \
   --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json \
   --cohsh-policy configs/generated/cohsh_policy.toml \
   --coh-policy configs/generated/coh_policy.toml \
@@ -453,8 +479,8 @@ PY_TIMER
 # and public CAS verification key as the guest.
 "$cargo_bin" run --locked -p coh-rtc --bin coh-rtc-python-profile -- \
   "$selected_manifest" --sel4-profiles configs/sel4/profiles.toml \
-  --profile qemu_smp_kvm_production \
-  --out configs/generated/cohesix_python_qemu_smp_production.json
+  --profile "$target_profile" \
+  --out "$target_contract"
 
 "$cargo_bin" build --locked --release -p gpu-bridge-host
 "$cargo_bin" build --locked --release -p cas-tool
@@ -502,8 +528,14 @@ os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-unknown}")"
   printf 'selected_manifest_sha256=%s\n' "$actual_manifest_sha"
   printf 'cas_verification_key_sha256=%s\n' "$actual_cas_key_sha"
   printf 'cohsh_policy_sha256=%s\n' "$(sha256sum configs/generated/cohsh_policy.toml | awk '{print $1}')"
-  printf 'qemu_profile=qemu_smp_kvm_production\n'
-  printf 'qemu_contract_sha256=%s\n' "$(sha256sum configs/generated/cohesix_python_qemu_smp_production.json | awk '{print $1}')"
+  printf 'target_profile=%s\n' "$target_profile"
+  printf 'target_timer_clock_hz=%s\n' "$target_timer"
+  printf 'target_contract_sha256=%s\n' "$(sha256sum "$target_contract" | awk '{print $1}')"
+  printf 'resolved_manifest_sha256=%s\n' "$(sha256sum configs/generated/root_task_resolved.json | awk '{print $1}')"
+  if [[ "$target_profile" == qemu_smp_kvm_production ]]; then
+    printf 'qemu_profile=qemu_smp_kvm_production\n'
+    printf 'qemu_contract_sha256=%s\n' "$(sha256sum "$target_contract" | awk '{print $1}')"
+  fi
   printf 'architecture=%s\n' "$(uname -m)"
   printf 'os_id=%s\n' "$os_id"
   printf 'os_version=%s\n' "$os_version"
@@ -623,7 +655,7 @@ PY
 }
 
 archive_bundle() {
-  if [[ -n "$REMOTE_BUILD_DIR" || -n "$REMOTE_CARGO" || -n "$REMOTE_CARGO_HOME" || -n "$SELECTED_MANIFEST" || -n "$LOCAL_OUT" || -n "$MANIFEST_OUT" || -n "$MAX_GLIBC_VERSION" || "$CLEAN" -ne 1 ]]; then
+  if [[ -n "$REMOTE_BUILD_DIR" || -n "$REMOTE_CARGO" || -n "$REMOTE_CARGO_HOME" || -n "$SELECTED_MANIFEST" || -n "$TARGET_PROFILE" || -n "$LOCAL_OUT" || -n "$MANIFEST_OUT" || -n "$MAX_GLIBC_VERSION" || "$CLEAN" -ne 1 ]]; then
     fail "build-tools options are not valid with archive-bundle"
   fi
   [[ -n "$REMOTE_RELEASE_DIR" ]] || fail "--remote-release-dir is required"
