@@ -79,8 +79,8 @@ def test_missing_selected_pi_contract_manifest_fails_before_generation(tmp_path)
     assert "unexpected compiler call" not in result.stdout
 
 
-def test_release_b_inventory_selects_current_notes_and_preserves_history() -> None:
-    """Release B selects 1.2.0 while keeping both prior notes immutable."""
+def test_release_b_inventory_selects_current_notes_and_excludes_retired_notes() -> None:
+    """New assemblies select current notes and omit retired versions."""
     inventory = tomllib.loads(
         (ROOT / "configs/implementation_surfaces.toml").read_text()
     )
@@ -88,8 +88,8 @@ def test_release_b_inventory_selects_current_notes_and_preserves_history() -> No
     assert release["version"] == "1.2.0"
     assert "releases/RELEASE_NOTES-1.2.0.md" in release["support_files"]
     assert "releases/cohesix-debian-publisher-2026.asc" in release["public_documents"]
-    assert "releases/RELEASE_NOTES-1.1.0-beta.md" in release["support_files"]
-    assert "releases/RELEASE_NOTES-1.0.0-beta.md" in release["support_files"]
+    assert "releases/RELEASE_NOTES-1.1.0-beta.md" not in release["support_files"]
+    assert "releases/RELEASE_NOTES-1.0.0-beta.md" not in release["support_files"]
     for contract in (
         "a2a_catalogue.json", "mcp_catalogue.json", "cuda_recipe.json",
         "provider_registry.json", "use_case_evidence.json",

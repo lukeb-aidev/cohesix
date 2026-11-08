@@ -219,6 +219,24 @@ Checks: No 0.9.0-beta distribution file remains under releases/; generated contr
 Deliverables: Scoped release-tree deletion and generated metadata, with AI-assisted inventory and verification; no runtime, target or release-acceptance claim.
 ```
 
+### Superseded 1.0.0-beta and 1.1.0-beta distribution retirement
+
+**Status:** Complete. The owner directed this repository maintenance on 8 November 2026.
+
+```text
+Title/ID: repo-release-legacy-tree-retirement
+Milestone: Release packaging / repo-release-legacy-tree-retirement
+Goal: Remove distributions older than 1.2.0 from the current releases directory and keep historical copies accessible.
+Inputs: 1.0.0-beta and 1.1.0-beta release trees, archives and notes at caed30380050 and their version tags, plus the compiler's release inventory.
+Changes:
+  - releases/ — remove only top-level 1.0.0-beta and 1.1.0-beta distributions and notes.
+  - configs/implementation_surfaces.toml, generated projections and tests/test_release_bundle.py — retire the old support-file selections and verify the selected release notes.
+  - docs/STATUS.md, docs/HOST_TOOLS.md, docs/TEST_PLAN.md, _config.yml and scripts/rest_perf_harness.py — point readers to tagged archives and update current examples and site exclusions.
+Commands: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json --cas-manifest-template configs/generated/cas_manifest_template.json, scripts/check-generated.sh, python3 -m pytest -q tests/test_release_bundle.py, git diff --cached --check.
+Checks: All 911 selected paths are removed. Their contents are recoverable from immutable tags. The 1.2.0 distribution remains byte-identical. The host tools, Python SDK and benchmark workloads, parameters and proof requirements retain their contracts.
+Deliverables: Scoped retirement and regenerated inventory with AI-assisted inventory and validation. This change supplies repository and packaging checks only.
+```
+
 ### Milestone ownership and historical references <a id="roadmap-id-mapping"></a>
 
 The 23 September 2026 revision keeps 0–27g scope, evidence, status and

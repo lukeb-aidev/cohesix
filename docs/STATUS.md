@@ -201,10 +201,12 @@ separate installed client path. Each record identifies the exercised source,
 profile, host or target and limits; use the release's own evidence to judge an
 assembled 1.2.0 distribution.
 
-The earlier [1.1.0-beta release notes](../releases/RELEASE_NOTES-1.1.0-beta.md)
-and [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md) retain their
-original Pi, host and package evidence, including disclosed limits. They remain
-useful for history and comparison, but do not qualify a new 1.2.0 image.
+The [1.0.0-beta distribution](https://github.com/lukeb-aidev/cohesix/tree/v1.0.0-beta/releases)
+and [1.1.0-beta distribution](https://github.com/lukeb-aidev/cohesix/tree/v1.1.0-beta/releases)
+are archived in their tagged `releases/` directories. The
+[1.1.0-beta release notes](https://github.com/lukeb-aidev/cohesix/blob/v1.1.0-beta/releases/RELEASE_NOTES-1.1.0-beta.md)
+and [qualification record](audit/M27G_IMPLEMENTATION_RECORD.md) describe the
+Pi, host and package evidence for that release.
 
 To verify a specific claim, match its source and selected manifest to the
 installed bundle, then use [Hardware Bring-up](HARDWARE_BRINGUP.md) for physical

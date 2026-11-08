@@ -3588,8 +3588,8 @@ On Mac, and then independently on Linux using the `-linux` paths:
 
 ```bash
 python3 scripts/release_qualify.py host \
-  --bundle <clean-extraction>/Cohesix-1.0.0-beta-MacOS \
-  --archive <clean-extraction>/Cohesix-1.0.0-beta-MacOS.tar.gz \
+  --bundle <clean-extraction>/Cohesix-1.2.0-MacOS \
+  --archive <clean-extraction>/Cohesix-1.2.0-MacOS.tar.gz \
   --port 31337 --output <fresh-evidence>/macos/result.json
 ```
 

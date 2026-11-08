@@ -48,12 +48,6 @@ exclude:
   - tools/swarmui-ui-tests/node_modules
 
   # Publication-only exclusions for unused pages; source and release archives stay in Git.
-  - releases/Cohesix-1.0.0-beta-MacOS/
-  - releases/Cohesix-1.0.0-beta-Pi4/
-  - releases/Cohesix-1.0.0-beta-linux/
-  - releases/Cohesix-1.1.0-beta-MacOS/
-  - releases/Cohesix-1.1.0-beta-Pi4/
-  - releases/Cohesix-1.1.0-beta-linux/
   - releases/Cohesix-1.2.0-MacOS/
   - releases/Cohesix-1.2.0-Pi4/
   - releases/Cohesix-1.2.0-linux/

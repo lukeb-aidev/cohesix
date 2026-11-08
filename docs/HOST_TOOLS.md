@@ -2367,7 +2367,7 @@ Then assemble on Mac, using the selected remote ARM64 builder for Linux archive
 compression:
 
 ```text
-scripts/release_bundle.sh --name Cohesix-1.0.0-beta --version 1.0.0-beta \
+scripts/release_bundle.sh --name Cohesix-1.2.0 --version 1.2.0 \
   --release-manifest <provisioned-source.toml> \
   --linux --linux-use-accepted-tools \
   --macos-artifact <mac-qemu-artifact.json> --macos-result <mac-base.json> \
